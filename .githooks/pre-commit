@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+
+python tools/strip_utf8_bom.py main ServoBoardMain libraries/FTServo_Arduino/src
+git add -u -- main ServoBoardMain libraries/FTServo_Arduino/src

@@ -1,0 +1,57 @@
+-- IDF_TARGET not set, using default target: esp32
+-- Found Git: D:/Software/GIT/Git/Git/cmd/git.exe (found version "2.45.2.windows.1") 
+-- ccache will be used for faster recompilation
+-- The C compiler identification is GNU 13.2.0
+-- The CXX compiler identification is GNU 13.2.0
+-- The ASM compiler identification is GNU
+-- Found assembler: E:/Espressif/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc.exe
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: E:/Espressif/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: E:/Espressif/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/xtensa-esp32-elf-g++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Building ESP-IDF components for target esp32
+NOTICE: Skipping optional dependency: espressif/esp-sr
+NOTICE: Skipping optional dependency: espressif/esp_hosted
+NOTICE: Skipping optional dependency: espressif/esp_wifi_remote
+NOTICE: 
+Following dependencies have new versions available:
+Dependency "espressif/esp-dsp": "1.7.0" -> "1.7.1"
+Consider running "idf.py update-dependencies" to update your lock file.
+NOTICE: Processing 28 dependencies:
+NOTICE: [1/28] chmorgan/esp-libhelix-mp3 (1.0.3)
+NOTICE: [2/28] espressif/arduino-esp32 (3.3.7)
+NOTICE: [3/28] espressif/cbor (0.6.1~4)
+NOTICE: [4/28] espressif/esp-dsp (1.7.0)
+NOTICE: [5/28] espressif/esp-modbus (1.0.18)
+NOTICE: [6/28] espressif/esp-serial-flasher (0.0.11)
+NOTICE: [7/28] espressif/esp-zboss-lib (1.6.4)
+NOTICE: [8/28] espressif/esp-zigbee-lib (1.6.8)
+NOTICE: [9/28] espressif/esp_diag_data_store (1.0.2)
+NOTICE: [10/28] espressif/esp_diagnostics (1.2.1)
+NOTICE: [11/28] espressif/esp_insights (1.2.2)
+NOTICE: [12/28] espressif/esp_modem (2.0.0)
+NOTICE: [13/28] espressif/esp_rainmaker (1.5.2)
+NOTICE: [14/28] espressif/esp_rcp_update (1.2.0)
+NOTICE: [15/28] espressif/esp_schedule (1.2.0)
+NOTICE: [16/28] espressif/esp_secure_cert_mgr (2.9.1)
+NOTICE: [17/28] espressif/jsmn (1.1.0)
+NOTICE: [18/28] espressif/json_generator (1.1.2)
+NOTICE: [19/28] espressif/json_parser (1.0.3)
+NOTICE: [20/28] espressif/lan867x (2.0.0)
+NOTICE: [21/28] espressif/lan86xx_common (1.0.0)
+NOTICE: [22/28] espressif/libsodium (1.0.20~4)
+NOTICE: [23/28] espressif/mdns (1.10.1)
+NOTICE: [24/28] espressif/network_provisioning (1.0.2)
+NOTICE: [25/28] espressif/qrcode (0.1.0~2)
+NOTICE: [26/28] espressif/rmaker_common (1.4.6)
+NOTICE: [27/28] joltwallet/littlefs (1.20.4)
+NOTICE: [28/28] idf (5.3.1)
+-- Found Python3: E:/Espressif/Espressif/python_env/idf5.3_py3.11_env/Scripts/python.exe (found version "3.11.2") found components: Interpreter 
+-- Configuring incomplete, errors occurred!
+See also "G:/超维动力/esp32-p4/HandControl/build/CMakeFiles/CMakeOutput.log".

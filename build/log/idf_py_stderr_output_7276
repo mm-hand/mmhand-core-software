@@ -1,0 +1,37 @@
+Traceback (most recent call last):
+  File "E:\Espressif\Espressif\frameworks\esp-idf-v5.3.1\tools\kconfig_new\prepare_kconfig_files.py", line 102, in <module>
+    main()
+  File "E:\Espressif\Espressif\frameworks\esp-idf-v5.3.1\tools\kconfig_new\prepare_kconfig_files.py", line 98, in main
+    _prepare_source_files(env, list_separator)
+  File "E:\Espressif\Espressif\frameworks\esp-idf-v5.3.1\tools\kconfig_new\prepare_kconfig_files.py", line 64, in _prepare_source_files
+    _write_source_file(env_dict['COMPONENT_KCONFIGS'], env_dict['COMPONENT_KCONFIGS_SOURCE_FILE'])
+  File "E:\Espressif\Espressif\frameworks\esp-idf-v5.3.1\tools\kconfig_new\prepare_kconfig_files.py", line 60, in _write_source_file
+    with open(config_file, 'w', encoding='utf-8') as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'G:/瓒呯淮鍔ㄥ姏/esp32-p4/HandControl/build/kconfigs.in'
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "E:\Espressif\Espressif\python_env\idf5.3_py3.11_env\Lib\site-packages\kconfgen\__main__.py", line 18, in <module>
+    main()
+  File "E:\Espressif\Espressif\python_env\idf5.3_py3.11_env\Lib\site-packages\kconfgen\core.py", line 724, in main
+    config = kconfiglib.Kconfig(args.kconfig, parser_version=parser_version)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Espressif\Espressif\python_env\idf5.3_py3.11_env\Lib\site-packages\kconfiglib\core.py", line 921, in __init__
+    self()
+  File "E:\Espressif\Espressif\python_env\idf5.3_py3.11_env\Lib\site-packages\kconfiglib\core.py", line 935, in __call__
+    prev = self._parse_block(None, self.top_node, self.top_node)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Espressif\Espressif\python_env\idf5.3_py3.11_env\Lib\site-packages\kconfiglib\core.py", line 2618, in _parse_block
+    raise KconfigError(
+kconfiglib.core.KconfigError: E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/Kconfig:336: 'G:/瓒呯淮鍔ㄥ姏/esp32-p4/HandControl/build/kconfigs_projbuild.in' not found (in 'source "$COMPONENT_KCONFIGS_PROJBUILD_SOURCE_FILE"'). Check that environment variables are set correctly (e.g. $srctree, which is unset or blank). Also note that unset environment variables expand to the empty string.
+CMake Error at E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/kconfig.cmake:209 (message):
+  Failed to run kconfgen
+  (E:/Espressif/Espressif/python_env/idf5.3_py3.11_env/Scripts/python.exe;-m;kconfgen;--list-separator=semicolon;--kconfig;E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/Kconfig;--sdkconfig-rename;E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/sdkconfig.rename;--config;G:/超维动力/esp32-p4/HandControl/sdkconfig;--defaults;G:/超维动力/esp32-p4/HandControl/sdkconfig.defaults;--env-file;G:/超维动力/esp32-p4/HandControl/build/config.env).
+  Error 1
+Call Stack (most recent call first):
+  E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/build.cmake:623 (__kconfig_generate_config)
+  E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/project.cmake:710 (idf_build_process)
+  CMakeLists.txt:4 (project)
+
+

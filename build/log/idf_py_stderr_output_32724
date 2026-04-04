@@ -1,0 +1,38 @@
+CMake Error at E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/component.cmake:225 (message):
+  CMake Warning (dev) at build_properties.temp.cmake:8:
+
+    Syntax Warning in cmake code at column 106
+
+  
+
+    Argument not separated from preceding token by whitespace.
+
+  Call Stack (most recent call first):
+
+    E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/scripts/component_get_requirements.cmake:3 (include)
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  
+
+  CMake Error at
+  G:/瓒呯淮鍔ㄥ姏/esp32-p4/HandControl/main/CMakeLists.txt:10
+  (add_custom_target):
+
+    add_custom_target command is not scriptable
+
+  Call Stack (most recent call first):
+
+    E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/scripts/component_get_requirements.cmake:107 (include)
+    E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/scripts/component_get_requirements.cmake:127 (__component_get_requirements)
+
+  
+
+  
+
+Call Stack (most recent call first):
+  E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/build.cmake:586 (__component_get_requirements)
+  E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/tools/cmake/project.cmake:710 (idf_build_process)
+  CMakeLists.txt:4 (project)
+
+

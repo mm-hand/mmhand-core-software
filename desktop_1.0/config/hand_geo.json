@@ -1,0 +1,52 @@
+{
+  "comment": "人手尺寸（mm）。坐标原点为手腕根部(0,0,0)。Y 轴朝上，0° 时四指伸直指尖朝上(+Y)；X 拇指侧，Z 掌心方向。屈曲角使指尖向掌心侧弯曲。angle_mapping 可选：21电机索引->20关节角[thumb(4),index(4),middle(4),ring(4),pinky(4)]，每指[abduct,flex1,flex2,flex3]",
+  "palm": {
+    "width_mm": 85,
+    "length_mm": 100,
+    "thickness_mm": 28,
+    "center_mm": [0, 50, 0]
+  },
+  "fingers": [
+    {
+      "name": "thumb",
+      "segment_lengths_mm": [40, 32, 28],
+      "base_offset_mm": [38, 18, 8],
+      "angle_indices": [0, 1, 2],
+      "flex_plane": "xz",
+      "spread_deg": 0
+    },
+    {
+      "name": "index",
+      "segment_lengths_mm": [48, 32, 24],
+      "base_offset_mm": [12, 28, 0],
+      "angle_indices": [5, 6, 7],
+      "flex_plane": "yz",
+      "spread_deg": 0
+    },
+    {
+      "name": "middle",
+      "segment_lengths_mm": [52, 36, 26],
+      "base_offset_mm": [0, 52, 0],
+      "angle_indices": [9, 10, 11],
+      "flex_plane": "yz",
+      "spread_deg": 0
+    },
+    {
+      "name": "ring",
+      "segment_lengths_mm": [46, 34, 25],
+      "base_offset_mm": [-12, 70, 0],
+      "angle_indices": [13, 14, 15],
+      "flex_plane": "yz",
+      "spread_deg": 0
+    },
+    {
+      "name": "pinky",
+      "segment_lengths_mm": [36, 26, 20],
+      "base_offset_mm": [-22, 82, 0],
+      "angle_indices": [17, 18, 19],
+      "flex_plane": "yz",
+      "spread_deg": 0
+    }
+  ],
+  "scale_display": 1.0
+}
