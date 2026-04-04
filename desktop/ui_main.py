@@ -317,14 +317,17 @@ class HandGUI:
         self._camera_buf_lock = threading.Lock()
         self._camera_thread = None
         self._camera_stop = threading.Event()
-        # Start：串口连接（若未连）+ 下位机 start + 手部姿态/触觉等；相机在 Device 中单独选，与 Start 无关
-        self._device_running = False
+        # 串口连接成功后即可实时显示数据；Start/Stop 仅控制电机运行。
+        self._device_running = self._is_comm_connected()
 
         self._setup_ui()
         self._setup_device_menu()
         self._start_camera_poll()
         self._start_display_poll()
-        self.root.after(150, self._clear_live_displays)
+        if self._device_running:
+            self.root.after(150, self._maybe_redraw)
+        else:
+            self.root.after(150, self._clear_live_displays)
 
     def _setup_device_menu(self) -> None:
         """Top menu bar: Device (Port/Camera/Teleop Device) and Mode (Monitor/Teleoperation/Algorithm)"""
@@ -526,8 +529,7 @@ class HandGUI:
     def _should_use_realtime_pose(self) -> bool:
         # Runtime policy:
         # - No port/connection: use txt pose.
-        # - Connected but not started: use txt pose.
-        # - Connected and started: use realtime angles.
+        # - Connected: use realtime angles.
         return self._is_comm_connected() and bool(getattr(self, "_device_running", False))
 
     def _start_camera_poll(self) -> None:
@@ -685,7 +687,6 @@ class HandGUI:
         else:
             self.port_select_var.set("No Connection")
         ttk.Button(top, text="Reset", command=self._on_btn_reset).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(top, text="伺服状态", command=self._show_servo_status_dialog).pack(side=tk.RIGHT, padx=2)
         ttk.Button(top, text="Calibrate", command=self._on_calibrate).pack(side=tk.RIGHT, padx=2)
         ttk.Button(top, text="Stop", command=self._on_btn_stop).pack(side=tk.RIGHT, padx=2)
         ttk.Button(top, text="Start", command=self._on_btn_start).pack(side=tk.RIGHT, padx=2)
@@ -867,7 +868,7 @@ class HandGUI:
         self._refresh_tactile_axis_button_states()
         with self._state_lock:
             s = self._state
-        tactile_state = self._get_tactile_display_state(s, fake=self._tactile_fake_mode)
+        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         if s:
             self._draw_hand_model(s.angles, tactile_state)
         self._update_tactile_matrix_widget(tactile_state)
@@ -878,9 +879,17 @@ class HandGUI:
             s = self._state
         if not s:
             s = HandModel()
-        tactile_state = self._get_tactile_display_state(s, fake=self._tactile_fake_mode)
+        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         self._draw_hand_model(s.angles, tactile_state)
         self._update_tactile_matrix_widget(tactile_state)
+
+    def _should_use_fake_tactile(self, s: Optional[HandModel]) -> bool:
+        """Fake 触觉仅用于未连接/未收到设备状态时的离线预览；一旦成功读到设备数据，就按真实情况显示。"""
+        if not bool(getattr(self, "_tactile_fake_mode", False)):
+            return False
+        if self._is_comm_connected() and s is not None:
+            return False
+        return True
 
     def _refresh_tactile_axis_button_states(self):
         if not hasattr(self, "_tactile_axis_buttons"):
@@ -1010,13 +1019,14 @@ class HandGUI:
         self._tactile_row = ttk.Frame(frame)
         self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
         ttk.Label(self._tactile_row, text="Axes (multi):").pack(side=tk.LEFT, padx=2)
-        self._tactile_fake_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self._tactile_fake_var = tk.BooleanVar(value=not bool(getattr(self, "_ports_cache", [])))
+        self._tactile_fake_check = ttk.Checkbutton(
             self._tactile_row,
             text="Fake",
             variable=self._tactile_fake_var,
             command=self._on_tactile_fake_toggle,
-        ).pack(side=tk.LEFT, padx=4)
+        )
+        self._tactile_fake_check.pack(side=tk.LEFT, padx=4)
         self._tactile_axis_buttons = []
         for axis, label in enumerate(["X", "Y", "Z"]):
             btn = tk.Button(
@@ -1470,6 +1480,7 @@ class HandGUI:
         self._joint_curr_vars: List[tk.StringVar] = []
         self._joint_target_vars: List[tk.DoubleVar] = []
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
+        self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
         self._motor_target_vars: List[tk.IntVar] = []
         self._motor_target_initialized = False
@@ -1782,9 +1793,10 @@ class HandGUI:
         return None
 
     def _clear_live_displays(self) -> None:
-        """Stop 后或未 Start：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
+        """断开连接或未连接时：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
         with self._state_lock:
             self._state = None
+        self._joint_target_initialized = False
         self._motor_target_initialized = False
         neutral = [0.0] * ENCODER_COUNT
         if hasattr(self, "_joint_curr_vars"):
@@ -1800,7 +1812,9 @@ class HandGUI:
             self._draw_hand_model(neutral, None)
         if hasattr(self, "_tactile_subplot_imgs"):
             empty = HandModel()
-            tactile_state = self._get_tactile_display_state(empty, fake=self._tactile_fake_mode)
+            tactile_state = self._get_tactile_display_state(
+                empty, fake=self._should_use_fake_tactile(None)
+            )
             self._update_tactile_matrix_widget(tactile_state)
         if hasattr(self, "status_var"):
             self.status_var.set("已停止：按 Start 连接设备并显示手部/触觉（相机在 Device 中单独选）")
@@ -1839,41 +1853,36 @@ class HandGUI:
         messagebox.showinfo("伺服 / 协议状态", "\n".join(lines))
 
     def _on_btn_start(self):
-        if getattr(self, "_device_running", False):
-            return
         port = self._get_port_from_main_combo()
-        connected = self._is_comm_connected()
-        if not connected:
+        if not self._is_comm_connected():
             if not port:
                 messagebox.showwarning(
                     "No Port",
-                    "Please select a serial port in the Port dropdown, then press Start.",
+                    "Please select a serial port in the Port dropdown first.",
                 )
                 return
             if not self.controller.initialize(port):
                 messagebox.showerror("Connection Failed", f"Cannot open port: {port}")
                 return
+            self._device_running = True
+            self._emit_action(f"Port connected: {port}")
+            self._maybe_redraw()
         self.controller.start()
-        self._device_running = True
         self._emit_action("Click [Start]")
         if hasattr(self, "status_var"):
-            self.status_var.set("Running…")
+            self.status_var.set("Motor start command sent")
         self._maybe_redraw()
 
     def _on_btn_stop(self):
         self._emit_action("Click [Stop]")
-        if not getattr(self, "_device_running", False):
+        if not self._is_comm_connected():
             return
         try:
             self.controller.stop()
         except Exception:
             pass
-        try:
-            self.controller.shutdown()
-        except Exception:
-            pass
-        self._device_running = False
-        self.root.after(0, self._clear_live_displays)
+        if hasattr(self, "status_var"):
+            self.status_var.set("Motor stop command sent")
 
     def _on_btn_reset(self):
         self._emit_action("Click [Reset]")
@@ -1999,6 +2008,11 @@ class HandGUI:
                         self._set_joint_encoder_dot(i, not bool(s.encoders[i].error))
                     else:
                         self._set_joint_encoder_dot(i, None)
+            if joint_has_data and not self._joint_target_initialized:
+                for i in range(min(ENCODER_COUNT, len(s.angles))):
+                    if i < len(self._joint_target_vars):
+                        self._joint_target_vars[i].set(float(s.angles[i]))
+                self._joint_target_initialized = True
 
         if hasattr(self, "_motor_curr_vars"):
             motor_has_data = bool(getattr(s, "has_servo_angle_data", False))
@@ -2014,7 +2028,7 @@ class HandGUI:
                         self._motor_target_vars[i].set(int(s.servo_angles[i]))
                 self._motor_target_initialized = True
 
-        tactile_state = self._get_tactile_display_state(s, fake=self._tactile_fake_mode)
+        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         self._draw_hand_model(s.angles, tactile_state)
         self._update_tactile_matrix_widget(tactile_state)
         if self.current_mode in ("算法", "Algorithm") and hasattr(self, "_alg_output"):
