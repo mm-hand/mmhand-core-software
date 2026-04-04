@@ -28,6 +28,7 @@ class HandController:
         self._paused = False
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
+        self._update_thread: Optional[threading.Thread] = None
 
     def set_control_mode(self, mode: ControlMode):
         """设置电机控制模式：JOINT_ANGLE 或 DIRECT_MOTOR"""
@@ -67,7 +68,8 @@ class HandController:
 
         self.running = True
         self._started = False
-        threading.Thread(target=self._update_loop, daemon=True).start()
+        self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
+        self._update_thread.start()
 
         # 连接成功后下发 calib_deg.json 中的编码器零点
         zero_raw = load_calib_zero_raw()
@@ -81,14 +83,52 @@ class HandController:
         return True
 
     def shutdown(self):
+        """
+        安全关闭控制器：停止下位机、等待线程、清理资源。
+        """
+        import time
+        
+        # Step 1: 停止下位机上的运动（即使暂停也要发送 STOP）
+        if self.comm:
+            try:
+                self.comm.send_command("stop")
+                time.sleep(0.15)  # 等待硬件响应
+            except Exception as e:
+                print(f"Warning: Failed to send stop command to lower computer: {e}")
+        
+        # Step 2: 标记停止运行
         self.running = False
         self._started = False
+        
+        # Step 3: 断开连接（停止 RX/TX 线程）
         if self.comm:
-            self.comm.disconnect()
+            try:
+                self.comm.disconnect()
+            except Exception as e:
+                print(f"Warning: Failed to disconnect: {e}")
+            time.sleep(0.1)  # 等待连接完全断开
+        
+        # Step 4: 等待 _update_loop 线程完全退出
+        if self._update_thread and self._update_thread.is_alive():
+            self._update_thread.join(timeout=2.0)
+            if self._update_thread.is_alive():
+                print("Warning: _update_thread did not exit within timeout")
+        self._update_thread = None
+        
+        # Step 5: 清理资源
+        with self.state_lock:
+            self.update_callbacks.clear()  # 移除所有回调
+        self._paused = False  # 恢复暂停状态
+        
+        # Step 6: 重置内部状态为断开连接状态
+        with self.state_lock:
+            self.current_state.calib_status = "DISCONNECTED"
 
     def _update_loop(self):
         while self.running:
             try:
+                if not self.comm:
+                    break
                 new_model = self.comm.rx_queue.get(timeout=0.1)
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
@@ -102,6 +142,10 @@ class HandController:
                         pass
             except queue.Empty:
                 continue
+            except (AttributeError, Exception) as e:
+                if self.running:
+                    print(f"Update loop caught exception: {e}")
+                break
 
     def set_target_angles(self, angles: List[float]):
         """设置 ENCODER_COUNT 路关节目标角（度），JOINT_ANGLE 模式；暂停时不发送"""
