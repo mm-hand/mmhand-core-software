@@ -45,10 +45,6 @@ extern volatile uint8_t g_calibrationUIStatus;
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
-static const size_t kCmdAngleFrameBytes = 1 + kFloatPayloadBytes;
-static const size_t kCmdCalibDataFrameBytes = 1 + kFloatPayloadBytes;
-static const size_t kCmdMotorPosFrameBytes = 1 + kMotorPosPayloadBytes;
-static const size_t kCmdSensorStreamModeFrameBytes = 2;
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
@@ -354,8 +350,8 @@ static void cacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values,
     sharedData->calib_zero_raw_valid = 1;
 }
 
-// 返回指定命令帧的固定长度（用于串口流式解析）。
-static size_t getCommandFrameLength(uint8_t cmd)
+// 返回命令负载长度；不包含 CMD 自身。
+static size_t getCommandPayloadLength(uint8_t cmd)
 {
     switch (cmd)
     {
@@ -363,17 +359,17 @@ static size_t getCommandFrameLength(uint8_t cmd)
         case CMD_START:
         case CMD_STOP:
         case CMD_RESET:
-            return 1;
-        case CMD_ANGLE_CTRL:
-            return kCmdAngleFrameBytes;
-        case CMD_CALIB_DATA:
-            return kCmdCalibDataFrameBytes;
-        case CMD_MOTOR_POS:
-            return kCmdMotorPosFrameBytes;
-        case CMD_SENSOR_STREAM_MODE:
-            return kCmdSensorStreamModeFrameBytes;
-        default:
             return 0;
+        case CMD_ANGLE_CTRL:
+            return kFloatPayloadBytes;
+        case CMD_CALIB_DATA:
+            return kFloatPayloadBytes;
+        case CMD_MOTOR_POS:
+            return kMotorPosPayloadBytes;
+        case CMD_SENSOR_STREAM_MODE:
+            return 1;
+        default:
+            return (size_t)-1;
     }
 }
 
@@ -465,7 +461,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_SENSOR_STREAM_MODE)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < kCmdSensorStreamModeFrameBytes) {
+        if (frameLen < 2) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint8_t requestedMode = frame[1];
@@ -517,28 +513,55 @@ void taskUpperComm(void* parameter)
         size_t parseOffset = 0;
         while (parseOffset < rxLen)
         {
-            const uint8_t cmd = rxBuffer[parseOffset];
+            const uint8_t cur = rxBuffer[parseOffset];
 
-            if (cmd == (uint8_t)'c' || cmd == (uint8_t)'b')
+            if (cur == (uint8_t)'c' || cur == (uint8_t)'b')
             {
-                handleLegacySingleByteCommand(sharedData, cmd);
+                handleLegacySingleByteCommand(sharedData, cur);
                 parseOffset += 1;
                 continue;
             }
 
-            const size_t frameLen = getCommandFrameLength(cmd);
-            if (frameLen == 0)
+            if (cur != PROTOCOL_HEADER)
             {
                 parseOffset += 1;
                 continue;
             }
 
+            if ((parseOffset + 4) > rxLen)
+            {
+                break;
+            }
+
+            const uint8_t wireLen = rxBuffer[parseOffset + 1];
+            if (wireLen < 2)
+            {
+                parseOffset += 1;
+                continue;
+            }
+
+            const size_t frameLen = (size_t)wireLen + 2;
             if ((parseOffset + frameLen) > rxLen)
             {
                 break;
             }
 
-            handleParsedCommand(sharedData, rxBuffer + parseOffset, frameLen);
+            if (rxBuffer[parseOffset + frameLen - 1] != PROTOCOL_TAIL)
+            {
+                parseOffset += 1;
+                continue;
+            }
+
+            const uint8_t cmd = rxBuffer[parseOffset + 2];
+            const size_t payloadLen = (size_t)wireLen - 2; // CMD + payload + tail
+            const size_t expectedPayloadLen = getCommandPayloadLength(cmd);
+            if (expectedPayloadLen == (size_t)-1 || expectedPayloadLen != payloadLen)
+            {
+                parseOffset += frameLen;
+                continue;
+            }
+
+            handleParsedCommand(sharedData, rxBuffer + parseOffset + 2, payloadLen + 1);
             parseOffset += frameLen;
         }
 
@@ -572,17 +595,18 @@ void taskUpperComm(void* parameter)
             sentPacket = true;
         }
 
-        if (!sentPacket)
+        bool sentServoAngle = false;
+        ServoAngleData_t servoAngleData;
+        if (xQueueReceive(sharedData->servoAngleQueue, &servoAngleData, 0) == pdTRUE)
         {
-            ServoAngleData_t servoAngleData;
-            if (xQueueReceive(sharedData->servoAngleQueue, &servoAngleData, 0) == pdTRUE)
-            {
-                sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL);
-            }
-            else if (g_calibrationUIStatus != 0)
-            {
-                sendDataPacket(NULL, NULL, NULL, NULL, NULL);
-            }
+            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL);
+            sentServoAngle = true;
+            sentPacket = true;
+        }
+
+        if (!sentPacket && !sentServoAngle && g_calibrationUIStatus != 0)
+        {
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL);
         }
 
         const uint32_t nowMs = millis();

@@ -54,6 +54,14 @@ RX_POLL_SLEEP = 0.005
 TX_QUEUE_GET_TIMEOUT = 0.1
 
 
+def _build_command_frame(cmd: int, payload: bytes = b"") -> bytes:
+    payload = bytes(payload)
+    # Symmetric downstream frame: [0xFE][LEN][CMD][PAYLOAD][0xFF]
+    # LEN = CMD byte + payload + tail byte.
+    frame_len = 1 + len(payload) + 1
+    return bytes([PROTOCOL_HEADER, frame_len & 0xFF, cmd & 0xFF]) + payload + bytes([PROTOCOL_TAIL])
+
+
 def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
     angles: List[int] = []
     errors: List[bool] = []
@@ -84,18 +92,23 @@ def parse_calib_ack(payload: bytes) -> Optional[int]:
 
 
 def parse_servo_angle_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
-    expected_len = MOTOR_COUNT * 4 + MOTOR_COUNT
-    if len(payload) != expected_len:
+    # Some firmware revisions upload 21 channels while newer desktop code expects 22.
+    # Accept any payload that matches N * (4-byte angle + 1-byte online flag).
+    if not payload or (len(payload) % 5) != 0:
+        return None
+
+    channel_count = len(payload) // 5
+    if channel_count <= 0:
         return None
 
     angles: List[int] = []
-    for i in range(MOTOR_COUNT):
+    for i in range(channel_count):
         start = i * 4
         angles.append(struct.unpack(">i", payload[start:start + 4])[0])
 
     online_flags: List[bool] = []
-    base = MOTOR_COUNT * 4
-    for i in range(MOTOR_COUNT):
+    base = channel_count * 4
+    for i in range(channel_count):
         online_flags.append(payload[base + i] == 1)
     return angles, online_flags
 
@@ -103,8 +116,11 @@ def parse_servo_angle_packet(payload: bytes) -> Optional[Tuple[List[int], List[b
 def parse_servo_telem_packet(
     payload: bytes,
 ) -> Optional[Tuple[List[int], List[int], List[int], List[int], List[bool]]]:
-    expected_len = MOTOR_COUNT * 7
-    if len(payload) != expected_len:
+    if not payload or (len(payload) % 7) != 0:
+        return None
+
+    channel_count = len(payload) // 7
+    if channel_count <= 0:
         return None
 
     speeds: List[int] = []
@@ -113,7 +129,7 @@ def parse_servo_telem_packet(
     temps: List[int] = []
     online: List[bool] = []
 
-    for i in range(MOTOR_COUNT):
+    for i in range(channel_count):
         base = i * 7
         speeds.append(struct.unpack(">h", payload[base:base + 2])[0])
         loads.append(struct.unpack(">h", payload[base + 2:base + 4])[0])
@@ -198,19 +214,19 @@ def parse_frame(data: bytes) -> Tuple[List[Tuple[int, bytes]], bytearray]:
 
 
 def build_calibrate_cmd() -> bytes:
-    return bytes([CMD_CALIBRATE])
+    return _build_command_frame(CMD_CALIBRATE)
 
 
 def build_start_cmd() -> bytes:
-    return bytes([CMD_START])
+    return _build_command_frame(CMD_START)
 
 
 def build_stop_cmd() -> bytes:
-    return bytes([CMD_STOP])
+    return _build_command_frame(CMD_STOP)
 
 
 def build_reset_cmd() -> bytes:
-    return bytes([CMD_RESET])
+    return _build_command_frame(CMD_RESET)
 
 
 def build_calib_data_cmd(zero_encoder_raw: List[int]) -> bytes:
@@ -218,14 +234,14 @@ def build_calib_data_cmd(zero_encoder_raw: List[int]) -> bytes:
         raise ValueError(f"need exactly {ENCODER_COUNT} encoder zero values")
     vals = [float(v) for v in zero_encoder_raw]
     payload = struct.pack(f"<{ENCODER_COUNT}f", *vals)
-    return bytes([CMD_CALIB_DATA]) + payload
+    return _build_command_frame(CMD_CALIB_DATA, payload)
 
 
 def build_angle_cmd(angles: List[float]) -> bytes:
     if len(angles) != ENCODER_COUNT:
         raise ValueError(f"need exactly {ENCODER_COUNT} joint angles")
     payload = struct.pack(f"<{ENCODER_COUNT}f", *angles)
-    return bytes([CMD_ANGLE_CTRL]) + payload
+    return _build_command_frame(CMD_ANGLE_CTRL, payload)
 
 
 def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:
@@ -236,11 +252,11 @@ def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:
         raw = int(value) & 0xFFFF
         payload.append((raw >> 8) & 0xFF)
         payload.append(raw & 0xFF)
-    return bytes([CMD_MOTOR_POS]) + bytes(payload)
+    return _build_command_frame(CMD_MOTOR_POS, bytes(payload))
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:
     mode_int = int(mode)
     if mode_int not in (SENSOR_STREAM_MODE_LEGACY_U16_WRAP, SENSOR_STREAM_MODE_SIGNED_I16):
         raise ValueError("unsupported sensor stream mode")
-    return bytes([CMD_SENSOR_STREAM_MODE, mode_int & 0xFF])
+    return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))

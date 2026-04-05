@@ -773,6 +773,12 @@ void taskSolver(void* parameter)
                     continue;
                 }
 
+                if (!controlEnabled)
+                {
+                    // 未收到明确 START 前，不向舵机发送任何保持/控制命令。
+                    continue;
+                }
+
                 if (emergency)
                 {
                     // 急停策略：保持当前舵机位置，避免异常状态下继续运动。

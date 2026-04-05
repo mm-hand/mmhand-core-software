@@ -14,6 +14,10 @@ import threading
 import time
 
 from protocol import ENCODER_COUNT, MOTOR_COUNT, ControlMode
+
+# Motor Control 滑条范围，与 build_motor_pos_cmd 的 16 位负载一致（界面 Target 预填会 mask 到此范围）
+MOTOR_TARGET_SCALE_LO = 0
+MOTOR_TARGET_SCALE_HI = 16383
 from data_models import (
     HandModel,
     FingerTactile,
@@ -324,7 +328,8 @@ class HandGUI:
         self._setup_device_menu()
         self._start_camera_poll()
         self._start_display_poll()
-        if self._device_running:
+        if self._is_comm_connected():
+            self._on_comm_ready()
             self.root.after(150, self._maybe_redraw)
         else:
             self.root.after(150, self._clear_live_displays)
@@ -497,17 +502,16 @@ class HandGUI:
             time.sleep(0.033)
 
     def _start_display_poll(self) -> None:
-        """设备 Start 后定期刷新；未 Start 时不刷新（触觉 fake 亦仅在运行中）"""
+        """串口已连接时定期刷新；断开时清屏。与电机 Start/Stop 解耦。"""
         def poll() -> None:
             try:
-                if not getattr(self, "_device_running", False):
-                    self.root.after(200, poll)
-                    return
                 if not self._is_comm_connected():
-                    self._device_running = False
-                    self._clear_live_displays()
+                    if getattr(self, "_device_running", False):
+                        self._device_running = False
+                        self._clear_live_displays()
                     self.root.after(200, poll)
                     return
+                self._device_running = True
                 with self._state_lock:
                     has_state = self._state is not None
                 need_redraw = not has_state or getattr(self, "_tactile_fake_mode", False)
@@ -526,11 +530,28 @@ class HandGUI:
             and getattr(comm.serial, "is_open", False)
         )
 
+    def _on_comm_ready(self) -> None:
+        """串口打开后重置一次性同步标志，待下位机下一帧编码器/舵机数据再填充 Target。"""
+        if hasattr(self, "_motor_target_initialized"):
+            self._motor_target_initialized = False
+        if hasattr(self, "_joint_target_initialized"):
+            self._joint_target_initialized = False
+        try:
+            self.root.after(0, self._maybe_redraw)
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _motor_target_from_servo_feedback(servo_abs: int) -> int:
+        """与 CMD_MOTOR_POS 一致：16 位语义，并限制在 Motor 滑条范围内。"""
+        v = int(servo_abs) & 0xFFFF
+        return max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, v))
+
     def _should_use_realtime_pose(self) -> bool:
         # Runtime policy:
         # - No port/connection: use txt pose.
         # - Connected: use realtime angles.
-        return self._is_comm_connected() and bool(getattr(self, "_device_running", False))
+        return self._is_comm_connected()
 
     def _start_camera_poll(self) -> None:
         """Main-thread poll: copy buffers to display (non-blocking)."""
@@ -646,14 +667,14 @@ class HandGUI:
         run(mode, reused_controller, port=port, gui=True)
 
     def _on_state_update(self, state: HandModel):
-        if not getattr(self, "_device_running", False):
+        if not self._is_comm_connected():
             return
         with self._state_lock:
             self._state = state
         self.root.after(0, self._maybe_redraw)
 
     def _maybe_redraw(self):
-        if not getattr(self, "_device_running", False):
+        if not self._is_comm_connected():
             return
         now = time.time()
         if now - self._last_draw < self._draw_interval:
@@ -1614,10 +1635,10 @@ class HandGUI:
         header.pack(fill=tk.X, padx=2, pady=(2, 4))
         if is_motor:
             ttk.Label(header, text="Channel").grid(row=0, column=0, padx=2, sticky="w")
-            ttk.Label(header, text="Current").grid(row=0, column=1, padx=2, sticky="w")
-            ttk.Label(header, text="Target").grid(row=0, column=2, padx=2, sticky="w")
+            ttk.Label(header, text="Current Raw").grid(row=0, column=1, padx=2, sticky="w")
+            ttk.Label(header, text="Target Raw").grid(row=0, column=2, padx=2, sticky="w")
             ttk.Label(header, text="Confirm").grid(row=0, column=3, padx=2, sticky="w")
-            ttk.Label(header, text="Target Slider").grid(row=0, column=4, padx=2, sticky="w")
+            ttk.Label(header, text="Raw Slider").grid(row=0, column=4, padx=2, sticky="w")
         else:
             ttk.Label(header, text="Channel").grid(row=0, column=0, padx=2, sticky="w")
             ttk.Label(header, text="Encoder").grid(row=0, column=1, padx=2, sticky="w")
@@ -1646,8 +1667,8 @@ class HandGUI:
                 btn.grid(row=0, column=3, padx=1, sticky="w")
                 sld = ttk.Scale(
                     row,
-                    from_=0,
-                    to=16383,
+                    from_=MOTOR_TARGET_SCALE_LO,
+                    to=MOTOR_TARGET_SCALE_HI,
                     variable=target,
                     orient=tk.HORIZONTAL,
                     length=130,
@@ -1687,9 +1708,59 @@ class HandGUI:
         self._motor_panel.pack_forget()
         if mode == "motor":
             self._motor_panel.pack(fill=tk.BOTH, expand=True)
+            self._refresh_motor_feedback_view(sync_target=True)
         else:
             self._joint_panel.pack(fill=tk.BOTH, expand=True)
+            self._refresh_joint_feedback_view(sync_target=True)
         self._apply_interaction_control_policy()
+
+    def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
+        if not hasattr(self, "_joint_curr_vars"):
+            return
+        with self._state_lock:
+            s = self._state
+        if not s:
+            return
+
+        joint_has_data = bool(getattr(s, "has_sensor_data", False))
+        for i in range(min(ENCODER_COUNT, len(self._joint_curr_vars))):
+            if joint_has_data and i < len(s.angles):
+                self._joint_curr_vars[i].set(f"{s.angles[i]:6.1f}")
+            else:
+                self._joint_curr_vars[i].set("-")
+
+            if hasattr(self, "_joint_status_dots"):
+                if joint_has_data and i < len(s.encoders):
+                    self._set_joint_encoder_dot(i, not bool(s.encoders[i].error))
+                else:
+                    self._set_joint_encoder_dot(i, None)
+
+        if joint_has_data and sync_target:
+            for i in range(min(ENCODER_COUNT, len(s.angles), len(self._joint_target_vars))):
+                self._joint_target_vars[i].set(float(s.angles[i]))
+            self._joint_target_initialized = True
+
+    def _refresh_motor_feedback_view(self, sync_target: bool = False) -> None:
+        if not hasattr(self, "_motor_curr_vars"):
+            return
+        with self._state_lock:
+            s = self._state
+        if not s:
+            return
+
+        motor_has_data = bool(getattr(s, "has_servo_angle_data", False))
+        for i in range(min(MOTOR_COUNT, len(self._motor_curr_vars))):
+            if motor_has_data and i < len(s.servo_angles):
+                self._motor_curr_vars[i].set(f"{int(s.servo_angles[i]):6d}")
+            else:
+                self._motor_curr_vars[i].set("-")
+
+        if motor_has_data and sync_target:
+            for i in range(min(MOTOR_COUNT, len(s.servo_angles), len(self._motor_target_vars))):
+                self._motor_target_vars[i].set(
+                    self._motor_target_from_servo_feedback(s.servo_angles[i])
+                )
+            self._motor_target_initialized = True
 
     def _toggle_interaction_control(self):
         self._interaction_enabled = not self._interaction_enabled
@@ -1729,15 +1800,30 @@ class HandGUI:
         except Exception as e:
             messagebox.showerror("Send Failed", f"Joint control send failed: {e}")
 
-    def _confirm_motor_row(self, idx: int):
+    def _send_motor_targets_from_ui(self, trigger: str) -> None:
         if not self._interaction_enabled:
             return
+        if not self._is_comm_connected():
+            raise RuntimeError("Serial port is not connected")
+
+        # Keep the lower controller in direct-motor mode for raw target writes.
+        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.controller.set_pid_control(False)
+
+        # Direct motor commands should take effect immediately after interaction is enabled.
+        if not self.controller.is_started():
+            self.controller.start()
+
+        targets = [int(v.get()) for v in self._motor_target_vars]
+        self.controller.set_motor_positions_raw(targets)
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Motor raw positions sent ({trigger})")
+
+    def _confirm_motor_row(self, idx: int):
         try:
-            targets = [int(v.get()) for v in self._motor_target_vars]
-            self.controller.set_motor_positions_raw(targets)
-            self.status_var.set(f"Motor targets sent (trigger M{idx})")
+            self._send_motor_targets_from_ui(f"OK M{idx}")
         except Exception as e:
-            messagebox.showerror("Send Failed", f"Motor control send failed: {e}")
+            messagebox.showerror("Send Failed", f"Motor raw position send failed: {e}")
 
     def _on_joint_slider_change(self, idx: int, value: str):
         """拖动关节拉动条时实时下发，无需点击确认"""
@@ -1756,8 +1842,7 @@ class HandGUI:
             return
         try:
             self._motor_target_vars[idx].set(int(float(value)))
-            targets = [int(v.get()) for v in self._motor_target_vars]
-            self.controller.set_motor_positions_raw(targets)
+            self._send_motor_targets_from_ui(f"Slider M{idx}")
         except Exception:
             pass
 
@@ -1866,7 +1951,7 @@ class HandGUI:
                 return
             self._device_running = True
             self._emit_action(f"Port connected: {port}")
-            self._maybe_redraw()
+            self._on_comm_ready()
         self.controller.start()
         self._emit_action("Click [Start]")
         if hasattr(self, "status_var"):
@@ -1986,7 +2071,7 @@ class HandGUI:
         ttk.Label(bar, textvariable=self._delay_var).pack(side=tk.RIGHT)
 
     def _update_display(self):
-        if not getattr(self, "_device_running", False):
+        if not self._is_comm_connected():
             return
         with self._state_lock:
             s = self._state
@@ -1995,38 +2080,10 @@ class HandGUI:
             s = HandModel()
 
         if hasattr(self, "_joint_curr_vars"):
-            joint_has_data = bool(getattr(s, "has_sensor_data", False))
-            for i in range(min(ENCODER_COUNT, len(self._joint_curr_vars))):
-                if joint_has_data and i < len(s.angles):
-                    a = s.angles[i]
-                    self._joint_curr_vars[i].set(f"{a:6.1f}")
-                else:
-                    self._joint_curr_vars[i].set("-")
-
-                if hasattr(self, "_joint_status_dots"):
-                    if joint_has_data and i < len(s.encoders):
-                        self._set_joint_encoder_dot(i, not bool(s.encoders[i].error))
-                    else:
-                        self._set_joint_encoder_dot(i, None)
-            if joint_has_data and not self._joint_target_initialized:
-                for i in range(min(ENCODER_COUNT, len(s.angles))):
-                    if i < len(self._joint_target_vars):
-                        self._joint_target_vars[i].set(float(s.angles[i]))
-                self._joint_target_initialized = True
+            self._refresh_joint_feedback_view(sync_target=not self._joint_target_initialized)
 
         if hasattr(self, "_motor_curr_vars"):
-            motor_has_data = bool(getattr(s, "has_servo_angle_data", False))
-            for i in range(min(MOTOR_COUNT, len(self._motor_curr_vars))):
-                if motor_has_data and i < len(s.servo_angles):
-                    ang = s.servo_angles[i]
-                    self._motor_curr_vars[i].set(f"{ang:6d}")
-                else:
-                    self._motor_curr_vars[i].set("-")
-            if motor_has_data and not self._motor_target_initialized:
-                for i in range(min(MOTOR_COUNT, len(s.servo_angles))):
-                    if i < len(self._motor_target_vars):
-                        self._motor_target_vars[i].set(int(s.servo_angles[i]))
-                self._motor_target_initialized = True
+            self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
 
         tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         self._draw_hand_model(s.angles, tactile_state)
