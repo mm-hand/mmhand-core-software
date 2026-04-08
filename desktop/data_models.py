@@ -421,10 +421,14 @@ class HandModel:
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
     has_servo_angle_data: bool = False
+    has_servo_raw_data: bool = False
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
+    # 伺服单圈原始位置与在线状态（来自 PACKET_TYPE_SERVO_RAW，单位：单圈计数）
+    servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
 
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
     servo_speed: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -487,6 +491,8 @@ class HandModel:
         # 复制伺服绝对角度与遥测
         self.servo_angles = list(other.servo_angles)
         self.servo_online = list(other.servo_online)
+        self.servo_raw_positions = list(other.servo_raw_positions)
+        self.servo_raw_online = list(other.servo_raw_online)
         self.servo_speed = list(other.servo_speed)
         self.servo_load = list(other.servo_load)
         self.servo_voltage = list(other.servo_voltage)
@@ -506,3 +512,4 @@ class HandModel:
         # 复制数据有效性标志
         self.has_sensor_data = bool(other.has_sensor_data)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
+        self.has_servo_raw_data = bool(other.has_servo_raw_data)

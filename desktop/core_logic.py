@@ -9,7 +9,13 @@ from calibration import run_calibration
 from comm_layer import LowerComputerComm, list_ports
 from data_models import HandModel
 from hand_geometry import has_calib_file, load_calib_zero_raw
-from protocol import ENCODER_COUNT, MOTOR_COUNT, ControlMode
+from protocol import (
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    ControlMode,
+    MOTOR_ABS_CMD_MAX,
+    MOTOR_ABS_CMD_MIN,
+)
 
 
 class HandController:
@@ -170,6 +176,27 @@ class HandController:
         raw = [int(v) & 0xFFFF for v in motor_pos_raw]
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos", raw))
+
+    def set_motor_positions_raw_sweep(self, motor_pos_raw: List[int]):
+        """设置 MOTOR_COUNT 路电机滑条扫动目标，DIRECT_MOTOR 模式；暂停时不发送"""
+        if self._paused:
+            return
+        if len(motor_pos_raw) != MOTOR_COUNT:
+            raise ValueError(f"需要 {MOTOR_COUNT} 个编码器原始值")
+
+        raw = [int(v) & 0xFFFF for v in motor_pos_raw]
+        if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
+            self.comm.send_command(("motor_pos_sweep", raw))
+
+    def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
+        """多圈绝对位置（CMD_MOTOR_POS_ABS），与下位机 clampServoPos 范围一致。"""
+        if self._paused:
+            return
+        if len(motor_abs) != MOTOR_COUNT:
+            raise ValueError(f"需要 {MOTOR_COUNT} 个绝对位置值")
+        raw = [max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(v))) for v in motor_abs]
+        if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
+            self.comm.send_command(("motor_pos_abs", raw))
 
     def _validate_angles(self, angles: List[float]) -> List[float]:
         out: List[float] = []

@@ -13,11 +13,21 @@ from typing import Callable, List, Optional, Tuple
 import threading
 import time
 
-from protocol import ENCODER_COUNT, MOTOR_COUNT, ControlMode
+from protocol import (
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    ControlMode,
+    MOTOR_ABS_CMD_MIN,
+    MOTOR_ABS_CMD_MAX,
+)
 
-# Motor Control 滑条范围，与 build_motor_pos_cmd 的 16 位负载一致（界面 Target 预填会 mask 到此范围）
+# Motor Control 使用单圈原始位置计数。
 MOTOR_TARGET_SCALE_LO = 0
-MOTOR_TARGET_SCALE_HI = 16383
+MOTOR_TARGET_SCALE_HI = 4095
+MOTOR_SINGLE_TURN_STEPS = 4096
+MOTOR_JUMP_RESYNC_THRESH = 2048
+MOTOR_DIR_HINT_CLEAR_TOL = 3
+MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 from data_models import (
     HandModel,
     FingerTactile,
@@ -310,8 +320,8 @@ class HandGUI:
         self._state_lock = threading.Lock()
         self._last_draw = 0.0
         self._draw_interval = 0.1  # 100ms
-        # 0=X, 1=Y, 2=Z；可多选，触觉区按选中个数并排显示对应热力图
-        self._tactile_axes_selected: set = {0, 1, 2}
+        # 0=X, 1=Y, 2=Z；触觉区仅显示一个通道，默认显示 Z
+        self._tactile_axis_selected = 2
         self._tactile_fake_mode = True  # False=真实数据/no data，True=显示生成数据
         # 主触觉区为仅传感 inferno 色标（见 _make_tactile_sensors_only_cmap_norm）；子图占位仍用全图热力图色标
         self._camera1_cap = None
@@ -323,9 +333,14 @@ class HandGUI:
         self._camera_stop = threading.Event()
         # 串口连接成功后即可实时显示数据；Start/Stop 仅控制电机运行。
         self._device_running = self._is_comm_connected()
+        self._joint_run_states: List[bool] = [False] * ENCODER_COUNT
+        self._motor_run_states: List[bool] = [False] * MOTOR_COUNT
+        self._joint_run_buttons: List[ttk.Button] = []
+        self._motor_run_buttons: List[ttk.Button] = []
 
         self._setup_ui()
         self._setup_device_menu()
+        self._bind_keyboard_shortcuts()
         self._start_camera_poll()
         self._start_display_poll()
         if self._is_comm_connected():
@@ -391,9 +406,7 @@ class HandGUI:
 
     def _on_mode_menu_selected(self, mode_name: str) -> None:
         if messagebox.askyesno("Confirm Mode Change", f"Switch to {mode_name} mode?"):
-            self.mode_select_var.set(mode_name)
-            self._emit_action("Click [Apply Port/Mode]")
-            self._apply_port_mode_in_main()
+            self._switch_mode_in_place(mode_name)
 
     def _list_available_cameras(self) -> List[int]:
         """Probe indices 0-4 for available cameras (avoids OpenCV out-of-bound on some systems)."""
@@ -522,6 +535,13 @@ class HandGUI:
                 pass
         self.root.after(200, poll)
 
+    def _bind_keyboard_shortcuts(self) -> None:
+        self.root.bind_all("<KeyPress-s>", self._on_keyboard_stop)
+        self.root.bind_all("<KeyPress-S>", self._on_keyboard_stop)
+
+    def _on_keyboard_stop(self, _event=None) -> None:
+        self._on_btn_stop()
+
     def _is_comm_connected(self) -> bool:
         comm = getattr(self.controller, "comm", None)
         return bool(
@@ -534,6 +554,17 @@ class HandGUI:
         """串口打开后重置一次性同步标志，待下位机下一帧编码器/舵机数据再填充 Target。"""
         if hasattr(self, "_motor_target_initialized"):
             self._motor_target_initialized = False
+        if hasattr(self, "_motor_abs_pos"):
+            self._motor_abs_pos = [None] * MOTOR_COUNT
+            self._motor_session_origin_abs = [None] * MOTOR_COUNT
+            self._motor_dir_hint = [0] * MOTOR_COUNT
+            self._motor_dir_hint_pending_clear = [False] * MOTOR_COUNT
+            self._motor_dir_hint_stable_count = [0] * MOTOR_COUNT
+            self._motor_last_slider = [None] * MOTOR_COUNT
+            self._motor_slider_dragging = [False] * MOTOR_COUNT
+            self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
+        if hasattr(self, "_motor_last_sent_abs"):
+            self._motor_last_sent_abs = [None] * MOTOR_COUNT
         if hasattr(self, "_joint_target_initialized"):
             self._joint_target_initialized = False
         try:
@@ -542,10 +573,227 @@ class HandGUI:
             pass
 
     @staticmethod
-    def _motor_target_from_servo_feedback(servo_abs: int) -> int:
-        """与 CMD_MOTOR_POS 一致：16 位语义，并限制在 Motor 滑条范围内。"""
-        v = int(servo_abs) & 0xFFFF
+    def _motor_target_from_servo_feedback(servo_raw_single: int) -> int:
+        """单圈反馈 raw → 滑条 0..4095。"""
+        v = int(servo_raw_single) % MOTOR_SINGLE_TURN_STEPS
         return max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, v))
+
+    @staticmethod
+    def _clamp_motor_abs_cmd(v: int) -> int:
+        return max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(v)))
+
+    @staticmethod
+    def _slider_from_abs_pos(abs_pos: int) -> int:
+        return int(abs_pos) % MOTOR_SINGLE_TURN_STEPS
+
+    def _read_motor_target_slider_int(self, idx: int) -> int:
+        """滑条表示用户目标位，只读不改。"""
+        if 0 <= idx < len(self._motor_target_vars):
+            try:
+                v = int(self._motor_target_vars[idx].get())
+                return max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, v))
+            except (tk.TclError, TypeError, ValueError):
+                pass
+        return MOTOR_TARGET_SCALE_LO
+
+    def _session_abs_from_slider_locked_turn(
+        self, idx: int, slider_value: int, drag_sign: int = 0
+    ) -> Optional[int]:
+        """
+        将单圈目标(0..4095)映射为会话坐标：
+        - 锁定“进入会话时所在的设备物理圈”
+        - 优先使用方向提示(由 +/- 设定)
+        - 无方向提示时按本次拖动方向
+        - 无拖动方向信息时再退化为最近等效圈
+        """
+        if idx < 0 or idx >= MOTOR_COUNT:
+            return None
+        if idx >= len(self._motor_session_origin_abs):
+            return None
+        origin = self._motor_session_origin_abs[idx]
+        if origin is None:
+            return None
+        origin_single = self._slider_from_abs_pos(origin)
+        sl = max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, int(slider_value)))
+        base = int(sl - origin_single)
+
+        current = None
+        if idx < len(self._motor_abs_pos):
+            current = self._motor_abs_pos[idx]
+
+        if current is None:
+            return self._clamp_motor_abs_cmd(base)
+
+        step = MOTOR_SINGLE_TURN_STEPS
+        hint = 0
+        if idx < len(self._motor_dir_hint):
+            hint = int(self._motor_dir_hint[idx])
+
+        if hint > 0:
+            # 正向：选择不小于当前会话位置的最近等效圈。
+            k = int((int(current) - base) // step)
+            candidate = base + k * step
+            if candidate < int(current):
+                candidate += step
+        elif hint < 0:
+            # 反向：选择不大于当前会话位置的最近等效圈。
+            k = int((int(current) - base) // step)
+            candidate = base + k * step
+            if candidate > int(current):
+                candidate -= step
+        elif drag_sign > 0:
+            k = int((int(current) - base) // step)
+            candidate = base + k * step
+            if candidate < int(current):
+                candidate += step
+        elif drag_sign < 0:
+            k = int((int(current) - base) // step)
+            candidate = base + k * step
+            if candidate > int(current):
+                candidate -= step
+        else:
+            # 无方向提示：使用最近等效圈。
+            k = int(round((int(current) - base) / float(step)))
+            candidate = base + k * step
+
+        return self._clamp_motor_abs_cmd(candidate)
+
+    @staticmethod
+    def _single_turn_diff(a: int, b: int) -> int:
+        diff = abs(int(a) - int(b)) % MOTOR_SINGLE_TURN_STEPS
+        return min(diff, MOTOR_SINGLE_TURN_STEPS - diff)
+
+    def _motor_resync_one_channel(self, idx: int) -> None:
+        """用下位机反馈对齐本通道会话坐标；不移动滑条（滑条仅表示用户目标）。"""
+        if idx < 0 or idx >= MOTOR_COUNT:
+            return
+        with self._state_lock:
+            s = self._state
+        if not s:
+            return
+        user_sl = self._read_motor_target_slider_int(idx)
+        if bool(getattr(s, "has_servo_angle_data", False)) and idx < len(s.servo_angles):
+            if idx < len(s.servo_online) and s.servo_online[idx]:
+                dev_abs = self._clamp_motor_abs_cmd(int(s.servo_angles[idx]))
+                if self._motor_session_origin_abs[idx] is None:
+                    self._motor_session_origin_abs[idx] = dev_abs
+                origin = self._motor_session_origin_abs[idx]
+                self._motor_abs_pos[idx] = self._clamp_motor_abs_cmd(dev_abs - origin)
+                self._motor_last_slider[idx] = user_sl
+                return
+        if bool(getattr(s, "has_servo_raw_data", False)) and idx < len(s.servo_raw_positions):
+            if idx < len(s.servo_raw_online) and s.servo_raw_online[idx]:
+                r = self._motor_target_from_servo_feedback(s.servo_raw_positions[idx])
+                dev_abs = self._clamp_motor_abs_cmd(r)
+                if self._motor_session_origin_abs[idx] is None:
+                    self._motor_session_origin_abs[idx] = dev_abs
+                origin = self._motor_session_origin_abs[idx]
+                self._motor_abs_pos[idx] = self._clamp_motor_abs_cmd(dev_abs - origin)
+                self._motor_last_slider[idx] = user_sl
+
+    def _motor_abs_for_command_packet(
+        self, idx: int, s: Optional[HandModel], *, ignore_last_sent: bool = False
+    ) -> int:
+        """会话坐标下发：device_abs = session_origin_abs + session_abs。"""
+        session_abs = self._motor_abs_pos[idx] if idx < len(self._motor_abs_pos) else None
+        origin = self._motor_session_origin_abs[idx] if idx < len(self._motor_session_origin_abs) else None
+
+        if (session_abs is None or origin is None) and s is not None:
+            if bool(getattr(s, "has_servo_angle_data", False)):
+                if idx < len(s.servo_online) and s.servo_online[idx] and idx < len(s.servo_angles):
+                    dev_abs = self._clamp_motor_abs_cmd(int(s.servo_angles[idx]))
+                    if origin is None:
+                        origin = dev_abs
+                        self._motor_session_origin_abs[idx] = origin
+                    if session_abs is None:
+                        session_abs = self._clamp_motor_abs_cmd(dev_abs - origin)
+            elif bool(getattr(s, "has_servo_raw_data", False)):
+                if idx < len(s.servo_raw_online) and s.servo_raw_online[idx] and idx < len(s.servo_raw_positions):
+                    dev_abs = self._clamp_motor_abs_cmd(int(self._motor_target_from_servo_feedback(s.servo_raw_positions[idx])))
+                    if origin is None:
+                        origin = dev_abs
+                        self._motor_session_origin_abs[idx] = origin
+                    if session_abs is None:
+                        session_abs = self._clamp_motor_abs_cmd(dev_abs - origin)
+
+        if session_abs is not None:
+            self._motor_abs_pos[idx] = session_abs
+        if origin is not None:
+            self._motor_session_origin_abs[idx] = origin
+        if session_abs is not None and origin is not None:
+            return self._clamp_motor_abs_cmd(origin + session_abs)
+
+        if not ignore_last_sent and idx < len(getattr(self, "_motor_last_sent_abs", [])):
+            ls = self._motor_last_sent_abs[idx]
+            if ls is not None:
+                return self._clamp_motor_abs_cmd(int(ls))
+        return 0
+
+    def _build_motor_abs_command_list(self) -> List[int]:
+        with self._state_lock:
+            s = self._state
+        return [self._motor_abs_for_command_packet(i, s) for i in range(MOTOR_COUNT)]
+
+    def _seed_motor_last_sent_after_sync(self, s: HandModel) -> None:
+        """首帧对齐后缓存「等价于当前状态」的各路上次命令，避免第一次拖条时邻路 abs 空而误发 0。"""
+        if not hasattr(self, "_motor_last_sent_abs"):
+            return
+        for i in range(MOTOR_COUNT):
+            self._motor_last_sent_abs[i] = self._motor_abs_for_command_packet(i, s, ignore_last_sent=True)
+
+    def _send_motor_abs_from_ui(self, trigger: str) -> None:
+        if not self._interaction_enabled:
+            return
+        if not self._is_comm_connected():
+            raise RuntimeError("Serial port is not connected")
+        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.controller.set_pid_control(False)
+        if not self.controller.is_started():
+            self.controller.start()
+        with self._state_lock:
+            s = self._state
+        if s is None or not (
+            bool(getattr(s, "has_servo_angle_data", False))
+            or bool(getattr(s, "has_servo_raw_data", False))
+        ):
+            if hasattr(self, "status_var"):
+                self.status_var.set("Motor command blocked: waiting for motor feedback")
+            return
+        if all(v is None for v in self._motor_last_sent_abs):
+            self._seed_motor_last_sent_after_sync(s)
+        if s is not None:
+            for i in range(MOTOR_COUNT):
+                if self._motor_abs_pos[i] is None:
+                    self._motor_resync_one_channel(i)
+        targets = self._build_motor_abs_command_list()
+        self.controller.set_motor_positions_absolute(targets)
+        for i in range(min(MOTOR_COUNT, len(self._motor_last_sent_abs))):
+            self._motor_last_sent_abs[i] = targets[i]
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Motor absolute positions sent ({trigger})")
+
+    def _sync_motor_abs_from_slider_before_send(self, idx: int) -> None:
+        """Send / Send All 前：锁定当前会话圈，abs = base_turn*4096 + slider。"""
+        if idx < 0 or idx >= MOTOR_COUNT:
+            return
+        if self._motor_abs_pos[idx] is None:
+            self._motor_resync_one_channel(idx)
+        if self._motor_abs_pos[idx] is None:
+            return
+        cur = int(self._motor_target_vars[idx].get())
+        mapped = self._session_abs_from_slider_locked_turn(idx, cur, 0)
+        if mapped is None:
+            return
+        self._motor_abs_pos[idx] = mapped
+        self._motor_last_slider[idx] = cur
+
+    def _on_motor_slider_press(self, idx: int, _event=None) -> None:
+        if 0 <= idx < len(self._motor_slider_dragging):
+            self._motor_slider_dragging[idx] = True
+
+    def _on_motor_slider_release(self, idx: int, _event=None) -> None:
+        if 0 <= idx < len(self._motor_slider_dragging):
+            self._motor_slider_dragging[idx] = False
 
     def _should_use_realtime_pose(self) -> bool:
         # Runtime policy:
@@ -612,14 +860,23 @@ class HandGUI:
         self.root.destroy()
 
     def _refresh_port_options_main(self):
+        current_choice = ""
+        if hasattr(self, "port_select_var"):
+            current_choice = self.port_select_var.get() or ""
         self._ports_cache = list_ports()
         choices = ["No Connection"] + [f"{d} ({desc})" for d, desc in self._ports_cache]
         if hasattr(self, "port_combo_main"):
             self.port_combo_main["values"] = choices
-        if hasattr(self, "port_select_var") and (not self.port_select_var.get()) and choices:
-            self.port_select_var.set(choices[0])
+        if hasattr(self, "port_select_var") and choices:
+            if current_choice in choices:
+                self.port_select_var.set(current_choice)
+            else:
+                self.port_select_var.set("No Connection")
         if hasattr(self, "_port_menu"):
             self._refresh_port_menu()
+
+    def _on_port_combo_preopen(self, _event=None):
+        self._refresh_port_options_main()
 
     def _parse_mode_str(self, mode_str: str) -> Mode:
         if mode_str in ("遥操作", "Teleoperation"):
@@ -628,10 +885,80 @@ class HandGUI:
             return Mode.ALGORITHM
         return Mode.MONITOR
 
+    def _normalize_mode_name(self, mode_name: str) -> str:
+        m = (mode_name or "").strip()
+        if m in ("Control", "遥操作", "Teleoperation"):
+            return "Teleoperation"
+        if m in ("Algorithm", "算法"):
+            return "Algorithm"
+        return "Monitor"
+
+    def _refresh_mode_button_states(self) -> None:
+        btns = getattr(self, "_mode_buttons", {})
+        current = self._normalize_mode_name(self.mode_select_var.get())
+        for mode_name, btn in btns.items():
+            try:
+                if mode_name == current:
+                    btn.configure(
+                        relief=tk.SUNKEN,
+                        state="normal",
+                        bg="#e0e0e0",
+                        fg="blue",
+                        activebackground="#e0e0e0",
+                        activeforeground="blue",
+                    )
+                else:
+                    btn.configure(
+                        relief=tk.RAISED,
+                        state="normal",
+                        bg="#e0e0e0",
+                        fg="black",
+                        activebackground="#e0e0e0",
+                        activeforeground="black",
+                    )
+            except Exception:
+                pass
+
+    def _switch_mode_in_place(self, mode_name: str) -> None:
+        mode_norm = self._normalize_mode_name(mode_name)
+        self.mode_select_var.set(mode_norm)
+        if self._normalize_mode_name(self.current_mode) == mode_norm:
+            self._refresh_mode_button_states()
+            return
+        self.current_mode = mode_norm
+        self._rebuild_right_panel()
+        self._refresh_mode_button_states()
+        self._emit_action(f"Mode selected: {mode_norm}")
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Mode switched to {mode_norm}")
+
+    def _rebuild_right_panel(self) -> None:
+        holder = getattr(self, "_right_panel_holder", None)
+        if holder is None:
+            return
+        for child in holder.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        if self.current_mode in ("遥操作", "Teleoperation"):
+            self._setup_teleop_control_panel(holder)
+        elif self.current_mode in ("算法", "Algorithm"):
+            self._setup_algorithm_control_panel(holder)
+        else:
+            self._setup_control_panel(holder)
+
+    def _ensure_state_callback_registered(self) -> None:
+        try:
+            if self._on_state_update not in self.controller.update_callbacks:
+                self.controller.register_update_callback(self._on_state_update)
+        except Exception:
+            pass
+
     def _apply_port_mode_in_main(self):
-        """在主窗口直接应用端口/模式，不再弹独立启动窗口"""
+        """在主窗口直接应用端口（不重绘整窗）。模式切换仅替换右侧面板。"""
         mode_str = self.mode_select_var.get() or "Monitor"
-        mode = self._parse_mode_str(mode_str)
+        mode_norm = self._normalize_mode_name(mode_str)
 
         port = None
         choice = self.port_select_var.get()
@@ -644,27 +971,31 @@ class HandGUI:
                 port = self._ports_cache[0][0]
 
         old_port = self.current_port if self.current_port else None
-        old_mode = self._parse_mode_str(self.current_mode or "Monitor")
-        if old_port == port and old_mode == mode:
+        old_mode_norm = self._normalize_mode_name(self.current_mode or "Monitor")
+        if old_port == port and old_mode_norm == mode_norm:
             return
 
-        # 复用现有 controller：仅当端口变化时重连
-        reused_controller = self.controller
         if old_port != port:
-            reused_controller.shutdown()
+            self.controller.shutdown()
+            self._ensure_state_callback_registered()
             if port:
-                if not reused_controller.initialize(port):
+                if not self.controller.initialize(port):
                     messagebox.showerror("Connection Failed", f"Cannot open port: {port}")
+                    self.current_port = ""
+                    self.port_select_var.set("No Connection")
                     return
+                self.current_port = port
+                self._on_comm_ready()
+                if hasattr(self, "status_var"):
+                    self.status_var.set(f"Port connected: {port}")
+            else:
+                self.current_port = ""
+                self._clear_live_displays()
+                if hasattr(self, "status_var"):
+                    self.status_var.set("Disconnected")
 
-        # 解绑旧窗口回调，避免切换后回调叠加
-        try:
-            if self._on_state_update in reused_controller.update_callbacks:
-                reused_controller.update_callbacks.remove(self._on_state_update)
-        except Exception:
-            pass
-        self.root.destroy()
-        run(mode, reused_controller, port=port, gui=True)
+        if old_mode_norm != mode_norm:
+            self._switch_mode_in_place(mode_norm)
 
     def _on_state_update(self, state: HandModel):
         if not self._is_comm_connected():
@@ -683,15 +1014,16 @@ class HandGUI:
         self._update_display()
 
     def _setup_ui(self):
-        # Top bar: port selection + control buttons
+        # Top bar: port selection + mode switching
         top = ttk.Frame(self.root)
         top.pack(fill=tk.X, padx=6, pady=4)
-        refresh_btn = tk.Button(top, text="↻", width=2, command=self._refresh_port_options_main, cursor="hand2")
-        refresh_btn.pack(side=tk.LEFT, padx=(0, 4))
         ttk.Label(top, text="Port:").pack(side=tk.LEFT)
         self.port_select_var = tk.StringVar(value="")
         self.port_combo_main = ttk.Combobox(top, textvariable=self.port_select_var, width=26, state="readonly")
         self.port_combo_main.pack(side=tk.LEFT, padx=4)
+        self.port_combo_main.bind("<Button-1>", self._on_port_combo_preopen, add="+")
+        self.port_combo_main.bind("<FocusIn>", self._on_port_combo_preopen, add="+")
+        self.port_combo_main.bind("<KeyPress-Down>", self._on_port_combo_preopen, add="+")
         self.port_combo_main.bind("<<ComboboxSelected>>", lambda e: self._apply_port_mode_in_main())
         self._camera1_var = tk.StringVar(value="None")
         self._camera2_var = tk.StringVar(value="None")
@@ -707,10 +1039,21 @@ class HandGUI:
             self.port_select_var.set(matched if matched else self.current_port)
         else:
             self.port_select_var.set("No Connection")
-        ttk.Button(top, text="Reset", command=self._on_btn_reset).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(top, text="Calibrate", command=self._on_calibrate).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(top, text="Stop", command=self._on_btn_stop).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(top, text="Start", command=self._on_btn_start).pack(side=tk.RIGHT, padx=2)
+        mode_btn_row = ttk.Frame(top)
+        mode_btn_row.pack(side=tk.LEFT, padx=(8, 2))
+        self._mode_buttons = {}
+        for label, mode_name in [("Manual", "Monitor"), ("Teleop", "Teleoperation"), ("Algorithm", "Algorithm")]:
+            btn = tk.Button(
+                mode_btn_row,
+                text=label,
+                width=9,
+                cursor="hand2",
+                bd=1,
+                command=lambda m=mode_name: self._switch_mode_in_place(m),
+            )
+            btn.pack(side=tk.LEFT, padx=1)
+            self._mode_buttons[mode_name] = btn
+        self._refresh_mode_button_states()
 
         # weight：窗口被拉大时“多出来的宽度”按权重分给各格；不保证首屏分割线就是 2:1
         # 若要与 weight 一致，需在布局完成后设 sash（见 _set_initial_main_sash）
@@ -718,7 +1061,7 @@ class HandGUI:
         main.pack(fill=tk.BOTH, expand=True)
         self._main_paned = main
         self._main_left_weight = 2
-        self._main_right_weight = 1
+        self._main_right_weight = 3
 
         # 左侧垂直分割：上 URDF 3D 姿态，下触觉矩阵 + 相机
         left_col = ttk.PanedWindow(main, orient=tk.VERTICAL)
@@ -740,15 +1083,12 @@ class HandGUI:
 
         right = ttk.Frame(main)
         main.add(right, weight=self._main_right_weight)
-        if self.current_mode in ("遥操作", "Teleoperation"):
-            self._setup_teleop_control_panel(right)
-        elif self.current_mode in ("算法", "Algorithm"):
-            self._setup_algorithm_control_panel(right)
-        else:
-            self._setup_control_panel(right)
+        self._right_panel_holder = right
+        self._rebuild_right_panel()
 
         self._setup_status_bar()
         self.root.after(100, self._set_initial_main_sash)
+        self.root.after(120, self._set_initial_tactile_camera_sash)
 
     def _set_initial_main_sash(self) -> None:
         """首次显示后把主区左右分割线设成与 weight 比例一致（ttk PanedWindow 默认常接近 1:1）。"""
@@ -767,6 +1107,21 @@ class HandGUI:
                 return
             # 左窗格右边缘像素位置 = 总宽 * wl/(wl+wr)
             paned.sashpos(0, int(w * wl / (wl + wr)))
+        except (tk.TclError, AttributeError, ZeroDivisionError):
+            pass
+
+    def _set_initial_tactile_camera_sash(self) -> None:
+        """首次显示后把左下触觉/摄像头分割线设到中间，避免初始时右侧相机栏被挤没。"""
+        try:
+            paned = getattr(self, "_tactile_cam_paned", None)
+            if paned is None:
+                return
+            self.root.update_idletasks()
+            w = int(paned.winfo_width())
+            if w <= 10:
+                self.root.after(120, self._set_initial_tactile_camera_sash)
+                return
+            paned.sashpos(0, int(w / 2))
         except (tk.TclError, AttributeError, ZeroDivisionError):
             pass
 
@@ -879,12 +1234,10 @@ class HandGUI:
 
     def _toggle_tactile_axis(self, axis: int):
         labels = ["X", "Y", "Z"]
-        if axis in self._tactile_axes_selected:
-            self._tactile_axes_selected.discard(axis)
-            self._emit_action(f"Tactile axis {labels[axis]} OFF")
-        else:
-            self._tactile_axes_selected.add(axis)
-            self._emit_action(f"Tactile axis {labels[axis]} ON")
+        if axis == getattr(self, "_tactile_axis_selected", 2):
+            return
+        self._tactile_axis_selected = axis
+        self._emit_action(f"Tactile axis {labels[axis]} selected")
         self._tactile_fig_sel_sig = None  # 强制重建子图布局
         self._refresh_tactile_axis_button_states()
         with self._state_lock:
@@ -916,7 +1269,7 @@ class HandGUI:
         if not hasattr(self, "_tactile_axis_buttons"):
             return
         for i, btn in enumerate(self._tactile_axis_buttons):
-            selected = i in self._tactile_axes_selected
+            selected = i == getattr(self, "_tactile_axis_selected", 2)
             if selected:
                 btn.configure(bg="#e0e0e0", fg="blue")
             else:
@@ -968,68 +1321,39 @@ class HandGUI:
         return out
 
     def _rebuild_tactile_figure(self) -> None:
-        """固定 1×3 子图（X | Y | Z），未选中的方向保留占位格，不随选中数缩放。"""
+        """触觉区固定为单子图，仅显示当前选中的一个通道。"""
         if not hasattr(self, "_tactile_fig"):
             return
         self._clear_tactile_anatomy_overlay()
         self._tactile_fig.clear()
         self._tactile_subplot_imgs = []
         self._tactile_no_data_texts = []
-        axes_arr = self._tactile_fig.subplots(1, 3, squeeze=False, sharey=True)
-        axes_row = axes_arr[0]
         spec = TACTILE_STITCH_SPEC
         mat0 = np.full((spec.height, spec.width), np.nan, dtype=float)
-
-        for i in range(3):
-            ax = axes_row[i]
-            on = i in self._tactile_axes_selected
-            if on:
-                cmap0, norm0 = _make_tactile_sensors_only_cmap_norm(1.0)
-                im = ax.imshow(
-                    np.ma.masked_invalid(mat0),
-                    cmap=cmap0,
-                    norm=norm0,
-                    aspect="equal",
-                    interpolation="nearest",
-                )
-                nd = ax.text(
-                    0.5,
-                    0.5,
-                    "No tactile data",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
-                    fontsize=9,
-                    color="white",
-                    alpha=0.85,
-                )
-                self._tactile_no_data_texts.append(nd)
-            else:
-                im = ax.imshow(
-                    mat0,
-                    cmap="gray",
-                    aspect="auto",
-                    vmin=0.25,
-                    vmax=0.35,
-                    interpolation="nearest",
-                )
-                ax.text(
-                    0.5,
-                    0.5,
-                    "未选择",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
-                    fontsize=10,
-                    color="silver",
-                )
-                self._tactile_no_data_texts.append(None)
-
-            # 去掉各通道子图外框（spines），仅保留热力图内容
-            ax.axis("off")
-            self._tactile_subplot_imgs.append(im)
-        # tight_layout 会给子图留边并拉开间距；无坐标轴时用手动边距更紧凑
-        self._tactile_fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.98, wspace=0.06)
+        ax = self._tactile_fig.subplots(1, 1)
+        cmap0, norm0 = _make_tactile_sensors_only_cmap_norm(1.0)
+        im = ax.imshow(
+            np.ma.masked_invalid(mat0),
+            cmap=cmap0,
+            norm=norm0,
+            aspect="equal",
+            interpolation="nearest",
+        )
+        nd = ax.text(
+            0.5,
+            0.5,
+            "No tactile data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="white",
+            alpha=0.85,
+        )
+        ax.axis("off")
+        self._tactile_subplot_imgs.append(im)
+        self._tactile_no_data_texts.append(nd)
+        self._tactile_fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.98)
 
     def _setup_tactile_matrix_widget(self, parent):
         """触觉空间矩阵：15 个传感器按 5 指 x 3 骨段拼成一个热力图"""
@@ -1039,7 +1363,7 @@ class HandGUI:
         # 标题与触觉轴按钮同一行
         self._tactile_row = ttk.Frame(frame)
         self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
-        ttk.Label(self._tactile_row, text="Axes (multi):").pack(side=tk.LEFT, padx=2)
+        ttk.Label(self._tactile_row, text="Axis:").pack(side=tk.LEFT, padx=2)
         self._tactile_fake_var = tk.BooleanVar(value=not bool(getattr(self, "_ports_cache", [])))
         self._tactile_fake_check = ttk.Checkbutton(
             self._tactile_row,
@@ -1053,10 +1377,10 @@ class HandGUI:
             btn = tk.Button(
                 self._tactile_row,
                 text=label,
-                width=3,
+                width=2,
                 command=lambda a=axis: self._toggle_tactile_axis(a),
             )
-            btn.pack(side=tk.LEFT, padx=2)
+            btn.pack(side=tk.LEFT, padx=1)
             self._tactile_axis_buttons.append(btn)
         self._refresh_tactile_axis_button_states()
 
@@ -1067,7 +1391,7 @@ class HandGUI:
         self._tactile_subplot_imgs: List = []
         self._tactile_no_data_texts: List = []
         self._rebuild_tactile_figure()
-        self._tactile_fig_sel_sig = frozenset(self._tactile_axes_selected)
+        self._tactile_fig_sel_sig = int(getattr(self, "_tactile_axis_selected", 2))
         self._tactile_anatomy_artists: List = []
         self._tactile_canvas.draw_idle()
 
@@ -1117,16 +1441,17 @@ class HandGUI:
         self._tactile_anatomy_artists.append(sc)
 
     def _setup_tactile_and_camera_widgets(self, parent):
-        """将原触觉窗格拆分为左右两栏：左触觉矩阵，右相机图像（触觉更窄，相机更宽）"""
+        """将下方区域拆分为左右两栏：触觉矩阵与相机各占左侧主区一半宽度。"""
         split = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
         split.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
+        self._tactile_cam_paned = split
 
         left_frame = ttk.Frame(split)
         split.add(left_frame, weight=1)
         self._setup_tactile_matrix_widget(left_frame)
 
         cam_frame = ttk.LabelFrame(split, text="")
-        split.add(cam_frame, weight=2)
+        split.add(cam_frame, weight=1)
         try:
             split.pane(left_frame, minsize=100)
             split.pane(cam_frame, minsize=120)
@@ -1316,34 +1641,31 @@ class HandGUI:
     def _update_tactile_matrix_widget(self, state: Optional[HandModel]):
         if not hasattr(self, "_tactile_subplot_imgs"):
             return
-        sig = frozenset(self._tactile_axes_selected)
+        sig = int(getattr(self, "_tactile_axis_selected", 2))
         if sig != getattr(self, "_tactile_fig_sel_sig", object()):
             self._rebuild_tactile_figure()
             self._tactile_fig_sel_sig = sig
 
         self._clear_tactile_anatomy_overlay()
-
-        for ax_i, (im, nd_txt) in enumerate(
-            zip(self._tactile_subplot_imgs, self._tactile_no_data_texts)
-        ):
-            if ax_i not in self._tactile_axes_selected or nd_txt is None:
-                continue
-            mat = self._build_tactile_spatial_matrix(state, ax_i)
-            tactile_pos = mat[np.isfinite(mat) & (mat >= 0.0)]
-            vmax = float(np.max(tactile_pos)) if tactile_pos.size > 0 else 0.0
-            vmax = max(vmax, 1.0)
-            cmap_u, norm_u = _make_tactile_sensors_only_cmap_norm(vmax)
-            im.set_data(np.ma.masked_invalid(mat))
-            im.set_cmap(cmap_u)
-            im.set_norm(norm_u)
-            has_data = bool(
-                state
-                and state.tactile_data
-                and tactile_pos.size > 0
-                and (np.max(tactile_pos) > 1e-9)
-            )
-            nd_txt.set_visible(not has_data)
-            self._draw_tactile_anatomy_overlay_sensors_only(im.axes, mat)
+        axis = int(getattr(self, "_tactile_axis_selected", 2))
+        im = self._tactile_subplot_imgs[0]
+        nd_txt = self._tactile_no_data_texts[0]
+        mat = self._build_tactile_spatial_matrix(state, axis)
+        tactile_pos = mat[np.isfinite(mat) & (mat >= 0.0)]
+        vmax = float(np.max(tactile_pos)) if tactile_pos.size > 0 else 0.0
+        vmax = max(vmax, 1.0)
+        cmap_u, norm_u = _make_tactile_sensors_only_cmap_norm(vmax)
+        im.set_data(np.ma.masked_invalid(mat))
+        im.set_cmap(cmap_u)
+        im.set_norm(norm_u)
+        has_data = bool(
+            state
+            and state.tactile_data
+            and tactile_pos.size > 0
+            and (np.max(tactile_pos) > 1e-9)
+        )
+        nd_txt.set_visible(not has_data)
+        self._draw_tactile_anatomy_overlay_sensors_only(im.axes, mat)
         self._tactile_canvas.draw_idle()
 
     def _get_generated_pose_angles(self) -> List[float]:
@@ -1472,39 +1794,129 @@ class HandGUI:
             self._pose_nodes_artist._offsets3d = (xs, ys, zs)
 
     def _setup_control_panel(self, parent):
-        panel = ttk.LabelFrame(parent, text=f"Interactive Control (J{ENCODER_COUNT} / M{MOTOR_COUNT})")
+        panel = ttk.LabelFrame(parent, text="Manual Control")
         panel.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        mode_row = ttk.Frame(panel)
-        mode_row.pack(fill=tk.X, padx=2, pady=2)
+        device_box = ttk.LabelFrame(panel, text="Device")
+        device_box.pack(fill=tk.X, padx=6, pady=(6, 4))
+        device_grid = ttk.Frame(device_box)
+        device_grid.pack(anchor="w", padx=6, pady=6)
+        device_grid.columnconfigure(0, weight=0)
+        device_grid.columnconfigure(1, weight=0)
+        device_grid.columnconfigure(2, weight=0)
+
+        ttk.Button(device_grid, text="Enable", width=11, command=self._on_btn_start).grid(
+            row=0, column=0, padx=(0, 6), pady=(0, 4), sticky="w"
+        )
+        ttk.Button(device_grid, text="Home", width=11, command=self._on_btn_home).grid(
+            row=0, column=1, padx=(0, 6), pady=(0, 4), sticky="w"
+        )
+        ttk.Button(device_grid, text="Calibrate", width=11, command=self._on_calibrate).grid(
+            row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="w"
+        )
+        ttk.Button(device_grid, text="Clear Fault", width=11, command=self._on_btn_reset).grid(
+            row=1, column=1, padx=(0, 6), pady=(0, 0), sticky="w"
+        )
+        self._estop_btn = tk.Label(
+            device_grid,
+            text="E-STOP",
+            bg="#c62828",
+            fg="#fff7f7",
+            relief=tk.RAISED,
+            bd=2,
+            font=("", 12, "bold"),
+            width=12,
+            height=3,
+            cursor="hand2",
+            padx=10,
+            pady=2,
+        )
+        self._estop_btn.grid(
+            row=0, column=2, rowspan=2, padx=(8, 0), pady=0, sticky="nsw"
+        )
+        self._estop_btn.bind("<Button-1>", lambda _event: self._on_btn_stop())
+        self._estop_btn.bind("<ButtonRelease-1>", lambda _event: self._estop_btn.configure(bg="#c62828"))
+        self._estop_btn.bind("<Enter>", lambda _event: self._estop_btn.configure(bg="#b71c1c"))
+        self._estop_btn.bind("<Leave>", lambda _event: self._estop_btn.configure(bg="#c62828"))
+
+        workflow_box = ttk.LabelFrame(panel, text="Workflow")
+        workflow_box.pack(fill=tk.X, padx=6, pady=4)
+        mode_row = ttk.Frame(workflow_box)
+        mode_row.pack(fill=tk.X, padx=6, pady=(6, 4))
         ttk.Label(mode_row, text="Mode:").pack(side=tk.LEFT)
         self._interaction_enabled = False
         self._control_widgets: List[tk.Widget] = []
         self._ctrl_mode_var = tk.StringVar(value="joint")
-        rb_joint = ttk.Radiobutton(mode_row, text="Joint Control", variable=self._ctrl_mode_var, value="joint",
-                                   command=self._switch_control_mode)
+        rb_joint = ttk.Radiobutton(
+            mode_row,
+            text="Whole-Hand PID",
+            variable=self._ctrl_mode_var,
+            value="joint",
+            command=self._switch_control_mode,
+        )
         rb_joint.pack(side=tk.LEFT, padx=4)
-        rb_motor = ttk.Radiobutton(mode_row, text="Motor Control", variable=self._ctrl_mode_var, value="motor",
-                                   command=self._switch_control_mode)
+        rb_motor = ttk.Radiobutton(
+            mode_row,
+            text="Single-Motor Open-Loop",
+            variable=self._ctrl_mode_var,
+            value="motor",
+            command=self._switch_control_mode,
+        )
         rb_motor.pack(side=tk.LEFT, padx=4)
-        # Keep mode switchers always enabled, even when Interaction is OFF,
-        # so users can still switch between Joint/Motor views to inspect data.
-        self._interaction_btn = ttk.Button(mode_row, text="Interaction: OFF", command=self._toggle_interaction_control)
+        self._interaction_btn = ttk.Button(mode_row, text="Hand Manual: OFF", command=self._toggle_interaction_control)
         self._interaction_btn.pack(side=tk.RIGHT, padx=2)
 
-        self._ctrl_body = ttk.Frame(panel)
-        self._ctrl_body.pack(fill=tk.BOTH, expand=True)
+        self._table_section = ttk.LabelFrame(panel, text=f"Channel Table (J{ENCODER_COUNT} / M{MOTOR_COUNT})")
+        self._table_section.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
+        self._batch_action_row = ttk.Frame(self._table_section)
+        self._batch_action_row.pack(fill=tk.X, padx=4, pady=(4, 2))
+        self._open_pose_btn = ttk.Button(
+            self._batch_action_row,
+            text="Open Pose",
+            width=11,
+            command=self._apply_preset_open,
+        )
+        self._open_pose_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._fist_pose_btn = ttk.Button(
+            self._batch_action_row,
+            text="Fist Pose",
+            width=11,
+            command=self._apply_preset_fist,
+        )
+        self._fist_pose_btn.pack(side=tk.LEFT, padx=4)
+        self._zero_pose_btn = ttk.Button(
+            self._batch_action_row,
+            text="Zero Pose",
+            width=11,
+            command=self._apply_preset_zero,
+        )
+        self._zero_pose_btn.pack(side=tk.LEFT, padx=4)
+        self._send_all_btn = ttk.Button(self._batch_action_row, text="Send All", command=self._apply_all_angles)
+        self._send_all_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self._ctrl_body = ttk.Frame(self._table_section)
+        self._ctrl_body.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         self._joint_panel = ttk.Frame(self._ctrl_body)
         self._motor_panel = ttk.Frame(self._ctrl_body)
 
         self._joint_curr_vars: List[tk.StringVar] = []
         self._joint_target_vars: List[tk.DoubleVar] = []
+        self._joint_target_user_set: List[bool] = []
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
         self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
         self._motor_target_vars: List[tk.IntVar] = []
+        self._motor_target_user_set: List[bool] = []
         self._motor_target_initialized = False
+        self._motor_abs_pos: List[Optional[int]] = [None] * MOTOR_COUNT
+        self._motor_session_origin_abs: List[Optional[int]] = [None] * MOTOR_COUNT
+        self._motor_dir_hint: List[int] = [0] * MOTOR_COUNT
+        self._motor_dir_hint_pending_clear: List[bool] = [False] * MOTOR_COUNT
+        self._motor_dir_hint_stable_count: List[int] = [0] * MOTOR_COUNT
+        self._motor_last_slider: List[Optional[int]] = [None] * MOTOR_COUNT
+        self._motor_slider_dragging: List[bool] = [False] * MOTOR_COUNT
+        self._motor_first_drag_limit_active: List[bool] = [True] * MOTOR_COUNT
+        self._motor_last_sent_abs: List[Optional[int]] = [None] * MOTOR_COUNT
 
         self._build_mode_table(self._joint_panel, is_motor=False)
         self._build_mode_table(self._motor_panel, is_motor=True)
@@ -1514,6 +1926,7 @@ class HandGUI:
                 w.configure(state="disabled")
             except Exception:
                 pass
+        self._update_manual_action_buttons()
         self._switch_control_mode()
 
     def _setup_teleop_control_panel(self, parent):
@@ -1635,16 +2048,16 @@ class HandGUI:
         header.pack(fill=tk.X, padx=2, pady=(2, 4))
         if is_motor:
             ttk.Label(header, text="Channel").grid(row=0, column=0, padx=2, sticky="w")
-            ttk.Label(header, text="Current Raw").grid(row=0, column=1, padx=2, sticky="w")
-            ttk.Label(header, text="Target Raw").grid(row=0, column=2, padx=2, sticky="w")
-            ttk.Label(header, text="Confirm").grid(row=0, column=3, padx=2, sticky="w")
-            ttk.Label(header, text="Raw Slider").grid(row=0, column=4, padx=2, sticky="w")
+            ttk.Label(header, text="当前(0–4095)").grid(row=0, column=1, padx=2, sticky="w")
+            ttk.Label(header, text="目标(0–4095)").grid(row=0, column=2, padx=2, sticky="w")
+            ttk.Label(header, text="Action").grid(row=0, column=3, padx=2, sticky="w")
+            ttk.Label(header, text="Step / Raw Slider").grid(row=0, column=4, columnspan=3, padx=2, sticky="w")
         else:
             ttk.Label(header, text="Channel").grid(row=0, column=0, padx=2, sticky="w")
             ttk.Label(header, text="Encoder").grid(row=0, column=1, padx=2, sticky="w")
             ttk.Label(header, text="Current").grid(row=0, column=2, padx=2, sticky="w")
             ttk.Label(header, text="Target").grid(row=0, column=3, padx=2, sticky="w")
-            ttk.Label(header, text="Confirm").grid(row=0, column=4, padx=2, sticky="w")
+            ttk.Label(header, text="Action").grid(row=0, column=4, padx=2, sticky="w")
             ttk.Label(header, text="Target Slider").grid(row=0, column=5, padx=2, sticky="w")
 
         channel_count = MOTOR_COUNT if is_motor else ENCODER_COUNT
@@ -1661,10 +2074,16 @@ class HandGUI:
                 target = tk.IntVar(value=0)
                 self._motor_curr_vars.append(curr)
                 self._motor_target_vars.append(target)
+                self._motor_target_user_set.append(False)
                 ent = ttk.Entry(row, textvariable=target, width=8)
                 ent.grid(row=0, column=2, padx=1, sticky="w")
-                btn = ttk.Button(row, text="OK", width=4, command=lambda idx=i: self._confirm_motor_row(idx))
+                ent.bind("<KeyRelease>", lambda _e, idx=i: self._mark_motor_target_user_set(idx))
+                ent.bind("<FocusOut>", lambda _e, idx=i: self._mark_motor_target_user_set(idx))
+                btn = ttk.Button(row, text="Send", width=5, command=lambda idx=i: self._confirm_motor_row(idx))
                 btn.grid(row=0, column=3, padx=1, sticky="w")
+                self._motor_run_buttons.append(btn)
+                minus_btn = ttk.Button(row, text="-", width=3, command=lambda idx=i: self._step_motor_target(idx, -1))
+                minus_btn.grid(row=0, column=4, padx=(1, 0), sticky="w")
                 sld = ttk.Scale(
                     row,
                     from_=MOTOR_TARGET_SCALE_LO,
@@ -1674,8 +2093,12 @@ class HandGUI:
                     length=130,
                     command=lambda value, idx=i: self._on_motor_slider_change(idx, value),
                 )
-                sld.grid(row=0, column=4, padx=1, sticky="we")
-                self._control_widgets.extend([ent, btn, sld])
+                sld.grid(row=0, column=5, padx=1, sticky="we")
+                sld.bind("<ButtonPress-1>", lambda e, idx=i: self._on_motor_slider_press(idx, e), add="+")
+                sld.bind("<ButtonRelease-1>", lambda e, idx=i: self._on_motor_slider_release(idx, e), add="+")
+                plus_btn = ttk.Button(row, text="+", width=3, command=lambda idx=i: self._step_motor_target(idx, 1))
+                plus_btn.grid(row=0, column=6, padx=(0, 1), sticky="w")
+                self._control_widgets.extend([ent, btn, minus_btn, sld, plus_btn])
             else:
                 dot_canvas = tk.Canvas(row, width=12, height=12, highlightthickness=0, bd=0)
                 dot_item = dot_canvas.create_oval(2, 2, 10, 10, fill="#9aa0a6", outline="#9aa0a6")
@@ -1686,10 +2109,14 @@ class HandGUI:
                 target = tk.DoubleVar(value=0.0)
                 self._joint_curr_vars.append(curr)
                 self._joint_target_vars.append(target)
+                self._joint_target_user_set.append(False)
                 ent = ttk.Entry(row, textvariable=target, width=8)
                 ent.grid(row=0, column=3, padx=1, sticky="w")
-                btn = ttk.Button(row, text="OK", width=4, command=lambda idx=i: self._confirm_joint_row(idx))
+                ent.bind("<KeyRelease>", lambda _e, idx=i: self._mark_joint_target_user_set(idx))
+                ent.bind("<FocusOut>", lambda _e, idx=i: self._mark_joint_target_user_set(idx))
+                btn = ttk.Button(row, text="Send", width=5, command=lambda idx=i: self._confirm_joint_row(idx))
                 btn.grid(row=0, column=4, padx=1, sticky="w")
+                self._joint_run_buttons.append(btn)
                 sld = ttk.Scale(
                     row,
                     from_=-90,
@@ -1704,15 +2131,73 @@ class HandGUI:
 
     def _switch_control_mode(self):
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        self._clear_run_states()
         self._joint_panel.pack_forget()
         self._motor_panel.pack_forget()
         if mode == "motor":
+            if hasattr(self, "_motor_dir_hint"):
+                self._motor_dir_hint = [0] * MOTOR_COUNT
+            if hasattr(self, "_motor_dir_hint_pending_clear"):
+                self._motor_dir_hint_pending_clear = [False] * MOTOR_COUNT
+            if hasattr(self, "_motor_dir_hint_stable_count"):
+                self._motor_dir_hint_stable_count = [0] * MOTOR_COUNT
+            if hasattr(self, "_motor_first_drag_limit_active"):
+                self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
             self._motor_panel.pack(fill=tk.BOTH, expand=True)
             self._refresh_motor_feedback_view(sync_target=True)
+            if hasattr(self, "_table_section"):
+                self._table_section.configure(text=f"Motor Channels (M{MOTOR_COUNT})")
         else:
             self._joint_panel.pack(fill=tk.BOTH, expand=True)
             self._refresh_joint_feedback_view(sync_target=True)
+            if hasattr(self, "_table_section"):
+                self._table_section.configure(text=f"Joint Channels (J{ENCODER_COUNT})")
+        self._update_manual_action_buttons()
         self._apply_interaction_control_policy()
+
+    def _mark_joint_target_user_set(self, idx: int) -> None:
+        if 0 <= idx < len(self._joint_target_user_set):
+            self._joint_target_user_set[idx] = True
+
+    def _mark_motor_target_user_set(self, idx: int) -> None:
+        if 0 <= idx < len(self._motor_target_user_set):
+            self._motor_target_user_set[idx] = True
+
+    def _joint_feedback_target(self, idx: int) -> float:
+        with self._state_lock:
+            s = self._state
+        if s and bool(getattr(s, "has_sensor_data", False)) and idx < len(s.angles):
+            return float(s.angles[idx])
+        if idx < len(self._joint_target_vars):
+            try:
+                return float(self._joint_target_vars[idx].get())
+            except Exception:
+                return 0.0
+        return 0.0
+
+    def _motor_feedback_target(self, idx: int) -> int:
+        with self._state_lock:
+            s = self._state
+        if s and bool(getattr(s, "has_servo_raw_data", False)) and idx < len(s.servo_raw_positions):
+            return int(self._motor_target_from_servo_feedback(s.servo_raw_positions[idx]))
+        if idx < len(self._motor_target_vars):
+            try:
+                return int(self._motor_target_vars[idx].get())
+            except Exception:
+                return 0
+        return 0
+
+    def _resolved_joint_targets(self) -> List[float]:
+        targets: List[float] = []
+        for i in range(ENCODER_COUNT):
+            if i < len(self._joint_target_vars) and i < len(self._joint_target_user_set) and self._joint_target_user_set[i]:
+                try:
+                    targets.append(float(self._joint_target_vars[i].get()))
+                except Exception:
+                    targets.append(self._joint_feedback_target(i))
+            else:
+                targets.append(self._joint_feedback_target(i))
+        return targets
 
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         if not hasattr(self, "_joint_curr_vars"):
@@ -1738,6 +2223,8 @@ class HandGUI:
         if joint_has_data and sync_target:
             for i in range(min(ENCODER_COUNT, len(s.angles), len(self._joint_target_vars))):
                 self._joint_target_vars[i].set(float(s.angles[i]))
+                if i < len(self._joint_target_user_set):
+                    self._joint_target_user_set[i] = False
             self._joint_target_initialized = True
 
     def _refresh_motor_feedback_view(self, sync_target: bool = False) -> None:
@@ -1748,29 +2235,113 @@ class HandGUI:
         if not s:
             return
 
-        motor_has_data = bool(getattr(s, "has_servo_angle_data", False))
+        motor_has_raw = bool(getattr(s, "has_servo_raw_data", False))
+        motor_has_abs = bool(getattr(s, "has_servo_angle_data", False))
         for i in range(min(MOTOR_COUNT, len(self._motor_curr_vars))):
-            if motor_has_data and i < len(s.servo_angles):
-                self._motor_curr_vars[i].set(f"{int(s.servo_angles[i]):6d}")
+            if (
+                motor_has_raw
+                and i < len(s.servo_raw_positions)
+                and i < len(s.servo_raw_online)
+                and s.servo_raw_online[i]
+            ):
+                st = self._motor_target_from_servo_feedback(s.servo_raw_positions[i])
+                self._motor_curr_vars[i].set(f"{st:4d}")
+            elif motor_has_abs and i < len(s.servo_angles) and i < len(s.servo_online) and s.servo_online[i]:
+                ab = self._clamp_motor_abs_cmd(int(s.servo_angles[i]))
+                st = self._slider_from_abs_pos(ab)
+                self._motor_curr_vars[i].set(f"{st:4d}")
             else:
                 self._motor_curr_vars[i].set("-")
 
-        if motor_has_data and sync_target:
-            for i in range(min(MOTOR_COUNT, len(s.servo_angles), len(self._motor_target_vars))):
-                self._motor_target_vars[i].set(
-                    self._motor_target_from_servo_feedback(s.servo_angles[i])
-                )
-            self._motor_target_initialized = True
+        # 仅首帧 sync_target：一次性用反馈对齐 abs + 滑条（之后不再自动改滑条）。
+        if (motor_has_raw or motor_has_abs) and sync_target:
+            if bool(getattr(s, "has_servo_angle_data", False)):
+                for i in range(min(MOTOR_COUNT, len(self._motor_target_vars))):
+                    if i < len(s.servo_online) and s.servo_online[i] and i < len(s.servo_angles):
+                        dev_abs = self._clamp_motor_abs_cmd(int(s.servo_angles[i]))
+                        self._motor_session_origin_abs[i] = dev_abs
+                        self._motor_abs_pos[i] = 0
+                        sl = self._slider_from_abs_pos(dev_abs)
+                        self._motor_last_slider[i] = sl
+                        self._motor_target_vars[i].set(sl)
+                    if i < len(self._motor_target_user_set):
+                        self._motor_target_user_set[i] = False
+                self._motor_target_initialized = True
+                self._seed_motor_last_sent_after_sync(s)
+            else:
+                for i in range(min(MOTOR_COUNT, len(s.servo_raw_positions), len(self._motor_target_vars))):
+                    if i < len(s.servo_raw_online) and s.servo_raw_online[i]:
+                        single = self._motor_target_from_servo_feedback(s.servo_raw_positions[i])
+                        dev_abs = self._clamp_motor_abs_cmd(single)
+                        self._motor_session_origin_abs[i] = dev_abs
+                        self._motor_abs_pos[i] = 0
+                        self._motor_last_slider[i] = single
+                        self._motor_target_vars[i].set(single)
+                    if i < len(self._motor_target_user_set):
+                        self._motor_target_user_set[i] = False
+                self._motor_target_initialized = True
+                self._seed_motor_last_sent_after_sync(s)
+
+        # 一次性方向覆盖：到位稳定后自动清零，继续等待下一次 +/-。
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        if mode == "motor":
+            for i in range(MOTOR_COUNT):
+                if i >= len(self._motor_dir_hint):
+                    break
+                if self._motor_dir_hint[i] == 0:
+                    if i < len(self._motor_dir_hint_pending_clear):
+                        self._motor_dir_hint_pending_clear[i] = False
+                    if i < len(self._motor_dir_hint_stable_count):
+                        self._motor_dir_hint_stable_count[i] = 0
+                    continue
+                if i >= len(self._motor_dir_hint_pending_clear) or not self._motor_dir_hint_pending_clear[i]:
+                    continue
+                if i >= len(self._motor_target_vars):
+                    continue
+
+                cur_single = None
+                if (
+                    motor_has_raw
+                    and i < len(s.servo_raw_positions)
+                    and i < len(s.servo_raw_online)
+                    and s.servo_raw_online[i]
+                ):
+                    cur_single = self._motor_target_from_servo_feedback(s.servo_raw_positions[i])
+                elif (
+                    motor_has_abs
+                    and i < len(s.servo_angles)
+                    and i < len(s.servo_online)
+                    and s.servo_online[i]
+                ):
+                    cur_single = self._slider_from_abs_pos(int(s.servo_angles[i]))
+
+                if cur_single is None:
+                    self._motor_dir_hint_stable_count[i] = 0
+                    continue
+
+                tgt_single = self._read_motor_target_slider_int(i)
+                if self._single_turn_diff(cur_single, tgt_single) <= MOTOR_DIR_HINT_CLEAR_TOL:
+                    self._motor_dir_hint_stable_count[i] += 1
+                else:
+                    self._motor_dir_hint_stable_count[i] = 0
+
+                if self._motor_dir_hint_stable_count[i] >= MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES:
+                    self._motor_dir_hint[i] = 0
+                    self._motor_dir_hint_pending_clear[i] = False
+                    self._motor_dir_hint_stable_count[i] = 0
 
     def _toggle_interaction_control(self):
         self._interaction_enabled = not self._interaction_enabled
-        self._interaction_btn.config(text=f"Interaction: {'ON' if self._interaction_enabled else 'OFF'}")
+        if self._interaction_enabled and hasattr(self, "status_var"):
+            self.status_var.set("Interaction enabled")
+        self._interaction_btn.config(text=f"Arm Manual: {'ON' if self._interaction_enabled else 'OFF'}")
         state = "normal" if self._interaction_enabled else "disabled"
         for w in self._control_widgets:
             try:
                 w.configure(state=state)
             except Exception:
                 pass
+        self._update_manual_action_buttons()
         self._apply_interaction_control_policy()
 
     def _apply_interaction_control_policy(self):
@@ -1790,40 +2361,111 @@ class HandGUI:
             self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
             self.controller.set_pid_control(bool(getattr(self, "_interaction_enabled", False)))
 
+    def _clear_run_states(self) -> None:
+        self._joint_run_states = [False] * ENCODER_COUNT
+        self._motor_run_states = [False] * MOTOR_COUNT
+        for btn in getattr(self, "_joint_run_buttons", []):
+            try:
+                btn.configure(text="Send")
+            except Exception:
+                pass
+        for btn in getattr(self, "_motor_run_buttons", []):
+            try:
+                btn.configure(text="Send")
+            except Exception:
+                pass
+
+    def _set_row_running(self, is_motor: bool, idx: int, running: bool) -> None:
+        states = self._motor_run_states if is_motor else self._joint_run_states
+        buttons = self._motor_run_buttons if is_motor else self._joint_run_buttons
+        if 0 <= idx < len(states):
+            states[idx] = bool(running)
+        if 0 <= idx < len(buttons):
+            try:
+                buttons[idx].configure(text="Hold" if running else "Send")
+            except Exception:
+                pass
+
+    def _update_manual_action_buttons(self) -> None:
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        interaction_on = bool(getattr(self, "_interaction_enabled", False))
+        joint_state = "normal" if mode == "joint" else "disabled"
+        send_all_state = "normal" if interaction_on else "disabled"
+        for btn_name in ("_open_pose_btn", "_fist_pose_btn", "_zero_pose_btn"):
+            btn = getattr(self, btn_name, None)
+            if btn is not None:
+                btn.configure(state=joint_state)
+        if hasattr(self, "_open_pose_btn"):
+            self._open_pose_btn.pack_configure(padx=(0, 4))
+        if hasattr(self, "_send_all_btn"):
+            self._send_all_btn.configure(state=send_all_state)
+            self._send_all_btn.pack_configure(padx=(8, 0))
+
+    def _hold_joint_row_at_feedback(self, idx: int) -> None:
+        if idx < len(self._joint_target_vars):
+            self._joint_target_vars[idx].set(self._joint_feedback_target(idx))
+        if idx < len(self._joint_target_user_set):
+            self._joint_target_user_set[idx] = False
+        targets = self._resolved_joint_targets()
+        self.controller.set_target_angles(targets)
+
+    def _hold_motor_row_at_feedback(self, idx: int) -> None:
+        with self._state_lock:
+            s = self._state
+        if (
+            s
+            and bool(getattr(s, "has_servo_angle_data", False))
+            and idx < len(s.servo_angles)
+            and idx < len(s.servo_online)
+            and s.servo_online[idx]
+        ):
+            dev_abs = self._clamp_motor_abs_cmd(int(s.servo_angles[idx]))
+            if idx < len(self._motor_session_origin_abs) and self._motor_session_origin_abs[idx] is None:
+                self._motor_session_origin_abs[idx] = dev_abs
+            origin = self._motor_session_origin_abs[idx] if idx < len(self._motor_session_origin_abs) else 0
+            self._motor_abs_pos[idx] = self._clamp_motor_abs_cmd(dev_abs - origin)
+            sl = self._slider_from_abs_pos(dev_abs)
+            self._motor_last_slider[idx] = sl
+            if idx < len(self._motor_target_vars):
+                self._motor_target_vars[idx].set(sl)
+        elif idx < len(self._motor_target_vars):
+            self._motor_target_vars[idx].set(self._motor_feedback_target(idx))
+            self._motor_resync_one_channel(idx)
+        if idx < len(self._motor_target_user_set):
+            self._motor_target_user_set[idx] = False
+        self._send_motor_abs_from_ui(f"Hold M{idx}")
+
     def _confirm_joint_row(self, idx: int):
         if not self._interaction_enabled:
             return
         try:
-            targets = [float(v.get()) for v in self._joint_target_vars]
-            self.controller.set_target_angles(targets)
-            self.status_var.set(f"Joint targets sent (trigger J{idx})")
+            if idx < len(self._joint_run_states) and self._joint_run_states[idx]:
+                self._hold_joint_row_at_feedback(idx)
+                self._set_row_running(False, idx, False)
+                self.status_var.set(f"Channel held at current feedback (J{idx})")
+            else:
+                self._mark_joint_target_user_set(idx)
+                targets = self._resolved_joint_targets()
+                self.controller.set_target_angles(targets)
+                self._set_row_running(False, idx, True)
+                self.status_var.set(f"Joint command sent (J{idx})")
         except Exception as e:
             messagebox.showerror("Send Failed", f"Joint control send failed: {e}")
 
-    def _send_motor_targets_from_ui(self, trigger: str) -> None:
-        if not self._interaction_enabled:
-            return
-        if not self._is_comm_connected():
-            raise RuntimeError("Serial port is not connected")
-
-        # Keep the lower controller in direct-motor mode for raw target writes.
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-
-        # Direct motor commands should take effect immediately after interaction is enabled.
-        if not self.controller.is_started():
-            self.controller.start()
-
-        targets = [int(v.get()) for v in self._motor_target_vars]
-        self.controller.set_motor_positions_raw(targets)
-        if hasattr(self, "status_var"):
-            self.status_var.set(f"Motor raw positions sent ({trigger})")
-
     def _confirm_motor_row(self, idx: int):
         try:
-            self._send_motor_targets_from_ui(f"OK M{idx}")
+            if idx < len(self._motor_run_states) and self._motor_run_states[idx]:
+                self._hold_motor_row_at_feedback(idx)
+                self._set_row_running(True, idx, False)
+                self.status_var.set(f"Channel held at current feedback (M{idx})")
+            else:
+                self._mark_motor_target_user_set(idx)
+                self._sync_motor_abs_from_slider_before_send(idx)
+                self._send_motor_abs_from_ui(f"Run M{idx}")
+                self._set_row_running(True, idx, True)
+                self.status_var.set(f"Motor absolute command sent (M{idx})")
         except Exception as e:
-            messagebox.showerror("Send Failed", f"Motor raw position send failed: {e}")
+            messagebox.showerror("Send Failed", f"Motor absolute send failed: {e}")
 
     def _on_joint_slider_change(self, idx: int, value: str):
         """拖动关节拉动条时实时下发，无需点击确认"""
@@ -1831,20 +2473,111 @@ class HandGUI:
             return
         try:
             self._joint_target_vars[idx].set(float(value))
-            targets = [float(v.get()) for v in self._joint_target_vars]
+            self._mark_joint_target_user_set(idx)
+            targets = self._resolved_joint_targets()
             self.controller.set_target_angles(targets)
         except Exception:
             pass
 
     def _on_motor_slider_change(self, idx: int, value: str):
-        """拖动电机拉动条时实时下发，无需点击确认"""
+        """滑条=用户目标：锁定当前会话圈，按该圈内单圈位直接映射。"""
         if not self._interaction_enabled:
             return
+        with self._state_lock:
+            s = self._state
+        if s is None or not (
+            bool(getattr(s, "has_servo_angle_data", False))
+            or bool(getattr(s, "has_servo_raw_data", False))
+        ):
+            if hasattr(self, "status_var"):
+                self.status_var.set("Slider ignored: waiting for motor feedback")
+            return
         try:
-            self._motor_target_vars[idx].set(int(float(value)))
-            self._send_motor_targets_from_ui(f"Slider M{idx}")
-        except Exception:
-            pass
+            new_s = int(float(value))
+        except (TypeError, ValueError):
+            return
+        if idx < 0 or idx >= MOTOR_COUNT:
+            return
+        if self._motor_abs_pos[idx] is None:
+            self._motor_resync_one_channel(idx)
+        if self._motor_abs_pos[idx] is None:
+            return
+        last = self._motor_last_slider[idx]
+        drag_sign = 0
+        if last is not None:
+            d = int(new_s) - int(last)
+            if d > 0:
+                drag_sign = 1
+            elif d < 0:
+                drag_sign = -1
+        mapped = self._session_abs_from_slider_locked_turn(idx, new_s, drag_sign)
+        if mapped is None:
+            return
+        if idx < len(self._motor_first_drag_limit_active) and self._motor_first_drag_limit_active[idx]:
+            mapped = max(-MOTOR_TARGET_SCALE_HI, min(MOTOR_TARGET_SCALE_HI, int(mapped)))
+        if last is None:
+            self._motor_abs_pos[idx] = mapped
+            self._motor_last_slider[idx] = new_s
+            self._motor_target_vars[idx].set(new_s)
+            self._mark_motor_target_user_set(idx)
+            self._send_motor_abs_from_ui(f"Slider M{idx}")
+            if idx < len(self._motor_first_drag_limit_active):
+                self._motor_first_drag_limit_active[idx] = False
+            return
+        d = new_s - int(last)
+        if abs(d) > MOTOR_JUMP_RESYNC_THRESH:
+            if self._motor_slider_dragging[idx]:
+                return
+            self._motor_resync_one_channel(idx)
+            return
+        self._motor_abs_pos[idx] = mapped
+        self._motor_last_slider[idx] = new_s
+        self._motor_target_vars[idx].set(new_s)
+        self._mark_motor_target_user_set(idx)
+        self._send_motor_abs_from_ui(f"Slider M{idx}")
+        if idx < len(self._motor_first_drag_limit_active):
+            self._motor_first_drag_limit_active[idx] = False
+
+    def _step_motor_target(self, idx: int, delta: int) -> None:
+        """± 仅在边界激活：+ 仅 4095，- 仅 0，并写入一次性方向提示。"""
+        if not self._interaction_enabled:
+            return
+        if idx < 0 or idx >= len(self._motor_target_vars):
+            return
+        if self._motor_abs_pos[idx] is None:
+            self._motor_resync_one_channel(idx)
+        if self._motor_abs_pos[idx] is None:
+            return
+        cur_sl = self._read_motor_target_slider_int(idx)
+        try:
+            if int(delta) > 0:
+                if cur_sl < MOTOR_TARGET_SCALE_HI:
+                    return
+                new_sl = MOTOR_TARGET_SCALE_LO
+                d_abs = 1
+            elif int(delta) < 0:
+                if cur_sl > MOTOR_TARGET_SCALE_LO:
+                    return
+                new_sl = MOTOR_TARGET_SCALE_HI
+                d_abs = -1
+            else:
+                return
+            self._motor_abs_pos[idx] = self._clamp_motor_abs_cmd(
+                int(self._motor_abs_pos[idx]) + d_abs
+            )
+            if idx < len(self._motor_dir_hint):
+                self._motor_dir_hint[idx] = 1 if d_abs > 0 else -1
+            if idx < len(self._motor_dir_hint_pending_clear):
+                self._motor_dir_hint_pending_clear[idx] = True
+            if idx < len(self._motor_dir_hint_stable_count):
+                self._motor_dir_hint_stable_count[idx] = 0
+            self._motor_target_vars[idx].set(new_sl)
+            self._motor_last_slider[idx] = new_sl
+            self._mark_motor_target_user_set(idx)
+            label = "Step+" if delta > 0 else "Step-"
+            self._send_motor_abs_from_ui(f"{label} M{idx}")
+        except Exception as e:
+            messagebox.showerror("Send Failed", f"Motor step failed: {e}")
 
     def _set_joint_encoder_dot(self, joint_index: int, is_connected: Optional[bool]) -> None:
         if not hasattr(self, "_joint_status_dots"):
@@ -1883,6 +2616,20 @@ class HandGUI:
             self._state = None
         self._joint_target_initialized = False
         self._motor_target_initialized = False
+        if hasattr(self, "_motor_abs_pos"):
+            self._motor_abs_pos = [None] * MOTOR_COUNT
+            self._motor_session_origin_abs = [None] * MOTOR_COUNT
+            self._motor_dir_hint = [0] * MOTOR_COUNT
+            self._motor_dir_hint_pending_clear = [False] * MOTOR_COUNT
+            self._motor_dir_hint_stable_count = [0] * MOTOR_COUNT
+            self._motor_last_slider = [None] * MOTOR_COUNT
+            self._motor_slider_dragging = [False] * MOTOR_COUNT
+            self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
+        if hasattr(self, "_motor_last_sent_abs"):
+            self._motor_last_sent_abs = [None] * MOTOR_COUNT
+        self._joint_target_user_set = [False] * len(getattr(self, "_joint_target_vars", []))
+        self._motor_target_user_set = [False] * len(getattr(self, "_motor_target_vars", []))
+        self._clear_run_states()
         neutral = [0.0] * ENCODER_COUNT
         if hasattr(self, "_joint_curr_vars"):
             for v in self._joint_curr_vars:
@@ -1973,6 +2720,20 @@ class HandGUI:
         self._emit_action("Click [Reset]")
         self.controller.reset()
 
+    def _on_btn_home(self):
+        if hasattr(self, "_ctrl_mode_var") and self._ctrl_mode_var.get() != "joint":
+            self._ctrl_mode_var.set("joint")
+            self._switch_control_mode()
+        if not self._interaction_enabled:
+            if hasattr(self, "status_var"):
+                self.status_var.set("Home requires manual control to be armed")
+            return
+        self._emit_action("Click [Home]")
+        self._apply_preset_zero()
+        self._apply_all_angles()
+        if hasattr(self, "status_var"):
+            self.status_var.set("Home pose sent")
+
     def _apply_preset_open(self):
         if not self._interaction_enabled:
             return
@@ -1981,6 +2742,8 @@ class HandGUI:
         for i, a in enumerate(angles):
             if i < len(self._joint_target_vars):
                 self._joint_target_vars[i].set(round(a, 1))
+                if i < len(self._joint_target_user_set):
+                    self._joint_target_user_set[i] = True
         self._draw_hand_model(angles, None)
 
     def _apply_preset_fist(self):
@@ -1991,22 +2754,22 @@ class HandGUI:
         for i, a in enumerate(angles):
             if i < len(self._joint_target_vars):
                 self._joint_target_vars[i].set(round(a, 1))
+                if i < len(self._joint_target_user_set):
+                    self._joint_target_user_set[i] = True
         self._draw_hand_model(angles, None)
 
     def _apply_preset_zero(self):
         if not self._interaction_enabled:
             return
         self._emit_action("Click [Zero All]")
-        for v in self._joint_target_vars:
+        for i, v in enumerate(self._joint_target_vars):
             v.set(0.0)
+            if i < len(self._joint_target_user_set):
+                self._joint_target_user_set[i] = True
         self._draw_hand_model([0.0] * ENCODER_COUNT, None)
 
     def _on_calibrate(self):
         self._emit_action("Click [Calibrate]")
-        if not self.controller.is_started():
-            messagebox.showwarning("Calibration Blocked", "Please click Start before calibration.")
-            self.status_var.set("Calibration blocked: click Start first")
-            return
 
         def progress(current: int, total: int, msg: str):
             self.root.after(0, lambda: self.status_var.set(f"Calibration: {current + 1}/{total} {msg}"))
@@ -2024,27 +2787,21 @@ class HandGUI:
         else:
             messagebox.showerror("Calibration Failed", "Calibration failed, please retry")
 
-    def _on_pause(self):
-        paused = self.controller.toggle_pause()
-        self._emit_action("Click [Resume]" if paused else "Click [Pause]")
-        self._pause_btn.config(text="Resume" if paused else "Pause")
-        with self._state_lock:
-            s = self._state
-        if s:
-            self._update_status_text(s, paused)
-        elif paused:
-            self.status_var.set("[Paused] Waiting for data...")
-
     def _apply_all_angles(self):
         if not self._interaction_enabled:
             return
-        self._emit_action("Click [Apply All Angles]")
+        self._emit_action("Click [Send All]")
         try:
-            angles = [self._joint_target_vars[i].get() for i in range(min(ENCODER_COUNT, len(self._joint_target_vars)))]
-            if len(angles) < ENCODER_COUNT:
-                angles.extend([0.0] * (ENCODER_COUNT - len(angles)))
-            self.controller.set_target_angles(angles)
-            self.status_var.set(f"Sent {ENCODER_COUNT} target joint angles")
+            mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+            if mode == "motor":
+                for mi in range(MOTOR_COUNT):
+                    self._sync_motor_abs_from_slider_before_send(mi)
+                self._send_motor_abs_from_ui("Send All")
+                self.status_var.set(f"Sent {MOTOR_COUNT} motor absolute targets")
+            else:
+                angles = self._resolved_joint_targets()
+                self.controller.set_target_angles(angles)
+                self.status_var.set(f"Sent {ENCODER_COUNT} joint targets")
         except ValueError as e:
             messagebox.showerror("Parameter Error", str(e))
         except Exception as e:
@@ -2084,6 +2841,8 @@ class HandGUI:
 
         if hasattr(self, "_motor_curr_vars"):
             self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
+
+        # 电机模式不以 0x03 角度重算 abs（避免拖一路时邻路 abs 被陈旧角度改掉、整包误触发）。
 
         tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         self._draw_hand_model(s.angles, tactile_state)

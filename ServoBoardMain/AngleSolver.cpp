@@ -158,6 +158,42 @@ static int16_t clampServoPos(int32_t value)
     return (int16_t)value;
 }
 
+static int16_t clampServoSingleTurnRaw(int32_t value)
+{
+    if (value > 4095) return 4095;
+    if (value < 0) return 0;
+    return (int16_t)value;
+}
+
+static int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
+{
+    const int32_t baseTarget = (int32_t)clampServoSingleTurnRaw(singleTurnRaw);
+    int32_t bestTarget = baseTarget;
+    int32_t bestDistance = 0x7FFFFFFF;
+
+    // 在当前圈及相邻两圈中寻找与当前多圈位置最近的等效目标。
+    const int32_t currentTurn = currentAbsPos / 4096;
+    for (int32_t turnOffset = -1; turnOffset <= 1; ++turnOffset)
+    {
+        const int32_t candidate = baseTarget + (currentTurn + turnOffset) * 4096;
+        const int32_t distance = (candidate >= currentAbsPos)
+            ? (candidate - currentAbsPos)
+            : (currentAbsPos - candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return clampServoPos(bestTarget);
+}
+
+static int32_t anchorSingleTurnSweepToCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
+{
+    return (int32_t)expandSingleTurnTargetNearCurrent(currentAbsPos, singleTurnRaw);
+}
+
 // 按安装方向统一编码器方向，输出范围 [0, kEncoderModulo)。
 static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
@@ -173,6 +209,17 @@ static int32_t wrapEncoderDelta(int32_t delta)
 {
     while (delta > kEncoderHalfTurn) delta -= kEncoderModulo;
     while (delta < -kEncoderHalfTurn) delta += kEncoderModulo;
+    return delta;
+}
+
+// 舵机单圈 raw [0,4095] 对应周期 4096；sweep 差分按最短弧折叠，避免 0/4095 边界出现 ±4095 大跳。
+static const int32_t kServoSingleTurnModulo = 4096;
+static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
+
+static int32_t wrapServoRawDelta(int32_t delta)
+{
+    while (delta > kServoSingleTurnHalf) delta -= kServoSingleTurnModulo;
+    while (delta < -kServoSingleTurnHalf) delta += kServoSingleTurnModulo;
     return delta;
 }
 
@@ -503,9 +550,46 @@ void taskSolver(void* parameter)
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
     uint8_t readBusPhase = 0;
+    bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
+    bool hotplugHoldMotor[SERVO_TOTAL_NUM] = {false};
+    uint32_t lastMotorCommandToken = sharedData->motor_command_token;
+    uint32_t lastMotorSweepCommandToken = sharedData->motor_sweep_command_token;
+    uint32_t lastJointCommandToken = sharedData->joint_command_token;
+    uint8_t lastMotorDirectSource = sharedData->motor_direct_command_source;
+    int16_t prevSweepRawTarget[SERVO_TOTAL_NUM] = {0};
+    int32_t sweepExpandedTarget[SERVO_TOTAL_NUM] = {0};
+    bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
 
     while (1)
     {
+        const uint32_t motorCommandToken = sharedData->motor_command_token;
+        if (motorCommandToken != lastMotorCommandToken)
+        {
+            memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
+            lastMotorCommandToken = motorCommandToken;
+        }
+
+        const uint32_t motorSweepCommandToken = sharedData->motor_sweep_command_token;
+        if (motorSweepCommandToken != lastMotorSweepCommandToken)
+        {
+            memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
+            lastMotorSweepCommandToken = motorSweepCommandToken;
+        }
+
+        const uint32_t jointCommandToken = sharedData->joint_command_token;
+        if (jointCommandToken != lastJointCommandToken)
+        {
+            memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
+            lastJointCommandToken = jointCommandToken;
+        }
+
+        const uint8_t motorDirectSource = sharedData->motor_direct_command_source;
+        if (motorDirectSource != lastMotorDirectSource)
+        {
+            memset(sweepAnchorValid, 0, sizeof(sweepAnchorValid));
+            lastMotorDirectSource = motorDirectSource;
+        }
+
         const uint32_t releaseFaultResetToken = sharedData->reverse_release_fault_reset_token;
         if (releaseFaultResetToken != lastReleaseFaultResetToken)
         {
@@ -542,10 +626,13 @@ void taskSolver(void* parameter)
         readBusPhase ^= 1;
 
         ServoAngleData_t servoData;
+        ServoAngleData_t servoRawData;
         ServoTelemetryData_t telemetryData;
         memset(&servoData, 0, sizeof(servoData));
+        memset(&servoRawData, 0, sizeof(servoRawData));
         memset(&telemetryData, 0, sizeof(telemetryData));
         servoData.timestamp = millis();
+        servoRawData.timestamp = servoData.timestamp;
         telemetryData.timestamp = servoData.timestamp;
 
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
@@ -556,9 +643,12 @@ void taskSolver(void* parameter)
             if (pBus && pBus->isOnline(id))
             {
                 const int32_t absPos = pBus->getAbsolutePosition(id);
+                const int16_t rawPos = pBus->getRawPosition(id);
                 const ServoFeedback& fb = pBus->getFeedback(id);
                 servoData.servoAngles[ch] = absPos;
+                servoRawData.servoRawPositions[ch] = rawPos;
                 servoData.onlineStatus[ch] = 1;
+                servoRawData.onlineStatus[ch] = 1;
                 telemetryData.speed[ch] = fb.speed;
                 telemetryData.load[ch] = fb.load;
                 telemetryData.voltage[ch] = fb.voltage;
@@ -570,8 +660,24 @@ void taskSolver(void* parameter)
         if (sharedData->servoAngleQueue) {
             xQueueOverwrite(sharedData->servoAngleQueue, &servoData);
         }
+        if (sharedData->servoRawQueue) {
+            xQueueOverwrite(sharedData->servoRawQueue, &servoRawData);
+        }
         if (sharedData->servoTelemetryQueue) {
             xQueueOverwrite(sharedData->servoTelemetryQueue, &telemetryData);
+        }
+
+        for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
+        {
+            const bool onlineNow = (servoData.onlineStatus[ch] != 0);
+            if (onlineNow && !prevMotorOnline[ch]) {
+                hotplugHoldMotor[ch] = true;
+                sweepAnchorValid[ch] = false;
+            }
+            if (!onlineNow) {
+                sweepAnchorValid[ch] = false;
+            }
+            prevMotorOnline[ch] = onlineNow;
         }
 
         // 过载保护逻辑当前关闭，但保留协议状态字段的输出兼容性。
@@ -729,7 +835,36 @@ void taskSolver(void* parameter)
                         continue;
                     }
 
-                    const int16_t targetPos = clampServoPos(sharedData->motorTargetRaw[ch]);
+                    int16_t targetPos = clampServoPos(servoData.servoAngles[ch]);
+                    if (!hotplugHoldMotor[ch]) {
+                        if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
+                            const int16_t rawTarget =
+                                clampServoSingleTurnRaw(sharedData->motorSweepTargetRaw[ch]);
+                            if (!sweepAnchorValid[ch]) {
+                                sweepExpandedTarget[ch] =
+                                    anchorSingleTurnSweepToCurrent(servoData.servoAngles[ch], rawTarget);
+                                prevSweepRawTarget[ch] = rawTarget;
+                                sweepAnchorValid[ch] = true;
+                            } else if (rawTarget != prevSweepRawTarget[ch]) {
+                                const int32_t d = (int32_t)rawTarget - (int32_t)prevSweepRawTarget[ch];
+                                sweepExpandedTarget[ch] += wrapServoRawDelta(d);
+                                prevSweepRawTarget[ch] = rawTarget;
+                            }
+                            targetPos = clampServoPos(sweepExpandedTarget[ch]);
+                            sweepExpandedTarget[ch] = targetPos;
+                        } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
+                            sweepAnchorValid[ch] = false;
+                            targetPos = clampServoPos((int32_t)sharedData->motorTargetRaw[ch]);
+                        } else {
+                            sweepAnchorValid[ch] = false;
+                            targetPos = expandSingleTurnTargetNearCurrent(
+                                servoData.servoAngles[ch],
+                                clampServoSingleTurnRaw(sharedData->motorTargetRaw[ch])
+                            );
+                        }
+                    } else {
+                        sweepAnchorValid[ch] = false;
+                    }
                     pBus->setTarget(id, targetPos, 1000, 50);
                     busWritePending[bus] = true;
                 }
@@ -768,6 +903,11 @@ void taskSolver(void* parameter)
                 } else {
                     emergency = emergency || releaseFaultActive;
                 }
+                const int jointMotorCh = findMotorChannel(bus, id);
+                const bool hotplugHoldActive =
+                    (jointMotorCh >= 0) &&
+                    (jointMotorCh < SERVO_TOTAL_NUM) &&
+                    hotplugHoldMotor[jointMotorCh];
 
                 if (!pBus) {
                     continue;
@@ -782,6 +922,28 @@ void taskSolver(void* parameter)
                 if (emergency)
                 {
                     // 急停策略：保持当前舵机位置，避免异常状态下继续运动。
+                    if (pBus->isOnline(id)) {
+                        const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
+                        pBus->setTarget(id, holdPos, 1000, 50);
+                        busWritePending[bus] = true;
+                        jointCmdPos[jointIndex] = holdPos;
+                        jointCmdValid[jointIndex] = 1;
+                    }
+
+                    if (jointIndex == kJoint16Index) {
+                        ServoBusManager* pSecBus = getBusByIndex(joint16SecondaryMotor.busIndex);
+                        if (pSecBus && pSecBus->isOnline(joint16SecondaryMotor.servoID)) {
+                            const int secCh = findMotorChannel(joint16SecondaryMotor.busIndex, joint16SecondaryMotor.servoID);
+                            const int16_t holdSec = (secCh >= 0) ? clampServoPos(servoData.servoAngles[secCh]) : 0;
+                            pSecBus->setTarget(joint16SecondaryMotor.servoID, holdSec, 1000, 50);
+                            busWritePending[joint16SecondaryMotor.busIndex] = true;
+                        }
+                    }
+                    continue;
+                }
+
+                if (hotplugHoldActive)
+                {
                     if (pBus->isOnline(id)) {
                         const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
                         pBus->setTarget(id, holdPos, 1000, 50);

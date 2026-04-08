@@ -86,13 +86,15 @@ void System_Init() {
     sharedData.canRxQueue = xQueueCreate(1, sizeof(RemoteSensorData_t));
     sharedData.canTxQueue = xQueueCreate(5, sizeof(RemoteCommand_t));
     sharedData.servoAngleQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
+    sharedData.servoRawQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
     sharedData.servoTelemetryQueue = xQueueCreate(1, sizeof(ServoTelemetryData_t));
     sharedData.mappedAngleQueue = xQueueCreate(1, sizeof(MappedAngleData_t));
     sharedData.jointDebugQueue = xQueueCreate(8, sizeof(JointDebugData_t));
 
     if (!sharedData.cmdQueue || !sharedData.statusQueue ||
         !sharedData.canRxQueue || !sharedData.canTxQueue ||
-        !sharedData.servoAngleQueue || !sharedData.servoTelemetryQueue || !sharedData.mappedAngleQueue ||
+        !sharedData.servoAngleQueue || !sharedData.servoRawQueue ||
+        !sharedData.servoTelemetryQueue || !sharedData.mappedAngleQueue ||
         !sharedData.jointDebugQueue) {
         // 资源不足时停在此处，避免系统在不完整状态下继续运行。
         while (1) {}
@@ -106,7 +108,13 @@ void System_Init() {
     }
     memset(sharedData.targetAngles, 0, sizeof(sharedData.targetAngles));
     memset(sharedData.motorTargetRaw, 0, sizeof(sharedData.motorTargetRaw));
+    memset(sharedData.motorSweepTargetRaw, 0, sizeof(sharedData.motorSweepTargetRaw));
     memset(sharedData.calib_zero_raw_cache, 0, sizeof(sharedData.calib_zero_raw_cache));
+    sharedData.motor_command_token = 0;
+    sharedData.motor_sweep_command_token = 0;
+    sharedData.joint_command_token = 0;
+    sharedData.motor_direct_command_generation = 0;
+    sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData.control_enabled = 0;
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.joint16_dual_feedback_fault = 0;

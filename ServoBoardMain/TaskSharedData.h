@@ -20,6 +20,13 @@
 #define CONTROL_MODE_JOINT 0
 #define CONTROL_MODE_DIRECT_MOTOR 1
 
+// 直控电机命令来源。
+#define MOTOR_DIRECT_SOURCE_NONE 0
+#define MOTOR_DIRECT_SOURCE_TARGET 1
+#define MOTOR_DIRECT_SOURCE_SWEEP 2
+// 上位机下发的多圈绝对位置（与 clampServoPos 一致），由 CMD_MOTOR_POS_ABS 写入 motorTargetRaw。
+#define MOTOR_DIRECT_SOURCE_ABSOLUTE 3
+
 // TWAI(CAN) 引脚。
 #define TWAI_TX_PIN 47
 #define TWAI_RX_PIN 48
@@ -76,6 +83,7 @@ typedef struct {
 
 typedef struct {
     int32_t servoAngles[SERVO_TOTAL_NUM];
+    int16_t servoRawPositions[SERVO_TOTAL_NUM];
     uint8_t onlineStatus[SERVO_TOTAL_NUM];
     uint32_t timestamp;
 } ServoAngleData_t;
@@ -108,6 +116,7 @@ typedef struct {
     QueueHandle_t canTxQueue;
     QueueHandle_t canRxQueue;
     QueueHandle_t servoAngleQueue;
+    QueueHandle_t servoRawQueue;
     QueueHandle_t servoTelemetryQueue;
     QueueHandle_t mappedAngleQueue;
     QueueHandle_t jointDebugQueue;
@@ -115,8 +124,19 @@ typedef struct {
     float targetAngles[ENCODER_TOTAL_NUM];
     SemaphoreHandle_t targetAnglesMutex;
 
-    // 直控舵机模式目标缓存，按电机通道索引（0..21）对齐。
+    // 直控舵机模式目标缓存，按电机通道索引（0..21）对齐，语义为单圈原始位置计数。
     int32_t motorTargetRaw[SERVO_TOTAL_NUM];
+    // 滑条扫动专用目标缓存，保持单圈原始位置语义。
+    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];
+    // 上位机每次下发新的直控电机目标时自增，用于解除热插拔保持锁存。
+    volatile uint32_t motor_command_token;
+    // 上位机每次下发新的滑条扫动命令时自增。
+    volatile uint32_t motor_sweep_command_token;
+    // 上位机每次下发新的关节角目标时自增，用于解除热插拔保持锁存。
+    volatile uint32_t joint_command_token;
+    // 最近一次直控命令的统一序号和来源，用于判定当前由哪种直控语义生效。
+    volatile uint32_t motor_direct_command_generation;
+    volatile uint8_t motor_direct_command_source;
 
     volatile uint8_t control_enabled;
     volatile uint8_t control_mode; // CONTROL_MODE_*

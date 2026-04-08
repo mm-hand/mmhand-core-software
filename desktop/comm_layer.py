@@ -14,6 +14,7 @@ from protocol import (
     MOTOR_COUNT,
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_RELEASE_FAULT,
+    PACKET_TYPE_SERVO_RAW,
     RX_POLL_SLEEP,
     RX_QUEUE_MAXSIZE,
     SERIAL_TIMEOUT,
@@ -23,6 +24,8 @@ from protocol import (
     build_calib_data_cmd,
     build_calibrate_cmd,
     build_motor_pos_cmd,
+    build_motor_pos_abs_cmd,
+    build_motor_pos_sweep_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -36,6 +39,7 @@ from protocol import (
     parse_proto_ack,
     parse_sensor_packet,
     parse_servo_angle_packet,
+    parse_servo_raw_packet,
     parse_servo_telem_packet,
     PROTO_ACK_STATUS_OK,
     SENSOR_STREAM_MODE_SIGNED_I16,
@@ -104,6 +108,7 @@ class LowerComputerComm:
         self.running = False
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
+        self._tx_lock = threading.Lock()
         self._rx_buffer = bytearray()
         self._last_model: Optional[HandModel] = None
         self._stream_mode_requested = SENSOR_STREAM_MODE_SIGNED_I16
@@ -180,6 +185,7 @@ class LowerComputerComm:
             model.calib_status = self._last_model.calib_status
             model.has_sensor_data = bool(self._last_model.has_sensor_data)
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
+            model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
 
         model.timestamp = time.time()
         emitted = False
@@ -221,6 +227,16 @@ class LowerComputerComm:
                         model.servo_angles[i] = int(angles[i])
                         model.servo_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
                     model.has_servo_angle_data = True
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_SERVO_RAW:
+                parsed = parse_servo_raw_packet(payload)
+                if parsed is not None:
+                    raw_positions, online_flags = parsed
+                    for i in range(min(MOTOR_COUNT, len(raw_positions))):
+                        model.servo_raw_positions[i] = int(raw_positions[i])
+                        model.servo_raw_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
+                    model.has_servo_raw_data = True
                     emitted = True
 
             elif pkt_type == 0x05:
@@ -292,10 +308,36 @@ class LowerComputerComm:
         return model if emitted else None
 
     def send_command(self, cmd: SendCmd):
+        if self._is_motor_high_rate_command(cmd):
+            self._enqueue_latest_motor_high_rate(cmd)
+            return
         try:
             self.tx_queue.put_nowait(cmd)
         except queue.Full:
             pass
+
+    @staticmethod
+    def _is_motor_high_rate_command(cmd: SendCmd) -> bool:
+        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] in (
+            "motor_pos_sweep",
+            "motor_pos_abs",
+        )
+
+    def _enqueue_latest_motor_high_rate(self, cmd: SendCmd):
+        # Keep only the latest pending high-rate motor command to avoid UI backlog.
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            kept = [item for item in pending if not self._is_motor_high_rate_command(item)]
+            pending.clear()
+            pending.extend(kept)
+
+            maxsize = self.tx_queue.maxsize
+            if maxsize > 0 and len(pending) >= maxsize:
+                return
+
+            pending.append(cmd)
+            self.tx_queue.unfinished_tasks += 1
+            self.tx_queue.not_empty.notify()
 
     def _tx_loop(self):
         while self.running and self.serial and self.serial.is_open:
@@ -303,7 +345,8 @@ class LowerComputerComm:
                 cmd = self.tx_queue.get(timeout=TX_QUEUE_GET_TIMEOUT)
                 data = self._encode_command(cmd)
                 if data:
-                    self.serial.write(data)
+                    with self._tx_lock:
+                        self.serial.write(data)
             except queue.Empty:
                 pass
             except Exception as exc:
@@ -316,6 +359,10 @@ class LowerComputerComm:
             return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
             return build_motor_pos_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":
+            return build_motor_pos_sweep_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
+            return build_motor_pos_abs_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
         if cmd == "start":

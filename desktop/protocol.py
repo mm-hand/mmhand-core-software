@@ -20,6 +20,7 @@ PACKET_TYPE_SERVO_TELEM = 0x05
 PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
+PACKET_TYPE_SERVO_RAW = 0x09
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -30,6 +31,8 @@ CMD_RESET = 0xCE
 CMD_CALIB_DATA = 0xCF
 CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
+CMD_MOTOR_POS_SWEEP = 0xD2
+CMD_MOTOR_POS_ABS = 0xD3
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -137,6 +140,26 @@ def parse_servo_telem_packet(
         temps.append(payload[base + 5])
         online.append(payload[base + 6] == 1)
     return speeds, loads, volts, temps, online
+
+
+def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
+    if not payload or (len(payload) % 3) != 0:
+        return None
+
+    channel_count = len(payload) // 3
+    if channel_count <= 0:
+        return None
+
+    raw_positions: List[int] = []
+    for i in range(channel_count):
+        start = i * 2
+        raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
+
+    online_flags: List[bool] = []
+    base = channel_count * 2
+    for i in range(channel_count):
+        online_flags.append(payload[base + i] == 1)
+    return raw_positions, online_flags
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[int]:
@@ -253,6 +276,36 @@ def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:
         payload.append((raw >> 8) & 0xFF)
         payload.append(raw & 0xFF)
     return _build_command_frame(CMD_MOTOR_POS, bytes(payload))
+
+
+def build_motor_pos_sweep_cmd(motor_pos_raw: List[int]) -> bytes:
+    if len(motor_pos_raw) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor raw values")
+    payload = bytearray()
+    for value in motor_pos_raw:
+        raw = int(value) & 0xFFFF
+        payload.append((raw >> 8) & 0xFF)
+        payload.append(raw & 0xFF)
+    return _build_command_frame(CMD_MOTOR_POS_SWEEP, bytes(payload))
+
+
+# 与下位机 clampServoPos 一致的多圈绝对位置（int16 大端每路）
+MOTOR_ABS_CMD_MIN = -30719
+MOTOR_ABS_CMD_MAX = 30719
+
+
+def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
+    if len(motor_abs) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor absolute values")
+    payload = bytearray()
+    for value in motor_abs:
+        v = int(value)
+        if v < MOTOR_ABS_CMD_MIN:
+            v = MOTOR_ABS_CMD_MIN
+        elif v > MOTOR_ABS_CMD_MAX:
+            v = MOTOR_ABS_CMD_MAX
+        payload.extend(struct.pack(">h", v))
+    return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:

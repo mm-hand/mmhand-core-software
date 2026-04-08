@@ -24,6 +24,7 @@ extern volatile uint8_t g_calibrationUIStatus;
 #define PACKET_TYPE_PROTO_ACK 0x06
 #define PACKET_TYPE_FAULT_STATUS 0x07
 #define PACKET_TYPE_RELEASE_FAULT 0x08
+#define PACKET_TYPE_SERVO_RAW 0x09
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -36,6 +37,8 @@ extern volatile uint8_t g_calibrationUIStatus;
 #define CMD_CALIB_DATA 0xCF
 #define CMD_MOTOR_POS 0xD0
 #define CMD_SENSOR_STREAM_MODE 0xD1
+#define CMD_MOTOR_POS_SWEEP 0xD2
+#define CMD_MOTOR_POS_ABS 0xD3
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -141,6 +144,7 @@ static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
 static void sendDataPacket(ServoStatus_t* pServo,
                            MappedAngleData_t* pMapped,
                            ServoAngleData_t* pServoAngle,
+                           ServoAngleData_t* pServoRaw,
                            ServoTelemetryData_t* pTelemetry,
                            JointDebugData_t* pJointDebug)
 {
@@ -183,6 +187,20 @@ static void sendDataPacket(ServoStatus_t* pServo,
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
             buffer[idx++] = pServoAngle->onlineStatus[i];
+        }
+    }
+    else if (pServoRaw)
+    {
+        buffer[idx++] = PACKET_TYPE_SERVO_RAW;
+        for (int i = 0; i < SERVO_TOTAL_NUM; i++)
+        {
+            const uint16_t raw = (uint16_t)pServoRaw->servoRawPositions[i];
+            buffer[idx++] = (uint8_t)((raw >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)(raw & 0xFF);
+        }
+        for (int i = 0; i < SERVO_TOTAL_NUM; i++)
+        {
+            buffer[idx++] = pServoRaw->onlineStatus[i];
         }
     }
     else if (pTelemetry)
@@ -314,6 +332,21 @@ static void applyMotorTargets(TaskSharedData_t* sharedData, const int32_t* targe
     }
 }
 
+// 写入滑条扫动专用电机目标缓存。
+static void applyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
+{
+    if (!sharedData || !targets) {
+        return;
+    }
+    if (count > SERVO_TOTAL_NUM) {
+        count = SERVO_TOTAL_NUM;
+    }
+    for (uint8_t i = 0; i < count; i++)
+    {
+        sharedData->motorSweepTargetRaw[i] = targets[i];
+    }
+}
+
 // 清空直控模式电机目标缓存。
 static void clearMotorTargets(TaskSharedData_t* sharedData)
 {
@@ -323,6 +356,7 @@ static void clearMotorTargets(TaskSharedData_t* sharedData)
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++)
     {
         sharedData->motorTargetRaw[i] = 0;
+        sharedData->motorSweepTargetRaw[i] = 0;
     }
 }
 
@@ -365,6 +399,10 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_CALIB_DATA:
             return kFloatPayloadBytes;
         case CMD_MOTOR_POS:
+            return kMotorPosPayloadBytes;
+        case CMD_MOTOR_POS_SWEEP:
+            return kMotorPosPayloadBytes;
+        case CMD_MOTOR_POS_ABS:
             return kMotorPosPayloadBytes;
         case CMD_SENSOR_STREAM_MODE:
             return 1;
@@ -421,6 +459,11 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         // RESET 恢复到关节控制模式，并清空目标缓存。
         clearTargetAngles(sharedData);
         clearMotorTargets(sharedData);
+        sharedData->motor_command_token++;
+        sharedData->motor_sweep_command_token++;
+        sharedData->joint_command_token++;
+        sharedData->motor_direct_command_generation++;
+        sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->control_enabled = 0;
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->joint16_dual_feedback_fault = 0;
@@ -434,6 +477,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, parsedAngles, ENCODER_TOTAL_NUM)) {
             applyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
+            sharedData->joint_command_token++;
             sharedData->control_mode = CONTROL_MODE_JOINT;
         }
         return;
@@ -453,6 +497,35 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
         if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
             applyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
+            sharedData->motor_command_token++;
+            sharedData->motor_direct_command_generation++;
+            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_TARGET;
+            sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+        }
+        return;
+    }
+
+    if (cmd == CMD_MOTOR_POS_SWEEP)
+    {
+        int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
+        if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
+            applyMotorSweepTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
+            sharedData->motor_sweep_command_token++;
+            sharedData->motor_direct_command_generation++;
+            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
+            sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+        }
+        return;
+    }
+
+    if (cmd == CMD_MOTOR_POS_ABS)
+    {
+        int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
+        if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
+            applyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
+            sharedData->motor_command_token++;
+            sharedData->motor_direct_command_generation++;
+            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
             sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
         }
         return;
@@ -577,21 +650,28 @@ void taskUpperComm(void* parameter)
         bool sentPacket = false;
         if (xQueueReceive(sharedData->mappedAngleQueue, &mappedData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, &mappedData, NULL, NULL, NULL);
+            sendDataPacket(NULL, &mappedData, NULL, NULL, NULL, NULL);
             sentPacket = true;
         }
 
         JointDebugData_t jointDebugData;
         while (xQueueReceive(sharedData->jointDebugQueue, &jointDebugData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, &jointDebugData);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, &jointDebugData);
+            sentPacket = true;
+        }
+
+        ServoAngleData_t servoRawData;
+        if (xQueueReceive(sharedData->servoRawQueue, &servoRawData, 0) == pdTRUE)
+        {
+            sendDataPacket(NULL, NULL, NULL, &servoRawData, NULL, NULL);
             sentPacket = true;
         }
 
         ServoTelemetryData_t telemetryData;
         if (xQueueReceive(sharedData->servoTelemetryQueue, &telemetryData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, &telemetryData, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, &telemetryData, NULL);
             sentPacket = true;
         }
 
@@ -599,14 +679,14 @@ void taskUpperComm(void* parameter)
         ServoAngleData_t servoAngleData;
         if (xQueueReceive(sharedData->servoAngleQueue, &servoAngleData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL);
+            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL, NULL);
             sentServoAngle = true;
             sentPacket = true;
         }
 
         if (!sentPacket && !sentServoAngle && g_calibrationUIStatus != 0)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL);
         }
 
         const uint32_t nowMs = millis();
