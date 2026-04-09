@@ -1,6 +1,7 @@
 # ui_main.py - 灵巧手图形界面（含启动时的端口/模式选择）
 
 import os
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
 import matplotlib
@@ -62,6 +63,7 @@ from data_models import (
 from core_logic import HandController
 from comm_layer import list_ports
 from modes import Mode, run
+from run_data_logger import RunDataLogger
 from plot_hand_from_urdf import (
     DISPLAY_TRANSFORM,
     POSE_VIEW_BG,
@@ -87,6 +89,7 @@ _FIST_20_RAD = (
     [-0.1, 1.5, 1.2, 1.0], [-0.2, 1.4, 1.1, 0.9],
 )
 _ANGLE_MAP = [[3, 0, 1, 2], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19]]
+NA_MODE_MARKER = "NA_MODE"
 
 
 def _make_tactile_heatmap_cmap_norm(vmax: float):
@@ -343,6 +346,9 @@ class HandGUI:
         self._motor_run_states: List[bool] = [False] * MOTOR_COUNT
         self._joint_run_buttons: List[ttk.Button] = []
         self._motor_run_buttons: List[ttk.Button] = []
+        self._save_data_var = tk.BooleanVar(value=False)
+        self._data_logger = RunDataLogger(flush_every=10)
+        self._recording_status_note = ""
 
         self._setup_ui()
         self._setup_device_menu()
@@ -836,7 +842,85 @@ class HandGUI:
             except Exception:
                 pass
 
+    def _run_data_root_dir(self) -> str:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(project_root, "run_data")
+
+    def _build_run_data_csv_path(self) -> str:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join(self._run_data_root_dir(), f"hand_run_{ts}.csv")
+
+    def _build_run_data_fieldnames(self) -> List[str]:
+        fields: List[str] = ["ts_wall", "ts_model", "control_mode"]
+        fields.extend([f"joint_curr_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
+        fields.extend([f"joint_target_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
+        fields.extend([f"servo_curr_single_m{i:02d}" for i in range(MOTOR_COUNT)])
+        fields.extend([f"servo_target_single_m{i:02d}" for i in range(MOTOR_COUNT)])
+        fields.extend([f"servo_curr_multi_m{i:02d}" for i in range(MOTOR_COUNT)])
+        fields.extend(["has_sensor_data", "has_servo_raw_data", "has_servo_angle_data"])
+        return fields
+
+    def _start_data_recording(self) -> None:
+        path = self._build_run_data_csv_path()
+        self._data_logger.start(path, fieldnames=self._build_run_data_fieldnames())
+        self._recording_status_note = f"Recording: {os.path.basename(path)}"
+        self._emit_action(f"Data recording started: {path}")
+        if hasattr(self, "status_var"):
+            self.status_var.set(self._recording_status_note)
+
+    def _stop_data_recording(self, reason: str = "stopped", keep_switch: bool = False) -> None:
+        if self._data_logger.is_running():
+            current_path = self._data_logger.path
+            self._data_logger.stop()
+            self._emit_action(f"Data recording {reason}: {current_path}")
+        self._recording_status_note = ""
+        if hasattr(self, "_save_data_var") and not keep_switch:
+            self._save_data_var.set(False)
+        if hasattr(self, "status_var"):
+            self.status_var.set("Recording stopped")
+
+    def _on_toggle_save_data(self) -> None:
+        enabled = bool(self._save_data_var.get())
+        if enabled:
+            try:
+                self._start_data_recording()
+            except Exception as exc:
+                self._save_data_var.set(False)
+                self._recording_status_note = ""
+                messagebox.showerror("Save Data", f"Failed to start recording: {exc}")
+        else:
+            self._stop_data_recording()
+
+    def _write_run_data_row(self, s: HandModel) -> None:
+        if not self._data_logger.is_running():
+            return
+
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        control_mode = "motor" if mode == "motor" else "joint"
+        if control_mode == "joint":
+            joint_targets: List[object] = list(self._resolved_joint_targets())
+            servo_targets_single: List[object] = [NA_MODE_MARKER] * MOTOR_COUNT
+        else:
+            joint_targets = [NA_MODE_MARKER] * ENCODER_COUNT
+            servo_targets_single = [self._read_motor_target_slider_int(i) for i in range(MOTOR_COUNT)]
+
+        row = {
+            "ts_wall": f"{time.time():.6f}",
+            "ts_model": f"{float(getattr(s, 'timestamp', 0.0)):.6f}",
+            "control_mode": control_mode,
+        }
+        row.update({f"joint_curr_deg_j{i:02d}": float(s.angles[i]) if i < len(s.angles) else 0.0 for i in range(ENCODER_COUNT)})
+        row.update({f"joint_target_deg_j{i:02d}": joint_targets[i] if i < len(joint_targets) else NA_MODE_MARKER for i in range(ENCODER_COUNT)})
+        row.update({f"servo_curr_single_m{i:02d}": int(s.servo_raw_positions[i]) if i < len(s.servo_raw_positions) else 0 for i in range(MOTOR_COUNT)})
+        row.update({f"servo_target_single_m{i:02d}": servo_targets_single[i] if i < len(servo_targets_single) else NA_MODE_MARKER for i in range(MOTOR_COUNT)})
+        row.update({f"servo_curr_multi_m{i:02d}": int(s.servo_angles[i]) if i < len(s.servo_angles) else 0 for i in range(MOTOR_COUNT)})
+        row["has_sensor_data"] = int(bool(getattr(s, "has_sensor_data", False)))
+        row["has_servo_raw_data"] = int(bool(getattr(s, "has_servo_raw_data", False)))
+        row["has_servo_angle_data"] = int(bool(getattr(s, "has_servo_angle_data", False)))
+        self._data_logger.write_row(row)
+
     def _on_close(self):
+        self._stop_data_recording(reason="stopped on close", keep_switch=True)
         stop = getattr(self, "_camera_stop", None)
         if stop is not None:
             stop.set()
@@ -1060,6 +1144,13 @@ class HandGUI:
             btn.pack(side=tk.LEFT, padx=1)
             self._mode_buttons[mode_name] = btn
         self._refresh_mode_button_states()
+        self._save_data_switch = ttk.Checkbutton(
+            top,
+            text="Save Data",
+            variable=self._save_data_var,
+            command=self._on_toggle_save_data,
+        )
+        self._save_data_switch.pack(side=tk.RIGHT, padx=(8, 0))
 
         # weight：窗口被拉大时“多出来的宽度”按权重分给各格；不保证首屏分割线就是 2:1
         # 若要与 weight 一致，需在布局完成后设 sash（见 _set_initial_main_sash）
@@ -2634,6 +2725,7 @@ class HandGUI:
 
     def _clear_live_displays(self) -> None:
         """断开连接或未连接时：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
+        self._stop_data_recording(reason="stopped on disconnect")
         with self._state_lock:
             self._state = None
         self._joint_target_initialized = False
@@ -2883,7 +2975,7 @@ class HandGUI:
         if hasattr(self, "_tactile_row") and not self._tactile_row.winfo_ismapped():
             self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
 
-        err_count = sum(1 for m in s.motors if m.error)
+        self._write_run_data_row(s)
         self._update_status_text(s, self.controller.is_paused())
 
     def _update_status_text(self, s: HandModel, paused: bool):
@@ -2906,6 +2998,9 @@ class HandGUI:
         )
         if paused:
             base = "[Paused] " + base
+        if self._data_logger.is_running():
+            note = self._recording_status_note or "Recording..."
+            base = f"{base} | {note}"
         self.status_var.set(base)
         self._delay_var.set(f"Latency: {(time.time() - s.timestamp)*1000:.0f} ms")
         if hasattr(self, "_release_fault_var") and hasattr(self, "_release_fault_lbl"):

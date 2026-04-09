@@ -964,7 +964,7 @@ void taskSolver(void* parameter)
                     continue;
                 }
 
-                const int16_t targetPos = clampServoPos(outPulses[jointIndex]);
+                    const int16_t targetPos = clampServoPos(outPulses[jointIndex]);
                 pBus->setTarget(id, targetPos, 1000, 50);
                 busWritePending[bus] = true;
                 jointCmdPos[jointIndex] = targetPos;
