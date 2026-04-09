@@ -28,6 +28,12 @@ MOTOR_SINGLE_TURN_STEPS = 4096
 MOTOR_JUMP_RESYNC_THRESH = 2048
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
+# Motor channel (M0..M21) -> Joint channel (J0..J20).
+# Thumb base lateral motion is dual-driven by M16/M17, both mapped to J16.
+MOTOR_TO_JOINT_INDEX = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20
+]
 from data_models import (
     HandModel,
     FingerTactile,
@@ -1905,6 +1911,7 @@ class HandGUI:
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
         self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
+        self._motor_joint_angle_vars: List[tk.StringVar] = []
         self._motor_target_vars: List[tk.IntVar] = []
         self._motor_target_user_set: List[bool] = []
         self._motor_target_initialized = False
@@ -2052,6 +2059,7 @@ class HandGUI:
             ttk.Label(header, text="目标(0–4095)").grid(row=0, column=2, padx=2, sticky="w")
             ttk.Label(header, text="Action").grid(row=0, column=3, padx=2, sticky="w")
             ttk.Label(header, text="Step / Raw Slider").grid(row=0, column=4, columnspan=3, padx=2, sticky="w")
+            ttk.Label(header, text="当前关节角(°)").grid(row=0, column=7, padx=2, sticky="w")
         else:
             ttk.Label(header, text="Channel").grid(row=0, column=0, padx=2, sticky="w")
             ttk.Label(header, text="Encoder").grid(row=0, column=1, padx=2, sticky="w")
@@ -2072,7 +2080,9 @@ class HandGUI:
             if is_motor:
                 ttk.Label(row, textvariable=curr, width=8).grid(row=0, column=1, padx=1, sticky="w")
                 target = tk.IntVar(value=0)
+                joint_angle = tk.StringVar(value="-")
                 self._motor_curr_vars.append(curr)
+                self._motor_joint_angle_vars.append(joint_angle)
                 self._motor_target_vars.append(target)
                 self._motor_target_user_set.append(False)
                 ent = ttk.Entry(row, textvariable=target, width=8)
@@ -2098,6 +2108,7 @@ class HandGUI:
                 sld.bind("<ButtonRelease-1>", lambda e, idx=i: self._on_motor_slider_release(idx, e), add="+")
                 plus_btn = ttk.Button(row, text="+", width=3, command=lambda idx=i: self._step_motor_target(idx, 1))
                 plus_btn.grid(row=0, column=6, padx=(0, 1), sticky="w")
+                ttk.Label(row, textvariable=joint_angle, width=12).grid(row=0, column=7, padx=(6, 1), sticky="w")
                 self._control_widgets.extend([ent, btn, minus_btn, sld, plus_btn])
             else:
                 dot_canvas = tk.Canvas(row, width=12, height=12, highlightthickness=0, bd=0)
@@ -2252,6 +2263,17 @@ class HandGUI:
                 self._motor_curr_vars[i].set(f"{st:4d}")
             else:
                 self._motor_curr_vars[i].set("-")
+
+            if i < len(self._motor_joint_angle_vars):
+                joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
+                if (
+                    joint_idx >= 0
+                    and bool(getattr(s, "has_sensor_data", False))
+                    and joint_idx < len(s.angles)
+                ):
+                    self._motor_joint_angle_vars[i].set(f"J{joint_idx:02d}: {s.angles[joint_idx]:5.1f}")
+                else:
+                    self._motor_joint_angle_vars[i].set("-")
 
         # 仅首帧 sync_target：一次性用反馈对齐 abs + 滑条（之后不再自动改滑条）。
         if (motor_has_raw or motor_has_abs) and sync_target:
@@ -2639,6 +2661,9 @@ class HandGUI:
                 self._set_joint_encoder_dot(i, None)
         if hasattr(self, "_motor_curr_vars"):
             for v in self._motor_curr_vars:
+                v.set("-")
+        if hasattr(self, "_motor_joint_angle_vars"):
+            for v in self._motor_joint_angle_vars:
                 v.set("-")
         if hasattr(self, "ax"):
             self._draw_hand_model(neutral, None)
