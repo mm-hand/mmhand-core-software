@@ -1,7 +1,9 @@
 # ui_main.py - 灵巧手图形界面（含启动时的端口/模式选择）
 
 import os
+import json
 from datetime import datetime
+from collections import deque
 import tkinter as tk
 from tkinter import ttk, messagebox
 import matplotlib
@@ -35,6 +37,10 @@ MOTOR_TO_JOINT_INDEX = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20
 ]
+JOINT_TO_PRIMARY_MOTOR_INDEX = [-1] * ENCODER_COUNT
+for _mi, _ji in enumerate(MOTOR_TO_JOINT_INDEX):
+    if 0 <= _ji < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_ji] < 0:
+        JOINT_TO_PRIMARY_MOTOR_INDEX[_ji] = _mi
 from data_models import (
     HandModel,
     FingerTactile,
@@ -349,6 +355,26 @@ class HandGUI:
         self._save_data_var = tk.BooleanVar(value=False)
         self._data_logger = RunDataLogger(flush_every=10)
         self._recording_status_note = ""
+        self._tendon_cfg_path = os.path.join(os.path.dirname(__file__), "config", "tendon_manual_calib.json")
+        self._tendon_cfg = self._load_tendon_manual_cfg()
+        self._tendon_release_margin_counts = 0
+        self._tendon_release_angle_eps_deg = 0.0
+        self._tendon_guard_last_warn_ts = 0.0
+        self._tendon_guard_warn_interval_s = 0.5
+        self._joint_rt_joint_var = tk.StringVar(value="J02")
+        self._joint_rt_joint_index = 2
+        self._joint_rt_window_sec = 12.0
+        self._joint_rt_plot_interval = 0.2
+        self._joint_rt_last_plot_ts = 0.0
+        self._joint_rt_t0 = 0.0
+        self._joint_rt_t = deque(maxlen=1800)
+        self._joint_rt_actual = deque(maxlen=1800)
+        self._joint_rt_target = deque(maxlen=1800)
+        self._joint_rt_fig = None
+        self._joint_rt_ax = None
+        self._joint_rt_canvas = None
+        self._joint_rt_line_target = None
+        self._joint_rt_line_actual = None
 
         self._setup_ui()
         self._setup_device_menu()
@@ -921,6 +947,7 @@ class HandGUI:
 
     def _on_close(self):
         self._stop_data_recording(reason="stopped on close", keep_switch=True)
+        self._cancel_pose_3d_rezoom_timer()
         stop = getattr(self, "_camera_stop", None)
         if stop is not None:
             stop.set()
@@ -1026,6 +1053,7 @@ class HandGUI:
         holder = getattr(self, "_right_panel_holder", None)
         if holder is None:
             return
+        self._destroy_joint_rt_plot()
         for child in holder.winfo_children():
             try:
                 child.destroy()
@@ -1237,7 +1265,9 @@ class HandGUI:
             pass
         cw.bind("<Configure>", self._on_pose_canvas_configure)
         self._pose_3d_target_dist = compute_pose_view_camera_dist()
-        self._pose_3d_dist_fix_idle_pending = False
+        self._pose_3d_drag_dist_scale = 0.90
+        self._pose_3d_rezoom_delay_ms = 500
+        self._pose_3d_rezoom_after_drag_job = None
         self.canvas.mpl_connect("scroll_event", self._on_pose_3d_mpl_scroll)
         self.canvas.mpl_connect("motion_notify_event", self._on_pose_3d_mpl_motion)
         self.canvas.mpl_connect("button_release_event", self._on_pose_3d_mpl_release)
@@ -1286,10 +1316,20 @@ class HandGUI:
         except (TypeError, ValueError):
             pass
 
+    def _cancel_pose_3d_rezoom_timer(self) -> None:
+        job = getattr(self, "_pose_3d_rezoom_after_drag_job", None)
+        if job is None:
+            return
+        try:
+            self.root.after_cancel(job)
+        except tk.TclError:
+            pass
+        self._pose_3d_rezoom_after_drag_job = None
+
     def _on_pose_3d_mpl_scroll(self, event) -> None:
         if event.inaxes != getattr(self, "ax", None):
             return
-        self._pose_view_dirty = True
+        self._cancel_pose_3d_rezoom_timer()
         self.root.after_idle(self._sync_pose_3d_target_dist_from_axes)
 
     @staticmethod
@@ -1306,28 +1346,23 @@ class HandGUI:
             return
         if not self._pose_3d_mpl_left_drag(event):
             return
-        self._pose_view_dirty = True
-        if self._pose_3d_dist_fix_idle_pending:
-            return
-        self._pose_3d_dist_fix_idle_pending = True
-
-        def fix_after_mplot3d() -> None:
-            self._pose_3d_dist_fix_idle_pending = False
-            apply_mplot3d_camera_zoom(self.ax, dist=self._pose_3d_target_dist)
-            self.canvas.draw_idle()
-
-        self.root.after_idle(fix_after_mplot3d)
+        self._cancel_pose_3d_rezoom_timer()
+        drag_scale = float(getattr(self, "_pose_3d_drag_dist_scale", 1.0))
+        drag_dist = float(self._pose_3d_target_dist) * max(0.5, min(1.0, drag_scale))
+        apply_mplot3d_camera_zoom(self.ax, dist=drag_dist)
 
     def _on_pose_3d_mpl_release(self, event) -> None:
         if event.inaxes != getattr(self, "ax", None) or event.button != 1:
             return
-        self._pose_view_dirty = True
+        self._cancel_pose_3d_rezoom_timer()
 
-        def restore() -> None:
+        def rezoom_after_release() -> None:
+            self._pose_3d_rezoom_after_drag_job = None
             apply_mplot3d_camera_zoom(self.ax, dist=self._pose_3d_target_dist)
             self.canvas.draw_idle()
 
-        self.root.after(1, restore)
+        delay_ms = int(getattr(self, "_pose_3d_rezoom_delay_ms", 500))
+        self._pose_3d_rezoom_after_drag_job = self.root.after(delay_ms, rezoom_after_release)
 
     def _toggle_tactile_axis(self, axis: int):
         labels = ["X", "Y", "Z"]
@@ -1830,6 +1865,25 @@ class HandGUI:
     def _ensure_pose_static_scene(self, joint_pos: dict) -> None:
         if self._pose_static_scene_ready and not self._pose_view_dirty:
             return
+
+        preserve_user_view = bool(self._pose_static_scene_ready)
+        prev_elev = None
+        prev_azim = None
+        prev_roll = None
+        prev_dist = None
+        if preserve_user_view:
+            try:
+                prev_elev = float(self.ax.elev)
+                prev_azim = float(self.ax.azim)
+                prev_dist = float(self._pose_3d_target_dist)
+                if hasattr(self.ax, "roll"):
+                    prev_roll = float(self.ax.roll)
+            except (TypeError, ValueError, AttributeError):
+                prev_elev = None
+                prev_azim = None
+                prev_roll = None
+                prev_dist = None
+
         # draw_skeleton 内部会清空 axes；先清理动态层避免对已脱管 artist 再次 remove。
         self._clear_pose_dynamic_artists()
         draw_skeleton(
@@ -1840,14 +1894,30 @@ class HandGUI:
             plot_title="Pose (URDF skeleton)",
             draw_links_nodes=False,
         )
-        cd = getattr(self.ax, "_pose_view_cam_dist", None)
-        if cd is not None:
+
+        if preserve_user_view and prev_elev is not None and prev_azim is not None:
             try:
-                self._pose_3d_target_dist = float(cd)
-            except (TypeError, ValueError):
+                if prev_roll is not None:
+                    self.ax.view_init(elev=prev_elev, azim=prev_azim, roll=prev_roll)
+                else:
+                    self.ax.view_init(elev=prev_elev, azim=prev_azim)
+            except TypeError:
+                self.ax.view_init(elev=prev_elev, azim=prev_azim)
+            if prev_dist is not None:
+                apply_mplot3d_camera_zoom(self.ax, dist=prev_dist)
+                self._pose_3d_target_dist = float(prev_dist)
+            else:
                 self._sync_pose_3d_target_dist_from_axes()
         else:
-            self._sync_pose_3d_target_dist_from_axes()
+            cd = getattr(self.ax, "_pose_view_cam_dist", None)
+            if cd is not None:
+                try:
+                    self._pose_3d_target_dist = float(cd)
+                except (TypeError, ValueError):
+                    self._sync_pose_3d_target_dist_from_axes()
+            else:
+                self._sync_pose_3d_target_dist_from_axes()
+
         self._pose_static_scene_ready = True
         self._pose_view_dirty = False
 
@@ -1963,6 +2033,8 @@ class HandGUI:
         self._interaction_btn = ttk.Button(mode_row, text="Hand Manual: OFF", command=self._toggle_interaction_control)
         self._interaction_btn.pack(side=tk.RIGHT, padx=2)
 
+        self._setup_joint_realtime_plot(panel)
+
         self._table_section = ttk.LabelFrame(panel, text=f"Channel Table (J{ENCODER_COUNT} / M{MOTOR_COUNT})")
         self._table_section.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
         self._batch_action_row = ttk.Frame(self._table_section)
@@ -2000,6 +2072,8 @@ class HandGUI:
         self._joint_target_vars: List[tk.DoubleVar] = []
         self._joint_target_user_set: List[bool] = []
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
+        self._joint_tie_sign_vars: List[tk.StringVar] = []
+        self._joint_tie_x1_vars: List[tk.StringVar] = []
         self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
         self._motor_joint_angle_vars: List[tk.StringVar] = []
@@ -2026,6 +2100,170 @@ class HandGUI:
                 pass
         self._update_manual_action_buttons()
         self._switch_control_mode()
+
+    def _setup_joint_realtime_plot(self, parent) -> None:
+        box = ttk.LabelFrame(parent, text="Joint Real-Time Curve")
+        box.pack(fill=tk.X, padx=6, pady=(2, 4))
+
+        top = ttk.Frame(box)
+        top.pack(fill=tk.X, padx=6, pady=(6, 2))
+        ttk.Label(top, text="Joint:").pack(side=tk.LEFT)
+        values = [f"J{i:02d}" for i in range(ENCODER_COUNT)]
+        if not (0 <= int(getattr(self, "_joint_rt_joint_index", 0)) < ENCODER_COUNT):
+            self._joint_rt_joint_index = 0
+        self._joint_rt_joint_var.set(f"J{int(self._joint_rt_joint_index):02d}")
+        combo = ttk.Combobox(
+            top,
+            textvariable=self._joint_rt_joint_var,
+            values=values,
+            state="readonly",
+            width=6,
+        )
+        combo.pack(side=tk.LEFT, padx=(4, 8))
+        combo.bind("<<ComboboxSelected>>", self._on_joint_rt_selection_changed)
+        ttk.Button(top, text="Clear", width=8, command=self._on_joint_rt_clear).pack(side=tk.LEFT)
+
+        self._joint_rt_fig = plt.Figure(figsize=(4.7, 2.0), dpi=100)
+        self._joint_rt_ax = self._joint_rt_fig.add_subplot(111)
+        self._joint_rt_ax.set_xlabel("Time (s)", fontsize=9)
+        self._joint_rt_ax.set_ylabel("Angle (deg)", fontsize=9)
+        self._joint_rt_ax.grid(True, alpha=0.28)
+        (self._joint_rt_line_target,) = self._joint_rt_ax.plot([], [], linestyle="--", linewidth=1.6, label="Target")
+        (self._joint_rt_line_actual,) = self._joint_rt_ax.plot([], [], linestyle="-", linewidth=1.8, label="Actual")
+        self._joint_rt_ax.legend(loc="upper right", fontsize=8)
+        self._joint_rt_canvas = FigureCanvasTkAgg(self._joint_rt_fig, box)
+        self._joint_rt_canvas.get_tk_widget().pack(fill=tk.X, padx=6, pady=(0, 6))
+
+        self._clear_joint_rt_history()
+        self._update_joint_rt_plot(force=True)
+
+    def _destroy_joint_rt_plot(self) -> None:
+        canvas = getattr(self, "_joint_rt_canvas", None)
+        if canvas is not None:
+            try:
+                widget = canvas.get_tk_widget()
+                widget.destroy()
+            except Exception:
+                pass
+        fig = getattr(self, "_joint_rt_fig", None)
+        if fig is not None:
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
+        self._joint_rt_canvas = None
+        self._joint_rt_fig = None
+        self._joint_rt_ax = None
+        self._joint_rt_line_target = None
+        self._joint_rt_line_actual = None
+
+    def _on_joint_rt_selection_changed(self, _event=None) -> None:
+        text = str(self._joint_rt_joint_var.get() or "").strip().upper()
+        idx = self._joint_rt_joint_index
+        if text.startswith("J"):
+            text = text[1:]
+        try:
+            parsed = int(text)
+            if 0 <= parsed < ENCODER_COUNT:
+                idx = parsed
+        except Exception:
+            pass
+        self._joint_rt_joint_index = int(idx)
+        self._joint_rt_joint_var.set(f"J{self._joint_rt_joint_index:02d}")
+        self._clear_joint_rt_history()
+        self._update_joint_rt_plot(force=True)
+
+    def _on_joint_rt_clear(self) -> None:
+        self._clear_joint_rt_history()
+        self._update_joint_rt_plot(force=True)
+
+    def _clear_joint_rt_history(self) -> None:
+        self._joint_rt_t.clear()
+        self._joint_rt_actual.clear()
+        self._joint_rt_target.clear()
+        self._joint_rt_t0 = 0.0
+        self._joint_rt_last_plot_ts = 0.0
+
+    def _append_joint_rt_sample(self, s: HandModel) -> None:
+        if getattr(self, "_joint_rt_ax", None) is None:
+            return
+        idx = int(getattr(self, "_joint_rt_joint_index", 0))
+        if idx < 0 or idx >= ENCODER_COUNT:
+            return
+
+        now = time.time()
+        if self._joint_rt_t0 <= 0.0:
+            self._joint_rt_t0 = now
+        t_rel = now - self._joint_rt_t0
+
+        actual = float("nan")
+        if idx < len(getattr(s, "angles", [])):
+            try:
+                actual = float(s.angles[idx])
+            except Exception:
+                actual = float("nan")
+
+        target = float("nan")
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        if mode == "joint":
+            try:
+                targets = self._resolved_joint_targets()
+                if idx < len(targets):
+                    target = float(targets[idx])
+            except Exception:
+                target = float("nan")
+
+        self._joint_rt_t.append(float(t_rel))
+        self._joint_rt_actual.append(actual)
+        self._joint_rt_target.append(target)
+
+    def _update_joint_rt_plot(self, force: bool = False) -> None:
+        ax = getattr(self, "_joint_rt_ax", None)
+        canvas = getattr(self, "_joint_rt_canvas", None)
+        line_t = getattr(self, "_joint_rt_line_target", None)
+        line_a = getattr(self, "_joint_rt_line_actual", None)
+        if ax is None or canvas is None or line_t is None or line_a is None:
+            return
+
+        now = time.time()
+        if not force and (now - float(getattr(self, "_joint_rt_last_plot_ts", 0.0))) < float(self._joint_rt_plot_interval):
+            return
+        self._joint_rt_last_plot_ts = now
+
+        t = list(self._joint_rt_t)
+        y_target = list(self._joint_rt_target)
+        y_actual = list(self._joint_rt_actual)
+        line_t.set_data(t, y_target)
+        line_a.set_data(t, y_actual)
+
+        if t:
+            x_max = float(t[-1])
+            x_min = max(0.0, x_max - float(self._joint_rt_window_sec))
+            ax.set_xlim(x_min, max(x_min + 0.8, x_max + 0.05))
+        else:
+            ax.set_xlim(0.0, float(self._joint_rt_window_sec))
+
+        vals: List[float] = []
+        for v in y_target:
+            if np.isfinite(v):
+                vals.append(float(v))
+        for v in y_actual:
+            if np.isfinite(v):
+                vals.append(float(v))
+        if vals:
+            y_min = min(vals)
+            y_max = max(vals)
+            if y_min == y_max:
+                y_max = y_min + 1.0
+            margin = (y_max - y_min) * 0.12
+            ax.set_ylim(y_min - margin, y_max + margin)
+        else:
+            ax.set_ylim(-1.0, 1.0)
+
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        suffix = "" if mode == "joint" else " (target N/A in motor mode)"
+        ax.set_title(f"J{int(self._joint_rt_joint_index):02d} Target vs Actual{suffix}", fontsize=9)
+        canvas.draw_idle()
 
     def _setup_teleop_control_panel(self, parent):
         """遥操作模式下的专用右侧控制栏"""
@@ -2158,6 +2396,9 @@ class HandGUI:
             ttk.Label(header, text="Target").grid(row=0, column=3, padx=2, sticky="w")
             ttk.Label(header, text="Action").grid(row=0, column=4, padx=2, sticky="w")
             ttk.Label(header, text="Target Slider").grid(row=0, column=5, padx=2, sticky="w")
+            ttk.Label(header, text="tie").grid(row=0, column=6, padx=2, sticky="w")
+            ttk.Label(header, text="+/-").grid(row=0, column=7, padx=2, sticky="w")
+            ttk.Label(header, text="x1(abs)").grid(row=0, column=8, padx=2, sticky="w")
 
         channel_count = MOTOR_COUNT if is_motor else ENCODER_COUNT
         for i in range(channel_count):
@@ -2229,6 +2470,23 @@ class HandGUI:
                     command=lambda value, idx=i: self._on_joint_slider_change(idx, value),
                 )
                 sld.grid(row=0, column=5, padx=1, sticky="we")
+                ttk.Label(row, text="tie", width=4).grid(row=0, column=6, padx=(8, 2), sticky="w")
+                tie_sign_cfg = self._tendon_cfg[i] if i < len(self._tendon_cfg) else {"enabled": False, "pull_sign": 1, "x1_abs": 0}
+                tie_sign = "+" if bool(tie_sign_cfg.get("enabled", False)) and int(tie_sign_cfg.get("pull_sign", 1)) >= 0 else (
+                    "-" if bool(tie_sign_cfg.get("enabled", False)) else ""
+                )
+                tie_sign_var = tk.StringVar(value=tie_sign)
+                tie_x1_var = tk.StringVar(value=str(int(tie_sign_cfg.get("x1_abs", 0))))
+                self._joint_tie_sign_vars.append(tie_sign_var)
+                self._joint_tie_x1_vars.append(tie_x1_var)
+                tie_sign_ent = ttk.Entry(row, textvariable=tie_sign_var, width=3)
+                tie_sign_ent.grid(row=0, column=7, padx=1, sticky="w")
+                tie_x1_ent = ttk.Entry(row, textvariable=tie_x1_var, width=8)
+                tie_x1_ent.grid(row=0, column=8, padx=1, sticky="w")
+                tie_sign_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
+                tie_x1_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
+                tie_sign_ent.bind("<Return>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
+                tie_x1_ent.bind("<Return>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 self._control_widgets.extend([ent, btn, sld])
 
     def _switch_control_mode(self):
@@ -2300,6 +2558,197 @@ class HandGUI:
             else:
                 targets.append(self._joint_feedback_target(i))
         return targets
+
+    @staticmethod
+    def _default_tendon_cfg() -> List[dict]:
+        return [{"enabled": False, "pull_sign": 1, "x1_abs": 0} for _ in range(ENCODER_COUNT)]
+
+    def _load_tendon_manual_cfg(self) -> List[dict]:
+        defaults = self._default_tendon_cfg()
+        p = getattr(self, "_tendon_cfg_path", "")
+        if not p or not os.path.isfile(p):
+            return defaults
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return defaults
+        joints = data.get("joints", [])
+        if not isinstance(joints, list):
+            return defaults
+
+        out = []
+        for i in range(ENCODER_COUNT):
+            item = joints[i] if i < len(joints) and isinstance(joints[i], dict) else {}
+            try:
+                sign_raw = int(item.get("pull_sign", 1))
+            except (TypeError, ValueError):
+                sign_raw = 1
+            sign = 1 if sign_raw >= 0 else -1
+            try:
+                x1 = int(item.get("x1_abs", 0))
+            except (TypeError, ValueError):
+                x1 = 0
+            x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
+            enabled = bool(item.get("enabled", False))
+            out.append({"enabled": enabled, "pull_sign": sign, "x1_abs": x1})
+        return out
+
+    def _save_tendon_manual_cfg(self) -> bool:
+        p = getattr(self, "_tendon_cfg_path", "")
+        if not p:
+            return False
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        joints = []
+        for i in range(ENCODER_COUNT):
+            item = self._tendon_cfg[i] if i < len(self._tendon_cfg) else {}
+            try:
+                sign_raw = int(item.get("pull_sign", 1))
+            except (TypeError, ValueError):
+                sign_raw = 1
+            sign = 1 if sign_raw >= 0 else -1
+            try:
+                x1 = int(item.get("x1_abs", 0))
+            except (TypeError, ValueError):
+                x1 = 0
+            x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
+            enabled = bool(item.get("enabled", False))
+            joints.append({"enabled": enabled, "pull_sign": sign, "x1_abs": x1})
+        payload = {
+            "comment": "Manual tendon calibration (+/- pull direction and x1 absolute anchor).",
+            "joints": joints,
+        }
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _parse_tie_sign_text(text: str) -> int:
+        t = (text or "").strip()
+        if t in ("+", "+1", "1"):
+            return 1
+        if t in ("-", "-1"):
+            return -1
+        return 0
+
+    def _on_joint_tie_field_commit(self, joint_idx: int) -> None:
+        if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
+            return
+        if joint_idx >= len(self._joint_tie_sign_vars) or joint_idx >= len(self._joint_tie_x1_vars):
+            return
+        sign_text = self._joint_tie_sign_vars[joint_idx].get()
+        sign = self._parse_tie_sign_text(sign_text)
+        if sign > 0:
+            self._joint_tie_sign_vars[joint_idx].set("+")
+        elif sign < 0:
+            self._joint_tie_sign_vars[joint_idx].set("-")
+        else:
+            self._joint_tie_sign_vars[joint_idx].set("")
+
+        try:
+            x1 = int(float(self._joint_tie_x1_vars[joint_idx].get()))
+        except (TypeError, ValueError, tk.TclError):
+            x1 = 0
+        x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
+        self._joint_tie_x1_vars[joint_idx].set(str(x1))
+
+        if joint_idx >= len(self._tendon_cfg):
+            self._tendon_cfg.extend(
+                [{"enabled": False, "pull_sign": 1, "x1_abs": 0} for _ in range(joint_idx - len(self._tendon_cfg) + 1)]
+            )
+        self._tendon_cfg[joint_idx] = {"enabled": sign != 0, "pull_sign": (1 if sign >= 0 else -1), "x1_abs": x1}
+        saved = self._save_tendon_manual_cfg()
+        if hasattr(self, "status_var"):
+            if not saved:
+                self.status_var.set(f"tie save failed: J{joint_idx}")
+            elif sign == 0:
+                self.status_var.set(f"tie saved: J{joint_idx} disabled, x1={x1}")
+            else:
+                self.status_var.set(f"tie saved: J{joint_idx} sign={'+' if sign > 0 else '-'} x1={x1}")
+
+    def _refresh_joint_tie_cfg_from_ui(self) -> None:
+        n = min(ENCODER_COUNT, len(self._joint_tie_sign_vars), len(self._joint_tie_x1_vars))
+        for i in range(n):
+            sign = self._parse_tie_sign_text(self._joint_tie_sign_vars[i].get())
+            try:
+                x1 = int(float(self._joint_tie_x1_vars[i].get()))
+            except (TypeError, ValueError, tk.TclError):
+                x1 = 0
+            x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
+            if i >= len(self._tendon_cfg):
+                self._tendon_cfg.extend(
+                    [{"enabled": False, "pull_sign": 1, "x1_abs": 0} for _ in range(i - len(self._tendon_cfg) + 1)]
+                )
+            self._tendon_cfg[i] = {"enabled": sign != 0, "pull_sign": (1 if sign >= 0 else -1), "x1_abs": x1}
+
+    @staticmethod
+    def _joint_primary_motor_channel(joint_index: int) -> int:
+        if joint_index < 0 or joint_index >= ENCODER_COUNT:
+            return -1
+        if joint_index >= len(JOINT_TO_PRIMARY_MOTOR_INDEX):
+            return -1
+        return int(JOINT_TO_PRIMARY_MOTOR_INDEX[joint_index])
+
+    def _send_joint_targets_with_tendon_guard(self, angles: List[float], source: str = "") -> None:
+        self._refresh_joint_tie_cfg_from_ui()
+        guarded = list(angles[:ENCODER_COUNT])
+        if len(guarded) < ENCODER_COUNT:
+            guarded.extend([0.0] * (ENCODER_COUNT - len(guarded)))
+
+        with self._state_lock:
+            s = self._state
+
+        blocked: List[int] = []
+        if (
+            s
+            and bool(getattr(s, "has_sensor_data", False))
+            and bool(getattr(s, "has_servo_angle_data", False))
+        ):
+            for joint_idx in range(ENCODER_COUNT):
+                cfg = self._tendon_cfg[joint_idx] if joint_idx < len(self._tendon_cfg) else None
+                if not cfg or not bool(cfg.get("enabled", False)):
+                    continue
+                sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
+                x1_abs = int(cfg.get("x1_abs", 0))
+                motor_ch = self._joint_primary_motor_channel(joint_idx)
+                if motor_ch < 0:
+                    continue
+                if (
+                    joint_idx >= len(getattr(s, "angles", []))
+                    or motor_ch >= len(getattr(s, "servo_angles", []))
+                    or motor_ch >= len(getattr(s, "servo_online", []))
+                    or not s.servo_online[motor_ch]
+                ):
+                    continue
+
+                cur_joint_deg = float(s.angles[joint_idx])
+                target_joint_deg = float(guarded[joint_idx])
+                release_cmd = target_joint_deg < (cur_joint_deg - self._tendon_release_angle_eps_deg)
+                if not release_cmd:
+                    continue
+
+                abs_now = int(s.servo_angles[motor_ch])
+                hit_boundary = (
+                    (sign > 0 and abs_now <= (x1_abs + self._tendon_release_margin_counts))
+                    or (sign < 0 and abs_now >= (x1_abs - self._tendon_release_margin_counts))
+                )
+                if hit_boundary:
+                    guarded[joint_idx] = cur_joint_deg
+                    blocked.append(joint_idx)
+
+        if blocked:
+            now = time.time()
+            if now - self._tendon_guard_last_warn_ts >= self._tendon_guard_warn_interval_s:
+                self._tendon_guard_last_warn_ts = now
+                if hasattr(self, "status_var"):
+                    blk = ", ".join([f"J{i}" for i in blocked])
+                    suffix = f" ({source})" if source else ""
+                    self.status_var.set(f"Tendon guard blocked release on {blk}{suffix}")
+
+        self.controller.set_target_angles(guarded)
 
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         if not hasattr(self, "_joint_curr_vars"):
@@ -2520,7 +2969,7 @@ class HandGUI:
         if idx < len(self._joint_target_user_set):
             self._joint_target_user_set[idx] = False
         targets = self._resolved_joint_targets()
-        self.controller.set_target_angles(targets)
+        self._send_joint_targets_with_tendon_guard(targets, source=f"Hold J{idx}")
 
     def _hold_motor_row_at_feedback(self, idx: int) -> None:
         with self._state_lock:
@@ -2559,7 +3008,7 @@ class HandGUI:
             else:
                 self._mark_joint_target_user_set(idx)
                 targets = self._resolved_joint_targets()
-                self.controller.set_target_angles(targets)
+                self._send_joint_targets_with_tendon_guard(targets, source=f"Run J{idx}")
                 self._set_row_running(False, idx, True)
                 self.status_var.set(f"Joint command sent (J{idx})")
         except Exception as e:
@@ -2588,7 +3037,7 @@ class HandGUI:
             self._joint_target_vars[idx].set(float(value))
             self._mark_joint_target_user_set(idx)
             targets = self._resolved_joint_targets()
-            self.controller.set_target_angles(targets)
+            self._send_joint_targets_with_tendon_guard(targets, source=f"Slider J{idx}")
         except Exception:
             pass
 
@@ -2744,6 +3193,8 @@ class HandGUI:
         self._joint_target_user_set = [False] * len(getattr(self, "_joint_target_vars", []))
         self._motor_target_user_set = [False] * len(getattr(self, "_motor_target_vars", []))
         self._clear_run_states()
+        self._clear_joint_rt_history()
+        self._update_joint_rt_plot(force=True)
         neutral = [0.0] * ENCODER_COUNT
         if hasattr(self, "_joint_curr_vars"):
             for v in self._joint_curr_vars:
@@ -2917,7 +3368,7 @@ class HandGUI:
                 self.status_var.set(f"Sent {MOTOR_COUNT} motor absolute targets")
             else:
                 angles = self._resolved_joint_targets()
-                self.controller.set_target_angles(angles)
+                self._send_joint_targets_with_tendon_guard(angles, source="Send All")
                 self.status_var.set(f"Sent {ENCODER_COUNT} joint targets")
         except ValueError as e:
             messagebox.showerror("Parameter Error", str(e))
@@ -2964,6 +3415,8 @@ class HandGUI:
         tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
         self._draw_hand_model(s.angles, tactile_state)
         self._update_tactile_matrix_widget(tactile_state)
+        self._append_joint_rt_sample(s)
+        self._update_joint_rt_plot()
         if self.current_mode in ("算法", "Algorithm") and hasattr(self, "_alg_output"):
             now = time.time()
             if now - getattr(self, "_alg_last_print", 0.0) >= 0.2:

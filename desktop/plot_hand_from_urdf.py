@@ -71,9 +71,9 @@ JOINT_ORDER: List[str] = [
     "5-5",
 ]
 
-# 与 hand_visualizer_ui.DEFAULT_ANGLE_MAPPING 行顺序一致：thumb, index, middle, ring, pinky
+# 与当前硬件通道组顺序一致：pinky, ring, middle, index, thumb
 # URDF 手指编号：1=index, 2=middle, 3=ring, 4=pinky, 5=thumb
-URDF_PREFIX_BY_MAPPING_ROW: Tuple[str, ...] = ("5", "1", "2", "3", "4")
+URDF_PREFIX_BY_MAPPING_ROW: Tuple[str, ...] = ("4", "3", "2", "1", "5")
 
 _FALLBACK_ANGLE_MAPPING: List[List[int]] = [
     [3, 0, 1, 2],
