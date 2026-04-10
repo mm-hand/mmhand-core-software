@@ -308,8 +308,8 @@ class LowerComputerComm:
         return model if emitted else None
 
     def send_command(self, cmd: SendCmd):
-        if self._is_motor_high_rate_command(cmd):
-            self._enqueue_latest_motor_high_rate(cmd)
+        if self._is_high_rate_command(cmd):
+            self._enqueue_latest_high_rate(cmd)
             return
         try:
             self.tx_queue.put_nowait(cmd)
@@ -317,17 +317,18 @@ class LowerComputerComm:
             pass
 
     @staticmethod
-    def _is_motor_high_rate_command(cmd: SendCmd) -> bool:
+    def _is_high_rate_command(cmd: SendCmd) -> bool:
         return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] in (
             "motor_pos_sweep",
             "motor_pos_abs",
+            "angle_live",
         )
 
-    def _enqueue_latest_motor_high_rate(self, cmd: SendCmd):
-        # Keep only the latest pending high-rate motor command to avoid UI backlog.
+    def _enqueue_latest_high_rate(self, cmd: SendCmd):
+        # Keep only the latest pending high-rate command to avoid UI backlog.
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_motor_high_rate_command(item)]
+            kept = [item for item in pending if not self._is_high_rate_command(item)]
             pending.clear()
             pending.extend(kept)
 
@@ -363,6 +364,8 @@ class LowerComputerComm:
             return build_motor_pos_sweep_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+            return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
         if cmd == "start":

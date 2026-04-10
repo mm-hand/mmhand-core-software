@@ -166,6 +166,20 @@ class HandController:
         if self.comm and self._control_mode == ControlMode.JOINT_ANGLE:
             self.comm.send_command(self.current_state)
 
+    def set_target_angles_live(self, angles: List[float]):
+        """高频滑条跟随专用：仅保留最新目标，避免串口队列积压。"""
+        if self._paused:
+            return
+        if len(angles) != ENCODER_COUNT:
+            raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
+
+        angles = self._validate_angles(angles)
+        with self.state_lock:
+            self.current_state.set_target_angles(angles)
+        if self.comm and self._control_mode == ControlMode.JOINT_ANGLE:
+            # tuple 命令走 comm_layer 高速通道（latest-only queue）。
+            self.comm.send_command(("angle_live", list(angles)))
+
     def set_motor_positions_raw(self, motor_pos_raw: List[int]):
         """设置 MOTOR_COUNT 路电机目标编码器原始值，DIRECT_MOTOR 模式；暂停时不发送"""
         if self._paused:
