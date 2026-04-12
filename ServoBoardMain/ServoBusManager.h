@@ -15,6 +15,8 @@
 #define MAX_SERVOS_PER_BUS     8      // 单条总线最大舵机数
 #define MAX_SERVO_ID           32     // 支持的最大舵机ID
 #define SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT 3
+static constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 2000;
+static constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 50;
 
 /* ==================== 舵机反馈数据（支持多圈） ==================== */
 
@@ -55,7 +57,12 @@ public:
      * @param speed 速度
      * @param acc 加速度
      */
-    void setTarget(uint8_t id, int16_t position, uint16_t speed = 1000, uint8_t acc = 50);
+    void setTarget(
+        uint8_t id,
+        int16_t position,
+        uint16_t speed = SERVO_TARGET_SPEED_DEFAULT,
+        uint8_t acc = SERVO_TARGET_ACC_DEFAULT
+    );
 
     /**
      * @brief 同步写入所有缓存的目标位置

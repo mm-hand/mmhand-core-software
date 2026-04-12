@@ -324,6 +324,25 @@ class LowerComputerComm:
             "angle_live",
         )
 
+    @staticmethod
+    def _is_joint_command(cmd: SendCmd) -> bool:
+        if isinstance(cmd, HandModel):
+            return True
+        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live"
+
+    def invalidate_pending_joint_commands(self) -> int:
+        """Drop pending joint-control commands from TX queue."""
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            kept = [item for item in pending if not self._is_joint_command(item)]
+            removed = len(pending) - len(kept)
+            if removed <= 0:
+                return 0
+            pending.clear()
+            pending.extend(kept)
+            self.tx_queue.not_full.notify_all()
+            return removed
+
     def _enqueue_latest_high_rate(self, cmd: SendCmd):
         # Keep only the latest pending high-rate command to avoid UI backlog.
         with self.tx_queue.mutex:

@@ -367,7 +367,7 @@ class HandGUI:
         self._motor_run_states: List[bool] = [False] * MOTOR_COUNT
         self._joint_run_buttons: List[ttk.Button] = []
         self._motor_run_buttons: List[ttk.Button] = []
-        self._save_data_var = tk.BooleanVar(value=False)
+        self._save_data_var = tk.BooleanVar(value=True)
         self._data_logger = RunDataLogger(flush_every=10)
         self._recording_status_note = ""
         self._tendon_cfg_path = os.path.join(os.path.dirname(__file__), "config", "tendon_manual_calib.json")
@@ -390,6 +390,7 @@ class HandGUI:
         self._joint_rt_canvas = None
         self._joint_rt_line_target = None
         self._joint_rt_line_actual = None
+        self._joint_rt_window = None
 
         self._setup_ui()
         self._setup_device_menu()
@@ -589,8 +590,7 @@ class HandGUI:
         self.root.after(200, poll)
 
     def _bind_keyboard_shortcuts(self) -> None:
-        self.root.bind_all("<KeyPress-s>", self._on_keyboard_stop)
-        self.root.bind_all("<KeyPress-S>", self._on_keyboard_stop)
+        self.root.bind_all("<KeyPress-space>", self._on_keyboard_stop)
 
     def _on_keyboard_stop(self, _event=None) -> None:
         self._on_btn_stop()
@@ -641,6 +641,12 @@ class HandGUI:
         if hasattr(self, "_joint_target_initialized"):
             self._joint_target_initialized = False
         self._refresh_start_indicator()
+        if hasattr(self, "_save_data_var") and bool(self._save_data_var.get()) and not self._data_logger.is_running():
+            try:
+                self._start_data_recording()
+            except Exception:
+                self._save_data_var.set(False)
+                self._recording_status_note = ""
         try:
             self.root.after(0, self._maybe_redraw)
         except tk.TclError:
@@ -924,6 +930,8 @@ class HandGUI:
         return fields
 
     def _start_data_recording(self) -> None:
+        if self._data_logger.is_running():
+            return
         path = self._build_run_data_csv_path()
         self._data_logger.start(path, fieldnames=self._build_run_data_fieldnames())
         self._recording_status_note = f"Recording: {os.path.basename(path)}"
@@ -984,6 +992,7 @@ class HandGUI:
 
     def _on_close(self):
         self._stop_data_recording(reason="stopped on close", keep_switch=True)
+        self._destroy_joint_rt_plot()
         self._cancel_pose_3d_rezoom_timer()
         stop = getattr(self, "_camera_stop", None)
         if stop is not None:
@@ -1092,7 +1101,6 @@ class HandGUI:
         holder = getattr(self, "_right_panel_holder", None)
         if holder is None:
             return
-        self._destroy_joint_rt_plot()
         for child in holder.winfo_children():
             try:
                 child.destroy()
@@ -1231,6 +1239,13 @@ class HandGUI:
             command=self._on_toggle_save_data,
         )
         self._save_data_switch.pack(side=tk.RIGHT, padx=(8, 0))
+        self._joint_rt_popup_btn = ttk.Button(
+            top,
+            text="Plot",
+            width=10,
+            command=self._open_joint_rt_window,
+        )
+        self._joint_rt_popup_btn.pack(side=tk.RIGHT, padx=(8, 0))
         self._refresh_start_indicator()
 
         # weight：窗口被拉大时“多出来的宽度”按权重分给各格；不保证首屏分割线就是 2:1
@@ -1265,6 +1280,8 @@ class HandGUI:
         self._rebuild_right_panel()
 
         self._setup_status_bar()
+        if bool(self._save_data_var.get()) and self._is_comm_connected():
+            self._on_toggle_save_data()
         self.root.after(100, self._set_initial_main_sash)
         self.root.after(120, self._set_initial_tactile_camera_sash)
 
@@ -2024,12 +2041,10 @@ class HandGUI:
         device_grid.columnconfigure(0, weight=0)
         device_grid.columnconfigure(1, weight=0)
         device_grid.columnconfigure(2, weight=0)
+        device_grid.columnconfigure(3, weight=0)
 
-        ttk.Button(device_grid, text="Enable", width=11, command=self._on_btn_start).grid(
-            row=0, column=0, padx=(0, 6), pady=(0, 4), sticky="w"
-        )
         ttk.Button(device_grid, text="Home", width=11, command=self._on_btn_home).grid(
-            row=0, column=1, padx=(0, 6), pady=(0, 4), sticky="w"
+            row=0, column=0, padx=(0, 6), pady=(0, 4), sticky="w"
         )
         ttk.Button(device_grid, text="Calibrate", width=11, command=self._on_calibrate).grid(
             row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="w"
@@ -2037,6 +2052,27 @@ class HandGUI:
         ttk.Button(device_grid, text="Clear Fault", width=11, command=self._on_btn_reset).grid(
             row=1, column=1, padx=(0, 6), pady=(0, 0), sticky="w"
         )
+        self._enable_btn = tk.Label(
+            device_grid,
+            text="ENABLE",
+            bg="#2e7d32",
+            fg="#f6fff6",
+            relief=tk.RAISED,
+            bd=2,
+            font=("", 12, "bold"),
+            width=12,
+            height=3,
+            cursor="hand2",
+            padx=10,
+            pady=2,
+        )
+        self._enable_btn.grid(
+            row=0, column=2, rowspan=2, padx=(8, 6), pady=0, sticky="nsw"
+        )
+        self._enable_btn.bind("<Button-1>", lambda _event: self._on_btn_start())
+        self._enable_btn.bind("<ButtonRelease-1>", lambda _event: self._enable_btn.configure(bg="#2e7d32"))
+        self._enable_btn.bind("<Enter>", lambda _event: self._enable_btn.configure(bg="#1b5e20"))
+        self._enable_btn.bind("<Leave>", lambda _event: self._enable_btn.configure(bg="#2e7d32"))
         self._estop_btn = tk.Label(
             device_grid,
             text="E-STOP",
@@ -2052,7 +2088,7 @@ class HandGUI:
             pady=2,
         )
         self._estop_btn.grid(
-            row=0, column=2, rowspan=2, padx=(8, 0), pady=0, sticky="nsw"
+            row=0, column=3, rowspan=2, padx=(8, 0), pady=0, sticky="nsw"
         )
         self._estop_btn.bind("<Button-1>", lambda _event: self._on_btn_stop())
         self._estop_btn.bind("<ButtonRelease-1>", lambda _event: self._estop_btn.configure(bg="#c62828"))
@@ -2085,8 +2121,6 @@ class HandGUI:
         rb_motor.pack(side=tk.LEFT, padx=4)
         self._interaction_btn = ttk.Button(mode_row, text="Hand Manual: OFF", command=self._toggle_interaction_control)
         self._interaction_btn.pack(side=tk.RIGHT, padx=2)
-
-        self._setup_joint_realtime_plot(panel)
 
         self._table_section = ttk.LabelFrame(panel, text=f"Channel Table (J{ENCODER_COUNT} / M{MOTOR_COUNT})")
         self._table_section.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
@@ -2155,9 +2189,34 @@ class HandGUI:
         self._update_manual_action_buttons()
         self._switch_control_mode()
 
+    def _open_joint_rt_window(self) -> None:
+        win = getattr(self, "_joint_rt_window", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    if getattr(self, "_joint_rt_canvas", None) is None:
+                        self._setup_joint_realtime_plot(win)
+                    win.deiconify()
+                    win.lift()
+                    win.focus_set()
+                    return
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title("Joint Real-Time Curve")
+        win.geometry("760x360")
+        win.protocol("WM_DELETE_WINDOW", self._on_joint_rt_window_close)
+        self._joint_rt_window = win
+        self._setup_joint_realtime_plot(win)
+
+    def _on_joint_rt_window_close(self) -> None:
+        self._destroy_joint_rt_plot()
+
     def _setup_joint_realtime_plot(self, parent) -> None:
+        self._destroy_joint_rt_plot(close_window=False)
         box = ttk.LabelFrame(parent, text="Joint Real-Time Curve")
-        box.pack(fill=tk.X, padx=6, pady=(2, 4))
+        box.pack(fill=tk.BOTH, expand=True, padx=6, pady=(2, 4))
 
         top = ttk.Frame(box)
         top.pack(fill=tk.X, padx=6, pady=(6, 2))
@@ -2177,7 +2236,7 @@ class HandGUI:
         combo.bind("<<ComboboxSelected>>", self._on_joint_rt_selection_changed)
         ttk.Button(top, text="Clear", width=8, command=self._on_joint_rt_clear).pack(side=tk.LEFT)
 
-        self._joint_rt_fig = plt.Figure(figsize=(4.7, 2.0), dpi=100)
+        self._joint_rt_fig = plt.Figure(figsize=(7.2, 3.0), dpi=100)
         self._joint_rt_ax = self._joint_rt_fig.add_subplot(111)
         self._joint_rt_ax.set_xlabel("Time (s)", fontsize=9)
         self._joint_rt_ax.set_ylabel("Angle (deg)", fontsize=9)
@@ -2186,12 +2245,12 @@ class HandGUI:
         (self._joint_rt_line_actual,) = self._joint_rt_ax.plot([], [], linestyle="-", linewidth=1.8, label="Actual")
         self._joint_rt_ax.legend(loc="upper right", fontsize=8)
         self._joint_rt_canvas = FigureCanvasTkAgg(self._joint_rt_fig, box)
-        self._joint_rt_canvas.get_tk_widget().pack(fill=tk.X, padx=6, pady=(0, 6))
+        self._joint_rt_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
         self._clear_joint_rt_history()
         self._update_joint_rt_plot(force=True)
 
-    def _destroy_joint_rt_plot(self) -> None:
+    def _destroy_joint_rt_plot(self, close_window: bool = True) -> None:
         canvas = getattr(self, "_joint_rt_canvas", None)
         if canvas is not None:
             try:
@@ -2210,6 +2269,15 @@ class HandGUI:
         self._joint_rt_ax = None
         self._joint_rt_line_target = None
         self._joint_rt_line_actual = None
+        if close_window:
+            win = getattr(self, "_joint_rt_window", None)
+            self._joint_rt_window = None
+            if win is not None:
+                try:
+                    if win.winfo_exists():
+                        win.destroy()
+                except Exception:
+                    pass
 
     def _on_joint_rt_selection_changed(self, _event=None) -> None:
         text = str(self._joint_rt_joint_var.get() or "").strip().upper()
@@ -2239,8 +2307,6 @@ class HandGUI:
         self._joint_rt_last_plot_ts = 0.0
 
     def _append_joint_rt_sample(self, s: HandModel) -> None:
-        if getattr(self, "_joint_rt_ax", None) is None:
-            return
         idx = int(getattr(self, "_joint_rt_joint_index", 0))
         if idx < 0 or idx >= ENCODER_COUNT:
             return
@@ -2552,6 +2618,7 @@ class HandGUI:
 
     def _switch_control_mode(self):
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        prev_mode = getattr(self, "_ctrl_mode_last", mode)
         self._clear_run_states()
         self._joint_panel.pack_forget()
         self._motor_panel.pack_forget()
@@ -2573,8 +2640,34 @@ class HandGUI:
             self._refresh_joint_feedback_view(sync_target=True)
             if hasattr(self, "_table_section"):
                 self._table_section.configure(text=f"Joint Channels (J{ENCODER_COUNT})")
+        if prev_mode == "joint" and mode == "motor":
+            self._stop_joint_pid_on_motor_switch()
+        self._ctrl_mode_last = mode
         self._update_manual_action_buttons()
         self._apply_interaction_control_policy()
+
+    def _stop_joint_pid_on_motor_switch(self) -> None:
+        if not self._is_comm_connected():
+            return
+        was_started = bool(self.controller.is_started())
+        if was_started:
+            try:
+                self.controller.stop()
+            except Exception:
+                pass
+        cleared = int(self.controller.invalidate_joint_commands())
+        self._refresh_start_indicator()
+        action = "Auto stop: joint PID halted on motor mode switch"
+        if cleared > 0:
+            action = f"{action}; cleared {cleared} pending joint command(s)"
+        self._emit_action(action)
+        if hasattr(self, "status_var"):
+            base = "Switched to motor mode: old joint commands invalidated"
+            if was_started:
+                base = f"{base}, joint PID stopped"
+            if cleared > 0:
+                base = f"{base} (cleared={cleared})"
+            self.status_var.set(base)
 
     def _mark_joint_target_user_set(self, idx: int) -> None:
         if 0 <= idx < len(self._joint_target_user_set):
@@ -3285,7 +3378,7 @@ class HandGUI:
 
     def _clear_live_displays(self) -> None:
         """断开连接或未连接时：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
-        self._stop_data_recording(reason="stopped on disconnect")
+        self._stop_data_recording(reason="stopped on disconnect", keep_switch=True)
         self._refresh_start_indicator()
         with self._state_lock:
             self._state = None

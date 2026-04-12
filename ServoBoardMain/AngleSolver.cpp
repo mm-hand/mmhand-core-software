@@ -829,7 +829,7 @@ void taskSolver(void* parameter)
                     {
                         if (pBus->isOnline(id)) {
                             const int16_t holdPos = clampServoPos(servoData.servoAngles[ch]);
-                            pBus->setTarget(id, holdPos, 1000, 50);
+                            pBus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                             busWritePending[bus] = true;
                         }
                         continue;
@@ -865,7 +865,7 @@ void taskSolver(void* parameter)
                     } else {
                         sweepAnchorValid[ch] = false;
                     }
-                    pBus->setTarget(id, targetPos, 1000, 50);
+                    pBus->setTarget(id, targetPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                     busWritePending[bus] = true;
                 }
             }
@@ -924,7 +924,7 @@ void taskSolver(void* parameter)
                     // 急停策略：保持当前舵机位置，避免异常状态下继续运动。
                     if (pBus->isOnline(id)) {
                         const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
-                        pBus->setTarget(id, holdPos, 1000, 50);
+                        pBus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                         busWritePending[bus] = true;
                         jointCmdPos[jointIndex] = holdPos;
                         jointCmdValid[jointIndex] = 1;
@@ -935,7 +935,12 @@ void taskSolver(void* parameter)
                         if (pSecBus && pSecBus->isOnline(joint16SecondaryMotor.servoID)) {
                             const int secCh = findMotorChannel(joint16SecondaryMotor.busIndex, joint16SecondaryMotor.servoID);
                             const int16_t holdSec = (secCh >= 0) ? clampServoPos(servoData.servoAngles[secCh]) : 0;
-                            pSecBus->setTarget(joint16SecondaryMotor.servoID, holdSec, 1000, 50);
+                            pSecBus->setTarget(
+                                joint16SecondaryMotor.servoID,
+                                holdSec,
+                                SERVO_TARGET_SPEED_DEFAULT,
+                                SERVO_TARGET_ACC_DEFAULT
+                            );
                             busWritePending[joint16SecondaryMotor.busIndex] = true;
                         }
                     }
@@ -946,7 +951,7 @@ void taskSolver(void* parameter)
                 {
                     if (pBus->isOnline(id)) {
                         const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
-                        pBus->setTarget(id, holdPos, 1000, 50);
+                        pBus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                         busWritePending[bus] = true;
                         jointCmdPos[jointIndex] = holdPos;
                         jointCmdValid[jointIndex] = 1;
@@ -957,7 +962,12 @@ void taskSolver(void* parameter)
                         if (pSecBus && pSecBus->isOnline(joint16SecondaryMotor.servoID)) {
                             const int secCh = findMotorChannel(joint16SecondaryMotor.busIndex, joint16SecondaryMotor.servoID);
                             const int16_t holdSec = (secCh >= 0) ? clampServoPos(servoData.servoAngles[secCh]) : 0;
-                            pSecBus->setTarget(joint16SecondaryMotor.servoID, holdSec, 1000, 50);
+                            pSecBus->setTarget(
+                                joint16SecondaryMotor.servoID,
+                                holdSec,
+                                SERVO_TARGET_SPEED_DEFAULT,
+                                SERVO_TARGET_ACC_DEFAULT
+                            );
                             busWritePending[joint16SecondaryMotor.busIndex] = true;
                         }
                     }
@@ -965,7 +975,7 @@ void taskSolver(void* parameter)
                 }
 
                     const int16_t targetPos = clampServoPos(outPulses[jointIndex]);
-                pBus->setTarget(id, targetPos, 1000, 50);
+                pBus->setTarget(id, targetPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 busWritePending[bus] = true;
                 jointCmdPos[jointIndex] = targetPos;
                 jointCmdValid[jointIndex] = 1;
@@ -975,7 +985,12 @@ void taskSolver(void* parameter)
                     if (pSecBus) {
                         // joint16 拮抗下发：主舵机目标确定后，副舵机按反向映射与偏置补偿计算。
                         const int32_t secTarget = -((int32_t)targetPos) + kJoint16SecondaryOffset + kJoint16TensionBias;
-                        pSecBus->setTarget(joint16SecondaryMotor.servoID, clampServoPos(secTarget), 1000, 50);
+                        pSecBus->setTarget(
+                            joint16SecondaryMotor.servoID,
+                            clampServoPos(secTarget),
+                            SERVO_TARGET_SPEED_DEFAULT,
+                            SERVO_TARGET_ACC_DEFAULT
+                        );
                         busWritePending[joint16SecondaryMotor.busIndex] = true;
                     }
                 }

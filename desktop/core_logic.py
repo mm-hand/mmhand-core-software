@@ -46,6 +46,15 @@ class HandController:
     def set_pid_control(self, enabled: bool):
         self._pid_enabled = enabled
 
+    def invalidate_joint_commands(self) -> int:
+        """清除发送队列中待发的关节控制指令（角度包/angle_live）。"""
+        if not self.comm:
+            return 0
+        try:
+            return int(self.comm.invalidate_pending_joint_commands())
+        except Exception:
+            return 0
+
     def pause(self):
         """暂停：停止向下位机发送控制指令（数据接收照常）"""
         self._paused = True

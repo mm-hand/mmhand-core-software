@@ -143,7 +143,7 @@ void System_Init() {
 
     // 6) 设置双环 PID 参数。
     float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {20.0f, 0.2f, 0.0f, 0.0f, 100.0f, 600.0f},
+        {16.5f, 0.0f, 0.5f, 0.0f, 100.0f, 600.0f},
         {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
     };
     angleSolver.setPIDParams(pidConfigs);
