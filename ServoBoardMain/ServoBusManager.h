@@ -15,8 +15,8 @@
 #define MAX_SERVOS_PER_BUS     8      // 单条总线最大舵机数
 #define MAX_SERVO_ID           32     // 支持的最大舵机ID
 #define SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT 3
-static constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 2000;
-static constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 50;
+static constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 3000;
+static constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200;
 
 /* ==================== 舵机反馈数据（支持多圈） ==================== */
 

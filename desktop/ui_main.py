@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap, Normalize
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import threading
 import time
 
@@ -34,6 +34,12 @@ MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 START_INDICATOR_RUN_BG = "#1e8e3e"
 START_INDICATOR_STOP_BG = "#c62828"
 START_INDICATOR_FG = "#ffffff"
+TEST_ROW_COUNT = 5
+TEST_TICK_MS = 40
+TEST_DEFAULT_FREQ_HZ = 0.20
+TEST_DEFAULT_PHASE_DEG = 0.0
+TEST_DEFAULT_HOLD_S = 0.0
+JOINT_RT_MAX_PLOT_JOINTS = 5
 # Joint control 目标角范围（度），需与下位机 AngleSolver + JointCalibrationProfile 当前生效限幅保持一致。
 # 注意：最小值也按关节独立维护，当前默认全部 0.0，后续可按关节单独调整。
 JOINT_TARGET_MIN_DEG_BY_INDEX = [
@@ -376,21 +382,36 @@ class HandGUI:
         self._tendon_release_angle_eps_deg = 0.0
         self._tendon_guard_last_warn_ts = 0.0
         self._tendon_guard_warn_interval_s = 0.5
-        self._joint_rt_joint_var = tk.StringVar(value="J02")
-        self._joint_rt_joint_index = 2
+        self._joint_rt_joint_var = tk.StringVar(value="J00")
+        self._joint_rt_joint_index = 0
+        self._joint_rt_joint_vars: List[tk.StringVar] = [
+            tk.StringVar(value="None") for _ in range(JOINT_RT_MAX_PLOT_JOINTS)
+        ]
         self._joint_rt_window_sec = 12.0
         self._joint_rt_plot_interval = 0.2
         self._joint_rt_last_plot_ts = 0.0
         self._joint_rt_t0 = 0.0
-        self._joint_rt_t = deque(maxlen=1800)
-        self._joint_rt_actual = deque(maxlen=1800)
-        self._joint_rt_target = deque(maxlen=1800)
+        self._joint_rt_series_t: Dict[int, deque] = {}
+        self._joint_rt_series_actual: Dict[int, deque] = {}
+        self._joint_rt_series_target: Dict[int, deque] = {}
         self._joint_rt_fig = None
         self._joint_rt_ax = None
         self._joint_rt_canvas = None
         self._joint_rt_line_target = None
         self._joint_rt_line_actual = None
         self._joint_rt_window = None
+        self._test_running = False
+        self._test_after_job = None
+        self._test_t0 = 0.0
+        self._test_tick_ms = TEST_TICK_MS
+        self._test_hold_s = float(TEST_DEFAULT_HOLD_S)
+        self._test_hold_s_var = tk.StringVar(value=f"{TEST_DEFAULT_HOLD_S:.2f}")
+        self._test_joint_vars: List[tk.StringVar] = []
+        self._test_min_vars: List[tk.StringVar] = []
+        self._test_max_vars: List[tk.StringVar] = []
+        self._test_freq_vars: List[tk.StringVar] = []
+        self._test_phase_vars: List[tk.StringVar] = []
+        self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
 
         self._setup_ui()
         self._setup_device_menu()
@@ -951,6 +972,12 @@ class HandGUI:
             self.status_var.set("Recording stopped")
 
     def _on_toggle_save_data(self) -> None:
+        if self._test_running:
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+            if hasattr(self, "status_var"):
+                self.status_var.set("Save Data is controlled by Test mode while Test is running")
+            return
         enabled = bool(self._save_data_var.get())
         if enabled:
             try:
@@ -967,8 +994,13 @@ class HandGUI:
             return
 
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
-        control_mode = "motor" if mode == "motor" else "joint"
-        if control_mode == "joint":
+        if mode == "motor":
+            control_mode = "motor"
+        elif mode == "test":
+            control_mode = "test"
+        else:
+            control_mode = "joint"
+        if control_mode in ("joint", "test"):
             joint_targets: List[object] = list(self._resolved_joint_targets())
             servo_targets_single: List[object] = [NA_MODE_MARKER] * MOTOR_COUNT
         else:
@@ -991,6 +1023,7 @@ class HandGUI:
         self._data_logger.write_row(row)
 
     def _on_close(self):
+        self._on_stop_test(reason="stopped on close", update_status=False)
         self._stop_data_recording(reason="stopped on close", keep_switch=True)
         self._destroy_joint_rt_plot()
         self._cancel_pose_3d_rezoom_timer()
@@ -1089,6 +1122,8 @@ class HandGUI:
             self._refresh_mode_button_states()
             self._refresh_start_indicator()
             return
+        if mode_norm != "Monitor":
+            self._on_stop_test(reason="stopped on global mode switch", update_status=False)
         self.current_mode = mode_norm
         self._rebuild_right_panel()
         self._refresh_mode_button_states()
@@ -2119,6 +2154,14 @@ class HandGUI:
             command=self._switch_control_mode,
         )
         rb_motor.pack(side=tk.LEFT, padx=4)
+        rb_test = ttk.Radiobutton(
+            mode_row,
+            text="Test",
+            variable=self._ctrl_mode_var,
+            value="test",
+            command=self._switch_control_mode,
+        )
+        rb_test.pack(side=tk.LEFT, padx=4)
         self._interaction_btn = ttk.Button(mode_row, text="Hand Manual: OFF", command=self._toggle_interaction_control)
         self._interaction_btn.pack(side=tk.RIGHT, padx=2)
 
@@ -2154,6 +2197,7 @@ class HandGUI:
 
         self._joint_panel = ttk.Frame(self._ctrl_body)
         self._motor_panel = ttk.Frame(self._ctrl_body)
+        self._test_panel = ttk.Frame(self._ctrl_body)
 
         self._joint_curr_vars: List[tk.StringVar] = []
         self._joint_target_vars: List[tk.DoubleVar] = []
@@ -2180,6 +2224,7 @@ class HandGUI:
 
         self._build_mode_table(self._joint_panel, is_motor=False)
         self._build_mode_table(self._motor_panel, is_motor=True)
+        self._setup_test_panel(self._test_panel)
         # 初始化为关闭：禁用交互输入
         for w in self._control_widgets:
             try:
@@ -2220,30 +2265,25 @@ class HandGUI:
 
         top = ttk.Frame(box)
         top.pack(fill=tk.X, padx=6, pady=(6, 2))
-        ttk.Label(top, text="Joint:").pack(side=tk.LEFT)
-        values = [f"J{i:02d}" for i in range(ENCODER_COUNT)]
-        if not (0 <= int(getattr(self, "_joint_rt_joint_index", 0)) < ENCODER_COUNT):
-            self._joint_rt_joint_index = 0
-        self._joint_rt_joint_var.set(f"J{int(self._joint_rt_joint_index):02d}")
-        combo = ttk.Combobox(
-            top,
-            textvariable=self._joint_rt_joint_var,
-            values=values,
-            state="readonly",
-            width=6,
-        )
-        combo.pack(side=tk.LEFT, padx=(4, 8))
-        combo.bind("<<ComboboxSelected>>", self._on_joint_rt_selection_changed)
+        ttk.Label(top, text="Joints:").pack(side=tk.LEFT)
+        values = ["None"] + [f"J{i:02d}" for i in range(ENCODER_COUNT)]
+        if len(getattr(self, "_joint_rt_joint_vars", [])) != JOINT_RT_MAX_PLOT_JOINTS:
+            self._joint_rt_joint_vars = [tk.StringVar(value="None") for _ in range(JOINT_RT_MAX_PLOT_JOINTS)]
+        for i, var in enumerate(self._joint_rt_joint_vars):
+            var.set(self._normalize_joint_rt_value(var.get()))
+            combo = ttk.Combobox(
+                top,
+                textvariable=var,
+                values=values,
+                state="readonly",
+                width=6,
+            )
+            combo.pack(side=tk.LEFT, padx=(4 if i == 0 else 2, 2))
+            combo.bind("<<ComboboxSelected>>", lambda _e, slot=i: self._on_joint_rt_selection_changed(slot))
         ttk.Button(top, text="Clear", width=8, command=self._on_joint_rt_clear).pack(side=tk.LEFT)
 
         self._joint_rt_fig = plt.Figure(figsize=(7.2, 3.0), dpi=100)
         self._joint_rt_ax = self._joint_rt_fig.add_subplot(111)
-        self._joint_rt_ax.set_xlabel("Time (s)", fontsize=9)
-        self._joint_rt_ax.set_ylabel("Angle (deg)", fontsize=9)
-        self._joint_rt_ax.grid(True, alpha=0.28)
-        (self._joint_rt_line_target,) = self._joint_rt_ax.plot([], [], linestyle="--", linewidth=1.6, label="Target")
-        (self._joint_rt_line_actual,) = self._joint_rt_ax.plot([], [], linestyle="-", linewidth=1.8, label="Actual")
-        self._joint_rt_ax.legend(loc="upper right", fontsize=8)
         self._joint_rt_canvas = FigureCanvasTkAgg(self._joint_rt_fig, box)
         self._joint_rt_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
@@ -2279,19 +2319,53 @@ class HandGUI:
                 except Exception:
                     pass
 
-    def _on_joint_rt_selection_changed(self, _event=None) -> None:
-        text = str(self._joint_rt_joint_var.get() or "").strip().upper()
-        idx = self._joint_rt_joint_index
+    @staticmethod
+    def _normalize_joint_rt_value(value: str) -> str:
+        text = str(value or "").strip().upper()
+        if text in ("", "NONE", "N", "-"):
+            return "None"
         if text.startswith("J"):
-            text = text[1:]
-        try:
-            parsed = int(text)
-            if 0 <= parsed < ENCODER_COUNT:
-                idx = parsed
-        except Exception:
-            pass
-        self._joint_rt_joint_index = int(idx)
-        self._joint_rt_joint_var.set(f"J{self._joint_rt_joint_index:02d}")
+            try:
+                idx = int(text[1:])
+            except ValueError:
+                return "None"
+            if 0 <= idx < ENCODER_COUNT:
+                return f"J{idx:02d}"
+        return "None"
+
+    def _selected_joint_rt_indices(self) -> List[int]:
+        selected: List[int] = []
+        for var in getattr(self, "_joint_rt_joint_vars", []):
+            norm = self._normalize_joint_rt_value(var.get())
+            var.set(norm)
+            if norm == "None":
+                continue
+            idx = int(norm[1:])
+            if idx not in selected:
+                selected.append(idx)
+        return selected[:JOINT_RT_MAX_PLOT_JOINTS]
+
+    def _on_joint_rt_selection_changed(self, slot: Optional[int] = None) -> None:
+        if slot is not None and 0 <= int(slot) < len(self._joint_rt_joint_vars):
+            slot_idx = int(slot)
+            current = self._normalize_joint_rt_value(self._joint_rt_joint_vars[slot_idx].get())
+            self._joint_rt_joint_vars[slot_idx].set(current)
+            if current != "None":
+                for i, var in enumerate(self._joint_rt_joint_vars):
+                    if i == slot_idx:
+                        continue
+                    if self._normalize_joint_rt_value(var.get()) == current:
+                        self._joint_rt_joint_vars[slot_idx].set("None")
+                        if hasattr(self, "status_var"):
+                            self.status_var.set(f"Plot selection duplicate joint: {current} already selected")
+                        break
+        selected = self._selected_joint_rt_indices()
+        if selected:
+            self._joint_rt_joint_index = int(selected[0])
+            self._joint_rt_joint_var.set(f"J{self._joint_rt_joint_index:02d}")
+        else:
+            self._joint_rt_joint_index = 0
+            self._joint_rt_joint_var.set("J00")
         self._clear_joint_rt_history()
         self._update_joint_rt_plot(force=True)
 
@@ -2300,15 +2374,21 @@ class HandGUI:
         self._update_joint_rt_plot(force=True)
 
     def _clear_joint_rt_history(self) -> None:
-        self._joint_rt_t.clear()
-        self._joint_rt_actual.clear()
-        self._joint_rt_target.clear()
+        self._joint_rt_series_t.clear()
+        self._joint_rt_series_actual.clear()
+        self._joint_rt_series_target.clear()
         self._joint_rt_t0 = 0.0
         self._joint_rt_last_plot_ts = 0.0
 
+    def _ensure_joint_rt_series(self, joint_idx: int) -> None:
+        if joint_idx not in self._joint_rt_series_t:
+            self._joint_rt_series_t[joint_idx] = deque(maxlen=1800)
+            self._joint_rt_series_actual[joint_idx] = deque(maxlen=1800)
+            self._joint_rt_series_target[joint_idx] = deque(maxlen=1800)
+
     def _append_joint_rt_sample(self, s: HandModel) -> None:
-        idx = int(getattr(self, "_joint_rt_joint_index", 0))
-        if idx < 0 or idx >= ENCODER_COUNT:
+        selected = self._selected_joint_rt_indices()
+        if not selected:
             return
 
         now = time.time()
@@ -2316,33 +2396,36 @@ class HandGUI:
             self._joint_rt_t0 = now
         t_rel = now - self._joint_rt_t0
 
-        actual = float("nan")
-        if idx < len(getattr(s, "angles", [])):
-            try:
-                actual = float(s.angles[idx])
-            except Exception:
-                actual = float("nan")
-
-        target = float("nan")
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
-        if mode == "joint":
+        targets: Optional[List[float]] = None
+        if mode in ("joint", "test"):
             try:
                 targets = self._resolved_joint_targets()
-                if idx < len(targets):
-                    target = float(targets[idx])
             except Exception:
-                target = float("nan")
+                targets = None
 
-        self._joint_rt_t.append(float(t_rel))
-        self._joint_rt_actual.append(actual)
-        self._joint_rt_target.append(target)
+        for idx in selected:
+            self._ensure_joint_rt_series(idx)
+            actual = float("nan")
+            if idx < len(getattr(s, "angles", [])):
+                try:
+                    actual = float(s.angles[idx])
+                except Exception:
+                    actual = float("nan")
+            target = float("nan")
+            if targets is not None and idx < len(targets):
+                try:
+                    target = float(targets[idx])
+                except Exception:
+                    target = float("nan")
+            self._joint_rt_series_t[idx].append(float(t_rel))
+            self._joint_rt_series_actual[idx].append(actual)
+            self._joint_rt_series_target[idx].append(target)
 
     def _update_joint_rt_plot(self, force: bool = False) -> None:
         ax = getattr(self, "_joint_rt_ax", None)
         canvas = getattr(self, "_joint_rt_canvas", None)
-        line_t = getattr(self, "_joint_rt_line_target", None)
-        line_a = getattr(self, "_joint_rt_line_actual", None)
-        if ax is None or canvas is None or line_t is None or line_a is None:
+        if ax is None or canvas is None:
             return
 
         now = time.time()
@@ -2350,26 +2433,55 @@ class HandGUI:
             return
         self._joint_rt_last_plot_ts = now
 
-        t = list(self._joint_rt_t)
-        y_target = list(self._joint_rt_target)
-        y_actual = list(self._joint_rt_actual)
-        line_t.set_data(t, y_target)
-        line_a.set_data(t, y_actual)
+        ax.clear()
+        ax.set_xlabel("Time (s)", fontsize=9)
+        ax.set_ylabel("Angle (deg)", fontsize=9)
+        ax.grid(True, alpha=0.28)
 
-        if t:
-            x_max = float(t[-1])
+        selected = self._selected_joint_rt_indices()
+        x_max = 0.0
+        vals: List[float] = []
+        plotted = False
+        cmap = plt.get_cmap("tab10")
+        for idx in selected:
+            t = list(self._joint_rt_series_t.get(idx, []))
+            y_actual = list(self._joint_rt_series_actual.get(idx, []))
+            y_target = list(self._joint_rt_series_target.get(idx, []))
+            if not t:
+                continue
+            plotted = True
+            x_max = max(x_max, float(t[-1]))
+            base_color = cmap(idx % 10)
+            ax.plot(
+                t,
+                y_actual,
+                linestyle="-",
+                linewidth=1.8,
+                color=base_color,
+                label=f"J{idx:02d} Actual",
+            )
+            ax.plot(
+                t,
+                y_target,
+                linestyle="--",
+                linewidth=1.6,
+                color=base_color,
+                alpha=0.55,
+                label=f"J{idx:02d} Target",
+            )
+            for v in y_target:
+                if np.isfinite(v):
+                    vals.append(float(v))
+            for v in y_actual:
+                if np.isfinite(v):
+                    vals.append(float(v))
+
+        if x_max > 0.0:
             x_min = max(0.0, x_max - float(self._joint_rt_window_sec))
             ax.set_xlim(x_min, max(x_min + 0.8, x_max + 0.05))
         else:
             ax.set_xlim(0.0, float(self._joint_rt_window_sec))
 
-        vals: List[float] = []
-        for v in y_target:
-            if np.isfinite(v):
-                vals.append(float(v))
-        for v in y_actual:
-            if np.isfinite(v):
-                vals.append(float(v))
         if vals:
             y_min = min(vals)
             y_max = max(vals)
@@ -2381,8 +2493,14 @@ class HandGUI:
             ax.set_ylim(-1.0, 1.0)
 
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
-        suffix = "" if mode == "joint" else " (target N/A in motor mode)"
-        ax.set_title(f"J{int(self._joint_rt_joint_index):02d} Target vs Actual{suffix}", fontsize=9)
+        suffix = " (target N/A in motor mode)" if mode == "motor" else ""
+        if selected:
+            selection_label = ", ".join([f"J{i:02d}" for i in selected])
+            ax.set_title(f"Target vs Actual: {selection_label}{suffix}", fontsize=9)
+        else:
+            ax.set_title(f"Target vs Actual: None selected{suffix}", fontsize=9)
+        if plotted:
+            ax.legend(loc="upper right", fontsize=8, ncol=2)
         canvas.draw_idle()
 
     def _setup_teleop_control_panel(self, parent):
@@ -2616,12 +2734,302 @@ class HandGUI:
                 tie_x1_ent.bind("<Return>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 self._control_widgets.extend([ent, btn, sld])
 
+    def _setup_test_panel(self, parent) -> None:
+        box = ttk.LabelFrame(parent, text="Joint Sine Test")
+        box.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        ttk.Label(
+            box,
+            text="Configure up to 5 joints (None allowed). Start Test sends periodic sine targets in joint PID mode.",
+            font=("", 9),
+        ).pack(fill=tk.X, padx=6, pady=(6, 4))
+
+        grid = ttk.Frame(box)
+        grid.pack(fill=tk.X, padx=6, pady=(2, 4))
+        ttk.Label(grid, text="#", width=2).grid(row=0, column=0, padx=2, sticky="w")
+        ttk.Label(grid, text="Joint", width=9).grid(row=0, column=1, padx=2, sticky="w")
+        ttk.Label(grid, text="Min(deg)", width=10).grid(row=0, column=2, padx=2, sticky="w")
+        ttk.Label(grid, text="Max(deg)", width=10).grid(row=0, column=3, padx=2, sticky="w")
+        ttk.Label(grid, text="Freq(Hz)", width=9).grid(row=0, column=4, padx=2, sticky="w")
+        ttk.Label(grid, text="Phase(deg)", width=11).grid(row=0, column=5, padx=2, sticky="w")
+
+        joint_choices = ["None"] + [f"J{i:02d}" for i in range(ENCODER_COUNT)]
+        self._test_joint_vars = []
+        self._test_min_vars = []
+        self._test_max_vars = []
+        self._test_freq_vars = []
+        self._test_phase_vars = []
+        for row_idx in range(TEST_ROW_COUNT):
+            ttk.Label(grid, text=f"{row_idx + 1}", width=2).grid(row=row_idx + 1, column=0, padx=2, pady=1, sticky="w")
+            joint_var = tk.StringVar(value="None")
+            min_var = tk.StringVar(value="0.0")
+            max_var = tk.StringVar(value="10.0")
+            freq_var = tk.StringVar(value=f"{TEST_DEFAULT_FREQ_HZ:.2f}")
+            phase_var = tk.StringVar(value=f"{TEST_DEFAULT_PHASE_DEG:.1f}")
+            self._test_joint_vars.append(joint_var)
+            self._test_min_vars.append(min_var)
+            self._test_max_vars.append(max_var)
+            self._test_freq_vars.append(freq_var)
+            self._test_phase_vars.append(phase_var)
+
+            joint_combo = ttk.Combobox(grid, textvariable=joint_var, values=joint_choices, state="readonly", width=8)
+            joint_combo.grid(row=row_idx + 1, column=1, padx=2, pady=1, sticky="w")
+            joint_combo.bind("<<ComboboxSelected>>", lambda _e, idx=row_idx: self._on_test_joint_changed(idx))
+            min_ent = ttk.Entry(grid, textvariable=min_var, width=11)
+            min_ent.grid(row=row_idx + 1, column=2, padx=2, pady=1, sticky="w")
+            max_ent = ttk.Entry(grid, textvariable=max_var, width=11)
+            max_ent.grid(row=row_idx + 1, column=3, padx=2, pady=1, sticky="w")
+            freq_ent = ttk.Entry(grid, textvariable=freq_var, width=10)
+            freq_ent.grid(row=row_idx + 1, column=4, padx=2, pady=1, sticky="w")
+            phase_ent = ttk.Entry(grid, textvariable=phase_var, width=11)
+            phase_ent.grid(row=row_idx + 1, column=5, padx=2, pady=1, sticky="w")
+            self._control_widgets.extend([joint_combo, min_ent, max_ent, freq_ent, phase_ent])
+
+        action_row = ttk.Frame(box)
+        action_row.pack(fill=tk.X, padx=6, pady=(6, 6))
+        self._test_start_btn = ttk.Button(action_row, text="Start Test", width=11, command=self._on_start_test)
+        self._test_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self._test_stop_btn = ttk.Button(action_row, text="Stop Test", width=11, command=self._on_stop_test)
+        self._test_stop_btn.pack(side=tk.LEFT)
+        ttk.Label(action_row, text="Initial Hold(s)").pack(side=tk.LEFT, padx=(10, 4))
+        hold_ent = ttk.Entry(action_row, textvariable=self._test_hold_s_var, width=8)
+        hold_ent.pack(side=tk.LEFT)
+        self._control_widgets.append(hold_ent)
+        self._set_test_button_states()
+
+    @staticmethod
+    def _normalize_test_joint_value(value: str) -> str:
+        text = (value or "").strip().upper()
+        if text in ("", "NONE", "N", "-"):
+            return "None"
+        if text.startswith("J"):
+            try:
+                idx = int(text[1:])
+            except ValueError:
+                return "None"
+            if 0 <= idx < ENCODER_COUNT:
+                return f"J{idx:02d}"
+        return "None"
+
+    def _on_test_joint_changed(self, row_idx: int) -> None:
+        if row_idx < 0 or row_idx >= len(self._test_joint_vars):
+            return
+        current = self._normalize_test_joint_value(self._test_joint_vars[row_idx].get())
+        self._test_joint_vars[row_idx].set(current)
+        if current == "None":
+            return
+        for i, var in enumerate(self._test_joint_vars):
+            if i == row_idx:
+                continue
+            if self._normalize_test_joint_value(var.get()) == current:
+                self._test_joint_vars[row_idx].set("None")
+                if hasattr(self, "status_var"):
+                    self.status_var.set(f"Test config duplicate joint: {current} already selected")
+                return
+
+    def _validate_test_rows(self, show_message: bool = True) -> Optional[List[Tuple[int, float, float, float, float]]]:
+        active: List[Tuple[int, float, float, float, float]] = []
+        selected = set()
+        n = min(
+            TEST_ROW_COUNT,
+            len(self._test_joint_vars),
+            len(self._test_min_vars),
+            len(self._test_max_vars),
+            len(self._test_freq_vars),
+            len(self._test_phase_vars),
+        )
+        for row_idx in range(n):
+            joint_text = self._normalize_test_joint_value(self._test_joint_vars[row_idx].get())
+            self._test_joint_vars[row_idx].set(joint_text)
+            if joint_text == "None":
+                continue
+            joint_idx = int(joint_text[1:])
+            if joint_idx in selected:
+                msg = f"Test row {row_idx + 1}: duplicated {joint_text}"
+                if show_message:
+                    messagebox.showwarning("Test Config", msg)
+                return None
+            selected.add(joint_idx)
+
+            try:
+                raw_min = float(self._test_min_vars[row_idx].get())
+                raw_max = float(self._test_max_vars[row_idx].get())
+                freq = float(self._test_freq_vars[row_idx].get())
+                phase_deg = float(self._test_phase_vars[row_idx].get())
+            except (TypeError, ValueError, tk.TclError):
+                msg = f"Test row {row_idx + 1}: invalid numeric input"
+                if show_message:
+                    messagebox.showwarning("Test Config", msg)
+                return None
+
+            if not np.isfinite(raw_min) or not np.isfinite(raw_max) or not np.isfinite(freq) or not np.isfinite(phase_deg):
+                msg = f"Test row {row_idx + 1}: min/max/freq/phase must be finite numbers"
+                if show_message:
+                    messagebox.showwarning("Test Config", msg)
+                return None
+            if freq <= 0.0:
+                msg = f"Test row {row_idx + 1}: frequency must be > 0"
+                if show_message:
+                    messagebox.showwarning("Test Config", msg)
+                return None
+            if phase_deg < 0.0 or phase_deg > 360.0:
+                msg = f"Test row {row_idx + 1}: phase must be in [0, 360] deg"
+                if show_message:
+                    messagebox.showwarning("Test Config", msg)
+                return None
+
+            lo_raw = min(raw_min, raw_max)
+            hi_raw = max(raw_min, raw_max)
+            lo = self._clamp_joint_target_deg(joint_idx, lo_raw)
+            hi = self._clamp_joint_target_deg(joint_idx, hi_raw)
+            if hi < lo:
+                lo, hi = hi, lo
+            self._test_min_vars[row_idx].set(f"{lo:.2f}")
+            self._test_max_vars[row_idx].set(f"{hi:.2f}")
+            self._test_freq_vars[row_idx].set(f"{freq:.4g}")
+            self._test_phase_vars[row_idx].set(f"{phase_deg:.4g}")
+            active.append((joint_idx, lo, hi, float(freq), float(phase_deg)))
+
+        if not active:
+            if show_message:
+                messagebox.showwarning("Test Config", "Select at least one valid joint (not None).")
+            return None
+        return active
+
+    def _set_test_button_states(self) -> None:
+        start_btn = getattr(self, "_test_start_btn", None)
+        stop_btn = getattr(self, "_test_stop_btn", None)
+        if start_btn is not None:
+            try:
+                start_btn.configure(state="disabled" if self._test_running else "normal")
+            except Exception:
+                pass
+        if stop_btn is not None:
+            try:
+                stop_btn.configure(state="normal" if self._test_running else "disabled")
+            except Exception:
+                pass
+
+    def _schedule_test_tick(self) -> None:
+        if not self._test_running:
+            return
+        self._test_after_job = self.root.after(int(self._test_tick_ms), self._test_tick)
+
+    def _on_start_test(self) -> None:
+        if self._test_running:
+            return
+        if not self._interaction_enabled:
+            if hasattr(self, "status_var"):
+                self.status_var.set("Start Test blocked: Hand Manual must be ON")
+            return
+        if not self._guard_joint_command_started():
+            return
+        active = self._validate_test_rows(show_message=True)
+        if not active:
+            return
+        try:
+            hold_s = float(self._test_hold_s_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showwarning("Test Config", "Initial Hold(s) must be a valid number.")
+            return
+        if (not np.isfinite(hold_s)) or hold_s < 0.0:
+            messagebox.showwarning("Test Config", "Initial Hold(s) must be a finite number >= 0.")
+            return
+        self._test_hold_s = float(hold_s)
+        self._test_hold_s_var.set(f"{self._test_hold_s:.4g}")
+
+        try:
+            if self._data_logger.is_running():
+                self._stop_data_recording(reason="restart by test", keep_switch=True)
+            self._start_data_recording()
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+        except Exception as exc:
+            messagebox.showerror("Start Test Failed", f"Cannot start recording: {exc}")
+            return
+
+        self._test_active_rows = active
+        self._test_running = True
+        self._test_t0 = time.time()
+        self._set_test_button_states()
+        self._emit_action("Test started")
+        if hasattr(self, "status_var"):
+            self.status_var.set("Test running")
+        self._test_tick()
+
+    def _on_stop_test(self, reason: str = "stopped by test", update_status: bool = True) -> None:
+        was_running = bool(self._test_running)
+        self._test_running = False
+        job = getattr(self, "_test_after_job", None)
+        self._test_after_job = None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._test_active_rows = []
+        self._set_test_button_states()
+        if self._data_logger.is_running():
+            self._stop_data_recording(reason=reason, keep_switch=True)
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(False)
+        if was_running:
+            self._emit_action(f"Test stopped ({reason})")
+        if update_status and hasattr(self, "status_var"):
+            self.status_var.set("Test stopped")
+
+    def _test_tick(self) -> None:
+        if not self._test_running:
+            return
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        if mode != "test":
+            self._on_stop_test(reason="stopped on mode switch", update_status=False)
+            return
+        if not self._interaction_enabled:
+            self._on_stop_test(reason="stopped: Hand Manual OFF")
+            return
+        if not self.controller.is_started():
+            self._on_stop_test(reason="stopped: press Enable to start controller")
+            return
+        if not self._test_active_rows:
+            self._on_stop_test(reason="stopped: no active test rows")
+            return
+
+        elapsed = max(0.0, time.time() - float(self._test_t0))
+        angles = self._resolved_joint_targets()
+        for joint_idx, lo, hi, freq, phase_deg in self._test_active_rows:
+            center = 0.5 * (lo + hi)
+            amp = 0.5 * (hi - lo)
+            phi = np.deg2rad(float(phase_deg))
+            initial_target = center + amp * float(np.sin(phi))
+            if elapsed < float(self._test_hold_s):
+                target = initial_target
+            else:
+                run_t = elapsed - float(self._test_hold_s)
+                target = center + amp * float(np.sin((2.0 * np.pi * float(freq) * run_t) + phi))
+            target = self._clamp_joint_target_deg(joint_idx, target)
+            angles[joint_idx] = target
+            if joint_idx < len(self._joint_target_vars):
+                self._joint_target_vars[joint_idx].set(target)
+            if joint_idx < len(self._joint_target_user_set):
+                self._joint_target_user_set[joint_idx] = True
+
+        try:
+            self._send_joint_targets_with_tendon_guard(angles, source="Test", live=True)
+        except Exception as exc:
+            self._on_stop_test(reason=f"stopped by send error: {exc}")
+            return
+        self._schedule_test_tick()
+
     def _switch_control_mode(self):
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
         prev_mode = getattr(self, "_ctrl_mode_last", mode)
+        if prev_mode == "test" and mode != "test":
+            self._on_stop_test(reason="stopped on mode switch", update_status=False)
         self._clear_run_states()
         self._joint_panel.pack_forget()
         self._motor_panel.pack_forget()
+        if hasattr(self, "_test_panel"):
+            self._test_panel.pack_forget()
         if mode == "motor":
             if hasattr(self, "_motor_dir_hint"):
                 self._motor_dir_hint = [0] * MOTOR_COUNT
@@ -2635,12 +3043,17 @@ class HandGUI:
             self._refresh_motor_feedback_view(sync_target=True)
             if hasattr(self, "_table_section"):
                 self._table_section.configure(text=f"Motor Channels (M{MOTOR_COUNT})")
+        elif mode == "test":
+            if hasattr(self, "_test_panel"):
+                self._test_panel.pack(fill=tk.BOTH, expand=True)
+            if hasattr(self, "_table_section"):
+                self._table_section.configure(text="Joint Sine Test")
         else:
             self._joint_panel.pack(fill=tk.BOTH, expand=True)
             self._refresh_joint_feedback_view(sync_target=True)
             if hasattr(self, "_table_section"):
                 self._table_section.configure(text=f"Joint Channels (J{ENCODER_COUNT})")
-        if prev_mode == "joint" and mode == "motor":
+        if prev_mode in ("joint", "test") and mode == "motor":
             self._stop_joint_pid_on_motor_switch()
         self._ctrl_mode_last = mode
         self._update_manual_action_buttons()
@@ -3378,6 +3791,7 @@ class HandGUI:
 
     def _clear_live_displays(self) -> None:
         """断开连接或未连接时：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
+        self._on_stop_test(reason="stopped on disconnect", update_status=False)
         self._stop_data_recording(reason="stopped on disconnect", keep_switch=True)
         self._refresh_start_indicator()
         with self._state_lock:
