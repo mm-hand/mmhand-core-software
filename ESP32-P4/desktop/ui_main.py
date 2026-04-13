@@ -6,6 +6,7 @@ from datetime import datetime
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, messagebox
+import tkinter.font as tkfont
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -40,6 +41,9 @@ TEST_DEFAULT_FREQ_HZ = 0.20
 TEST_DEFAULT_PHASE_DEG = 0.0
 TEST_DEFAULT_HOLD_S = 0.0
 JOINT_RT_MAX_PLOT_JOINTS = 5
+CAMERA_INDEX_SCAN_MAX = 5
+CAMERA_POLL_ACTIVE_MS = 50
+CAMERA_POLL_IDLE_MS = 220
 # Joint control 目标角范围（度），需与下位机 AngleSolver + JointCalibrationProfile 当前生效限幅保持一致。
 # 注意：最小值也按关节独立维护，当前默认全部 0.0，后续可按关节单独调整。
 JOINT_TARGET_MIN_DEG_BY_INDEX = [
@@ -117,6 +121,73 @@ _FIST_20_RAD = (
 )
 _ANGLE_MAP = [[3, 0, 1, 2], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19]]
 NA_MODE_MARKER = "NA_MODE"
+
+
+def _normalized_mousewheel_steps(event) -> int:
+    """Normalize wheel events across Windows/macOS/Linux."""
+    delta = int(getattr(event, "delta", 0) or 0)
+    if delta != 0:
+        if abs(delta) < 120:
+            return -1 if delta > 0 else 1
+        return int(-delta / 120)
+    num = int(getattr(event, "num", 0) or 0)
+    if num == 4:
+        return -1
+    if num == 5:
+        return 1
+    return 0
+
+
+def _apply_platform_ui_defaults(root: tk.Tk, *, compact: bool = False) -> None:
+    """Apply lightweight platform-specific UI tuning (DPI, fonts, theme)."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+        try:
+            scale = float(root.winfo_fpixels("1i")) / 72.0
+            if 1.0 <= scale <= 2.5:
+                root.tk.call("tk", "scaling", scale)
+        except Exception:
+            pass
+    style = ttk.Style(root)
+    try:
+        if os.name == "nt" and "vista" in style.theme_names():
+            style.theme_use("vista")
+        elif "clam" in style.theme_names():
+            style.theme_use("clam")
+    except Exception:
+        pass
+    family = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
+    size = 9 if compact else 10
+    for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
+        try:
+            f = tkfont.nametofont(fname)
+            f.configure(family=family, size=size)
+        except Exception:
+            pass
+    try:
+        f = tkfont.nametofont("TkHeadingFont")
+        f.configure(family=family, size=size + 1, weight="bold")
+    except Exception:
+        pass
+    root.option_add("*tearOff", False)
+    try:
+        root.configure(bg="#f2f4f8")
+    except Exception:
+        pass
+    style.configure("TFrame", background="#f2f4f8")
+    style.configure("TLabel", background="#f2f4f8", foreground="#111827")
+    style.configure("TLabelframe", background="#f2f4f8")
+    style.configure("TLabelframe.Label", background="#f2f4f8", foreground="#1f2937")
+    style.configure("TCheckbutton", background="#f2f4f8")
+    style.configure("TButton", padding=(8, 3))
+    style.configure("TCombobox", padding=(3, 2))
 
 
 def _make_tactile_heatmap_cmap_norm(vmax: float):
@@ -224,8 +295,10 @@ class LauncherWindow:
 
     def __init__(self):
         self.root = tk.Tk()
+        _apply_platform_ui_defaults(self.root, compact=True)
         self.root.title("Dexterous Hand - Connection & Mode")
-        self.root.geometry("336x224")
+        self.root.geometry("460x250")
+        self.root.minsize(420, 230)
         self.root.resizable(True, False)
 
         self.port_var = tk.StringVar(value="")
@@ -344,18 +417,26 @@ class HandGUI:
         self._pose_nodes_artist = None
 
         self.root = tk.Tk()
+        _apply_platform_ui_defaults(self.root, compact=False)
         title = f"{ENCODER_COUNT}-DOF Dexterous Hand Control System"
         if title_suffix:
             title = f"{title} - {title_suffix}"
         self.root.title(title)
         self.root.geometry("1260x720")
+        self.root.minsize(1100, 640)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._ui_base_width = 1260
+        self._ui_base_height = 720
+        self._ui_font_base_size = 10
+        self._ui_scale_bucket = -1
 
         controller.register_update_callback(self._on_state_update)
         self._state: Optional[HandModel] = None
         self._state_lock = threading.Lock()
         self._last_draw = 0.0
         self._draw_interval = 0.1  # 100ms
+        self._redraw_pending = False
+        self._redraw_job = None
         # 0=X, 1=Y, 2=Z；触觉区仅显示一个通道，默认显示 Z
         self._tactile_axis_selected = 2
         self._tactile_fake_mode = True  # False=真实数据/no data，True=显示生成数据
@@ -367,6 +448,15 @@ class HandGUI:
         self._camera_buf_lock = threading.Lock()
         self._camera_thread = None
         self._camera_stop = threading.Event()
+        self._camera_frame_seq = 0
+        self._camera_last_painted_seq = -1
+        self._camera_last_blank_drawn = False
+        self._camera_scan_lock = threading.Lock()
+        self._camera_scan_in_progress = False
+        self._camera_scan_pending = False
+        self._camera_indices_cache: List[int] = []
+        self._camera_scan_last_ts = 0.0
+        self._camera_scan_ttl_s = 4.0
         # 串口连接成功后即可实时显示数据；Start/Stop 仅控制电机运行。
         self._device_running = self._is_comm_connected()
         self._joint_run_states: List[bool] = [False] * ENCODER_COUNT
@@ -417,6 +507,8 @@ class HandGUI:
         self._setup_ui()
         self._setup_device_menu()
         self._bind_keyboard_shortcuts()
+        self.root.bind("<Configure>", self._on_root_resized, add="+")
+        self.root.after(100, self._apply_responsive_ui_scale)
         self._start_camera_poll()
         self._start_display_poll()
         if self._is_comm_connected():
@@ -438,8 +530,10 @@ class HandGUI:
         self._port_menu = port_sub
         self._refresh_port_menu()
 
-        self._camera1_var = tk.StringVar(value="None")
-        self._camera2_var = tk.StringVar(value="None")
+        if not hasattr(self, "_camera1_var"):
+            self._camera1_var = tk.StringVar(value="None")
+        if not hasattr(self, "_camera2_var"):
+            self._camera2_var = tk.StringVar(value="None")
         self._camera1_menu = tk.Menu(device_menu, tearoff=0)
         self._camera2_menu = tk.Menu(device_menu, tearoff=0)
         device_menu.add_command(label="Teleop Device", command=lambda: self._emit_action("Menu [Teleop Device]"))
@@ -484,6 +578,17 @@ class HandGUI:
         if messagebox.askyesno("Confirm Mode Change", f"Switch to {mode_name} mode?"):
             self._switch_mode_in_place(mode_name)
 
+    def _open_cv_capture(self, cv2_mod, index: int):
+        """OpenCV camera open helper with a Windows-friendly backend."""
+        if os.name == "nt":
+            cap_dshow = getattr(cv2_mod, "CAP_DSHOW", None)
+            if cap_dshow is not None:
+                try:
+                    return cv2_mod.VideoCapture(index, cap_dshow)
+                except Exception:
+                    pass
+        return cv2_mod.VideoCapture(index)
+
     def _list_available_cameras(self) -> List[int]:
         """Probe indices 0-4 for available cameras (avoids OpenCV out-of-bound on some systems)."""
         try:
@@ -491,21 +596,64 @@ class HandGUI:
         except ImportError:
             return []
         available = []
-        for idx in range(5):
+        for idx in range(CAMERA_INDEX_SCAN_MAX):
+            cap = None
             try:
-                cap = cv2.VideoCapture(idx)
+                cap = self._open_cv_capture(cv2, idx)
                 if cap.isOpened():
-                    ret, _ = cap.read()
-                    cap.release()
+                    ret = False
+                    for _ in range(2):
+                        ret, _ = cap.read()
+                        if ret:
+                            break
                     if ret:
                         available.append(idx)
             except Exception:
                 pass
+            finally:
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
         return available
+
+    def _request_camera_scan(self, force: bool = False) -> None:
+        if not force and self._camera_indices_cache and (time.time() - self._camera_scan_last_ts) < self._camera_scan_ttl_s:
+            self._update_camera_combo_values()
+            return
+        with self._camera_scan_lock:
+            if self._camera_scan_in_progress:
+                self._camera_scan_pending = True
+                return
+            self._camera_scan_in_progress = True
+            self._camera_scan_pending = False
+
+        def worker() -> None:
+            indices = self._list_available_cameras()
+            try:
+                self.root.after(0, lambda vals=indices: self._on_camera_scan_done(vals))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_camera_scan_done(self, indices: List[int]) -> None:
+        self._camera_indices_cache = sorted(set(int(i) for i in indices if i is not None))
+        self._camera_scan_last_ts = time.time()
+        self._update_camera_combo_values()
+        rerun = False
+        with self._camera_scan_lock:
+            rerun = self._camera_scan_pending
+            self._camera_scan_pending = False
+            self._camera_scan_in_progress = False
+        if rerun:
+            self._request_camera_scan(force=True)
 
     def _refresh_camera_menus(self) -> None:
         """Refresh camera combo dropdown values (Device > Refresh)."""
         self._update_camera_combo_values()
+        self._request_camera_scan(force=True)
 
     def _on_camera_selected(self, index: Optional[int], slot: int) -> None:
         """Slot 1=Left widget, 2=Right widget."""
@@ -545,10 +693,11 @@ class HandGUI:
             self._camera_frame_right = None
             with self._camera_buf_lock:
                 self._camera_frame_right_buf = None
+        self._camera_last_blank_drawn = False
 
         if index is not None:
             try:
-                cap = cv2.VideoCapture(index)
+                cap = self._open_cv_capture(cv2, index)
                 if cap.isOpened():
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -588,6 +737,7 @@ class HandGUI:
             with self._camera_buf_lock:
                 self._camera_frame_left_buf = left_frame
                 self._camera_frame_right_buf = right_frame
+                self._camera_frame_seq += 1
             time.sleep(0.033)
 
     def _start_display_poll(self) -> None:
@@ -605,7 +755,7 @@ class HandGUI:
                     has_state = self._state is not None
                 need_redraw = not has_state or getattr(self, "_tactile_fake_mode", False)
                 if need_redraw:
-                    self._maybe_redraw()
+                    self._request_redraw()
                 self.root.after(200, poll)
             except tk.TclError:
                 pass
@@ -672,7 +822,7 @@ class HandGUI:
                 self._save_data_var.set(False)
                 self._recording_status_note = ""
         try:
-            self.root.after(0, self._maybe_redraw)
+            self._request_redraw()
         except tk.TclError:
             pass
 
@@ -914,18 +1064,123 @@ class HandGUI:
                 with self._camera_buf_lock:
                     left = self._camera_frame_left_buf
                     right = self._camera_frame_right_buf
+                    frame_seq = int(self._camera_frame_seq)
                 self._camera_frame_left = left
                 self._camera_frame_right = right
+                has_live_camera = (self._camera1_cap is not None) or (self._camera2_cap is not None)
+                has_frame = (left is not None) or (right is not None)
                 if hasattr(self, "_cam_left_canvas"):
-                    self._update_camera_widget()
+                    should_redraw = frame_seq != self._camera_last_painted_seq
+                    if not should_redraw and (not has_live_camera) and (not has_frame) and (not self._camera_last_blank_drawn):
+                        should_redraw = True
+                    if should_redraw:
+                        self._camera_last_painted_seq = frame_seq
+                        self._camera_last_blank_drawn = (not has_live_camera) and (not has_frame)
+                        self._update_camera_widget()
+                next_ms = CAMERA_POLL_ACTIVE_MS if (has_live_camera or has_frame) else CAMERA_POLL_IDLE_MS
             except Exception:
-                pass
+                next_ms = CAMERA_POLL_IDLE_MS
             try:
-                self.root.after(33, poll)
+                self.root.after(next_ms, poll)
             except tk.TclError:
                 pass
 
-        self.root.after(33, poll)
+        self.root.after(CAMERA_POLL_IDLE_MS, poll)
+
+    def _request_redraw(self) -> None:
+        if not self._is_comm_connected():
+            self._redraw_pending = False
+            return
+        self._redraw_pending = True
+        if self._redraw_job is not None:
+            return
+        now = time.time()
+        dt = now - self._last_draw
+        delay_ms = 0 if dt >= self._draw_interval else max(1, int((self._draw_interval - dt) * 1000))
+        try:
+            self._redraw_job = self.root.after(delay_ms, self._process_pending_redraw)
+        except tk.TclError:
+            self._redraw_job = None
+
+    def _process_pending_redraw(self) -> None:
+        self._redraw_job = None
+        if not self._is_comm_connected():
+            self._redraw_pending = False
+            return
+        if not self._redraw_pending:
+            return
+        now = time.time()
+        if now - self._last_draw < self._draw_interval:
+            self._request_redraw()
+            return
+        self._redraw_pending = False
+        self._last_draw = now
+        try:
+            self._update_display()
+        except Exception:
+            pass
+        if self._redraw_pending:
+            self._request_redraw()
+
+    def _bind_canvas_mousewheel(self, canvas: tk.Canvas) -> None:
+        def _on_mousewheel(event):
+            steps = _normalized_mousewheel_steps(event)
+            if steps:
+                canvas.yview_scroll(steps, "units")
+                return "break"
+            return None
+
+        canvas.bind("<Enter>", lambda _e: canvas.focus_set(), add="+")
+        canvas.bind("<MouseWheel>", _on_mousewheel, add="+")
+        canvas.bind("<Button-4>", _on_mousewheel, add="+")
+        canvas.bind("<Button-5>", _on_mousewheel, add="+")
+
+    def _on_root_resized(self, event=None) -> None:
+        if event is not None and event.widget is not self.root:
+            return
+        self._apply_responsive_ui_scale()
+
+    def _apply_responsive_ui_scale(self) -> None:
+        try:
+            w = max(1, int(self.root.winfo_width()))
+            h = max(1, int(self.root.winfo_height()))
+        except tk.TclError:
+            return
+        base_w = max(1, int(getattr(self, "_ui_base_width", 1260)))
+        base_h = max(1, int(getattr(self, "_ui_base_height", 720)))
+        scale = min(w / float(base_w), h / float(base_h))
+        bucket = 0
+        if scale >= 1.28:
+            bucket = 2
+        elif scale >= 1.08:
+            bucket = 1
+        if bucket == int(getattr(self, "_ui_scale_bucket", -1)):
+            return
+        self._ui_scale_bucket = bucket
+        family = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
+        font_size = int(getattr(self, "_ui_font_base_size", 10)) + bucket
+        for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
+            try:
+                tkfont.nametofont(fname).configure(family=family, size=font_size)
+            except Exception:
+                pass
+        try:
+            tkfont.nametofont("TkHeadingFont").configure(family=family, size=font_size + 1, weight="bold")
+        except Exception:
+            pass
+        style = ttk.Style(self.root)
+        style.configure("TButton", padding=(8 + bucket * 2, 3 + bucket))
+        style.configure("TCombobox", padding=(3 + bucket, 2 + bucket // 2))
+        if hasattr(self, "_enable_btn"):
+            try:
+                self._enable_btn.configure(font=(family, 12 + bucket, "bold"))
+            except Exception:
+                pass
+        if hasattr(self, "_estop_btn"):
+            try:
+                self._estop_btn.configure(font=(family, 12 + bucket, "bold"))
+            except Exception:
+                pass
 
     def _emit_action(self, msg: str) -> None:
         """在按钮响应中上报操作（如监控模式下直接打印）"""
@@ -1037,6 +1292,13 @@ class HandGUI:
         if thr is not None:
             thr.join(timeout=1.0)
             self._camera_thread = None
+        redraw_job = getattr(self, "_redraw_job", None)
+        if redraw_job is not None:
+            try:
+                self.root.after_cancel(redraw_job)
+            except tk.TclError:
+                pass
+            self._redraw_job = None
         for cap_attr in ("_camera1_cap", "_camera2_cap"):
             cap = getattr(self, cap_attr, None)
             if cap is not None:
@@ -1101,19 +1363,19 @@ class HandGUI:
                     btn.configure(
                         relief=tk.SUNKEN,
                         state="normal",
-                        bg="#e0e0e0",
-                        fg="blue",
-                        activebackground="#e0e0e0",
-                        activeforeground="blue",
+                        bg="#2563eb",
+                        fg="#ffffff",
+                        activebackground="#1d4ed8",
+                        activeforeground="#ffffff",
                     )
                 else:
                     btn.configure(
                         relief=tk.RAISED,
                         state="normal",
-                        bg="#e0e0e0",
-                        fg="black",
-                        activebackground="#e0e0e0",
-                        activeforeground="black",
+                        bg="#e5e7eb",
+                        fg="#111827",
+                        activebackground="#d1d5db",
+                        activeforeground="#111827",
                     )
             except Exception:
                 pass
@@ -1205,16 +1467,10 @@ class HandGUI:
             return
         with self._state_lock:
             self._state = state
-        self.root.after(0, self._maybe_redraw)
+        self._request_redraw()
 
     def _maybe_redraw(self):
-        if not self._is_comm_connected():
-            return
-        now = time.time()
-        if now - self._last_draw < self._draw_interval:
-            return
-        self._last_draw = now
-        self._update_display()
+        self._request_redraw()
 
     def _setup_ui(self):
         # Top bar: port selection + mode switching
@@ -1511,9 +1767,9 @@ class HandGUI:
         for i, btn in enumerate(self._tactile_axis_buttons):
             selected = i == getattr(self, "_tactile_axis_selected", 2)
             if selected:
-                btn.configure(bg="#e0e0e0", fg="blue")
+                btn.configure(bg="#2563eb", fg="#ffffff", activebackground="#1d4ed8", activeforeground="#ffffff")
             else:
-                btn.configure(bg="#e0e0e0", fg="black")
+                btn.configure(bg="#e5e7eb", fg="#111827", activebackground="#d1d5db", activeforeground="#111827")
 
     def _get_tactile_display_state(self, s: Optional[HandModel], fake: bool = False) -> Optional[HandModel]:
         """
@@ -1733,7 +1989,7 @@ class HandGUI:
         self._cam_left_combo, self._cam_left_canvas = _make_camera_slot(left_box, self._camera1_var, 1)
         self._cam_right_combo, self._cam_right_canvas = _make_camera_slot(right_box, self._camera2_var, 2)
 
-        self._update_camera_combo_values()
+        self._refresh_camera_menus()
 
     def set_camera_frame_left(self, frame: np.ndarray) -> None:
         """外部可调用：设置左相机帧（RGB/BGR/灰度均可）"""
@@ -1749,7 +2005,7 @@ class HandGUI:
 
     def _update_camera_combo_values(self) -> None:
         """Set combo values: None + available cameras."""
-        choices = ["None"] + [f"Camera {i}" for i in self._list_available_cameras()]
+        choices = ["None"] + [f"Camera {i}" for i in self._camera_indices_cache]
         if hasattr(self, "_cam_left_combo"):
             self._cam_left_combo["values"] = choices
         if hasattr(self, "_cam_right_combo"):
@@ -2238,6 +2494,8 @@ class HandGUI:
                 pass
         self._update_manual_action_buttons()
         self._switch_control_mode()
+        self._ui_scale_bucket = -1
+        self._apply_responsive_ui_scale()
 
     def _open_joint_rt_window(self) -> None:
         win = getattr(self, "_joint_rt_window", None)
@@ -2616,12 +2874,11 @@ class HandGUI:
         scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
         canvas.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
         inner = ttk.Frame(canvas)
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
 
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-(e.delta if hasattr(e, 'delta') else (120 if getattr(e, 'num', 0) == 4 else -120)) / 120), "units"))
-        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+        canvas.bind("<Configure>", lambda e, c=canvas, wid=inner_window: c.itemconfigure(wid, width=e.width), add="+")
+        self._bind_canvas_mousewheel(canvas)
 
         header = ttk.Frame(inner)
         header.pack(fill=tk.X, padx=2, pady=(2, 4))
@@ -2657,6 +2914,7 @@ class HandGUI:
             curr = tk.StringVar(value="-")
 
             if is_motor:
+                row.columnconfigure(5, weight=1, minsize=220)
                 ttk.Label(row, textvariable=curr, width=8).grid(row=0, column=1, padx=1, sticky="w")
                 target = tk.IntVar(value=0)
                 joint_angle = tk.StringVar(value="-")
@@ -2679,7 +2937,7 @@ class HandGUI:
                     to=MOTOR_TARGET_SCALE_HI,
                     variable=target,
                     orient=tk.HORIZONTAL,
-                    length=130,
+                    length=220,
                     command=lambda value, idx=i: self._on_motor_slider_change(idx, value),
                 )
                 sld.grid(row=0, column=5, padx=1, sticky="we")
@@ -2690,6 +2948,7 @@ class HandGUI:
                 ttk.Label(row, textvariable=joint_angle, width=12).grid(row=0, column=7, padx=(6, 1), sticky="w")
                 self._control_widgets.extend([ent, btn, minus_btn, sld, plus_btn])
             else:
+                row.columnconfigure(7, weight=1, minsize=220)
                 dot_canvas = tk.Canvas(row, width=12, height=12, highlightthickness=0, bd=0)
                 dot_item = dot_canvas.create_oval(2, 2, 10, 10, fill="#9aa0a6", outline="#9aa0a6")
                 dot_canvas.grid(row=0, column=1, padx=2, sticky="w")
@@ -2717,7 +2976,7 @@ class HandGUI:
                     to=joint_max,
                     variable=target,
                     orient=tk.HORIZONTAL,
-                    length=130,
+                    length=220,
                     command=lambda value, idx=i: self._on_joint_slider_change(idx, value),
                 )
                 sld.grid(row=0, column=7, padx=1, sticky="we")
@@ -4114,7 +4373,8 @@ class HandGUI:
             messagebox.showerror("Send Failed", f"{type(e).__name__}: {e}")
 
     def _setup_status_bar(self):
-        bar = ttk.Frame(self.root)
+        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(side=tk.BOTTOM, fill=tk.X)
+        bar = ttk.Frame(self.root, padding=(8, 3))
         bar.pack(side=tk.BOTTOM, fill=tk.X)
         comm = getattr(self.controller, "comm", None)
         connected = bool(
@@ -4123,13 +4383,23 @@ class HandGUI:
             and getattr(comm.serial, "is_open", False)
         )
         self.status_var = tk.StringVar(value="Disconnected" if not connected else "Ready")
-        ttk.Label(bar, textvariable=self.status_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(bar, textvariable=self.status_var, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._delay_var = tk.StringVar()
         self._overload_var = tk.StringVar(value="伺服过载: —")
-        self._overload_lbl = tk.Label(bar, textvariable=self._overload_var, fg="gray35", font=("", 9))
+        self._overload_lbl = tk.Label(
+            bar,
+            textvariable=self._overload_var,
+            fg="gray35",
+            font=("Segoe UI" if os.name == "nt" else "", 9),
+        )
         self._overload_lbl.pack(side=tk.RIGHT, padx=(0, 10))
         self._release_fault_var = tk.StringVar(value="反绕保护: 无")
-        self._release_fault_lbl = tk.Label(bar, textvariable=self._release_fault_var, fg="gray35", font=("", 9))
+        self._release_fault_lbl = tk.Label(
+            bar,
+            textvariable=self._release_fault_var,
+            fg="gray35",
+            font=("Segoe UI" if os.name == "nt" else "", 9),
+        )
         self._release_fault_lbl.pack(side=tk.RIGHT, padx=(0, 10))
         ttk.Label(bar, textvariable=self._delay_var).pack(side=tk.RIGHT)
 
