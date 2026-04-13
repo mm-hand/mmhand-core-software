@@ -149,6 +149,9 @@ typedef struct {
     volatile uint32_t reverse_release_fault_bitmap;
     // START/RESET 时自增，用于通知清除反绕故障锁存。
     volatile uint32_t reverse_release_fault_reset_token;
+    volatile uint8_t tendon_guard_enabled[ENCODER_TOTAL_NUM];
+    volatile int8_t tendon_guard_sign[ENCODER_TOTAL_NUM];
+    volatile int16_t tendon_guard_x1_abs[ENCODER_TOTAL_NUM];
 
     int32_t calib_zero_raw_cache[ENCODER_TOTAL_NUM];
     volatile uint8_t calib_zero_raw_valid;

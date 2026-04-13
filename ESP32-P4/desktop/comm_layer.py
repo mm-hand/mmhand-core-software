@@ -26,6 +26,7 @@ from protocol import (
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_sweep_cmd,
+    build_tendon_guard_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -387,6 +388,8 @@ class LowerComputerComm:
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "tendon_guard":
+            return build_tendon_guard_cmd(cmd[1])
         if cmd == "start":
             return build_start_cmd()
         if cmd == "stop":

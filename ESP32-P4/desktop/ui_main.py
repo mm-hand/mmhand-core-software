@@ -382,6 +382,7 @@ class HandGUI:
         self._tendon_release_angle_eps_deg = 0.0
         self._tendon_guard_last_warn_ts = 0.0
         self._tendon_guard_warn_interval_s = 0.5
+        self._last_tendon_guard_sent: Optional[Tuple[Tuple[int, int, int], ...]] = None
         self._joint_rt_joint_var = tk.StringVar(value="J00")
         self._joint_rt_joint_index = 0
         self._joint_rt_joint_vars: List[tk.StringVar] = [
@@ -661,6 +662,8 @@ class HandGUI:
             self._motor_last_sent_abs = [None] * MOTOR_COUNT
         if hasattr(self, "_joint_target_initialized"):
             self._joint_target_initialized = False
+        self._last_tendon_guard_sent = None
+        self._sync_tendon_guard_to_lower(force=True)
         self._refresh_start_indicator()
         if hasattr(self, "_save_data_var") and bool(self._save_data_var.get()) and not self._data_logger.is_running():
             try:
@@ -2206,6 +2209,8 @@ class HandGUI:
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
         self._joint_tie_sign_vars: List[tk.StringVar] = []
         self._joint_tie_x1_vars: List[tk.StringVar] = []
+        self._joint_tie_motor_abs_vars: List[tk.StringVar] = []
+        self._joint_tie_x1_live_vars: List[tk.StringVar] = []
         self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
         self._motor_joint_angle_vars: List[tk.StringVar] = []
@@ -2639,6 +2644,8 @@ class HandGUI:
             ttk.Label(header, text="tie").grid(row=0, column=8, padx=2, sticky="w")
             ttk.Label(header, text="+/-").grid(row=0, column=9, padx=2, sticky="w")
             ttk.Label(header, text="x1(abs)").grid(row=0, column=10, padx=2, sticky="w")
+            ttk.Label(header, text="ServoAbs(now)").grid(row=0, column=11, padx=2, sticky="w")
+            ttk.Label(header, text="x1(now)").grid(row=0, column=12, padx=2, sticky="w")
 
         channel_count = MOTOR_COUNT if is_motor else ENCODER_COUNT
         for i in range(channel_count):
@@ -2728,6 +2735,16 @@ class HandGUI:
                 tie_sign_ent.grid(row=0, column=9, padx=1, sticky="w")
                 tie_x1_ent = ttk.Entry(row, textvariable=tie_x1_var, width=8)
                 tie_x1_ent.grid(row=0, column=10, padx=1, sticky="w")
+                tie_motor_abs_live_var = tk.StringVar(value="-")
+                tie_x1_live_var = tk.StringVar(value="-")
+                self._joint_tie_motor_abs_vars.append(tie_motor_abs_live_var)
+                self._joint_tie_x1_live_vars.append(tie_x1_live_var)
+                ttk.Label(row, textvariable=tie_motor_abs_live_var, width=12).grid(
+                    row=0, column=11, padx=(6, 1), sticky="w"
+                )
+                ttk.Label(row, textvariable=tie_x1_live_var, width=10).grid(
+                    row=0, column=12, padx=1, sticky="w"
+                )
                 tie_sign_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 tie_x1_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 tie_sign_ent.bind("<Return>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
@@ -3269,6 +3286,7 @@ class HandGUI:
                 self.status_var.set(f"tie saved: J{joint_idx} disabled, x1={x1}")
             else:
                 self.status_var.set(f"tie saved: J{joint_idx} sign={'+' if sign > 0 else '-'} x1={x1}")
+        self._sync_tendon_guard_to_lower(force=True)
 
     def _refresh_joint_tie_cfg_from_ui(self) -> None:
         n = min(ENCODER_COUNT, len(self._joint_tie_sign_vars), len(self._joint_tie_x1_vars))
@@ -3285,6 +3303,34 @@ class HandGUI:
                 )
             self._tendon_cfg[i] = {"enabled": sign != 0, "pull_sign": (1 if sign >= 0 else -1), "x1_abs": x1}
 
+    def _build_tendon_guard_payload(self) -> List[Tuple[bool, int, int]]:
+        payload: List[Tuple[bool, int, int]] = []
+        for i in range(ENCODER_COUNT):
+            cfg = self._tendon_cfg[i] if i < len(self._tendon_cfg) else {}
+            enabled = bool(cfg.get("enabled", False))
+            sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
+            try:
+                x1 = int(cfg.get("x1_abs", 0))
+            except (TypeError, ValueError):
+                x1 = 0
+            x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
+            payload.append((enabled, sign, x1))
+        return payload
+
+    def _sync_tendon_guard_to_lower(self, force: bool = False) -> None:
+        self._refresh_joint_tie_cfg_from_ui()
+        payload = self._build_tendon_guard_payload()
+        fingerprint = tuple((1 if e else 0, int(s), int(x)) for e, s, x in payload)
+        if (not force) and (fingerprint == self._last_tendon_guard_sent):
+            return
+        if not self._is_comm_connected():
+            return
+        try:
+            self.controller.set_tendon_guard_config(payload)
+            self._last_tendon_guard_sent = fingerprint
+        except Exception:
+            pass
+
     @staticmethod
     def _joint_primary_motor_channel(joint_index: int) -> int:
         if joint_index < 0 or joint_index >= ENCODER_COUNT:
@@ -3298,6 +3344,7 @@ class HandGUI:
                                               source: str = "",
                                               live: bool = False) -> None:
         self._refresh_joint_tie_cfg_from_ui()
+        self._sync_tendon_guard_to_lower(force=False)
         guarded = list(angles[:ENCODER_COUNT])
         if len(guarded) < ENCODER_COUNT:
             guarded.extend([0.0] * (ENCODER_COUNT - len(guarded)))
@@ -3365,9 +3412,40 @@ class HandGUI:
         if not s:
             return
 
+        # Keep tie runtime display aligned with what command send path will parse.
+        self._refresh_joint_tie_cfg_from_ui()
         joint_has_data = bool(getattr(s, "has_sensor_data", False))
+        motor_has_raw = bool(getattr(s, "has_servo_raw_data", False))
+        motor_has_abs = bool(getattr(s, "has_servo_angle_data", False))
         for i in range(min(ENCODER_COUNT, len(self._joint_curr_vars))):
-            if joint_has_data and i < len(s.angles):
+            fallback_text = "-"
+            motor_ch = self._joint_primary_motor_channel(i)
+            if (
+                motor_has_raw
+                and motor_ch >= 0
+                and motor_ch < len(getattr(s, "servo_raw_positions", []))
+                and motor_ch < len(getattr(s, "servo_raw_online", []))
+                and bool(s.servo_raw_online[motor_ch])
+            ):
+                fallback_text = f"{self._motor_target_from_servo_feedback(s.servo_raw_positions[motor_ch]):4d}"
+            elif (
+                motor_has_abs
+                and motor_ch >= 0
+                and motor_ch < len(getattr(s, "servo_angles", []))
+                and motor_ch < len(getattr(s, "servo_online", []))
+                and bool(s.servo_online[motor_ch])
+            ):
+                fallback_text = f"{self._slider_from_abs_pos(int(s.servo_angles[motor_ch])):4d}"
+
+            encoder_valid = (
+                joint_has_data
+                and i < len(getattr(s, "angles", []))
+                and i < len(getattr(s, "encoders", []))
+                and (not bool(s.encoders[i].error))
+            )
+            if fallback_text != "-":
+                self._joint_curr_vars[i].set(fallback_text)
+            elif encoder_valid:
                 self._joint_curr_vars[i].set(f"{s.angles[i]:6.1f}")
             else:
                 self._joint_curr_vars[i].set("-")
@@ -3377,6 +3455,34 @@ class HandGUI:
                     self._set_joint_encoder_dot(i, not bool(s.encoders[i].error))
                 else:
                     self._set_joint_encoder_dot(i, None)
+
+            if i < len(getattr(self, "_joint_tie_motor_abs_vars", [])):
+                motor_abs_text = "-"
+                motor_ch = self._joint_primary_motor_channel(i)
+                if (
+                    motor_has_abs
+                    and motor_ch >= 0
+                    and motor_ch < len(getattr(s, "servo_angles", []))
+                    and motor_ch < len(getattr(s, "servo_online", []))
+                    and bool(s.servo_online[motor_ch])
+                ):
+                    motor_abs_text = str(int(s.servo_angles[motor_ch]))
+                self._joint_tie_motor_abs_vars[i].set(motor_abs_text)
+
+            if i < len(getattr(self, "_joint_tie_x1_live_vars", [])):
+                x1_live_text = "-"
+                if i < len(getattr(self, "_tendon_cfg", [])):
+                    cfg = self._tendon_cfg[i]
+                    try:
+                        x1 = int(cfg.get("x1_abs", 0))
+                    except Exception:
+                        x1 = 0
+                    sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
+                    if bool(cfg.get("enabled", False)):
+                        x1_live_text = f"{'+' if sign > 0 else '-'}{x1}"
+                    else:
+                        x1_live_text = f"off {x1}"
+                self._joint_tie_x1_live_vars[i].set(x1_live_text)
 
         if joint_has_data and sync_target:
             for i in range(min(ENCODER_COUNT, len(s.angles), len(self._joint_target_vars))):
@@ -3809,6 +3915,7 @@ class HandGUI:
             self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
         if hasattr(self, "_motor_last_sent_abs"):
             self._motor_last_sent_abs = [None] * MOTOR_COUNT
+        self._last_tendon_guard_sent = None
         self._joint_target_user_set = [False] * len(getattr(self, "_joint_target_vars", []))
         self._motor_target_user_set = [False] * len(getattr(self, "_motor_target_vars", []))
         self._clear_run_states()
@@ -3817,6 +3924,12 @@ class HandGUI:
         neutral = [0.0] * ENCODER_COUNT
         if hasattr(self, "_joint_curr_vars"):
             for v in self._joint_curr_vars:
+                v.set("-")
+        if hasattr(self, "_joint_tie_motor_abs_vars"):
+            for v in self._joint_tie_motor_abs_vars:
+                v.set("-")
+        if hasattr(self, "_joint_tie_x1_live_vars"):
+            for v in self._joint_tie_x1_live_vars:
                 v.set("-")
         if hasattr(self, "_joint_status_dots"):
             for i in range(min(ENCODER_COUNT, len(self._joint_status_dots))):

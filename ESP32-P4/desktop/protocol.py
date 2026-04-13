@@ -33,6 +33,7 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
+CMD_TENDON_GUARD = 0xD4
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -313,3 +314,32 @@ def build_stream_mode_cmd(mode: int) -> bytes:
     if mode_int not in (SENSOR_STREAM_MODE_LEGACY_U16_WRAP, SENSOR_STREAM_MODE_SIGNED_I16):
         raise ValueError("unsupported sensor stream mode")
     return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
+
+
+def build_tendon_guard_cmd(configs: List[Tuple[bool, int, int]]) -> bytes:
+    """
+    Build CMD_TENDON_GUARD payload.
+
+    Per joint (4 bytes):
+    - enabled: uint8 (0/1)
+    - sign: int8 (+1 / -1, other values normalized)
+    - x1_abs: int16 big-endian, clamped to motor absolute command range
+    """
+    if len(configs) != ENCODER_COUNT:
+        raise ValueError(f"need exactly {ENCODER_COUNT} tendon guard configs")
+
+    payload = bytearray()
+    for enabled, sign_raw, x1_raw in configs:
+        enabled_u8 = 1 if bool(enabled) else 0
+        sign_i8 = 1 if int(sign_raw) >= 0 else -1
+        x1 = int(x1_raw)
+        if x1 < MOTOR_ABS_CMD_MIN:
+            x1 = MOTOR_ABS_CMD_MIN
+        elif x1 > MOTOR_ABS_CMD_MAX:
+            x1 = MOTOR_ABS_CMD_MAX
+
+        payload.append(enabled_u8 & 0xFF)
+        payload.extend(struct.pack("b", sign_i8))
+        payload.extend(struct.pack(">h", x1))
+
+    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))

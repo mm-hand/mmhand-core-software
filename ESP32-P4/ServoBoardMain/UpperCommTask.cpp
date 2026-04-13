@@ -39,6 +39,7 @@ extern volatile uint8_t g_calibrationUIStatus;
 #define CMD_SENSOR_STREAM_MODE 0xD1
 #define CMD_MOTOR_POS_SWEEP 0xD2
 #define CMD_MOTOR_POS_ABS 0xD3
+#define CMD_TENDON_GUARD 0xD4
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -48,6 +49,7 @@ extern volatile uint8_t g_calibrationUIStatus;
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
+static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
@@ -296,6 +298,56 @@ static bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, 
     return true;
 }
 
+static int16_t clampServoAbsCommand(int32_t value)
+{
+    if (value > 30719) return 30719;
+    if (value < -30719) return -30719;
+    return (int16_t)value;
+}
+
+static bool parseTendonGuardPayload(const uint8_t* payload,
+                                    size_t payloadLen,
+                                    uint8_t* enabled,
+                                    int8_t* sign,
+                                    int16_t* x1Abs)
+{
+    if (!payload || !enabled || !sign || !x1Abs) {
+        return false;
+    }
+    if (payloadLen < kTendonGuardPayloadBytes) {
+        return false;
+    }
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++)
+    {
+        const size_t base = (size_t)i * 4;
+        enabled[i] = (payload[base] != 0) ? 1 : 0;
+        sign[i] = (payload[base + 1] < 0) ? (int8_t)-1 : (int8_t)1;
+        const uint16_t raw = ((uint16_t)payload[base + 2] << 8) | payload[base + 3];
+        x1Abs[i] = clampServoAbsCommand((int16_t)raw);
+    }
+    return true;
+}
+
+static void applyTendonGuardConfig(TaskSharedData_t* sharedData,
+                                   const uint8_t* enabled,
+                                   const int8_t* sign,
+                                   const int16_t* x1Abs,
+                                   uint8_t count)
+{
+    if (!sharedData || !enabled || !sign || !x1Abs) {
+        return;
+    }
+    if (count > ENCODER_TOTAL_NUM) {
+        count = ENCODER_TOTAL_NUM;
+    }
+    for (uint8_t i = 0; i < count; i++)
+    {
+        sharedData->tendon_guard_enabled[i] = enabled[i] ? 1 : 0;
+        sharedData->tendon_guard_sign[i] = (sign[i] < 0) ? -1 : 1;
+        sharedData->tendon_guard_x1_abs[i] = clampServoAbsCommand(x1Abs[i]);
+    }
+}
+
 // 写入目标关节角缓存（线程安全）。
 static void applyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count)
 {
@@ -404,6 +456,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kMotorPosPayloadBytes;
         case CMD_MOTOR_POS_ABS:
             return kMotorPosPayloadBytes;
+        case CMD_TENDON_GUARD:
+            return kTendonGuardPayloadBytes;
         case CMD_SENSOR_STREAM_MODE:
             return 1;
         default:
@@ -527,6 +581,17 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             sharedData->motor_direct_command_generation++;
             sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
             sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+        }
+        return;
+    }
+
+    if (cmd == CMD_TENDON_GUARD)
+    {
+        uint8_t enabled[ENCODER_TOTAL_NUM] = {0};
+        int8_t sign[ENCODER_TOTAL_NUM] = {0};
+        int16_t x1Abs[ENCODER_TOTAL_NUM] = {0};
+        if (parseTendonGuardPayload(frame + 1, frameLen - 1, enabled, sign, x1Abs)) {
+            applyTendonGuardConfig(sharedData, enabled, sign, x1Abs, ENCODER_TOTAL_NUM);
         }
         return;
     }

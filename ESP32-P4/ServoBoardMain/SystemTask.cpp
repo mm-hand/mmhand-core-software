@@ -122,6 +122,11 @@ void System_Init() {
     sharedData.overload_fault_reset_token = 0;
     sharedData.reverse_release_fault_bitmap = 0;
     sharedData.reverse_release_fault_reset_token = 0;
+    memset((void*)sharedData.tendon_guard_enabled, 0, sizeof(sharedData.tendon_guard_enabled));
+    memset((void*)sharedData.tendon_guard_x1_abs, 0, sizeof(sharedData.tendon_guard_x1_abs));
+    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        sharedData.tendon_guard_sign[i] = 1;
+    }
     sharedData.calib_zero_raw_valid = 0;
 
     // 4) 初始化全部舵机总线，保持与现有接线假设一致。

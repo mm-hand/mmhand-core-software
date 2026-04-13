@@ -125,6 +125,8 @@ static const uint8_t kReleaseForwardAnomalyCycles = 3;
 static const float kReleaseRecoverPullCmdDeg = 2.5f;
 static const float kReleaseRecoverTrackErrDeg = 1.5f;
 static const uint8_t kReleaseRecoverStableCycles = 8;
+static const int32_t kTendonGuardReleaseMarginCounts = 0;
+static const float kTendonGuardReleaseAngleEpsDeg = 0.0f;
 
 typedef struct
 {
@@ -513,6 +515,36 @@ static uint32_t buildReleaseFaultBitmap(const ReleaseGuardState guards[ENCODER_T
     return bitmap;
 }
 
+static bool shouldBlockReleaseByTendonGuard(const TaskSharedData_t* sharedData,
+                                            uint8_t jointIndex,
+                                            float targetDeg,
+                                            float actualDeg,
+                                            int32_t absNow,
+                                            bool inputsValid)
+{
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM || !inputsValid) {
+        return false;
+    }
+    if (!isfinite(targetDeg) || !isfinite(actualDeg)) {
+        return false;
+    }
+    if (sharedData->tendon_guard_enabled[jointIndex] == 0) {
+        return false;
+    }
+
+    const bool isReleaseCmd = (targetDeg < (actualDeg - kTendonGuardReleaseAngleEpsDeg));
+    if (!isReleaseCmd) {
+        return false;
+    }
+
+    const int8_t sign = (sharedData->tendon_guard_sign[jointIndex] < 0) ? -1 : 1;
+    const int32_t x1Abs = (int32_t)sharedData->tendon_guard_x1_abs[jointIndex];
+    if (sign > 0) {
+        return absNow <= (x1Abs + kTendonGuardReleaseMarginCounts);
+    }
+    return absNow >= (x1Abs - kTendonGuardReleaseMarginCounts);
+}
+
 // Solver 任务主循环：
 // 1) 读取舵机反馈并上报遥测；
 // 2) 构建关节反馈量与传感器映射量；
@@ -878,21 +910,30 @@ void taskSolver(void* parameter)
                 const uint8_t bus = jointMap[jointIndex].busIndex;
                 const uint8_t id = jointMap[jointIndex].servoID;
                 ServoBusManager* pBus = getBusByIndex(bus);
+                const int jointMotorCh = findMotorChannel(bus, id);
+                const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
+                const bool mappedValid = canBusOnline && (mappedData.validFlags[jointIndex] != 0);
+                const bool guardInputsValid = servoOnline && mappedValid;
                 bool releaseFaultActive = false;
+                bool holdByTendonGuard = false;
 
                 if (jointIndex != kJoint16Index)
                 {
-                    const int jointMotorCh = findMotorChannel(bus, id);
-                    const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
-                    const bool mappedValid = canBusOnline && (mappedData.validFlags[jointIndex] != 0);
-                    const bool inputsValid = servoOnline && mappedValid;
                     const int32_t servoPos =
                         (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePosition[jointIndex];
                     releaseFaultActive = updateReleaseGuardState(&releaseGuards[jointIndex],
                                                                  localTargets[jointIndex],
                                                                  magAngles[jointIndex],
                                                                  servoPos,
-                                                                 inputsValid);
+                                                                 guardInputsValid);
+                    holdByTendonGuard = shouldBlockReleaseByTendonGuard(
+                        sharedData,
+                        jointIndex,
+                        localTargets[jointIndex],
+                        magAngles[jointIndex],
+                        absolutePosition[jointIndex],
+                        guardInputsValid
+                    );
                 }
 
                 bool emergency =
@@ -901,9 +942,8 @@ void taskSolver(void* parameter)
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || joint16DualFault;
                 } else {
-                    emergency = emergency || releaseFaultActive;
+                    emergency = emergency || releaseFaultActive || holdByTendonGuard;
                 }
-                const int jointMotorCh = findMotorChannel(bus, id);
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&

@@ -221,6 +221,17 @@ class HandController:
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs", raw))
 
+    def set_tendon_guard_config(self, configs: List[tuple]) -> None:
+        """
+        下发腱绳 guard 配置到下位机（每关节: enabled, sign, x1_abs）。
+        该配置属于控制参数，不依赖当前控制模式。
+        """
+        if not self.comm:
+            return
+        if len(configs) != ENCODER_COUNT:
+            raise ValueError(f"需要 {ENCODER_COUNT} 组 tendon guard 配置")
+        self.comm.send_command(("tendon_guard", list(configs)))
+
     def _validate_angles(self, angles: List[float]) -> List[float]:
         out: List[float] = []
         for a in angles:

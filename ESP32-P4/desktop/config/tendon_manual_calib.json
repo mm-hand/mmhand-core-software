@@ -2,14 +2,14 @@
   "comment": "Manual tendon calibration (+/- pull direction and x1 absolute anchor).",
   "joints": [
     {
-      "enabled": false,
+      "enabled": true,
       "pull_sign": 1,
       "x1_abs": 0
     },
     {
-      "enabled": false,
+      "enabled": true,
       "pull_sign": 1,
-      "x1_abs": 1500
+      "x1_abs": 2000
     },
     {
       "enabled": false,
