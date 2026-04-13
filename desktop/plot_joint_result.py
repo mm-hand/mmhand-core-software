@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 
 NA_MODE_MARKER = "NA_MODE"
-JIDX = 2
+JIDX = 0
 
 
 def _default_run_data_dir() -> str:
