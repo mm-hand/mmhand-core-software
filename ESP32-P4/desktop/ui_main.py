@@ -755,7 +755,7 @@ class HandGUI:
                     has_state = self._state is not None
                 need_redraw = not has_state or getattr(self, "_tactile_fake_mode", False)
                 if need_redraw:
-                    self._request_redraw()
+                    self._maybe_redraw()
                 self.root.after(200, poll)
             except tk.TclError:
                 pass
@@ -822,7 +822,7 @@ class HandGUI:
                 self._save_data_var.set(False)
                 self._recording_status_note = ""
         try:
-            self._request_redraw()
+            self.root.after(0, self._maybe_redraw)
         except tk.TclError:
             pass
 
@@ -1088,39 +1088,13 @@ class HandGUI:
         self.root.after(CAMERA_POLL_IDLE_MS, poll)
 
     def _request_redraw(self) -> None:
-        if not self._is_comm_connected():
-            self._redraw_pending = False
-            return
-        self._redraw_pending = True
-        if self._redraw_job is not None:
-            return
-        now = time.time()
-        dt = now - self._last_draw
-        delay_ms = 0 if dt >= self._draw_interval else max(1, int((self._draw_interval - dt) * 1000))
         try:
-            self._redraw_job = self.root.after(delay_ms, self._process_pending_redraw)
+            self.root.after(0, self._maybe_redraw)
         except tk.TclError:
-            self._redraw_job = None
+            pass
 
     def _process_pending_redraw(self) -> None:
-        self._redraw_job = None
-        if not self._is_comm_connected():
-            self._redraw_pending = False
-            return
-        if not self._redraw_pending:
-            return
-        now = time.time()
-        if now - self._last_draw < self._draw_interval:
-            self._request_redraw()
-            return
-        self._redraw_pending = False
-        self._last_draw = now
-        try:
-            self._update_display()
-        except Exception:
-            pass
-        if self._redraw_pending:
-            self._request_redraw()
+        self._request_redraw()
 
     def _bind_canvas_mousewheel(self, canvas: tk.Canvas) -> None:
         def _on_mousewheel(event):
@@ -1467,10 +1441,16 @@ class HandGUI:
             return
         with self._state_lock:
             self._state = state
-        self._request_redraw()
+        self.root.after(0, self._maybe_redraw)
 
     def _maybe_redraw(self):
-        self._request_redraw()
+        if not self._is_comm_connected():
+            return
+        now = time.time()
+        if now - self._last_draw < self._draw_interval:
+            return
+        self._last_draw = now
+        self._update_display()
 
     def _setup_ui(self):
         # Top bar: port selection + mode switching
