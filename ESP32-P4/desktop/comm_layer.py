@@ -4,10 +4,11 @@ import threading
 import time
 from typing import List, Optional, Union
 
+import numpy as np
 import serial
 import serial.tools.list_ports
 
-from data_models import HandModel, MotorState
+from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
 from protocol import (
     BAUDRATE,
     ENCODER_COUNT,
@@ -15,6 +16,7 @@ from protocol import (
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_TACTILE,
     RX_POLL_SLEEP,
     RX_QUEUE_MAXSIZE,
     SERIAL_TIMEOUT,
@@ -39,6 +41,7 @@ from protocol import (
     parse_joint_debug_packet,
     parse_proto_ack,
     parse_sensor_packet,
+    parse_tactile_packet,
     parse_servo_angle_packet,
     parse_servo_raw_packet,
     parse_servo_telem_packet,
@@ -48,6 +51,32 @@ from protocol import (
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
+
+
+def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
+    out: List[FingerTactile] = []
+    for finger_idx in range(len(groups)):
+        sensors: List[TactileSensor] = []
+        group = groups[finger_idx]
+        for sensor_idx in range(3):
+            if sensor_idx < len(group):
+                fx, fy, fz = group[sensor_idx]
+            else:
+                fx, fy, fz = 0, 0, 0
+
+            if sensor_idx == 0:
+                rows, cols = tactile_segment_shape(2)  # tip 5x5
+            else:
+                rows, cols = tactile_segment_shape(0)  # pad 4x13
+
+            contact = np.zeros((rows, cols, 3), dtype=float)
+            contact[:, :, 0] = float(fx)
+            contact[:, :, 1] = float(fy)
+            contact[:, :, 2] = float(fz)
+            resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
+            sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
+        out.append(FingerTactile(sensors=sensors))
+    return out
 
 
 def list_ports() -> List[tuple]:
@@ -187,6 +216,7 @@ class LowerComputerComm:
             model.has_sensor_data = bool(self._last_model.has_sensor_data)
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
             model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
+            model.tactile_data = list(self._last_model.tactile_data)
 
         model.timestamp = time.time()
         emitted = False
@@ -289,6 +319,13 @@ class LowerComputerComm:
                 if release_fault_bitmap is not None:
                     for i in range(ENCODER_COUNT):
                         model.joint_reverse_release_fault[i] = ((release_fault_bitmap >> i) & 0x01) != 0
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_TACTILE:
+                parsed = parse_tactile_packet(payload)
+                if parsed is not None:
+                    _seq, groups = parsed
+                    model.tactile_data = _build_tactile_fingers(groups)
                     emitted = True
 
             elif pkt_type == 0x06:

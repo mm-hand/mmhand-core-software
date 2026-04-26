@@ -8,6 +8,7 @@ namespace {
 constexpr uint8_t kErrorCodesPerFrame = 7;
 constexpr uint8_t kErrorFrameCount =
     (ENCODER_TOTAL_NUM + kErrorCodesPerFrame - 1) / kErrorCodesPerFrame;
+constexpr uint8_t kTactileSummaryBytes = TACTILE_GROUP_NUM * 3 * 3;
 
 constexpr uint16_t kDiagMagLowBit = 0x0800;
 constexpr uint16_t kDiagMagHighBit = 0x0400;
@@ -17,6 +18,10 @@ static_assert(
     kErrorFrameCount ==
         (CAN_ID_ERROR_DETAIL_LAST - CAN_ID_ERROR_DETAIL_BASE + 1),
     "Error detail frame ID range does not match frame count.");
+static_assert(
+    CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME >= kTactileSummaryBytes,
+    "Tactile summary frame budget is not enough."
+);
 
 HalTWAI::HalTWAI() : _is_initialized(false) {}
 
@@ -82,32 +87,36 @@ void HalTWAI::sendEncoderData(const EncoderData &encData) {
 }
 
 void HalTWAI::sendTactileSummary(const TactileData &tacData) {
-    uint8_t buffer[8];
-    uint8_t bufPtr = 0;
-    uint32_t frameId = 0x200;
+    uint8_t flat[kTactileSummaryBytes] = {0};
+    uint8_t cursor = 0;
 
     for (int g = 0; g < TACTILE_GROUP_NUM; g++) {
         const TacGroup &grp = tacData.groups[g];
-        const uint8_t *ptrs[3] = {
+        const uint8_t *globals[3] = {
             grp.sensor_A.global,
             grp.sensor_B.global,
             grp.sensor_C.global
         };
-
         for (int s = 0; s < 3; s++) {
-            for (int k = 0; k < 3; k++) {
-                buffer[bufPtr++] = ptrs[s][k];
-                if (bufPtr == 8) {
-                    sendFrame(frameId++, buffer, 8);
-                    bufPtr = 0;
-                    memset(buffer, 0, 8);
-                }
+            for (int axis = 0; axis < 3; axis++) {
+                flat[cursor++] = globals[s][axis];
             }
         }
     }
-    if (bufPtr > 0) {
-        sendFrame(frameId, buffer, bufPtr);
+
+    static uint8_t seq = 0;
+    for (uint8_t frame = 0; frame < CAN_TAC_SUMMARY_FRAME_COUNT; frame++) {
+        uint8_t buf[8] = {0};
+        buf[0] = seq;
+        for (uint8_t i = 0; i < CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME; i++) {
+            const uint8_t idx = frame * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME + i;
+            if (idx < kTactileSummaryBytes) {
+                buf[1 + i] = flat[idx];
+            }
+        }
+        sendFrame(CAN_ID_TAC_SUMMARY_BASE + frame, buf, 8);
     }
+    seq++;
 }
 
 void HalTWAI::sendTactileFullDump(const TactileData &tacData) {

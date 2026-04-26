@@ -25,6 +25,7 @@ extern volatile uint8_t g_calibrationUIStatus;
 #define PACKET_TYPE_FAULT_STATUS 0x07
 #define PACKET_TYPE_RELEASE_FAULT 0x08
 #define PACKET_TYPE_SERVO_RAW 0x09
+#define PACKET_TYPE_TACTILE 0x0A
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -148,6 +149,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
                            ServoAngleData_t* pServoAngle,
                            ServoAngleData_t* pServoRaw,
                            ServoTelemetryData_t* pTelemetry,
+                           RemoteTactileData_t* pTactile,
                            JointDebugData_t* pJointDebug)
 {
     (void)pServo;
@@ -219,6 +221,15 @@ static void sendDataPacket(ServoStatus_t* pServo,
             buffer[idx++] = pTelemetry->voltage[i];
             buffer[idx++] = pTelemetry->temperature[i];
             buffer[idx++] = pTelemetry->onlineStatus[i];
+        }
+    }
+    else if (pTactile)
+    {
+        buffer[idx++] = PACKET_TYPE_TACTILE;
+        buffer[idx++] = pTactile->seq;
+        for (int i = 0; i < TACTILE_SUMMARY_BYTES; i++)
+        {
+            buffer[idx++] = pTactile->values[i];
         }
     }
     else if (pJointDebug)
@@ -715,28 +726,36 @@ void taskUpperComm(void* parameter)
         bool sentPacket = false;
         if (xQueueReceive(sharedData->mappedAngleQueue, &mappedData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, &mappedData, NULL, NULL, NULL, NULL);
+            sendDataPacket(NULL, &mappedData, NULL, NULL, NULL, NULL, NULL);
+            sentPacket = true;
+        }
+
+        RemoteTactileData_t tactileData;
+        if (sharedData->tactileQueue &&
+            xQueueReceive(sharedData->tactileQueue, &tactileData, 0) == pdTRUE)
+        {
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, &tactileData, NULL);
             sentPacket = true;
         }
 
         JointDebugData_t jointDebugData;
         while (xQueueReceive(sharedData->jointDebugQueue, &jointDebugData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL, &jointDebugData);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, &jointDebugData);
             sentPacket = true;
         }
 
         ServoAngleData_t servoRawData;
         if (xQueueReceive(sharedData->servoRawQueue, &servoRawData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, &servoRawData, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, &servoRawData, NULL, NULL, NULL);
             sentPacket = true;
         }
 
         ServoTelemetryData_t telemetryData;
         if (xQueueReceive(sharedData->servoTelemetryQueue, &telemetryData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, &telemetryData, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, &telemetryData, NULL, NULL);
             sentPacket = true;
         }
 
@@ -744,14 +763,14 @@ void taskUpperComm(void* parameter)
         ServoAngleData_t servoAngleData;
         if (xQueueReceive(sharedData->servoAngleQueue, &servoAngleData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL, NULL, NULL);
             sentServoAngle = true;
             sentPacket = true;
         }
 
         if (!sentPacket && !sentServoAngle && g_calibrationUIStatus != 0)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         }
 
         const uint32_t nowMs = millis();

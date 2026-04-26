@@ -21,6 +21,7 @@ PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
+PACKET_TYPE_TACTILE = 0x0A
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -44,6 +45,10 @@ PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 22
+TACTILE_GROUP_COUNT = 5
+TACTILE_SENSOR_PER_GROUP = 3
+TACTILE_AXIS_COUNT = 3
+TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
@@ -173,6 +178,30 @@ def parse_release_fault_packet(payload: bytes) -> Optional[int]:
     if len(payload) != 4:
         return None
     return struct.unpack(">I", payload)[0]
+
+
+def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
+    if len(payload) == (1 + TACTILE_SUMMARY_BYTES):
+        seq = payload[0]
+        data = payload[1:]
+    elif len(payload) == TACTILE_SUMMARY_BYTES:
+        seq = 0
+        data = payload
+    else:
+        return None
+
+    out: List[List[List[int]]] = []
+    cursor = 0
+    for _group in range(TACTILE_GROUP_COUNT):
+        group_data: List[List[int]] = []
+        for _sensor in range(TACTILE_SENSOR_PER_GROUP):
+            fx = struct.unpack("b", bytes([data[cursor]]))[0]
+            fy = struct.unpack("b", bytes([data[cursor + 1]]))[0]
+            fz = int(data[cursor + 2])
+            group_data.append([fx, fy, fz])
+            cursor += TACTILE_AXIS_COUNT
+        out.append(group_data)
+    return seq, out
 
 
 def parse_joint_debug_packet(

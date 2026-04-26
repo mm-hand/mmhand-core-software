@@ -15,6 +15,10 @@
 #define ENCODER_TOTAL_NUM 21
 // 舵机通道数（joint16 使用双舵机）。
 #define SERVO_TOTAL_NUM 22
+#define TACTILE_GROUP_NUM 5
+#define TACTILE_SENSOR_PER_GROUP 3
+#define TACTILE_AXIS_NUM 3
+#define TACTILE_SUMMARY_BYTES (TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_NUM)
 
 // 求解器输出控制模式。
 #define CONTROL_MODE_JOINT 0
@@ -111,6 +115,13 @@ typedef struct {
 } JointDebugData_t;
 
 typedef struct {
+    uint8_t values[TACTILE_SUMMARY_BYTES];
+    uint8_t seq;
+    uint32_t timestamp;
+    bool isValid;
+} RemoteTactileData_t;
+
+typedef struct {
     QueueHandle_t cmdQueue;
     QueueHandle_t statusQueue;
     QueueHandle_t canTxQueue;
@@ -120,6 +131,7 @@ typedef struct {
     QueueHandle_t servoTelemetryQueue;
     QueueHandle_t mappedAngleQueue;
     QueueHandle_t jointDebugQueue;
+    QueueHandle_t tactileQueue;
 
     float targetAngles[ENCODER_TOTAL_NUM];
     SemaphoreHandle_t targetAnglesMutex;

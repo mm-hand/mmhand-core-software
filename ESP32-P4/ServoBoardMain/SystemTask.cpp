@@ -90,12 +90,13 @@ void System_Init() {
     sharedData.servoTelemetryQueue = xQueueCreate(1, sizeof(ServoTelemetryData_t));
     sharedData.mappedAngleQueue = xQueueCreate(1, sizeof(MappedAngleData_t));
     sharedData.jointDebugQueue = xQueueCreate(8, sizeof(JointDebugData_t));
+    sharedData.tactileQueue = xQueueCreate(1, sizeof(RemoteTactileData_t));
 
     if (!sharedData.cmdQueue || !sharedData.statusQueue ||
         !sharedData.canRxQueue || !sharedData.canTxQueue ||
         !sharedData.servoAngleQueue || !sharedData.servoRawQueue ||
         !sharedData.servoTelemetryQueue || !sharedData.mappedAngleQueue ||
-        !sharedData.jointDebugQueue) {
+        !sharedData.jointDebugQueue || !sharedData.tactileQueue) {
         // 资源不足时停在此处，避免系统在不完整状态下继续运行。
         while (1) {}
     }
