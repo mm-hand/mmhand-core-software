@@ -2,6 +2,11 @@
 #include "../config/Config.h"
 #include "../hal/HalEncoders.h"
 
+namespace {
+constexpr bool kEnableEncoderDebugDump = false;
+constexpr int kEncoderDebugDumpDecimation = 100;
+}
+
 // 任务句柄
 TaskHandle_t xEncTask = NULL;
 
@@ -32,7 +37,7 @@ void Task_Encoders(void* pvParameters) {
         localData = rawData;
 
         // 打印测试结果 (每100次循环打印一次)
-        if ((g_testCounter % 100) == 1) {
+        if (kEnableEncoderDebugDump && (g_testCounter % kEncoderDebugDumpDecimation) == 1) {
             Serial.println(">>> Encoders (raw Angle: 0~16383)");
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
                 // [ID:数据] 格式优化

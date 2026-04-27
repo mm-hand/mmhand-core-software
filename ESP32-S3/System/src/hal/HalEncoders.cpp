@@ -1,5 +1,4 @@
 #include "HalEncoders.h"
-#include "HalSharedLock.h"
 #include <cstring>
 
 #if ENC_HW_MODE != ENC_HW_MODE_138_CS_DEMUX && ENC_HW_MODE != ENC_HW_MODE_151_MISO_MUX
@@ -27,7 +26,6 @@ void HalEncoders::begin() {
     pinMode(PIN_MUX_A, OUTPUT);
     pinMode(PIN_MUX_B, OUTPUT);
     pinMode(PIN_MUX_C, OUTPUT);
-    (void)getSharedMuxLock();
     setupSPI();
 }
 
@@ -59,14 +57,6 @@ void HalEncoders::setMux(uint8_t ch) {
 }
 
 bool HalEncoders::transferOnce(uint8_t muxChannel, uint8_t count, const uint16_t *txBuf, uint16_t *rxBuf) {
-    SemaphoreHandle_t muxLock = getSharedMuxLock();
-    if (muxLock == nullptr) {
-        return false;
-    }
-    if (xSemaphoreTake(muxLock, pdMS_TO_TICKS(2)) != pdTRUE) {
-        return false;
-    }
-
     setMux(muxChannel);
 
     spi_transaction_t t = {};
@@ -79,7 +69,6 @@ bool HalEncoders::transferOnce(uint8_t muxChannel, uint8_t count, const uint16_t
     const esp_err_t err = spi_device_polling_transmit(_spi, &t);
     digitalWrite(PIN_ENC_CS, HIGH);
     delayMicroseconds(2);
-    xSemaphoreGive(muxLock);
 
     return err == ESP_OK;
 }

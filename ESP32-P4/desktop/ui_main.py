@@ -434,7 +434,11 @@ class HandGUI:
         self._state: Optional[HandModel] = None
         self._state_lock = threading.Lock()
         self._last_draw = 0.0
-        self._draw_interval = 0.1  # 100ms
+        self._draw_interval = 0.03  # 30ms
+        self._pose_draw_interval = 0.06  # 60ms
+        self._tactile_draw_interval = 0.08  # 80ms
+        self._last_pose_draw = 0.0
+        self._last_tactile_draw = 0.0
         self._redraw_pending = False
         self._redraw_job = None
         # 0=X, 1=Y, 2=Z；触觉区仅显示一个通道，默认显示 Z
@@ -1441,13 +1445,19 @@ class HandGUI:
             return
         with self._state_lock:
             self._state = state
-        self.root.after(0, self._maybe_redraw)
+        if self._redraw_job is None:
+            self._redraw_job = self.root.after(0, self._maybe_redraw)
 
     def _maybe_redraw(self):
+        self._redraw_job = None
         if not self._is_comm_connected():
             return
         now = time.time()
         if now - self._last_draw < self._draw_interval:
+            delay_s = self._draw_interval - (now - self._last_draw)
+            delay_ms = max(1, int(delay_s * 1000))
+            if self._redraw_job is None:
+                self._redraw_job = self.root.after(delay_ms, self._maybe_redraw)
             return
         self._last_draw = now
         self._update_display()
@@ -1709,19 +1719,8 @@ class HandGUI:
         self._pose_3d_rezoom_after_drag_job = self.root.after(delay_ms, rezoom_after_release)
 
     def _toggle_tactile_axis(self, axis: int):
-        labels = ["X", "Y", "Z"]
-        if axis == getattr(self, "_tactile_axis_selected", 2):
-            return
-        self._tactile_axis_selected = axis
-        self._emit_action(f"Tactile axis {labels[axis]} selected")
-        self._tactile_fig_sel_sig = None  # 强制重建子图布局
-        self._refresh_tactile_axis_button_states()
-        with self._state_lock:
-            s = self._state
-        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
-        if s:
-            self._draw_hand_model(s.angles, tactile_state)
-        self._update_tactile_matrix_widget(tactile_state)
+        _ = axis
+        self._emit_action("Tactile axis switch is disabled in dot-matrix mode")
 
     def _on_tactile_fake_toggle(self):
         self._tactile_fake_mode = bool(self._tactile_fake_var.get())
@@ -1797,39 +1796,65 @@ class HandGUI:
         return out
 
     def _rebuild_tactile_figure(self) -> None:
-        """触觉区固定为单子图，仅显示当前选中的一个通道。"""
+        """触觉区参考 simulate_tactile_dot_matrix：3x5 点阵子图，统一显示 Fz。"""
         if not hasattr(self, "_tactile_fig"):
             return
-        self._clear_tactile_anatomy_overlay()
+
         self._tactile_fig.clear()
-        self._tactile_subplot_imgs = []
-        self._tactile_no_data_texts = []
-        spec = TACTILE_STITCH_SPEC
-        mat0 = np.full((spec.height, spec.width), np.nan, dtype=float)
-        ax = self._tactile_fig.subplots(1, 1)
-        cmap0, norm0 = _make_tactile_sensors_only_cmap_norm(1.0)
-        im = ax.imshow(
-            np.ma.masked_invalid(mat0),
-            cmap=cmap0,
-            norm=norm0,
-            aspect="equal",
-            interpolation="nearest",
+        self._tactile_dot_scatters = []
+        self._tactile_status_text = None
+        self._tactile_colorbar = None
+
+        # Follow paxini_all_read_2.12 semantics:
+        # columns = MUX groups D3..D7, rows = DP/IP/CP sensors
+        group_names = ["D3", "D4", "D5", "D6", "D7"]
+        sensor_names = ["DP(A+B)", "IP(A)", "CP(B)"]
+        axes = self._tactile_fig.subplots(3, 5)
+
+        for sensor_idx in range(3):
+            scatter_row = []
+            rows, cols = self._sensor_shape_by_index(sensor_idx)
+            yy, xx = np.mgrid[0:rows, 0:cols]
+            base_vals = np.zeros(rows * cols, dtype=float)
+
+            for finger_idx in range(5):
+                ax = axes[sensor_idx, finger_idx]
+                sc = ax.scatter(
+                    xx.flatten(),
+                    yy.flatten(),
+                    c=base_vals.copy(),
+                    cmap="inferno",
+                    vmin=0.0,
+                    vmax=255.0,
+                    s=150,
+                    marker="s",
+                    edgecolors="#111111",
+                    linewidths=0.25,
+                )
+
+                ax.set_xlim(-0.75, cols - 0.25)
+                ax.set_ylim(rows - 0.25, -0.75)
+                ax.set_aspect("equal")
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.grid(alpha=0.25, linewidth=0.35)
+
+                if sensor_idx == 0:
+                    ax.set_title(group_names[finger_idx], fontsize=9)
+                if finger_idx == 0:
+                    ax.set_ylabel(sensor_names[sensor_idx], fontsize=8)
+
+                scatter_row.append(sc)
+
+            self._tactile_dot_scatters.append(scatter_row)
+
+        self._tactile_status_text = self._tactile_fig.suptitle("No tactile data", fontsize=10)
+        cax = self._tactile_fig.add_axes([0.93, 0.12, 0.015, 0.76])
+        self._tactile_colorbar = self._tactile_fig.colorbar(
+            self._tactile_dot_scatters[0][0], cax=cax
         )
-        nd = ax.text(
-            0.5,
-            0.5,
-            "No tactile data",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=9,
-            color="white",
-            alpha=0.85,
-        )
-        ax.axis("off")
-        self._tactile_subplot_imgs.append(im)
-        self._tactile_no_data_texts.append(nd)
-        self._tactile_fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.98)
+        self._tactile_colorbar.set_label("Fz")
+        self._tactile_fig.subplots_adjust(left=0.06, right=0.90, bottom=0.05, top=0.92)
 
     def _setup_tactile_matrix_widget(self, parent):
         """触觉空间矩阵：15 个传感器按 5 指 x 3 骨段拼成一个热力图"""
@@ -1839,7 +1864,7 @@ class HandGUI:
         # 标题与触觉轴按钮同一行
         self._tactile_row = ttk.Frame(frame)
         self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
-        ttk.Label(self._tactile_row, text="Axis:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(self._tactile_row, text="Tactile Dot Matrix (2.12, Fz)").pack(side=tk.LEFT, padx=2)
         self._tactile_fake_var = tk.BooleanVar(value=not bool(getattr(self, "_ports_cache", [])))
         self._tactile_fake_check = ttk.Checkbutton(
             self._tactile_row,
@@ -1849,26 +1874,14 @@ class HandGUI:
         )
         self._tactile_fake_check.pack(side=tk.LEFT, padx=4)
         self._tactile_axis_buttons = []
-        for axis, label in enumerate(["X", "Y", "Z"]):
-            btn = tk.Button(
-                self._tactile_row,
-                text=label,
-                width=2,
-                command=lambda a=axis: self._toggle_tactile_axis(a),
-            )
-            btn.pack(side=tk.LEFT, padx=1)
-            self._tactile_axis_buttons.append(btn)
-        self._refresh_tactile_axis_button_states()
 
         self._tactile_fig = plt.Figure(figsize=(7.8, 4.0))
         self._tactile_canvas = FigureCanvasTkAgg(self._tactile_fig, frame)
         self._tactile_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self._tactile_fig_sel_sig = None
-        self._tactile_subplot_imgs: List = []
-        self._tactile_no_data_texts: List = []
+        self._tactile_dot_scatters: List = []
+        self._tactile_status_text = None
+        self._tactile_colorbar = None
         self._rebuild_tactile_figure()
-        self._tactile_fig_sel_sig = int(getattr(self, "_tactile_axis_selected", 2))
-        self._tactile_anatomy_artists: List = []
         self._tactile_canvas.draw_idle()
 
     def _safe_remove_artist(self, artist) -> None:
@@ -2043,6 +2056,34 @@ class HandGUI:
         )
 
     @staticmethod
+    def _sensor_shape_by_index(sensor_idx: int) -> Tuple[int, int]:
+        if sensor_idx == 0:
+            return tactile_segment_shape(2)  # tip: 5x5
+        return tactile_segment_shape(0)  # pad: 4x13
+
+    @classmethod
+    def _extract_sensor_dot_values(cls, fd: FingerTactile, sensor_idx: int) -> np.ndarray:
+        rows, cols = cls._sensor_shape_by_index(sensor_idx)
+
+        if sensor_idx >= len(fd.sensors):
+            return np.zeros(rows * cols, dtype=float)
+
+        sensor = fd.sensors[sensor_idx]
+        cf = getattr(sensor, "contact_forces", None)
+        if cf is not None and hasattr(cf, "shape") and len(cf.shape) >= 3:
+            z_idx = min(2, int(cf.shape[2]) - 1)
+            grid = np.asarray(cf[:, :, z_idx], dtype=float)
+            out = np.zeros((rows, cols), dtype=float)
+            r0 = min(rows, grid.shape[0])
+            c0 = min(cols, grid.shape[1])
+            out[:r0, :c0] = grid[:r0, :c0]
+            return np.clip(out, 0.0, None).flatten()
+
+        resultant = getattr(sensor, "resultant", None)
+        fz = float(resultant[2]) if resultant is not None and len(resultant) >= 3 else 0.0
+        return np.full(rows * cols, max(0.0, fz), dtype=float)
+
+    @staticmethod
     def _extract_finger_strip(
         fd: FingerTactile, axis: int, structure_as_nan: bool = False
     ) -> np.ndarray:
@@ -2115,33 +2156,41 @@ class HandGUI:
         return mat
 
     def _update_tactile_matrix_widget(self, state: Optional[HandModel]):
-        if not hasattr(self, "_tactile_subplot_imgs"):
+        if not hasattr(self, "_tactile_dot_scatters"):
             return
-        sig = int(getattr(self, "_tactile_axis_selected", 2))
-        if sig != getattr(self, "_tactile_fig_sel_sig", object()):
-            self._rebuild_tactile_figure()
-            self._tactile_fig_sel_sig = sig
 
-        self._clear_tactile_anatomy_overlay()
-        axis = int(getattr(self, "_tactile_axis_selected", 2))
-        im = self._tactile_subplot_imgs[0]
-        nd_txt = self._tactile_no_data_texts[0]
-        mat = self._build_tactile_spatial_matrix(state, axis)
-        tactile_pos = mat[np.isfinite(mat) & (mat >= 0.0)]
-        vmax = float(np.max(tactile_pos)) if tactile_pos.size > 0 else 0.0
-        vmax = max(vmax, 1.0)
-        cmap_u, norm_u = _make_tactile_sensors_only_cmap_norm(vmax)
-        im.set_data(np.ma.masked_invalid(mat))
-        im.set_cmap(cmap_u)
-        im.set_norm(norm_u)
-        has_data = bool(
-            state
-            and state.tactile_data
-            and tactile_pos.size > 0
-            and (np.max(tactile_pos) > 1e-9)
-        )
-        nd_txt.set_visible(not has_data)
-        self._draw_tactile_anatomy_overlay_sensors_only(im.axes, mat)
+        tactile_list = state.tactile_data if (state and state.tactile_data) else []
+        any_data = False
+        vmax = 1.0
+
+        for sensor_idx in range(3):
+            for finger_idx in range(5):
+                scatter = self._tactile_dot_scatters[sensor_idx][finger_idx]
+                if finger_idx < len(tactile_list):
+                    fd = tactile_list[finger_idx]
+                else:
+                    fd = FingerTactile(sensors=[])
+
+                vals = self._extract_sensor_dot_values(fd, sensor_idx)
+                scatter.set_array(vals)
+                if vals.size > 0:
+                    local_max = float(np.max(vals))
+                    vmax = max(vmax, local_max)
+                    if local_max > 1e-9:
+                        any_data = True
+
+        for row in self._tactile_dot_scatters:
+            for scatter in row:
+                scatter.set_clim(0.0, vmax)
+
+        if getattr(self, "_tactile_status_text", None) is not None:
+            self._tactile_status_text.set_text(
+                f"Tactile Dot Matrix (2.12: D3~D7 x DP/IP/CP, Fz) | "
+                f"{'LIVE' if any_data else 'No tactile data'} | vmax={vmax:.1f}"
+            )
+        if getattr(self, "_tactile_colorbar", None) is not None:
+            self._tactile_colorbar.set_label(f"Fz (0..{vmax:.0f})")
+
         self._tactile_canvas.draw_idle()
 
     def _get_generated_pose_angles(self) -> List[float]:
@@ -4181,7 +4230,7 @@ class HandGUI:
                 v.set("-")
         if hasattr(self, "ax"):
             self._draw_hand_model(neutral, None)
-        if hasattr(self, "_tactile_subplot_imgs"):
+        if hasattr(self, "_tactile_dot_scatters"):
             empty = HandModel()
             tactile_state = self._get_tactile_display_state(
                 empty, fake=self._should_use_fake_tactile(None)
@@ -4400,9 +4449,14 @@ class HandGUI:
 
         # 电机模式不以 0x03 角度重算 abs（避免拖一路时邻路 abs 被陈旧角度改掉、整包误触发）。
 
+        now = time.time()
         tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
-        self._draw_hand_model(s.angles, tactile_state)
-        self._update_tactile_matrix_widget(tactile_state)
+        if (now - self._last_pose_draw) >= self._pose_draw_interval:
+            self._draw_hand_model(s.angles, tactile_state)
+            self._last_pose_draw = now
+        if (now - self._last_tactile_draw) >= self._tactile_draw_interval:
+            self._update_tactile_matrix_widget(tactile_state)
+            self._last_tactile_draw = now
         self._append_joint_rt_sample(s)
         self._update_joint_rt_plot()
         if self.current_mode in ("算法", "Algorithm") and hasattr(self, "_alg_output"):

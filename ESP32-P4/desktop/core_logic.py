@@ -144,7 +144,15 @@ class HandController:
             try:
                 if not self.comm:
                     break
+                # Keep only the latest RX frame to avoid UI latency caused by
+                # backlog when producer rate is higher than consumer rate.
                 new_model = self.comm.rx_queue.get(timeout=0.1)
+                while True:
+                    try:
+                        newer = self.comm.rx_queue.get_nowait()
+                        new_model = newer
+                    except queue.Empty:
+                        break
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
                     self.current_state.calib_status = new_model.calib_status
