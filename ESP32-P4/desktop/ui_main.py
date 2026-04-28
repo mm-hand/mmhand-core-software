@@ -429,18 +429,27 @@ class HandGUI:
         self._ui_base_height = 720
         self._ui_font_base_size = 10
         self._ui_scale_bucket = -1
+        self._root_resize_job = None
+        self._root_resize_debounce_ms = 260
+        self._pose_resize_job = None
+        self._pose_resize_debounce_ms = 80
+        self._pose_resize_pending_size: Optional[Tuple[int, int]] = None
 
         controller.register_update_callback(self._on_state_update)
         self._state: Optional[HandModel] = None
         self._state_lock = threading.Lock()
         self._last_draw = 0.0
-        self._draw_interval = 0.03  # 30ms
+        self._draw_interval = 0.04  # 40ms
         self._pose_draw_interval = 0.06  # 60ms
         self._tactile_draw_interval = 0.08  # 80ms
+        self._feedback_draw_interval = 0.06  # 60ms
+        self._last_feedback_draw = 0.0
         self._last_pose_draw = 0.0
         self._last_tactile_draw = 0.0
         self._redraw_pending = False
         self._redraw_job = None
+        self._pose_3d_enabled_var = tk.BooleanVar(value=False)
+        self._camera_chain_enabled_var = tk.BooleanVar(value=False)
         # 0=X, 1=Y, 2=Z；触觉区仅显示一个通道，默认显示 Z
         self._tactile_axis_selected = 2
         self._tactile_fake_mode = True  # False=真实数据/no data，True=显示生成数据
@@ -467,7 +476,8 @@ class HandGUI:
         self._motor_run_states: List[bool] = [False] * MOTOR_COUNT
         self._joint_run_buttons: List[ttk.Button] = []
         self._motor_run_buttons: List[ttk.Button] = []
-        self._save_data_var = tk.BooleanVar(value=True)
+        self._save_data_var = tk.BooleanVar(value=False)
+        self._csv_recording_enabled = False
         self._data_logger = RunDataLogger(flush_every=10)
         self._recording_status_note = ""
         self._tendon_cfg_path = os.path.join(os.path.dirname(__file__), "config", "tendon_manual_calib.json")
@@ -511,7 +521,8 @@ class HandGUI:
         self._setup_ui()
         self._setup_device_menu()
         self._bind_keyboard_shortcuts()
-        self.root.bind("<Configure>", self._on_root_resized, add="+")
+        if os.name != "nt":
+            self.root.bind("<Configure>", self._on_root_resized, add="+")
         self.root.after(100, self._apply_responsive_ui_scale)
         self._start_camera_poll()
         self._start_display_poll()
@@ -623,6 +634,10 @@ class HandGUI:
         return available
 
     def _request_camera_scan(self, force: bool = False) -> None:
+        if not self._is_camera_chain_enabled():
+            self._camera_indices_cache = []
+            self._update_camera_combo_values()
+            return
         if not force and self._camera_indices_cache and (time.time() - self._camera_scan_last_ts) < self._camera_scan_ttl_s:
             self._update_camera_combo_values()
             return
@@ -657,6 +672,8 @@ class HandGUI:
     def _refresh_camera_menus(self) -> None:
         """Refresh camera combo dropdown values (Device > Refresh)."""
         self._update_camera_combo_values()
+        if not self._is_camera_chain_enabled():
+            return
         self._request_camera_scan(force=True)
 
     def _on_camera_selected(self, index: Optional[int], slot: int) -> None:
@@ -667,6 +684,8 @@ class HandGUI:
         else:
             self._camera2_var.set(label)
         self._emit_action(f"Camera {slot} selected: {index if index is not None else 'None'}")
+        if not self._is_camera_chain_enabled():
+            return
         threading.Thread(target=lambda: self._set_camera_capture(slot, index), daemon=True).start()
 
     def _set_camera_capture(self, slot: int, index: Optional[int]) -> None:
@@ -675,6 +694,8 @@ class HandGUI:
             import cv2
         except ImportError:
             return
+        if not self._is_camera_chain_enabled():
+            index = None
         self._camera_stop.set()
         if self._camera_thread is not None:
             self._camera_thread.join(timeout=1.0)
@@ -819,12 +840,6 @@ class HandGUI:
         self._last_tendon_guard_sent = None
         self._sync_tendon_guard_to_lower(force=True)
         self._refresh_start_indicator()
-        if hasattr(self, "_save_data_var") and bool(self._save_data_var.get()) and not self._data_logger.is_running():
-            try:
-                self._start_data_recording()
-            except Exception:
-                self._save_data_var.set(False)
-                self._recording_status_note = ""
         try:
             self.root.after(0, self._maybe_redraw)
         except tk.TclError:
@@ -1060,11 +1075,97 @@ class HandGUI:
         # - Connected: use realtime angles.
         return self._is_comm_connected()
 
+    def _is_pose_3d_enabled(self) -> bool:
+        var = getattr(self, "_pose_3d_enabled_var", None)
+        return True if var is None else bool(var.get())
+
+    def _is_camera_chain_enabled(self) -> bool:
+        var = getattr(self, "_camera_chain_enabled_var", None)
+        return True if var is None else bool(var.get())
+
+    @staticmethod
+    def _camera_index_from_label(label: str) -> Optional[int]:
+        v = (label or "").strip()
+        if v.startswith("Camera "):
+            try:
+                return int(v.replace("Camera ", "", 1))
+            except ValueError:
+                return None
+        return None
+
+    def _selected_camera_index(self, slot: int) -> Optional[int]:
+        var = self._camera1_var if slot == 1 else self._camera2_var
+        return self._camera_index_from_label(var.get())
+
+    def _set_camera_widget_interaction(self, enabled: bool) -> None:
+        combo_state = "readonly" if enabled else "disabled"
+        for name in ("_cam_left_combo", "_cam_right_combo"):
+            combo = getattr(self, name, None)
+            if combo is None:
+                continue
+            try:
+                combo.configure(state=combo_state)
+            except Exception:
+                pass
+
+    def _apply_camera_chain_state(self, enabled: bool) -> None:
+        self._set_camera_widget_interaction(enabled)
+        if not enabled:
+            self._camera_indices_cache = []
+            self._update_camera_combo_values()
+
+        def worker() -> None:
+            if not enabled:
+                self._set_camera_capture(1, None)
+                self._set_camera_capture(2, None)
+                return
+            self._set_camera_capture(1, self._selected_camera_index(1))
+            self._set_camera_capture(2, self._selected_camera_index(2))
+
+        threading.Thread(target=worker, daemon=True).start()
+        if not enabled:
+            self._camera_last_painted_seq = -1
+            self._camera_last_blank_drawn = False
+        else:
+            self._camera_last_blank_drawn = False
+
+    def _on_toggle_pose_3d(self) -> None:
+        enabled = self._is_pose_3d_enabled()
+        frame = getattr(self, "_pose_frame", None)
+        if frame is not None:
+            try:
+                visible = bool(frame.winfo_ismapped())
+            except Exception:
+                visible = False
+            if enabled and not visible:
+                frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
+            elif (not enabled) and visible:
+                frame.pack_forget()
+        if not enabled:
+            self._cancel_pose_3d_rezoom_timer()
+        if enabled:
+            self._request_redraw()
+
+    def _on_toggle_camera_chain(self) -> None:
+        enabled = self._is_camera_chain_enabled()
+        self._apply_camera_chain_state(enabled)
+        if enabled:
+            self._request_camera_scan(force=True)
+
     def _start_camera_poll(self) -> None:
         """Main-thread poll: copy buffers to display (non-blocking)."""
 
         def poll() -> None:
             try:
+                if not self._is_camera_chain_enabled():
+                    next_ms = CAMERA_POLL_IDLE_MS
+                    if hasattr(self, "_cam_left_canvas") and not self._camera_last_blank_drawn:
+                        self._camera_frame_left = None
+                        self._camera_frame_right = None
+                        self._camera_last_blank_drawn = True
+                        self._update_camera_widget()
+                    self.root.after(next_ms, poll)
+                    return
                 with self._camera_buf_lock:
                     left = self._camera_frame_left_buf
                     right = self._camera_frame_right_buf
@@ -1116,7 +1217,22 @@ class HandGUI:
     def _on_root_resized(self, event=None) -> None:
         if event is not None and event.widget is not self.root:
             return
+        job = getattr(self, "_root_resize_job", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+        delay_ms = int(getattr(self, "_root_resize_debounce_ms", 260))
+        try:
+            self._root_resize_job = self.root.after(delay_ms, self._flush_root_resize)
+        except tk.TclError:
+            self._root_resize_job = None
+
+    def _flush_root_resize(self) -> None:
+        self._root_resize_job = None
         self._apply_responsive_ui_scale()
+        self._request_redraw()
 
     def _apply_responsive_ui_scale(self) -> None:
         try:
@@ -1187,6 +1303,8 @@ class HandGUI:
         return fields
 
     def _start_data_recording(self) -> None:
+        if not bool(getattr(self, "_csv_recording_enabled", False)):
+            return
         if self._data_logger.is_running():
             return
         path = self._build_run_data_csv_path()
@@ -1277,6 +1395,15 @@ class HandGUI:
             except tk.TclError:
                 pass
             self._redraw_job = None
+        for job_name in ("_root_resize_job", "_pose_resize_job"):
+            job = getattr(self, job_name, None)
+            if job is None:
+                continue
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+            setattr(self, job_name, None)
         for cap_attr in ("_camera1_cap", "_camera2_cap"):
             cap = getattr(self, cap_attr, None)
             if cap is not None:
@@ -1516,13 +1643,20 @@ class HandGUI:
             pady=1,
         )
         self._start_indicator_lbl.pack(side=tk.RIGHT, padx=(8, 0))
-        self._save_data_switch = ttk.Checkbutton(
+        self._camera_chain_switch = ttk.Checkbutton(
             top,
-            text="Save Data",
-            variable=self._save_data_var,
-            command=self._on_toggle_save_data,
+            text="Camera Link",
+            variable=self._camera_chain_enabled_var,
+            command=self._on_toggle_camera_chain,
         )
-        self._save_data_switch.pack(side=tk.RIGHT, padx=(8, 0))
+        self._camera_chain_switch.pack(side=tk.RIGHT, padx=(8, 0))
+        self._pose_3d_switch = ttk.Checkbutton(
+            top,
+            text="3D Pose",
+            variable=self._pose_3d_enabled_var,
+            command=self._on_toggle_pose_3d,
+        )
+        self._pose_3d_switch.pack(side=tk.RIGHT, padx=(8, 0))
         self._joint_rt_popup_btn = ttk.Button(
             top,
             text="Plot",
@@ -1564,8 +1698,8 @@ class HandGUI:
         self._rebuild_right_panel()
 
         self._setup_status_bar()
-        if bool(self._save_data_var.get()) and self._is_comm_connected():
-            self._on_toggle_save_data()
+        self._on_toggle_pose_3d()
+        self._on_toggle_camera_chain()
         self.root.after(100, self._set_initial_main_sash)
         self.root.after(120, self._set_initial_tactile_camera_sash)
 
@@ -1607,6 +1741,7 @@ class HandGUI:
     def _setup_3d_display(self, parent):
         pose_frame = ttk.Frame(parent)
         pose_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
+        self._pose_frame = pose_frame
         self.fig = plt.Figure(figsize=(6.5, 5.0), dpi=110, facecolor=POSE_VIEW_BG)
         self.ax = self.fig.add_axes((0.05, 0.10, 0.945, 0.82), projection="3d")
         self.canvas = FigureCanvasTkAgg(self.fig, pose_frame)
@@ -1636,6 +1771,8 @@ class HandGUI:
 
     def _on_pose_canvas_configure(self, event) -> None:
         """姿态 3D 区随窗口拉伸，Figure 尺寸与 Tk 画布一致。"""
+        if not self._is_pose_3d_enabled():
+            return
         if event.widget is not getattr(self, "_pose_canvas_widget", None):
             return
         w, h = int(event.width), int(event.height)
@@ -1645,6 +1782,32 @@ class HandGUI:
         if key == getattr(self, "_pose_canvas_size", None):
             return
         self._pose_canvas_size = key
+        self._pose_resize_pending_size = key
+        job = getattr(self, "_pose_resize_job", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+        delay_ms = int(getattr(self, "_pose_resize_debounce_ms", 80))
+        try:
+            self._pose_resize_job = self.root.after(delay_ms, self._flush_pose_canvas_resize)
+        except tk.TclError:
+            self._pose_resize_job = None
+        return
+
+    def _flush_pose_canvas_resize(self) -> None:
+        self._pose_resize_job = None
+        key = getattr(self, "_pose_resize_pending_size", None)
+        if key is None:
+            return
+        if not self._is_pose_3d_enabled():
+            return
+        if not hasattr(self, "fig") or not hasattr(self, "ax") or not hasattr(self, "canvas"):
+            return
+        w, h = key
+        if w < 24 or h < 24:
+            return
         dpi = float(self.fig.dpi)
         self.fig.set_size_inches(w / dpi, h / dpi)
         try:
@@ -2227,7 +2390,11 @@ class HandGUI:
         generate：None 时用实例属性 _pose_generate；True 强制从文本读角；False 强制用传入 angles。
         state 保留参数以便与旧调用兼容；触觉叠加已在独立子图中绘制。
         """
+        if not self._is_pose_3d_enabled():
+            return
         _ = state
+        if not hasattr(self, "ax") or not hasattr(self, "fig"):
+            return
         if generate is None:
             use_gen = not self._should_use_realtime_pose()
         else:
@@ -2905,8 +3072,29 @@ class HandGUI:
         inner = ttk.Frame(canvas)
         inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e, c=canvas, wid=inner_window: c.itemconfigure(wid, width=e.width), add="+")
+        table_scroll_job = {"id": None}
+
+        def _flush_table_scrollregion() -> None:
+            table_scroll_job["id"] = None
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except tk.TclError:
+                pass
+
+        def _on_inner_configure(_event=None) -> None:
+            job = table_scroll_job["id"]
+            if job is not None:
+                try:
+                    self.root.after_cancel(job)
+                except tk.TclError:
+                    pass
+            try:
+                table_scroll_job["id"] = self.root.after(80, _flush_table_scrollregion)
+            except tk.TclError:
+                table_scroll_job["id"] = None
+
+        inner.bind("<Configure>", _on_inner_configure, add="+")
+        _on_inner_configure()
         self._bind_canvas_mousewheel(canvas)
 
         header = ttk.Frame(inner)
@@ -3241,16 +3429,6 @@ class HandGUI:
             return
         self._test_hold_s = float(hold_s)
         self._test_hold_s_var.set(f"{self._test_hold_s:.4g}")
-
-        try:
-            if self._data_logger.is_running():
-                self._stop_data_recording(reason="restart by test", keep_switch=True)
-            self._start_data_recording()
-            if hasattr(self, "_save_data_var"):
-                self._save_data_var.set(True)
-        except Exception as exc:
-            messagebox.showerror("Start Test Failed", f"Cannot start recording: {exc}")
-            return
 
         self._test_active_rows = active
         self._test_running = True
@@ -4435,26 +4613,33 @@ class HandGUI:
     def _update_display(self):
         if not self._is_comm_connected():
             return
+        now = time.time()
         with self._state_lock:
             s = self._state
         # 无连接时 _state 为 None，用默认状态；触觉由 _get_tactile_display_state(fake) 决定
         if not s:
             s = HandModel()
 
-        if hasattr(self, "_joint_curr_vars"):
-            self._refresh_joint_feedback_view(sync_target=not self._joint_target_initialized)
-
-        if hasattr(self, "_motor_curr_vars"):
-            self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
+        feedback_interval = float(getattr(self, "_feedback_draw_interval", 0.06))
+        do_feedback_update = (now - float(getattr(self, "_last_feedback_draw", 0.0))) >= feedback_interval
+        if do_feedback_update:
+            if hasattr(self, "_joint_curr_vars"):
+                self._refresh_joint_feedback_view(sync_target=not self._joint_target_initialized)
+            if hasattr(self, "_motor_curr_vars"):
+                self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
+            self._last_feedback_draw = now
 
         # 电机模式不以 0x03 角度重算 abs（避免拖一路时邻路 abs 被陈旧角度改掉、整包误触发）。
 
-        now = time.time()
-        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
-        if (now - self._last_pose_draw) >= self._pose_draw_interval:
+        need_pose_draw = self._is_pose_3d_enabled() and (now - self._last_pose_draw) >= self._pose_draw_interval
+        need_tactile_draw = (now - self._last_tactile_draw) >= self._tactile_draw_interval
+        tactile_state = None
+        if need_pose_draw or need_tactile_draw:
+            tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
+        if need_pose_draw:
             self._draw_hand_model(s.angles, tactile_state)
             self._last_pose_draw = now
-        if (now - self._last_tactile_draw) >= self._tactile_draw_interval:
+        if need_tactile_draw:
             self._update_tactile_matrix_widget(tactile_state)
             self._last_tactile_draw = now
         self._append_joint_rt_sample(s)
@@ -4470,7 +4655,6 @@ class HandGUI:
         if hasattr(self, "_tactile_row") and not self._tactile_row.winfo_ismapped():
             self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
 
-        self._write_run_data_row(s)
         self._update_status_text(s, self.controller.is_paused())
 
     def _update_status_text(self, s: HandModel, paused: bool):
