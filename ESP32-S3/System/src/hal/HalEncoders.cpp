@@ -21,8 +21,10 @@ HalEncoders::HalEncoders() : _spi(nullptr) {
 }
 
 void HalEncoders::begin() {
+#if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
     pinMode(PIN_ENC_CS, OUTPUT);
     digitalWrite(PIN_ENC_CS, HIGH);
+#endif
     pinMode(PIN_MUX_A, OUTPUT);
     pinMode(PIN_MUX_B, OUTPUT);
     pinMode(PIN_MUX_C, OUTPUT);
@@ -64,11 +66,16 @@ bool HalEncoders::transferOnce(uint8_t muxChannel, uint8_t count, const uint16_t
     t.tx_buffer = txBuf;
     t.rx_buffer = rxBuf;
 
+#if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
     digitalWrite(PIN_ENC_CS, LOW);
     delayMicroseconds(1);
     const esp_err_t err = spi_device_polling_transmit(_spi, &t);
     digitalWrite(PIN_ENC_CS, HIGH);
     delayMicroseconds(2);
+#else
+    const esp_err_t err = spi_device_polling_transmit(_spi, &t);
+    delayMicroseconds(2);
+#endif
 
     return err == ESP_OK;
 }

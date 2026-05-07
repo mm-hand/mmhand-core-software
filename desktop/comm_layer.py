@@ -4,19 +4,18 @@ import threading
 import time
 from typing import List, Optional, Union
 
-import numpy as np
 import serial
 import serial.tools.list_ports
 
-from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
+from data_models import HandModel, MotorState
 from protocol import (
     BAUDRATE,
     ENCODER_COUNT,
     MOTOR_COUNT,
     PACKET_TYPE_FAULT_STATUS,
+    PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_SERVO_RAW,
-    PACKET_TYPE_TACTILE,
     RX_POLL_SLEEP,
     RX_QUEUE_MAXSIZE,
     SERIAL_TIMEOUT,
@@ -25,10 +24,12 @@ from protocol import (
     build_angle_cmd,
     build_calib_data_cmd,
     build_calibrate_cmd,
+    build_local_test_params_cmd,
+    build_local_test_start_cmd,
+    build_local_test_stop_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_sweep_cmd,
-    build_tendon_guard_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -41,42 +42,16 @@ from protocol import (
     parse_joint_debug_packet,
     parse_proto_ack,
     parse_sensor_packet,
-    parse_tactile_packet,
     parse_servo_angle_packet,
     parse_servo_raw_packet,
     parse_servo_telem_packet,
     PROTO_ACK_STATUS_OK,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
+from run_data_logger import RunDataLogger
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
-
-
-def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
-    out: List[FingerTactile] = []
-    for finger_idx in range(len(groups)):
-        sensors: List[TactileSensor] = []
-        group = groups[finger_idx]
-        for sensor_idx in range(3):
-            if sensor_idx < len(group):
-                fx, fy, fz = group[sensor_idx]
-            else:
-                fx, fy, fz = 0, 0, 0
-
-            if sensor_idx == 0:
-                rows, cols = tactile_segment_shape(2)  # tip 5x5
-            else:
-                rows, cols = tactile_segment_shape(0)  # pad 4x13
-
-            contact = np.zeros((rows, cols, 3), dtype=float)
-            contact[:, :, 0] = float(fx)
-            contact[:, :, 1] = float(fy)
-            contact[:, :, 2] = float(fz)
-            resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
-            sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
-        out.append(FingerTactile(sensors=sensors))
-    return out
 
 
 def list_ports() -> List[tuple]:
@@ -146,6 +121,16 @@ class LowerComputerComm:
         self._stream_mode_ack_pending = False
         self._stream_mode_ack_deadline = 0.0
         self._stream_mode_ack_warned = False
+        self._rx_diag_last_print = time.time()
+        self._rx_diag_total_packets = 0
+        self._rx_diag_joint_debug_packets = 0
+        self._rx_diag_sensor_packets = 0
+        self._rx_diag_bytes = 0
+        self._tx_diag_last_print = time.time()
+        self._tx_diag_total_cmds = 0
+        self._tx_diag_angle_live_cmds = 0
+        self._tx_diag_bytes = 0
+        self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
 
         if self.port:
             if not is_valid_port(self.port):
@@ -162,6 +147,8 @@ class LowerComputerComm:
             self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)
             self.running = True
             self._rx_buffer = bytearray()
+            self._reset_rx_diag()
+            self._reset_tx_diag()
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -178,9 +165,123 @@ class LowerComputerComm:
 
     def disconnect(self):
         self.running = False
+        self.stop_joint_debug_packet_log()
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
+
+    def start_joint_debug_packet_log(self, path: str) -> None:
+        fieldnames = [
+            "host_ts_wall",
+            "device_ts_ms",
+            "joint_index",
+            "valid",
+            "target_deg",
+            "actual_deg",
+            "loop1_output",
+            "loop2_actual",
+            "loop2_output",
+            "cmd_valid",
+            "cmd_target_pos",
+        ]
+        self._joint_debug_packet_logger.start(path, fieldnames=fieldnames)
+
+    def stop_joint_debug_packet_log(self) -> None:
+        self._joint_debug_packet_logger.stop()
+
+    def _log_joint_debug_packet(
+        self,
+        host_ts_wall: float,
+        joint_index: int,
+        valid: bool,
+        target_deg: float,
+        actual_deg: float,
+        loop1_out: float,
+        loop2_act: float,
+        loop2_out: float,
+        cmd_valid: bool,
+        cmd_target_pos: int,
+        device_timestamp_ms: int,
+    ) -> None:
+        if not self._joint_debug_packet_logger.is_running():
+            return
+        self._joint_debug_packet_logger.write_row(
+            {
+                "host_ts_wall": f"{float(host_ts_wall):.6f}",
+                "device_ts_ms": int(device_timestamp_ms),
+                "joint_index": int(joint_index),
+                "valid": 1 if valid else 0,
+                "target_deg": float(target_deg),
+                "actual_deg": float(actual_deg),
+                "loop1_output": float(loop1_out),
+                "loop2_actual": float(loop2_act),
+                "loop2_output": float(loop2_out),
+                "cmd_valid": 1 if cmd_valid else 0,
+                "cmd_target_pos": int(cmd_target_pos),
+            }
+        )
+
+    def _reset_rx_diag(self) -> None:
+        self._rx_diag_last_print = time.time()
+        self._rx_diag_total_packets = 0
+        self._rx_diag_joint_debug_packets = 0
+        self._rx_diag_sensor_packets = 0
+        self._rx_diag_bytes = 0
+
+    def _reset_tx_diag(self) -> None:
+        self._tx_diag_last_print = time.time()
+        self._tx_diag_total_cmds = 0
+        self._tx_diag_angle_live_cmds = 0
+        self._tx_diag_bytes = 0
+
+    def _update_rx_diag(self, packets: List[tuple], chunk_len: int) -> None:
+        self._rx_diag_bytes += int(chunk_len)
+        self._rx_diag_total_packets += len(packets)
+        for pkt_type, _payload in packets:
+            if pkt_type == PACKET_TYPE_JOINT_DEBUG:
+                self._rx_diag_joint_debug_packets += 1
+            elif pkt_type == 0x01:
+                self._rx_diag_sensor_packets += 1
+
+    def _maybe_print_rx_diag(self) -> None:
+        now = time.time()
+        elapsed = now - self._rx_diag_last_print
+        if elapsed < 1.0:
+            return
+        total_rate = self._rx_diag_total_packets / elapsed
+        joint_debug_rate = self._rx_diag_joint_debug_packets / elapsed
+        sensor_rate = self._rx_diag_sensor_packets / elapsed
+        byte_rate = self._rx_diag_bytes / elapsed
+        print(
+            "[RX diag] "
+            f"total={total_rate:.1f} pkt/s "
+            f"jointDebug={joint_debug_rate:.1f} pkt/s "
+            f"sensor={sensor_rate:.1f} pkt/s "
+            f"bytes={byte_rate:.0f} B/s"
+        )
+        self._reset_rx_diag()
+
+    def _update_tx_diag(self, cmd: SendCmd, data_len: int) -> None:
+        self._tx_diag_total_cmds += 1
+        self._tx_diag_bytes += int(data_len)
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+            self._tx_diag_angle_live_cmds += 1
+
+    def _maybe_print_tx_diag(self) -> None:
+        now = time.time()
+        elapsed = now - self._tx_diag_last_print
+        if elapsed < 1.0:
+            return
+        total_rate = self._tx_diag_total_cmds / elapsed
+        angle_live_rate = self._tx_diag_angle_live_cmds / elapsed
+        byte_rate = self._tx_diag_bytes / elapsed
+        print(
+            "[TX diag] "
+            f"total={total_rate:.1f} cmd/s "
+            f"angle_live={angle_live_rate:.1f} cmd/s "
+            f"bytes={byte_rate:.0f} B/s"
+        )
+        self._reset_tx_diag()
 
     def _rx_loop(self):
         while self.running and self.serial and self.serial.is_open:
@@ -189,6 +290,7 @@ class LowerComputerComm:
                     chunk = self.serial.read(self.serial.in_waiting)
                     self._rx_buffer.extend(chunk)
                     packets, self._rx_buffer = parse_frame(bytes(self._rx_buffer))
+                    self._update_rx_diag(packets, len(chunk))
                     model = self._process_packets(packets)
                     if model:
                         try:
@@ -198,6 +300,7 @@ class LowerComputerComm:
                 else:
                     time.sleep(RX_POLL_SLEEP)
                 self._check_stream_mode_ack_timeout()
+                self._maybe_print_rx_diag()
             except Exception as exc:
                 print(f"RX error: {exc}")
 
@@ -216,7 +319,6 @@ class LowerComputerComm:
             model.has_sensor_data = bool(self._last_model.has_sensor_data)
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
             model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
-            model.tactile_data = list(self._last_model.tactile_data)
 
         model.timestamp = time.time()
         emitted = False
@@ -295,7 +397,21 @@ class LowerComputerComm:
                         loop2_out,
                         cmd_valid,
                         cmd_target_pos,
+                        device_timestamp_ms,
                     ) = parsed
+                    self._log_joint_debug_packet(
+                        host_ts_wall=time.time(),
+                        joint_index=joint_index,
+                        valid=valid,
+                        target_deg=target_deg,
+                        actual_deg=actual_deg,
+                        loop1_out=loop1_out,
+                        loop2_act=loop2_act,
+                        loop2_out=loop2_out,
+                        cmd_valid=cmd_valid,
+                        cmd_target_pos=cmd_target_pos,
+                        device_timestamp_ms=device_timestamp_ms,
+                    )
                     if 0 <= joint_index < ENCODER_COUNT:
                         model.joint_debug_valid[joint_index] = valid
                         model.joint_debug_target_deg[joint_index] = float(target_deg)
@@ -305,6 +421,7 @@ class LowerComputerComm:
                         model.joint_debug_loop2_output[joint_index] = float(loop2_out)
                         model.joint_debug_cmd_valid[joint_index] = bool(cmd_valid)
                         model.joint_debug_cmd_target_pos[joint_index] = int(cmd_target_pos)
+                        model.joint_debug_timestamp_ms[joint_index] = int(device_timestamp_ms)
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_FAULT_STATUS:
@@ -319,13 +436,6 @@ class LowerComputerComm:
                 if release_fault_bitmap is not None:
                     for i in range(ENCODER_COUNT):
                         model.joint_reverse_release_fault[i] = ((release_fault_bitmap >> i) & 0x01) != 0
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_TACTILE:
-                parsed = parse_tactile_packet(payload)
-                if parsed is not None:
-                    _seq, groups = parsed
-                    model.tactile_data = _build_tactile_fingers(groups)
                     emitted = True
 
             elif pkt_type == 0x06:
@@ -346,6 +456,9 @@ class LowerComputerComm:
         return model if emitted else None
 
     def send_command(self, cmd: SendCmd):
+        if cmd == "stop":
+            self._enqueue_stop_immediately()
+            return
         if self._is_high_rate_command(cmd):
             self._enqueue_latest_high_rate(cmd)
             return
@@ -353,6 +466,14 @@ class LowerComputerComm:
             self.tx_queue.put_nowait(cmd)
         except queue.Full:
             pass
+
+    def _enqueue_stop_immediately(self) -> None:
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            pending.clear()
+            pending.append("stop")
+            self.tx_queue.unfinished_tasks += 1
+            self.tx_queue.not_empty.notify()
 
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
@@ -405,8 +526,10 @@ class LowerComputerComm:
                 if data:
                     with self._tx_lock:
                         self.serial.write(data)
+                    self._update_tx_diag(cmd, len(data))
+                self._maybe_print_tx_diag()
             except queue.Empty:
-                pass
+                self._maybe_print_tx_diag()
             except Exception as exc:
                 print(f"TX error: {exc}")
 
@@ -425,8 +548,12 @@ class LowerComputerComm:
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "tendon_guard":
-            return build_tendon_guard_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "local_test_params":
+            return build_local_test_params_cmd(cmd[1], cmd[2])
+        if cmd == "local_test_start":
+            return build_local_test_start_cmd()
+        if cmd == "local_test_stop":
+            return build_local_test_stop_cmd()
         if cmd == "start":
             return build_start_cmd()
         if cmd == "stop":

@@ -2,14 +2,11 @@
 
 import argparse
 
-from console_encoding import configure_utf8_console
 from core_logic import HandController
 from modes import Mode, run
 
 
 def main():
-    configure_utf8_console()
-
     parser = argparse.ArgumentParser(description="Dexterous Hand Software")
     parser.add_argument(
         "--app-mode",

@@ -1,5 +1,7 @@
 #include "CanCommTask.h"
 #include "driver/twai.h"
+#include "esp_err.h"
+#include "esp_ldo_regulator.h"
 
 #include <string.h>
 
@@ -31,6 +33,44 @@ typedef struct {
     uint8_t codes[ENCODER_TOTAL_NUM];
     uint32_t firstFrameTimeMs;
 } ErrorDetailReassemblyState;
+
+static esp_ldo_channel_handle_t s_canVo4Ldo = NULL;
+
+static bool twaiUsesVo4Domain(void) {
+    return TWAI_TX_PIN == 47 || TWAI_TX_PIN == 48 ||
+           TWAI_RX_PIN == 47 || TWAI_RX_PIN == 48;
+}
+
+static void ensureTwaiGpioPowerReady(void) {
+    static bool powered = false;
+    if (powered || !twaiUsesVo4Domain()) {
+        return;
+    }
+
+    esp_ldo_channel_config_t ldo_cfg = {
+        .chan_id = 4,
+        .voltage_mv = 3300,
+        .flags = {
+            .adjustable = 1,
+        },
+    };
+
+    esp_err_t ret = esp_ldo_acquire_channel(&ldo_cfg, &s_canVo4Ldo);
+    if (ret != ESP_OK) {
+        Serial.printf("[CAN] VO4 acquire failed: %s\n", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = esp_ldo_channel_adjust_voltage(s_canVo4Ldo, 3300);
+    if (ret != ESP_OK) {
+        Serial.printf("[CAN] VO4 set 3.3V failed: %s\n", esp_err_to_name(ret));
+        return;
+    }
+
+    powered = true;
+    Serial.println("[CAN] VO4 set to 3.3V for GPIO47/48");
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
 
 typedef struct {
     uint8_t active;
@@ -80,6 +120,8 @@ static void setupTwai() {
     if (installed) {
         return;
     }
+
+    ensureTwaiGpioPowerReady();
 
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
         (gpio_num_t)TWAI_TX_PIN,
@@ -270,4 +312,3 @@ void taskCanComm(void* parameter) {
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
-

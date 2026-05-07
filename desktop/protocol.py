@@ -21,7 +21,6 @@ PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
-PACKET_TYPE_TACTILE = 0x0A
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -34,7 +33,9 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
-CMD_TENDON_GUARD = 0xD4
+CMD_LOCAL_TEST_PARAMS = 0xD4
+CMD_LOCAL_TEST_START = 0xD5
+CMD_LOCAL_TEST_STOP = 0xD6
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -45,10 +46,6 @@ PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 22
-TACTILE_GROUP_COUNT = 5
-TACTILE_SENSOR_PER_GROUP = 3
-TACTILE_AXIS_COUNT = 3
-TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
@@ -180,47 +177,29 @@ def parse_release_fault_packet(payload: bytes) -> Optional[int]:
     return struct.unpack(">I", payload)[0]
 
 
-def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
-    if len(payload) == (1 + TACTILE_SUMMARY_BYTES):
-        seq = payload[0]
-        data = payload[1:]
-    elif len(payload) == TACTILE_SUMMARY_BYTES:
-        seq = 0
-        data = payload
-    else:
-        return None
-
-    out: List[List[List[int]]] = []
-    cursor = 0
-    for _group in range(TACTILE_GROUP_COUNT):
-        group_data: List[List[int]] = []
-        for _sensor in range(TACTILE_SENSOR_PER_GROUP):
-            fx = struct.unpack("b", bytes([data[cursor]]))[0]
-            fy = struct.unpack("b", bytes([data[cursor + 1]]))[0]
-            fz = int(data[cursor + 2])
-            group_data.append([fx, fy, fz])
-            cursor += TACTILE_AXIS_COUNT
-        out.append(group_data)
-    return seq, out
-
-
 def parse_joint_debug_packet(
     payload: bytes,
-) -> Optional[Tuple[int, bool, float, float, float, float, float, bool, int]]:
+) -> Optional[Tuple[int, bool, float, float, float, float, float, bool, int, int]]:
     legacy_len = 2 + 5 * 4
-    extended_len = legacy_len + 1 + 2
-    if len(payload) not in (legacy_len, extended_len):
+    cmd_len = legacy_len + 1 + 2
+    cmd_ts_len = cmd_len + 4
+    if len(payload) not in (legacy_len, cmd_len, cmd_ts_len):
         return None
 
     joint_index, valid, target_deg, actual_deg, loop1_out, loop2_act, loop2_out = struct.unpack(
         ">BBfffff", payload[:legacy_len]
     )
-    if len(payload) == extended_len:
+    if len(payload) >= cmd_len:
         cmd_valid = payload[legacy_len] == 1
         cmd_target_pos = struct.unpack(">h", payload[legacy_len + 1 : legacy_len + 3])[0]
     else:
         cmd_valid = False
         cmd_target_pos = 0
+
+    if len(payload) == cmd_ts_len:
+        device_timestamp_ms = struct.unpack(">I", payload[cmd_len : cmd_len + 4])[0]
+    else:
+        device_timestamp_ms = 0
 
     return (
         joint_index,
@@ -232,6 +211,7 @@ def parse_joint_debug_packet(
         loop2_out,
         cmd_valid,
         cmd_target_pos,
+        device_timestamp_ms,
     )
 
 
@@ -345,30 +325,14 @@ def build_stream_mode_cmd(mode: int) -> bytes:
     return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
 
 
-def build_tendon_guard_cmd(configs: List[Tuple[bool, int, int]]) -> bytes:
-    """
-    Build CMD_TENDON_GUARD payload.
+def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:
+    payload = struct.pack("<ff", freq_hz, amplitude_deg)
+    return _build_command_frame(CMD_LOCAL_TEST_PARAMS, payload)
 
-    Per joint (4 bytes):
-    - enabled: uint8 (0/1)
-    - sign: int8 (+1 / -1, other values normalized)
-    - x1_abs: int16 big-endian, clamped to motor absolute command range
-    """
-    if len(configs) != ENCODER_COUNT:
-        raise ValueError(f"need exactly {ENCODER_COUNT} tendon guard configs")
 
-    payload = bytearray()
-    for enabled, sign_raw, x1_raw in configs:
-        enabled_u8 = 1 if bool(enabled) else 0
-        sign_i8 = 1 if int(sign_raw) >= 0 else -1
-        x1 = int(x1_raw)
-        if x1 < MOTOR_ABS_CMD_MIN:
-            x1 = MOTOR_ABS_CMD_MIN
-        elif x1 > MOTOR_ABS_CMD_MAX:
-            x1 = MOTOR_ABS_CMD_MAX
+def build_local_test_start_cmd() -> bytes:
+    return _build_command_frame(CMD_LOCAL_TEST_START, b"")
 
-        payload.append(enabled_u8 & 0xFF)
-        payload.extend(struct.pack("b", sign_i8))
-        payload.extend(struct.pack(">h", x1))
 
-    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))
+def build_local_test_stop_cmd() -> bytes:
+    return _build_command_frame(CMD_LOCAL_TEST_STOP, b"")

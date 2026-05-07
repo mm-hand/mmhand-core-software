@@ -1,12 +1,12 @@
 # ui_main.py - 灵巧手图形界面（含启动时的端口/模式选择）
 
+import csv
 import os
 import json
 from datetime import datetime
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, messagebox
-import tkinter.font as tkfont
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -36,14 +36,17 @@ START_INDICATOR_RUN_BG = "#1e8e3e"
 START_INDICATOR_STOP_BG = "#c62828"
 START_INDICATOR_FG = "#ffffff"
 TEST_ROW_COUNT = 5
-TEST_TICK_MS = 40
+TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
 TEST_DEFAULT_PHASE_DEG = 0.0
 TEST_DEFAULT_HOLD_S = 0.0
+FF_TEST_DEFAULT_TARGETS_DEG = "20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40"
+FF_TEST_DEFAULT_STEP_S = 1.0
+TRI_TEST_DEFAULT_FREQ_HZ = 0.20
+CAMERA_CAPTURE_SLEEP_S = 0.05
+CAMERA_UI_POLL_MS = 50
+DISPLAY_POLL_MS = 50
 JOINT_RT_MAX_PLOT_JOINTS = 5
-CAMERA_INDEX_SCAN_MAX = 5
-CAMERA_POLL_ACTIVE_MS = 50
-CAMERA_POLL_IDLE_MS = 220
 # Joint control 目标角范围（度），需与下位机 AngleSolver + JointCalibrationProfile 当前生效限幅保持一致。
 # 注意：最小值也按关节独立维护，当前默认全部 0.0，后续可按关节单独调整。
 JOINT_TARGET_MIN_DEG_BY_INDEX = [
@@ -121,73 +124,6 @@ _FIST_20_RAD = (
 )
 _ANGLE_MAP = [[3, 0, 1, 2], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19]]
 NA_MODE_MARKER = "NA_MODE"
-
-
-def _normalized_mousewheel_steps(event) -> int:
-    """Normalize wheel events across Windows/macOS/Linux."""
-    delta = int(getattr(event, "delta", 0) or 0)
-    if delta != 0:
-        if abs(delta) < 120:
-            return -1 if delta > 0 else 1
-        return int(-delta / 120)
-    num = int(getattr(event, "num", 0) or 0)
-    if num == 4:
-        return -1
-    if num == 5:
-        return 1
-    return 0
-
-
-def _apply_platform_ui_defaults(root: tk.Tk, *, compact: bool = False) -> None:
-    """Apply lightweight platform-specific UI tuning (DPI, fonts, theme)."""
-    if os.name == "nt":
-        try:
-            import ctypes
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(1)
-            except Exception:
-                ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-        try:
-            scale = float(root.winfo_fpixels("1i")) / 72.0
-            if 1.0 <= scale <= 2.5:
-                root.tk.call("tk", "scaling", scale)
-        except Exception:
-            pass
-    style = ttk.Style(root)
-    try:
-        if os.name == "nt" and "vista" in style.theme_names():
-            style.theme_use("vista")
-        elif "clam" in style.theme_names():
-            style.theme_use("clam")
-    except Exception:
-        pass
-    family = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
-    size = 9 if compact else 10
-    for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
-        try:
-            f = tkfont.nametofont(fname)
-            f.configure(family=family, size=size)
-        except Exception:
-            pass
-    try:
-        f = tkfont.nametofont("TkHeadingFont")
-        f.configure(family=family, size=size + 1, weight="bold")
-    except Exception:
-        pass
-    root.option_add("*tearOff", False)
-    try:
-        root.configure(bg="#f2f4f8")
-    except Exception:
-        pass
-    style.configure("TFrame", background="#f2f4f8")
-    style.configure("TLabel", background="#f2f4f8", foreground="#111827")
-    style.configure("TLabelframe", background="#f2f4f8")
-    style.configure("TLabelframe.Label", background="#f2f4f8", foreground="#1f2937")
-    style.configure("TCheckbutton", background="#f2f4f8")
-    style.configure("TButton", padding=(8, 3))
-    style.configure("TCombobox", padding=(3, 2))
 
 
 def _make_tactile_heatmap_cmap_norm(vmax: float):
@@ -295,10 +231,8 @@ class LauncherWindow:
 
     def __init__(self):
         self.root = tk.Tk()
-        _apply_platform_ui_defaults(self.root, compact=True)
         self.root.title("Dexterous Hand - Connection & Mode")
-        self.root.geometry("460x250")
-        self.root.minsize(420, 230)
+        self.root.geometry("336x224")
         self.root.resizable(True, False)
 
         self.port_var = tk.StringVar(value="")
@@ -417,39 +351,20 @@ class HandGUI:
         self._pose_nodes_artist = None
 
         self.root = tk.Tk()
-        _apply_platform_ui_defaults(self.root, compact=False)
         title = f"{ENCODER_COUNT}-DOF Dexterous Hand Control System"
         if title_suffix:
             title = f"{title} - {title_suffix}"
         self.root.title(title)
         self.root.geometry("1260x720")
-        self.root.minsize(1100, 640)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._ui_base_width = 1260
-        self._ui_base_height = 720
-        self._ui_font_base_size = 10
-        self._ui_scale_bucket = -1
-        self._root_resize_job = None
-        self._root_resize_debounce_ms = 260
-        self._pose_resize_job = None
-        self._pose_resize_debounce_ms = 80
-        self._pose_resize_pending_size: Optional[Tuple[int, int]] = None
 
         controller.register_update_callback(self._on_state_update)
         self._state: Optional[HandModel] = None
         self._state_lock = threading.Lock()
         self._last_draw = 0.0
-        self._draw_interval = 0.04  # 40ms
-        self._pose_draw_interval = 0.06  # 60ms
-        self._tactile_draw_interval = 0.08  # 80ms
-        self._feedback_draw_interval = 0.06  # 60ms
-        self._last_feedback_draw = 0.0
-        self._last_pose_draw = 0.0
-        self._last_tactile_draw = 0.0
-        self._redraw_pending = False
-        self._redraw_job = None
-        self._pose_3d_enabled_var = tk.BooleanVar(value=False)
-        self._camera_chain_enabled_var = tk.BooleanVar(value=False)
+        self._draw_interval = 0.1  # 100ms
+        self._display_state_dirty = False
+        self._redraw_scheduled = False
         # 0=X, 1=Y, 2=Z；触觉区仅显示一个通道，默认显示 Z
         self._tactile_axis_selected = 2
         self._tactile_fake_mode = True  # False=真实数据/no data，True=显示生成数据
@@ -461,23 +376,17 @@ class HandGUI:
         self._camera_buf_lock = threading.Lock()
         self._camera_thread = None
         self._camera_stop = threading.Event()
-        self._camera_frame_seq = 0
-        self._camera_last_painted_seq = -1
-        self._camera_last_blank_drawn = False
-        self._camera_scan_lock = threading.Lock()
-        self._camera_scan_in_progress = False
-        self._camera_scan_pending = False
-        self._camera_indices_cache: List[int] = []
-        self._camera_scan_last_ts = 0.0
-        self._camera_scan_ttl_s = 4.0
+        self._cam_left_image_item = None
+        self._cam_left_text_item = None
+        self._cam_right_image_item = None
+        self._cam_right_text_item = None
         # 串口连接成功后即可实时显示数据；Start/Stop 仅控制电机运行。
         self._device_running = self._is_comm_connected()
         self._joint_run_states: List[bool] = [False] * ENCODER_COUNT
         self._motor_run_states: List[bool] = [False] * MOTOR_COUNT
         self._joint_run_buttons: List[ttk.Button] = []
         self._motor_run_buttons: List[ttk.Button] = []
-        self._save_data_var = tk.BooleanVar(value=False)
-        self._csv_recording_enabled = False
+        self._save_data_var = tk.BooleanVar(value=True)
         self._data_logger = RunDataLogger(flush_every=10)
         self._recording_status_note = ""
         self._tendon_cfg_path = os.path.join(os.path.dirname(__file__), "config", "tendon_manual_calib.json")
@@ -486,16 +395,16 @@ class HandGUI:
         self._tendon_release_angle_eps_deg = 0.0
         self._tendon_guard_last_warn_ts = 0.0
         self._tendon_guard_warn_interval_s = 0.5
-        self._last_tendon_guard_sent: Optional[Tuple[Tuple[int, int, int], ...]] = None
         self._joint_rt_joint_var = tk.StringVar(value="J00")
         self._joint_rt_joint_index = 0
         self._joint_rt_joint_vars: List[tk.StringVar] = [
             tk.StringVar(value="None") for _ in range(JOINT_RT_MAX_PLOT_JOINTS)
         ]
         self._joint_rt_window_sec = 12.0
-        self._joint_rt_plot_interval = 0.2
+        self._joint_rt_plot_interval = 0.05
         self._joint_rt_last_plot_ts = 0.0
         self._joint_rt_t0 = 0.0
+        self._joint_rt_t0_map: Dict[int, float] = {}
         self._joint_rt_series_t: Dict[int, deque] = {}
         self._joint_rt_series_actual: Dict[int, deque] = {}
         self._joint_rt_series_target: Dict[int, deque] = {}
@@ -517,13 +426,33 @@ class HandGUI:
         self._test_freq_vars: List[tk.StringVar] = []
         self._test_phase_vars: List[tk.StringVar] = []
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
+        self._ff_test_running = False
+        self._ff_test_after_job = None
+        self._ff_test_joint_var = tk.StringVar(value="None")
+        self._ff_test_targets_var = tk.StringVar(value=FF_TEST_DEFAULT_TARGETS_DEG)
+        self._ff_test_step_s_var = tk.StringVar(value=f"{FF_TEST_DEFAULT_STEP_S:.2f}")
+        self._ff_test_joint_idx = 0
+        self._ff_test_targets: List[float] = []
+        self._ff_test_step_s = float(FF_TEST_DEFAULT_STEP_S)
+        self._ff_test_idx = 0
+        self._ff_test_t_accum = 0.0
+        self._ff_test_last_ts = 0.0
+        self._tri_test_running = False
+        self._tri_test_after_job = None
+        self._tri_test_joint_var = tk.StringVar(value="None")
+        self._tri_test_min_var = tk.StringVar(value="0.0")
+        self._tri_test_max_var = tk.StringVar(value="10.0")
+        self._tri_test_freq_var = tk.StringVar(value=f"{TRI_TEST_DEFAULT_FREQ_HZ:.2f}")
+        self._tri_test_joint_idx = 0
+        self._tri_test_min_deg = 0.0
+        self._tri_test_max_deg = 0.0
+        self._tri_test_freq_hz = float(TRI_TEST_DEFAULT_FREQ_HZ)
+        self._tri_test_t0 = 0.0
+        self._local_test_running = False
 
         self._setup_ui()
         self._setup_device_menu()
         self._bind_keyboard_shortcuts()
-        if os.name != "nt":
-            self.root.bind("<Configure>", self._on_root_resized, add="+")
-        self.root.after(100, self._apply_responsive_ui_scale)
         self._start_camera_poll()
         self._start_display_poll()
         if self._is_comm_connected():
@@ -545,10 +474,8 @@ class HandGUI:
         self._port_menu = port_sub
         self._refresh_port_menu()
 
-        if not hasattr(self, "_camera1_var"):
-            self._camera1_var = tk.StringVar(value="None")
-        if not hasattr(self, "_camera2_var"):
-            self._camera2_var = tk.StringVar(value="None")
+        self._camera1_var = tk.StringVar(value="None")
+        self._camera2_var = tk.StringVar(value="None")
         self._camera1_menu = tk.Menu(device_menu, tearoff=0)
         self._camera2_menu = tk.Menu(device_menu, tearoff=0)
         device_menu.add_command(label="Teleop Device", command=lambda: self._emit_action("Menu [Teleop Device]"))
@@ -593,17 +520,6 @@ class HandGUI:
         if messagebox.askyesno("Confirm Mode Change", f"Switch to {mode_name} mode?"):
             self._switch_mode_in_place(mode_name)
 
-    def _open_cv_capture(self, cv2_mod, index: int):
-        """OpenCV camera open helper with a Windows-friendly backend."""
-        if os.name == "nt":
-            cap_dshow = getattr(cv2_mod, "CAP_DSHOW", None)
-            if cap_dshow is not None:
-                try:
-                    return cv2_mod.VideoCapture(index, cap_dshow)
-                except Exception:
-                    pass
-        return cv2_mod.VideoCapture(index)
-
     def _list_available_cameras(self) -> List[int]:
         """Probe indices 0-4 for available cameras (avoids OpenCV out-of-bound on some systems)."""
         try:
@@ -611,70 +527,21 @@ class HandGUI:
         except ImportError:
             return []
         available = []
-        for idx in range(CAMERA_INDEX_SCAN_MAX):
-            cap = None
+        for idx in range(5):
             try:
-                cap = self._open_cv_capture(cv2, idx)
+                cap = cv2.VideoCapture(idx)
                 if cap.isOpened():
-                    ret = False
-                    for _ in range(2):
-                        ret, _ = cap.read()
-                        if ret:
-                            break
+                    ret, _ = cap.read()
+                    cap.release()
                     if ret:
                         available.append(idx)
             except Exception:
                 pass
-            finally:
-                if cap is not None:
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
         return available
-
-    def _request_camera_scan(self, force: bool = False) -> None:
-        if not self._is_camera_chain_enabled():
-            self._camera_indices_cache = []
-            self._update_camera_combo_values()
-            return
-        if not force and self._camera_indices_cache and (time.time() - self._camera_scan_last_ts) < self._camera_scan_ttl_s:
-            self._update_camera_combo_values()
-            return
-        with self._camera_scan_lock:
-            if self._camera_scan_in_progress:
-                self._camera_scan_pending = True
-                return
-            self._camera_scan_in_progress = True
-            self._camera_scan_pending = False
-
-        def worker() -> None:
-            indices = self._list_available_cameras()
-            try:
-                self.root.after(0, lambda vals=indices: self._on_camera_scan_done(vals))
-            except tk.TclError:
-                pass
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_camera_scan_done(self, indices: List[int]) -> None:
-        self._camera_indices_cache = sorted(set(int(i) for i in indices if i is not None))
-        self._camera_scan_last_ts = time.time()
-        self._update_camera_combo_values()
-        rerun = False
-        with self._camera_scan_lock:
-            rerun = self._camera_scan_pending
-            self._camera_scan_pending = False
-            self._camera_scan_in_progress = False
-        if rerun:
-            self._request_camera_scan(force=True)
 
     def _refresh_camera_menus(self) -> None:
         """Refresh camera combo dropdown values (Device > Refresh)."""
         self._update_camera_combo_values()
-        if not self._is_camera_chain_enabled():
-            return
-        self._request_camera_scan(force=True)
 
     def _on_camera_selected(self, index: Optional[int], slot: int) -> None:
         """Slot 1=Left widget, 2=Right widget."""
@@ -684,8 +551,6 @@ class HandGUI:
         else:
             self._camera2_var.set(label)
         self._emit_action(f"Camera {slot} selected: {index if index is not None else 'None'}")
-        if not self._is_camera_chain_enabled():
-            return
         threading.Thread(target=lambda: self._set_camera_capture(slot, index), daemon=True).start()
 
     def _set_camera_capture(self, slot: int, index: Optional[int]) -> None:
@@ -694,8 +559,6 @@ class HandGUI:
             import cv2
         except ImportError:
             return
-        if not self._is_camera_chain_enabled():
-            index = None
         self._camera_stop.set()
         if self._camera_thread is not None:
             self._camera_thread.join(timeout=1.0)
@@ -718,11 +581,10 @@ class HandGUI:
             self._camera_frame_right = None
             with self._camera_buf_lock:
                 self._camera_frame_right_buf = None
-        self._camera_last_blank_drawn = False
 
         if index is not None:
             try:
-                cap = self._open_cv_capture(cv2, index)
+                cap = cv2.VideoCapture(index)
                 if cap.isOpened():
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -762,8 +624,7 @@ class HandGUI:
             with self._camera_buf_lock:
                 self._camera_frame_left_buf = left_frame
                 self._camera_frame_right_buf = right_frame
-                self._camera_frame_seq += 1
-            time.sleep(0.033)
+            time.sleep(CAMERA_CAPTURE_SLEEP_S)
 
     def _start_display_poll(self) -> None:
         """串口已连接时定期刷新；断开时清屏。与电机 Start/Stop 解耦。"""
@@ -773,18 +634,25 @@ class HandGUI:
                     if getattr(self, "_device_running", False):
                         self._device_running = False
                         self._clear_live_displays()
-                    self.root.after(200, poll)
+                    self.root.after(DISPLAY_POLL_MS, poll)
                     return
                 self._device_running = True
                 with self._state_lock:
                     has_state = self._state is not None
-                need_redraw = not has_state or getattr(self, "_tactile_fake_mode", False)
-                if need_redraw:
-                    self._maybe_redraw()
-                self.root.after(200, poll)
+                    state_for_log = self._state
+                need_redraw = (
+                    bool(getattr(self, "_display_state_dirty", False))
+                    or not has_state
+                    or getattr(self, "_tactile_fake_mode", False)
+                )
+                if need_redraw and self._maybe_redraw():
+                    self._display_state_dirty = False
+                if state_for_log is not None:
+                    self._write_run_data_row(state_for_log)
+                self.root.after(DISPLAY_POLL_MS, poll)
             except tk.TclError:
                 pass
-        self.root.after(200, poll)
+        self.root.after(DISPLAY_POLL_MS, poll)
 
     def _bind_keyboard_shortcuts(self) -> None:
         self.root.bind_all("<KeyPress-space>", self._on_keyboard_stop)
@@ -837,11 +705,15 @@ class HandGUI:
             self._motor_last_sent_abs = [None] * MOTOR_COUNT
         if hasattr(self, "_joint_target_initialized"):
             self._joint_target_initialized = False
-        self._last_tendon_guard_sent = None
-        self._sync_tendon_guard_to_lower(force=True)
         self._refresh_start_indicator()
+        if hasattr(self, "_save_data_var") and bool(self._save_data_var.get()) and not self._data_logger.is_running():
+            try:
+                self._start_data_recording()
+            except Exception:
+                self._save_data_var.set(False)
+                self._recording_status_note = ""
         try:
-            self.root.after(0, self._maybe_redraw)
+            self._schedule_redraw()
         except tk.TclError:
             pass
 
@@ -1075,206 +947,26 @@ class HandGUI:
         # - Connected: use realtime angles.
         return self._is_comm_connected()
 
-    def _is_pose_3d_enabled(self) -> bool:
-        var = getattr(self, "_pose_3d_enabled_var", None)
-        return True if var is None else bool(var.get())
-
-    def _is_camera_chain_enabled(self) -> bool:
-        var = getattr(self, "_camera_chain_enabled_var", None)
-        return True if var is None else bool(var.get())
-
-    @staticmethod
-    def _camera_index_from_label(label: str) -> Optional[int]:
-        v = (label or "").strip()
-        if v.startswith("Camera "):
-            try:
-                return int(v.replace("Camera ", "", 1))
-            except ValueError:
-                return None
-        return None
-
-    def _selected_camera_index(self, slot: int) -> Optional[int]:
-        var = self._camera1_var if slot == 1 else self._camera2_var
-        return self._camera_index_from_label(var.get())
-
-    def _set_camera_widget_interaction(self, enabled: bool) -> None:
-        combo_state = "readonly" if enabled else "disabled"
-        for name in ("_cam_left_combo", "_cam_right_combo"):
-            combo = getattr(self, name, None)
-            if combo is None:
-                continue
-            try:
-                combo.configure(state=combo_state)
-            except Exception:
-                pass
-
-    def _apply_camera_chain_state(self, enabled: bool) -> None:
-        self._set_camera_widget_interaction(enabled)
-        if not enabled:
-            self._camera_indices_cache = []
-            self._update_camera_combo_values()
-
-        def worker() -> None:
-            if not enabled:
-                self._set_camera_capture(1, None)
-                self._set_camera_capture(2, None)
-                return
-            self._set_camera_capture(1, self._selected_camera_index(1))
-            self._set_camera_capture(2, self._selected_camera_index(2))
-
-        threading.Thread(target=worker, daemon=True).start()
-        if not enabled:
-            self._camera_last_painted_seq = -1
-            self._camera_last_blank_drawn = False
-        else:
-            self._camera_last_blank_drawn = False
-
-    def _on_toggle_pose_3d(self) -> None:
-        enabled = self._is_pose_3d_enabled()
-        frame = getattr(self, "_pose_frame", None)
-        if frame is not None:
-            try:
-                visible = bool(frame.winfo_ismapped())
-            except Exception:
-                visible = False
-            if enabled and not visible:
-                frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
-            elif (not enabled) and visible:
-                frame.pack_forget()
-        if not enabled:
-            self._cancel_pose_3d_rezoom_timer()
-        if enabled:
-            self._request_redraw()
-
-    def _on_toggle_camera_chain(self) -> None:
-        enabled = self._is_camera_chain_enabled()
-        self._apply_camera_chain_state(enabled)
-        if enabled:
-            self._request_camera_scan(force=True)
-
     def _start_camera_poll(self) -> None:
         """Main-thread poll: copy buffers to display (non-blocking)."""
 
         def poll() -> None:
             try:
-                if not self._is_camera_chain_enabled():
-                    next_ms = CAMERA_POLL_IDLE_MS
-                    if hasattr(self, "_cam_left_canvas") and not self._camera_last_blank_drawn:
-                        self._camera_frame_left = None
-                        self._camera_frame_right = None
-                        self._camera_last_blank_drawn = True
-                        self._update_camera_widget()
-                    self.root.after(next_ms, poll)
-                    return
                 with self._camera_buf_lock:
                     left = self._camera_frame_left_buf
                     right = self._camera_frame_right_buf
-                    frame_seq = int(self._camera_frame_seq)
                 self._camera_frame_left = left
                 self._camera_frame_right = right
-                has_live_camera = (self._camera1_cap is not None) or (self._camera2_cap is not None)
-                has_frame = (left is not None) or (right is not None)
                 if hasattr(self, "_cam_left_canvas"):
-                    should_redraw = frame_seq != self._camera_last_painted_seq
-                    if not should_redraw and (not has_live_camera) and (not has_frame) and (not self._camera_last_blank_drawn):
-                        should_redraw = True
-                    if should_redraw:
-                        self._camera_last_painted_seq = frame_seq
-                        self._camera_last_blank_drawn = (not has_live_camera) and (not has_frame)
-                        self._update_camera_widget()
-                next_ms = CAMERA_POLL_ACTIVE_MS if (has_live_camera or has_frame) else CAMERA_POLL_IDLE_MS
+                    self._update_camera_widget()
             except Exception:
-                next_ms = CAMERA_POLL_IDLE_MS
+                pass
             try:
-                self.root.after(next_ms, poll)
+                self.root.after(CAMERA_UI_POLL_MS, poll)
             except tk.TclError:
                 pass
 
-        self.root.after(CAMERA_POLL_IDLE_MS, poll)
-
-    def _request_redraw(self) -> None:
-        try:
-            self.root.after(0, self._maybe_redraw)
-        except tk.TclError:
-            pass
-
-    def _process_pending_redraw(self) -> None:
-        self._request_redraw()
-
-    def _bind_canvas_mousewheel(self, canvas: tk.Canvas) -> None:
-        def _on_mousewheel(event):
-            steps = _normalized_mousewheel_steps(event)
-            if steps:
-                canvas.yview_scroll(steps, "units")
-                return "break"
-            return None
-
-        canvas.bind("<Enter>", lambda _e: canvas.focus_set(), add="+")
-        canvas.bind("<MouseWheel>", _on_mousewheel, add="+")
-        canvas.bind("<Button-4>", _on_mousewheel, add="+")
-        canvas.bind("<Button-5>", _on_mousewheel, add="+")
-
-    def _on_root_resized(self, event=None) -> None:
-        if event is not None and event.widget is not self.root:
-            return
-        job = getattr(self, "_root_resize_job", None)
-        if job is not None:
-            try:
-                self.root.after_cancel(job)
-            except tk.TclError:
-                pass
-        delay_ms = int(getattr(self, "_root_resize_debounce_ms", 260))
-        try:
-            self._root_resize_job = self.root.after(delay_ms, self._flush_root_resize)
-        except tk.TclError:
-            self._root_resize_job = None
-
-    def _flush_root_resize(self) -> None:
-        self._root_resize_job = None
-        self._apply_responsive_ui_scale()
-        self._request_redraw()
-
-    def _apply_responsive_ui_scale(self) -> None:
-        try:
-            w = max(1, int(self.root.winfo_width()))
-            h = max(1, int(self.root.winfo_height()))
-        except tk.TclError:
-            return
-        base_w = max(1, int(getattr(self, "_ui_base_width", 1260)))
-        base_h = max(1, int(getattr(self, "_ui_base_height", 720)))
-        scale = min(w / float(base_w), h / float(base_h))
-        bucket = 0
-        if scale >= 1.28:
-            bucket = 2
-        elif scale >= 1.08:
-            bucket = 1
-        if bucket == int(getattr(self, "_ui_scale_bucket", -1)):
-            return
-        self._ui_scale_bucket = bucket
-        family = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
-        font_size = int(getattr(self, "_ui_font_base_size", 10)) + bucket
-        for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
-            try:
-                tkfont.nametofont(fname).configure(family=family, size=font_size)
-            except Exception:
-                pass
-        try:
-            tkfont.nametofont("TkHeadingFont").configure(family=family, size=font_size + 1, weight="bold")
-        except Exception:
-            pass
-        style = ttk.Style(self.root)
-        style.configure("TButton", padding=(8 + bucket * 2, 3 + bucket))
-        style.configure("TCombobox", padding=(3 + bucket, 2 + bucket // 2))
-        if hasattr(self, "_enable_btn"):
-            try:
-                self._enable_btn.configure(font=(family, 12 + bucket, "bold"))
-            except Exception:
-                pass
-        if hasattr(self, "_estop_btn"):
-            try:
-                self._estop_btn.configure(font=(family, 12 + bucket, "bold"))
-            except Exception:
-                pass
+        self.root.after(CAMERA_UI_POLL_MS, poll)
 
     def _emit_action(self, msg: str) -> None:
         """在按钮响应中上报操作（如监控模式下直接打印）"""
@@ -1292,10 +984,515 @@ class HandGUI:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return os.path.join(self._run_data_root_dir(), f"hand_run_{ts}.csv")
 
+    @staticmethod
+    def _build_joint_debug_packet_csv_path(csv_path: str) -> str:
+        base, _ = os.path.splitext(csv_path)
+        return f"{base}_joint_debug_packets.csv"
+
+    @staticmethod
+    def _build_joint_debug_packet_image_path(csv_path: str) -> str:
+        base, _ = os.path.splitext(csv_path)
+        return f"{base}.png"
+
+    def _build_joint_rt_image_path(self, csv_path: Optional[str] = None) -> str:
+        if csv_path:
+            base, _ = os.path.splitext(csv_path)
+            return f"{base}_joint_rt.png"
+        current_csv = self._data_logger.path if hasattr(self, "_data_logger") else ""
+        if current_csv:
+            base, _ = os.path.splitext(current_csv)
+            return f"{base}_joint_rt.png"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join(self._run_data_root_dir(), f"joint_rt_{ts}.png")
+
+    @staticmethod
+    def _parse_joint_rt_csv_float(value: object) -> float:
+        try:
+            out = float(value)
+        except Exception:
+            return float("nan")
+        return out if np.isfinite(out) else float("nan")
+
+    def _resolve_joint_rt_export_indices(self) -> List[int]:
+        selected = self._selected_joint_rt_indices()
+        if selected:
+            return selected
+        idx = int(getattr(self, "_joint_rt_joint_index", 0))
+        if 0 <= idx < ENCODER_COUNT:
+            return [idx]
+        return [0]
+
+    def _resolve_joint_rt_csv_path(self, csv_path: Optional[str] = None) -> str:
+        candidate = os.path.abspath(csv_path) if csv_path else ""
+        if candidate and os.path.isfile(candidate):
+            return candidate
+        current_csv = self._data_logger.path if hasattr(self, "_data_logger") else ""
+        current_csv = os.path.abspath(current_csv) if current_csv else ""
+        if current_csv and os.path.isfile(current_csv):
+            return current_csv
+        return ""
+
+    def _load_joint_rt_export_series(
+        self,
+        csv_path: str,
+        joint_indices: List[int],
+    ) -> Tuple[Dict[int, List[float]], Dict[int, List[float]], Dict[int, List[float]], str]:
+        host_ts_abs: List[float] = []
+        host_actual_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        host_target_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        debug_time_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        debug_actual_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        debug_target_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        debug_t0_map: Dict[int, float] = {}
+        debug_last_ts_map: Dict[int, float] = {}
+
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise ValueError(f"CSV header is empty: {csv_path}")
+
+            required = {"ts_wall"}
+            for idx in joint_indices:
+                required.add(f"joint_curr_deg_j{idx:02d}")
+                required.add(f"joint_target_deg_j{idx:02d}")
+            missing = [key for key in required if key not in reader.fieldnames]
+            if missing:
+                raise ValueError(f"CSV missing required columns: {missing}")
+
+            for row in reader:
+                host_t_abs = self._parse_joint_rt_csv_float(row.get("ts_wall", ""))
+                if np.isfinite(host_t_abs):
+                    host_ts_abs.append(float(host_t_abs))
+                for idx in joint_indices:
+                    actual_key = f"joint_curr_deg_j{idx:02d}"
+                    target_key = f"joint_target_deg_j{idx:02d}"
+                    if np.isfinite(host_t_abs):
+                        host_actual_map[idx].append(self._parse_joint_rt_csv_float(row.get(actual_key, "")))
+                    raw_target = str(row.get(target_key, "")).strip()
+                    if raw_target == "" or raw_target == NA_MODE_MARKER:
+                        host_target = float("nan")
+                    else:
+                        host_target = self._parse_joint_rt_csv_float(raw_target)
+                    if np.isfinite(host_t_abs):
+                        host_target_map[idx].append(host_target)
+
+                    debug_ts_key = f"joint_debug_ts_ms_j{idx:02d}"
+                    debug_target_key = f"joint_debug_target_deg_j{idx:02d}"
+                    debug_actual_key = f"joint_debug_actual_deg_j{idx:02d}"
+                    if debug_ts_key not in reader.fieldnames:
+                        continue
+                    debug_ts = self._parse_joint_rt_csv_float(row.get(debug_ts_key, ""))
+                    debug_target = self._parse_joint_rt_csv_float(row.get(debug_target_key, ""))
+                    debug_actual = self._parse_joint_rt_csv_float(row.get(debug_actual_key, ""))
+                    if (not np.isfinite(debug_ts)) or (not np.isfinite(debug_target)) or (not np.isfinite(debug_actual)):
+                        continue
+                    if debug_ts <= 0.0:
+                        continue
+                    prev_debug_ts = debug_last_ts_map.get(idx)
+                    if prev_debug_ts is not None and debug_ts <= prev_debug_ts:
+                        continue
+                    if idx not in debug_t0_map:
+                        debug_t0_map[idx] = float(debug_ts)
+                    debug_last_ts_map[idx] = float(debug_ts)
+                    debug_time_map[idx].append((float(debug_ts) - debug_t0_map[idx]) / 1000.0)
+                    debug_target_map[idx].append(float(debug_target))
+                    debug_actual_map[idx].append(float(debug_actual))
+
+        if not host_ts_abs and not any(debug_time_map[idx] for idx in joint_indices):
+            raise ValueError(f"No usable CSV rows: {csv_path}")
+
+        host_time_map: Dict[int, List[float]] = {}
+        if host_ts_abs:
+            t0 = host_ts_abs[0]
+            host_t_rel = [float(t - t0) for t in host_ts_abs]
+            for idx in joint_indices:
+                host_time_map[idx] = list(host_t_rel)
+
+        time_map: Dict[int, List[float]] = {}
+        actual_map: Dict[int, List[float]] = {}
+        target_map: Dict[int, List[float]] = {}
+        used_debug = 0
+        used_host = 0
+        for idx in joint_indices:
+            if debug_time_map[idx]:
+                time_map[idx] = debug_time_map[idx]
+                actual_map[idx] = debug_actual_map[idx]
+                target_map[idx] = debug_target_map[idx]
+                used_debug += 1
+            else:
+                time_map[idx] = host_time_map.get(idx, [])
+                actual_map[idx] = host_actual_map[idx]
+                target_map[idx] = host_target_map[idx]
+                used_host += 1
+
+        if used_debug and not used_host:
+            time_label = "Device Time (s)"
+        elif used_debug and used_host:
+            time_label = "Time (s, device preferred)"
+        else:
+            time_label = "Host Time (s)"
+        return time_map, actual_map, target_map, time_label
+
+    def _load_joint_debug_packet_export_series(
+        self,
+        csv_path: str,
+    joint_indices: List[int],
+    ) -> Tuple[Dict[int, List[float]], Dict[int, List[float]], Dict[int, List[float]]]:
+        time_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        actual_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        target_map: Dict[int, List[float]] = {idx: [] for idx in joint_indices}
+        last_ts_map: Dict[int, float] = {}
+
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise ValueError(f"CSV header is empty: {csv_path}")
+            required = {
+                "device_ts_ms",
+                "joint_index",
+                "target_deg",
+                "actual_deg",
+            }
+            missing = [key for key in required if key not in reader.fieldnames]
+            if missing:
+                raise ValueError(f"CSV missing required columns: {missing}")
+
+            joint_index_set = set(int(idx) for idx in joint_indices)
+            for row in reader:
+                try:
+                    joint_index = int(str(row.get("joint_index", "")).strip())
+                except Exception:
+                    continue
+                if joint_index not in joint_index_set:
+                    continue
+
+                device_ts = self._parse_joint_rt_csv_float(row.get("device_ts_ms", ""))
+                target_deg = self._parse_joint_rt_csv_float(row.get("target_deg", ""))
+                actual_deg = self._parse_joint_rt_csv_float(row.get("actual_deg", ""))
+                if (not np.isfinite(device_ts)) or (not np.isfinite(target_deg)) or (not np.isfinite(actual_deg)):
+                    continue
+                if device_ts <= 0.0:
+                    continue
+                prev_ts = last_ts_map.get(joint_index)
+                if prev_ts is not None and device_ts <= prev_ts:
+                    continue
+                last_ts_map[joint_index] = float(device_ts)
+                time_map[joint_index].append(float(device_ts) / 1000.0)
+                target_map[joint_index].append(float(target_deg))
+                actual_map[joint_index].append(float(actual_deg))
+
+        if not any(time_map[idx] for idx in joint_indices):
+            raise ValueError(f"No usable packet CSV rows: {csv_path}")
+        return time_map, actual_map, target_map
+
+    def _estimate_series_lag(
+        self,
+        t_rel: List[float],
+        y_target: List[float],
+        y_actual: List[float],
+    ) -> Optional[Dict[str, float]]:
+        if len(t_rel) < 20 or len(y_target) != len(t_rel) or len(y_actual) != len(t_rel):
+            return None
+
+        t = np.asarray(t_rel, dtype=float)
+        target = np.asarray(y_target, dtype=float)
+        actual = np.asarray(y_actual, dtype=float)
+        finite_mask = np.isfinite(t) & np.isfinite(target) & np.isfinite(actual)
+        if int(np.sum(finite_mask)) < 20:
+            return None
+        t = t[finite_mask]
+        target = target[finite_mask]
+        actual = actual[finite_mask]
+
+        keep = [0]
+        for i in range(1, len(t)):
+            if t[i] > t[keep[-1]]:
+                keep.append(i)
+        if len(keep) < 20:
+            return None
+        t = t[keep]
+        target = target[keep]
+        actual = actual[keep]
+
+        base_target = float(target[0])
+        start_idx = 0
+        for i, value in enumerate(target):
+            if abs(float(value) - base_target) > 0.3:
+                start_idx = max(0, i - 3)
+                break
+        t = t[start_idx:]
+        target = target[start_idx:]
+        actual = actual[start_idx:]
+        if len(t) < 20:
+            return None
+
+        dt = float(np.median(np.diff(t)))
+        if (not np.isfinite(dt)) or dt <= 0.0:
+            return None
+
+        grid = np.arange(float(t[0]), float(t[-1]), dt)
+        if len(grid) < 32:
+            return None
+
+        target_i = np.interp(grid, t, target)
+        actual_i = np.interp(grid, t, actual)
+        x = target_i - float(np.mean(target_i))
+        y = actual_i - float(np.mean(actual_i))
+        if len(x) < 32 or np.allclose(x, 0.0) or np.allclose(y, 0.0):
+            return None
+
+        freqs = np.fft.rfftfreq(len(grid), d=dt)
+        target_fft = np.fft.rfft(x)
+        if len(freqs) < 2:
+            return None
+        dominant_idx = int(np.argmax(np.abs(target_fft[1:])) + 1)
+        dominant_freq = float(freqs[dominant_idx])
+        if (not np.isfinite(dominant_freq)) or dominant_freq <= 0.0:
+            return None
+
+        actual_fft = np.fft.rfft(y)
+        phase_target = float(np.angle(target_fft[dominant_idx]))
+        phase_actual = float(np.angle(actual_fft[dominant_idx]))
+        phase_diff = phase_target - phase_actual
+        phase_diff = (phase_diff + math.pi) % (2.0 * math.pi) - math.pi
+        lag_s = float(phase_diff / (2.0 * math.pi * dominant_freq))
+
+        best_corr = None
+        best_lag = 0.0
+        max_lag_steps = int(round(1.0 / dt))
+        for lag_steps in range(-max_lag_steps, max_lag_steps + 1):
+            if lag_steps < 0:
+                xs = x[-lag_steps:]
+                ys = y[: len(y) + lag_steps]
+            elif lag_steps > 0:
+                xs = x[:-lag_steps]
+                ys = y[lag_steps:]
+            else:
+                xs = x
+                ys = y
+            if len(xs) < 20:
+                continue
+            corr = float(np.corrcoef(xs, ys)[0, 1])
+            if not np.isfinite(corr):
+                continue
+            if best_corr is None or corr > best_corr:
+                best_corr = corr
+                best_lag = float(lag_steps * dt)
+
+        return {
+            "lag_s": lag_s,
+            "phase_deg": float(phase_diff * 180.0 / math.pi),
+            "freq_hz": dominant_freq,
+            "corr": float(best_corr) if best_corr is not None else float("nan"),
+            "xcorr_lag_s": best_lag,
+        }
+
+    def _save_joint_rt_plot_snapshot(self, csv_path: Optional[str] = None, *, reason: str = "") -> Optional[str]:
+        try:
+            source_csv = self._resolve_joint_rt_csv_path(csv_path)
+            if not source_csv:
+                return None
+            joint_indices = self._resolve_joint_rt_export_indices()
+            time_map, actual_map, target_map, time_label = self._load_joint_rt_export_series(source_csv, joint_indices)
+            out_path = self._build_joint_rt_image_path(csv_path)
+            folder = os.path.dirname(out_path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+
+            fig = plt.Figure(figsize=(10.5, 5.6), dpi=100)
+            ax = fig.add_subplot(111)
+            ax.set_xlabel(time_label, fontsize=10)
+            ax.set_ylabel("Angle (deg)", fontsize=10)
+            ax.grid(True, alpha=0.28)
+
+            cmap = plt.get_cmap("tab10")
+            plotted = False
+            vals: List[float] = []
+            x_max = 0.0
+            for idx in joint_indices:
+                t_rel = time_map.get(idx, [])
+                y_actual = actual_map.get(idx, [])
+                y_target = target_map.get(idx, [])
+                if len(y_actual) != len(t_rel) or len(y_target) != len(t_rel):
+                    continue
+                if not t_rel:
+                    continue
+                plotted = True
+                x_max = max(x_max, float(t_rel[-1]))
+                base_color = cmap(idx % 10)
+                ax.plot(
+                    t_rel,
+                    y_actual,
+                    linestyle="-",
+                    linewidth=1.8,
+                    color=base_color,
+                    label=f"J{idx:02d} Actual",
+                )
+                ax.plot(
+                    t_rel,
+                    y_target,
+                    linestyle="--",
+                    linewidth=1.6,
+                    color=base_color,
+                    alpha=0.58,
+                    label=f"J{idx:02d} Target",
+                )
+                vals.extend([float(v) for v in y_actual if np.isfinite(v)])
+                vals.extend([float(v) for v in y_target if np.isfinite(v)])
+
+            if x_max > 0.0:
+                ax.set_xlim(0.0, max(0.8, x_max + 0.05))
+            else:
+                ax.set_xlim(0.0, 1.0)
+
+            if vals:
+                y_min = min(vals)
+                y_max = max(vals)
+                if y_min == y_max:
+                    y_max = y_min + 1.0
+                margin = (y_max - y_min) * 0.12
+                ax.set_ylim(y_min - margin, y_max + margin)
+            else:
+                ax.set_ylim(-1.0, 1.0)
+
+            joint_label = ", ".join([f"J{i:02d}" for i in joint_indices]) if joint_indices else "J00"
+            ax.set_title(f"Target vs Actual (Full Run): {joint_label}", fontsize=11)
+            if plotted:
+                ax.legend(loc="upper right", fontsize=8, ncol=2)
+            fig.tight_layout()
+            fig.savefig(out_path, dpi=150, bbox_inches="tight")
+            fig.clear()
+
+            suffix = f" ({reason})" if reason else ""
+            self._emit_action(f"Joint RT plot saved from CSV{suffix}: {out_path}")
+            return out_path
+        except Exception as exc:
+            self._emit_action(f"Joint RT plot save failed: {exc}")
+            return None
+
+    def _save_joint_debug_packet_plot_snapshot(
+        self,
+        csv_path: str,
+        *,
+        reason: str = "",
+    ) -> Optional[str]:
+        try:
+            source_csv = os.path.abspath(csv_path) if csv_path else ""
+            if not source_csv or not os.path.isfile(source_csv):
+                return None
+            joint_indices = self._resolve_joint_rt_export_indices()
+            time_map, actual_map, target_map = self._load_joint_debug_packet_export_series(source_csv, joint_indices)
+            out_path = self._build_joint_debug_packet_image_path(source_csv)
+            folder = os.path.dirname(out_path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+
+            fig = plt.Figure(figsize=(10.5, 5.6), dpi=100)
+            ax = fig.add_subplot(111)
+            ax.set_xlabel("device_ts_ms / 1000 (s)", fontsize=10)
+            ax.set_ylabel("Angle (deg)", fontsize=10)
+            ax.grid(True, alpha=0.28)
+
+            cmap = plt.get_cmap("tab10")
+            plotted = False
+            vals: List[float] = []
+            x_min = float("inf")
+            x_max = float("-inf")
+            summary_lines: List[str] = []
+            for idx in joint_indices:
+                t_rel = time_map.get(idx, [])
+                y_actual = actual_map.get(idx, [])
+                y_target = target_map.get(idx, [])
+                if len(y_actual) != len(t_rel) or len(y_target) != len(t_rel):
+                    continue
+                if not t_rel:
+                    continue
+                plotted = True
+                x_min = min(x_min, float(t_rel[0]))
+                x_max = max(x_max, float(t_rel[-1]))
+                base_color = cmap(idx % 10)
+                ax.plot(
+                    t_rel,
+                    y_actual,
+                    linestyle="-",
+                    linewidth=1.8,
+                    color=base_color,
+                    label=f"J{idx:02d} Actual",
+                )
+                ax.plot(
+                    t_rel,
+                    y_target,
+                    linestyle="--",
+                    linewidth=1.6,
+                    color=base_color,
+                    alpha=0.75,
+                    label=f"J{idx:02d} Target",
+                )
+                vals.extend([float(v) for v in y_actual if np.isfinite(v)])
+                vals.extend([float(v) for v in y_target if np.isfinite(v)])
+                lag_info = self._estimate_series_lag(t_rel, y_target, y_actual)
+                if lag_info:
+                    summary_lines.append(
+                        f"J{idx:02d}: lag~{lag_info['lag_s'] * 1000.0:.0f} ms, "
+                        f"phase~{lag_info['phase_deg']:.1f} deg @ {lag_info['freq_hz']:.2f} Hz"
+                    )
+
+            if not plotted:
+                raise ValueError(f"No plottable packet series for joints: {joint_indices}")
+
+            if vals:
+                vmin = min(vals)
+                vmax = max(vals)
+                if np.isfinite(vmin) and np.isfinite(vmax):
+                    if math.isclose(vmin, vmax):
+                        pad = 1.0 if abs(vmin) < 1.0 else abs(vmin) * 0.1
+                        ax.set_ylim(vmin - pad, vmax + pad)
+                    else:
+                        pad = (vmax - vmin) * 0.08
+                        ax.set_ylim(vmin - pad, vmax + pad)
+
+            if np.isfinite(x_min) and np.isfinite(x_max) and x_max > x_min:
+                ax.set_xlim(x_min, x_max)
+
+            title = f"Joint Debug Packets: {', '.join([f'J{idx:02d}' for idx in joint_indices])}"
+            if summary_lines:
+                title += f"\n{summary_lines[0]}"
+            ax.set_title(title, fontsize=12)
+            if summary_lines:
+                ax.text(
+                    0.01,
+                    0.99,
+                    "\n".join(summary_lines),
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    fontsize=9,
+                    bbox={"facecolor": "white", "alpha": 0.78, "edgecolor": "#cccccc"},
+                )
+            ax.legend(loc="upper right", fontsize=9, ncol=1)
+            fig.tight_layout()
+            fig.savefig(out_path)
+            plt.close(fig)
+
+            suffix = f" ({reason})" if reason else ""
+            if summary_lines:
+                self._emit_action(
+                    f"Joint debug packet plot saved{suffix}: {out_path} | {summary_lines[0]}"
+                )
+            else:
+                self._emit_action(f"Joint debug packet plot saved{suffix}: {out_path}")
+            return out_path
+        except Exception as exc:
+            self._emit_action(f"Joint debug packet plot save failed: {exc}")
+            return None
+
     def _build_run_data_fieldnames(self) -> List[str]:
         fields: List[str] = ["ts_wall", "ts_model", "control_mode"]
         fields.extend([f"joint_curr_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
         fields.extend([f"joint_target_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
+        fields.extend([f"joint_debug_ts_ms_j{i:02d}" for i in range(ENCODER_COUNT)])
+        fields.extend([f"joint_debug_target_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
+        fields.extend([f"joint_debug_actual_deg_j{i:02d}" for i in range(ENCODER_COUNT)])
         fields.extend([f"servo_curr_single_m{i:02d}" for i in range(MOTOR_COUNT)])
         fields.extend([f"servo_target_single_m{i:02d}" for i in range(MOTOR_COUNT)])
         fields.extend([f"servo_curr_multi_m{i:02d}" for i in range(MOTOR_COUNT)])
@@ -1303,21 +1500,28 @@ class HandGUI:
         return fields
 
     def _start_data_recording(self) -> None:
-        if not bool(getattr(self, "_csv_recording_enabled", False)):
-            return
         if self._data_logger.is_running():
             return
         path = self._build_run_data_csv_path()
         self._data_logger.start(path, fieldnames=self._build_run_data_fieldnames())
+        comm = getattr(self.controller, "comm", None)
+        if comm:
+            comm.start_joint_debug_packet_log(self._build_joint_debug_packet_csv_path(path))
         self._recording_status_note = f"Recording: {os.path.basename(path)}"
         self._emit_action(f"Data recording started: {path}")
         if hasattr(self, "status_var"):
             self.status_var.set(self._recording_status_note)
 
     def _stop_data_recording(self, reason: str = "stopped", keep_switch: bool = False) -> None:
+        comm = getattr(self.controller, "comm", None)
+        if comm:
+            comm.stop_joint_debug_packet_log()
         if self._data_logger.is_running():
             current_path = self._data_logger.path
+            packet_csv_path = self._build_joint_debug_packet_csv_path(current_path)
             self._data_logger.stop()
+            self._save_joint_rt_plot_snapshot(current_path, reason=reason)
+            self._save_joint_debug_packet_plot_snapshot(packet_csv_path, reason=reason)
             self._emit_action(f"Data recording {reason}: {current_path}")
         self._recording_status_note = ""
         if hasattr(self, "_save_data_var") and not keep_switch:
@@ -1368,6 +1572,34 @@ class HandGUI:
         }
         row.update({f"joint_curr_deg_j{i:02d}": float(s.angles[i]) if i < len(s.angles) else 0.0 for i in range(ENCODER_COUNT)})
         row.update({f"joint_target_deg_j{i:02d}": joint_targets[i] if i < len(joint_targets) else NA_MODE_MARKER for i in range(ENCODER_COUNT)})
+        row.update({
+            f"joint_debug_ts_ms_j{i:02d}": (
+                int(s.joint_debug_timestamp_ms[i])
+                if i < len(s.joint_debug_timestamp_ms) and int(s.joint_debug_timestamp_ms[i]) > 0
+                else NA_MODE_MARKER
+            )
+            for i in range(ENCODER_COUNT)
+        })
+        row.update({
+            f"joint_debug_target_deg_j{i:02d}": (
+                float(s.joint_debug_target_deg[i])
+                if i < len(s.joint_debug_target_deg)
+                and i < len(s.joint_debug_timestamp_ms)
+                and int(s.joint_debug_timestamp_ms[i]) > 0
+                else NA_MODE_MARKER
+            )
+            for i in range(ENCODER_COUNT)
+        })
+        row.update({
+            f"joint_debug_actual_deg_j{i:02d}": (
+                float(s.joint_debug_actual_deg[i])
+                if i < len(s.joint_debug_actual_deg)
+                and i < len(s.joint_debug_timestamp_ms)
+                and int(s.joint_debug_timestamp_ms[i]) > 0
+                else NA_MODE_MARKER
+            )
+            for i in range(ENCODER_COUNT)
+        })
         row.update({f"servo_curr_single_m{i:02d}": int(s.servo_raw_positions[i]) if i < len(s.servo_raw_positions) else 0 for i in range(MOTOR_COUNT)})
         row.update({f"servo_target_single_m{i:02d}": servo_targets_single[i] if i < len(servo_targets_single) else NA_MODE_MARKER for i in range(MOTOR_COUNT)})
         row.update({f"servo_curr_multi_m{i:02d}": int(s.servo_angles[i]) if i < len(s.servo_angles) else 0 for i in range(MOTOR_COUNT)})
@@ -1378,6 +1610,9 @@ class HandGUI:
 
     def _on_close(self):
         self._on_stop_test(reason="stopped on close", update_status=False)
+        self._on_stop_ff_test(reason="stopped on close", update_status=False)
+        self._on_stop_tri_test(reason="stopped on close", update_status=False)
+        self._on_stop_local_test(reason="stopped on close", update_status=False)
         self._stop_data_recording(reason="stopped on close", keep_switch=True)
         self._destroy_joint_rt_plot()
         self._cancel_pose_3d_rezoom_timer()
@@ -1388,22 +1623,6 @@ class HandGUI:
         if thr is not None:
             thr.join(timeout=1.0)
             self._camera_thread = None
-        redraw_job = getattr(self, "_redraw_job", None)
-        if redraw_job is not None:
-            try:
-                self.root.after_cancel(redraw_job)
-            except tk.TclError:
-                pass
-            self._redraw_job = None
-        for job_name in ("_root_resize_job", "_pose_resize_job"):
-            job = getattr(self, job_name, None)
-            if job is None:
-                continue
-            try:
-                self.root.after_cancel(job)
-            except tk.TclError:
-                pass
-            setattr(self, job_name, None)
         for cap_attr in ("_camera1_cap", "_camera2_cap"):
             cap = getattr(self, cap_attr, None)
             if cap is not None:
@@ -1468,19 +1687,19 @@ class HandGUI:
                     btn.configure(
                         relief=tk.SUNKEN,
                         state="normal",
-                        bg="#2563eb",
-                        fg="#ffffff",
-                        activebackground="#1d4ed8",
-                        activeforeground="#ffffff",
+                        bg="#e0e0e0",
+                        fg="blue",
+                        activebackground="#e0e0e0",
+                        activeforeground="blue",
                     )
                 else:
                     btn.configure(
                         relief=tk.RAISED,
                         state="normal",
-                        bg="#e5e7eb",
-                        fg="#111827",
-                        activebackground="#d1d5db",
-                        activeforeground="#111827",
+                        bg="#e0e0e0",
+                        fg="black",
+                        activebackground="#e0e0e0",
+                        activeforeground="black",
                     )
             except Exception:
                 pass
@@ -1494,6 +1713,9 @@ class HandGUI:
             return
         if mode_norm != "Monitor":
             self._on_stop_test(reason="stopped on global mode switch", update_status=False)
+            self._on_stop_ff_test(reason="stopped on global mode switch", update_status=False)
+            self._on_stop_tri_test(reason="stopped on global mode switch", update_status=False)
+            self._on_stop_local_test(reason="stopped on global mode switch", update_status=False)
         self.current_mode = mode_norm
         self._rebuild_right_panel()
         self._refresh_mode_button_states()
@@ -1572,22 +1794,31 @@ class HandGUI:
             return
         with self._state_lock:
             self._state = state
-        if self._redraw_job is None:
-            self._redraw_job = self.root.after(0, self._maybe_redraw)
+        self._display_state_dirty = True
+
+    def _schedule_redraw(self) -> None:
+        if getattr(self, "_redraw_scheduled", False):
+            return
+        self._redraw_scheduled = True
+
+        def do() -> None:
+            self._redraw_scheduled = False
+            self._maybe_redraw()
+
+        try:
+            self.root.after_idle(do)
+        except tk.TclError:
+            self._redraw_scheduled = False
 
     def _maybe_redraw(self):
-        self._redraw_job = None
         if not self._is_comm_connected():
-            return
+            return False
         now = time.time()
         if now - self._last_draw < self._draw_interval:
-            delay_s = self._draw_interval - (now - self._last_draw)
-            delay_ms = max(1, int(delay_s * 1000))
-            if self._redraw_job is None:
-                self._redraw_job = self.root.after(delay_ms, self._maybe_redraw)
-            return
+            return False
         self._last_draw = now
         self._update_display()
+        return True
 
     def _setup_ui(self):
         # Top bar: port selection + mode switching
@@ -1643,20 +1874,13 @@ class HandGUI:
             pady=1,
         )
         self._start_indicator_lbl.pack(side=tk.RIGHT, padx=(8, 0))
-        self._camera_chain_switch = ttk.Checkbutton(
+        self._save_data_switch = ttk.Checkbutton(
             top,
-            text="Camera Link",
-            variable=self._camera_chain_enabled_var,
-            command=self._on_toggle_camera_chain,
+            text="Save Data",
+            variable=self._save_data_var,
+            command=self._on_toggle_save_data,
         )
-        self._camera_chain_switch.pack(side=tk.RIGHT, padx=(8, 0))
-        self._pose_3d_switch = ttk.Checkbutton(
-            top,
-            text="3D Pose",
-            variable=self._pose_3d_enabled_var,
-            command=self._on_toggle_pose_3d,
-        )
-        self._pose_3d_switch.pack(side=tk.RIGHT, padx=(8, 0))
+        self._save_data_switch.pack(side=tk.RIGHT, padx=(8, 0))
         self._joint_rt_popup_btn = ttk.Button(
             top,
             text="Plot",
@@ -1698,8 +1922,8 @@ class HandGUI:
         self._rebuild_right_panel()
 
         self._setup_status_bar()
-        self._on_toggle_pose_3d()
-        self._on_toggle_camera_chain()
+        if bool(self._save_data_var.get()) and self._is_comm_connected():
+            self._on_toggle_save_data()
         self.root.after(100, self._set_initial_main_sash)
         self.root.after(120, self._set_initial_tactile_camera_sash)
 
@@ -1741,7 +1965,6 @@ class HandGUI:
     def _setup_3d_display(self, parent):
         pose_frame = ttk.Frame(parent)
         pose_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2))
-        self._pose_frame = pose_frame
         self.fig = plt.Figure(figsize=(6.5, 5.0), dpi=110, facecolor=POSE_VIEW_BG)
         self.ax = self.fig.add_axes((0.05, 0.10, 0.945, 0.82), projection="3d")
         self.canvas = FigureCanvasTkAgg(self.fig, pose_frame)
@@ -1771,8 +1994,6 @@ class HandGUI:
 
     def _on_pose_canvas_configure(self, event) -> None:
         """姿态 3D 区随窗口拉伸，Figure 尺寸与 Tk 画布一致。"""
-        if not self._is_pose_3d_enabled():
-            return
         if event.widget is not getattr(self, "_pose_canvas_widget", None):
             return
         w, h = int(event.width), int(event.height)
@@ -1782,32 +2003,6 @@ class HandGUI:
         if key == getattr(self, "_pose_canvas_size", None):
             return
         self._pose_canvas_size = key
-        self._pose_resize_pending_size = key
-        job = getattr(self, "_pose_resize_job", None)
-        if job is not None:
-            try:
-                self.root.after_cancel(job)
-            except tk.TclError:
-                pass
-        delay_ms = int(getattr(self, "_pose_resize_debounce_ms", 80))
-        try:
-            self._pose_resize_job = self.root.after(delay_ms, self._flush_pose_canvas_resize)
-        except tk.TclError:
-            self._pose_resize_job = None
-        return
-
-    def _flush_pose_canvas_resize(self) -> None:
-        self._pose_resize_job = None
-        key = getattr(self, "_pose_resize_pending_size", None)
-        if key is None:
-            return
-        if not self._is_pose_3d_enabled():
-            return
-        if not hasattr(self, "fig") or not hasattr(self, "ax") or not hasattr(self, "canvas"):
-            return
-        w, h = key
-        if w < 24 or h < 24:
-            return
         dpi = float(self.fig.dpi)
         self.fig.set_size_inches(w / dpi, h / dpi)
         try:
@@ -1882,8 +2077,19 @@ class HandGUI:
         self._pose_3d_rezoom_after_drag_job = self.root.after(delay_ms, rezoom_after_release)
 
     def _toggle_tactile_axis(self, axis: int):
-        _ = axis
-        self._emit_action("Tactile axis switch is disabled in dot-matrix mode")
+        labels = ["X", "Y", "Z"]
+        if axis == getattr(self, "_tactile_axis_selected", 2):
+            return
+        self._tactile_axis_selected = axis
+        self._emit_action(f"Tactile axis {labels[axis]} selected")
+        self._tactile_fig_sel_sig = None  # 强制重建子图布局
+        self._refresh_tactile_axis_button_states()
+        with self._state_lock:
+            s = self._state
+        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
+        if s:
+            self._draw_hand_model(s.angles, tactile_state)
+        self._update_tactile_matrix_widget(tactile_state)
 
     def _on_tactile_fake_toggle(self):
         self._tactile_fake_mode = bool(self._tactile_fake_var.get())
@@ -1909,9 +2115,9 @@ class HandGUI:
         for i, btn in enumerate(self._tactile_axis_buttons):
             selected = i == getattr(self, "_tactile_axis_selected", 2)
             if selected:
-                btn.configure(bg="#2563eb", fg="#ffffff", activebackground="#1d4ed8", activeforeground="#ffffff")
+                btn.configure(bg="#e0e0e0", fg="blue")
             else:
-                btn.configure(bg="#e5e7eb", fg="#111827", activebackground="#d1d5db", activeforeground="#111827")
+                btn.configure(bg="#e0e0e0", fg="black")
 
     def _get_tactile_display_state(self, s: Optional[HandModel], fake: bool = False) -> Optional[HandModel]:
         """
@@ -1959,65 +2165,39 @@ class HandGUI:
         return out
 
     def _rebuild_tactile_figure(self) -> None:
-        """触觉区参考 simulate_tactile_dot_matrix：3x5 点阵子图，统一显示 Fz。"""
+        """触觉区固定为单子图，仅显示当前选中的一个通道。"""
         if not hasattr(self, "_tactile_fig"):
             return
-
+        self._clear_tactile_anatomy_overlay()
         self._tactile_fig.clear()
-        self._tactile_dot_scatters = []
-        self._tactile_status_text = None
-        self._tactile_colorbar = None
-
-        # Follow paxini_all_read_2.12 semantics:
-        # columns = MUX groups D3..D7, rows = DP/IP/CP sensors
-        group_names = ["D3", "D4", "D5", "D6", "D7"]
-        sensor_names = ["DP(A+B)", "IP(A)", "CP(B)"]
-        axes = self._tactile_fig.subplots(3, 5)
-
-        for sensor_idx in range(3):
-            scatter_row = []
-            rows, cols = self._sensor_shape_by_index(sensor_idx)
-            yy, xx = np.mgrid[0:rows, 0:cols]
-            base_vals = np.zeros(rows * cols, dtype=float)
-
-            for finger_idx in range(5):
-                ax = axes[sensor_idx, finger_idx]
-                sc = ax.scatter(
-                    xx.flatten(),
-                    yy.flatten(),
-                    c=base_vals.copy(),
-                    cmap="inferno",
-                    vmin=0.0,
-                    vmax=255.0,
-                    s=150,
-                    marker="s",
-                    edgecolors="#111111",
-                    linewidths=0.25,
-                )
-
-                ax.set_xlim(-0.75, cols - 0.25)
-                ax.set_ylim(rows - 0.25, -0.75)
-                ax.set_aspect("equal")
-                ax.set_xticks([])
-                ax.set_yticks([])
-                ax.grid(alpha=0.25, linewidth=0.35)
-
-                if sensor_idx == 0:
-                    ax.set_title(group_names[finger_idx], fontsize=9)
-                if finger_idx == 0:
-                    ax.set_ylabel(sensor_names[sensor_idx], fontsize=8)
-
-                scatter_row.append(sc)
-
-            self._tactile_dot_scatters.append(scatter_row)
-
-        self._tactile_status_text = self._tactile_fig.suptitle("No tactile data", fontsize=10)
-        cax = self._tactile_fig.add_axes([0.93, 0.12, 0.015, 0.76])
-        self._tactile_colorbar = self._tactile_fig.colorbar(
-            self._tactile_dot_scatters[0][0], cax=cax
+        self._tactile_subplot_imgs = []
+        self._tactile_no_data_texts = []
+        spec = TACTILE_STITCH_SPEC
+        mat0 = np.full((spec.height, spec.width), np.nan, dtype=float)
+        ax = self._tactile_fig.subplots(1, 1)
+        cmap0, norm0 = _make_tactile_sensors_only_cmap_norm(1.0)
+        im = ax.imshow(
+            np.ma.masked_invalid(mat0),
+            cmap=cmap0,
+            norm=norm0,
+            aspect="equal",
+            interpolation="nearest",
         )
-        self._tactile_colorbar.set_label("Fz")
-        self._tactile_fig.subplots_adjust(left=0.06, right=0.90, bottom=0.05, top=0.92)
+        nd = ax.text(
+            0.5,
+            0.5,
+            "No tactile data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="white",
+            alpha=0.85,
+        )
+        ax.axis("off")
+        self._tactile_subplot_imgs.append(im)
+        self._tactile_no_data_texts.append(nd)
+        self._tactile_fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.98)
 
     def _setup_tactile_matrix_widget(self, parent):
         """触觉空间矩阵：15 个传感器按 5 指 x 3 骨段拼成一个热力图"""
@@ -2027,7 +2207,7 @@ class HandGUI:
         # 标题与触觉轴按钮同一行
         self._tactile_row = ttk.Frame(frame)
         self._tactile_row.pack(fill=tk.X, padx=2, pady=2)
-        ttk.Label(self._tactile_row, text="Tactile Dot Matrix (2.12, Fz)").pack(side=tk.LEFT, padx=2)
+        ttk.Label(self._tactile_row, text="Axis:").pack(side=tk.LEFT, padx=2)
         self._tactile_fake_var = tk.BooleanVar(value=not bool(getattr(self, "_ports_cache", [])))
         self._tactile_fake_check = ttk.Checkbutton(
             self._tactile_row,
@@ -2037,14 +2217,26 @@ class HandGUI:
         )
         self._tactile_fake_check.pack(side=tk.LEFT, padx=4)
         self._tactile_axis_buttons = []
+        for axis, label in enumerate(["X", "Y", "Z"]):
+            btn = tk.Button(
+                self._tactile_row,
+                text=label,
+                width=2,
+                command=lambda a=axis: self._toggle_tactile_axis(a),
+            )
+            btn.pack(side=tk.LEFT, padx=1)
+            self._tactile_axis_buttons.append(btn)
+        self._refresh_tactile_axis_button_states()
 
         self._tactile_fig = plt.Figure(figsize=(7.8, 4.0))
         self._tactile_canvas = FigureCanvasTkAgg(self._tactile_fig, frame)
         self._tactile_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self._tactile_dot_scatters: List = []
-        self._tactile_status_text = None
-        self._tactile_colorbar = None
+        self._tactile_fig_sel_sig = None
+        self._tactile_subplot_imgs: List = []
+        self._tactile_no_data_texts: List = []
         self._rebuild_tactile_figure()
+        self._tactile_fig_sel_sig = int(getattr(self, "_tactile_axis_selected", 2))
+        self._tactile_anatomy_artists: List = []
         self._tactile_canvas.draw_idle()
 
     def _safe_remove_artist(self, artist) -> None:
@@ -2115,6 +2307,10 @@ class HandGUI:
         """相机图像窗格：上下两个，每个含摄像头下拉选择 + 画面全填充"""
         self._camera_frame_left = None
         self._camera_frame_right = None
+        self._cam_left_image_item = None
+        self._cam_left_text_item = None
+        self._cam_right_image_item = None
+        self._cam_right_text_item = None
 
         split = ttk.PanedWindow(parent, orient=tk.VERTICAL)
         split.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
@@ -2145,7 +2341,7 @@ class HandGUI:
         self._cam_left_combo, self._cam_left_canvas = _make_camera_slot(left_box, self._camera1_var, 1)
         self._cam_right_combo, self._cam_right_canvas = _make_camera_slot(right_box, self._camera2_var, 2)
 
-        self._refresh_camera_menus()
+        self._update_camera_combo_values()
 
     def set_camera_frame_left(self, frame: np.ndarray) -> None:
         """外部可调用：设置左相机帧（RGB/BGR/灰度均可）"""
@@ -2161,7 +2357,7 @@ class HandGUI:
 
     def _update_camera_combo_values(self) -> None:
         """Set combo values: None + available cameras."""
-        choices = ["None"] + [f"Camera {i}" for i in self._camera_indices_cache]
+        choices = ["None"] + [f"Camera {i}" for i in self._list_available_cameras()]
         if hasattr(self, "_cam_left_combo"):
             self._cam_left_combo["values"] = choices
         if hasattr(self, "_cam_right_combo"):
@@ -2181,18 +2377,40 @@ class HandGUI:
                     pass
         self.root.after(0, do)
 
-    def _update_single_camera_widget(self, frame, canvas, photo_attr: str):
+    def _update_single_camera_widget(
+        self,
+        frame,
+        canvas,
+        photo_attr: str,
+        image_item_attr: str,
+        text_item_attr: str,
+    ):
         """Update canvas with frame using PIL/PhotoImage for real-time video."""
         try:
             from PIL import Image
             from PIL import ImageTk
         except ImportError:
             return
-        canvas.delete("all")
         cw = max(canvas.winfo_width() or 320, 320)
         ch = max(canvas.winfo_height() or 240, 240)
+        image_item = getattr(self, image_item_attr, None)
+        if image_item is None:
+            image_item = canvas.create_image(cw // 2, ch // 2)
+            setattr(self, image_item_attr, image_item)
+        else:
+            canvas.coords(image_item, cw // 2, ch // 2)
+
+        text_item = getattr(self, text_item_attr, None)
+        if text_item is None:
+            text_item = canvas.create_text(cw // 2, ch // 2, text="None", fill="white", font=("", 14))
+            setattr(self, text_item_attr, text_item)
+        else:
+            canvas.coords(text_item, cw // 2, ch // 2)
+
         if frame is None:
-            canvas.create_text(cw // 2, ch // 2, text="None", fill="white", font=("", 14))
+            setattr(self, photo_attr, None)
+            canvas.itemconfigure(image_item, image="", state="hidden")
+            canvas.itemconfigure(text_item, text="None", state="normal")
             return
         img = np.asarray(frame, dtype=np.uint8)
         if img.ndim == 2:
@@ -2205,46 +2423,27 @@ class HandGUI:
         pil_img.thumbnail((max(cw, 1), max(ch, 1)), resample)
         photo = ImageTk.PhotoImage(pil_img)
         setattr(self, photo_attr, photo)
-        canvas.create_image(cw // 2, ch // 2, image=photo)
+        canvas.itemconfigure(image_item, image=photo, state="normal")
+        canvas.itemconfigure(text_item, state="hidden")
 
     def _update_camera_widget(self):
         """相机与串口 Start/Stop 无关：在 Device 中选摄像头后即采集显示，由 _start_camera_poll 刷新。"""
         if not hasattr(self, "_cam_left_canvas"):
             return
         self._update_single_camera_widget(
-            self._camera_frame_left, self._cam_left_canvas, "_cam_left_photo"
+            self._camera_frame_left,
+            self._cam_left_canvas,
+            "_cam_left_photo",
+            "_cam_left_image_item",
+            "_cam_left_text_item",
         )
         self._update_single_camera_widget(
-            self._camera_frame_right, self._cam_right_canvas, "_cam_right_photo"
+            self._camera_frame_right,
+            self._cam_right_canvas,
+            "_cam_right_photo",
+            "_cam_right_image_item",
+            "_cam_right_text_item",
         )
-
-    @staticmethod
-    def _sensor_shape_by_index(sensor_idx: int) -> Tuple[int, int]:
-        if sensor_idx == 0:
-            return tactile_segment_shape(2)  # tip: 5x5
-        return tactile_segment_shape(0)  # pad: 4x13
-
-    @classmethod
-    def _extract_sensor_dot_values(cls, fd: FingerTactile, sensor_idx: int) -> np.ndarray:
-        rows, cols = cls._sensor_shape_by_index(sensor_idx)
-
-        if sensor_idx >= len(fd.sensors):
-            return np.zeros(rows * cols, dtype=float)
-
-        sensor = fd.sensors[sensor_idx]
-        cf = getattr(sensor, "contact_forces", None)
-        if cf is not None and hasattr(cf, "shape") and len(cf.shape) >= 3:
-            z_idx = min(2, int(cf.shape[2]) - 1)
-            grid = np.asarray(cf[:, :, z_idx], dtype=float)
-            out = np.zeros((rows, cols), dtype=float)
-            r0 = min(rows, grid.shape[0])
-            c0 = min(cols, grid.shape[1])
-            out[:r0, :c0] = grid[:r0, :c0]
-            return np.clip(out, 0.0, None).flatten()
-
-        resultant = getattr(sensor, "resultant", None)
-        fz = float(resultant[2]) if resultant is not None and len(resultant) >= 3 else 0.0
-        return np.full(rows * cols, max(0.0, fz), dtype=float)
 
     @staticmethod
     def _extract_finger_strip(
@@ -2319,41 +2518,33 @@ class HandGUI:
         return mat
 
     def _update_tactile_matrix_widget(self, state: Optional[HandModel]):
-        if not hasattr(self, "_tactile_dot_scatters"):
+        if not hasattr(self, "_tactile_subplot_imgs"):
             return
+        sig = int(getattr(self, "_tactile_axis_selected", 2))
+        if sig != getattr(self, "_tactile_fig_sel_sig", object()):
+            self._rebuild_tactile_figure()
+            self._tactile_fig_sel_sig = sig
 
-        tactile_list = state.tactile_data if (state and state.tactile_data) else []
-        any_data = False
-        vmax = 1.0
-
-        for sensor_idx in range(3):
-            for finger_idx in range(5):
-                scatter = self._tactile_dot_scatters[sensor_idx][finger_idx]
-                if finger_idx < len(tactile_list):
-                    fd = tactile_list[finger_idx]
-                else:
-                    fd = FingerTactile(sensors=[])
-
-                vals = self._extract_sensor_dot_values(fd, sensor_idx)
-                scatter.set_array(vals)
-                if vals.size > 0:
-                    local_max = float(np.max(vals))
-                    vmax = max(vmax, local_max)
-                    if local_max > 1e-9:
-                        any_data = True
-
-        for row in self._tactile_dot_scatters:
-            for scatter in row:
-                scatter.set_clim(0.0, vmax)
-
-        if getattr(self, "_tactile_status_text", None) is not None:
-            self._tactile_status_text.set_text(
-                f"Tactile Dot Matrix (2.12: D3~D7 x DP/IP/CP, Fz) | "
-                f"{'LIVE' if any_data else 'No tactile data'} | vmax={vmax:.1f}"
-            )
-        if getattr(self, "_tactile_colorbar", None) is not None:
-            self._tactile_colorbar.set_label(f"Fz (0..{vmax:.0f})")
-
+        self._clear_tactile_anatomy_overlay()
+        axis = int(getattr(self, "_tactile_axis_selected", 2))
+        im = self._tactile_subplot_imgs[0]
+        nd_txt = self._tactile_no_data_texts[0]
+        mat = self._build_tactile_spatial_matrix(state, axis)
+        tactile_pos = mat[np.isfinite(mat) & (mat >= 0.0)]
+        vmax = float(np.max(tactile_pos)) if tactile_pos.size > 0 else 0.0
+        vmax = max(vmax, 1.0)
+        cmap_u, norm_u = _make_tactile_sensors_only_cmap_norm(vmax)
+        im.set_data(np.ma.masked_invalid(mat))
+        im.set_cmap(cmap_u)
+        im.set_norm(norm_u)
+        has_data = bool(
+            state
+            and state.tactile_data
+            and tactile_pos.size > 0
+            and (np.max(tactile_pos) > 1e-9)
+        )
+        nd_txt.set_visible(not has_data)
+        self._draw_tactile_anatomy_overlay_sensors_only(im.axes, mat)
         self._tactile_canvas.draw_idle()
 
     def _get_generated_pose_angles(self) -> List[float]:
@@ -2390,11 +2581,7 @@ class HandGUI:
         generate：None 时用实例属性 _pose_generate；True 强制从文本读角；False 强制用传入 angles。
         state 保留参数以便与旧调用兼容；触觉叠加已在独立子图中绘制。
         """
-        if not self._is_pose_3d_enabled():
-            return
         _ = state
-        if not hasattr(self, "ax") or not hasattr(self, "fig"):
-            return
         if generate is None:
             use_gen = not self._should_use_realtime_pose()
         else:
@@ -2661,8 +2848,6 @@ class HandGUI:
         self._joint_status_dots: List[Tuple[tk.Canvas, int]] = []
         self._joint_tie_sign_vars: List[tk.StringVar] = []
         self._joint_tie_x1_vars: List[tk.StringVar] = []
-        self._joint_tie_motor_abs_vars: List[tk.StringVar] = []
-        self._joint_tie_x1_live_vars: List[tk.StringVar] = []
         self._joint_target_initialized = False
         self._motor_curr_vars: List[tk.StringVar] = []
         self._motor_joint_angle_vars: List[tk.StringVar] = []
@@ -2690,8 +2875,6 @@ class HandGUI:
                 pass
         self._update_manual_action_buttons()
         self._switch_control_mode()
-        self._ui_scale_bucket = -1
-        self._apply_responsive_ui_scale()
 
     def _open_joint_rt_window(self) -> None:
         win = getattr(self, "_joint_rt_window", None)
@@ -2715,6 +2898,7 @@ class HandGUI:
         self._setup_joint_realtime_plot(win)
 
     def _on_joint_rt_window_close(self) -> None:
+        self._save_joint_rt_plot_snapshot(reason="window close")
         self._destroy_joint_rt_plot()
 
     def _setup_joint_realtime_plot(self, parent) -> None:
@@ -2837,6 +3021,7 @@ class HandGUI:
         self._joint_rt_series_actual.clear()
         self._joint_rt_series_target.clear()
         self._joint_rt_t0 = 0.0
+        self._joint_rt_t0_map.clear()
         self._joint_rt_last_plot_ts = 0.0
 
     def _ensure_joint_rt_series(self, joint_idx: int) -> None:
@@ -2850,11 +3035,6 @@ class HandGUI:
         if not selected:
             return
 
-        now = time.time()
-        if self._joint_rt_t0 <= 0.0:
-            self._joint_rt_t0 = now
-        t_rel = now - self._joint_rt_t0
-
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
         targets: Optional[List[float]] = None
         if mode in ("joint", "test"):
@@ -2865,18 +3045,49 @@ class HandGUI:
 
         for idx in selected:
             self._ensure_joint_rt_series(idx)
+            t_rel = float("nan")
             actual = float("nan")
-            if idx < len(getattr(s, "angles", [])):
-                try:
-                    actual = float(s.angles[idx])
-                except Exception:
-                    actual = float("nan")
             target = float("nan")
-            if targets is not None and idx < len(targets):
+
+            debug_ts_ms = 0
+            if idx < len(getattr(s, "joint_debug_timestamp_ms", [])):
                 try:
-                    target = float(targets[idx])
+                    debug_ts_ms = int(s.joint_debug_timestamp_ms[idx])
                 except Exception:
-                    target = float("nan")
+                    debug_ts_ms = 0
+
+            if debug_ts_ms > 0:
+                if idx not in self._joint_rt_t0_map:
+                    self._joint_rt_t0_map[idx] = float(debug_ts_ms)
+                t_rel = (float(debug_ts_ms) - self._joint_rt_t0_map[idx]) / 1000.0
+                if idx < len(getattr(s, "joint_debug_actual_deg", [])):
+                    try:
+                        actual = float(s.joint_debug_actual_deg[idx])
+                    except Exception:
+                        actual = float("nan")
+                if idx < len(getattr(s, "joint_debug_target_deg", [])):
+                    try:
+                        target = float(s.joint_debug_target_deg[idx])
+                    except Exception:
+                        target = float("nan")
+                if self._joint_rt_series_t[idx] and t_rel <= float(self._joint_rt_series_t[idx][-1]):
+                    continue
+            else:
+                now = time.time()
+                if idx not in self._joint_rt_t0_map:
+                    self._joint_rt_t0_map[idx] = now
+                t_rel = now - self._joint_rt_t0_map[idx]
+                if idx < len(getattr(s, "angles", [])):
+                    try:
+                        actual = float(s.angles[idx])
+                    except Exception:
+                        actual = float("nan")
+                if targets is not None and idx < len(targets):
+                    try:
+                        target = float(targets[idx])
+                    except Exception:
+                        target = float("nan")
+
             self._joint_rt_series_t[idx].append(float(t_rel))
             self._joint_rt_series_actual[idx].append(actual)
             self._joint_rt_series_target[idx].append(target)
@@ -3070,32 +3281,12 @@ class HandGUI:
         scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
         canvas.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
         inner = ttk.Frame(canvas)
-        inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        table_scroll_job = {"id": None}
-
-        def _flush_table_scrollregion() -> None:
-            table_scroll_job["id"] = None
-            try:
-                canvas.configure(scrollregion=canvas.bbox("all"))
-            except tk.TclError:
-                pass
-
-        def _on_inner_configure(_event=None) -> None:
-            job = table_scroll_job["id"]
-            if job is not None:
-                try:
-                    self.root.after_cancel(job)
-                except tk.TclError:
-                    pass
-            try:
-                table_scroll_job["id"] = self.root.after(80, _flush_table_scrollregion)
-            except tk.TclError:
-                table_scroll_job["id"] = None
-
-        inner.bind("<Configure>", _on_inner_configure, add="+")
-        _on_inner_configure()
-        self._bind_canvas_mousewheel(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-(e.delta if hasattr(e, 'delta') else (120 if getattr(e, 'num', 0) == 4 else -120)) / 120), "units"))
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
         header = ttk.Frame(inner)
         header.pack(fill=tk.X, padx=2, pady=(2, 4))
@@ -3118,8 +3309,6 @@ class HandGUI:
             ttk.Label(header, text="tie").grid(row=0, column=8, padx=2, sticky="w")
             ttk.Label(header, text="+/-").grid(row=0, column=9, padx=2, sticky="w")
             ttk.Label(header, text="x1(abs)").grid(row=0, column=10, padx=2, sticky="w")
-            ttk.Label(header, text="ServoAbs(now)").grid(row=0, column=11, padx=2, sticky="w")
-            ttk.Label(header, text="x1(now)").grid(row=0, column=12, padx=2, sticky="w")
 
         channel_count = MOTOR_COUNT if is_motor else ENCODER_COUNT
         for i in range(channel_count):
@@ -3131,7 +3320,6 @@ class HandGUI:
             curr = tk.StringVar(value="-")
 
             if is_motor:
-                row.columnconfigure(5, weight=1, minsize=220)
                 ttk.Label(row, textvariable=curr, width=8).grid(row=0, column=1, padx=1, sticky="w")
                 target = tk.IntVar(value=0)
                 joint_angle = tk.StringVar(value="-")
@@ -3154,7 +3342,7 @@ class HandGUI:
                     to=MOTOR_TARGET_SCALE_HI,
                     variable=target,
                     orient=tk.HORIZONTAL,
-                    length=220,
+                    length=130,
                     command=lambda value, idx=i: self._on_motor_slider_change(idx, value),
                 )
                 sld.grid(row=0, column=5, padx=1, sticky="we")
@@ -3165,7 +3353,6 @@ class HandGUI:
                 ttk.Label(row, textvariable=joint_angle, width=12).grid(row=0, column=7, padx=(6, 1), sticky="w")
                 self._control_widgets.extend([ent, btn, minus_btn, sld, plus_btn])
             else:
-                row.columnconfigure(7, weight=1, minsize=220)
                 dot_canvas = tk.Canvas(row, width=12, height=12, highlightthickness=0, bd=0)
                 dot_item = dot_canvas.create_oval(2, 2, 10, 10, fill="#9aa0a6", outline="#9aa0a6")
                 dot_canvas.grid(row=0, column=1, padx=2, sticky="w")
@@ -3193,7 +3380,7 @@ class HandGUI:
                     to=joint_max,
                     variable=target,
                     orient=tk.HORIZONTAL,
-                    length=220,
+                    length=130,
                     command=lambda value, idx=i: self._on_joint_slider_change(idx, value),
                 )
                 sld.grid(row=0, column=7, padx=1, sticky="we")
@@ -3211,16 +3398,6 @@ class HandGUI:
                 tie_sign_ent.grid(row=0, column=9, padx=1, sticky="w")
                 tie_x1_ent = ttk.Entry(row, textvariable=tie_x1_var, width=8)
                 tie_x1_ent.grid(row=0, column=10, padx=1, sticky="w")
-                tie_motor_abs_live_var = tk.StringVar(value="-")
-                tie_x1_live_var = tk.StringVar(value="-")
-                self._joint_tie_motor_abs_vars.append(tie_motor_abs_live_var)
-                self._joint_tie_x1_live_vars.append(tie_x1_live_var)
-                ttk.Label(row, textvariable=tie_motor_abs_live_var, width=12).grid(
-                    row=0, column=11, padx=(6, 1), sticky="w"
-                )
-                ttk.Label(row, textvariable=tie_x1_live_var, width=10).grid(
-                    row=0, column=12, padx=1, sticky="w"
-                )
                 tie_sign_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 tie_x1_ent.bind("<FocusOut>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
                 tie_sign_ent.bind("<Return>", lambda _e, idx=i: self._on_joint_tie_field_commit(idx))
@@ -3287,7 +3464,146 @@ class HandGUI:
         hold_ent = ttk.Entry(action_row, textvariable=self._test_hold_s_var, width=8)
         hold_ent.pack(side=tk.LEFT)
         self._control_widgets.append(hold_ent)
+
+        ff_box = ttk.LabelFrame(parent, text="Feedforward Test")
+        ff_box.pack(fill=tk.X, expand=False, padx=2, pady=(0, 2))
+        ttk.Label(
+            ff_box,
+            text="Step through a fixed joint-angle sequence with constant hold time per point.",
+            font=("", 9),
+        ).pack(fill=tk.X, padx=6, pady=(6, 4))
+
+        ff_grid = ttk.Frame(ff_box)
+        ff_grid.pack(fill=tk.X, padx=6, pady=(2, 4))
+        ttk.Label(ff_grid, text="Joint", width=9).grid(row=0, column=0, padx=2, sticky="w")
+        ttk.Label(ff_grid, text="Targets(deg)", width=18).grid(row=0, column=1, padx=2, sticky="w")
+        ttk.Label(ff_grid, text="Step Time(s)", width=12).grid(row=0, column=2, padx=2, sticky="w")
+
+        ff_joint_choices = ["None"] + [f"J{i:02d}" for i in range(ENCODER_COUNT)]
+        ff_joint_combo = ttk.Combobox(
+            ff_grid,
+            textvariable=self._ff_test_joint_var,
+            values=ff_joint_choices,
+            state="readonly",
+            width=8,
+        )
+        ff_joint_combo.grid(row=1, column=0, padx=2, pady=1, sticky="w")
+        ff_joint_combo.bind("<<ComboboxSelected>>", lambda _e: self._ff_test_joint_var.set(
+            self._normalize_test_joint_value(self._ff_test_joint_var.get())
+        ))
+        ff_targets_ent = ttk.Entry(ff_grid, textvariable=self._ff_test_targets_var, width=34)
+        ff_targets_ent.grid(row=1, column=1, padx=2, pady=1, sticky="we")
+        ff_step_ent = ttk.Entry(ff_grid, textvariable=self._ff_test_step_s_var, width=10)
+        ff_step_ent.grid(row=1, column=2, padx=2, pady=1, sticky="w")
+        ff_grid.columnconfigure(1, weight=1)
+        self._control_widgets.extend([ff_joint_combo, ff_targets_ent, ff_step_ent])
+
+        ff_action_row = ttk.Frame(ff_box)
+        ff_action_row.pack(fill=tk.X, padx=6, pady=(4, 6))
+        self._ff_test_start_btn = ttk.Button(
+            ff_action_row,
+            text="Start Feedforward Test",
+            width=22,
+            command=self._on_start_ff_test,
+        )
+        self._ff_test_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self._ff_test_stop_btn = ttk.Button(
+            ff_action_row,
+            text="Stop Feedforward Test",
+            width=22,
+            command=self._on_stop_ff_test,
+        )
+        self._ff_test_stop_btn.pack(side=tk.LEFT)
+
+        tri_box = ttk.LabelFrame(parent, text="Triangle Wave Test")
+        tri_box.pack(fill=tk.X, expand=False, padx=2, pady=(0, 2))
+        ttk.Label(
+            tri_box,
+            text="Run one joint with a periodic triangle-wave target in joint PID mode.",
+            font=("", 9),
+        ).pack(fill=tk.X, padx=6, pady=(6, 4))
+
+        tri_grid = ttk.Frame(tri_box)
+        tri_grid.pack(fill=tk.X, padx=6, pady=(2, 4))
+        ttk.Label(tri_grid, text="Joint", width=9).grid(row=0, column=0, padx=2, sticky="w")
+        ttk.Label(tri_grid, text="Min(deg)", width=10).grid(row=0, column=1, padx=2, sticky="w")
+        ttk.Label(tri_grid, text="Max(deg)", width=10).grid(row=0, column=2, padx=2, sticky="w")
+        ttk.Label(tri_grid, text="Freq(Hz)", width=9).grid(row=0, column=3, padx=2, sticky="w")
+
+        tri_joint_combo = ttk.Combobox(
+            tri_grid,
+            textvariable=self._tri_test_joint_var,
+            values=joint_choices,
+            state="readonly",
+            width=8,
+        )
+        tri_joint_combo.grid(row=1, column=0, padx=2, pady=1, sticky="w")
+        tri_joint_combo.bind("<<ComboboxSelected>>", lambda _e: self._tri_test_joint_var.set(
+            self._normalize_test_joint_value(self._tri_test_joint_var.get())
+        ))
+        tri_min_ent = ttk.Entry(tri_grid, textvariable=self._tri_test_min_var, width=11)
+        tri_min_ent.grid(row=1, column=1, padx=2, pady=1, sticky="w")
+        tri_max_ent = ttk.Entry(tri_grid, textvariable=self._tri_test_max_var, width=11)
+        tri_max_ent.grid(row=1, column=2, padx=2, pady=1, sticky="w")
+        tri_freq_ent = ttk.Entry(tri_grid, textvariable=self._tri_test_freq_var, width=10)
+        tri_freq_ent.grid(row=1, column=3, padx=2, pady=1, sticky="w")
+        self._control_widgets.extend([tri_joint_combo, tri_min_ent, tri_max_ent, tri_freq_ent])
+
+        tri_action_row = ttk.Frame(tri_box)
+        tri_action_row.pack(fill=tk.X, padx=6, pady=(4, 6))
+        self._tri_test_start_btn = ttk.Button(
+            tri_action_row,
+            text="Start Triangle Test",
+            width=22,
+            command=self._on_start_tri_test,
+        )
+        self._tri_test_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self._tri_test_stop_btn = ttk.Button(
+            tri_action_row,
+            text="Stop Triangle Test",
+            width=22,
+            command=self._on_stop_tri_test,
+        )
+        self._tri_test_stop_btn.pack(side=tk.LEFT)
         self._set_test_button_states()
+
+        local_box = ttk.LabelFrame(parent, text="Local Test Mode")
+        local_box.pack(fill=tk.X, expand=False, padx=2, pady=(0, 2))
+        ttk.Label(
+            local_box,
+            text="Generate sine wave targets locally on device. Eliminates serial latency for pure controller testing.",
+            font=("", 9),
+        ).pack(fill=tk.X, padx=6, pady=(6, 4))
+
+        local_grid = ttk.Frame(local_box)
+        local_grid.pack(fill=tk.X, padx=6, pady=(2, 4))
+        ttk.Label(local_grid, text="Freq(Hz)", width=10).grid(row=0, column=0, padx=2, sticky="w")
+        ttk.Label(local_grid, text="Amp(deg)", width=10).grid(row=0, column=1, padx=2, sticky="w")
+
+        self._local_freq_var = tk.StringVar(value="0.5")
+        self._local_amp_var = tk.StringVar(value="20.0")
+        freq_ent = ttk.Entry(local_grid, textvariable=self._local_freq_var, width=11)
+        freq_ent.grid(row=1, column=0, padx=2, pady=1, sticky="w")
+        amp_ent = ttk.Entry(local_grid, textvariable=self._local_amp_var, width=11)
+        amp_ent.grid(row=1, column=1, padx=2, pady=1, sticky="w")
+        self._control_widgets.extend([freq_ent, amp_ent])
+
+        local_action_row = ttk.Frame(local_box)
+        local_action_row.pack(fill=tk.X, padx=6, pady=(4, 6))
+        self._local_start_btn = ttk.Button(
+            local_action_row,
+            text="Start Local Test",
+            width=18,
+            command=self._on_start_local_test,
+        )
+        self._local_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self._local_stop_btn = ttk.Button(
+            local_action_row,
+            text="Stop Local Test",
+            width=18,
+            command=self._on_stop_local_test,
+        )
+        self._local_stop_btn.pack(side=tk.LEFT)
 
     @staticmethod
     def _normalize_test_joint_value(value: str) -> str:
@@ -3391,14 +3707,56 @@ class HandGUI:
     def _set_test_button_states(self) -> None:
         start_btn = getattr(self, "_test_start_btn", None)
         stop_btn = getattr(self, "_test_stop_btn", None)
+        ff_start_btn = getattr(self, "_ff_test_start_btn", None)
+        ff_stop_btn = getattr(self, "_ff_test_stop_btn", None)
+        tri_start_btn = getattr(self, "_tri_test_start_btn", None)
+        tri_stop_btn = getattr(self, "_tri_test_stop_btn", None)
+        local_start_btn = getattr(self, "_local_start_btn", None)
+        local_stop_btn = getattr(self, "_local_stop_btn", None)
+        any_running = bool(
+            self._test_running or
+            self._ff_test_running or
+            self._tri_test_running or
+            self._local_test_running
+        )
         if start_btn is not None:
             try:
-                start_btn.configure(state="disabled" if self._test_running else "normal")
+                start_btn.configure(state="disabled" if any_running else "normal")
             except Exception:
                 pass
         if stop_btn is not None:
             try:
                 stop_btn.configure(state="normal" if self._test_running else "disabled")
+            except Exception:
+                pass
+        if ff_start_btn is not None:
+            try:
+                ff_start_btn.configure(state="disabled" if any_running else "normal")
+            except Exception:
+                pass
+        if ff_stop_btn is not None:
+            try:
+                ff_stop_btn.configure(state="normal" if self._ff_test_running else "disabled")
+            except Exception:
+                pass
+        if tri_start_btn is not None:
+            try:
+                tri_start_btn.configure(state="disabled" if any_running else "normal")
+            except Exception:
+                pass
+        if tri_stop_btn is not None:
+            try:
+                tri_stop_btn.configure(state="normal" if self._tri_test_running else "disabled")
+            except Exception:
+                pass
+        if local_start_btn is not None:
+            try:
+                local_start_btn.configure(state="disabled" if any_running else "normal")
+            except Exception:
+                pass
+        if local_stop_btn is not None:
+            try:
+                local_stop_btn.configure(state="normal" if self._local_test_running else "disabled")
             except Exception:
                 pass
 
@@ -3410,6 +3768,12 @@ class HandGUI:
     def _on_start_test(self) -> None:
         if self._test_running:
             return
+        if self._ff_test_running:
+            self._on_stop_ff_test(reason="restarted by sine test", update_status=False)
+        if self._tri_test_running:
+            self._on_stop_tri_test(reason="restarted by sine test", update_status=False)
+        if self._local_test_running:
+            self._on_stop_local_test(reason="restarted by sine test", update_status=False)
         if not self._interaction_enabled:
             if hasattr(self, "status_var"):
                 self.status_var.set("Start Test blocked: Hand Manual must be ON")
@@ -3429,6 +3793,16 @@ class HandGUI:
             return
         self._test_hold_s = float(hold_s)
         self._test_hold_s_var.set(f"{self._test_hold_s:.4g}")
+
+        try:
+            if self._data_logger.is_running():
+                self._stop_data_recording(reason="restart by test", keep_switch=True)
+            self._start_data_recording()
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+        except Exception as exc:
+            messagebox.showerror("Start Test Failed", f"Cannot start recording: {exc}")
+            return
 
         self._test_active_rows = active
         self._test_running = True
@@ -3459,6 +3833,302 @@ class HandGUI:
             self._emit_action(f"Test stopped ({reason})")
         if update_status and hasattr(self, "status_var"):
             self.status_var.set("Test stopped")
+
+    @staticmethod
+    def _parse_ff_targets_text(raw_text: str) -> Optional[List[float]]:
+        text = str(raw_text or "").replace(",", " ")
+        tokens = [tok for tok in text.split() if tok]
+        if not tokens:
+            return None
+        values: List[float] = []
+        for tok in tokens:
+            try:
+                val = float(tok)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(val):
+                return None
+            values.append(float(val))
+        return values if values else None
+
+    def _validate_ff_test_config(self, show_message: bool = True) -> Optional[Tuple[int, List[float], float]]:
+        joint_text = self._normalize_test_joint_value(self._ff_test_joint_var.get())
+        self._ff_test_joint_var.set(joint_text)
+        if joint_text == "None":
+            if show_message:
+                messagebox.showwarning("Feedforward Test", "Select one valid joint.")
+            return None
+        joint_idx = int(joint_text[1:])
+
+        targets = self._parse_ff_targets_text(self._ff_test_targets_var.get())
+        if not targets:
+            if show_message:
+                messagebox.showwarning("Feedforward Test", "Targets(deg) must contain at least one valid number.")
+            return None
+
+        try:
+            step_s = float(self._ff_test_step_s_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            if show_message:
+                messagebox.showwarning("Feedforward Test", "Step Time(s) must be a valid number.")
+            return None
+        if (not np.isfinite(step_s)) or step_s <= 0.0:
+            if show_message:
+                messagebox.showwarning("Feedforward Test", "Step Time(s) must be a finite number > 0.")
+            return None
+
+        clamped = [self._clamp_joint_target_deg(joint_idx, target) for target in targets]
+        self._ff_test_targets_var.set(", ".join(f"{target:.2f}" for target in clamped))
+        self._ff_test_step_s_var.set(f"{step_s:.4g}")
+        return joint_idx, clamped, float(step_s)
+
+    def _schedule_ff_test_tick(self) -> None:
+        if not self._ff_test_running:
+            return
+        self._ff_test_after_job = self.root.after(int(self._test_tick_ms), self._ff_test_tick)
+
+    def _on_start_ff_test(self) -> None:
+        if self._ff_test_running:
+            return
+        if self._test_running:
+            self._on_stop_test(reason="restarted by feedforward test", update_status=False)
+        if self._tri_test_running:
+            self._on_stop_tri_test(reason="restarted by feedforward test", update_status=False)
+        if self._local_test_running:
+            self._on_stop_local_test(reason="restarted by feedforward test", update_status=False)
+        if not self._interaction_enabled:
+            if hasattr(self, "status_var"):
+                self.status_var.set("Feedforward Test blocked: Hand Manual must be ON")
+            return
+        if not self._guard_joint_command_started():
+            return
+        validated = self._validate_ff_test_config(show_message=True)
+        if not validated:
+            return
+        joint_idx, targets, step_s = validated
+
+        try:
+            if self._data_logger.is_running():
+                self._stop_data_recording(reason="restart by feedforward test", keep_switch=True)
+            self._start_data_recording()
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+        except Exception as exc:
+            messagebox.showerror("Start Feedforward Test Failed", f"Cannot start recording: {exc}")
+            return
+
+        self._ff_test_joint_idx = int(joint_idx)
+        self._ff_test_targets = list(targets)
+        self._ff_test_step_s = float(step_s)
+        self._ff_test_idx = 0
+        self._ff_test_t_accum = 0.0
+        self._ff_test_last_ts = time.time()
+        self._ff_test_running = True
+        self._set_test_button_states()
+        self._emit_action(f"Feedforward Test started on J{joint_idx:02d}")
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Feedforward Test running on J{joint_idx:02d}")
+        self._ff_test_tick()
+
+    def _on_stop_ff_test(self, reason: str = "stopped by feedforward test", update_status: bool = True) -> None:
+        was_running = bool(self._ff_test_running)
+        self._ff_test_running = False
+        job = getattr(self, "_ff_test_after_job", None)
+        self._ff_test_after_job = None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._ff_test_targets = []
+        self._ff_test_idx = 0
+        self._ff_test_t_accum = 0.0
+        self._ff_test_last_ts = 0.0
+        self._set_test_button_states()
+        if self._data_logger.is_running():
+            self._stop_data_recording(reason=reason, keep_switch=True)
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(False)
+        if was_running:
+            self._emit_action(f"Feedforward Test stopped ({reason})")
+        if update_status and hasattr(self, "status_var"):
+            self.status_var.set("Feedforward Test stopped")
+
+    def _validate_tri_test_config(self, show_message: bool = True) -> Optional[Tuple[int, float, float, float]]:
+        joint_text = self._normalize_test_joint_value(self._tri_test_joint_var.get())
+        self._tri_test_joint_var.set(joint_text)
+        if joint_text == "None":
+            if show_message:
+                messagebox.showwarning("Triangle Wave Test", "Select one valid joint.")
+            return None
+        joint_idx = int(joint_text[1:])
+
+        try:
+            raw_min = float(self._tri_test_min_var.get())
+            raw_max = float(self._tri_test_max_var.get())
+            freq = float(self._tri_test_freq_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            if show_message:
+                messagebox.showwarning("Triangle Wave Test", "Min/Max/Freq must be valid numbers.")
+            return None
+
+        if not np.isfinite(raw_min) or not np.isfinite(raw_max) or not np.isfinite(freq):
+            if show_message:
+                messagebox.showwarning("Triangle Wave Test", "Min/Max/Freq must be finite numbers.")
+            return None
+        if freq <= 0.0:
+            if show_message:
+                messagebox.showwarning("Triangle Wave Test", "Frequency must be > 0.")
+            return None
+
+        lo = self._clamp_joint_target_deg(joint_idx, min(raw_min, raw_max))
+        hi = self._clamp_joint_target_deg(joint_idx, max(raw_min, raw_max))
+        if hi < lo:
+            lo, hi = hi, lo
+
+        self._tri_test_min_var.set(f"{lo:.2f}")
+        self._tri_test_max_var.set(f"{hi:.2f}")
+        self._tri_test_freq_var.set(f"{freq:.4g}")
+        return joint_idx, float(lo), float(hi), float(freq)
+
+    def _schedule_tri_test_tick(self) -> None:
+        if not self._tri_test_running:
+            return
+        self._tri_test_after_job = self.root.after(int(self._test_tick_ms), self._tri_test_tick)
+
+    def _on_start_tri_test(self) -> None:
+        if self._tri_test_running:
+            return
+        if self._test_running:
+            self._on_stop_test(reason="restarted by triangle test", update_status=False)
+        if self._ff_test_running:
+            self._on_stop_ff_test(reason="restarted by triangle test", update_status=False)
+        if self._local_test_running:
+            self._on_stop_local_test(reason="restarted by triangle test", update_status=False)
+        if not self._interaction_enabled:
+            if hasattr(self, "status_var"):
+                self.status_var.set("Triangle Wave Test blocked: Hand Manual must be ON")
+            return
+        if not self._guard_joint_command_started():
+            return
+        validated = self._validate_tri_test_config(show_message=True)
+        if not validated:
+            return
+        joint_idx, lo, hi, freq = validated
+
+        try:
+            if self._data_logger.is_running():
+                self._stop_data_recording(reason="restart by triangle test", keep_switch=True)
+            self._start_data_recording()
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+        except Exception as exc:
+            messagebox.showerror("Start Triangle Test Failed", f"Cannot start recording: {exc}")
+            return
+
+        self._tri_test_joint_idx = int(joint_idx)
+        self._tri_test_min_deg = float(lo)
+        self._tri_test_max_deg = float(hi)
+        self._tri_test_freq_hz = float(freq)
+        self._tri_test_t0 = time.time()
+        self._tri_test_running = True
+        self._set_test_button_states()
+        self._emit_action(f"Triangle Wave Test started on J{joint_idx:02d}")
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Triangle Wave Test running on J{joint_idx:02d}")
+        self._tri_test_tick()
+
+    def _on_stop_tri_test(self, reason: str = "stopped by triangle test", update_status: bool = True) -> None:
+        was_running = bool(self._tri_test_running)
+        self._tri_test_running = False
+        job = getattr(self, "_tri_test_after_job", None)
+        self._tri_test_after_job = None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._tri_test_t0 = 0.0
+        self._set_test_button_states()
+        if self._data_logger.is_running():
+            self._stop_data_recording(reason=reason, keep_switch=True)
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(False)
+        if was_running:
+            self._emit_action(f"Triangle Wave Test stopped ({reason})")
+        if update_status and hasattr(self, "status_var"):
+            self.status_var.set("Triangle Wave Test stopped")
+
+    def _on_start_local_test(self) -> None:
+        if self._local_test_running:
+            return
+        if self._test_running:
+            self._on_stop_test(reason="restarted by local test", update_status=False)
+        if self._ff_test_running:
+            self._on_stop_ff_test(reason="restarted by local test", update_status=False)
+        if self._tri_test_running:
+            self._on_stop_tri_test(reason="restarted by local test", update_status=False)
+        if not self._interaction_enabled:
+            if hasattr(self, "status_var"):
+                self.status_var.set("Local Test blocked: Hand Manual must be ON")
+            return
+        if not self._guard_joint_command_started():
+            return
+
+        try:
+            freq_hz = float(self._local_freq_var.get())
+            amplitude_deg = float(self._local_amp_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showwarning("Local Test", "Freq(Hz) and Amp(deg) must be valid numbers.")
+            return
+
+        if (not np.isfinite(freq_hz)) or freq_hz <= 0.0:
+            messagebox.showwarning("Local Test", "Freq(Hz) must be a finite number > 0.")
+            return
+        if not np.isfinite(amplitude_deg):
+            messagebox.showwarning("Local Test", "Amp(deg) must be a finite number.")
+            return
+
+        self._local_freq_var.set(f"{freq_hz:.4g}")
+        self._local_amp_var.set(f"{amplitude_deg:.4g}")
+
+        try:
+            if self._data_logger.is_running():
+                self._stop_data_recording(reason="restart by local test", keep_switch=True)
+            self._start_data_recording()
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(True)
+            self.controller.set_local_test_params(float(freq_hz), float(amplitude_deg))
+            self.controller.start_local_test()
+        except Exception as exc:
+            messagebox.showerror("Start Local Test Failed", f"{type(exc).__name__}: {exc}")
+            return
+
+        self._local_test_running = True
+        self._set_test_button_states()
+        self._emit_action(
+            f"Local Test started (freq={float(freq_hz):.4g} Hz, amp={float(amplitude_deg):.4g} deg)"
+        )
+        if hasattr(self, "status_var"):
+            self.status_var.set("Local Test running")
+
+    def _on_stop_local_test(self, reason: str = "stopped by local test", update_status: bool = True) -> None:
+        was_running = bool(self._local_test_running)
+        self._local_test_running = False
+        try:
+            if self._is_comm_connected():
+                self.controller.stop_local_test()
+        except Exception:
+            pass
+        self._set_test_button_states()
+        if self._data_logger.is_running():
+            self._stop_data_recording(reason=reason, keep_switch=True)
+            if hasattr(self, "_save_data_var"):
+                self._save_data_var.set(False)
+        if was_running:
+            self._emit_action(f"Local Test stopped ({reason})")
+        if update_status and hasattr(self, "status_var"):
+            self.status_var.set("Local Test stopped")
 
     def _test_tick(self) -> None:
         if not self._test_running:
@@ -3503,11 +4173,93 @@ class HandGUI:
             return
         self._schedule_test_tick()
 
+    def _ff_test_tick(self) -> None:
+        if not self._ff_test_running:
+            return
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        if mode != "test":
+            self._on_stop_ff_test(reason="stopped on mode switch", update_status=False)
+            return
+        if not self._interaction_enabled:
+            self._on_stop_ff_test(reason="stopped: Hand Manual OFF")
+            return
+        if not self.controller.is_started():
+            self._on_stop_ff_test(reason="stopped: press Enable to start controller")
+            return
+        if not self._ff_test_targets:
+            self._on_stop_ff_test(reason="stopped: no feedforward targets")
+            return
+
+        now = time.time()
+        dt = 0.0 if self._ff_test_last_ts <= 0.0 else max(0.0, now - self._ff_test_last_ts)
+        self._ff_test_last_ts = now
+        self._ff_test_t_accum += dt
+        while self._ff_test_t_accum >= self._ff_test_step_s and self._ff_test_idx < (len(self._ff_test_targets) - 1):
+            self._ff_test_t_accum -= self._ff_test_step_s
+            self._ff_test_idx += 1
+
+        target = self._clamp_joint_target_deg(
+            self._ff_test_joint_idx,
+            self._ff_test_targets[self._ff_test_idx],
+        )
+        angles = self._resolved_joint_targets()
+        angles[self._ff_test_joint_idx] = target
+        if self._ff_test_joint_idx < len(self._joint_target_vars):
+            self._joint_target_vars[self._ff_test_joint_idx].set(target)
+        if self._ff_test_joint_idx < len(self._joint_target_user_set):
+            self._joint_target_user_set[self._ff_test_joint_idx] = True
+
+        try:
+            self._send_joint_targets_with_tendon_guard(angles, source="Feedforward Test", live=True)
+        except Exception as exc:
+            self._on_stop_ff_test(reason=f"stopped by send error: {exc}")
+            return
+        self._schedule_ff_test_tick()
+
+    def _tri_test_tick(self) -> None:
+        if not self._tri_test_running:
+            return
+        mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
+        if mode != "test":
+            self._on_stop_tri_test(reason="stopped on mode switch", update_status=False)
+            return
+        if not self._interaction_enabled:
+            self._on_stop_tri_test(reason="stopped: Hand Manual OFF")
+            return
+        if not self.controller.is_started():
+            self._on_stop_tri_test(reason="stopped: press Enable to start controller")
+            return
+
+        elapsed = max(0.0, time.time() - float(self._tri_test_t0))
+        phase = elapsed * float(self._tri_test_freq_hz)
+        frac = phase - np.floor(phase)
+        tri = 1.0 - 4.0 * abs(float(frac) - 0.5)
+        center = 0.5 * (float(self._tri_test_min_deg) + float(self._tri_test_max_deg))
+        amp = 0.5 * (float(self._tri_test_max_deg) - float(self._tri_test_min_deg))
+        target = self._clamp_joint_target_deg(self._tri_test_joint_idx, center + amp * tri)
+
+        angles = self._resolved_joint_targets()
+        angles[self._tri_test_joint_idx] = target
+        if self._tri_test_joint_idx < len(self._joint_target_vars):
+            self._joint_target_vars[self._tri_test_joint_idx].set(target)
+        if self._tri_test_joint_idx < len(self._joint_target_user_set):
+            self._joint_target_user_set[self._tri_test_joint_idx] = True
+
+        try:
+            self._send_joint_targets_with_tendon_guard(angles, source="Triangle Wave Test", live=True)
+        except Exception as exc:
+            self._on_stop_tri_test(reason=f"stopped by send error: {exc}")
+            return
+        self._schedule_tri_test_tick()
+
     def _switch_control_mode(self):
         mode = self._ctrl_mode_var.get() if hasattr(self, "_ctrl_mode_var") else "joint"
         prev_mode = getattr(self, "_ctrl_mode_last", mode)
         if prev_mode == "test" and mode != "test":
             self._on_stop_test(reason="stopped on mode switch", update_status=False)
+            self._on_stop_ff_test(reason="stopped on mode switch", update_status=False)
+            self._on_stop_tri_test(reason="stopped on mode switch", update_status=False)
+            self._on_stop_local_test(reason="stopped on mode switch", update_status=False)
         self._clear_run_states()
         self._joint_panel.pack_forget()
         self._motor_panel.pack_forget()
@@ -3530,7 +4282,7 @@ class HandGUI:
             if hasattr(self, "_test_panel"):
                 self._test_panel.pack(fill=tk.BOTH, expand=True)
             if hasattr(self, "_table_section"):
-                self._table_section.configure(text="Joint Sine Test")
+                self._table_section.configure(text="Joint Tests")
         else:
             self._joint_panel.pack(fill=tk.BOTH, expand=True)
             self._refresh_joint_feedback_view(sync_target=True)
@@ -3752,7 +4504,6 @@ class HandGUI:
                 self.status_var.set(f"tie saved: J{joint_idx} disabled, x1={x1}")
             else:
                 self.status_var.set(f"tie saved: J{joint_idx} sign={'+' if sign > 0 else '-'} x1={x1}")
-        self._sync_tendon_guard_to_lower(force=True)
 
     def _refresh_joint_tie_cfg_from_ui(self) -> None:
         n = min(ENCODER_COUNT, len(self._joint_tie_sign_vars), len(self._joint_tie_x1_vars))
@@ -3769,34 +4520,6 @@ class HandGUI:
                 )
             self._tendon_cfg[i] = {"enabled": sign != 0, "pull_sign": (1 if sign >= 0 else -1), "x1_abs": x1}
 
-    def _build_tendon_guard_payload(self) -> List[Tuple[bool, int, int]]:
-        payload: List[Tuple[bool, int, int]] = []
-        for i in range(ENCODER_COUNT):
-            cfg = self._tendon_cfg[i] if i < len(self._tendon_cfg) else {}
-            enabled = bool(cfg.get("enabled", False))
-            sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
-            try:
-                x1 = int(cfg.get("x1_abs", 0))
-            except (TypeError, ValueError):
-                x1 = 0
-            x1 = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, x1))
-            payload.append((enabled, sign, x1))
-        return payload
-
-    def _sync_tendon_guard_to_lower(self, force: bool = False) -> None:
-        self._refresh_joint_tie_cfg_from_ui()
-        payload = self._build_tendon_guard_payload()
-        fingerprint = tuple((1 if e else 0, int(s), int(x)) for e, s, x in payload)
-        if (not force) and (fingerprint == self._last_tendon_guard_sent):
-            return
-        if not self._is_comm_connected():
-            return
-        try:
-            self.controller.set_tendon_guard_config(payload)
-            self._last_tendon_guard_sent = fingerprint
-        except Exception:
-            pass
-
     @staticmethod
     def _joint_primary_motor_channel(joint_index: int) -> int:
         if joint_index < 0 or joint_index >= ENCODER_COUNT:
@@ -3810,7 +4533,6 @@ class HandGUI:
                                               source: str = "",
                                               live: bool = False) -> None:
         self._refresh_joint_tie_cfg_from_ui()
-        self._sync_tendon_guard_to_lower(force=False)
         guarded = list(angles[:ENCODER_COUNT])
         if len(guarded) < ENCODER_COUNT:
             guarded.extend([0.0] * (ENCODER_COUNT - len(guarded)))
@@ -3878,40 +4600,9 @@ class HandGUI:
         if not s:
             return
 
-        # Keep tie runtime display aligned with what command send path will parse.
-        self._refresh_joint_tie_cfg_from_ui()
         joint_has_data = bool(getattr(s, "has_sensor_data", False))
-        motor_has_raw = bool(getattr(s, "has_servo_raw_data", False))
-        motor_has_abs = bool(getattr(s, "has_servo_angle_data", False))
         for i in range(min(ENCODER_COUNT, len(self._joint_curr_vars))):
-            fallback_text = "-"
-            motor_ch = self._joint_primary_motor_channel(i)
-            if (
-                motor_has_raw
-                and motor_ch >= 0
-                and motor_ch < len(getattr(s, "servo_raw_positions", []))
-                and motor_ch < len(getattr(s, "servo_raw_online", []))
-                and bool(s.servo_raw_online[motor_ch])
-            ):
-                fallback_text = f"{self._motor_target_from_servo_feedback(s.servo_raw_positions[motor_ch]):4d}"
-            elif (
-                motor_has_abs
-                and motor_ch >= 0
-                and motor_ch < len(getattr(s, "servo_angles", []))
-                and motor_ch < len(getattr(s, "servo_online", []))
-                and bool(s.servo_online[motor_ch])
-            ):
-                fallback_text = f"{self._slider_from_abs_pos(int(s.servo_angles[motor_ch])):4d}"
-
-            encoder_valid = (
-                joint_has_data
-                and i < len(getattr(s, "angles", []))
-                and i < len(getattr(s, "encoders", []))
-                and (not bool(s.encoders[i].error))
-            )
-            if fallback_text != "-":
-                self._joint_curr_vars[i].set(fallback_text)
-            elif encoder_valid:
+            if joint_has_data and i < len(s.angles):
                 self._joint_curr_vars[i].set(f"{s.angles[i]:6.1f}")
             else:
                 self._joint_curr_vars[i].set("-")
@@ -3921,34 +4612,6 @@ class HandGUI:
                     self._set_joint_encoder_dot(i, not bool(s.encoders[i].error))
                 else:
                     self._set_joint_encoder_dot(i, None)
-
-            if i < len(getattr(self, "_joint_tie_motor_abs_vars", [])):
-                motor_abs_text = "-"
-                motor_ch = self._joint_primary_motor_channel(i)
-                if (
-                    motor_has_abs
-                    and motor_ch >= 0
-                    and motor_ch < len(getattr(s, "servo_angles", []))
-                    and motor_ch < len(getattr(s, "servo_online", []))
-                    and bool(s.servo_online[motor_ch])
-                ):
-                    motor_abs_text = str(int(s.servo_angles[motor_ch]))
-                self._joint_tie_motor_abs_vars[i].set(motor_abs_text)
-
-            if i < len(getattr(self, "_joint_tie_x1_live_vars", [])):
-                x1_live_text = "-"
-                if i < len(getattr(self, "_tendon_cfg", [])):
-                    cfg = self._tendon_cfg[i]
-                    try:
-                        x1 = int(cfg.get("x1_abs", 0))
-                    except Exception:
-                        x1 = 0
-                    sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
-                    if bool(cfg.get("enabled", False)):
-                        x1_live_text = f"{'+' if sign > 0 else '-'}{x1}"
-                    else:
-                        x1_live_text = f"off {x1}"
-                self._joint_tie_x1_live_vars[i].set(x1_live_text)
 
         if joint_has_data and sync_target:
             for i in range(min(ENCODER_COUNT, len(s.angles), len(self._joint_target_vars))):
@@ -4364,6 +5027,9 @@ class HandGUI:
     def _clear_live_displays(self) -> None:
         """断开连接或未连接时：清空关节读数、3D 手与触觉；相机单独由 Device 菜单选择，不受此影响。"""
         self._on_stop_test(reason="stopped on disconnect", update_status=False)
+        self._on_stop_ff_test(reason="stopped on disconnect", update_status=False)
+        self._on_stop_tri_test(reason="stopped on disconnect", update_status=False)
+        self._on_stop_local_test(reason="stopped on disconnect", update_status=False)
         self._stop_data_recording(reason="stopped on disconnect", keep_switch=True)
         self._refresh_start_indicator()
         with self._state_lock:
@@ -4381,7 +5047,6 @@ class HandGUI:
             self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
         if hasattr(self, "_motor_last_sent_abs"):
             self._motor_last_sent_abs = [None] * MOTOR_COUNT
-        self._last_tendon_guard_sent = None
         self._joint_target_user_set = [False] * len(getattr(self, "_joint_target_vars", []))
         self._motor_target_user_set = [False] * len(getattr(self, "_motor_target_vars", []))
         self._clear_run_states()
@@ -4390,12 +5055,6 @@ class HandGUI:
         neutral = [0.0] * ENCODER_COUNT
         if hasattr(self, "_joint_curr_vars"):
             for v in self._joint_curr_vars:
-                v.set("-")
-        if hasattr(self, "_joint_tie_motor_abs_vars"):
-            for v in self._joint_tie_motor_abs_vars:
-                v.set("-")
-        if hasattr(self, "_joint_tie_x1_live_vars"):
-            for v in self._joint_tie_x1_live_vars:
                 v.set("-")
         if hasattr(self, "_joint_status_dots"):
             for i in range(min(ENCODER_COUNT, len(self._joint_status_dots))):
@@ -4408,7 +5067,7 @@ class HandGUI:
                 v.set("-")
         if hasattr(self, "ax"):
             self._draw_hand_model(neutral, None)
-        if hasattr(self, "_tactile_dot_scatters"):
+        if hasattr(self, "_tactile_subplot_imgs"):
             empty = HandModel()
             tactile_state = self._get_tactile_display_state(
                 empty, fake=self._should_use_fake_tactile(None)
@@ -4474,6 +5133,14 @@ class HandGUI:
 
     def _on_btn_stop(self):
         self._emit_action("Click [Stop]")
+        if getattr(self, "_test_running", False):
+            self._on_stop_test(reason="stopped by E-STOP", update_status=False)
+        if getattr(self, "_ff_test_running", False):
+            self._on_stop_ff_test(reason="stopped by E-STOP", update_status=False)
+        if getattr(self, "_tri_test_running", False):
+            self._on_stop_tri_test(reason="stopped by E-STOP", update_status=False)
+        if getattr(self, "_local_test_running", False):
+            self._on_stop_local_test(reason="stopped by E-STOP", update_status=False)
         if not self._is_comm_connected():
             self._refresh_start_indicator()
             return
@@ -4580,8 +5247,7 @@ class HandGUI:
             messagebox.showerror("Send Failed", f"{type(e).__name__}: {e}")
 
     def _setup_status_bar(self):
-        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(side=tk.BOTTOM, fill=tk.X)
-        bar = ttk.Frame(self.root, padding=(8, 3))
+        bar = ttk.Frame(self.root)
         bar.pack(side=tk.BOTTOM, fill=tk.X)
         comm = getattr(self.controller, "comm", None)
         connected = bool(
@@ -4590,58 +5256,36 @@ class HandGUI:
             and getattr(comm.serial, "is_open", False)
         )
         self.status_var = tk.StringVar(value="Disconnected" if not connected else "Ready")
-        ttk.Label(bar, textvariable=self.status_var, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(bar, textvariable=self.status_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._delay_var = tk.StringVar()
         self._overload_var = tk.StringVar(value="伺服过载: —")
-        self._overload_lbl = tk.Label(
-            bar,
-            textvariable=self._overload_var,
-            fg="gray35",
-            font=("Segoe UI" if os.name == "nt" else "", 9),
-        )
+        self._overload_lbl = tk.Label(bar, textvariable=self._overload_var, fg="gray35", font=("", 9))
         self._overload_lbl.pack(side=tk.RIGHT, padx=(0, 10))
         self._release_fault_var = tk.StringVar(value="反绕保护: 无")
-        self._release_fault_lbl = tk.Label(
-            bar,
-            textvariable=self._release_fault_var,
-            fg="gray35",
-            font=("Segoe UI" if os.name == "nt" else "", 9),
-        )
+        self._release_fault_lbl = tk.Label(bar, textvariable=self._release_fault_var, fg="gray35", font=("", 9))
         self._release_fault_lbl.pack(side=tk.RIGHT, padx=(0, 10))
         ttk.Label(bar, textvariable=self._delay_var).pack(side=tk.RIGHT)
 
     def _update_display(self):
         if not self._is_comm_connected():
             return
-        now = time.time()
         with self._state_lock:
             s = self._state
         # 无连接时 _state 为 None，用默认状态；触觉由 _get_tactile_display_state(fake) 决定
         if not s:
             s = HandModel()
 
-        feedback_interval = float(getattr(self, "_feedback_draw_interval", 0.06))
-        do_feedback_update = (now - float(getattr(self, "_last_feedback_draw", 0.0))) >= feedback_interval
-        if do_feedback_update:
-            if hasattr(self, "_joint_curr_vars"):
-                self._refresh_joint_feedback_view(sync_target=not self._joint_target_initialized)
-            if hasattr(self, "_motor_curr_vars"):
-                self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
-            self._last_feedback_draw = now
+        if hasattr(self, "_joint_curr_vars"):
+            self._refresh_joint_feedback_view(sync_target=not self._joint_target_initialized)
+
+        if hasattr(self, "_motor_curr_vars"):
+            self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
 
         # 电机模式不以 0x03 角度重算 abs（避免拖一路时邻路 abs 被陈旧角度改掉、整包误触发）。
 
-        need_pose_draw = self._is_pose_3d_enabled() and (now - self._last_pose_draw) >= self._pose_draw_interval
-        need_tactile_draw = (now - self._last_tactile_draw) >= self._tactile_draw_interval
-        tactile_state = None
-        if need_pose_draw or need_tactile_draw:
-            tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
-        if need_pose_draw:
-            self._draw_hand_model(s.angles, tactile_state)
-            self._last_pose_draw = now
-        if need_tactile_draw:
-            self._update_tactile_matrix_widget(tactile_state)
-            self._last_tactile_draw = now
+        tactile_state = self._get_tactile_display_state(s, fake=self._should_use_fake_tactile(s))
+        self._draw_hand_model(s.angles, tactile_state)
+        self._update_tactile_matrix_widget(tactile_state)
         self._append_joint_rt_sample(s)
         self._update_joint_rt_plot()
         if self.current_mode in ("算法", "Algorithm") and hasattr(self, "_alg_output"):

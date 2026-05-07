@@ -144,15 +144,7 @@ class HandController:
             try:
                 if not self.comm:
                     break
-                # Keep only the latest RX frame to avoid UI latency caused by
-                # backlog when producer rate is higher than consumer rate.
                 new_model = self.comm.rx_queue.get(timeout=0.1)
-                while True:
-                    try:
-                        newer = self.comm.rx_queue.get_nowait()
-                        new_model = newer
-                    except queue.Empty:
-                        break
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
                     self.current_state.calib_status = new_model.calib_status
@@ -229,16 +221,20 @@ class HandController:
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs", raw))
 
-    def set_tendon_guard_config(self, configs: List[tuple]) -> None:
-        """
-        下发腱绳 guard 配置到下位机（每关节: enabled, sign, x1_abs）。
-        该配置属于控制参数，不依赖当前控制模式。
-        """
-        if not self.comm:
-            return
-        if len(configs) != ENCODER_COUNT:
-            raise ValueError(f"需要 {ENCODER_COUNT} 组 tendon guard 配置")
-        self.comm.send_command(("tendon_guard", list(configs)))
+    def set_local_test_params(self, freq_hz: float, amplitude_deg: float):
+        """设置本地测试参数：频率（Hz）和幅值（度）"""
+        if self.comm:
+            self.comm.send_command(("local_test_params", freq_hz, amplitude_deg))
+
+    def start_local_test(self):
+        """开始本地测试模式"""
+        if self.comm:
+            self.comm.send_command("local_test_start")
+
+    def stop_local_test(self):
+        """停止本地测试模式"""
+        if self.comm:
+            self.comm.send_command("local_test_stop")
 
     def _validate_angles(self, angles: List[float]) -> List[float]:
         out: List[float] = []

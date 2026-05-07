@@ -9,7 +9,7 @@
     {
       "enabled": true,
       "pull_sign": 1,
-      "x1_abs": 2000
+      "x1_abs": 1500
     },
     {
       "enabled": false,
@@ -17,7 +17,7 @@
       "x1_abs": 0
     },
     {
-      "enabled": false,
+      "enabled": true,
       "pull_sign": 1,
       "x1_abs": 2000
     },

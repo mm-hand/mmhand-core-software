@@ -85,26 +85,30 @@ struct RemoteCommand {
 // HSPI: encoders (AS5047P)
 #define PIN_ENC_MISO    47
 #define PIN_ENC_MOSI    38
-#define PIN_ENC_SCLK    48
+#define PIN_ENC_SCLK    9
 #define PIN_ENC_CS      7
 
 // VSPI: tactile sensors
 #define PIN_TAC_MISO    13
 #define PIN_TAC_MOSI    11
-#define PIN_TAC_SCLK    12
+#define PIN_TAC_SCLK    8
 #define PIN_TAC_CS_A    7
 #define PIN_TAC_CS_B    6
 // #define PIN_TAC_CS_C  8
 
 // TWAI (CAN)
-#define PIN_TWAI_TX     9
-#define PIN_TWAI_RX     8
+#define PIN_TWAI_TX     48
+#define PIN_TWAI_RX     1
 #define CAN_BAUD_RATE   TWAI_TIMING_CONFIG_1MBITS()
 
 // MUX control pins
 #define PIN_MUX_A       2
 #define PIN_MUX_B       4
 #define PIN_MUX_C       5
+#define PIN_MUX_D       13
+#define PIN_MUX_E       14
+#define PIN_MUX_F       17
+#define PIN_MUX_G       18
 
 // ===========================================
 // [Encoder HW Compat] board compatibility
@@ -115,11 +119,11 @@ struct RemoteCommand {
 #define ENC_HW_MODE_151_MISO_MUX 1
 
 #ifndef ENC_HW_MODE
-#define ENC_HW_MODE ENC_HW_MODE_151_MISO_MUX
+#define ENC_HW_MODE ENC_HW_MODE_138_CS_DEMUX
 #endif
 
-// 138 path currently uses channel = grp + 3
-#define ENC_MUX_BASE_CHANNEL 3
+// 138 encoder SPI path uses Y0..Y4 on the new board
+#define ENC_MUX_BASE_CHANNEL 0
 
 // 151 path mapping: D3..D7 -> group 0..4
 static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {4,3, 5, 6, 7};
