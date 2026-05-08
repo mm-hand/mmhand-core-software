@@ -4,8 +4,6 @@ from data_models import HandModel
 
 
 class HandGuiContext:
-    """Narrow component-facing facade around HandGUI."""
-
     def __init__(self, app):
         self._app = app
 
@@ -14,7 +12,7 @@ class HandGuiContext:
 
     @property
     def root(self):
-        return self._app.root
+        return self._app
 
     @property
     def controller(self):
@@ -25,27 +23,28 @@ class HandGuiContext:
         return self._app.current_mode
 
     def is_comm_connected(self) -> bool:
-        return self._app._is_comm_connected()
+        return self._app.is_comm_connected()
 
     def request_redraw(self) -> None:
-        self._app._schedule_redraw()
+        self._app.request_redraw()
 
     def emit_action(self, msg: str) -> None:
-        self._app._emit_action(msg)
+        self._app.emit_action(msg)
 
     def get_state(self) -> Optional[HandModel]:
-        with self._app._state_lock:
-            return self._app._state
+        return self._app.get_state()
 
     def set_state(self, state: Optional[HandModel]) -> None:
-        with self._app._state_lock:
-            self._app._state = state
+        self._app.set_state(state)
 
-    def list_available_cameras(self):
-        return self._app._list_available_cameras()
+    def send_joint_targets(self, angles, source: str = "", live: bool = False) -> None:
+        self._app.send_joint_targets(angles, source=source, live=live)
 
-    def select_camera(self, index, slot: int) -> None:
-        self._app._on_camera_selected(index, slot)
+    def start_recording_for_test(self, reason: str = "test") -> None:
+        self._app.start_recording_for_test(reason)
 
-    def stop_camera_capture(self) -> None:
-        self._app._stop_camera_capture()
+    def stop_recording_for_test(self, reason: str = "test stopped") -> None:
+        self._app.stop_recording_for_test(reason)
+
+    def refresh_cameras(self) -> None:
+        self._app.refresh_cameras()

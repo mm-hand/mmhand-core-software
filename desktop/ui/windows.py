@@ -1,90 +1,65 @@
-import os
-import tkinter as tk
-from tkinter import ttk
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-from data_models import HandModel
+from .qt_compat import QtCore, QtGui, QtWidgets, Signal
 from .camera_view import CameraView
 from .pose_view import Pose3DView
 from .tactile_view import TactileView
 
 
-GAP = 16
-MARGIN = 24
 POSE_REAL_INTERVAL_S = 0.10
 POSE_PREVIEW_INTERVAL_S = 0.25
 
 
-def _work_area(root: tk.Tk) -> Tuple[int, int, int, int]:
-    if os.name == "nt":
+class _DisplayWindow(QtWidgets.QDialog):
+    closed = Signal(str)
+
+    def __init__(self, key: str, title: str, component, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.component = component
+        self.setWindowTitle(title)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        component.build(self)
+        layout.addWidget(component)
+
+    def closeEvent(self, event):
         try:
-            import ctypes
-
-            class RECT(ctypes.Structure):
-                _fields_ = [
-                    ("left", ctypes.c_long),
-                    ("top", ctypes.c_long),
-                    ("right", ctypes.c_long),
-                    ("bottom", ctypes.c_long),
-                ]
-
-            rect = RECT()
-            ok = ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
-            if ok:
-                return (
-                    int(rect.left),
-                    int(rect.top),
-                    int(rect.right - rect.left),
-                    int(rect.bottom - rect.top),
-                )
+            self.component.close()
         except Exception:
             pass
-    return 0, 0, int(root.winfo_screenwidth()), int(root.winfo_screenheight())
-
-
-def _clamp(value: int, low: int, high: int) -> int:
-    return max(low, min(high, value))
+        self.closed.emit(self.key)
+        super().closeEvent(event)
 
 
 class DisplayWindowManager:
     def __init__(self, owner):
         self.owner = owner
-        self.root = owner.root
-        self.windows: Dict[str, tk.Toplevel] = {}
+        self.context = getattr(owner, "context", owner)
+        self.windows: Dict[str, _DisplayWindow] = {}
         self.components: Dict[str, object] = {}
-        self.vars: Dict[str, tk.BooleanVar] = {
-            "pose": tk.BooleanVar(value=False),
-            "tactile": tk.BooleanVar(value=False),
-            "cameras": tk.BooleanVar(value=False),
-        }
+        self.actions: Dict[str, QtWidgets.QAction] = {}
         self._last_pose_update_ts = 0.0
 
-    def attach_menu(self, menubar: tk.Menu) -> None:
-        view_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="View", menu=view_menu)
-        view_menu.add_checkbutton(
-            label="Hand Pose",
-            variable=self.vars["pose"],
-            command=lambda: self._toggle("pose"),
-        )
-        view_menu.add_checkbutton(
-            label="Tactile",
-            variable=self.vars["tactile"],
-            command=lambda: self._toggle("tactile"),
-        )
-        view_menu.add_checkbutton(
-            label="Cameras",
-            variable=self.vars["cameras"],
-            command=lambda: self._toggle("cameras"),
-        )
+    def attach_menu(self, menubar: QtWidgets.QMenuBar) -> None:
+        menu = menubar.addMenu("View")
+        for key, label in [("pose", "Hand Pose"), ("tactile", "Tactile"), ("cameras", "Cameras")]:
+            action_cls = getattr(QtGui, "QAction", QtWidgets.QAction)
+            action = action_cls(label, self.owner)
+            action.setCheckable(True)
+            action.toggled.connect(lambda checked, k=key: self.open(k) if checked else self.close(k))
+            menu.addAction(action)
+            self.actions[key] = action
 
     def apply_main_geometry(self) -> None:
-        x, y, w, h = _work_area(self.root)
-        main_w = _clamp(int(w * 0.42), 640, min(880, max(640, w - MARGIN * 2)))
-        main_h = _clamp(h - 80, 620, min(760, max(620, h - MARGIN * 2)))
-        self.root.geometry(f"{main_w}x{main_h}+{x + MARGIN}+{y + MARGIN}")
-        self.root.minsize(640, 620)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            self.owner.resize(1180, 760)
+            return
+        area = screen.availableGeometry()
+        self.owner.resize(min(1280, int(area.width() * 0.78)), min(820, int(area.height() * 0.82)))
+        self.owner.move(area.x() + 24, area.y() + 24)
 
     def open_pose(self) -> None:
         self.open("pose")
@@ -97,174 +72,104 @@ class DisplayWindowManager:
 
     def is_open(self, key: str) -> bool:
         win = self.windows.get(key)
-        if win is None:
-            return False
-        try:
-            return bool(win.winfo_exists() and win.state() != "withdrawn")
-        except tk.TclError:
-            return False
+        return bool(win is not None and win.isVisible())
 
     def open(self, key: str) -> None:
         if self.is_open(key):
-            win = self.windows[key]
-            self.vars[key].set(True)
-            win.deiconify()
-            win.lift()
-            win.focus_set()
+            self.windows[key].raise_()
+            self.windows[key].activateWindow()
             return
-
-        title, component, min_size = self._make_component(key)
-        win = tk.Toplevel(self.root)
-        win.title(title)
-        win.minsize(*min_size)
-        win.protocol("WM_DELETE_WINDOW", lambda k=key: self.close(k))
-        frame = ttk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True)
-        component.build(frame)
+        title, component, size = self._make_component(key)
+        win = _DisplayWindow(key, title, component, self.owner)
+        win.closed.connect(self._on_window_closed)
+        win.resize(*size)
         self.windows[key] = win
         self.components[key] = component
-        self.vars[key].set(True)
+        self._set_action(key, True)
         self.layout_open_windows()
-        win.lift()
+        win.show()
+        win.raise_()
 
     def close(self, key: str) -> None:
-        comp = self.components.pop(key, None)
-        if comp is not None:
-            try:
-                comp.close()
-            except Exception:
-                pass
         win = self.windows.pop(key, None)
+        self.components.pop(key, None)
+        self._set_action(key, False)
         if win is not None:
+            win.blockSignals(True)
             try:
-                win.destroy()
-            except tk.TclError:
-                pass
-        if key in self.vars:
-            self.vars[key].set(False)
+                win.close()
+            finally:
+                win.deleteLater()
         self.layout_open_windows()
 
     def close_all(self) -> None:
         for key in list(self.windows.keys()):
             self.close(key)
 
-    def update_views(self, state: HandModel) -> None:
+    def update_views(self, state) -> None:
         self.update_pose_if_due(state)
         self.update_tactile_if_due(state)
 
-    def update_pose_if_due(self, state: HandModel, *, force: bool = False) -> None:
-        if not self.is_open("pose"):
-            return
+    def update_pose_if_due(self, state, *, force: bool = False) -> None:
         comp = self.components.get("pose")
         if comp is None:
             return
-        interval = POSE_REAL_INTERVAL_S if self.owner._is_comm_connected() else POSE_PREVIEW_INTERVAL_S
+        interval = POSE_REAL_INTERVAL_S if self.owner.is_comm_connected() else POSE_PREVIEW_INTERVAL_S
         now = time.time()
-        if not force and (now - self._last_pose_update_ts) < interval:
+        if not force and now - self._last_pose_update_ts < interval:
             return
         self._last_pose_update_ts = now
-        try:
-            comp.update(state)
-        except tk.TclError:
-            self.close("pose")
-        except Exception:
-            pass
+        comp.update(state)
 
-    def update_tactile_if_due(self, state: HandModel, *, force: bool = False) -> None:
-        if not self.is_open("tactile"):
-            return
+    def update_tactile_if_due(self, state, *, force: bool = False) -> None:
         comp = self.components.get("tactile")
-        if comp is None:
-            return
-        try:
-            if hasattr(comp, "update_if_due"):
-                comp.update_if_due(state, force=force)
-            else:
-                comp.update(state)
-        except tk.TclError:
-            self.close("tactile")
-        except Exception:
-            pass
+        if comp is not None:
+            comp.update_if_due(state, force=force)
 
     def update_cameras(self) -> None:
-        if not self.is_open("cameras"):
-            return
         comp = self.components.get("cameras")
-        if comp is None:
-            return
-        try:
-            comp.update(None)
-        except tk.TclError:
-            self.close("cameras")
-        except Exception:
-            pass
+        if comp is not None:
+            comp.update()
 
     def layout_open_windows(self) -> None:
-        open_keys = [k for k in ("pose", "tactile", "cameras") if self.is_open(k)]
-        if not open_keys:
+        visible = [k for k in ("pose", "tactile", "cameras") if self.is_open(k)]
+        if not visible:
             return
-        self.root.update_idletasks()
-        wx, wy, ww, wh = _work_area(self.root)
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_w = max(self.root.winfo_width(), 640)
-        main_h = max(self.root.winfo_height(), 620)
-        right_x = main_x + main_w + GAP
-        right_y = main_y
-        right_w = wx + ww - right_x - MARGIN
-        right_h = min(main_h, wy + wh - right_y - MARGIN)
+        geo = self.owner.geometry()
+        screen = QtWidgets.QApplication.primaryScreen()
+        area = screen.availableGeometry() if screen else geo
+        x = geo.x() + geo.width() + 16
+        y = geo.y()
+        right_w = area.right() - x - 24
         if right_w < 420:
-            right_x = wx + MARGIN
-            right_y = main_y + main_h + GAP
-            right_w = ww - MARGIN * 2
-            right_h = wy + wh - right_y - MARGIN
-        if right_h < 260:
-            right_x = wx + MARGIN
-            right_y = wy + MARGIN
-            right_w = max(420, ww - MARGIN * 2)
-            right_h = max(300, wh - MARGIN * 2)
+            x = area.x() + 24
+            y = geo.y() + geo.height() + 16
+            right_w = area.width() - 48
+        right_w = max(420, right_w)
+        each_h = max(300, min(520, (area.bottom() - y - 24) // max(1, len(visible))))
+        for idx, key in enumerate(visible):
+            win = self.windows.get(key)
+            if win is not None:
+                win.setGeometry(x, y + idx * (each_h + 12), min(860, right_w), each_h)
 
-        if len(open_keys) == 1:
-            key = open_keys[0]
-            w = min(760 if key != "cameras" else 860, max(420, right_w))
-            h = min(520 if key != "cameras" else 460, max(300, right_h))
-            self._set_geometry(key, w, h, right_x, right_y)
+    def _set_action(self, key: str, checked: bool) -> None:
+        action = self.actions.get(key)
+        if action is None:
             return
+        action.blockSignals(True)
+        action.setChecked(checked)
+        action.blockSignals(False)
 
-        if len(open_keys) >= 3 and right_w >= 920 and right_h >= 560:
-            left_w = max(420, (right_w - GAP) // 2)
-            right_col_w = max(420, right_w - left_w - GAP)
-            row_h = max(260, (right_h - GAP) // 2)
-            self._set_geometry("pose", left_w, row_h, right_x, right_y)
-            self._set_geometry("tactile", left_w, row_h, right_x, right_y + row_h + GAP)
-            self._set_geometry("cameras", right_col_w, row_h * 2 + GAP, right_x + left_w + GAP, right_y)
-            return
-
-        each_h = max(260, (right_h - GAP * (len(open_keys) - 1)) // len(open_keys))
-        for idx, key in enumerate(open_keys):
-            self._set_geometry(key, max(420, right_w), each_h, right_x, right_y + idx * (each_h + GAP))
-
-    def _set_geometry(self, key: str, w: int, h: int, x: int, y: int) -> None:
-        win = self.windows.get(key)
-        if win is None:
-            return
-        try:
-            win.geometry(f"{int(w)}x{int(h)}+{int(x)}+{int(y)}")
-        except tk.TclError:
-            pass
-
-    def _toggle(self, key: str) -> None:
-        if self.vars[key].get():
-            self.open(key)
-        else:
-            self.close(key)
+    def _on_window_closed(self, key: str) -> None:
+        self.windows.pop(key, None)
+        self.components.pop(key, None)
+        self._set_action(key, False)
 
     def _make_component(self, key: str):
-        component_owner = getattr(self.owner, "context", self.owner)
         if key == "pose":
-            return "Hand Pose", Pose3DView(component_owner), (420, 300)
+            return "Hand Pose", Pose3DView(self.context), (760, 520)
         if key == "tactile":
-            return "Tactile", TactileView(component_owner), (420, 300)
+            return "Tactile", TactileView(self.context), (760, 520)
         if key == "cameras":
-            return "Cameras", CameraView(component_owner), (520, 320)
+            return "Cameras", CameraView(self.context), (860, 460)
         raise ValueError(f"Unknown display window: {key}")

@@ -1,50 +1,22 @@
-import os
-import tkinter as tk
-from tkinter import ttk
+from .qt_compat import QtWidgets
 
 
-def configure_windows_process_dpi() -> None:
-    if os.name != "nt":
+def configure_qt_application(app: QtWidgets.QApplication) -> None:
+    app.setStyle("Fusion")
+    font = app.font()
+    if font.pointSize() < 9:
+        font.setPointSize(9)
+    app.setFont(font)
+
+
+def apply_main_window_defaults(window: QtWidgets.QWidget) -> None:
+    screen = QtWidgets.QApplication.primaryScreen()
+    if screen is None:
+        window.resize(1180, 760)
         return
-    try:
-        import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-
-def configure_windows_root(root: tk.Tk) -> None:
-    if os.name != "nt":
-        return
-    tk_font = "{Segoe UI} 9"
-    root.option_add("*Font", tk_font)
-    root.option_add("*Menu.Font", tk_font)
-    root.option_add("*TCombobox*Listbox.Font", tk_font)
-    root.option_add("*tearOff", False)
-    try:
-        root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 96.0))
-    except tk.TclError:
-        pass
-
-
-def configure_windows_ttk_style(root: tk.Tk) -> ttk.Style:
-    style = ttk.Style(root)
-    if os.name != "nt":
-        return style
-    for theme in ("vista", "xpnative", "winnative"):
-        if theme in style.theme_names():
-            try:
-                style.theme_use(theme)
-                break
-            except tk.TclError:
-                pass
-    style.configure(".", font=("Segoe UI", 9))
-    style.configure("TButton", padding=(8, 4))
-    style.configure("TCheckbutton", padding=(4, 2))
-    style.configure("TRadiobutton", padding=(4, 2))
-    style.configure("TLabelFrame.Label", font=("Segoe UI", 9, "bold"))
-    style.configure("TNotebook.Tab", padding=(10, 4))
-    return style
+    area = screen.availableGeometry()
+    w = min(1280, max(980, int(area.width() * 0.78)))
+    h = min(820, max(680, int(area.height() * 0.82)))
+    x = area.x() + max(24, (area.width() - w) // 2)
+    y = area.y() + max(24, (area.height() - h) // 2)
+    window.setGeometry(x, y, w, h)
