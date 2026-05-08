@@ -67,7 +67,7 @@ def is_valid_port(port: str) -> bool:
 
 def choose_serial_port_interactive() -> Optional[str]:
     while True:
-        os.system("cls" if os.name == "nt" else "clear")
+        os.system("cls")
         print("Scanning serial ports...")
         ports = list_ports()
         if not ports:

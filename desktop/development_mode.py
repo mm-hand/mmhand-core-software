@@ -1,7 +1,5 @@
 import os
-import sys
 import time
-import select
 import importlib
 from collections import deque
 from dataclasses import dataclass, field
@@ -29,61 +27,30 @@ PLOT_WINDOW_SEC = 10.0
 
 
 class _KeyReader:
-    """Cross-platform non-blocking keyboard reader for single char."""
+    """Windows non-blocking keyboard reader for single char."""
 
     def __init__(self):
-        self._is_windows = os.name == "nt"
-        self._fd = None
-        self._old_term = None
         self._msvcrt = None
-        if self._is_windows:
-            try:
-                import msvcrt  # type: ignore
-                self._msvcrt = msvcrt
-            except Exception:
-                self._msvcrt = None
+        try:
+            import msvcrt  # type: ignore
+            self._msvcrt = msvcrt
+        except Exception:
+            self._msvcrt = None
 
     def __enter__(self):
-        if not self._is_windows:
-            try:
-                import termios
-                import tty
-                self._fd = sys.stdin.fileno()
-                self._old_term = termios.tcgetattr(self._fd)
-                tty.setcbreak(self._fd)
-            except Exception:
-                self._fd = None
-                self._old_term = None
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self._is_windows and self._fd is not None and self._old_term is not None:
-            try:
-                import termios
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_term)
-            except Exception:
-                pass
+        return None
 
     def read_key(self) -> Optional[str]:
-        if self._is_windows and self._msvcrt is not None:
-            if self._msvcrt.kbhit():
-                b = self._msvcrt.getch()
-                try:
-                    return b.decode("utf-8", errors="ignore").lower()
-                except Exception:
-                    return None
+        if self._msvcrt is None or not self._msvcrt.kbhit():
             return None
-
-        if self._fd is None:
-            return None
+        b = self._msvcrt.getch()
         try:
-            rlist, _, _ = select.select([sys.stdin], [], [], 0)
-            if rlist:
-                ch = sys.stdin.read(1)
-                return ch.lower()
+            return b.decode("utf-8", errors="ignore").lower()
         except Exception:
             return None
-        return None
 
 
 def _fmt_sensor_cell(index: int, raw: int, error: bool) -> str:
@@ -153,8 +120,7 @@ def _print_console(controller: HandController, connected_port: str, plot_status:
     latency_ms = (time.time() - last_update) * 1000.0 if last_update > 0 else 9999.0
     rows = (ENCODER_COUNT + 2) // 3
 
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
+    os.system("cls")
     print(f"{Back.BLUE}{Fore.WHITE}  ServoBoard Monitor  {Style.RESET_ALL}")
     port_text = f"{Fore.GREEN}Connected: {connected_port}{Style.RESET_ALL}"
     latency_color = Fore.GREEN if latency_ms < 100 else (Fore.YELLOW if latency_ms < 500 else Fore.RED)
