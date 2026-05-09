@@ -21,7 +21,7 @@ class LauncherWindow(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
         self.port_combo = QtWidgets.QComboBox()
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Monitor", "Teleoperation", "Algorithm"])
+        self.mode_combo.addItems(["Manual", "Teleop", "Algorithm"])
         form.addRow("Port:", self.port_combo)
         form.addRow("Mode:", self.mode_combo)
         layout.addLayout(form)
@@ -50,7 +50,7 @@ class LauncherWindow(QtWidgets.QDialog):
         port = self.port_combo.currentData()
         mode_text = self.mode_combo.currentText()
         mode = Mode.MONITOR
-        if mode_text == "Teleoperation":
+        if mode_text == "Teleop":
             mode = Mode.TELEOP
         elif mode_text == "Algorithm":
             mode = Mode.ALGORITHM

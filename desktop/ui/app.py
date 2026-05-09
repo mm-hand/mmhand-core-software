@@ -54,6 +54,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._joint_debug_csv_path = ""
         self._last_draw = 0.0
         self._draw_interval = 0.1
+        self._pending_status_text = ""
         self.context = HandGuiContext(self)
         self.tendon_guard = TendonGuard(os.path.join(DESKTOP_DIR, "config", "tendon_manual_calib.json"))
 
@@ -65,6 +66,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self._display_windows.attach_menu(self.menuBar())
         self._attach_device_menu()
         self._display_windows.apply_main_geometry()
+        shortcut_cls = getattr(QtGui, "QShortcut", getattr(QtWidgets, "QShortcut", None))
+        self._esc_shortcut = shortcut_cls(QtGui.QKeySequence("Esc"), self) if shortcut_cls is not None else None
+        if self._esc_shortcut is not None:
+            self._esc_shortcut.activated.connect(self._on_keyboard_stop)
 
         self._display_timer = QtCore.QTimer(self)
         self._display_timer.timeout.connect(self._display_poll)
@@ -84,10 +89,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self.port_combo.setMinimumWidth(240)
         self.refresh_ports()
         self.connect_btn = QtWidgets.QPushButton("Connect")
-        self.connect_btn.clicked.connect(self._connect_selected_port)
+        self.connect_btn.clicked.connect(lambda _checked=False: self._connect_selected_port())
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Monitor", "Teleoperation", "Algorithm"])
-        idx = self.mode_combo.findText(self.current_mode)
+        self.mode_combo.addItems(["Manual", "Teleop", "Algorithm"])
+        idx = self.mode_combo.findText(self._mode_display_name(self.current_mode))
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentTextChanged.connect(self._switch_mode)
@@ -95,7 +100,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check.setChecked(True)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.plot_btn = QtWidgets.QPushButton("Plot")
-        self.plot_btn.clicked.connect(self._open_joint_rt_window)
+        self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
         self.start_indicator.setMinimumWidth(56)
@@ -110,20 +115,13 @@ class HandGUI(QtWidgets.QMainWindow):
 
         central = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(central)
-        self.left_placeholder = QtWidgets.QWidget()
-        left_layout = QtWidgets.QVBoxLayout(self.left_placeholder)
-        left_layout.setContentsMargins(8, 8, 8, 8)
-        title = QtWidgets.QLabel("Display windows are available from View: Hand Pose, Tactile, Cameras.")
-        title.setAlignment(QtCore.Qt.AlignCenter)
-        title.setStyleSheet("color: #555;")
-        left_layout.addWidget(title, 1)
         self.control_panel = ControlPanel(self.context)
-        central.addWidget(self.left_placeholder)
+        self.control_panel.sync_app_mode(self.current_mode)
         central.addWidget(self.control_panel)
         central.setStretchFactor(0, 1)
-        central.setStretchFactor(1, 2)
 
-        self.status_label = QtWidgets.QLabel("Ready" if self.is_comm_connected() else "Disconnected")
+        initial_status = self._pending_status_text or ("Ready" if self.is_comm_connected() else "Disconnected")
+        self.status_label = QtWidgets.QLabel(initial_status)
         self.delay_label = QtWidgets.QLabel("")
         self.fault_label = QtWidgets.QLabel("Faults: none")
         self.statusBar().addWidget(self.status_label, 1)
@@ -133,7 +131,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot = JointRealtimePlotView(self.context, self)
 
     def _attach_device_menu(self) -> None:
-        action_cls = getattr(QtGui, "QAction", QtWidgets.QAction)
+        action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
         menu = self.menuBar().addMenu("Device")
         refresh_ports = action_cls("Refresh Ports", self)
         refresh_ports.triggered.connect(self.refresh_ports)
@@ -170,33 +168,50 @@ class HandGUI(QtWidgets.QMainWindow):
     def _toggle_connection(self) -> None:
         if self.is_comm_connected():
             self._stop_data_recording("disconnected")
+            self.control_panel.stop_all_tests("disconnected", update_status=False)
             self.controller.shutdown()
             self.current_port = ""
+            self.control_panel.clear_live_state()
+            self._display_windows.update_views(HandModel())
             self._set_status("Disconnected")
             self._refresh_start_indicator()
             return
         self._connect_selected_port()
 
-    def _connect_selected_port(self) -> None:
+    def connect_selected_port(self) -> bool:
+        return self._connect_selected_port()
+
+    def _ensure_state_callback_registered(self) -> None:
+        try:
+            if self._on_state_update not in self.controller.update_callbacks:
+                self.controller.register_update_callback(self._on_state_update)
+        except Exception:
+            pass
+
+    def _connect_selected_port(self) -> bool:
         port = self.port_combo.currentData()
         if port is None:
             self.current_port = ""
             self._set_status("No serial port selected")
-            return
+            return False
         if self.is_comm_connected():
             self._set_status(f"Already connected: {self.current_port}")
-            return
+            return True
+        self._ensure_state_callback_registered()
         if self.controller.initialize(port):
             self.current_port = str(port)
             self._set_status(f"Connected: {self.current_port}")
             self._on_comm_ready()
+            return True
         else:
             QtWidgets.QMessageBox.critical(self, "Connection Failed", f"Cannot open port: {port}")
+            return False
 
     def _switch_mode(self, mode_name: str) -> None:
         self.current_mode = self._normalize_mode(mode_name)
         self.controller.set_pid_control(self.current_mode != "Monitor")
-        self._set_status(f"Mode: {self.current_mode}")
+        self.control_panel.sync_app_mode(self.current_mode)
+        self._set_status(f"Mode: {self._mode_display_name(self.current_mode)}")
 
     def _on_comm_ready(self) -> None:
         self._refresh_start_indicator()
@@ -253,7 +268,7 @@ class HandGUI(QtWidgets.QMainWindow):
         )
 
     def _clear_live_displays(self) -> None:
-        self.control_panel.update_state(HandModel())
+        self.control_panel.clear_live_state()
         self._display_windows.update_views(HandModel())
 
     def _open_joint_rt_window(self) -> None:
@@ -263,6 +278,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot.activateWindow()
 
     def send_joint_targets(self, angles: List[float], source: str = "", live: bool = False) -> None:
+        try:
+            self.control_panel._refresh_tendon_guard_from_ui()
+        except Exception:
+            pass
         self.tendon_guard.sync_to_controller(self.controller, force=False)
         guarded, blocked, msg = self.tendon_guard.apply(self._state or self.controller.current_state, angles, source=source)
         if msg:
@@ -333,7 +352,10 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _on_toggle_save_data(self, checked: bool) -> None:
         if checked:
-            self._start_data_recording()
+            if self.is_comm_connected():
+                self._start_data_recording()
+            else:
+                self._set_status("Recording waits for an active serial connection")
         else:
             self._stop_data_recording()
 
@@ -519,7 +541,12 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state = state
 
     def _set_status(self, text: str) -> None:
-        self.status_label.setText(str(text))
+        self._pending_status_text = str(text)
+        if hasattr(self, "status_label"):
+            self.status_label.setText(str(text))
+
+    def _on_keyboard_stop(self) -> None:
+        self.control_panel.stop_controller()
 
     def _refresh_start_indicator(self) -> None:
         started = bool(self.controller.is_started())
@@ -531,8 +558,23 @@ class HandGUI(QtWidgets.QMainWindow):
     @staticmethod
     def _normalize_mode(mode_name: str) -> str:
         text = str(mode_name or "").strip()
-        mapping = {"monitor": "Monitor", "teleop": "Teleoperation", "teleoperation": "Teleoperation", "algorithm": "Algorithm"}
+        mapping = {
+            "manual": "Monitor",
+            "monitor": "Monitor",
+            "teleop": "Teleoperation",
+            "teleoperation": "Teleoperation",
+            "algorithm": "Algorithm",
+        }
         return mapping.get(text.lower(), text or "Monitor")
+
+    @staticmethod
+    def _mode_display_name(mode_name: str) -> str:
+        normalized = HandGUI._normalize_mode(mode_name)
+        if normalized == "Monitor":
+            return "Manual"
+        if normalized == "Teleoperation":
+            return "Teleop"
+        return normalized
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         try:

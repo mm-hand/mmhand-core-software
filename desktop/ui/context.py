@@ -31,6 +31,12 @@ class HandGuiContext:
     def emit_action(self, msg: str) -> None:
         self._app.emit_action(msg)
 
+    def set_status(self, text: str) -> None:
+        self._app._set_status(text)
+
+    def connect_selected_port(self) -> bool:
+        return self._app.connect_selected_port()
+
     def get_state(self) -> Optional[HandModel]:
         return self._app.get_state()
 

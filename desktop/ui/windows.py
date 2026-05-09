@@ -39,13 +39,13 @@ class DisplayWindowManager:
         self.context = getattr(owner, "context", owner)
         self.windows: Dict[str, _DisplayWindow] = {}
         self.components: Dict[str, object] = {}
-        self.actions: Dict[str, QtWidgets.QAction] = {}
+        self.actions: Dict[str, object] = {}
         self._last_pose_update_ts = 0.0
 
     def attach_menu(self, menubar: QtWidgets.QMenuBar) -> None:
         menu = menubar.addMenu("View")
         for key, label in [("pose", "Hand Pose"), ("tactile", "Tactile"), ("cameras", "Cameras")]:
-            action_cls = getattr(QtGui, "QAction", QtWidgets.QAction)
+            action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
             action = action_cls(label, self.owner)
             action.setCheckable(True)
             action.toggled.connect(lambda checked, k=key: self.open(k) if checked else self.close(k))
