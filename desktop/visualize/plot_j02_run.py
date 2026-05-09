@@ -26,7 +26,7 @@ JIDX = 2
 
 
 def _default_run_data_dir() -> str:
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(project_root, "run_data")
 
 

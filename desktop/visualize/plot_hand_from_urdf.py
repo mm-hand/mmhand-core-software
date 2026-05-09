@@ -45,6 +45,7 @@ DISPLAY_TRANSFORM: np.ndarray = _make_display_transform()
 
 # 姿态窗口 Figure / Axes 统一底色（与 ui_main 中 Figure 一致）。mplot3d 的 ax.clear() 会把 axes 恢复成默认白底，必须与 fig.patch 一起设回，否则宽屏两侧「信箱」与绘图区会错色。
 POSE_VIEW_BG = "#e8eaee"
+DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 JOINT_ORDER: List[str] = [
@@ -86,7 +87,7 @@ _FALLBACK_ANGLE_MAPPING: List[List[int]] = [
 
 def load_angle_mapping_for_ui() -> List[List[int]]:
     """与 hand_visualizer_ui 相同：从 config/hand_geo.json 读取 angle_mapping。"""
-    p = os.path.join(os.path.dirname(__file__), "config", "hand_geo.json")
+    p = os.path.join(DESKTOP_DIR, "config", "hand_geo.json")
     try:
         from hand_geometry import load_hand_geo
 
@@ -978,8 +979,7 @@ def run_interactive(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    here = os.path.dirname(os.path.abspath(__file__))
-    default_urdf = os.path.join(here, "hku_hand_v2_urdf", "urdf", "hand.urdf")
+    default_urdf = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urdf")
 
     p = argparse.ArgumentParser(
         description="从 URDF 绘制 HKU 手骨架：默认交互 21 关节，可选静态快照。",

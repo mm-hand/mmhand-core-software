@@ -1,2 +1,2 @@
-"""Desktop Tk UI package."""
+"""Desktop Qt UI package."""
 

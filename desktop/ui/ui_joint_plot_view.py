@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from protocol import ENCODER_COUNT
-from .qt_compat import QtCore, QtWidgets
+from .ui_qt_compat import QtCore, QtWidgets
 import pyqtgraph as pg
 
 

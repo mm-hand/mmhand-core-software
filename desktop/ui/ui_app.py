@@ -7,14 +7,14 @@ from comm_layer import list_ports
 from core_logic import HandController
 from data_models import HandModel
 from protocol import ENCODER_COUNT, MOTOR_COUNT
-from .context import HandGuiContext
-from .control_panels import ControlPanel
-from .joint_plot_view import JointRealtimePlotView
-from .qt_compat import QtCore, QtGui, QtWidgets, ensure_app
-from .services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
-from .style import apply_main_window_defaults, configure_qt_application
-from .tendon_guard import TendonGuard, MOTOR_TO_JOINT_INDEX
-from .windows import DisplayWindowManager
+from .ui_context import HandGuiContext
+from .ui_control_panels import ControlPanel
+from .ui_joint_plot_view import JointRealtimePlotView
+from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
+from .ui_services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
+from .ui_style import apply_main_window_defaults, configure_qt_application
+from .ui_tendon_guard import TendonGuard, MOTOR_TO_JOINT_INDEX
+from .ui_windows import DisplayWindowManager
 
 
 DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +63,7 @@ class HandGUI(QtWidgets.QMainWindow):
         apply_main_window_defaults(self)
         self._build_ui()
         self._display_windows = DisplayWindowManager(self)
+        self._attach_mode_menu()
         self._display_windows.attach_menu(self.menuBar())
         self._attach_device_menu()
         self._display_windows.apply_main_geometry()
@@ -88,14 +89,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self.port_combo = QtWidgets.QComboBox()
         self.port_combo.setMinimumWidth(240)
         self.refresh_ports()
-        self.connect_btn = QtWidgets.QPushButton("Connect")
-        self.connect_btn.clicked.connect(lambda _checked=False: self._connect_selected_port())
-        self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Manual", "Teleop", "Algorithm"])
-        idx = self.mode_combo.findText(self._mode_display_name(self.current_mode))
-        if idx >= 0:
-            self.mode_combo.setCurrentIndex(idx)
-        self.mode_combo.currentTextChanged.connect(self._switch_mode)
+        self.port_combo.currentIndexChanged.connect(lambda _idx: self._on_port_selection_changed())
+        self.connect_btn = QtWidgets.QPushButton("Refresh")
+        self.connect_btn.clicked.connect(lambda _checked=False: self.refresh_ports())
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
         self.save_data_check.setChecked(True)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
@@ -108,8 +104,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            QtWidgets.QLabel("Mode:"), self.mode_combo, self.save_data_check,
-            self.plot_btn, self.start_indicator,
+            self.save_data_check, self.plot_btn, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
@@ -129,6 +124,36 @@ class HandGUI(QtWidgets.QMainWindow):
         self.statusBar().addPermanentWidget(self.delay_label)
 
         self.joint_plot = JointRealtimePlotView(self.context, self)
+
+    def _attach_mode_menu(self) -> None:
+        action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
+        group_cls = getattr(QtGui, "QActionGroup", None) or getattr(QtWidgets, "QActionGroup", None)
+        menu = self.menuBar().addMenu("Mode")
+        self._mode_action_group = group_cls(self) if group_cls is not None else None
+        if self._mode_action_group is not None:
+            self._mode_action_group.setExclusive(True)
+        self._mode_actions = {}
+        for label in ["Manual", "Teleop", "Algorithm"]:
+            action = action_cls(label, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, name=label: self._on_mode_action_triggered(name, checked))
+            if self._mode_action_group is not None:
+                self._mode_action_group.addAction(action)
+            menu.addAction(action)
+            self._mode_actions[label] = action
+        self._sync_mode_actions()
+
+    def _on_mode_action_triggered(self, mode_name: str, checked: bool = True) -> None:
+        if checked or self._mode_action_group is None:
+            self._switch_mode(mode_name)
+
+    def _sync_mode_actions(self) -> None:
+        actions = getattr(self, "_mode_actions", {})
+        selected = self._mode_display_name(self.current_mode)
+        for label, action in actions.items():
+            action.blockSignals(True)
+            action.setChecked(label == selected)
+            action.blockSignals(False)
 
     def _attach_device_menu(self) -> None:
         action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
@@ -167,14 +192,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _toggle_connection(self) -> None:
         if self.is_comm_connected():
-            self._stop_data_recording("disconnected")
-            self.control_panel.stop_all_tests("disconnected", update_status=False)
-            self.controller.shutdown()
-            self.current_port = ""
-            self.control_panel.clear_live_state()
-            self._display_windows.update_views(HandModel())
-            self._set_status("Disconnected")
-            self._refresh_start_indicator()
+            self._disconnect_current_port("Disconnected")
             return
         self._connect_selected_port()
 
@@ -187,6 +205,41 @@ class HandGUI(QtWidgets.QMainWindow):
                 self.controller.register_update_callback(self._on_state_update)
         except Exception:
             pass
+
+    def _on_port_selection_changed(self) -> None:
+        port = self.port_combo.currentData()
+        if port is None:
+            if self.is_comm_connected() or self.current_port:
+                self._disconnect_current_port("Disconnected")
+            else:
+                self.current_port = ""
+                self._clear_live_displays()
+                self._set_status("No serial port selected")
+            return
+        port = str(port)
+        if self.is_comm_connected() and self.current_port == port:
+            return
+        if self.is_comm_connected():
+            self._disconnect_current_port(f"Switching port: {port}", clear_selection=False)
+        self._connect_selected_port()
+
+    def _disconnect_current_port(self, status: str = "Disconnected", clear_selection: bool = True) -> None:
+        self._stop_data_recording("disconnected")
+        self.control_panel.stop_all_tests("disconnected", update_status=False)
+        self.controller.shutdown()
+        self.current_port = ""
+        self._state = None
+        self._state_buffer_version = 0
+        self.control_panel.clear_live_state()
+        self._display_windows.update_views(HandModel())
+        if clear_selection:
+            self.port_combo.blockSignals(True)
+            idx = self.port_combo.findData(None)
+            if idx >= 0:
+                self.port_combo.setCurrentIndex(idx)
+            self.port_combo.blockSignals(False)
+        self._set_status(status)
+        self._refresh_start_indicator()
 
     def _connect_selected_port(self) -> bool:
         port = self.port_combo.currentData()
@@ -211,6 +264,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.current_mode = self._normalize_mode(mode_name)
         self.controller.set_pid_control(self.current_mode != "Monitor")
         self.control_panel.sync_app_mode(self.current_mode)
+        self._sync_mode_actions()
         self._set_status(f"Mode: {self._mode_display_name(self.current_mode)}")
 
     def _on_comm_ready(self) -> None:

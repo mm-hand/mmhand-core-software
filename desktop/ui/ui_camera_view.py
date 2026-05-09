@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from .qt_compat import QtCore, QtGui, QtWidgets
+from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
 
 CAMERA_CAPTURE_SLEEP_S = 0.05
@@ -22,7 +22,7 @@ class CameraView(QtWidgets.QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         self.combos = []
         self.labels = []

@@ -18,7 +18,7 @@ class Mode(Enum):
 
 def _run_monitor_gui(controller: HandController, port: Optional[str] = None) -> None:
     controller.reset()
-    # 下位机 start 与显示由主界面 [Start]/[Stop] 控制
+    # 涓嬩綅鏈?start 涓庢樉绀虹敱涓荤晫闈?[Start]/[Stop] 鎺у埗
     from ui_main import HandGUI
     gui_win = HandGUI(
         controller,
@@ -34,9 +34,9 @@ def _run_monitor_gui(controller: HandController, port: Optional[str] = None) -> 
 def _run_teleop_gui(controller: HandController, port: Optional[str] = None) -> None:
     controller.reset()
     try:
-        from example_teleop import run as teleop_run
+        from teleop.example_teleop import run as teleop_run
     except ImportError:
-        print("example_teleop module not found. Please implement run(controller, port=None).")
+        print("teleop.example_teleop module not found. Please implement run(controller, port=None).")
         return
     if not callable(teleop_run):
         print("example_teleop.run must be callable: run(controller, port).")
@@ -47,9 +47,9 @@ def _run_teleop_gui(controller: HandController, port: Optional[str] = None) -> N
 def _run_algorithm_gui(controller: HandController, port: Optional[str] = None) -> None:
     controller.reset()
     try:
-        from example_algorithm import run as algorithm_run
+        from algorithm.example_algorithm import run as algorithm_run
     except ImportError:
-        print("example_algorithm module not found. Please implement run(controller, stop_event=None).")
+        print("algorithm.example_algorithm module not found. Please implement run(controller, stop_event=None).")
         return
     if not callable(algorithm_run):
         print("example_algorithm.run must be callable: run(controller, stop_event=None).")

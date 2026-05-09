@@ -1,8 +1,8 @@
 from comm_layer import list_ports
 from core_logic import HandController
 from modes import Mode, run
-from .qt_compat import QtWidgets, ensure_app
-from .style import configure_qt_application
+from .ui_qt_compat import QtWidgets, ensure_app
+from .ui_style import configure_qt_application
 
 
 class LauncherWindow(QtWidgets.QDialog):

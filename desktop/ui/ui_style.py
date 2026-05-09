@@ -1,4 +1,4 @@
-from .qt_compat import QtWidgets
+from .ui_qt_compat import QtWidgets
 
 
 def configure_qt_application(app: QtWidgets.QApplication) -> None:

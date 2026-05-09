@@ -1,10 +1,10 @@
 import time
 from typing import Dict, Optional
 
-from .qt_compat import QtCore, QtGui, QtWidgets, Signal
-from .camera_view import CameraView
-from .pose_view import Pose3DView
-from .tactile_view import TactileView
+from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
+from .ui_camera_view import CameraView
+from .ui_pose_view import Pose3DView
+from .ui_tactile_view import TactileView
 
 
 POSE_REAL_INTERVAL_S = 0.10
@@ -18,6 +18,8 @@ class _DisplayWindow(QtWidgets.QDialog):
         super().__init__(parent)
         self.key = key
         self.component = component
+        if key != "pose":
+            self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -25,11 +27,15 @@ class _DisplayWindow(QtWidgets.QDialog):
         layout.addWidget(component)
 
     def closeEvent(self, event):
+        self.closed.emit(self.key)
         try:
             self.component.close()
         except Exception:
             pass
-        self.closed.emit(self.key)
+        if self.key == "pose":
+            self.hide()
+            event.ignore()
+            return
         super().closeEvent(event)
 
 
@@ -72,12 +78,34 @@ class DisplayWindowManager:
 
     def is_open(self, key: str) -> bool:
         win = self.windows.get(key)
-        return bool(win is not None and win.isVisible())
+        if win is None:
+            return False
+        try:
+            return bool(win.isVisible())
+        except RuntimeError:
+            self.windows.pop(key, None)
+            self.components.pop(key, None)
+            self._set_action(key, False)
+            return False
 
     def open(self, key: str) -> None:
         if self.is_open(key):
             self.windows[key].raise_()
             self.windows[key].activateWindow()
+            return
+        hidden = self.windows.get(key)
+        if key == "pose" and hidden is not None:
+            self.components[key] = hidden.component
+            try:
+                hidden.component.resume()
+            except Exception:
+                pass
+            self._last_pose_update_ts = 0.0
+            self._set_action(key, True)
+            self.layout_open_windows()
+            hidden.show()
+            hidden.raise_()
+            hidden.activateWindow()
             return
         title, component, size = self._make_component(key)
         win = _DisplayWindow(key, title, component, self.owner)
@@ -85,26 +113,50 @@ class DisplayWindowManager:
         win.resize(*size)
         self.windows[key] = win
         self.components[key] = component
+        if key == "pose":
+            self._last_pose_update_ts = 0.0
         self._set_action(key, True)
         self.layout_open_windows()
         win.show()
         win.raise_()
 
     def close(self, key: str) -> None:
-        win = self.windows.pop(key, None)
+        win = self.windows.get(key) if key == "pose" else self.windows.pop(key, None)
         self.components.pop(key, None)
         self._set_action(key, False)
         if win is not None:
-            win.blockSignals(True)
             try:
-                win.close()
-            finally:
-                win.deleteLater()
+                if key == "pose":
+                    try:
+                        win.component.pause()
+                    except Exception:
+                        pass
+                    win.hide()
+                else:
+                    win.blockSignals(True)
+                    win.close()
+            except RuntimeError:
+                if key == "pose":
+                    self.windows.pop(key, None)
         self.layout_open_windows()
 
     def close_all(self) -> None:
         for key in list(self.windows.keys()):
-            self.close(key)
+            if key == "pose":
+                win = self.windows.pop(key, None)
+                self.components.pop(key, None)
+                self._set_action(key, False)
+                if win is not None:
+                    try:
+                        win.component.close()
+                    except Exception:
+                        pass
+                    try:
+                        win.deleteLater()
+                    except RuntimeError:
+                        pass
+            else:
+                self.close(key)
 
     def update_views(self, state) -> None:
         self.update_pose_if_due(state)
@@ -161,9 +213,11 @@ class DisplayWindowManager:
         action.blockSignals(False)
 
     def _on_window_closed(self, key: str) -> None:
-        self.windows.pop(key, None)
+        if key != "pose":
+            self.windows.pop(key, None)
         self.components.pop(key, None)
         self._set_action(key, False)
+        self.layout_open_windows()
 
     def _make_component(self, key: str):
         if key == "pose":

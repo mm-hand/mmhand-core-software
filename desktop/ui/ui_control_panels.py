@@ -12,15 +12,15 @@ from protocol import (
     MOTOR_ABS_CMD_MIN,
     MOTOR_ABS_CMD_MAX,
 )
-from .qt_compat import QtCore, QtGui, QtWidgets
-from .tendon_guard import (
+from .ui_qt_compat import QtCore, QtGui, QtWidgets
+from .ui_tendon_guard import (
     MOTOR_TO_JOINT_INDEX,
     TendonGuard,
     clamp_motor_abs,
     motor_target_from_servo_feedback,
 )
-from .teleop_view import TeleopView
-from .algorithm_view import AlgorithmView
+from .ui_teleop_view import TeleopView
+from .ui_algorithm_view import AlgorithmView
 
 
 MOTOR_TARGET_SCALE_LO = 0
@@ -285,16 +285,16 @@ class ControlPanel(QtWidgets.QWidget):
         return item
 
     def _build_joint_table(self) -> QtWidgets.QTableWidget:
-        table = QtWidgets.QTableWidget(ENCODER_COUNT, 11)
+        table = QtWidgets.QTableWidget(ENCODER_COUNT, 12)
         table.setHorizontalHeaderLabels([
-            "Joint", "Enc", "Current", "Min", "Target", "Max", "Action",
+            "Joint", "Enc", "Current", "Raw", "Min", "Target", "Max", "Action",
             "Target Slider", "tie", "+/-", "x1(abs)",
         ])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(True)
         for i in range(ENCODER_COUNT):
             table.setItem(i, 0, self._make_item(f"J{i:02d}"))
-            status = self._make_item("●")
+            status = self._make_item("*")
             status.setTextAlignment(QtCore.Qt.AlignCenter)
             status.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
             enc = self._make_item("-")
@@ -304,7 +304,8 @@ class ControlPanel(QtWidgets.QWidget):
             self.joint_current_items.append(cur)
             table.setItem(i, 1, status)
             table.setItem(i, 2, cur)
-            table.setItem(i, 3, self._make_item(f"{self._joint_target_min_deg(i):.2f}"))
+            table.setItem(i, 3, enc)
+            table.setItem(i, 4, self._make_item(f"{self._joint_target_min_deg(i):.2f}"))
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(self._joint_target_min_deg(i), self._joint_target_max_deg(i))
             spin.setDecimals(2)
@@ -312,18 +313,18 @@ class ControlPanel(QtWidgets.QWidget):
             spin.valueChanged.connect(lambda value, idx=i: self._joint_spin_changed(idx, value))
             spin.editingFinished.connect(lambda idx=i: self._mark_joint_target_user_set(idx))
             self.joint_target_spins.append(spin)
-            table.setCellWidget(i, 4, spin)
-            table.setItem(i, 5, self._make_item(f"{self._joint_target_max_deg(i):.2f}"))
+            table.setCellWidget(i, 5, spin)
+            table.setItem(i, 6, self._make_item(f"{self._joint_target_max_deg(i):.2f}"))
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: self.send_joint_row(idx))
             self.joint_send_buttons.append(send)
-            table.setCellWidget(i, 6, send)
+            table.setCellWidget(i, 7, send)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setRange(int(self._joint_target_min_deg(i) * 100), int(self._joint_target_max_deg(i) * 100))
             slider.valueChanged.connect(lambda value, idx=i: self._joint_slider_changed(idx, value))
             self.joint_sliders.append(slider)
-            table.setCellWidget(i, 7, slider)
-            table.setItem(i, 8, self._make_item("tie"))
+            table.setCellWidget(i, 8, slider)
+            table.setItem(i, 9, self._make_item("tie"))
             cfg = self.context.tendon_guard.config[i] if i < len(self.context.tendon_guard.config) else {}
             sign_text = TendonGuard.sign_text(cfg)
             sign_edit = QtWidgets.QLineEdit(sign_text)
@@ -334,12 +335,12 @@ class ControlPanel(QtWidgets.QWidget):
             x1_edit.editingFinished.connect(lambda idx=i: self._on_joint_tie_field_commit(idx))
             self.joint_tie_sign_edits.append(sign_edit)
             self.joint_tie_x1_edits.append(x1_edit)
-            table.setCellWidget(i, 9, sign_edit)
-            table.setCellWidget(i, 10, x1_edit)
+            table.setCellWidget(i, 10, sign_edit)
+            table.setCellWidget(i, 11, x1_edit)
             self._joint_target_user_set.append(False)
             self._control_widgets.extend([spin, send, slider, sign_edit, x1_edit])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Stretch)
         return table
 
     def _build_motor_table(self) -> QtWidgets.QTableWidget:
@@ -665,6 +666,9 @@ class ControlPanel(QtWidgets.QWidget):
         state = self._state
         return [self._motor_abs_for_command_packet(i, state) for i in range(MOTOR_COUNT)]
 
+    def motor_sweep_targets(self) -> List[int]:
+        return [self._read_motor_target_slider_int(i) for i in range(MOTOR_COUNT)]
+
     def send_joint_row(self, idx: int) -> None:
         if not self._interaction_enabled:
             return
@@ -933,6 +937,25 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_last_sent_abs = list(targets)
         self.context.emit_action(f"Motor absolute positions sent ({trigger})")
 
+    def _send_motor_sweep_from_ui(self, trigger: str) -> None:
+        if not self._interaction_enabled:
+            return
+        if not self.context.is_comm_connected():
+            raise RuntimeError("Serial port is not connected")
+        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.controller.set_pid_control(False)
+        if not self.controller.is_started():
+            self.controller.start()
+        state = self._state
+        if state is None or not (
+            bool(getattr(state, "has_servo_angle_data", False)) or bool(getattr(state, "has_servo_raw_data", False))
+        ):
+            self._set_status("Motor command blocked: waiting for motor feedback")
+            return
+        targets = self.motor_sweep_targets()
+        self.controller.set_motor_positions_raw_sweep(targets)
+        self.context.emit_action(f"Motor sweep positions sent ({trigger})")
+
     def _sync_motor_abs_from_slider_before_send(self, idx: int) -> None:
         if idx < 0 or idx >= MOTOR_COUNT:
             return
@@ -1047,6 +1070,9 @@ class ControlPanel(QtWidgets.QWidget):
                     if i < len(getattr(state, "encoders", [])):
                         self.joint_encoder_items[i].setText(str(getattr(state.encoders[i], "raw", "-")))
                         self._set_joint_encoder_dot(i, not bool(getattr(state.encoders[i], "error", False)))
+                    else:
+                        self.joint_encoder_items[i].setText("-")
+                        self._set_joint_encoder_dot(i, None)
                 else:
                     self.joint_current_items[i].setText("-")
                     self.joint_encoder_items[i].setText("-")
@@ -1217,7 +1243,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._mark_motor_target_user_set(idx)
         self._motor_first_drag_limit_active[idx] = False
         try:
-            self._send_motor_abs_from_ui(f"Slider M{idx}")
+            self._send_motor_sweep_from_ui(f"Slider M{idx}")
         except Exception as exc:
             self._set_status(f"Motor slider send failed: {exc}")
 
@@ -1229,26 +1255,22 @@ class ControlPanel(QtWidgets.QWidget):
         if self._motor_abs_pos[idx] is None:
             return
         cur_sl = self._read_motor_target_slider_int(idx)
-        if int(delta) > 0:
-            if cur_sl < MOTOR_TARGET_SCALE_HI:
-                return
-            new_sl = MOTOR_TARGET_SCALE_LO
-            d_abs = 1
-        elif int(delta) < 0:
-            if cur_sl > MOTOR_TARGET_SCALE_LO:
-                return
-            new_sl = MOTOR_TARGET_SCALE_HI
-            d_abs = -1
+        step_dir = 1 if int(delta) > 0 else (-1 if int(delta) < 0 else 0)
+        if step_dir > 0:
+            new_sl = MOTOR_TARGET_SCALE_LO if cur_sl >= MOTOR_TARGET_SCALE_HI else cur_sl + 1
+        elif step_dir < 0:
+            new_sl = MOTOR_TARGET_SCALE_HI if cur_sl <= MOTOR_TARGET_SCALE_LO else cur_sl - 1
         else:
             return
-        self._motor_abs_pos[idx] = clamp_motor_abs(int(self._motor_abs_pos[idx]) + d_abs)
-        self._motor_dir_hint[idx] = 1 if d_abs > 0 else -1
+        self._motor_abs_pos[idx] = clamp_motor_abs(int(self._motor_abs_pos[idx]) + step_dir)
+        self._motor_dir_hint[idx] = step_dir
         self._motor_dir_hint_pending_clear[idx] = True
         self._motor_dir_hint_stable_count[idx] = 0
         self._set_motor_target_widget(idx, new_sl)
         self._motor_last_slider[idx] = new_sl
         self._mark_motor_target_user_set(idx)
-        self._send_motor_abs_from_ui(f"{'Step+' if delta > 0 else 'Step-'} M{idx}")
+        self._motor_first_drag_limit_active[idx] = False
+        self._send_motor_sweep_from_ui(f"{'Step+' if delta > 0 else 'Step-'} M{idx}")
 
     def _normalize_test_joint_value(self, text: str) -> str:
         text = str(text or "").strip()

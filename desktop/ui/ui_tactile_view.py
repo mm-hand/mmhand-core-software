@@ -22,7 +22,7 @@ from data_models import (
     TACTILE_JOINT_BAND_INDICES,
     tactile_apply_fingertip_round_cap,
 )
-from .qt_compat import QtCore, QtWidgets
+from .ui_qt_compat import QtCore, QtWidgets
 import pyqtgraph as pg
 
 

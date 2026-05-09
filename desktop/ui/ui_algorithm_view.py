@@ -1,4 +1,4 @@
-from .qt_compat import QtWidgets
+from .ui_qt_compat import QtWidgets
 
 
 class AlgorithmView(QtWidgets.QWidget):
