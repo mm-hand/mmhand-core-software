@@ -1,7 +1,8 @@
 #include "SystemTask.h"
-#include "ServoBusManager.h"
-#include "AngleSolver.h"
 #include "CalibrationTask.h"
+#include "StateMachineTask.h"
+#include "ControlTask.h"
+#include "ServoCommunicationTask.h"
 
 #include <string.h>
 
@@ -18,18 +19,14 @@ TaskSharedData_t sharedData;
 
 // 任务句柄用于系统侧管理（当前主要用于可见性与后续扩展）。
 TaskHandle_t taskUpperCommHandle = NULL;
+TaskHandle_t taskStateMachineHandle = NULL;
 TaskHandle_t taskCanCommHandle = NULL;
-TaskHandle_t taskSolverHandle = NULL;
+TaskHandle_t taskServoCommHandle = NULL;
+TaskHandle_t taskControlHandle = NULL;
 
 // 4 路舵机总线管理器实例，物理接线与 jointMap 对应。
-ServoBusManager servoBus0;
-ServoBusManager servoBus1;
-ServoBusManager servoBus2;
-ServoBusManager servoBus3;
 
 // 角度求解与双环控制实例。
-AngleSolver angleSolver;
-
 // 主映射：关节索引(0..20) -> 主舵机总线/ID。
 JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
     {0, 1},  {0, 2},  {0, 3},  {0, 4},
@@ -83,19 +80,26 @@ void System_Init() {
     // 2) 创建跨任务消息队列。
     sharedData.cmdQueue = xQueueCreate(5, sizeof(ServoCommand_t));
     sharedData.statusQueue = xQueueCreate(3, sizeof(ServoStatus_t));
+    sharedData.stateEventQueue = xQueueCreate(8, sizeof(SystemEvent_t));
     sharedData.canRxQueue = xQueueCreate(1, sizeof(RemoteSensorData_t));
     sharedData.canTxQueue = xQueueCreate(5, sizeof(RemoteCommand_t));
+    sharedData.servoTargetQueue = xQueueCreate(1, sizeof(ServoTargetBatch_t));
+    sharedData.servoFeedbackQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
     sharedData.servoAngleQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
     sharedData.servoRawQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
     sharedData.servoTelemetryQueue = xQueueCreate(1, sizeof(ServoTelemetryData_t));
+    sharedData.servoTelemetrySnapshotQueue = xQueueCreate(1, sizeof(ServoTelemetryData_t));
     sharedData.mappedAngleQueue = xQueueCreate(1, sizeof(MappedAngleData_t));
     sharedData.jointDebugQueue = xQueueCreate(8, sizeof(JointDebugData_t));
     sharedData.tactileQueue = xQueueCreate(1, sizeof(RemoteTactileData_t));
 
     if (!sharedData.cmdQueue || !sharedData.statusQueue ||
+        !sharedData.stateEventQueue ||
         !sharedData.canRxQueue || !sharedData.canTxQueue ||
+        !sharedData.servoTargetQueue || !sharedData.servoFeedbackQueue ||
         !sharedData.servoAngleQueue || !sharedData.servoRawQueue ||
-        !sharedData.servoTelemetryQueue || !sharedData.mappedAngleQueue ||
+        !sharedData.servoTelemetryQueue || !sharedData.servoTelemetrySnapshotQueue ||
+        !sharedData.mappedAngleQueue ||
         !sharedData.jointDebugQueue || !sharedData.tactileQueue) {
         // 资源不足时停在此处，避免系统在不完整状态下继续运行。
         while (1) {}
@@ -118,6 +122,9 @@ void System_Init() {
     sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData.control_enabled = 0;
     sharedData.control_mode = CONTROL_MODE_JOINT;
+    sharedData.system_state = SYSTEM_STATE_BOOTING;
+    sharedData.system_fault_bitmap = 0;
+    sharedData.state_transition_count = 0;
     sharedData.joint16_dual_feedback_fault = 0;
     sharedData.overload_fault_bitmap = 0;
     sharedData.overload_fault_reset_token = 0;
@@ -130,61 +137,56 @@ void System_Init() {
     }
     sharedData.calib_zero_raw_valid = 0;
 
-    // 4) 初始化全部舵机总线，保持与现有接线假设一致。
-    servoBus0.begin(0, 21, 20, 1000000);
-    servoBus1.begin(1, 23, 22, 1000000);
-    servoBus2.begin(2, 27, 26, 1000000);
-    servoBus3.begin(3, 33, 32, 1000000);
-
-    // 5) 初始化求解器基础参数（默认零点/比例/方向）。
-    int16_t zeros[ENCODER_TOTAL_NUM];
-    float ratios[ENCODER_TOTAL_NUM];
-    int8_t dirs[ENCODER_TOTAL_NUM];
-    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-        zeros[i] = 2048;
-        ratios[i] = 1.0f;
-        dirs[i] = 1;
-    }
-    angleSolver.init(zeros, ratios, dirs);
-
-    // 6) 设置双环 PID 参数。
-    float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {16.5f, 0.0f, 0.5f, 0.0f, 100.0f, 600.0f},
-        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
-    };
-    angleSolver.setPIDParams(pidConfigs);
 
     // 7) 当前测试阶段：禁用自动标定动作，使用手动配置入口。
     initManualCalibrationForTest();
 
     // 8) 创建上位机通信任务。
     xTaskCreate(
-        taskUpperComm,
-        "UpperComm",
+        upperCommunicationTask,
+        "upperCommunicationTask",
         UPPER_COMM_TASK_STACK_SIZE,
         &sharedData,
         TASK_UPPER_COMM_PRIORITY,
         &taskUpperCommHandle
     );
 
+    xTaskCreate(
+        stateMachineTask,
+        "stateMachineTask",
+        STATE_MACHINE_TASK_STACK_SIZE,
+        &sharedData,
+        TASK_STATE_MACHINE_PRIORITY,
+        &taskStateMachineHandle
+    );
+
     // 9) 创建 CAN 通信任务。
     xTaskCreate(
-        taskCanComm,
-        "CanComm",
+        canCommunicationTask,
+        "canCommunicationTask",
         CAN_COMM_TASK_STACK_SIZE,
         &sharedData,
         TASK_CAN_COMM_PRIORITY,
         &taskCanCommHandle
     );
 
+    xTaskCreate(
+        servoCommunicationTask,
+        "servoCommunicationTask",
+        SERVO_COMM_TASK_STACK_SIZE,
+        &sharedData,
+        TASK_SERVO_COMM_PRIORITY,
+        &taskServoCommHandle
+    );
+
     // 10) 创建角度求解与执行任务。
     xTaskCreate(
-        taskSolver,
-        "Solver",
-        SOLVER_TASK_STACK_SIZE,
+        controlTask,
+        "controlTask",
+        CONTROL_TASK_STACK_SIZE,
         &sharedData,
-        TASK_SOLVER_PRIORITY,
-        &taskSolverHandle
+        TASK_CONTROL_PRIORITY,
+        &taskControlHandle
     );
 
     Serial.println("FreeRTOS tasks created successfully.");

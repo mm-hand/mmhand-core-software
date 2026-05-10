@@ -2,9 +2,7 @@
 
 #include <string.h>
 
-#include "AngleSolver.h"
 #include "JointCalibrationProfile.h"
-#include "ServoBusManager.h"
 
 // CalibrationTask 模块职责：
 // 1) 管理关节标定参数与标定结果；
@@ -13,14 +11,11 @@
 //
 // 数据来源约束：
 // - 编码器原始值来自 canRxQueue（RemoteSensorData_t）；
-// - 舵机运动与反馈来自 ServoBusManager；
+// - 舵机运动与反馈通过 servoCommunicationTask 的队列/快照交互；
 // - 标定状态通过 g_calibrationUIStatus 对上位机可见。
 
-extern ServoBusManager servoBus0;
-extern ServoBusManager servoBus1;
-extern ServoBusManager servoBus2;
-extern ServoBusManager servoBus3;
 extern JointMapItem jointMap[ENCODER_TOTAL_NUM];
+extern MotorMapItem joint16SecondaryMotor;
 extern volatile uint8_t g_calibrationUIStatus;
 
 // 全局标定配置与结果（按关节索引 0~ENCODER_TOTAL_NUM-1）。
@@ -38,7 +33,7 @@ int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
 };
 
 // 手工回退 offset 表：
-// 当自动标定结果不可用时，AngleSolver 会读取该表作为零偏。
+// 当自动标定结果不可用时，控制任务会读取该表作为零偏。
 int32_t g_encoderOffsetManual[ENCODER_TOTAL_NUM] = {0};
 
 static const uint8_t kJoint16Index = 16;
@@ -81,16 +76,6 @@ static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction) {
     return oriented;
 }
 
-// 将 busIndex 映射为总线对象；非法索引返回 NULL。
-static ServoBusManager* getBusByIndex(uint8_t busIndex) {
-    switch (busIndex) {
-        case 0: return &servoBus0;
-        case 1: return &servoBus1;
-        case 2: return &servoBus2;
-        case 3: return &servoBus3;
-        default: return NULL;
-    }
-}
 
 // 舵机绝对位置限幅，防止下发超出协议/硬件安全范围的目标值。
 static int16_t clampToServoPos(int32_t value) {
@@ -153,20 +138,125 @@ static bool readLatestEncoderRaw(TaskSharedData_t* sharedData, uint8_t jointInde
     *outEncoder = orientEncoderRaw(sensorData.encoderValues[jointIndex], g_encoderDirection[jointIndex]);
     return true;
 }
+static int findMotorChannel(uint8_t bus, uint8_t id)
+{
+    for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
+        if (motorMap[i].busIndex == bus && motorMap[i].servoID == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool readLatestServoAbs(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int32_t* outAbs)
+{
+    if (!sharedData || !outAbs) {
+        return false;
+    }
+    const int ch = findMotorChannel(bus, id);
+    if (ch < 0) {
+        return false;
+    }
+    ServoAngleData_t servoData;
+    if (!sharedData->servoFeedbackQueue || xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE) {
+        return false;
+    }
+    if (servoData.onlineStatus[ch] == 0) {
+        return false;
+    }
+    *outAbs = servoData.servoAngles[ch];
+    return true;
+}
+
+static bool readLatestServoLoad(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int16_t* outLoad)
+{
+    if (!sharedData || !outLoad) {
+        return false;
+    }
+    const int ch = findMotorChannel(bus, id);
+    if (ch < 0) {
+        return false;
+    }
+    ServoTelemetryData_t telemetry;
+    QueueHandle_t queue = sharedData->servoTelemetrySnapshotQueue ? sharedData->servoTelemetrySnapshotQueue : sharedData->servoTelemetryQueue;
+    if (!queue || xQueuePeek(queue, &telemetry, 0) != pdTRUE) {
+        return false;
+    }
+    if (telemetry.onlineStatus[ch] == 0) {
+        return false;
+    }
+    *outLoad = telemetry.load[ch];
+    return true;
+}
+
+static bool appendServoTarget(ServoTargetBatch_t* batch,
+                              uint8_t busIndex,
+                              uint8_t servoId,
+                              int16_t position,
+                              uint16_t speed,
+                              uint8_t acc)
+{
+    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX || busIndex >= NUM_BUSES) {
+        return false;
+    }
+    ServoTargetCommand_t& cmd = batch->commands[batch->count++];
+    cmd.busIndex = busIndex;
+    cmd.servoId = servoId;
+    cmd.position = position;
+    cmd.speed = speed;
+    cmd.acc = acc;
+    return true;
+}
+
+static bool queueJointTarget(TaskSharedData_t* sharedData,
+                             uint8_t jointIndex,
+                             int16_t primaryTarget,
+                             const JointCalibrationConfig& cfg)
+{
+    if (!sharedData || !sharedData->servoTargetQueue || jointIndex >= ENCODER_TOTAL_NUM) {
+        return false;
+    }
+
+    ServoTargetBatch_t batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.timestamp = millis();
+    appendServoTarget(&batch,
+                      jointMap[jointIndex].busIndex,
+                      jointMap[jointIndex].servoID,
+                      primaryTarget,
+                      cfg.tightenSpeed,
+                      cfg.tightenAcc);
+
+    JointDualServoConstraint dualCfg;
+    int16_t secondaryTarget = 0;
+    if (getJointDualServoConstraint(jointIndex, &dualCfg) &&
+        computeSecondaryServoTargetForJoint(jointIndex, primaryTarget, &secondaryTarget)) {
+        appendServoTarget(&batch,
+                          dualCfg.secondaryBusIndex,
+                          dualCfg.secondaryServoID,
+                          secondaryTarget,
+                          cfg.tightenSpeed,
+                          cfg.tightenAcc);
+    }
+
+    if (batch.count == 0) {
+        return false;
+    }
+    return xQueueOverwrite(sharedData->servoTargetQueue, &batch) == pdTRUE;
+}
 
 // 标定后回退动作：
 // 将关节移动到 angleReserved 预留角度，避免长时间停在机械限位附近。
 // 成功返回 true；超时或反馈不可用返回 false（不影响标定主结果已写回）。
 static bool moveJointToReserved(TaskSharedData_t* sharedData,
-                                ServoBusManager* pBus,
-                                uint8_t servoId,
                                 uint8_t jointIndex,
                                 const JointCalibrationConfig& cfg,
                                 int32_t offset) {
-    if (!sharedData || !pBus) return false;
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) return false;
 
     const int32_t targetEncoder = offset + cfg.angleReserved;
-    const uint8_t ids[] = {servoId};
+    const uint8_t bus = jointMap[jointIndex].busIndex;
+    const uint8_t servoId = jointMap[jointIndex].servoID;
     const uint32_t beginMs = millis();
 
     while (millis() - beginMs < 3000) {
@@ -181,12 +271,12 @@ static bool moveJointToReserved(TaskSharedData_t* sharedData,
             return true;
         }
 
-        if (pBus->syncReadPositions(ids, 1) <= 0) {
+        int32_t currentServoPos = 0;
+        if (!readLatestServoAbs(sharedData, bus, servoId, &currentServoPos)) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
-        const int32_t currentServoPos = pBus->getAbsolutePosition(servoId);
         int32_t step = encoderErr / 8;
         if (step == 0) step = (encoderErr > 0) ? 1 : -1;
 
@@ -196,24 +286,13 @@ static bool moveJointToReserved(TaskSharedData_t* sharedData,
         if (step < -stepLimit) step = -stepLimit;
 
         const int16_t targetPos = clampToServoPos(currentServoPos + step);
-        pBus->setTarget(servoId, targetPos, cfg.tightenSpeed, cfg.tightenAcc);
-        JointDualServoConstraint dualCfg;
-        if (getJointDualServoConstraint(jointIndex, &dualCfg)) {
-            ServoBusManager* pSecBus = getBusByIndex(dualCfg.secondaryBusIndex);
-            int16_t secTarget = 0;
-            if (pSecBus && computeSecondaryServoTargetForJoint(jointIndex, targetPos, &secTarget)) {
-                pSecBus->setTarget(dualCfg.secondaryServoID, secTarget, cfg.tightenSpeed, cfg.tightenAcc);
-                pSecBus->syncWriteAll();
-            }
-        }
-        pBus->syncWriteAll();
+        queueJointTarget(sharedData, jointIndex, targetPos, cfg);
         vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
     }
 
     return false;
 }
-
-// 装载默认标定参数（来自 profile 表）。
+// 装载默认标定参数。
 void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count) {
     loadJointCalibrationProfile(cfg, count);
 }
@@ -273,36 +352,29 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
 
     const uint8_t bus = jointMap[jointIndex].busIndex;
     const uint8_t servoId = jointMap[jointIndex].servoID;
-    ServoBusManager* pBus = getBusByIndex(bus);
-    if (!pBus) return false;
-
-    const uint8_t ids[] = {servoId};
-    pBus->syncReadPositions(ids, 1);
-    int16_t commandPos = clampToServoPos(pBus->getAbsolutePosition(servoId));
+    int32_t currentServoPos = 0;
+    if (!readLatestServoAbs(sharedData, bus, servoId, &currentServoPos)) {
+        return false;
+    }
+    int16_t commandPos = clampToServoPos(currentServoPos);
 
     bool seenBelowThreshold = false;
     const uint32_t searchBeginMs = millis();
 
     while (millis() - searchBeginMs < cfg.maxSearchMs) {
-        // 每轮按 tightenStep 推进一步，0 步长会被强制为 1，避免死循环。
         int32_t tightenStep = (int32_t)cfg.tightenStep;
         if (tightenStep == 0) tightenStep = 1;
         commandPos = clampToServoPos((int32_t)commandPos + tightenStep);
-        pBus->setTarget(servoId, commandPos, cfg.tightenSpeed, cfg.tightenAcc);
-        JointDualServoConstraint dualCfg;
-        if (getJointDualServoConstraint(jointIndex, &dualCfg)) {
-            ServoBusManager* pSecBus = getBusByIndex(dualCfg.secondaryBusIndex);
-            int16_t secTarget = 0;
-            if (pSecBus && computeSecondaryServoTargetForJoint(jointIndex, commandPos, &secTarget)) {
-                pSecBus->setTarget(dualCfg.secondaryServoID, secTarget, cfg.tightenSpeed, cfg.tightenAcc);
-                pSecBus->syncWriteAll();
-            }
+        if (!queueJointTarget(sharedData, jointIndex, commandPos, cfg)) {
+            return false;
         }
-        pBus->syncWriteAll();
         vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
 
-        const int16_t load = pBus->readLoad(servoId);
-        // 采用“先低后高”的边沿触发，降低启动瞬态噪声导致的误判概率。
+        int16_t load = 0;
+        if (!readLatestServoLoad(sharedData, bus, servoId, &load)) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
         if (load < cfg.loadThreshold) {
             seenBelowThreshold = true;
         }
@@ -318,19 +390,16 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
             out->angleMax = cfg.angleScope - cfg.bottomReserved - cfg.topReserved;
             out->success = true;
 
-            // 标定成功后尝试回退到预留角；即使回退失败，也保持成功结果。
-            moveJointToReserved(sharedData, pBus, servoId, jointIndex, cfg, out->offset);
+            moveJointToReserved(sharedData, jointIndex, cfg, out->offset);
             return true;
         }
     }
 
     return false;
 }
-
 void taskServoCalibration(void* parameter) {
     (void)parameter;
     // 当前测试阶段：自动标定任务占位关闭，避免后台自主运动影响联调。
     g_calibrationUIStatus = CALIB_STATUS_IDLE;
     vTaskDelete(NULL);
 }
-

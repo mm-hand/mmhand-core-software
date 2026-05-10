@@ -10,6 +10,7 @@
 // 1) 解析上位机串口命令并更新共享控制状态；
 // 2) 汇总并上报传感器/舵机/调试数据；
 // 3) 发送协议 ACK 与故障位图心跳。
-void taskUpperComm(void *parameter);
+void upperCommunicationTask(void* parameter);
+void taskUpperComm(void* parameter);
 
 #endif

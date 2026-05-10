@@ -31,6 +31,7 @@
 #define CAN_TAC_REASSEMBLY_TIMEOUT_MS 80
 
 // CAN 通信任务入口（FreeRTOS 任务函数）。
+void canCommunicationTask(void* parameter);
 void taskCanComm(void* parameter);
 
 #endif

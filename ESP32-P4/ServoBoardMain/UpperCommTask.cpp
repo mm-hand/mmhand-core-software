@@ -2,6 +2,7 @@
 #include "CanCommTask.h"
 #include "TaskSharedData.h"
 #include "CalibrationTask.h"
+#include "StateMachineTask.h"
 
 #include <math.h>
 #include <string.h>
@@ -65,6 +66,11 @@ static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
     buffer[(*idx)++] = (uint8_t)((bits >> 16) & 0xFF);
     buffer[(*idx)++] = (uint8_t)((bits >> 8) & 0xFF);
     buffer[(*idx)++] = (uint8_t)(bits & 0xFF);
+}
+
+void taskUpperComm(void* parameter)
+{
+    upperCommunicationTask(parameter);
 }
 
 // 根据流模式与通道有效性，将映射角计数编码为线协议 int16。
@@ -332,7 +338,7 @@ static bool parseTendonGuardPayload(const uint8_t* payload,
     {
         const size_t base = (size_t)i * 4;
         enabled[i] = (payload[base] != 0) ? 1 : 0;
-        sign[i] = (payload[base + 1] < 0) ? (int8_t)-1 : (int8_t)1;
+        sign[i] = (((int8_t)payload[base + 1]) < 0) ? (int8_t)-1 : (int8_t)1;
         const uint16_t raw = ((uint16_t)payload[base + 2] << 8) | payload[base + 3];
         x1Abs[i] = clampServoAbsCommand((int16_t)raw);
     }
@@ -410,19 +416,6 @@ static void applyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* 
     }
 }
 
-// 清空直控模式电机目标缓存。
-static void clearMotorTargets(TaskSharedData_t* sharedData)
-{
-    if (!sharedData) {
-        return;
-    }
-    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++)
-    {
-        sharedData->motorTargetRaw[i] = 0;
-        sharedData->motorSweepTargetRaw[i] = 0;
-    }
-}
-
 // 缓存标定零位原始值（非法浮点会归零）。
 static void cacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count)
 {
@@ -480,7 +473,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
 static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t cmd)
 {
     if (cmd == (uint8_t)'c') {
-        g_calibrationUIStatus = CALIB_STATUS_IDLE;
+        postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
         return;
     }
     if (cmd == (uint8_t)'b') {
@@ -499,41 +492,25 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_CALIBRATE)
     {
-        g_calibrationUIStatus = CALIB_STATUS_IDLE;
+        postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
         return;
     }
 
     if (cmd == CMD_START)
     {
-        // START 仅恢复控制使能并触发故障锁存清除令牌。
-        sharedData->control_enabled = 1;
-        sharedData->joint16_dual_feedback_fault = 0;
-        sharedData->overload_fault_reset_token++;
-        sharedData->reverse_release_fault_reset_token++;
+        postSystemEvent(sharedData, SYSTEM_EVENT_START);
         return;
     }
 
     if (cmd == CMD_STOP)
     {
-        sharedData->control_enabled = 0;
+        postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
         return;
     }
 
     if (cmd == CMD_RESET)
     {
-        // RESET 恢复到关节控制模式，并清空目标缓存。
-        clearTargetAngles(sharedData);
-        clearMotorTargets(sharedData);
-        sharedData->motor_command_token++;
-        sharedData->motor_sweep_command_token++;
-        sharedData->joint_command_token++;
-        sharedData->motor_direct_command_generation++;
-        sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
-        sharedData->control_enabled = 0;
-        sharedData->control_mode = CONTROL_MODE_JOINT;
-        sharedData->joint16_dual_feedback_fault = 0;
-        sharedData->overload_fault_reset_token++;
-        sharedData->reverse_release_fault_reset_token++;
+        postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
         return;
     }
 
@@ -626,7 +603,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 }
 
 // UpperComm 主循环：串口收包解析 + 多路队列上报 + 故障位图心跳发送。
-void taskUpperComm(void* parameter)
+void upperCommunicationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     MappedAngleData_t mappedData;

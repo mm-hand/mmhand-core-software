@@ -15,6 +15,13 @@
 #define ENCODER_TOTAL_NUM 21
 // 舵机通道数（joint16 使用双舵机）。
 #define SERVO_TOTAL_NUM 22
+#define JOINT_COUNT ENCODER_TOTAL_NUM
+#define NUM_BUSES 4
+#define MAX_SERVOS_PER_BUS 8
+#define MAX_SERVO_ID 32
+#define SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT 3
+#define SERVO_TARGET_SPEED_DEFAULT 3000
+#define SERVO_TARGET_ACC_DEFAULT 200
 #define TACTILE_GROUP_NUM 5
 #define TACTILE_SENSOR_PER_GROUP 3
 #define TACTILE_AXIS_NUM 3
@@ -31,19 +38,60 @@
 // 上位机下发的多圈绝对位置（与 clampServoPos 一致），由 CMD_MOTOR_POS_ABS 写入 motorTargetRaw。
 #define MOTOR_DIRECT_SOURCE_ABSOLUTE 3
 
+#define SYSTEM_EVENT_NONE 0
+#define SYSTEM_EVENT_START 1
+#define SYSTEM_EVENT_STOP 2
+#define SYSTEM_EVENT_RESET 3
+#define SYSTEM_EVENT_CALIBRATE 4
+
+#define SYSTEM_STATE_BOOTING 0
+#define SYSTEM_STATE_IDLE 1
+#define SYSTEM_STATE_RUNNING 2
+#define SYSTEM_STATE_STOPPED 3
+#define SYSTEM_STATE_FAULT_HOLD 4
+#define SYSTEM_STATE_CALIBRATION_IDLE 5
+
+#define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
+#define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
+#define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
+#define SYSTEM_FAULT_RELEASE_GUARD    (1UL << 3)
+#define SYSTEM_FAULT_SERVO_OFFLINE    (1UL << 4)
+
 // TWAI(CAN) 引脚。
 #define TWAI_TX_PIN 47
 #define TWAI_RX_PIN 48
 
 // FreeRTOS 任务优先级。
 #define TASK_UPPER_COMM_PRIORITY 1
+#define TASK_STATE_MACHINE_PRIORITY 2
 #define TASK_CAN_COMM_PRIORITY 3
-#define TASK_SOLVER_PRIORITY 4
+#define TASK_SERVO_COMM_PRIORITY 3
+#define TASK_CONTROL_PRIORITY 4
+#define TASK_SOLVER_PRIORITY TASK_CONTROL_PRIORITY
 
 // FreeRTOS 任务栈大小（字节）。
 #define UPPER_COMM_TASK_STACK_SIZE 8192
 #define CAN_COMM_TASK_STACK_SIZE 4096
-#define SOLVER_TASK_STACK_SIZE 8192
+#define STATE_MACHINE_TASK_STACK_SIZE 4096
+#define SERVO_COMM_TASK_STACK_SIZE 6144
+#define CONTROL_TASK_STACK_SIZE 8192
+#define SOLVER_TASK_STACK_SIZE CONTROL_TASK_STACK_SIZE
+
+#define SERVO_TARGET_BATCH_MAX SERVO_TOTAL_NUM
+
+struct JointMapItem {
+    uint8_t busIndex;
+    uint8_t servoID;
+};
+
+struct MotorMapItem {
+    uint8_t busIndex;
+    uint8_t servoID;
+};
+
+extern JointMapItem jointMap[ENCODER_TOTAL_NUM];
+extern MotorMapItem joint16SecondaryMotor;
+extern MotorMapItem motorMap[SERVO_TOTAL_NUM];
 
 typedef struct {
     uint8_t cmdID;
@@ -75,6 +123,25 @@ typedef struct {
     uint16_t speed;
     uint8_t busIndex;
 } ServoCommand_t;
+
+typedef struct {
+    uint8_t event;
+    uint32_t timestamp;
+} SystemEvent_t;
+
+typedef struct {
+    uint8_t busIndex;
+    uint8_t servoId;
+    int16_t position;
+    uint16_t speed;
+    uint8_t acc;
+} ServoTargetCommand_t;
+
+typedef struct {
+    uint8_t count;
+    ServoTargetCommand_t commands[SERVO_TARGET_BATCH_MAX];
+    uint32_t timestamp;
+} ServoTargetBatch_t;
 
 typedef struct {
     uint8_t servoId;
@@ -124,11 +191,15 @@ typedef struct {
 typedef struct {
     QueueHandle_t cmdQueue;
     QueueHandle_t statusQueue;
+    QueueHandle_t stateEventQueue;
     QueueHandle_t canTxQueue;
     QueueHandle_t canRxQueue;
+    QueueHandle_t servoTargetQueue;
+    QueueHandle_t servoFeedbackQueue;
     QueueHandle_t servoAngleQueue;
     QueueHandle_t servoRawQueue;
     QueueHandle_t servoTelemetryQueue;
+    QueueHandle_t servoTelemetrySnapshotQueue;
     QueueHandle_t mappedAngleQueue;
     QueueHandle_t jointDebugQueue;
     QueueHandle_t tactileQueue;
@@ -152,6 +223,9 @@ typedef struct {
 
     volatile uint8_t control_enabled;
     volatile uint8_t control_mode; // CONTROL_MODE_*
+    volatile uint8_t system_state; // SYSTEM_STATE_*
+    volatile uint32_t system_fault_bitmap;
+    volatile uint32_t state_transition_count;
     volatile uint8_t joint16_dual_feedback_fault;
     // 过载锁存故障位图：bit i 对应电机通道 i。
     volatile uint32_t overload_fault_bitmap;

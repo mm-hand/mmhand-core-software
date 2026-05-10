@@ -138,7 +138,7 @@ static void setupTwai() {
     }
 }
 
-void taskCanComm(void* parameter) {
+void canCommunicationTask(void* parameter) {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     setupTwai();
 
@@ -311,4 +311,8 @@ void taskCanComm(void* parameter) {
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
+}
+
+void taskCanComm(void* parameter) {
+    canCommunicationTask(parameter);
 }

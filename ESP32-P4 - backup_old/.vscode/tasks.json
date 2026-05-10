@@ -1,0 +1,37 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "watch: strip UTF-8 BOM",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "tools/watch_strip_utf8_bom.py",
+                "main",
+                "ServoBoardMain",
+                "libraries/FTServo_Arduino/src"
+            ],
+            "isBackground": true,
+            "runOptions": {
+                "runOn": "folderOpen"
+            },
+            "presentation": {
+                "reveal": "never",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "sanitize: strip UTF-8 BOM once",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "tools/strip_utf8_bom.py",
+                "main",
+                "ServoBoardMain",
+                "libraries/FTServo_Arduino/src"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

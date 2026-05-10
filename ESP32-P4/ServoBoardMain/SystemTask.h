@@ -16,8 +16,9 @@
 #include "TaskSharedData.h"
 #include "UpperCommTask.h"
 #include "CanCommTask.h"
-#include "AngleSolver.h"          // 引入 AngleSolver（含 taskSolver 声明）
-#include "ServoBusManager.h"      // 引入舵机总线管理器
+#include "StateMachineTask.h"
+#include "ControlTask.h"
+#include "ServoCommunicationTask.h"
 
 // 全局标志：用于上位机标定流程的一次性状态回传（跨任务共享）。
 extern volatile uint8_t g_calibrationUIStatus;

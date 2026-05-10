@@ -2,7 +2,8 @@
 #define SERVO_BUS_MANAGER_H
 
 #include <Arduino.h>
-#include "SMS_STS.h"
+#include "../libraries/FTServo_Arduino/src/SMS_STS.h"
+
 
 // ServoBusManager 头文件职责：
 // 1) 声明单总线舵机读写接口；

@@ -1,0 +1,8 @@
+{
+    "idf.currentSetup": "E:/Espressif/Espressif/frameworks/esp-idf-v5.3.1/",
+    "files.encoding": "utf8",
+    "files.autoGuessEncoding": false,
+    "task.allowAutomaticTasks": "on",
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
+}
