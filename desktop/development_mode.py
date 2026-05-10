@@ -131,7 +131,7 @@ def _print_console(controller: HandController, connected_port: str, plot_status:
     )
     print("-" * 88)
 
-    print("Mapped encoder data (count | degree):")
+    print("Raw magnetic encoder data (count | degree):")
     enc_raw = snap["enc_raw"]
     enc_err = snap["enc_err"]
     for row in range(rows):

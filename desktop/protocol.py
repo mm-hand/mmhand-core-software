@@ -69,6 +69,7 @@ def _build_command_frame(cmd: int, payload: bytes = b"") -> bytes:
 
 
 def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
+    """Parse 21 raw magnetic encoder counts from the firmware sensor packet."""
     angles: List[int] = []
     errors: List[bool] = []
     if len(payload) < ENCODER_COUNT * 2:

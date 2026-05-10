@@ -1,493 +1,289 @@
-# ESP32-P4 ServoBoardMain 架构说明
+# ServoBoardMain 固件说明
 
-本文档用于帮助使用者快速理解 `ESP32-P4/ServoBoardMain` 程序的功能、任务架构、数据流和通信协议。该程序运行在 ESP32-P4 舵机主控板上，是整只手的控制中心。
+本文档描述 `ESP32-P4/ServoBoardMain` 当前固件架构。当前版本已经按任务层级重构：上位机通信、状态机、实时控制、CAN 通信、舵机通信彼此解耦，通过 `TaskSharedData_t` 中的队列、快照和状态字段交互。
 
-## 1. 系统定位
+旧的 `AngleSolver`、`ServoBusManager` 公共模块已经移除：
 
-`ServoBoardMain` 负责连接三类对象：
+- 控制求解逻辑并入 `ControlTask` 内部模块。
+- FTServo/SMS_STS 舵机总线访问只允许出现在 `ServoCommunicationTask.cpp`。
+- 如果 IDE 仍显示 `AngleSolver.*` 或 `ServoBusManager.*` 标签页，那只是旧文件缓存，应关闭标签页并以当前文件树为准。
 
-- 上位机：通过 USB/串口通信，接收控制命令，回传传感器、舵机和调试状态。
-- ESP32-S3 掌端采集板：通过 TWAI/CAN 接收 21 路磁编码器数据、编码器错误状态和触觉摘要数据。
-- 飞特舵机总线：通过 4 路 UART 总线控制 22 个舵机，并读取舵机位置、速度、负载、电压、温度和在线状态。
+## 目录定位
 
-整体上，ESP32-P4 的职责是：
-
-- 接收 S3 的关节传感器数据。
-- 接收上位机目标角度或舵机直控命令。
-- 将编码器反馈和舵机反馈融合为闭环控制输入。
-- 运行双环 PID 和安全保护逻辑。
-- 将目标位置批量下发到多路舵机总线。
-- 将实时状态回传给上位机。
-
-## 2. 目录与模块分层
-
-```text
-ServoBoardMain/
-├── ServoBoardMain.ino          # Arduino 入口，仅调用 System_Init/System_Loop
-├── SystemTask.*                # 系统初始化、任务创建、全局映射表
-├── TaskSharedData.h            # 跨任务共享数据结构、队列、控制状态
-├── UpperCommTask.*             # 上位机串口协议解析与状态上报
-├── CanCommTask.*               # TWAI/CAN 收发、S3 传感数据重组
-├── AngleSolver.*               # 角度映射、双环 PID、控制模式、安全保护
-├── ServoBusManager.*           # 飞特舵机总线读写、多圈位置跟踪
-├── CalibrationTask.*           # 标定配置、标定结果、自动标定接口
-├── JointCalibrationProfile.*   # 默认关节标定参数表
-└── pid.*                       # PID 基础算法
-```
-
-### 2.1 入口层
-
-`ServoBoardMain.ino` 很薄：
+`ServoBoardMain.ino` 只负责 Arduino 入口：
 
 - `setup()` 调用 `System_Init()`。
-- `loop()` 调用 `System_Loop()`。
+- `loop()` 不做业务逻辑，只周期性 `delay()`。
 
-主业务不放在 Arduino 主循环中，而是交给 FreeRTOS 任务并行执行。
+真正的业务初始化、任务创建和共享资源分配都在 `src/system/SystemTask.cpp` 中完成。源码按 Arduino 兼容的 `src/` 目录分层组织，sketch 根目录只保留 `ServoBoardMain.ino` 和本文档。
 
-### 2.2 系统层
+## 分层架构
 
-`SystemTask` 负责系统级资源初始化：
-
-- 初始化 `Serial`，波特率为 `921600`。
-- 创建跨任务队列和互斥锁。
-- 初始化目标角缓存、控制模式、故障位图和保护状态。
-- 初始化 4 路舵机总线。
-- 初始化 `AngleSolver` 和双环 PID 参数。
-- 加载当前测试阶段使用的手动标定结果。
-- 创建 `UpperComm`、`CanComm`、`Solver` 三个核心任务。
-
-### 2.3 共享数据层
-
-`TaskSharedData.h` 定义所有任务共享的数据中心 `TaskSharedData_t`，主要包含：
-
-- 上位机命令队列和状态上报队列。
-- CAN 接收/发送队列。
-- 舵机角度、raw 位置、遥测数据队列。
-- 映射后的关节角队列。
-- 触觉摘要队列。
-- 21 路目标关节角缓存。
-- 22 路电机直控目标缓存。
-- 控制使能、控制模式、故障位图、热插拔与保护相关状态。
-
-关键数量：
-
-- `ENCODER_TOTAL_NUM = 21`：关节/磁编码器通道数。
-- `SERVO_TOTAL_NUM = 22`：舵机通道数，joint16 使用主副双舵机。
-- `TACTILE_GROUP_NUM = 5`：触觉组数量。
-
-## 3. 启动流程
-
-系统启动顺序由 `System_Init()` 统一组织：
-
-1. 初始化上位机串口 `Serial.begin(921600)`。
-2. 创建 FreeRTOS 队列：
-   - `cmdQueue`
-   - `statusQueue`
-   - `canRxQueue`
-   - `canTxQueue`
-   - `servoAngleQueue`
-   - `servoRawQueue`
-   - `servoTelemetryQueue`
-   - `mappedAngleQueue`
-   - `jointDebugQueue`
-   - `tactileQueue`
-3. 创建 `targetAnglesMutex`，保护目标关节角数组。
-4. 清空目标、控制状态和故障状态。
-5. 初始化 4 路舵机总线：
-   - bus0：RX 21，TX 20，1 Mbps
-   - bus1：RX 23，TX 22，1 Mbps
-   - bus2：RX 27，TX 26，1 Mbps
-   - bus3：RX 33，TX 32，1 Mbps
-6. 初始化 `AngleSolver` 的零点、传动比、方向和 PID 参数。
-7. 调用 `initManualCalibrationForTest()` 加载手动标定测试数据。
-8. 创建三个核心任务：
-   - `UpperComm`
-   - `CanComm`
-   - `Solver`
-9. `System_Loop()` 仅执行 `vTaskDelay(10ms)`，保持轻量调度入口。
-
-## 4. FreeRTOS 任务架构
-
-### 4.1 UpperComm 任务
-
-文件：`UpperCommTask.cpp`
-
-职责：
-
-- 解析上位机串口下行命令。
-- 更新共享目标、控制模式和故障复位状态。
-- 从各类上报队列读取数据并打包发给上位机。
-- 周期性上报故障位图。
-
-运行节奏：
-
-- 主循环末尾 `vTaskDelay(5ms)`。
-- 任务优先级 `TASK_UPPER_COMM_PRIORITY = 1`。
-
-主要处理内容：
-
-- 关节角目标。
-- 电机直控目标。
-- START/STOP/RESET。
-- 传感器流模式切换。
-- 腱绳保护配置。
-- 标定 UI 状态回传。
-- 舵机角度、raw 位置、遥测、触觉、调试数据上报。
-
-### 4.2 CanComm 任务
-
-文件：`CanCommTask.cpp`
-
-职责：
-
-- 初始化 TWAI/CAN，波特率 1 Mbps。
-- 接收 S3 发来的编码器帧。
-- 重组编码器错误详情帧。
-- 重组触觉摘要帧。
-- 将最新传感器快照写入 `canRxQueue`。
-- 从 `canTxQueue` 取出命令并发送到 CAN 总线。
-
-运行节奏：
-
-- 主循环末尾 `vTaskDelay(5ms)`。
-- 任务优先级 `TASK_CAN_COMM_PRIORITY = 3`。
-
-CAN 引脚：
-
-- TX：`TWAI_TX_PIN = 47`
-- RX：`TWAI_RX_PIN = 48`
-
-### 4.3 Solver 任务
-
-文件：`AngleSolver.cpp`
-
-职责：
-
-- 同步读取 4 路舵机总线反馈。
-- 维护舵机多圈绝对位置。
-- 从 `canRxQueue` 获取 S3 编码器数据。
-- 将原始编码器值转换为关节侧角度。
-- 执行目标限幅和双环 PID 求解。
-- 根据控制模式生成舵机目标。
-- 执行安全保护、故障判断和保持策略。
-- 批量下发舵机目标。
-- 将舵机状态、映射角度和调试信息写入上报队列。
-
-运行节奏：
-
-- `solverPeriodTicks = 10ms`，即约 100 Hz。
-- 任务优先级 `TASK_SOLVER_PRIORITY = 4`。
-
-## 5. 数据流
-
-### 5.1 S3 传感器到 P4 控制器
-
-```text
-ESP32-S3
-  -> CAN 编码器/错误/触觉帧
-  -> CanCommTask
-  -> canRxQueue / tactileQueue
-  -> AngleSolver / UpperCommTask
-```
-
-用途：
-
-- `AngleSolver` 使用编码器数据做闭环反馈。
-- `UpperCommTask` 将映射后的传感器数据和触觉数据回传给上位机。
-
-### 5.2 上位机到舵机
-
-```text
-上位机
-  -> Serial 协议帧
-  -> UpperCommTask
-  -> sharedData 目标缓存/控制状态
-  -> AngleSolver
-  -> ServoBusManager
-  -> 飞特舵机
-```
-
-支持两类控制模式：
-
-- 关节控制模式：上位机下发 21 路目标关节角，P4 根据编码器反馈和 PID 生成舵机目标。
-- 电机直控模式：上位机直接下发 22 路电机位置目标，P4 负责限幅、热插拔保持和总线下发。
-
-### 5.3 舵机反馈到上位机
-
-```text
-飞特舵机
-  -> ServoBusManager 同步读
-  -> AngleSolver
-  -> servoAngleQueue / servoRawQueue / servoTelemetryQueue
-  -> UpperCommTask
-  -> Serial
-  -> 上位机
-```
-
-上报内容包括：
-
-- 舵机多圈绝对位置。
-- 舵机单圈 raw 位置。
-- 速度、负载、电压、温度。
-- 在线状态。
-- 关节调试数据。
-
-## 6. 通信协议
-
-### 6.1 上位机串口协议
-
-串口帧格式：
-
-```text
-0xFE LEN TYPE_OR_CMD PAYLOAD 0xFF
-```
-
-说明：
-
-- `0xFE`：帧头。
-- `LEN`：从 `TYPE_OR_CMD` 到帧尾 `0xFF` 的长度。
-- `TYPE_OR_CMD`：上行包类型或下行命令。
-- `PAYLOAD`：负载。
-- `0xFF`：帧尾。
-
-兼容历史单字节命令：
-
-- `'c'`：设置标定 UI 状态为空闲。
-- `'b'`：清空目标关节角。
-
-### 6.2 上位机下行命令
-
-| 命令 | 名称 | 功能 |
+| 层级 | 任务/模块 | 责任 |
 | --- | --- | --- |
-| `0xCA` | `CMD_CALIBRATE` | 标定命令，目前设置 UI 标定状态 |
-| `0xCB` | `CMD_ANGLE_CTRL` | 下发 21 路关节目标角，float 小端 |
-| `0xCC` | `CMD_START` | 使能控制，并触发故障复位 token |
-| `0xCD` | `CMD_STOP` | 关闭控制输出 |
-| `0xCE` | `CMD_RESET` | 清空目标，回到关节控制模式，关闭控制 |
-| `0xCF` | `CMD_CALIB_DATA` | 下发 21 路标定零位 raw 缓存 |
-| `0xD0` | `CMD_MOTOR_POS` | 22 路单圈电机直控目标 |
-| `0xD1` | `CMD_SENSOR_STREAM_MODE` | 切换传感器上报编码模式 |
-| `0xD2` | `CMD_MOTOR_POS_SWEEP` | 滑条扫动直控目标 |
-| `0xD3` | `CMD_MOTOR_POS_ABS` | 22 路多圈绝对电机直控目标 |
-| `0xD4` | `CMD_TENDON_GUARD` | 腱绳保护配置 |
+| 上层通信层 | `upperCommunicationTask` | 解析上位机串口协议，投递系统事件，写入控制命令快照，回传传感器/舵机/故障遥测 |
+| 系统管理层 | `stateMachineTask` | 统一处理 START/STOP/RESET/CALIBRATE，维护系统状态、故障位、控制使能和舵机目标所有权 |
+| 实时控制层 | `controlTask` | 读取命令快照和反馈，执行关节 PID、direct motor 输出、安全保护，生成舵机目标 batch |
+| 底层 CAN 通信层 | `canCommunicationTask` | 接收编码器、触觉和错误码 CAN 帧，写入共享队列 |
+| 底层舵机通信层 | `servoCommunicationTask` | 独占 UART 舵机总线，执行同步写、同步读、多圈缓存和舵机遥测发布 |
+| 校准服务模块 | `CalibrationTask` | 提供标定参数、单关节标定算法和校准目标构建；生命周期由状态机驱动 |
 
-### 6.3 P4 上行包类型
+## 当前文件职责
 
-| 类型 | 名称 | 内容 |
+| 文件 | 说明 |
+| --- | --- |
+| `ServoBoardMain.ino` | Arduino 入口 |
+| `src/shared/TaskSharedData.h` | 跨层共享类型、常量、队列句柄、状态字段 |
+| `src/system/SystemTask.*` | 创建队列、互斥锁、任务和系统初始状态 |
+| `src/system/StateMachineTask.*` | 状态机和故障管理 |
+| `src/communication/upper/*` | 上位机串口协议、命令路由和遥测发送 |
+| `src/communication/can/CanCommTask.*` | TWAI/CAN 收发、编码器/触觉/错误帧解析 |
+| `src/communication/servo/*` | 舵机通信任务和飞特协议常量，唯一访问 FTServo/SMS_STS 和舵机 UART 的位置 |
+| `src/control/*` | 实时控制任务、PID 求解、安全保护、输出 batch 构建和 C PID 实现 |
+| `src/calibration/*` | 校准服务模块、手工标定注入、单关节标定算法和校准 profile |
+| `src/hardware/HardwareMap.*` | 关节到舵机、舵机索引到总线 ID 的硬件映射 |
+
+## 启动流程
+
+1. `ServoBoardMain.ino::setup()` 调用 `System_Init()`。
+2. `src/system/SystemTask.cpp` 初始化 `TaskSharedData_t`、硬件映射、PID/校准 profile、队列和互斥锁。
+3. 创建任务：
+   - `upperCommunicationTask`
+   - `stateMachineTask`
+   - `canCommunicationTask`
+   - `servoCommunicationTask`
+   - `controlTask`
+4. 系统初始状态为 `SYSTEM_STATE_IDLE`，舵机目标所有权为 `SERVO_TARGET_OWNER_NONE`。
+
+## 共享数据边界
+
+跨任务通信集中在 `TaskSharedData_t`：
+
+- `stateEventQueue`：上位机命令转为系统事件，由状态机消费。
+- `servoTargetQueue`：控制层或校准层生成舵机目标 batch，由舵机通信层消费。
+- `servoFeedbackQueue` / `servoTelemetryQueue` / `servoTelemetrySnapshotQueue`：舵机通信层发布反馈。
+- `canRxQueue` / `tactileQueue`：CAN 层发布编码器、触觉和错误状态。
+- `mappedAngleQueue` / `jointDebugQueue`：控制层发布内部映射角度和调试信息；上位机 sensor 包直接来自 CAN 原始编码器 raw。
+- `commandStateMutex`：保护控制命令相关共享字段。
+- `targetAnglesMutex`：保留兼容旧目标访问，新的控制命令优先走 `commandStateMutex`。
+
+控制任务每个周期只读取一次 `ControlCommandSnapshot_t`，避免读到上位机连续下发时的半更新数据。
+
+## 状态机与舵机目标所有权
+
+状态机是系统状态和控制使能的唯一权威。
+
+| 事件 | 状态变化 | 舵机目标 owner | 控制输出 |
+| --- | --- | --- | --- |
+| START | 进入 `SYSTEM_STATE_RUNNING` | `SERVO_TARGET_OWNER_CONTROL` | 允许 |
+| STOP | 进入 `SYSTEM_STATE_STOPPED` | `SERVO_TARGET_OWNER_NONE` | 停止 |
+| RESET | 回到 `SYSTEM_STATE_IDLE` | `SERVO_TARGET_OWNER_NONE` | 停止并清空目标/故障 |
+| CALIBRATE | 进入 `SYSTEM_STATE_CALIBRATION_IDLE` | `SERVO_TARGET_OWNER_CALIBRATION` | 普通控制暂停 |
+| CALIBRATION_DONE | 进入 `SYSTEM_STATE_CALIBRATION_SUCCESS` | `SERVO_TARGET_OWNER_CALIBRATION` | 普通控制暂停 |
+| CALIBRATION_FAILED | 进入 `SYSTEM_STATE_CALIBRATION_FAILED` | `SERVO_TARGET_OWNER_CALIBRATION` | 普通控制暂停 |
+
+`ServoTargetBatch_t` 带有 `source` 字段：
+
+- `SERVO_TARGET_OWNER_CONTROL`：来自 `ControlTask`。
+- `SERVO_TARGET_OWNER_CALIBRATION`：来自 `CalibrationTask`。
+
+`ServoCommunicationTask` 只执行与当前 `servo_target_owner` 匹配的 batch。状态切换时会 `xQueueReset(servoTargetQueue)`，避免旧目标在模式切换后继续执行。
+
+## 控制模式
+
+### Joint 模式
+
+上位机下发 `CMD_ANGLE_CTRL` 后进入 `CONTROL_MODE_JOINT`。
+
+数据流：
+
+1. 上位机发送 21 个 float 目标角。
+2. `UpperCommCommandRouter` 在 `commandStateMutex` 下更新 `targetAngles` 和 `joint_command_token`。
+3. `ControlTask` 周期性读取命令快照、CAN 编码器反馈和舵机反馈。
+4. `ControlSolver` 执行 PID 求解。
+5. `ControlOutputBuilder` 生成舵机目标 batch。
+6. `ServoCommunicationTask` 执行同步写。
+
+### Direct Motor 模式
+
+Direct motor 模式用于上位机滑条、绝对位置或扫动命令直接控制 22 个舵机目标。
+
+相关命令：
+
+- `CMD_MOTOR_POS`
+- `CMD_MOTOR_POS_SWEEP`
+- `CMD_MOTOR_POS_ABS`
+
+进入 direct motor 模式后，`ControlTask` 不走关节 PID，而是直接根据 motor raw 目标生成 batch。为了支持没有完整 CAN 编码器或部分舵机未在线时调试滑条，direct motor 模式下 `CAN_OFFLINE` 和 `SERVO_OFFLINE` 仍会上报故障，但不会单独把系统强制拉入 `FAULT_HOLD`。过载、释放保护等硬安全仍会阻断输出。
+
+## 安全保护
+
+当前安全逻辑集中在 `ControlSafety` 和 `StateMachineTask`：
+
+- `SYSTEM_FAULT_CAN_OFFLINE`：CAN 编码器反馈超时。
+- `SYSTEM_FAULT_SERVO_OFFLINE`：舵机反馈超时或部分舵机未上报。
+- `SYSTEM_FAULT_JOINT16_DUAL`：joint16 双舵机同步保护。
+- `SYSTEM_FAULT_OVERLOAD`：负载异常保护。
+- `SYSTEM_FAULT_RELEASE_GUARD`：反绕释放保护或肌腱保护触发。
+
+`FAULT_HOLD` 下普通 PID 不继续生成新的运动目标，只保持当前位置或进入安全保持逻辑。
+
+## 上位机串口协议
+
+帧格式：
+
+```text
+[0xFE][LEN][TYPE/CMD][PAYLOAD...][0xFF]
+```
+
+其中 `LEN` 表示 `TYPE/CMD + PAYLOAD` 的长度。
+
+### 上位机命令
+
+| 命令 | ID | 说明 |
 | --- | --- | --- |
-| `0x01` | `PACKET_TYPE_SENSOR` | 21 路映射后的关节传感器值 |
-| `0x02` | `PACKET_TYPE_CALIB_ACK` | 标定 UI 状态 |
-| `0x03` | `PACKET_TYPE_SERVO_ANGLE` | 22 路舵机多圈绝对位置和在线状态 |
-| `0x04` | `PACKET_TYPE_JOINT1_DEBUG` | 指定关节的目标、反馈、PID 输出和命令位置 |
-| `0x05` | `PACKET_TYPE_SERVO_TELEM` | 舵机速度、负载、电压、温度和在线状态 |
-| `0x06` | `PACKET_TYPE_PROTO_ACK` | 协议命令 ACK |
-| `0x07` | `PACKET_TYPE_FAULT_STATUS` | 过载故障位图 |
-| `0x08` | `PACKET_TYPE_RELEASE_FAULT` | 反绕释放保护故障位图 |
-| `0x09` | `PACKET_TYPE_SERVO_RAW` | 22 路舵机单圈 raw 位置和在线状态 |
-| `0x0A` | `PACKET_TYPE_TACTILE` | 触觉摘要数据 |
+| `CMD_CALIBRATE` | `0xCA` | 进入校准状态 |
+| `CMD_ANGLE_CTRL` | `0xCB` | 下发 21 个关节角目标 |
+| `CMD_START` | `0xCC` | 进入运行状态 |
+| `CMD_STOP` | `0xCD` | 停止控制输出 |
+| `CMD_RESET` | `0xCE` | 清空状态并回到 IDLE |
+| `CMD_CALIB_DATA` | `0xCF` | 写入校准零点数据 |
+| `CMD_MOTOR_POS` | `0xD0` | 直接下发 22 个舵机 raw 目标 |
+| `CMD_SENSOR_STREAM_MODE` | `0xD1` | 切换传感器流格式 |
+| `CMD_MOTOR_POS_SWEEP` | `0xD2` | 下发滑条 sweep 目标 |
+| `CMD_MOTOR_POS_ABS` | `0xD3` | 下发绝对舵机位置 |
+| `CMD_TENDON_GUARD` | `0xD4` | 配置肌腱保护 |
 
-### 6.4 CAN 输入协议
+### 固件上报
 
-P4 主要接收 S3 发来的 CAN 数据。
-
-| CAN ID | 内容 | 说明 |
+| 包类型 | ID | 说明 |
 | --- | --- | --- |
-| `0x100~0x105` | 编码器角度 | 21 路编码器，每帧最多 4 个 `uint16_t` |
-| `0x1F0~0x1F2` | 编码器错误详情 | 每帧 `seq + 7` 路错误码，共覆盖 21 路 |
-| `0x240~0x246` | 触觉摘要 | 每帧 `seq + 7` 字节负载，重组后写入 `tactileQueue` |
+| `PKT_SENSOR` | `0x01` | 21 路原始磁编码器 raw 值 |
+| `PKT_CALIB_ACK` | `0x02` | 校准 ACK |
+| `PKT_SERVO_ANGLE` | `0x03` | 舵机角度 |
+| `PKT_JOINT1_DEBUG` | `0x04` | joint debug |
+| `PKT_SERVO_TELEM` | `0x05` | 舵机遥测 |
+| `PKT_PROTO_ACK` | `0x06` | 协议 ACK |
+| `PKT_FAULT_STATUS` | `0x07` | 故障状态 |
+| `PKT_RELEASE_FAULT` | `0x08` | 释放保护故障 |
+| `PKT_SERVO_RAW` | `0x09` | 舵机 raw 位置 |
+| `PKT_TACTILE` | `0x0A` | 触觉数据 |
 
-错误详情重组规则：
+## CAN 协议概览
 
-- 3 帧序号 `seq` 必须一致。
-- 超过 `CAN_ERROR_REASSEMBLY_TIMEOUT_MS = 100ms` 会丢弃本批次。
-- 若 `300ms` 内没有新的完整错误批次，会清空错误表。
+CAN 使用 ESP32 TWAI，默认引脚：
 
-触觉摘要重组规则：
+- TX：GPIO 47
+- RX：GPIO 48
 
-- 7 帧序号 `seq` 必须一致。
-- 超过 `CAN_TAC_REASSEMBLY_TIMEOUT_MS = 80ms` 会丢弃本批次。
+主要帧：
 
-## 7. 舵机总线与映射
+- 编码器帧：`0x100` 起，每帧 4 个通道。
+- 错误详情帧：`0x1F0` 到 `0x1F2`，用于重组错误码表。
+- 触觉汇总帧：`0x240` 到 `0x246`，用于重组触觉组数据。
 
-系统使用 4 个 `ServoBusManager` 实例：
+编码器总数为 `ENCODER_TOTAL_NUM = 21`。触觉数据为 5 组，每组 3 个传感器，每个传感器 3 轴。
 
-| 总线 | 串口 | RX | TX | 波特率 |
+## 舵机通信
+
+舵机总线由 `ServoCommunicationTask.cpp` 内部私有 `ServoBusDriver` 管理。其他文件不能直接访问 `SMS_STS`、`HardwareSerial` 或同步读写 API。
+
+默认总线配置：
+
+| Bus | Serial | RX | TX | Baud |
 | --- | --- | --- | --- | --- |
-| bus0 | `Serial1` | 21 | 20 | 1 Mbps |
-| bus1 | `Serial2` | 23 | 22 | 1 Mbps |
-| bus2 | `Serial3` | 27 | 26 | 1 Mbps |
-| bus3 | `Serial4` | 33 | 32 | 1 Mbps |
+| 0 | `Serial1` | GPIO 21 | GPIO 20 | 1 Mbps |
+| 1 | `Serial2` | GPIO 23 | GPIO 22 | 1 Mbps |
+| 2 | `Serial3` | GPIO 27 | GPIO 26 | 1 Mbps |
+| 3 | `Serial4` | GPIO 33 | GPIO 32 | 1 Mbps |
 
-`jointMap` 定义 21 个关节到主舵机的映射。
+舵机通信层职责：
 
-`motorMap` 定义 22 个电机通道到实际总线和舵机 ID 的映射。
+- 接收 `servoTargetQueue` 中 owner 匹配的目标 batch。
+- 执行同步写位置、速度、加速度。
+- 分阶段同步读舵机位置、负载等反馈。
+- 维护多圈位置缓存。
+- 发布 `servoFeedbackQueue`、`servoAngleQueue`、`servoRawQueue`、`servoTelemetryQueue` 和 `servoTelemetrySnapshotQueue`。
 
-joint16 使用双舵机拮抗结构：
+## 硬件映射
 
-- 主舵机：`bus3-id17`
-- 副舵机：`bus3-id18`
-- 副舵机目标由主舵机目标反向映射得到：
+硬件映射集中在 `HardwareMap.cpp`。
+
+关节数量：
+
+- `JOINT_COUNT = 21`
+- `SERVO_TOTAL_NUM = 22`
+
+其中 joint16 使用双舵机：
+
+- 主舵机：bus 3, id 17
+- 副舵机：bus 3, id 18
+
+22 个舵机索引由 `motorMap` 映射到具体 bus/id。21 个关节由 `jointMap` 映射到主舵机。不要在控制、校准或通信任务里散落硬编码映射。
+
+## 校准状态
+
+校准不再是常驻 FreeRTOS 任务，而是由 `StateMachineTask` 管理生命周期。`CalibrationTask` 仅作为服务模块保留标定参数、单关节标定算法、反馈读取 helper 和校准目标构建能力。
+
+当前策略：
+
+- `CMD_CALIBRATE` 只进入校准生命周期，不自动跑完整机械标定。
+- `StateMachineTask` 设置 `g_calibrationUIStatus`，由 `UpperCommTask` 一次性上报给上位机。
+- 校准期间 `servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION`。
+- 普通控制目标不会覆盖校准目标。
+- 退出校准需要通过 START、STOP 或 RESET。
+- `runSingleJointCalibration()` 仍保留为内部能力，可后续接入明确的单关节校准命令。
+
+## 开发边界
+
+新增代码时应遵守以下边界：
+
+- 只有 `ServoCommunicationTask.cpp` 可以 include 或调用 FTServo/SMS_STS、`HardwareSerial` 舵机总线读写、同步读写 API。
+- `ControlTask` 和 `CalibrationTask` 只能通过队列、快照和共享状态与舵机通信层交互。
+- `UpperCommTask` 不直接写 `control_enabled`，START/STOP/RESET/CALIBRATE 只能投递 `SystemEvent_t`。
+- 控制命令字段必须在 `commandStateMutex` 保护下读写。
+- 状态切换时必须清空旧 `servoTargetQueue`，避免历史目标跨状态执行。
+- 新增硬件映射应修改 `HardwareMap.cpp`，不要在任务文件中复制 bus/id 表。
+
+## 编译和验证建议
+
+静态检查：
 
 ```text
-secondaryTarget = -primaryTarget + secondaryOffset + tensionBias
+搜索 AngleSolver / ServoBusManager，应无公共引用。
+除 ServoCommunicationTask.cpp 外，不应出现 SMS_STS、HardwareSerial 舵机读写、syncRead/write、setTarget 等舵机总线调用。
+UpperCommTask 不应直接写 control_enabled。
+ControlTask 不应绕过 commandStateMutex 读取命令数组。
 ```
 
-## 8. 控制模式
+功能检查：
 
-### 8.1 关节控制模式
+1. START 后进入 `RUNNING`，direct motor 滑条可以下发舵机目标。
+2. STOP 后 owner 变为 `NONE`，旧目标不会继续执行。
+3. RESET 后清空目标、tokens、故障位并回到 `IDLE`。
+4. CALIBRATE 后进入 `CALIBRATION_IDLE`，普通控制不再写 `servoTargetQueue`。
+5. START 可以从校准状态恢复到控制 owner。
+6. joint16 双舵机异常会进入保护。
+7. 上位机连续下发 joint/direct/sweep 命令时，控制任务读到的是完整快照。
 
-控制模式值：`CONTROL_MODE_JOINT`
+## 阅读顺序
 
-输入：
+建议按以下顺序理解代码：
 
-- 上位机下发的 21 路目标关节角。
-- S3 通过 CAN 发来的 21 路编码器反馈。
-- 舵机总线读回的 22 路电机反馈。
+1. `src/shared/TaskSharedData.h`
+2. `src/system/SystemTask.cpp`
+3. `src/system/StateMachineTask.cpp`
+4. `src/communication/upper/UpperCommProtocol.h`
+5. `src/communication/upper/UpperCommTask.cpp` 和 `UpperCommCommandRouter.cpp`
+6. `src/control/ControlTask.cpp`
+7. `src/control/ControlSolver.cpp`、`ControlSafety.cpp`、`ControlOutputBuilder.cpp`
+8. `src/communication/servo/ServoCommunicationTask.cpp`
+9. `src/communication/can/CanCommTask.cpp`
+10. `src/hardware/HardwareMap.cpp`
+11. `src/calibration/CalibrationTask.cpp`
 
-处理：
+## 当前限制
 
-- 统一编码器方向。
-- 使用标定结果或手动 offset 将 raw 编码器值映射到关节角。
-- 对目标角做标定范围限幅。
-- 外环 PID：目标关节角 vs 磁编码器实际角。
-- 内环 PID：目标舵机位置 vs 舵机绝对位置。
-- 输出舵机目标位置。
-
-### 8.2 电机直控模式
-
-控制模式值：`CONTROL_MODE_DIRECT_MOTOR`
-
-输入：
-
-- `CMD_MOTOR_POS`：单圈 raw 目标，会展开到离当前多圈位置最近的等效目标。
-- `CMD_MOTOR_POS_SWEEP`：滑条扫动目标，根据单圈变化量连续累加。
-- `CMD_MOTOR_POS_ABS`：多圈绝对位置目标，范围限制为 `-30719~30719`。
-
-处理：
-
-- 对 22 路电机逐通道生成目标。
-- 在线热插拔后先保持当前位置，避免新上线舵机突然跳到旧目标。
-- joint16 主副舵机发生双反馈故障时保持当前位置。
-
-## 9. 安全与保护逻辑
-
-### 9.1 控制使能
-
-系统上电后默认不输出控制。收到 `CMD_START` 后：
-
-- `control_enabled = 1`
-- 清除 joint16 双反馈故障状态。
-- 自增过载和反绕故障 reset token。
-
-收到 `CMD_STOP` 后：
-
-- `control_enabled = 0`
-- 停止继续下发主动控制目标。
-
-收到 `CMD_RESET` 后：
-
-- 清空关节目标和电机直控目标。
-- 回到关节控制模式。
-- 关闭控制输出。
-- 刷新故障复位 token。
-
-### 9.2 CAN 和编码器异常
-
-以下情况会触发对应关节保持当前位置：
-
-- CAN 数据超过 `300ms` 未更新。
-- `RemoteSensorData_t` 无效。
-- 编码器值为 `0xFFFF`。
-- 对应关节错误码非 0。
-- 映射后的关节数据无效。
-
-### 9.3 joint16 双舵机保护
-
-joint16 使用主副双舵机反馈融合：
-
-- 将副舵机位置投影到主舵机坐标。
-- 主副差异超过阈值并持续多个周期后触发故障。
-- 故障时 joint16 主副舵机均保持当前位置。
-
-### 9.4 反绕释放保护
-
-`AngleSolver` 维护每个关节的释放保护状态，监测释放方向上的异常：
-
-- 释放窗口内舵机累计运动过大。
-- 实际角度没有按预期回退。
-- 出现持续的反向异常趋势。
-
-触发后会设置 `reverse_release_fault_bitmap`，由 `UpperCommTask` 周期性上报给上位机。
-
-### 9.5 腱绳保护
-
-上位机可通过 `CMD_TENDON_GUARD` 配置每个关节：
-
-- 是否启用保护。
-- 保护方向。
-- 保护阈值位置 `x1Abs`。
-
-当目标命令是释放方向，且当前位置已到达保护边界时，对应关节会保持当前位置，不继续释放。
-
-### 9.6 热插拔保持
-
-当舵机从离线变为在线时，系统会标记该电机进入热插拔保持状态，优先保持当前反馈位置，避免突然执行旧目标造成跳动。
-
-## 10. 标定体系
-
-标定相关文件：
-
-- `CalibrationTask.h/.cpp`
-- `JointCalibrationProfile.h/.cpp`
-
-当前系统使用测试阶段的手动标定结果：
-
-- `initManualCalibrationForTest()` 加载默认标定参数。
-- 使用 `kManualEncoderMax[]` 推导每个关节的 offset 和 angleMax。
-- `encoderMax == 0` 表示该关节没有有效手动标定数据。
-
-自动标定能力保留了接口：
-
-- `runSingleJointCalibration()`
-- `taskServoCalibration()`
-
-但当前 `taskServoCalibration()` 是占位实现，启动后会设置状态并删除自身，不会自动驱动舵机执行完整标定流程。
-
-## 11. 已实现功能点
-
-- 21 路关节编码器数据接收、重组、方向统一和角度映射。
-- 21 路编码器错误详情接收和错误位图维护。
-- 5 组触觉摘要 CAN 数据重组和串口上报。
-- 22 路飞特舵机管理。
-- 4 路舵机 UART 总线同步写和同步读。
-- 舵机多圈绝对位置跟踪，范围限制为 `-30719~30719`。
-- 关节控制模式和电机直控模式。
-- 双环 PID 控制。
-- joint16 主副双舵机拮抗控制。
-- CAN 离线、编码器断连和通道错误保护。
-- joint16 双反馈差异故障保护。
-- 反绕释放保护。
-- 腱绳保护配置。
-- 热插拔保持。
-- 上位机串口协议收发。
-- 舵机角度、raw、遥测、触觉、调试和故障状态上报。
-
-## 12. 当前限制与待完善点
-
-- 自动标定任务当前处于占位关闭状态，系统依赖手动标定测试数据。
-- `CMD_CALIBRATE` 当前主要更新 UI 状态，并未直接启动完整自动标定流程。
-- 过载保护协议字段和上报位图已保留，但当前求解任务中 `overload_fault_bitmap` 被置为 0，实际过载保护逻辑未启用。
-- 触觉侧在 P4 端支持摘要重组和上报，完整触觉 dump 不在本程序中实现。
-- 源码中部分中文注释存在编码乱码，阅读代码时建议以本架构文档和实际 C/C++ 逻辑为准。
-
-## 13. 快速阅读建议
-
-如果只想快速理解系统，建议按以下顺序阅读源码：
-
-1. `ServoBoardMain.ino`：了解入口。
-2. `SystemTask.cpp`：了解启动流程、任务创建和舵机映射。
-3. `TaskSharedData.h`：了解任务之间交换的数据。
-4. `CanCommTask.cpp`：了解 S3 传感数据如何进入 P4。
-5. `UpperCommTask.cpp`：了解上位机协议。
-6. `AngleSolver.cpp`：了解控制模式、PID 和保护逻辑。
-7. `ServoBusManager.cpp`：了解舵机总线读写和多圈位置跟踪。
+- 自动全关节校准暂未启用，避免误触发硬件运动。
+- 校准协议仍保留向后兼容空间，后续可增加单关节校准命令。
+- direct motor 模式为了方便滑条调试，对 CAN/SERVO offline 故障采用“上报但不单独阻断”的策略；真实闭环运行仍建议保证全部反馈在线。

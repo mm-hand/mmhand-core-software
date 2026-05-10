@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "SystemTask.h"
+#include "src/system/SystemTask.h"
 
 // ServoBoardMain 入口模块职责：
 // 1) 初始化系统资源与后台任务；
