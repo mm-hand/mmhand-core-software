@@ -3,6 +3,8 @@
 #include "TaskSharedData.h"
 #include "CalibrationTask.h"
 #include "StateMachineTask.h"
+#include "UpperCommCommandRouter.h"
+#include "UpperCommProtocol.h"
 
 #include <math.h>
 #include <string.h>
@@ -14,47 +16,6 @@ extern volatile uint8_t g_calibrationUIStatus;
 // 2) 组包上报传感器、舵机、调试和故障状态；
 // 3) 维护串口协议 ACK 与故障位图心跳同步。
 //
-// 上行帧（设备 -> 上位机）：[0xFE][LEN][TYPE][PAYLOAD][0xFF]
-#define PROTOCOL_HEADER 0xFE
-#define PROTOCOL_TAIL 0xFF
-#define PACKET_TYPE_SENSOR 0x01
-#define PACKET_TYPE_CALIB_ACK 0x02
-#define PACKET_TYPE_SERVO_ANGLE 0x03
-#define PACKET_TYPE_JOINT1_DEBUG 0x04
-#define PACKET_TYPE_SERVO_TELEM 0x05
-#define PACKET_TYPE_PROTO_ACK 0x06
-#define PACKET_TYPE_FAULT_STATUS 0x07
-#define PACKET_TYPE_RELEASE_FAULT 0x08
-#define PACKET_TYPE_SERVO_RAW 0x09
-#define PACKET_TYPE_TACTILE 0x0A
-
-#define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
-
-// 下行命令（上位机 -> 设备）
-#define CMD_CALIBRATE 0xCA
-#define CMD_ANGLE_CTRL 0xCB
-#define CMD_START 0xCC
-#define CMD_STOP 0xCD
-#define CMD_RESET 0xCE
-#define CMD_CALIB_DATA 0xCF
-#define CMD_MOTOR_POS 0xD0
-#define CMD_SENSOR_STREAM_MODE 0xD1
-#define CMD_MOTOR_POS_SWEEP 0xD2
-#define CMD_MOTOR_POS_ABS 0xD3
-#define CMD_TENDON_GUARD 0xD4
-
-#define PROTO_ACK_STATUS_OK 0
-#define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
-
-#define SENSOR_STREAM_MODE_LEGACY_U16_WRAP 0
-#define SENSOR_STREAM_MODE_SIGNED_I16 1
-
-static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
-static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
-static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
-static const size_t kSerialRxBufferSize = 512;
-static const int32_t kEncoderModulo = 16384;
-static const uint32_t kFaultStatusHeartbeatMs = 200;
 static uint8_t g_sensorStreamMode = SENSOR_STREAM_MODE_SIGNED_I16;
 
 // 将 float 以大端字节序写入缓冲区（用于上行调试包）。
@@ -315,13 +276,6 @@ static bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, 
     return true;
 }
 
-static int16_t clampServoAbsCommand(int32_t value)
-{
-    if (value > 30719) return 30719;
-    if (value < -30719) return -30719;
-    return (int16_t)value;
-}
-
 static bool parseTendonGuardPayload(const uint8_t* payload,
                                     size_t payloadLen,
                                     uint8_t* enabled,
@@ -343,101 +297,6 @@ static bool parseTendonGuardPayload(const uint8_t* payload,
         x1Abs[i] = clampServoAbsCommand((int16_t)raw);
     }
     return true;
-}
-
-static void applyTendonGuardConfig(TaskSharedData_t* sharedData,
-                                   const uint8_t* enabled,
-                                   const int8_t* sign,
-                                   const int16_t* x1Abs,
-                                   uint8_t count)
-{
-    if (!sharedData || !enabled || !sign || !x1Abs) {
-        return;
-    }
-    if (count > ENCODER_TOTAL_NUM) {
-        count = ENCODER_TOTAL_NUM;
-    }
-    for (uint8_t i = 0; i < count; i++)
-    {
-        sharedData->tendon_guard_enabled[i] = enabled[i] ? 1 : 0;
-        sharedData->tendon_guard_sign[i] = (sign[i] < 0) ? -1 : 1;
-        sharedData->tendon_guard_x1_abs[i] = clampServoAbsCommand(x1Abs[i]);
-    }
-}
-
-// 写入目标关节角缓存（线程安全）。
-static void applyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count)
-{
-    if (count > ENCODER_TOTAL_NUM) count = ENCODER_TOTAL_NUM;
-    if (xSemaphoreTake(sharedData->targetAnglesMutex, pdMS_TO_TICKS(10)) == pdTRUE)
-    {
-        for (uint8_t i = 0; i < count; i++)
-        {
-            sharedData->targetAngles[i] = angles[i];
-        }
-        xSemaphoreGive(sharedData->targetAnglesMutex);
-    }
-}
-
-// 清空全部关节角目标缓存。
-static void clearTargetAngles(TaskSharedData_t* sharedData)
-{
-    float zeroAngles[ENCODER_TOTAL_NUM] = {0.0f};
-    applyTargetAngles(sharedData, zeroAngles, ENCODER_TOTAL_NUM);
-}
-
-// 写入直控模式电机目标缓存。
-static void applyMotorTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
-{
-    if (!sharedData || !targets) {
-        return;
-    }
-    if (count > SERVO_TOTAL_NUM) {
-        count = SERVO_TOTAL_NUM;
-    }
-    for (uint8_t i = 0; i < count; i++)
-    {
-        sharedData->motorTargetRaw[i] = targets[i];
-    }
-}
-
-// 写入滑条扫动专用电机目标缓存。
-static void applyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
-{
-    if (!sharedData || !targets) {
-        return;
-    }
-    if (count > SERVO_TOTAL_NUM) {
-        count = SERVO_TOTAL_NUM;
-    }
-    for (uint8_t i = 0; i < count; i++)
-    {
-        sharedData->motorSweepTargetRaw[i] = targets[i];
-    }
-}
-
-// 缓存标定零位原始值（非法浮点会归零）。
-static void cacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count)
-{
-    if (!sharedData || !values) {
-        return;
-    }
-    if (count > ENCODER_TOTAL_NUM) {
-        count = ENCODER_TOTAL_NUM;
-    }
-    for (uint8_t i = 0; i < count; i++)
-    {
-        float v = values[i];
-        if (!isfinite(v)) {
-            v = 0.0f;
-        }
-        sharedData->calib_zero_raw_cache[i] = (int32_t)lroundf(v);
-    }
-    for (uint8_t i = count; i < ENCODER_TOTAL_NUM; i++)
-    {
-        sharedData->calib_zero_raw_cache[i] = 0;
-    }
-    sharedData->calib_zero_raw_valid = 1;
 }
 
 // 返回命令负载长度；不包含 CMD 自身。
@@ -477,7 +336,7 @@ static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t 
         return;
     }
     if (cmd == (uint8_t)'b') {
-        clearTargetAngles(sharedData);
+        upperClearTargetAngles(sharedData);
     }
 }
 
@@ -518,9 +377,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, parsedAngles, ENCODER_TOTAL_NUM)) {
-            applyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
-            sharedData->joint_command_token++;
-            sharedData->control_mode = CONTROL_MODE_JOINT;
+            upperApplyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
         }
         return;
     }
@@ -529,7 +386,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         float zeroRaw[ENCODER_TOTAL_NUM] = {0.0f};
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, zeroRaw, ENCODER_TOTAL_NUM)) {
-            cacheCalibZeroRaw(sharedData, zeroRaw, ENCODER_TOTAL_NUM);
+            upperCacheCalibZeroRaw(sharedData, zeroRaw, ENCODER_TOTAL_NUM);
         }
         return;
     }
@@ -538,11 +395,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
         if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
-            applyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
-            sharedData->motor_command_token++;
-            sharedData->motor_direct_command_generation++;
-            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_TARGET;
-            sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM, MOTOR_DIRECT_SOURCE_TARGET);
         }
         return;
     }
@@ -551,11 +404,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
         if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
-            applyMotorSweepTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
-            sharedData->motor_sweep_command_token++;
-            sharedData->motor_direct_command_generation++;
-            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
-            sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+            upperApplyMotorSweepTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
         }
         return;
     }
@@ -564,11 +413,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
         if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
-            applyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
-            sharedData->motor_command_token++;
-            sharedData->motor_direct_command_generation++;
-            sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
-            sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM, MOTOR_DIRECT_SOURCE_ABSOLUTE);
         }
         return;
     }
@@ -579,7 +424,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         int8_t sign[ENCODER_TOTAL_NUM] = {0};
         int16_t x1Abs[ENCODER_TOTAL_NUM] = {0};
         if (parseTendonGuardPayload(frame + 1, frameLen - 1, enabled, sign, x1Abs)) {
-            applyTendonGuardConfig(sharedData, enabled, sign, x1Abs, ENCODER_TOTAL_NUM);
+            upperApplyTendonGuardConfig(sharedData, enabled, sign, x1Abs, ENCODER_TOTAL_NUM);
         }
         return;
     }

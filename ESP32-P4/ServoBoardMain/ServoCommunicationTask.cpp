@@ -330,7 +330,10 @@ void servoCommunicationTask(void* parameter)
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {
-            applyServoTargetBatch(batch);
+            const uint8_t owner = sharedData->servo_target_owner;
+            if (owner != SERVO_TARGET_OWNER_NONE && batch.source == owner) {
+                applyServoTargetBatch(batch);
+            }
         }
 
         uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};

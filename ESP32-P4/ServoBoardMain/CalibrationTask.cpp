@@ -220,6 +220,7 @@ static bool queueJointTarget(TaskSharedData_t* sharedData,
     ServoTargetBatch_t batch;
     memset(&batch, 0, sizeof(batch));
     batch.timestamp = millis();
+    batch.source = SERVO_TARGET_OWNER_CALIBRATION;
     appendServoTarget(&batch,
                       jointMap[jointIndex].busIndex,
                       jointMap[jointIndex].servoID,
@@ -240,6 +241,9 @@ static bool queueJointTarget(TaskSharedData_t* sharedData,
     }
 
     if (batch.count == 0) {
+        return false;
+    }
+    if (sharedData->servo_target_owner != SERVO_TARGET_OWNER_CALIBRATION) {
         return false;
     }
     return xQueueOverwrite(sharedData->servoTargetQueue, &batch) == pdTRUE;
@@ -398,8 +402,31 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
     return false;
 }
 void taskServoCalibration(void* parameter) {
-    (void)parameter;
-    // 当前测试阶段：自动标定任务占位关闭，避免后台自主运动影响联调。
+    TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
+    if (!sharedData) {
+        vTaskDelete(NULL);
+        return;
+    }
+
     g_calibrationUIStatus = CALIB_STATUS_IDLE;
-    vTaskDelete(NULL);
+    uint8_t lastState = SYSTEM_STATE_BOOTING;
+
+    for (;;)
+    {
+        const uint8_t state = sharedData->system_state;
+        if (state != lastState) {
+            if (state == SYSTEM_STATE_CALIBRATION_IDLE) {
+                g_calibrationUIStatus = CALIB_STATUS_IDLE;
+            } else if (state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+                g_calibrationUIStatus = CALIB_STATUS_RUNNING;
+            } else if (state == SYSTEM_STATE_CALIBRATION_SUCCESS) {
+                g_calibrationUIStatus = CALIB_STATUS_SUCCESS;
+            } else if (state == SYSTEM_STATE_CALIBRATION_FAILED) {
+                g_calibrationUIStatus = CALIB_STATUS_FAILED;
+            }
+            lastState = state;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }

@@ -3,6 +3,7 @@
 #include "StateMachineTask.h"
 #include "ControlTask.h"
 #include "ServoCommunicationTask.h"
+#include "HardwareMap.h"
 
 #include <string.h>
 
@@ -23,50 +24,7 @@ TaskHandle_t taskStateMachineHandle = NULL;
 TaskHandle_t taskCanCommHandle = NULL;
 TaskHandle_t taskServoCommHandle = NULL;
 TaskHandle_t taskControlHandle = NULL;
-
-// 4 路舵机总线管理器实例，物理接线与 jointMap 对应。
-
-// 角度求解与双环控制实例。
-// 主映射：关节索引(0..20) -> 主舵机总线/ID。
-JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
-    {0, 1},  {0, 2},  {0, 3},  {0, 4},
-    {0, 5},  {0, 6},  {1, 7},  {2, 8},
-    {1, 9},  {1, 10}, {1, 11}, {1, 12},
-    {2, 13}, {2, 14}, {2, 15}, {2, 16},
-    {3, 17}, {3, 19}, {3, 20}, {3, 21}, {3, 22}
-};
-
-// // 主映射：关节索引(0..20) -> 主舵机总线/ID。
-// JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
-//     {0, 1},  {0, 2},  {1, 3},  {2, 4},
-//     {0, 5},  {0, 6},  {0, 7},  {0, 8},
-//     {1, 9},  {1, 10}, {1, 11}, {1, 12},
-//     {2, 13}, {2, 14}, {2, 15}, {2, 16},
-//     {3, 17}, {3, 19}, {3, 20}, {3, 21}, {3, 22}
-// };
-
-// joint16 的副舵机（拮抗控制用）。
-MotorMapItem joint16SecondaryMotor = {3, 18};
-
-// 电机通道映射(0..21)：用于22通道直控与舵机角度/遥测上报。
-MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
-    {0, 1},  {0, 2},  {0, 3},  {0, 4},     // 小拇指
-    {0, 5},  {0, 6},  {1, 7},  {2, 8},     // 无名指
-    {1, 9},  {1, 10}, {1, 11}, {1, 12},    //  中指
-    {2, 13}, {2, 14}, {2, 15}, {2, 16},    //  食指
-    {3, 17}, {3, 18}, {3, 19}, {3, 20},
-    {3, 21}, {3, 22}
-};  // bus id - motor id
-
-
-// MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
-//     {0, 1},  {0, 2},  {1, 3},  {2, 4},     // 小拇指
-//     {0, 5},  {0, 6},  {0, 7},  {0, 8},     // 无名指
-//     {1, 9},  {1, 10}, {1, 11}, {1, 12},    //  中指
-//     {2, 13}, {2, 14}, {2, 15}, {2, 16},    //  食指
-//     {3, 17}, {3, 18}, {3, 19}, {3, 20},
-//     {3, 21}, {3, 22}
-// };  // bus id - motor id
+TaskHandle_t taskCalibrationHandle = NULL;
 
 // 系统启动总入口：按“资源初始化 -> 参数初始化 -> 任务创建”顺序执行。
 void System_Init() {
@@ -107,7 +65,8 @@ void System_Init() {
 
     // 3) 初始化目标角缓存与控制相关状态。
     sharedData.targetAnglesMutex = xSemaphoreCreateMutex();
-    if (!sharedData.targetAnglesMutex) {
+    sharedData.commandStateMutex = xSemaphoreCreateMutex();
+    if (!sharedData.targetAnglesMutex || !sharedData.commandStateMutex) {
         // 互斥锁创建失败同样进入安全停机。
         while (1) {}
     }
@@ -123,6 +82,7 @@ void System_Init() {
     sharedData.control_enabled = 0;
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_BOOTING;
+    sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData.system_fault_bitmap = 0;
     sharedData.state_transition_count = 0;
     sharedData.joint16_dual_feedback_fault = 0;
@@ -187,6 +147,15 @@ void System_Init() {
         &sharedData,
         TASK_CONTROL_PRIORITY,
         &taskControlHandle
+    );
+
+    xTaskCreate(
+        taskServoCalibration,
+        "calibrationTask",
+        CALIB_TASK_STACK_SIZE,
+        &sharedData,
+        TASK_CALIB_PRIORITY,
+        &taskCalibrationHandle
     );
 
     Serial.println("FreeRTOS tasks created successfully.");

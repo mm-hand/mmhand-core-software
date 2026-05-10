@@ -43,6 +43,8 @@
 #define SYSTEM_EVENT_STOP 2
 #define SYSTEM_EVENT_RESET 3
 #define SYSTEM_EVENT_CALIBRATE 4
+#define SYSTEM_EVENT_CALIBRATION_DONE 5
+#define SYSTEM_EVENT_CALIBRATION_FAILED 6
 
 #define SYSTEM_STATE_BOOTING 0
 #define SYSTEM_STATE_IDLE 1
@@ -50,12 +52,19 @@
 #define SYSTEM_STATE_STOPPED 3
 #define SYSTEM_STATE_FAULT_HOLD 4
 #define SYSTEM_STATE_CALIBRATION_IDLE 5
+#define SYSTEM_STATE_CALIBRATION_RUNNING 6
+#define SYSTEM_STATE_CALIBRATION_SUCCESS 7
+#define SYSTEM_STATE_CALIBRATION_FAILED 8
 
 #define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
 #define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
 #define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
 #define SYSTEM_FAULT_RELEASE_GUARD    (1UL << 3)
 #define SYSTEM_FAULT_SERVO_OFFLINE    (1UL << 4)
+
+#define SERVO_TARGET_OWNER_NONE 0
+#define SERVO_TARGET_OWNER_CONTROL 1
+#define SERVO_TARGET_OWNER_CALIBRATION 2
 
 // TWAI(CAN) 引脚。
 #define TWAI_TX_PIN 47
@@ -139,9 +148,25 @@ typedef struct {
 
 typedef struct {
     uint8_t count;
+    uint8_t source;
     ServoTargetCommand_t commands[SERVO_TARGET_BATCH_MAX];
     uint32_t timestamp;
 } ServoTargetBatch_t;
+
+typedef struct {
+    float targetAngles[ENCODER_TOTAL_NUM];
+    int32_t motorTargetRaw[SERVO_TOTAL_NUM];
+    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];
+    uint32_t motorCommandToken;
+    uint32_t motorSweepCommandToken;
+    uint32_t jointCommandToken;
+    uint32_t motorDirectCommandGeneration;
+    uint8_t motorDirectCommandSource;
+    uint8_t controlMode;
+    uint8_t tendonGuardEnabled[ENCODER_TOTAL_NUM];
+    int8_t tendonGuardSign[ENCODER_TOTAL_NUM];
+    int16_t tendonGuardX1Abs[ENCODER_TOTAL_NUM];
+} ControlCommandSnapshot_t;
 
 typedef struct {
     uint8_t servoId;
@@ -206,6 +231,7 @@ typedef struct {
 
     float targetAngles[ENCODER_TOTAL_NUM];
     SemaphoreHandle_t targetAnglesMutex;
+    SemaphoreHandle_t commandStateMutex;
 
     // 直控舵机模式目标缓存，按电机通道索引（0..21）对齐，语义为单圈原始位置计数。
     int32_t motorTargetRaw[SERVO_TOTAL_NUM];
@@ -224,6 +250,7 @@ typedef struct {
     volatile uint8_t control_enabled;
     volatile uint8_t control_mode; // CONTROL_MODE_*
     volatile uint8_t system_state; // SYSTEM_STATE_*
+    volatile uint8_t servo_target_owner; // SERVO_TARGET_OWNER_*
     volatile uint32_t system_fault_bitmap;
     volatile uint32_t state_transition_count;
     volatile uint8_t joint16_dual_feedback_fault;

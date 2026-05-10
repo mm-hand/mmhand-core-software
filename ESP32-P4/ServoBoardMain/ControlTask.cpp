@@ -4,7 +4,9 @@
 #include <string.h>
 
 #include "CalibrationTask.h"
-#include "pid.h"
+#include "ControlOutputBuilder.h"
+#include "ControlSafety.h"
+#include "ControlSolver.h"
 
 #ifndef SOLVER_DIAG_LOG_ENABLE
 #define SOLVER_DIAG_LOG_ENABLE 0
@@ -14,95 +16,6 @@ void taskSolver(void* parameter)
 {
     controlTask(parameter);
 }
-
-class ControlSolver {
-public:
-    ControlSolver() : _initialized(false)
-    {
-        memset(_zeroOffsets, 0, sizeof(_zeroOffsets));
-        memset(_gearRatios, 0, sizeof(_gearRatios));
-        memset(_directions, 0, sizeof(_directions));
-        memset(_pids, 0, sizeof(_pids));
-    }
-
-    void begin()
-    {
-        int16_t zeros[JOINT_COUNT];
-        float ratios[JOINT_COUNT];
-        int8_t dirs[JOINT_COUNT];
-        for (int i = 0; i < JOINT_COUNT; i++) {
-            zeros[i] = 2048;
-            ratios[i] = 1.0f;
-            dirs[i] = 1;
-        }
-        init(zeros, ratios, dirs);
-
-        float pidConfigs[2][PID_PARAMETER_NUM] = {
-            {16.5f, 0.0f, 0.5f, 0.0f, 100.0f, 600.0f},
-            {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
-        };
-        setPIDParams(pidConfigs);
-    }
-
-    void init(int16_t* zeroOffsets, float* gearRatios, int8_t* directions)
-    {
-        for (int i = 0; i < JOINT_COUNT; i++) {
-            _zeroOffsets[i] = zeroOffsets[i];
-            _gearRatios[i] = gearRatios[i];
-            _directions[i] = directions[i];
-        }
-        _initialized = true;
-    }
-
-    void setPIDParams(float pidParams[][PID_PARAMETER_NUM])
-    {
-        for (int i = 0; i < JOINT_COUNT; i++) {
-            PID_Init(&_pids[i][0], PID_POSITION, pidParams[0]);
-            PID_Init(&_pids[i][1], PID_POSITION, pidParams[1]);
-        }
-    }
-
-    bool compute(float* targetDegs,
-                 float* magActualDegs,
-                 const int32_t* absolutePosition,
-                 int16_t* outServoPulses)
-    {
-        if (!targetDegs || !magActualDegs || !absolutePosition || !outServoPulses) {
-            return false;
-        }
-
-        for (int i = 0; i < JOINT_COUNT; i++) {
-            f_PID_Calculate(&_pids[i][0], targetDegs[i], magActualDegs[i]);
-
-            const float loop2Target = _pids[i][0].Output + (float)absolutePosition[i];
-            const float loop2Actual = (float)absolutePosition[i];
-            f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual);
-
-            outServoPulses[i] = (int16_t)_pids[i][1].Output + absolutePosition[i];
-        }
-        return true;
-    }
-
-    float getPidOutput(uint8_t jointIndex, uint8_t loopIndex) const
-    {
-        if (jointIndex >= JOINT_COUNT || loopIndex > 1) {
-            return 0.0f;
-        }
-        return _pids[jointIndex][loopIndex].Output;
-    }
-
-    void resetAll()
-    {
-        memset(_pids, 0, sizeof(_pids));
-    }
-
-private:
-    int16_t _zeroOffsets[JOINT_COUNT];
-    float _gearRatios[JOINT_COUNT];
-    int8_t _directions[JOINT_COUNT];
-    PID_Info_TypeDef _pids[JOINT_COUNT][2];
-    bool _initialized;
-};
 
 static ControlSolver g_controlSolver;
 
@@ -116,52 +29,8 @@ static const uint8_t kDebugJointIndices[] = {4, 5, 6, 7};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
 
-// joint16 双舵机拮抗参数：
-// - 副反馈投影到主坐标: S_proj = -S + secondaryOffset
-// - 副舵机目标:          T_sub  = -T_main + secondaryOffset + tensionBias
-// - 一致性判故障: abs(P - S_proj) > threshold 持续 faultCycles 周期
-static const uint8_t kJoint16Index = 16;
-static const int32_t kJoint16SecondaryOffset = 0;
-static const int32_t kJoint16TensionBias = 0;
-static const int32_t kJoint16DiffThresholdCounts = 180;
-static const uint8_t kJoint16DiffFaultCycles = 3;
-
 static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-
-// 放绳反绕保护阈值（平衡档）。
-static const float kReleaseWindowEnterTargetDeltaDeg = -0.3f;
-static const float kReleaseWindowExitTargetDeltaDeg = 0.3f;
-static const float kReleaseFilterAlpha = 0.25f;
-static const float kReleaseActualDeadbandDeg = 0.2f;
-static const int32_t kReleaseAccumPrecheckCounts = 256;
-static const int32_t kReleaseAccumEarlyFaultCounts = 512;
-static const int32_t kReleaseAccumHalfTurnCounts = 2048;
-static const int32_t kReleaseAccumFullTurnCounts = 4096;
-static const float kReleaseForwardDeltaDeg = 2.0f;
-static const float kReleaseMinReturnAccumDeg = 1.5f;
-static const uint8_t kReleaseForwardAnomalyCycles = 3;
-static const float kReleaseRecoverPullCmdDeg = 2.5f;
-static const float kReleaseRecoverTrackErrDeg = 1.5f;
-static const uint8_t kReleaseRecoverStableCycles = 8;
-static const int32_t kTendonGuardReleaseMarginCounts = 0;
-static const float kTendonGuardReleaseAngleEpsDeg = 0.0f;
-
-typedef struct
-{
-    uint8_t initialized;
-    uint8_t faultActive;
-    uint8_t catastrophicFault;
-    uint8_t releaseWindowActive;
-    int32_t releaseServoAccumCounts;
-    float actualReturnAccumDeg;
-    float filteredActualDeg;
-    uint8_t forwardAnomalyCycles;
-    uint8_t recoverStableCycles;
-    float prevTargetDeg;
-    float prevActualDeg;
-    int32_t prevServoPos;
-} ReleaseGuardState;
 
 // 协议映射值限幅，避开断连保留值范围。
 
@@ -170,49 +39,6 @@ static int16_t clampMappedCountForProtocol(int32_t value)
     if (value > 32766) return 32766;
     if (value < -32768) return -32768;
     return (int16_t)value;
-}
-
-static int16_t clampServoPos(int32_t value)
-{
-    if (value > 30719) return 30719;
-    if (value < -30719) return -30719;
-    return (int16_t)value;
-}
-
-static int16_t clampServoSingleTurnRaw(int32_t value)
-{
-    if (value > 4095) return 4095;
-    if (value < 0) return 0;
-    return (int16_t)value;
-}
-
-static int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
-{
-    const int32_t baseTarget = (int32_t)clampServoSingleTurnRaw(singleTurnRaw);
-    int32_t bestTarget = baseTarget;
-    int32_t bestDistance = 0x7FFFFFFF;
-
-    // 在当前圈及相邻两圈中寻找与当前多圈位置最近的等效目标。
-    const int32_t currentTurn = currentAbsPos / 4096;
-    for (int32_t turnOffset = -1; turnOffset <= 1; ++turnOffset)
-    {
-        const int32_t candidate = baseTarget + (currentTurn + turnOffset) * 4096;
-        const int32_t distance = (candidate >= currentAbsPos)
-            ? (candidate - currentAbsPos)
-            : (currentAbsPos - candidate);
-        if (distance < bestDistance)
-        {
-            bestDistance = distance;
-            bestTarget = candidate;
-        }
-    }
-
-    return clampServoPos(bestTarget);
-}
-
-static int32_t anchorSingleTurnSweepToCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
-{
-    return (int32_t)expandSingleTurnTargetNearCurrent(currentAbsPos, singleTurnRaw);
 }
 
 // 按安装方向统一编码器方向，输出范围 [0, kEncoderModulo)。
@@ -230,17 +56,6 @@ static int32_t wrapEncoderDelta(int32_t delta)
 {
     while (delta > kEncoderHalfTurn) delta -= kEncoderModulo;
     while (delta < -kEncoderHalfTurn) delta += kEncoderModulo;
-    return delta;
-}
-
-// 舵机单圈 raw [0,4095] 对应周期 4096；sweep 差分按最短弧折叠，避免 0/4095 边界出现 ±4095 大跳。
-static const int32_t kServoSingleTurnModulo = 4096;
-static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
-
-static int32_t wrapServoRawDelta(int32_t delta)
-{
-    while (delta > kServoSingleTurnHalf) delta -= kServoSingleTurnModulo;
-    while (delta < -kServoSingleTurnHalf) delta += kServoSingleTurnModulo;
     return delta;
 }
 
@@ -288,27 +103,6 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
     return targetDeg;
 }
 
-// 单关节急停判定：任一输入状态异常即触发急停。
-static bool shouldEmergencyStop(bool canBusOnline,
-                                const RemoteSensorData_t& sensorData,
-                                const MappedAngleData_t& mappedData,
-                                uint8_t jointIndex)
-{
-    if (!canBusOnline || !sensorData.isValid) {
-        return true;
-    }
-    if (jointIndex >= ENCODER_TOTAL_NUM) {
-        return true;
-    }
-    if (sensorData.errorFlags[jointIndex] != 0) {
-        return true;
-    }
-    if (mappedData.validFlags[jointIndex] == 0) {
-        return true;
-    }
-    return false;
-}
-
 // 总线索引 -> 总线管理器实例。
 
 // 通过 bus + servoId 找到电机通道索引，找不到返回 -1。
@@ -323,232 +117,33 @@ static int findMotorChannel(uint8_t bus, uint8_t id)
     return -1;
 }
 
-// 向某总线读取列表追加目标舵机（自动去重）。
-
-static void clearReleaseWindowTracking(ReleaseGuardState* guard)
+static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlCommandSnapshot_t* out)
 {
-    if (!guard) {
-        return;
-    }
-    guard->releaseWindowActive = 0;
-    guard->releaseServoAccumCounts = 0;
-    guard->actualReturnAccumDeg = 0.0f;
-    guard->forwardAnomalyCycles = 0;
-}
-
-static void resetReleaseGuardState(ReleaseGuardState* guard)
-{
-    if (!guard) {
-        return;
-    }
-    memset(guard, 0, sizeof(*guard));
-}
-
-static void resetAllReleaseGuardStates(ReleaseGuardState guards[ENCODER_TOTAL_NUM])
-{
-    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++)
-    {
-        resetReleaseGuardState(&guards[i]);
-    }
-}
-
-static bool updateReleaseGuardState(ReleaseGuardState* guard,
-                                    float targetDeg,
-                                    float actualDeg,
-                                    int32_t servoPos,
-                                    bool inputsValid)
-{
-    if (!guard) {
+    if (!sharedData || !out) {
         return false;
     }
 
-    if (!isfinite(targetDeg)) {
-        targetDeg = 0.0f;
-    }
-    if (!isfinite(actualDeg)) {
-        actualDeg = 0.0f;
-    }
-
-    if (!guard->initialized)
-    {
-        guard->initialized = 1;
-        guard->filteredActualDeg = actualDeg;
-        guard->prevActualDeg = actualDeg;
-        guard->prevTargetDeg = targetDeg;
-        guard->prevServoPos = servoPos;
-        return guard->faultActive != 0;
-    }
-
-    const float targetDelta = targetDeg - guard->prevTargetDeg;
-    guard->filteredActualDeg =
-        kReleaseFilterAlpha * actualDeg + (1.0f - kReleaseFilterAlpha) * guard->filteredActualDeg;
-    float actualDelta = guard->filteredActualDeg - guard->prevActualDeg;
-    if (fabsf(actualDelta) < kReleaseActualDeadbandDeg) {
-        actualDelta = 0.0f;
-    }
-
-    int32_t servoDelta = servoPos - guard->prevServoPos;
-    if (servoDelta < 0) {
-        servoDelta = -servoDelta;
-    }
-
-    if (!inputsValid)
-    {
-        clearReleaseWindowTracking(guard);
-        guard->recoverStableCycles = 0;
-        guard->initialized = 0;
-        guard->prevTargetDeg = targetDeg;
-        guard->prevActualDeg = guard->filteredActualDeg;
-        guard->prevServoPos = servoPos;
-        return guard->faultActive != 0;
-    }
-
-    if (targetDelta <= kReleaseWindowEnterTargetDeltaDeg) {
-        guard->releaseWindowActive = 1;
-    }
-    if (targetDelta >= kReleaseWindowExitTargetDeltaDeg) {
-        clearReleaseWindowTracking(guard);
-    }
-
-    if (guard->releaseWindowActive)
-    {
-        if (servoDelta > 0) {
-            const int32_t remaining = 0x7FFFFFFF - guard->releaseServoAccumCounts;
-            guard->releaseServoAccumCounts += (servoDelta > remaining) ? remaining : servoDelta;
-        }
-        if (actualDelta < 0.0f) {
-            guard->actualReturnAccumDeg += -actualDelta;
-        }
-
-        if ((guard->releaseServoAccumCounts >= kReleaseAccumPrecheckCounts) &&
-            (actualDelta >= kReleaseForwardDeltaDeg))
-        {
-            if (guard->forwardAnomalyCycles < 255) {
-                guard->forwardAnomalyCycles++;
-            }
-        }
-        else
-        {
-            guard->forwardAnomalyCycles = 0;
-        }
-
-        if (guard->releaseServoAccumCounts >= kReleaseAccumFullTurnCounts) {
-            guard->faultActive = 1;
-            guard->catastrophicFault = 1;
-        } else if (guard->releaseServoAccumCounts >= kReleaseAccumHalfTurnCounts) {
-            guard->faultActive = 1;
-        } else if ((guard->releaseServoAccumCounts >= kReleaseAccumEarlyFaultCounts) &&
-                   (guard->actualReturnAccumDeg <= kReleaseMinReturnAccumDeg)) {
-            guard->faultActive = 1;
-        } else if ((guard->releaseServoAccumCounts >= kReleaseAccumPrecheckCounts) &&
-                   (guard->forwardAnomalyCycles >= kReleaseForwardAnomalyCycles)) {
-            guard->faultActive = 1;
-        }
-    }
-    else
-    {
-        guard->releaseServoAccumCounts = 0;
-        guard->actualReturnAccumDeg = 0.0f;
-        guard->forwardAnomalyCycles = 0;
-    }
-
-    if (guard->faultActive && !guard->catastrophicFault)
-    {
-        bool clearFault = false;
-        if (targetDelta >= kReleaseRecoverPullCmdDeg) {
-            clearFault = true;
-        } else {
-            const float trackErr = fabsf(targetDeg - guard->filteredActualDeg);
-            if (trackErr <= kReleaseRecoverTrackErrDeg) {
-                if (guard->recoverStableCycles < 255) {
-                    guard->recoverStableCycles++;
-                }
-            } else {
-                guard->recoverStableCycles = 0;
-            }
-            if (guard->recoverStableCycles >= kReleaseRecoverStableCycles) {
-                clearFault = true;
-            }
-        }
-
-        if (clearFault)
-        {
-            guard->faultActive = 0;
-            guard->releaseWindowActive = 0;
-            guard->releaseServoAccumCounts = 0;
-            guard->actualReturnAccumDeg = 0.0f;
-            guard->forwardAnomalyCycles = 0;
-            guard->recoverStableCycles = 0;
-        }
-    }
-
-    guard->prevTargetDeg = targetDeg;
-    guard->prevActualDeg = guard->filteredActualDeg;
-    guard->prevServoPos = servoPos;
-    return guard->faultActive != 0;
-}
-
-static uint32_t buildReleaseFaultBitmap(const ReleaseGuardState guards[ENCODER_TOTAL_NUM])
-{
-    uint32_t bitmap = 0;
-    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++)
-    {
-        if (i == kJoint16Index) {
-            continue;
-        }
-        if (guards[i].faultActive) {
-            bitmap |= (1UL << i);
-        }
-    }
-    return bitmap;
-}
-
-static bool shouldBlockReleaseByTendonGuard(const TaskSharedData_t* sharedData,
-                                            uint8_t jointIndex,
-                                            float targetDeg,
-                                            float actualDeg,
-                                            int32_t absNow,
-                                            bool inputsValid)
-{
-    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM || !inputsValid) {
-        return false;
-    }
-    if (!isfinite(targetDeg) || !isfinite(actualDeg)) {
-        return false;
-    }
-    if (sharedData->tendon_guard_enabled[jointIndex] == 0) {
+    SemaphoreHandle_t lock = sharedData->commandStateMutex ? sharedData->commandStateMutex : sharedData->targetAnglesMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(2)) != pdTRUE) {
         return false;
     }
 
-    const bool isReleaseCmd = (targetDeg < (actualDeg - kTendonGuardReleaseAngleEpsDeg));
-    if (!isReleaseCmd) {
-        return false;
-    }
+    memcpy(out->targetAngles, sharedData->targetAngles, sizeof(out->targetAngles));
+    memcpy(out->motorTargetRaw, sharedData->motorTargetRaw, sizeof(out->motorTargetRaw));
+    memcpy(out->motorSweepTargetRaw, sharedData->motorSweepTargetRaw, sizeof(out->motorSweepTargetRaw));
+    out->motorCommandToken = sharedData->motor_command_token;
+    out->motorSweepCommandToken = sharedData->motor_sweep_command_token;
+    out->jointCommandToken = sharedData->joint_command_token;
+    out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
+    out->motorDirectCommandSource = sharedData->motor_direct_command_source;
+    out->controlMode = sharedData->control_mode;
+    memcpy(out->tendonGuardEnabled, (const void*)sharedData->tendon_guard_enabled, sizeof(out->tendonGuardEnabled));
+    memcpy(out->tendonGuardSign, (const void*)sharedData->tendon_guard_sign, sizeof(out->tendonGuardSign));
+    memcpy(out->tendonGuardX1Abs, (const void*)sharedData->tendon_guard_x1_abs, sizeof(out->tendonGuardX1Abs));
 
-    const int8_t sign = (sharedData->tendon_guard_sign[jointIndex] < 0) ? -1 : 1;
-    const int32_t x1Abs = (int32_t)sharedData->tendon_guard_x1_abs[jointIndex];
-    if (sign > 0) {
-        return absNow <= (x1Abs + kTendonGuardReleaseMarginCounts);
+    if (lock) {
+        xSemaphoreGive(lock);
     }
-    return absNow >= (x1Abs - kTendonGuardReleaseMarginCounts);
-}
-
-static bool appendServoTarget(ServoTargetBatch_t* batch,
-                              uint8_t busIndex,
-                              uint8_t servoId,
-                              int16_t position,
-                              uint16_t speed,
-                              uint8_t acc)
-{
-    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX) {
-        return false;
-    }
-    ServoTargetCommand_t& cmd = batch->commands[batch->count++];
-    cmd.busIndex = busIndex;
-    cmd.servoId = servoId;
-    cmd.position = position;
-    cmd.speed = speed;
-    cmd.acc = acc;
     return true;
 }
 
@@ -583,6 +178,9 @@ void controlTask(void* parameter)
     resetAllReleaseGuardStates(releaseGuards);
     uint32_t lastReleaseFaultResetToken = sharedData->reverse_release_fault_reset_token;
     sharedData->reverse_release_fault_bitmap = 0;
+    ControlCommandSnapshot_t commandSnapshot;
+    memset(&commandSnapshot, 0, sizeof(commandSnapshot));
+    readControlCommandSnapshot(sharedData, &commandSnapshot);
 
 #if SOLVER_DIAG_LOG_ENABLE
     uint32_t lastDiagLogMs = 0;
@@ -592,38 +190,43 @@ void controlTask(void* parameter)
     const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
     bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
     bool hotplugHoldMotor[SERVO_TOTAL_NUM] = {false};
-    uint32_t lastMotorCommandToken = sharedData->motor_command_token;
-    uint32_t lastMotorSweepCommandToken = sharedData->motor_sweep_command_token;
-    uint32_t lastJointCommandToken = sharedData->joint_command_token;
-    uint8_t lastMotorDirectSource = sharedData->motor_direct_command_source;
+    uint32_t lastMotorCommandToken = commandSnapshot.motorCommandToken;
+    uint32_t lastMotorSweepCommandToken = commandSnapshot.motorSweepCommandToken;
+    uint32_t lastJointCommandToken = commandSnapshot.jointCommandToken;
+    uint8_t lastMotorDirectSource = commandSnapshot.motorDirectCommandSource;
     int16_t prevSweepRawTarget[SERVO_TOTAL_NUM] = {0};
     int32_t sweepExpandedTarget[SERVO_TOTAL_NUM] = {0};
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
 
     while (1)
     {
-        const uint32_t motorCommandToken = sharedData->motor_command_token;
+        if (!readControlCommandSnapshot(sharedData, &commandSnapshot)) {
+            vTaskDelayUntil(&lastWakeTime, solverPeriodTicks);
+            continue;
+        }
+
+        const uint32_t motorCommandToken = commandSnapshot.motorCommandToken;
         if (motorCommandToken != lastMotorCommandToken)
         {
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             lastMotorCommandToken = motorCommandToken;
         }
 
-        const uint32_t motorSweepCommandToken = sharedData->motor_sweep_command_token;
+        const uint32_t motorSweepCommandToken = commandSnapshot.motorSweepCommandToken;
         if (motorSweepCommandToken != lastMotorSweepCommandToken)
         {
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             lastMotorSweepCommandToken = motorSweepCommandToken;
         }
 
-        const uint32_t jointCommandToken = sharedData->joint_command_token;
+        const uint32_t jointCommandToken = commandSnapshot.jointCommandToken;
         if (jointCommandToken != lastJointCommandToken)
         {
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             lastJointCommandToken = jointCommandToken;
         }
 
-        const uint8_t motorDirectSource = sharedData->motor_direct_command_source;
+        const uint8_t motorDirectSource = commandSnapshot.motorDirectCommandSource;
         if (motorDirectSource != lastMotorDirectSource)
         {
             memset(sweepAnchorValid, 0, sizeof(sweepAnchorValid));
@@ -641,6 +244,7 @@ void controlTask(void* parameter)
         ServoTargetBatch_t targetBatch;
         memset(&targetBatch, 0, sizeof(targetBatch));
         targetBatch.timestamp = millis();
+        targetBatch.source = SERVO_TARGET_OWNER_CONTROL;
         int16_t jointCmdPos[ENCODER_TOTAL_NUM] = {0};
         uint8_t jointCmdValid[ENCODER_TOTAL_NUM] = {0};
 
@@ -777,16 +381,18 @@ void controlTask(void* parameter)
             xQueueOverwrite(sharedData->mappedAngleQueue, &mappedData);
         }
 
-        if (xSemaphoreTake(sharedData->targetAnglesMutex, pdMS_TO_TICKS(10)) == pdTRUE)
-        {
-            memcpy(localTargets, sharedData->targetAngles, sizeof(localTargets));
-            xSemaphoreGive(sharedData->targetAnglesMutex);
-        }
+        memcpy(localTargets, commandSnapshot.targetAngles, sizeof(localTargets));
         const bool hostControlEnabled = (sharedData->control_enabled != 0);
-        const bool controlEnabled = hostControlEnabled;
+        const uint8_t systemState = sharedData->system_state;
+        const uint8_t targetOwner = sharedData->servo_target_owner;
+        const bool controlOwnerActive = (targetOwner == SERVO_TARGET_OWNER_CONTROL);
+        const bool runningState = (systemState == SYSTEM_STATE_RUNNING);
+        const bool faultHoldState = (systemState == SYSTEM_STATE_FAULT_HOLD);
+        const bool controlEnabled = hostControlEnabled && controlOwnerActive && (runningState || faultHoldState);
+        const bool normalOutputAllowed = controlEnabled && runningState;
 
         // 仅关节控制模式下执行角度限幅（直控模式透传原始目标）。
-        if (sharedData->control_mode == CONTROL_MODE_JOINT) {
+        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
             }
@@ -795,7 +401,7 @@ void controlTask(void* parameter)
         // 阶段4：执行双环解算，得到每关节目标脉冲。
         g_controlSolver.compute(localTargets, magAngles, absolutePosition, outPulses);
 
-        if (sharedData->control_mode == CONTROL_MODE_DIRECT_MOTOR)
+        if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
             // 直控模式：按 motorTargetRaw 下发；joint16 双反馈故障仅作用于主副舵机对。
             if (controlEnabled) {
@@ -809,7 +415,7 @@ void controlTask(void* parameter)
 
                     const bool isJoint16Motor =
                         ((int)ch == joint16PrimaryCh) || ((int)ch == joint16SecondaryCh);
-                    if (joint16DualFault && isJoint16Motor)
+                    if (!normalOutputAllowed || (joint16DualFault && isJoint16Motor))
                     {
                         if (servoData.onlineStatus[ch] != 0) {
                             const int16_t holdPos = clampServoPos(servoData.servoAngles[ch]);
@@ -823,7 +429,7 @@ void controlTask(void* parameter)
                     if (!hotplugHoldMotor[ch]) {
                         if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
                             const int16_t rawTarget =
-                                clampServoSingleTurnRaw(sharedData->motorSweepTargetRaw[ch]);
+                                clampServoSingleTurnRaw(commandSnapshot.motorSweepTargetRaw[ch]);
                             if (!sweepAnchorValid[ch]) {
                                 sweepExpandedTarget[ch] =
                                     anchorSingleTurnSweepToCurrent(servoData.servoAngles[ch], rawTarget);
@@ -838,12 +444,12 @@ void controlTask(void* parameter)
                             sweepExpandedTarget[ch] = targetPos;
                         } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
                             sweepAnchorValid[ch] = false;
-                            targetPos = clampServoPos((int32_t)sharedData->motorTargetRaw[ch]);
+                            targetPos = clampServoPos((int32_t)commandSnapshot.motorTargetRaw[ch]);
                         } else {
                             sweepAnchorValid[ch] = false;
                             targetPos = expandSingleTurnTargetNearCurrent(
                                 servoData.servoAngles[ch],
-                                clampServoSingleTurnRaw(sharedData->motorTargetRaw[ch])
+                                clampServoSingleTurnRaw(commandSnapshot.motorTargetRaw[ch])
                             );
                         }
                     } else {
@@ -878,7 +484,7 @@ void controlTask(void* parameter)
                                                                  servoPos,
                                                                  guardInputsValid);
                     holdByTendonGuard = shouldBlockReleaseByTendonGuard(
-                        sharedData,
+                        &commandSnapshot,
                         jointIndex,
                         localTargets[jointIndex],
                         magAngles[jointIndex],
@@ -888,7 +494,7 @@ void controlTask(void* parameter)
                 }
 
                 bool emergency =
-                    (!controlEnabled) ||
+                    (!normalOutputAllowed) ||
                     shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || joint16DualFault;
@@ -961,7 +567,7 @@ void controlTask(void* parameter)
                     continue;
                 }
 
-                    const int16_t targetPos = clampServoPos(outPulses[jointIndex]);
+                const int16_t targetPos = clampServoPos(outPulses[jointIndex]);
                 appendServoTarget(&targetBatch, bus, id, targetPos,
                                   SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 jointCmdPos[jointIndex] = targetPos;
