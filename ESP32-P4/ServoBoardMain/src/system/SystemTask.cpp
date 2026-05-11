@@ -82,6 +82,7 @@ void System_Init() {
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_BOOTING;
     sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
+    sharedData.servo_emergency_stop_token = 0;
     sharedData.system_fault_bitmap = 0;
     sharedData.state_transition_count = 0;
     sharedData.joint16_dual_feedback_fault = 0;

@@ -90,6 +90,13 @@ static void resetServoTargetQueue(TaskSharedData_t* sharedData)
     }
 }
 
+static void requestServoEmergencyHold(TaskSharedData_t* sharedData)
+{
+    if (sharedData) {
+        sharedData->servo_emergency_stop_token++;
+    }
+}
+
 static void resetControlAndFaultTokens(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -123,6 +130,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
+            requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_STOPPED);
             break;
 
@@ -132,6 +140,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             resetServoTargetQueue(sharedData);
+            requestServoEmergencyHold(sharedData);
             resetControlAndFaultTokens(sharedData);
             sharedData->system_fault_bitmap = 0;
             setSystemState(sharedData, SYSTEM_STATE_IDLE);

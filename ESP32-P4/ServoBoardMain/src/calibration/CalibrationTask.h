@@ -4,28 +4,22 @@
 #include <Arduino.h>
 #include "../shared/TaskSharedData.h"
 
-// CalibrationTask 头文件职责：
-// 1) 定义关节标定配置/结果的数据结构；
-// 2) 声明手工标定注入与单关节自动标定服务接口；
-// 3) 暴露双舵机关节标定约束访问入口。
-// 注意：校准生命周期由 StateMachineTask 管理，本模块不是 FreeRTOS task。
-
-// 上位机可见的标定状态码（与通信层约定保持一致）。
+// Calibration service module. The calibration lifecycle is owned by the state
+// machine; this file only exposes calibration data and helper algorithms.
 #define CALIB_STATUS_IDLE      0
 #define CALIB_STATUS_RUNNING   1
 #define CALIB_STATUS_SUCCESS   2
 #define CALIB_STATUS_FAILED    3
 
-// 单关节标定配置：
-// - angleScope/bottomReserved/topReserved/angleReserved 以编码器计数为单位
-// - loadThreshold 为舵机负载阈值，超过阈值视为触碰机械限位
-// - tightenStep/speed/acc 控制逼近限位时的步长与运动参数
-// - settleMs/maxSearchMs 控制每步等待和整体超时
+// Per-joint calibration config:
+// - angleScope/bottomReserved/topReserved/angleReserved are all degrees.
+// - Manual minraw/maxraw overwrites angleScope with a measured mechanical range.
+// - Load and motion parameters are used by the optional single-joint search.
 struct JointCalibrationConfig {
-    int32_t angleScope;
-    int32_t bottomReserved;
-    int32_t topReserved;
-    int32_t angleReserved;
+    float angleScope;
+    float bottomReserved;
+    float topReserved;
+    float angleReserved;
 
     int16_t loadThreshold;
     int16_t tightenStep;
@@ -36,26 +30,25 @@ struct JointCalibrationConfig {
     uint32_t maxSearchMs;
 };
 
-// 单关节标定输出结果：
-// - success 表示该关节标定是否有效
-// - encoderMax 为触及限位时的编码器计数
-// - offset 为后续映射使用的零偏
-// - angleMax 为可用角度范围上限（计数单位）
+// Per-joint calibration result:
+// - encoderMin/encoderMax/offset are encoder counts.
+// - angleMax is the usable control range in degrees.
 struct JointCalibrationResult {
     bool success;
+    int32_t encoderMin;
     int32_t encoderMax;
     int32_t offset;
-    int32_t angleMax;
+    float angleMax;
 };
 
 extern JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 
-// 编码器安装方向表与手工 offset 表由控制映射逻辑读取。
+// Encoder direction table and fallback offset table.
 extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
 extern int32_t g_encoderOffsetManual[ENCODER_TOTAL_NUM];
 
-// 双舵机关节约束（用于标定流程中的主副联动约束入口）。
+// Dual-servo constraint used by calibration helpers.
 struct JointDualServoConstraint {
     uint8_t enabled;
     uint8_t jointIndex;
@@ -68,20 +61,14 @@ struct JointDualServoConstraint {
 };
 
 extern JointDualServoConstraint g_joint16DualServoConstraint;
-// 获取指定关节的双舵机约束配置（当前仅 joint16 启用）。
+
 bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* out);
-// 根据主舵机目标计算副舵机拮抗目标。
 bool computeSecondaryServoTargetForJoint(uint8_t jointIndex, int32_t primaryTarget, int16_t* outSecondaryTarget);
 
-// 加载默认标定参数（来源于 JointCalibrationProfile）。
 void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count);
-
-// 测试辅助入口：
-// 使用手工填入的 encoderMax 推导 offset，且不执行自动标定运动。
 void initManualCalibrationForTest(void);
 
-// 执行单关节自动标定（正式流程入口）：
-// 返回 true 表示找到有效限位并回写 out，false 表示参数/通信/超时等失败。
+// Run one-joint calibration search. Not called automatically by the state machine.
 bool runSingleJointCalibration(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                const JointCalibrationConfig& cfg,

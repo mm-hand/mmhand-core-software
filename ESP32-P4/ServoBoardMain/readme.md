@@ -225,6 +225,14 @@ CAN 使用 ESP32 TWAI，默认引脚：
 
 校准不再是常驻 FreeRTOS 任务，而是由 `StateMachineTask` 管理生命周期。`CalibrationTask` 仅作为服务模块保留标定参数、单关节标定算法、反馈读取 helper 和校准目标构建能力。
 
+手工标定采用原始磁编码器限位表：
+
+- `minraw`：关节初始/机械下限位置的 CAN 原始磁编码器读数。
+- `maxraw`：关节机械上限位置的 CAN 原始磁编码器读数。
+- `g_encoderDirection[]`：安装方向，固件会自动把 `minraw/maxraw` 转成方向归一后的 raw，不需要手动计算 oriented raw。
+- `angleScope`：由 `minraw -> maxraw` 的 14-bit 环形正向差值推导后换算为 degrees，不再作为设计活动角度手工给定。
+- `bottomReserved/topReserved/angleReserved`：单位均为 degrees，实际可控范围为 `angleScope - bottomReserved - topReserved`。
+
 当前策略：
 
 - `CMD_CALIBRATE` 只进入校准生命周期，不自动跑完整机械标定。

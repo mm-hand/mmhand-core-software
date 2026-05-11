@@ -27,6 +27,8 @@ MOTOR_TARGET_SCALE_LO = 0
 MOTOR_TARGET_SCALE_HI = 4095
 MOTOR_SINGLE_TURN_STEPS = 4096
 MOTOR_JUMP_RESYNC_THRESH = 2048
+MOTOR_SLIDER_WRAP_MARGIN = 512
+MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 TEST_ROW_COUNT = 5
@@ -72,6 +74,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._interaction_enabled = False
         self._control_widgets: List[QtWidgets.QWidget] = []
         self._state: Optional[HandModel] = None
+        self._estop_latched = False
 
         self.joint_current_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
@@ -92,14 +95,15 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_send_buttons: List[QtWidgets.QPushButton] = []
         self._motor_target_user_set: List[bool] = []
         self._motor_target_initialized = False
+        # UI relative multi-turn targets. Device command = origin feedback + this value.
         self._motor_abs_pos: List[Optional[int]] = [None] * MOTOR_COUNT
+        # Servo absolute feedback captured when direct control is synced or held.
         self._motor_session_origin_abs: List[Optional[int]] = [None] * MOTOR_COUNT
         self._motor_dir_hint: List[int] = [0] * MOTOR_COUNT
         self._motor_dir_hint_pending_clear: List[bool] = [False] * MOTOR_COUNT
         self._motor_dir_hint_stable_count: List[int] = [0] * MOTOR_COUNT
         self._motor_last_slider: List[Optional[int]] = [None] * MOTOR_COUNT
         self._motor_slider_dragging: List[bool] = [False] * MOTOR_COUNT
-        self._motor_first_drag_limit_active: List[bool] = [True] * MOTOR_COUNT
         self._motor_last_sent_abs: List[Optional[int]] = [None] * MOTOR_COUNT
         self._motor_run_states = [False] * MOTOR_COUNT
 
@@ -345,7 +349,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _build_motor_table(self) -> QtWidgets.QTableWidget:
         table = QtWidgets.QTableWidget(MOTOR_COUNT, 8)
-        table.setHorizontalHeaderLabels(["Motor", "Current", "Target", "Action", "-", "Raw Slider", "+", "Joint Angle"])
+        table.setHorizontalHeaderLabels(["Motor", "Current(rel)", "Target(rel)", "Action", "-", "Raw Slider", "+", "Joint Angle"])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(True)
         for i in range(MOTOR_COUNT):
@@ -637,19 +641,26 @@ class ControlPanel(QtWidgets.QWidget):
     def _motor_spin_changed(self, idx: int, value: int) -> None:
         if self._updating:
             return
-        single = self._slider_from_abs_pos(int(value))
+        relative_target = clamp_motor_abs(int(value))
+        single = self._slider_from_abs_pos(relative_target)
         self.motor_sliders[idx].blockSignals(True)
         self.motor_sliders[idx].setValue(single)
         self.motor_sliders[idx].blockSignals(False)
+        if 0 <= idx < MOTOR_COUNT:
+            if self._motor_session_origin_abs[idx] is None:
+                self._motor_resync_one_channel(idx)
+            self._motor_abs_pos[idx] = relative_target
+            self._motor_last_slider[idx] = single
 
     def _motor_slider_changed(self, idx: int, value: int) -> None:
         if self._updating:
             return
-        self.motor_target_spins[idx].blockSignals(True)
-        self.motor_target_spins[idx].setValue(int(value))
-        self.motor_target_spins[idx].blockSignals(False)
         if self._interaction_enabled:
             self._on_motor_slider_change(idx, int(value))
+        else:
+            self.motor_target_spins[idx].blockSignals(True)
+            self.motor_target_spins[idx].setValue(int(value))
+            self.motor_target_spins[idx].blockSignals(False)
 
     def resolved_joint_targets(self) -> List[float]:
         targets = []
@@ -741,10 +752,12 @@ class ControlPanel(QtWidgets.QWidget):
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
                 return
+        self._estop_latched = False
         self.controller.start()
         self.context.emit_action("Start")
 
     def stop_controller(self) -> None:
+        self._estop_latched = True
         self.stop_all_tests("stopped by E-STOP", update_status=False)
         try:
             self.controller.stop()
@@ -754,6 +767,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.context.emit_action("Stop")
 
     def reset_controller(self) -> None:
+        self._estop_latched = True
         self.controller.reset()
         self._clear_run_states()
         self.context.emit_action("Reset")
@@ -784,7 +798,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_dir_hint_stable_count = [0] * MOTOR_COUNT
         self._motor_last_slider = [None] * MOTOR_COUNT
         self._motor_slider_dragging = [False] * MOTOR_COUNT
-        self._motor_first_drag_limit_active = [True] * MOTOR_COUNT
         self._motor_last_sent_abs = [None] * MOTOR_COUNT
         self._joint_target_user_set = [False] * ENCODER_COUNT
         self._motor_target_user_set = [False] * MOTOR_COUNT
@@ -810,6 +823,9 @@ class ControlPanel(QtWidgets.QWidget):
     def _guard_joint_command_started(self) -> bool:
         if self.controller.is_started():
             return True
+        if self._estop_latched:
+            self._set_status("Command blocked: press ENABLE after E-STOP")
+            return False
         self._set_status("Joint command blocked: press Enable first")
         return False
 
@@ -823,84 +839,81 @@ class ControlPanel(QtWidgets.QWidget):
         return min(diff, MOTOR_SINGLE_TURN_STEPS - diff)
 
     def _read_motor_target_slider_int(self, idx: int) -> int:
+        if 0 <= idx < len(self.motor_sliders):
+            return max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, int(self.motor_sliders[idx].value())))
         if 0 <= idx < len(self.motor_target_spins):
-            return max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, int(self.motor_target_spins[idx].value())))
+            return self._slider_from_abs_pos(int(self.motor_target_spins[idx].value()))
         return MOTOR_TARGET_SCALE_LO
 
     def _session_abs_from_slider_locked_turn(self, idx: int, slider_value: int, drag_sign: int = 0) -> Optional[int]:
         if idx < 0 or idx >= MOTOR_COUNT:
             return None
-        origin = self._motor_session_origin_abs[idx]
-        if origin is None:
-            return None
-        origin_single = self._slider_from_abs_pos(origin)
         slider = max(MOTOR_TARGET_SCALE_LO, min(MOTOR_TARGET_SCALE_HI, int(slider_value)))
-        base = int(slider - origin_single)
         current = self._motor_abs_pos[idx]
         if current is None:
-            return clamp_motor_abs(base)
+            current = 0
         hint = int(self._motor_dir_hint[idx])
         step = MOTOR_SINGLE_TURN_STEPS
         if hint > 0 or drag_sign > 0:
-            k = int((int(current) - base) // step)
-            candidate = base + k * step
+            k = int((int(current) - slider) // step)
+            candidate = slider + k * step
             if candidate < int(current):
                 candidate += step
         elif hint < 0 or drag_sign < 0:
-            k = int((int(current) - base) // step)
-            candidate = base + k * step
+            k = int((int(current) - slider) // step)
+            candidate = slider + k * step
             if candidate > int(current):
                 candidate -= step
         else:
-            k = int(round((int(current) - base) / float(step)))
-            candidate = base + k * step
+            k = int(round((int(current) - slider) / float(step)))
+            candidate = slider + k * step
         return clamp_motor_abs(candidate)
 
     def _motor_resync_one_channel(self, idx: int) -> None:
+        dev_abs = self._motor_feedback_abs(idx)
+        if dev_abs is None:
+            return
+        self._motor_session_origin_abs[idx] = dev_abs
+        self._motor_abs_pos[idx] = 0
+        self._motor_last_slider[idx] = 0
+
+    def _motor_feedback_abs(self, idx: int) -> Optional[int]:
         state = self._state
         if idx < 0 or idx >= MOTOR_COUNT or state is None:
-            return
-        user_sl = self._read_motor_target_slider_int(idx)
-        if bool(getattr(state, "has_servo_angle_data", False)) and idx < len(getattr(state, "servo_angles", [])):
-            if idx < len(getattr(state, "servo_online", [])) and state.servo_online[idx]:
-                dev_abs = clamp_motor_abs(int(state.servo_angles[idx]))
-                if self._motor_session_origin_abs[idx] is None:
-                    self._motor_session_origin_abs[idx] = dev_abs
-                self._motor_abs_pos[idx] = clamp_motor_abs(dev_abs - int(self._motor_session_origin_abs[idx]))
-                self._motor_last_slider[idx] = user_sl
-                return
-        if bool(getattr(state, "has_servo_raw_data", False)) and idx < len(getattr(state, "servo_raw_positions", [])):
-            if idx < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[idx]:
-                dev_abs = clamp_motor_abs(motor_target_from_servo_feedback(state.servo_raw_positions[idx]))
-                if self._motor_session_origin_abs[idx] is None:
-                    self._motor_session_origin_abs[idx] = dev_abs
-                self._motor_abs_pos[idx] = clamp_motor_abs(dev_abs - int(self._motor_session_origin_abs[idx]))
-                self._motor_last_slider[idx] = user_sl
+            return None
+        if bool(getattr(state, "has_servo_angle_data", False)):
+            if idx < len(getattr(state, "servo_online", [])) and state.servo_online[idx] and idx < len(getattr(state, "servo_angles", [])):
+                return clamp_motor_abs(int(state.servo_angles[idx]))
+        if bool(getattr(state, "has_servo_raw_data", False)):
+            if idx < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[idx] and idx < len(getattr(state, "servo_raw_positions", [])):
+                return clamp_motor_abs(motor_target_from_servo_feedback(state.servo_raw_positions[idx]))
+        return None
+
+    def _motor_feedback_relative(self, idx: int) -> Optional[int]:
+        dev_abs = self._motor_feedback_abs(idx)
+        if dev_abs is None:
+            return None
+        origin = self._motor_session_origin_abs[idx]
+        if origin is None:
+            return 0
+        return clamp_motor_abs(int(dev_abs) - int(origin))
 
     def _motor_abs_for_command_packet(self, idx: int, state: Optional[HandModel], *, ignore_last_sent: bool = False) -> int:
-        session_abs = self._motor_abs_pos[idx]
+        relative_target = self._motor_abs_pos[idx]
         origin = self._motor_session_origin_abs[idx]
-        if (session_abs is None or origin is None) and state is not None:
+        if origin is None and state is not None:
             if bool(getattr(state, "has_servo_angle_data", False)):
                 if idx < len(getattr(state, "servo_online", [])) and state.servo_online[idx] and idx < len(state.servo_angles):
-                    dev_abs = clamp_motor_abs(int(state.servo_angles[idx]))
-                    if origin is None:
-                        origin = dev_abs
-                    if session_abs is None:
-                        session_abs = clamp_motor_abs(dev_abs - int(origin))
+                    origin = clamp_motor_abs(int(state.servo_angles[idx]))
             elif bool(getattr(state, "has_servo_raw_data", False)):
                 if idx < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[idx] and idx < len(state.servo_raw_positions):
-                    dev_abs = clamp_motor_abs(motor_target_from_servo_feedback(state.servo_raw_positions[idx]))
-                    if origin is None:
-                        origin = dev_abs
-                    if session_abs is None:
-                        session_abs = clamp_motor_abs(dev_abs - int(origin))
-        if session_abs is not None:
-            self._motor_abs_pos[idx] = session_abs
+                    origin = clamp_motor_abs(motor_target_from_servo_feedback(state.servo_raw_positions[idx]))
+        if relative_target is None:
+            relative_target = 0
+            self._motor_abs_pos[idx] = relative_target
         if origin is not None:
             self._motor_session_origin_abs[idx] = origin
-        if session_abs is not None and origin is not None:
-            return clamp_motor_abs(int(origin) + int(session_abs))
+            return clamp_motor_abs(int(origin) + int(relative_target))
         if not ignore_last_sent and self._motor_last_sent_abs[idx] is not None:
             return clamp_motor_abs(int(self._motor_last_sent_abs[idx]))
         return 0
@@ -912,6 +925,24 @@ class ControlPanel(QtWidgets.QWidget):
         for i in range(MOTOR_COUNT):
             self._motor_last_sent_abs[i] = self._motor_abs_for_command_packet(i, state, ignore_last_sent=True)
 
+    def _motor_command_debug_summary(self, trigger: str, targets: List[int]) -> str:
+        idx = 0
+        marker = "M"
+        pos = str(trigger).rfind(marker)
+        if pos >= 0:
+            digits = []
+            for ch in str(trigger)[pos + 1:]:
+                if ch.isdigit():
+                    digits.append(ch)
+                else:
+                    break
+            if digits:
+                idx = max(0, min(MOTOR_COUNT - 1, int("".join(digits))))
+        relative = self._motor_abs_pos[idx] if 0 <= idx < len(self._motor_abs_pos) else None
+        origin = self._motor_session_origin_abs[idx] if 0 <= idx < len(self._motor_session_origin_abs) else None
+        sent = targets[idx] if 0 <= idx < len(targets) else None
+        return f"M{idx:02d} rel={relative if relative is not None else '-'} origin={origin if origin is not None else '-'} sent={sent if sent is not None else '-'}"
+
     def _send_motor_abs_from_ui(self, trigger: str) -> None:
         if not self._interaction_enabled:
             return
@@ -919,6 +950,9 @@ class ControlPanel(QtWidgets.QWidget):
             raise RuntimeError("Serial port is not connected")
         self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
         self.controller.set_pid_control(False)
+        if self._estop_latched and not self.controller.is_started():
+            self._set_status("Motor command blocked: press ENABLE after E-STOP")
+            return
         if not self.controller.is_started():
             self.controller.start()
         state = self._state
@@ -927,15 +961,15 @@ class ControlPanel(QtWidgets.QWidget):
         ):
             self._set_status("Motor command blocked: waiting for motor feedback")
             return
-        if all(v is None for v in self._motor_last_sent_abs):
-            self._seed_motor_last_sent_after_sync(state)
         for idx in range(MOTOR_COUNT):
-            if self._motor_abs_pos[idx] is None:
+            if self._motor_session_origin_abs[idx] is None:
                 self._motor_resync_one_channel(idx)
+            if self._motor_abs_pos[idx] is None:
+                self._motor_abs_pos[idx] = 0
         targets = self._build_motor_abs_command_list()
         self.controller.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
-        self.context.emit_action(f"Motor absolute positions sent ({trigger})")
+        self.context.emit_action(f"Motor absolute positions sent ({trigger}): {self._motor_command_debug_summary(trigger, targets)}")
 
     def _send_motor_sweep_from_ui(self, trigger: str) -> None:
         if not self._interaction_enabled:
@@ -944,6 +978,9 @@ class ControlPanel(QtWidgets.QWidget):
             raise RuntimeError("Serial port is not connected")
         self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
         self.controller.set_pid_control(False)
+        if self._estop_latched and not self.controller.is_started():
+            self._set_status("Motor command blocked: press ENABLE after E-STOP")
+            return
         if not self.controller.is_started():
             self.controller.start()
         state = self._state
@@ -959,10 +996,10 @@ class ControlPanel(QtWidgets.QWidget):
     def _sync_motor_abs_from_slider_before_send(self, idx: int) -> None:
         if idx < 0 or idx >= MOTOR_COUNT:
             return
-        if self._motor_abs_pos[idx] is None:
+        if self._motor_session_origin_abs[idx] is None:
             self._motor_resync_one_channel(idx)
         if self._motor_abs_pos[idx] is None:
-            return
+            self._motor_abs_pos[idx] = 0
         cur = self._read_motor_target_slider_int(idx)
         mapped = self._session_abs_from_slider_locked_turn(idx, cur, 0)
         if mapped is not None:
@@ -1096,32 +1133,23 @@ class ControlPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             for i in range(MOTOR_COUNT):
-                if motor_has_raw and i < len(getattr(state, "servo_raw_positions", [])):
-                    cur_single = motor_target_from_servo_feedback(state.servo_raw_positions[i])
-                    self.motor_current_items[i].setText(f"{cur_single:4d}")
-                elif motor_has_abs and i < len(getattr(state, "servo_angles", [])):
-                    cur_single = self._slider_from_abs_pos(int(state.servo_angles[i]))
-                    self.motor_current_items[i].setText(f"{cur_single:4d}")
+                current_rel = self._motor_feedback_relative(i)
+                self.motor_current_items[i].setText(f"{current_rel:6d}" if current_rel is not None else "-")
                 if i < len(getattr(state, "angles", [])):
                     joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else min(i, ENCODER_COUNT - 1)
                     if 0 <= joint_idx < len(state.angles):
                         self.motor_joint_items[i].setText(f"{float(state.angles[joint_idx]):.2f}")
             if (motor_has_raw or motor_has_abs) and sync_target:
                 for i in range(MOTOR_COUNT):
-                    if motor_has_abs and i < len(getattr(state, "servo_angles", [])):
-                        dev_abs = clamp_motor_abs(int(state.servo_angles[i]))
-                        self._motor_session_origin_abs[i] = dev_abs
-                        self._motor_abs_pos[i] = 0
-                        single = self._slider_from_abs_pos(dev_abs)
-                    elif motor_has_raw and i < len(getattr(state, "servo_raw_positions", [])):
-                        single = motor_target_from_servo_feedback(state.servo_raw_positions[i])
-                        self._motor_session_origin_abs[i] = clamp_motor_abs(single)
-                        self._motor_abs_pos[i] = 0
-                    else:
+                    dev_abs = self._motor_feedback_abs(i)
+                    if dev_abs is None:
                         continue
-                    self.motor_target_spins[i].setValue(single)
-                    self.motor_sliders[i].setValue(single)
-                    self._motor_last_slider[i] = single
+                    self._motor_session_origin_abs[i] = dev_abs
+                    self._motor_abs_pos[i] = 0
+                    self.motor_current_items[i].setText(f"{0:6d}")
+                    self.motor_target_spins[i].setValue(0)
+                    self.motor_sliders[i].setValue(0)
+                    self._motor_last_slider[i] = 0
                     self._motor_target_user_set[i] = False
                 self._motor_target_initialized = True
                 self._seed_motor_last_sent_after_sync(state)
@@ -1177,19 +1205,17 @@ class ControlPanel(QtWidgets.QWidget):
         self.context.send_joint_targets(self.resolved_joint_targets(), source=f"Hold J{idx}", live=False)
 
     def _hold_motor_row_at_feedback(self, idx: int) -> None:
-        state = self._state
-        if state is not None and bool(getattr(state, "has_servo_angle_data", False)):
-            if idx < len(getattr(state, "servo_online", [])) and state.servo_online[idx] and idx < len(state.servo_angles):
-                dev_abs = clamp_motor_abs(int(state.servo_angles[idx]))
-                if self._motor_session_origin_abs[idx] is None:
-                    self._motor_session_origin_abs[idx] = dev_abs
-                self._motor_abs_pos[idx] = clamp_motor_abs(dev_abs - int(self._motor_session_origin_abs[idx]))
-                single = self._slider_from_abs_pos(dev_abs)
-                self._set_motor_target_widget(idx, single)
-                self._motor_last_slider[idx] = single
+        dev_abs = self._motor_feedback_abs(idx)
+        if dev_abs is not None:
+            self._motor_session_origin_abs[idx] = dev_abs
+            self._motor_abs_pos[idx] = 0
+            self._set_motor_target_widget(idx, 0)
+            self._motor_last_slider[idx] = 0
+            if 0 <= idx < len(self.motor_current_items):
+                self.motor_current_items[idx].setText(f"{0:6d}")
         else:
-            self._set_motor_target_widget(idx, self._motor_feedback_target(idx))
             self._motor_resync_one_channel(idx)
+            self._set_motor_target_widget(idx, 0)
         self._motor_target_user_set[idx] = False
         self._send_motor_abs_from_ui(f"Hold M{idx}")
 
@@ -1197,9 +1223,27 @@ class ControlPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             self.motor_target_spins[idx].setValue(int(value))
-            self.motor_sliders[idx].setValue(int(value))
+            self.motor_sliders[idx].setValue(self._slider_from_abs_pos(int(value)))
         finally:
             self._updating = False
+
+    def _set_motor_relative_target_widget(self, idx: int, relative_target: int) -> None:
+        self._updating = True
+        try:
+            target = clamp_motor_abs(int(relative_target))
+            self.motor_target_spins[idx].setValue(target)
+            self.motor_sliders[idx].setValue(self._slider_from_abs_pos(target))
+        finally:
+            self._updating = False
+
+    def _restore_motor_slider_to_relative_target(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self.motor_sliders):
+            return
+        current = self._motor_abs_pos[idx]
+        if current is None:
+            current = 0
+        self._motor_last_slider[idx] = self._slider_from_abs_pos(int(current))
+        self._set_motor_relative_target_widget(idx, int(current))
 
     def _on_joint_slider_change(self, idx: int, value: float) -> None:
         self._mark_joint_target_user_set(idx)
@@ -1218,42 +1262,66 @@ class ControlPanel(QtWidgets.QWidget):
         ):
             self._set_status("Slider ignored: waiting for motor feedback")
             return
-        if self._motor_abs_pos[idx] is None:
+        if self._motor_session_origin_abs[idx] is None:
             self._motor_resync_one_channel(idx)
         if self._motor_abs_pos[idx] is None:
-            return
+            self._motor_abs_pos[idx] = 0
         new_single = int(value)
         last = self._motor_last_slider[idx]
         drag_sign = 0
         if last is not None:
             diff = new_single - int(last)
-            drag_sign = 1 if diff > 0 else (-1 if diff < 0 else 0)
+            last_single = int(last)
+            if (
+                last_single >= MOTOR_TARGET_SCALE_HI - MOTOR_SLIDER_WRAP_MARGIN
+                and new_single <= MOTOR_TARGET_SCALE_LO + MOTOR_SLIDER_WRAP_MARGIN
+            ):
+                drag_sign = 1
+            elif (
+                last_single <= MOTOR_TARGET_SCALE_LO + MOTOR_SLIDER_WRAP_MARGIN
+                and new_single >= MOTOR_TARGET_SCALE_HI - MOTOR_SLIDER_WRAP_MARGIN
+            ):
+                drag_sign = -1
+            elif abs(diff) > MOTOR_JUMP_RESYNC_THRESH:
+                self._restore_motor_slider_to_relative_target(idx)
+                self._set_status(
+                    f"Motor slider jump blocked: M{idx:02d} slider {last_single} -> {new_single}"
+                )
+                return
+            else:
+                drag_sign = 1 if diff > 0 else (-1 if diff < 0 else 0)
         mapped = self._session_abs_from_slider_locked_turn(idx, new_single, drag_sign)
         if mapped is None:
             return
-        if self._motor_first_drag_limit_active[idx]:
-            mapped = max(-MOTOR_TARGET_SCALE_HI, min(MOTOR_TARGET_SCALE_HI, int(mapped)))
-        if last is not None and abs(new_single - int(last)) > MOTOR_JUMP_RESYNC_THRESH:
+        current_target = int(self._motor_abs_pos[idx] or 0)
+        if abs(int(mapped) - current_target) > MOTOR_SLIDER_MAX_TARGET_DELTA:
+            self._restore_motor_slider_to_relative_target(idx)
+            self._set_status(
+                f"Motor slider jump blocked: M{idx:02d} {current_target} -> {int(mapped)}"
+            )
+            return
+        if last is not None and self._single_turn_diff(new_single, int(last)) > MOTOR_JUMP_RESYNC_THRESH:
             if self._motor_slider_dragging[idx]:
+                self._restore_motor_slider_to_relative_target(idx)
                 return
             self._motor_resync_one_channel(idx)
             return
         self._motor_abs_pos[idx] = mapped
         self._motor_last_slider[idx] = new_single
         self._mark_motor_target_user_set(idx)
-        self._motor_first_drag_limit_active[idx] = False
+        self._set_motor_relative_target_widget(idx, mapped)
         try:
-            self._send_motor_sweep_from_ui(f"Slider M{idx}")
+            self._send_motor_abs_from_ui(f"Slider M{idx}")
         except Exception as exc:
             self._set_status(f"Motor slider send failed: {exc}")
 
     def _step_motor_target(self, idx: int, delta: int) -> None:
         if not self._interaction_enabled:
             return
-        if self._motor_abs_pos[idx] is None:
+        if self._motor_session_origin_abs[idx] is None:
             self._motor_resync_one_channel(idx)
         if self._motor_abs_pos[idx] is None:
-            return
+            self._motor_abs_pos[idx] = 0
         cur_sl = self._read_motor_target_slider_int(idx)
         step_dir = 1 if int(delta) > 0 else (-1 if int(delta) < 0 else 0)
         if step_dir > 0:
@@ -1266,11 +1334,10 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_dir_hint[idx] = step_dir
         self._motor_dir_hint_pending_clear[idx] = True
         self._motor_dir_hint_stable_count[idx] = 0
-        self._set_motor_target_widget(idx, new_sl)
         self._motor_last_slider[idx] = new_sl
         self._mark_motor_target_user_set(idx)
-        self._motor_first_drag_limit_active[idx] = False
-        self._send_motor_sweep_from_ui(f"{'Step+' if delta > 0 else 'Step-'} M{idx}")
+        self._set_motor_relative_target_widget(idx, self._motor_abs_pos[idx])
+        self._send_motor_abs_from_ui(f"{'Step+' if delta > 0 else 'Step-'} M{idx}")
 
     def _normalize_test_joint_value(self, text: str) -> str:
         text = str(text or "").strip()

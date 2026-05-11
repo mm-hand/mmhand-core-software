@@ -280,6 +280,7 @@ typedef struct {
     volatile uint8_t system_state; // SYSTEM_STATE_*
     // servo_target_owner 决定舵机通信层执行 CONTROL 还是 CALIBRATION batch。
     volatile uint8_t servo_target_owner; // SERVO_TARGET_OWNER_*
+    volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;
     volatile uint32_t state_transition_count;
     volatile uint8_t joint16_dual_feedback_fault;

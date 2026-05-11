@@ -52,15 +52,24 @@ JointDualServoConstraint g_joint16DualServoConstraint = {
     kJoint16TensionBiasDefault
 };
 
-// 测试模式手工 encoderMax 表（单位：编码器计数）。
-// 约定：值为 0 表示该关节未提供手工标定数据。
+// Manual mechanical limit raw tables. Fill values from the host raw magnetic
+// encoder display directly; direction conversion happens in this file.
+// -1 means not configured. Raw value 0 is valid.
 static const uint8_t kTestJointCount = ENCODER_TOTAL_NUM;
-static const int32_t kManualEncoderMax[kTestJointCount] = {
+static const int32_t kManualEncoderMinRaw[kTestJointCount] = {
+    -1, -1, -1, -1,
+    -1, -1, -1, -1,
+    -1, -1, -1, -1,
+    5766, 6586, 6248, 12130,
+    -1, -1, -1, -1, -1
+};
+
+static const int32_t kManualEncoderMaxRaw[kTestJointCount] = {
     12037, 12636, 9174, 12822,
     12440, 9738, 3500, 1232,
     3339, 2425, 12643, 6464,
     9061, 3422, 2408, 1457,
-    0, 6542, 6480, 10115, 6535
+    -1, 6542, 6480, 10115, 6535
 };
 
 static const int32_t kEncoderModulo = 16384;
@@ -75,6 +84,28 @@ static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction) {
     return oriented;
 }
 
+static bool isManualEncoderRawValid(int32_t rawValue) {
+    return rawValue >= 0 && rawValue < kEncoderModulo;
+}
+
+static int32_t wrapEncoderCount(int32_t value) {
+    value %= kEncoderModulo;
+    if (value < 0) value += kEncoderModulo;
+    return value;
+}
+
+static int32_t forwardEncoderDelta(int32_t from, int32_t to) {
+    return wrapEncoderCount(to - from);
+}
+
+static float encoderCountToDeg(int32_t count) {
+    return (float)count * 360.0f / (float)kEncoderModulo;
+}
+
+static int32_t degToEncoderCount(float deg) {
+    const float scaled = deg * (float)kEncoderModulo / 360.0f;
+    return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
+}
 
 // 舵机绝对位置限幅，防止下发超出协议/硬件安全范围的目标值。
 static int16_t clampToServoPos(int32_t value) {
@@ -262,7 +293,7 @@ static bool moveJointToReserved(TaskSharedData_t* sharedData,
                                 int32_t offset) {
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) return false;
 
-    const int32_t targetEncoder = offset + cfg.angleReserved;
+    const int32_t targetEncoder = offset + degToEncoderCount(cfg.angleReserved);
     const uint8_t bus = jointMap[jointIndex].busIndex;
     const uint8_t servoId = jointMap[jointIndex].servoID;
     const uint32_t beginMs = millis();
@@ -307,26 +338,59 @@ void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count) {
 
 // 测试模式初始化：
 // 1) 装载默认配置；
-// 2) 用手工 encoderMax 推导 offset/angleMax；
-// 3) 将可用结果同步到手工回退表；
-// 4) 保持标定状态为 IDLE（自动标定任务关闭）。
+// 2) 将手工 minraw/maxraw 按方向自动转换成 oriented min/max；
+// 3) 用 oriented min/max 推导 angleScope/offset/angleMax；
+// 4) 将可用结果同步到手工回退表；
+// 5) 保持标定状态为 IDLE（自动标定任务关闭）。
 void initManualCalibrationForTest(void) {
     initDefaultCalibrationConfig(g_jointCalibConfig, ENCODER_TOTAL_NUM);
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
     for (uint8_t i = 0; i < kTestJointCount; i++) {
-        const JointCalibrationConfig& cfg = g_jointCalibConfig[i];
+        JointCalibrationConfig& cfg = g_jointCalibConfig[i];
         JointCalibrationResult& out = g_jointCalibResult[i];
+        const int32_t rawEncoderMin = kManualEncoderMinRaw[i];
+        const int32_t rawEncoderMax = kManualEncoderMaxRaw[i];
 
-        out.encoderMax = kManualEncoderMax[i];
-        out.offset = out.encoderMax - cfg.angleScope + cfg.bottomReserved;
-        out.angleMax = cfg.angleScope - cfg.bottomReserved - cfg.topReserved;
-        // 约定：encoderMax == 0 代表该关节未提供有效手工标定数据。
-        out.success = (out.encoderMax != 0);
+        // Manual tables hold raw CAN values. Convert both limits into the
+        // normalized direction, then derive the mechanical scope.
+        const bool rawValid =
+            isManualEncoderRawValid(rawEncoderMin) &&
+            isManualEncoderRawValid(rawEncoderMax);
+        const int32_t encoderMin = rawValid
+            ? orientEncoderRaw((uint16_t)rawEncoderMin, g_encoderDirection[i])
+            : 0;
+        const int32_t encoderMax = rawValid
+            ? orientEncoderRaw((uint16_t)rawEncoderMax, g_encoderDirection[i])
+            : 0;
+        const int32_t derivedAngleScopeCount = rawValid
+            ? forwardEncoderDelta(encoderMin, encoderMax)
+            : 0;
+        const float derivedAngleScopeDeg = encoderCountToDeg(derivedAngleScopeCount);
+        const int32_t bottomReservedCount = degToEncoderCount(cfg.bottomReserved);
+        const int32_t topReservedCount = degToEncoderCount(cfg.topReserved);
+        const float usableAngleMax =
+            derivedAngleScopeDeg - cfg.bottomReserved - cfg.topReserved;
+
+        out.success =
+            rawValid &&
+            derivedAngleScopeCount > 0 &&
+            (bottomReservedCount + topReservedCount) < derivedAngleScopeCount &&
+            usableAngleMax > 0.0f;
+        out.encoderMin = out.success ? encoderMin : 0;
+        out.encoderMax = out.success ? encoderMax : 0;
+        if (out.success) {
+            cfg.angleScope = derivedAngleScopeDeg;
+            out.offset = wrapEncoderCount(encoderMin + bottomReservedCount);
+            out.angleMax = usableAngleMax;
+        } else {
+            out.offset = 0;
+            out.angleMax = 0.0f;
+        }
 
         // 同步写入回退表，便于调试阶段统一读取路径。
-        g_encoderOffsetManual[i] = out.offset;
+        g_encoderOffsetManual[i] = out.success ? out.offset : 0;
     }
 
     // 当前测试阶段不运行自动标定任务。
@@ -353,9 +417,10 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
     if (!sharedData || !out || jointIndex >= ENCODER_TOTAL_NUM) return false;
 
     out->success = false;
+    out->encoderMin = 0;
     out->encoderMax = 0;
     out->offset = 0;
-    out->angleMax = 0;
+    out->angleMax = 0.0f;
 
     const uint8_t bus = jointMap[jointIndex].busIndex;
     const uint8_t servoId = jointMap[jointIndex].servoID;
@@ -364,6 +429,10 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
         return false;
     }
     int16_t commandPos = clampToServoPos(currentServoPos);
+    int32_t encoderMin = 0;
+    if (!readLatestEncoderRaw(sharedData, jointIndex, &encoderMin)) {
+        return false;
+    }
 
     bool seenBelowThreshold = false;
     const uint32_t searchBeginMs = millis();
@@ -392,9 +461,21 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
                 return false;
             }
 
+            const int32_t derivedAngleScopeCount = forwardEncoderDelta(encoderMin, encoderMax);
+            const int32_t bottomReservedCount = degToEncoderCount(cfg.bottomReserved);
+            const int32_t topReservedCount = degToEncoderCount(cfg.topReserved);
+            const float usableAngleMax =
+                encoderCountToDeg(derivedAngleScopeCount) - cfg.bottomReserved - cfg.topReserved;
+            if (derivedAngleScopeCount <= 0 ||
+                (bottomReservedCount + topReservedCount) >= derivedAngleScopeCount ||
+                usableAngleMax <= 0.0f) {
+                return false;
+            }
+
+            out->encoderMin = encoderMin;
             out->encoderMax = encoderMax;
-            out->offset = encoderMax - cfg.angleScope + cfg.bottomReserved;
-            out->angleMax = cfg.angleScope - cfg.bottomReserved - cfg.topReserved;
+            out->offset = wrapEncoderCount(encoderMin + bottomReservedCount);
+            out->angleMax = usableAngleMax;
             out->success = true;
 
             moveJointToReserved(sharedData, jointIndex, cfg, out->offset);

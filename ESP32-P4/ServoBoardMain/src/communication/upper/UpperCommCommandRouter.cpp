@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-// 直控绝对位置命令使用与舵机扩展位置一致的安全范围。
+// Clamp a host absolute motor command to the firmware multi-turn range.
 int16_t clampServoAbsCommand(int32_t value)
 {
     if (value > 30719) return 30719;
@@ -20,7 +20,7 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, u
     SemaphoreHandle_t lock = sharedData->commandStateMutex ? sharedData->commandStateMutex : sharedData->targetAnglesMutex;
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE)
     {
-        // 关节角目标必须整组写入，ControlTask 每周期再整组读取快照。
+        // Write the complete joint target set while the command mutex is held.
         for (uint8_t i = 0; i < count; i++) {
             sharedData->targetAngles[i] = angles[i];
         }
@@ -51,7 +51,7 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
     }
-    // motorTargetRaw 按 motorMap 的 22 通道顺序排列，不按 servo ID 直接索引。
+    // Store direct motor targets in motorMap channel order.
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorTargetRaw[i] = targets[i];
     }
@@ -76,7 +76,7 @@ void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
     }
-    // sweep 目标保持单圈 raw 语义，连续多圈展开由 ControlOutputBuilder 完成。
+    // Store sweep targets as single-turn raw positions in motorMap order.
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorSweepTargetRaw[i] = targets[i];
     }
@@ -105,7 +105,7 @@ void upperApplyTendonGuardConfig(TaskSharedData_t* sharedData,
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
     }
-    // sign 只保留方向语义，x1Abs 存储舵机绝对位置边界。
+    // Store tendon guard config in joint order.
     for (uint8_t i = 0; i < count; i++) {
         sharedData->tendon_guard_enabled[i] = enabled[i] ? 1 : 0;
         sharedData->tendon_guard_sign[i] = (sign[i] < 0) ? -1 : 1;
@@ -128,7 +128,7 @@ void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, u
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
     }
-    // 桌面端以 float 传输历史格式，这里转成 int32 raw 计数缓存。
+    // Cache the host-provided raw calibration values.
     for (uint8_t i = 0; i < count; i++) {
         float v = values[i];
         if (!isfinite(v)) {

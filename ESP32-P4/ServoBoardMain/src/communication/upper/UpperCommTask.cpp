@@ -11,15 +11,14 @@
 
 extern volatile uint8_t g_calibrationUIStatus;
 
-// UpperCommTask 模块职责：
-// 1) 解析上位机下行命令并更新共享控制状态；
-// 2) 组包上报传感器、舵机、调试和故障状态；
-// 3) 维护串口协议 ACK 与故障位图心跳同步。
-//
+// UpperCommTask responsibilities:
+// 1) parse host commands and update shared command state;
+// 2) publish sensor, servo, telemetry, debug, and fault packets;
+// 3) keep protocol ACK and fault heartbeat reporting synchronized.
 static uint8_t g_sensorStreamMode = SENSOR_STREAM_MODE_SIGNED_I16;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-// 将 float 以大端字节序写入缓冲区（用于上行调试包）。
+// Append a float using big-endian wire order.
 static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
 {
     uint32_t bits = 0;
@@ -30,8 +29,7 @@ static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
     buffer[(*idx)++] = (uint8_t)(bits & 0xFF);
 }
 
-// 将 CAN 收到的原始磁编码器 raw 值编码为线协议 u16。
-// CMD_SENSOR_STREAM_MODE 仍保留 ACK 兼容性，但 raw 上报不再做映射/方向/零偏处理。
+// Encode raw CAN magnetic encoder values for the sensor packet.
 static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
 {
     if (!channelValid) {
@@ -45,7 +43,7 @@ static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
     return rawValue;
 }
 
-// 下发协议 ACK 包（用于模式切换等命令回执）。
+// Send a protocol ACK packet.
 static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
 {
     uint8_t buffer[8];
@@ -58,11 +56,11 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
     buffer[idx++] = appliedMode;
     buffer[idx++] = status;
     buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2); // LEN = 类型字节 + 负载 + 尾字节
+    buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
 }
 
-// 上报伺服过载故障位图（0x07）。
+// Send the servo overload fault bitmap.
 static void sendFaultStatusPacket(uint32_t overloadFaultBitmap)
 {
     uint8_t buffer[8];
@@ -76,11 +74,11 @@ static void sendFaultStatusPacket(uint32_t overloadFaultBitmap)
     buffer[idx++] = (uint8_t)((overloadFaultBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(overloadFaultBitmap & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2); // LEN = 类型字节 + 负载 + 尾字节
+    buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
 }
 
-// 上报关节反绕故障位图（0x08）。
+// Send the joint reverse-release fault bitmap.
 static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
 {
     uint8_t buffer[8];
@@ -94,11 +92,11 @@ static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
     buffer[idx++] = (uint8_t)((releaseFaultBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(releaseFaultBitmap & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2); // LEN = 类型字节 + 负载 + 尾字节
+    buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
 }
 
-// 统一封装数据包发送入口：根据非空指针选择一种上行包类型。
+// Serialize one upstream data packet.
 static void sendDataPacket(ServoStatus_t* pServo,
                            RemoteSensorData_t* pSensorRaw,
                            ServoAngleData_t* pServoAngle,
@@ -113,8 +111,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     size_t idx = 0;
 
     buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0x00; // LEN 占位，序列化完成后回填。
-
+    buffer[idx++] = 0x00; // LEN placeholder.
     if (g_calibrationUIStatus != 0)
     {
         buffer[idx++] = PACKET_TYPE_CALIB_ACK;
@@ -210,7 +207,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
 
     buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2); // LEN = 类型字节 + 负载 + 尾字节
+    buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
 
     if (g_calibrationUIStatus != 0) {
@@ -218,7 +215,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
 }
 
-// 按小端字节序解码 float。
+// Decode a little-endian float from command payload.
 static float decodeFloatLittleEndian(const uint8_t* data)
 {
     uint32_t bits = 0;
@@ -231,7 +228,7 @@ static float decodeFloatLittleEndian(const uint8_t* data)
     return out;
 }
 
-// 解析下行负载中的 float 数组（小端）。
+// Parse a little-endian float array from command payload.
 static bool parseFloatArrayLittleEndian(const uint8_t* payload, size_t payloadLen, float* outValues, uint8_t count)
 {
     if (!payload || !outValues) {
@@ -248,7 +245,7 @@ static bool parseFloatArrayLittleEndian(const uint8_t* payload, size_t payloadLe
     return true;
 }
 
-// 解析下行负载中的 int16 数组（大端）。
+// Parse a big-endian int16 array from command payload.
 static bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, int32_t* outValues, uint8_t count)
 {
     if (!payload || !outValues) {
@@ -289,7 +286,7 @@ static bool parseTendonGuardPayload(const uint8_t* payload,
     return true;
 }
 
-// 返回命令负载长度；不包含 CMD 自身。
+// Return command payload length, excluding the command byte.
 static size_t getCommandPayloadLength(uint8_t cmd)
 {
     switch (cmd)
@@ -318,7 +315,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
     }
 }
 
-// 兼容历史单字节命令入口。
+// Handle legacy single-byte commands.
 static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t cmd)
 {
     if (cmd == (uint8_t)'c') {
@@ -330,7 +327,7 @@ static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t 
     }
 }
 
-// 处理完整下行命令帧并更新共享状态。
+// Apply a parsed downstream command frame.
 static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* frame, size_t frameLen)
 {
     if (!sharedData || !frame || frameLen == 0) {
@@ -437,7 +434,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     }
 }
 
-// UpperComm 主循环：串口收包解析 + 多路队列上报 + 故障位图心跳发送。
+// Serial receive/transmit task.
 void upperCommunicationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;

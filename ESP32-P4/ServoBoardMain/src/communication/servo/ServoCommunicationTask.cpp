@@ -12,6 +12,12 @@
 
 extern MotorMapItem motorMap[SERVO_TOTAL_NUM];
 
+#ifndef SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
+#define SERVO_CONFIGURE_MULTI_TURN_ON_BOOT 1
+#endif
+
+#define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
+
 // 单个舵机在通信层内部维护的反馈缓存。
 // rawPosition 是单圈读数，absolutePosition 是根据跨圈变化推导的多圈位置。
 struct ServoFeedbackInternal {
@@ -52,6 +58,23 @@ public:
         _serial = serial;
         _serial->begin(baud, SERIAL_8N1, rxPin, txPin);
         _sms.pSerial = _serial;
+    }
+
+    bool configureMultiTurnMode(uint8_t id)
+    {
+        if (!_serial || id == 0 || id > MAX_SERVO_ID) {
+            return false;
+        }
+
+        uint8_t zeroLimits[4] = {0, 0, 0, 0};
+        bool ok = true;
+        ok = (_sms.unLockEprom(id) >= 0) && ok;
+        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        ok = (_sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, zeroLimits, sizeof(zeroLimits)) >= 0) && ok;
+        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        ok = (_sms.LockEprom(id) >= 0) && ok;
+        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        return ok;
     }
 
     void setTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
@@ -168,6 +191,24 @@ private:
     {
         // 根据单圈 raw 跨过半圈的方向推断圈数，得到连续多圈位置。
         ServoFeedbackInternal& fb = _feedback[id];
+        if (newRawPos < 0 || newRawPos >= 4096) {
+            int16_t rawSingleTurn = (int16_t)(newRawPos % 4096);
+            if (rawSingleTurn < 0) {
+                rawSingleTurn += 4096;
+            }
+            fb.rawPosition = rawSingleTurn;
+            fb.lastRawPosition = rawSingleTurn;
+            fb.absolutePosition = newRawPos;
+            if (fb.absolutePosition > 30719) {
+                fb.absolutePosition = 30719;
+            } else if (fb.absolutePosition < -30719) {
+                fb.absolutePosition = -30719;
+            }
+            fb.turnCount = (int16_t)((fb.absolutePosition - rawSingleTurn) / 4096);
+            fb.initialized = true;
+            return;
+        }
+
         if (!fb.initialized) {
             fb.rawPosition = newRawPos;
             fb.lastRawPosition = newRawPos;
@@ -253,6 +294,44 @@ static void beginServoBuses()
     initialized = true;
 }
 
+static void configureMappedServosForMultiTurn()
+{
+#if SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
+    static bool configuredOnce = false;
+    if (configuredOnce) {
+        return;
+    }
+
+    uint8_t configuredIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
+    uint8_t configuredCounts[NUM_BUSES] = {0};
+
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+            continue;
+        }
+
+        bool alreadyConfigured = false;
+        for (uint8_t i = 0; i < configuredCounts[busIndex]; i++) {
+            if (configuredIds[busIndex][i] == id) {
+                alreadyConfigured = true;
+                break;
+            }
+        }
+        if (alreadyConfigured || configuredCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
+            continue;
+        }
+
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (bus && bus->configureMultiTurnMode(id)) {
+            configuredIds[busIndex][configuredCounts[busIndex]++] = id;
+        }
+    }
+    configuredOnce = true;
+#endif
+}
+
 static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
 {
     // 按总线聚合目标：先填每条总线缓存，再分别执行同步写。
@@ -266,6 +345,60 @@ static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
         }
         bus->setTarget(cmd.servoId, cmd.position, cmd.speed, cmd.acc);
         busWritePending[cmd.busIndex] = true;
+    }
+
+    for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
+        if (busWritePending[busIndex]) {
+            g_servoBuses[busIndex].syncWriteAll();
+        }
+    }
+}
+
+static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
+{
+    if (sharedData && sharedData->servoTargetQueue) {
+        xQueueReset(sharedData->servoTargetQueue);
+    }
+
+    uint8_t heldIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
+    uint8_t heldCounts[NUM_BUSES] = {0};
+    bool busWritePending[NUM_BUSES] = {false};
+
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+            continue;
+        }
+
+        bool alreadyHeld = false;
+        for (uint8_t i = 0; i < heldCounts[busIndex]; i++) {
+            if (heldIds[busIndex][i] == id) {
+                alreadyHeld = true;
+                break;
+            }
+        }
+        if (alreadyHeld || heldCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
+            continue;
+        }
+
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || !bus->isOnline(id)) {
+            continue;
+        }
+
+        const int32_t holdPos32 = bus->getAbsolutePosition(id);
+        int16_t holdPos = 0;
+        if (holdPos32 > 30719) {
+            holdPos = 30719;
+        } else if (holdPos32 < -30719) {
+            holdPos = -30719;
+        } else {
+            holdPos = (int16_t)holdPos32;
+        }
+        bus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+        heldIds[busIndex][heldCounts[busIndex]++] = id;
+        busWritePending[busIndex] = true;
     }
 
     for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
@@ -337,13 +470,21 @@ void servoCommunicationTask(void* parameter)
     }
 
     beginServoBuses();
+    configureMappedServosForMultiTurn();
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t taskPeriodTicks = pdMS_TO_TICKS(10);
     uint8_t readBusPhase = 0;
+    uint32_t lastEmergencyStopToken = sharedData->servo_emergency_stop_token;
 
     for (;;)
     {
+        const uint32_t emergencyStopToken = sharedData->servo_emergency_stop_token;
+        if (emergencyStopToken != lastEmergencyStopToken) {
+            lastEmergencyStopToken = emergencyStopToken;
+            emergencyHoldMappedServosAtFeedback(sharedData);
+        }
+
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {

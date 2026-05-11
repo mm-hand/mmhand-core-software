@@ -15,11 +15,9 @@
 static ControlSolver g_controlSolver;
 
 static const int32_t kEncoderModulo = 16384;
-static const int32_t kEncoderHalfTurn = kEncoderModulo / 2;
-// 映射时的边界裕量，减少边界跳变导致的误判。
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 
-// 调试包关注的关节索引列表（仅影响调试输出）。
+// 璋冭瘯鍖呭叧娉ㄧ殑鍏宠妭绱㈠紩鍒楄〃锛堜粎褰卞搷璋冭瘯杈撳嚭锛夈€?
 static const uint8_t kDebugJointIndices[] = {4, 5, 6, 7};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
@@ -27,7 +25,7 @@ static const uint8_t kDebugJointCount =
 static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-// 协议映射值限幅，避开断连保留值范围。
+// 鍗忚鏄犲皠鍊奸檺骞咃紝閬垮紑鏂繛淇濈暀鍊艰寖鍥淬€?
 
 static int16_t clampMappedCountForProtocol(int32_t value)
 {
@@ -36,7 +34,7 @@ static int16_t clampMappedCountForProtocol(int32_t value)
     return (int16_t)value;
 }
 
-// 按安装方向统一编码器方向，输出范围 [0, kEncoderModulo)。
+// 鎸夊畨瑁呮柟鍚戠粺涓€缂栫爜鍣ㄦ柟鍚戯紝杈撳嚭鑼冨洿 [0, kEncoderModulo)銆?
 static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
     int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
@@ -46,15 +44,19 @@ static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
     return oriented;
 }
 
-// 增量折叠到半圈范围，得到最短路径差值。
-static int32_t wrapEncoderDelta(int32_t delta)
+static int32_t wrapEncoderCount(int32_t value)
 {
-    while (delta > kEncoderHalfTurn) delta -= kEncoderModulo;
-    while (delta < -kEncoderHalfTurn) delta += kEncoderModulo;
-    return delta;
+    value %= kEncoderModulo;
+    if (value < 0) value += kEncoderModulo;
+    return value;
 }
 
-// 优先使用自动标定零偏，失败时回退到手动零偏表。
+static int32_t forwardEncoderDelta(int32_t from, int32_t to)
+{
+    return wrapEncoderCount(to - from);
+}
+
+// Prefer calibrated offset, otherwise use the manual fallback table.
 static int32_t getEncoderOffset(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) return 0;
@@ -64,13 +66,18 @@ static int32_t getEncoderOffset(uint8_t jointIndex)
     return g_encoderOffsetManual[jointIndex];
 }
 
-// 编码器计数 -> 角度（度）。
+// Encoder counts to degrees.
 static float convertEncoderCountToDeg(int32_t encoderCount)
 {
     return (float)encoderCount * 360.0f / (float)kEncoderModulo;
 }
 
-// 目标角限幅：约束到 [0, angleScope-bottomReserved-topReserved]（度）。
+static int32_t degToEncoderCount(float deg)
+{
+    const float scaled = deg * (float)kEncoderModulo / 360.0f;
+    return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
+}
+
 static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
 {
     if (!isfinite(targetDeg)) {
@@ -80,11 +87,15 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
         return 0.0f;
     }
 
-    const int32_t maxCount =
-        g_jointCalibConfig[jointIndex].angleScope -
-        g_jointCalibConfig[jointIndex].bottomReserved -
-        g_jointCalibConfig[jointIndex].topReserved;
-    const float maxDeg = convertEncoderCountToDeg(maxCount);
+    float maxDeg = 0.0f;
+    if (g_jointCalibResult[jointIndex].success) {
+        maxDeg = g_jointCalibResult[jointIndex].angleMax;
+    } else {
+        maxDeg =
+            g_jointCalibConfig[jointIndex].angleScope -
+            g_jointCalibConfig[jointIndex].bottomReserved -
+            g_jointCalibConfig[jointIndex].topReserved;
+    }
 
     if (!isfinite(maxDeg) || maxDeg <= 0.0f) {
         return 0.0f;
@@ -98,7 +109,7 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
     return targetDeg;
 }
 
-// 通过 bus + servoId 找到电机通道索引，找不到返回 -1。
+// Find the motorMap channel for a physical bus/id pair.
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
     for (int i = 0; i < SERVO_TOTAL_NUM; i++)
@@ -112,8 +123,7 @@ static int findMotorChannel(uint8_t bus, uint8_t id)
 
 static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlCommandSnapshot_t* out)
 {
-    // 命令快照是 ControlTask 读取上位机目标的唯一入口，
-    // 避免在一个控制周期内读到 joint/direct/sweep 混合的半更新状态。
+// Read host commands once per control cycle to avoid mixed partial updates.
     if (!sharedData || !out) {
         return false;
     }
@@ -142,11 +152,10 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     return true;
 }
 
-// ControlTask 任务主循环：
-// 1) 读取舵机反馈并上报遥测；
-// 2) 构建关节反馈量与传感器映射量；
-// 3) 执行限幅与双环解算；
-// 4) 根据控制模式与安全状态下发命令。
+// ControlTask 浠诲姟涓诲惊鐜細
+// 1) 璇诲彇鑸垫満鍙嶉骞朵笂鎶ラ仴娴嬶紱
+// 2) 鏋勫缓鍏宠妭鍙嶉閲忎笌浼犳劅鍣ㄦ槧灏勯噺锛?// 3) 鎵ц闄愬箙涓庡弻鐜В绠楋紱
+// 4) 鏍规嵁鎺у埗妯″紡涓庡畨鍏ㄧ姸鎬佷笅鍙戝懡浠ゃ€?
 void controlTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -264,10 +273,10 @@ void controlTask(void* parameter)
             prevMotorOnline[ch] = onlineNow;
         }
 
-        // 过载保护逻辑当前关闭，但保留协议状态字段的输出兼容性。
+        // 杩囪浇淇濇姢閫昏緫褰撳墠鍏抽棴锛屼絾淇濈暀鍗忚鐘舵€佸瓧娈电殑杈撳嚭鍏煎鎬с€?
         sharedData->overload_fault_bitmap = 0;
 
-        // 阶段3：从舵机反馈构建“关节侧”绝对位置（闭环输入）。
+        // 闃舵3锛氫粠鑸垫満鍙嶉鏋勫缓鈥滃叧鑺備晶鈥濈粷瀵逛綅缃紙闂幆杈撳叆锛夈€?
         memset(absolutePosition, 0, sizeof(absolutePosition));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
         {
@@ -298,10 +307,10 @@ void controlTask(void* parameter)
                 const int32_t fused = (p + sProj) / 2;
                 const int32_t diff = (p >= sProj) ? (p - sProj) : (sProj - p);
 
-                // 双反馈融合后的 joint16 位置用于闭环。
+                // 鍙屽弽棣堣瀺鍚堝悗鐨?joint16 浣嶇疆鐢ㄤ簬闂幆銆?
                 absolutePosition[kJoint16Index] = fused;
 
-                // 连续超差判故障，抑制单周期抖动误触发。
+                // 杩炵画瓒呭樊鍒ゆ晠闅滐紝鎶戝埗鍗曞懆鏈熸姈鍔ㄨ瑙﹀彂銆?
                 if (diff > kJoint16DiffThresholdCounts) {
                     if (joint16DiffFaultCounter < 255) {
                         joint16DiffFaultCounter++;
@@ -354,16 +363,17 @@ void controlTask(void* parameter)
                 const int32_t orientedRaw = orientEncoderRaw(sensorData.encoderValues[i], g_encoderDirection[i]);
                 int32_t mappedCount = orientedRaw;
                 if (g_jointCalibResult[i].success) {
+                    const JointCalibrationResult& calib = g_jointCalibResult[i];
                     const int32_t offset = getEncoderOffset((uint8_t)i);
-                    const int32_t angleScope = g_jointCalibConfig[i].angleScope;
-                    const int32_t bottomReserved = g_jointCalibConfig[i].bottomReserved;
-                    int32_t delta = orientedRaw - offset + bottomReserved;
-                    delta %= kEncoderModulo;
-                    if (delta < 0) delta += kEncoderModulo;
-                    if (delta > angleScope + kEncoderMarginCounts) {
+                    int32_t delta = forwardEncoderDelta(offset, orientedRaw);
+                    int32_t hardMaxFromOffset = forwardEncoderDelta(offset, calib.encoderMax);
+                    if (hardMaxFromOffset <= 0) {
+                        hardMaxFromOffset = degToEncoderCount(calib.angleMax);
+                    }
+                    if (delta > hardMaxFromOffset + kEncoderMarginCounts) {
                         delta -= kEncoderModulo;
                     }
-                    mappedCount = delta - bottomReserved;
+                    mappedCount = delta;
                 }
 
                 mappedData.angleValues[i] = clampMappedCountForProtocol(mappedCount);
@@ -386,19 +396,19 @@ void controlTask(void* parameter)
         const bool controlEnabled = hostControlEnabled && controlOwnerActive && (runningState || faultHoldState);
         const bool normalOutputAllowed = controlEnabled && runningState;
 
-        // 仅关节控制模式下执行角度限幅（直控模式透传原始目标）。
+        // 浠呭叧鑺傛帶鍒舵ā寮忎笅鎵ц瑙掑害闄愬箙锛堢洿鎺фā寮忛€忎紶鍘熷鐩爣锛夈€?
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
             }
         }
 
-        // 阶段4：执行双环解算，得到每关节目标脉冲。
+        // 闃舵4锛氭墽琛屽弻鐜В绠楋紝寰楀埌姣忓叧鑺傜洰鏍囪剦鍐层€?
         g_controlSolver.compute(localTargets, magAngles, absolutePosition, outPulses);
 
         if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
-            // 直控模式：按 motorTargetRaw 下发；joint16 双反馈故障仅作用于主副舵机对。
+            // 鐩存帶妯″紡锛氭寜 motorTargetRaw 涓嬪彂锛沯oint16 鍙屽弽棣堟晠闅滀粎浣滅敤浜庝富鍓埖鏈哄銆?
             if (controlEnabled) {
                 for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
                 {
@@ -457,7 +467,7 @@ void controlTask(void* parameter)
         }
         else
         {
-            // 关节模式：按关节逐一评估急停条件并下发目标。
+            // 鍏宠妭妯″紡锛氭寜鍏宠妭閫愪竴璇勪及鎬ュ仠鏉′欢骞朵笅鍙戠洰鏍囥€?
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
                 const uint8_t bus = jointMap[jointIndex].busIndex;
@@ -507,13 +517,13 @@ void controlTask(void* parameter)
 
                 if (!controlEnabled)
                 {
-                    // 未收到明确 START 前，不向舵机发送任何保持/控制命令。
+                    // 鏈敹鍒版槑纭?START 鍓嶏紝涓嶅悜鑸垫満鍙戦€佷换浣曚繚鎸?鎺у埗鍛戒护銆?
                     continue;
                 }
 
                 if (emergency)
                 {
-                    // 急停策略：保持当前舵机位置，避免异常状态下继续运动。
+                    // 鎬ュ仠绛栫暐锛氫繚鎸佸綋鍓嶈埖鏈轰綅缃紝閬垮厤寮傚父鐘舵€佷笅缁х画杩愬姩銆?
                     if (servoOnline) {
                         const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
                         appendServoTarget(&targetBatch, bus, id, holdPos,
@@ -570,7 +580,7 @@ void controlTask(void* parameter)
 
                 if (jointIndex == kJoint16Index) {
                     if (joint16SecondaryMotor.busIndex < NUM_BUSES) {
-                        // joint16 拮抗下发：主舵机目标确定后，副舵机按反向映射与偏置补偿计算。
+                        // joint16 鎷姉涓嬪彂锛氫富鑸垫満鐩爣纭畾鍚庯紝鍓埖鏈烘寜鍙嶅悜鏄犲皠涓庡亸缃ˉ鍋胯绠椼€?
                         const int32_t secTarget = -((int32_t)targetPos) + kJoint16SecondaryOffset + kJoint16TensionBias;
                         appendServoTarget(&targetBatch,
                             joint16SecondaryMotor.busIndex,
@@ -588,7 +598,7 @@ void controlTask(void* parameter)
 
         if (sharedData->jointDebugQueue)
         {
-            // 调试上报：发送指定关节的目标/反馈/PID 输出与命令位置。
+            // 璋冭瘯涓婃姤锛氬彂閫佹寚瀹氬叧鑺傜殑鐩爣/鍙嶉/PID 杈撳嚭涓庡懡浠や綅缃€?
             for (uint8_t di = 0; di < kDebugJointCount; di++)
             {
                 const uint8_t jointIndex = kDebugJointIndices[di];
