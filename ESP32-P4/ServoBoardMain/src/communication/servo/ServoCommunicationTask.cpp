@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "../../hardware/HardwareMap.h"
 #include "../libraries/FTServo_Arduino/src/SMS_STS.h"
 
 #ifndef FTSERVO_ARDUINO_EXTERNAL_BUILD
@@ -10,16 +11,52 @@
 #include "../libraries/FTServo_Arduino/src/SMS_STS.cpp"
 #endif
 
-extern MotorMapItem motorMap[SERVO_TOTAL_NUM];
-
 #ifndef SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
 #define SERVO_CONFIGURE_MULTI_TURN_ON_BOOT 1
 #endif
 
-#define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
+#ifndef SERVO_BOOT_RECOVER_LIMIT_TO_RAW
+#define SERVO_BOOT_RECOVER_LIMIT_TO_RAW 0
+#endif
 
-// 单个舵机在通信层内部维护的反馈缓存。
-// rawPosition 是单圈读数，absolutePosition 是根据跨圈变化推导的多圈位置。
+#define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
+static const uint32_t kBootRecoverLimitToRawWindowMs = 8000;
+static const int32_t kServoAbsLimit = 30719;
+static const int32_t kServoAbsLimitRecoverMargin = 16;
+
+static bool isServoAbsAtLimit(int32_t value)
+{
+    return value >= (kServoAbsLimit - kServoAbsLimitRecoverMargin) ||
+           value <= (-kServoAbsLimit + kServoAbsLimitRecoverMargin);
+}
+
+static int16_t clampServoAbsLocal(int32_t value)
+{
+    if (value > kServoAbsLimit) return (int16_t)kServoAbsLimit;
+    if (value < -kServoAbsLimit) return (int16_t)-kServoAbsLimit;
+    return (int16_t)value;
+}
+
+static int16_t normalizeServoRawSingleTurn(int32_t value)
+{
+    int32_t raw = value % 4096;
+    if (raw < 0) {
+        raw += 4096;
+    }
+    return (int16_t)raw;
+}
+
+static uint16_t singleTurnDistanceCounts(int16_t a, int16_t b)
+{
+    int32_t diff = abs((int32_t)normalizeServoRawSingleTurn(a) -
+                       (int32_t)normalizeServoRawSingleTurn(b)) % 4096;
+    if (diff > 2048) {
+        diff = 4096 - diff;
+    }
+    return (uint16_t)diff;
+}
+
+// Per-servo feedback cache used inside the servo communication layer.
 struct ServoFeedbackInternal {
     int16_t rawPosition;
     int16_t speed;
@@ -34,18 +71,17 @@ struct ServoFeedbackInternal {
     uint32_t lastUpdate;
 };
 
-// ServoBusDriver 是 ServoCommunicationTask.cpp 私有的舵机总线驱动封装。
-// 它负责一条 UART 上的批量写入、同步读取和多圈位置缓存。
+// Private wrapper for one Feetech UART servo bus.
 class ServoBusDriver {
 public:
     ServoBusDriver() : _serial(NULL), _writeCount(0), _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT)
     {
         memset(_feedback, 0, sizeof(_feedback));
+        memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
     }
 
     void begin(uint8_t busIndex, int rxPin, int txPin, uint32_t baud)
     {
-        // ESP32-P4 当前使用 Serial1~Serial4 分别绑定四条飞特舵机总线。
         HardwareSerial* serial = NULL;
         switch (busIndex) {
             case 0: serial = &Serial1; break;
@@ -79,12 +115,14 @@ public:
 
     void setTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
     {
-        // 先缓存到本总线的批量写数组，syncWriteAll 再一次性下发。
-        if (_writeCount >= MAX_SERVOS_PER_BUS) {
+        if (id == 0 || id > MAX_SERVO_ID || _writeCount >= MAX_SERVOS_PER_BUS) {
             return;
         }
-        if (position < -30719) position = -30719;
-        if (position > 30719) position = 30719;
+        if (_torqueDisabled[id]) {
+            _sms.EnableTorque(id, 1);
+            _torqueDisabled[id] = false;
+        }
+        position = clampServoAbsLocal(position);
 
         _writeIDs[_writeCount] = id;
         _writePos[_writeCount] = position;
@@ -95,7 +133,6 @@ public:
 
     void syncWriteAll()
     {
-        // 飞特同步写要求同一总线上的 ID/位置/速度/加速度数组并行传入。
         if (_writeCount == 0 || !_serial) {
             return;
         }
@@ -105,7 +142,6 @@ public:
 
     int syncReadPositions(const uint8_t* ids, uint8_t count)
     {
-        // 读取当前位置开始的 8 字节：位置、速度、负载、电压、温度。
         if (!_serial || !ids || count == 0) {
             return 0;
         }
@@ -118,7 +154,6 @@ public:
         _sms.syncReadBegin(count, feedbackLen, timeoutMs);
         const int txResult = _sms.syncReadPacketTx((uint8_t*)ids, count, addrPresentPosition, feedbackLen);
         if (txResult <= 0) {
-            // TX 失败说明该轮同步读无效，先将目标 ID 标记离线。
             for (uint8_t i = 0; i < count; i++) {
                 if (ids[i] <= MAX_SERVO_ID) {
                     _feedback[ids[i]].online = false;
@@ -136,7 +171,6 @@ public:
                 continue;
             }
             if (rxLen == feedbackLen) {
-                // 返回长度正确才更新缓存；否则保留其他字段并标记离线。
                 const int16_t rawPos = decodeSigned(rxBuf[0], rxBuf[1]);
                 _updateMultiTurnPosition(id, rawPos);
                 _feedback[id].speed = decodeSigned(rxBuf[2], rxBuf[3]);
@@ -179,61 +213,85 @@ public:
         return id <= MAX_SERVO_ID && _feedback[id].online;
     }
 
+    bool setTorqueEnabled(uint8_t id, bool enabled)
+    {
+        if (!_serial || id == 0 || id > MAX_SERVO_ID) {
+            return false;
+        }
+        const bool ok = (_sms.EnableTorque(id, enabled ? 1 : 0) >= 0);
+        if (ok) {
+            _torqueDisabled[id] = !enabled;
+        }
+        return ok;
+    }
+
+    bool restoreAbsolutePosition(uint8_t id, int32_t absPosition, uint16_t rawToleranceCounts)
+    {
+        if (id == 0 || id > MAX_SERVO_ID) {
+            return false;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        if (!fb.online) {
+            return false;
+        }
+
+        const int16_t currentRaw = normalizeServoRawSingleTurn(fb.rawPosition);
+        const int16_t restoredRaw = normalizeServoRawSingleTurn(absPosition);
+        if (singleTurnDistanceCounts(currentRaw, restoredRaw) > rawToleranceCounts) {
+            return false;
+        }
+
+        const int32_t absClamped = clampServoAbsLocal(absPosition);
+        fb.rawPosition = currentRaw;
+        fb.lastRawPosition = currentRaw;
+        fb.absolutePosition = absClamped;
+        fb.turnCount = (int16_t)((absClamped - currentRaw) / 4096);
+        fb.initialized = true;
+        fb.lastUpdate = millis();
+        return true;
+    }
+
 private:
+    static int32_t expandSingleTurnRawNearAnchor(int16_t rawSingleTurn, int32_t anchor)
+    {
+        int32_t candidate = rawSingleTurn;
+        while ((candidate - anchor) > 2048) {
+            candidate -= 4096;
+        }
+        while ((anchor - candidate) > 2048) {
+            candidate += 4096;
+        }
+        return clampServoAbsLocal(candidate);
+    }
+
     static int16_t decodeSigned(uint8_t lo, uint8_t hi)
     {
-        // 飞特返回值使用最高位表示符号，其余位表示绝对值。
         const uint16_t raw = ((uint16_t)hi << 8) | lo;
         return (raw & (1 << 15)) ? -(int16_t)(raw & ~(1 << 15)) : (int16_t)raw;
     }
 
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)
     {
-        // 根据单圈 raw 跨过半圈的方向推断圈数，得到连续多圈位置。
         ServoFeedbackInternal& fb = _feedback[id];
+        int32_t absPos = 0;
+        int16_t rawSingleTurn = 0;
+
         if (newRawPos < 0 || newRawPos >= 4096) {
-            int16_t rawSingleTurn = (int16_t)(newRawPos % 4096);
-            if (rawSingleTurn < 0) {
-                rawSingleTurn += 4096;
-            }
-            fb.rawPosition = rawSingleTurn;
-            fb.lastRawPosition = rawSingleTurn;
-            fb.absolutePosition = newRawPos;
-            if (fb.absolutePosition > 30719) {
-                fb.absolutePosition = 30719;
-            } else if (fb.absolutePosition < -30719) {
-                fb.absolutePosition = -30719;
-            }
-            fb.turnCount = (int16_t)((fb.absolutePosition - rawSingleTurn) / 4096);
-            fb.initialized = true;
-            return;
+            absPos = clampServoAbsLocal((int32_t)newRawPos);
+            rawSingleTurn = normalizeServoRawSingleTurn(absPos);
+        } else {
+            rawSingleTurn = normalizeServoRawSingleTurn(newRawPos);
+            const int32_t anchor = fb.initialized
+                ? fb.absolutePosition
+                : (int32_t)rawSingleTurn;
+            absPos = expandSingleTurnRawNearAnchor(rawSingleTurn, anchor);
         }
 
-        if (!fb.initialized) {
-            fb.rawPosition = newRawPos;
-            fb.lastRawPosition = newRawPos;
-            fb.absolutePosition = newRawPos;
-            fb.turnCount = 0;
-            fb.initialized = true;
-            return;
-        }
-
-        const int16_t delta = newRawPos - fb.lastRawPosition;
-        const int16_t halfTurn = 2048;
-        if (delta > halfTurn) {
-            fb.turnCount--;
-        } else if (delta < -halfTurn) {
-            fb.turnCount++;
-        }
-
-        fb.rawPosition = newRawPos;
-        fb.lastRawPosition = newRawPos;
-        fb.absolutePosition = (int32_t)fb.turnCount * 4096 + newRawPos;
-        if (fb.absolutePosition > 30719) {
-            fb.absolutePosition = 30719;
-        } else if (fb.absolutePosition < -30719) {
-            fb.absolutePosition = -30719;
-        }
+        fb.rawPosition = rawSingleTurn;
+        fb.lastRawPosition = rawSingleTurn;
+        fb.absolutePosition = absPos;
+        fb.turnCount = (int16_t)((absPos - rawSingleTurn) / 4096);
+        fb.initialized = true;
     }
 
     SMS_STS _sms;
@@ -244,6 +302,7 @@ private:
     uint8_t _writeAcc[MAX_SERVOS_PER_BUS];
     uint8_t _writeCount;
     ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1];
+    bool _torqueDisabled[MAX_SERVO_ID + 1];
     uint16_t _syncReadTimeoutMs;
 };
 
@@ -251,7 +310,6 @@ static ServoBusDriver g_servoBuses[NUM_BUSES];
 
 static ServoBusDriver* getBusByIndex(uint8_t busIndex)
 {
-    // 所有外部目标都必须先通过 busIndex 映射到内部驱动对象。
     if (busIndex >= NUM_BUSES) {
         return NULL;
     }
@@ -263,7 +321,6 @@ static bool addReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
                           uint8_t bus,
                           uint8_t id)
 {
-    // 同一条总线上同一个 ID 只加入一次，避免重复同步读。
     if (bus >= NUM_BUSES) {
         return false;
     }
@@ -279,9 +336,56 @@ static bool addReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
     return true;
 }
 
+static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
+                                          uint32_t motorMask,
+                                          const int32_t* motorAbs,
+                                          uint16_t rawToleranceCounts,
+                                          uint32_t* restoredMask,
+                                          uint32_t* rejectedMask)
+{
+    uint32_t restored = 0;
+    uint32_t rejected = 0;
+    if (!sharedData || !motorAbs) {
+        if (restoredMask) *restoredMask = 0;
+        if (rejectedMask) *rejectedMask = motorMask;
+        return false;
+    }
+
+    const uint32_t requestMask = motorMask & validMotorChannelMask();
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = (1UL << ch);
+        if ((requestMask & bit) == 0) {
+            continue;
+        }
+
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || id == 0 || id > MAX_SERVO_ID ||
+            !bus->restoreAbsolutePosition(id, motorAbs[ch], rawToleranceCounts)) {
+            rejected |= bit;
+            continue;
+        }
+        restored |= bit;
+    }
+
+    if (restored != 0) {
+        sharedData->multi_turn_unknown_bitmap &= ~restored;
+    }
+
+    if (restoredMask) *restoredMask = restored;
+    if (rejectedMask) *rejectedMask = rejected;
+    Serial.printf("[SERVO RESTORE] request=0x%08lX restored=0x%08lX rejected=0x%08lX unknown=0x%08lX tol=%u\r\n",
+                  (unsigned long)requestMask,
+                  (unsigned long)restored,
+                  (unsigned long)rejected,
+                  (unsigned long)sharedData->multi_turn_unknown_bitmap,
+                  (unsigned)rawToleranceCounts);
+    return (requestMask != 0) && ((requestMask & ~restored) == 0);
+}
+
 static void beginServoBuses()
 {
-    // 防止任务意外重复初始化 UART。
     static bool initialized = false;
     if (initialized) {
         return;
@@ -334,7 +438,6 @@ static void configureMappedServosForMultiTurn()
 
 static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
 {
-    // 按总线聚合目标：先填每条总线缓存，再分别执行同步写。
     bool busWritePending[NUM_BUSES] = {false};
 
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
@@ -363,8 +466,12 @@ static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
     uint8_t heldIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
     uint8_t heldCounts[NUM_BUSES] = {0};
     bool busWritePending[NUM_BUSES] = {false};
+    uint32_t skippedUnknownMask = 0;
+    uint32_t torqueDisabledMask = 0;
+    const uint32_t unknownMask = sharedData ? sharedData->multi_turn_unknown_bitmap : 0;
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = (1UL << ch);
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
         if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
@@ -387,18 +494,28 @@ static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
             continue;
         }
 
-        const int32_t holdPos32 = bus->getAbsolutePosition(id);
-        int16_t holdPos = 0;
-        if (holdPos32 > 30719) {
-            holdPos = 30719;
-        } else if (holdPos32 < -30719) {
-            holdPos = -30719;
-        } else {
-            holdPos = (int16_t)holdPos32;
+        if ((unknownMask & bit) != 0) {
+            skippedUnknownMask |= bit;
+            if (bus->setTorqueEnabled(id, false)) {
+                torqueDisabledMask |= bit;
+            }
+            continue;
         }
+
+        const int32_t holdPos32 = bus->getAbsolutePosition(id);
+        const int16_t rawSingleTurn = normalizeServoRawSingleTurn(bus->getRawPosition(id));
+        const int16_t holdPos = isServoAbsAtLimit(holdPos32)
+            ? rawSingleTurn
+            : clampServoAbsLocal(holdPos32);
         bus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
         heldIds[busIndex][heldCounts[busIndex]++] = id;
         busWritePending[busIndex] = true;
+    }
+
+    if (skippedUnknownMask != 0) {
+        Serial.printf("[SERVO HOLD] unknown motors torque-off skip-position mask=0x%08lX disabled=0x%08lX\r\n",
+                      (unsigned long)skippedUnknownMask,
+                      (unsigned long)torqueDisabledMask);
     }
 
     for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
@@ -406,6 +523,74 @@ static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
             g_servoBuses[busIndex].syncWriteAll();
         }
     }
+}
+
+static void bootRecoverLimitServosToRaw(uint32_t bootRecoverDeadlineMs)
+{
+#if SERVO_BOOT_RECOVER_LIMIT_TO_RAW
+    static bool attempted[NUM_BUSES][MAX_SERVO_ID + 1] = {false};
+
+    const uint32_t nowMs = millis();
+    if ((int32_t)(nowMs - bootRecoverDeadlineMs) > 0) {
+        return;
+    }
+
+    uint8_t heldIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
+    uint8_t heldCounts[NUM_BUSES] = {0};
+    bool busWritePending[NUM_BUSES] = {false};
+
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+            continue;
+        }
+        if (attempted[busIndex][id]) {
+            continue;
+        }
+
+        bool alreadyHeld = false;
+        for (uint8_t i = 0; i < heldCounts[busIndex]; i++) {
+            if (heldIds[busIndex][i] == id) {
+                alreadyHeld = true;
+                break;
+            }
+        }
+        if (alreadyHeld || heldCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
+            continue;
+        }
+
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || !bus->isOnline(id)) {
+            continue;
+        }
+
+        const int32_t absPos = bus->getAbsolutePosition(id);
+        if (!isServoAbsAtLimit(absPos)) {
+            attempted[busIndex][id] = true;
+            continue;
+        }
+
+        const int16_t rawSingleTurn = normalizeServoRawSingleTurn(bus->getRawPosition(id));
+        bus->setTarget(id, rawSingleTurn, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+        attempted[busIndex][id] = true;
+        heldIds[busIndex][heldCounts[busIndex]++] = id;
+        busWritePending[busIndex] = true;
+        Serial.printf("[SERVO BOOT RECOVER] bus=%u id=%u abs=%ld raw=%d\r\n",
+                      (unsigned)busIndex,
+                      (unsigned)id,
+                      (long)absPos,
+                      (int)rawSingleTurn);
+    }
+
+    for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
+        if (busWritePending[busIndex]) {
+            g_servoBuses[busIndex].syncWriteAll();
+        }
+    }
+#else
+    (void)bootRecoverDeadlineMs;
+#endif
 }
 
 static void publishServoFeedback(TaskSharedData_t* sharedData)
@@ -425,7 +610,6 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
 
-    // 将物理 bus/id 反馈按 motorMap 转换成上层统一的 0..21 motor 通道顺序。
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
@@ -433,6 +617,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
         if (bus && bus->isOnline(id)) {
             const ServoFeedbackInternal& fb = bus->getFeedback(id);
             servoData.servoAngles[ch] = bus->getAbsolutePosition(id);
+            servoData.servoRawPositions[ch] = bus->getRawPosition(id);
             servoRawData.servoRawPositions[ch] = bus->getRawPosition(id);
             servoData.onlineStatus[ch] = 1;
             servoRawData.onlineStatus[ch] = 1;
@@ -461,6 +646,42 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     }
 }
 
+static void processHostMultiTurnRestore(TaskSharedData_t* sharedData, uint32_t* lastToken)
+{
+    if (!sharedData || !lastToken) {
+        return;
+    }
+    const uint32_t token = sharedData->restore_multi_turn_request_token;
+    if (token == *lastToken) {
+        return;
+    }
+    *lastToken = token;
+
+    uint32_t motorMask = 0;
+    int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return;
+    }
+    motorMask = sharedData->restore_multi_turn_mask;
+    memcpy(motorAbs, sharedData->restore_multi_turn_abs, sizeof(motorAbs));
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+
+    uint32_t restoredMask = 0;
+    uint32_t rejectedMask = 0;
+    restoreServoMultiTurnFromHost(sharedData,
+                                  motorMask,
+                                  motorAbs,
+                                  256,
+                                  &restoredMask,
+                                  &rejectedMask);
+    sharedData->restore_multi_turn_restored_mask = restoredMask;
+    sharedData->restore_multi_turn_rejected_mask = rejectedMask;
+    sharedData->restore_multi_turn_result_token = token;
+}
+
 void servoCommunicationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -476,6 +697,8 @@ void servoCommunicationTask(void* parameter)
     const TickType_t taskPeriodTicks = pdMS_TO_TICKS(10);
     uint8_t readBusPhase = 0;
     uint32_t lastEmergencyStopToken = sharedData->servo_emergency_stop_token;
+    uint32_t lastRestoreToken = sharedData->restore_multi_turn_request_token;
+    const uint32_t bootRecoverDeadlineMs = millis() + kBootRecoverLimitToRawWindowMs;
 
     for (;;)
     {
@@ -485,10 +708,11 @@ void servoCommunicationTask(void* parameter)
             emergencyHoldMappedServosAtFeedback(sharedData);
         }
 
+        processHostMultiTurnRestore(sharedData, &lastRestoreToken);
+
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {
-            // owner/source 双重匹配，保证校准目标和普通控制目标不会互相覆盖。
             const uint8_t owner = sharedData->servo_target_owner;
             if (owner != SERVO_TARGET_OWNER_NONE && batch.source == owner) {
                 applyServoTargetBatch(batch);
@@ -497,13 +721,11 @@ void servoCommunicationTask(void* parameter)
 
         uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
         uint8_t readCounts[NUM_BUSES] = {0};
-        // 每轮都从 motorMap 生成读取列表，确保映射表是唯一硬件拓扑来源。
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
             addReadTarget(readIds, readCounts, motorMap[ch].busIndex, motorMap[ch].servoID);
         }
 
         const uint8_t readStartBus = (readBusPhase == 0) ? 0 : 2;
-        // 10ms 周期内只读两条总线，0/1 与 2/3 交替，降低单周期串口阻塞时间。
         for (uint8_t offset = 0; offset < 2; offset++) {
             const uint8_t busIndex = (uint8_t)(readStartBus + offset);
             if (busIndex >= NUM_BUSES || readCounts[busIndex] == 0) {
@@ -513,6 +735,7 @@ void servoCommunicationTask(void* parameter)
         }
         readBusPhase ^= 1;
 
+        bootRecoverLimitServosToRaw(bootRecoverDeadlineMs);
         publishServoFeedback(sharedData);
         vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
     }

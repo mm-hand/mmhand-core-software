@@ -21,6 +21,9 @@ PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
+PACKET_TYPE_ENCODER_RAW = 0x0B
+PACKET_TYPE_SYSTEM_STATUS = 0x0C
+PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -36,6 +39,11 @@ CMD_MOTOR_POS_ABS = 0xD3
 CMD_LOCAL_TEST_PARAMS = 0xD4
 CMD_LOCAL_TEST_START = 0xD5
 CMD_LOCAL_TEST_STOP = 0xD6
+CMD_ACTIVE_SCOPE = 0xD7
+CMD_RUN_FEEDBACK = 0xD8
+CMD_PAUSE = 0xD9
+CMD_RESTORE_MULTITURN = 0xDA
+CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -43,9 +51,34 @@ SENSOR_STREAM_MODE_SIGNED_I16 = 1
 PROTO_ACK_STATUS_OK = 0
 PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
 
+SYSTEM_STATE_UNCONTROLLABLE = 0
+SYSTEM_STATE_IDLE = 1
+SYSTEM_STATE_RUN_FEEDBACK = 2
+SYSTEM_STATE_STOPPED = 3
+SYSTEM_STATE_CALIBRATION_RUNNING = 4
+SYSTEM_STATE_READY = 5
+SYSTEM_STATE_RUN_DIRECT = 6
+SYSTEM_STATE_PAUSED = 7
+
+SYSTEM_FAULT_CAN_OFFLINE = 1 << 0
+SYSTEM_FAULT_JOINT16_DUAL = 1 << 1
+SYSTEM_FAULT_OVERLOAD = 1 << 2
+SYSTEM_FAULT_RELEASE_GUARD = 1 << 3
+SYSTEM_FAULT_SERVO_OFFLINE = 1 << 4
+SYSTEM_FAULT_CALIBRATION = 1 << 5
+
+SERVO_TARGET_OWNER_NONE = 0
+SERVO_TARGET_OWNER_CONTROL = 1
+SERVO_TARGET_OWNER_CALIBRATION = 2
+
 # Decoupled dimensions
 ENCODER_COUNT = 21
-MOTOR_COUNT = 22
+MOTOR_COUNT = 27
+HAND_PROFILE = "v2"
+VALID_MOTOR_COUNT_V1 = 22
+VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
+VALID_MOTOR_MASK_V2 = (1 << MOTOR_COUNT) - 1
+VALID_MOTOR_MASK = VALID_MOTOR_MASK_V2 if HAND_PROFILE.lower() == "v2" else VALID_MOTOR_MASK_V1
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
@@ -92,6 +125,50 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
     return payload[0], payload[1], payload[2]
 
 
+def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int]]:
+    if len(payload) < 13:
+        return None
+    system_state = payload[0]
+    control_enabled = payload[1]
+    servo_target_owner = payload[2]
+    control_mode = payload[3]
+    calib_status = payload[4]
+    system_fault_bitmap = struct.unpack(">I", payload[5:9])[0]
+    state_transition_count = struct.unpack(">I", payload[9:13])[0]
+    multi_turn_unknown_bitmap = struct.unpack(">I", payload[13:17])[0] if len(payload) >= 17 else 0
+    return (
+        system_state,
+        control_enabled,
+        servo_target_owner,
+        control_mode,
+        calib_status,
+        system_fault_bitmap,
+        state_transition_count,
+        multi_turn_unknown_bitmap,
+    )
+
+
+def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, List[int], List[int]]]:
+    required = 4 + MOTOR_COUNT * 4
+    if len(payload) < required:
+        return None
+    valid_bitmap = struct.unpack(">I", payload[:4])[0]
+    if len(payload) >= 8 + MOTOR_COUNT * 4:
+        locked_bitmap = struct.unpack(">I", payload[4:8])[0]
+        offset = 8
+    else:
+        # Backward compatibility with older firmware: valid limits were always locked.
+        locked_bitmap = valid_bitmap
+        offset = 4
+    mins: List[int] = []
+    maxs: List[int] = []
+    for _ in range(MOTOR_COUNT):
+        mins.append(struct.unpack(">h", payload[offset:offset + 2])[0])
+        maxs.append(struct.unpack(">h", payload[offset + 2:offset + 4])[0])
+        offset += 4
+    return valid_bitmap, locked_bitmap, mins, maxs
+
+
 def parse_calib_ack(payload: bytes) -> Optional[int]:
     if len(payload) < 1:
         return None
@@ -99,7 +176,7 @@ def parse_calib_ack(payload: bytes) -> Optional[int]:
 
 
 def parse_servo_angle_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
-    # Some firmware revisions upload 21 channels while newer desktop code expects 22.
+    # Some firmware revisions upload fewer channels while newer desktop code reserves 27.
     # Accept any payload that matches N * (4-byte angle + 1-byte online flag).
     if not payload or (len(payload) % 5) != 0:
         return None
@@ -271,11 +348,53 @@ def build_calib_data_cmd(zero_encoder_raw: List[int]) -> bytes:
     return _build_command_frame(CMD_CALIB_DATA, payload)
 
 
+def build_active_scope_cmd(active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bytes:
+    payload = struct.pack(
+        ">IIB",
+        int(active_motor_mask) & 0xFFFFFFFF,
+        int(active_joint_mask) & 0xFFFFFFFF,
+        1 if require_can_feedback else 0,
+    )
+    return _build_command_frame(CMD_ACTIVE_SCOPE, payload)
+
+
 def build_angle_cmd(angles: List[float]) -> bytes:
     if len(angles) != ENCODER_COUNT:
         raise ValueError(f"need exactly {ENCODER_COUNT} joint angles")
     payload = struct.pack(f"<{ENCODER_COUNT}f", *angles)
     return _build_command_frame(CMD_ANGLE_CTRL, payload)
+
+
+def build_run_feedback_cmd() -> bytes:
+    return _build_command_frame(CMD_RUN_FEEDBACK, b"")
+
+
+def build_pause_cmd() -> bytes:
+    return _build_command_frame(CMD_PAUSE, b"")
+
+
+def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) -> bytes:
+    if len(motor_abs) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor absolute values")
+    payload = bytearray()
+    payload.extend(struct.pack(">I", int(active_motor_mask) & 0xFFFFFFFF))
+    for value in motor_abs:
+        v = int(value)
+        if v < MOTOR_ABS_CMD_MIN:
+            v = MOTOR_ABS_CMD_MIN
+        elif v > MOTOR_ABS_CMD_MAX:
+            v = MOTOR_ABS_CMD_MAX
+        payload.extend(struct.pack(">h", v))
+    return _build_command_frame(CMD_RESTORE_MULTITURN, bytes(payload))
+
+
+def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -> bytes:
+    payload = struct.pack(
+        ">BI",
+        1 if lock_enabled else 0,
+        int(active_motor_mask) & 0xFFFFFFFF,
+    )
+    return _build_command_frame(CMD_MOTOR_ABS_LIMIT_LOCK, payload)
 
 
 def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:

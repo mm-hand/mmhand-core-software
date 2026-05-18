@@ -6,7 +6,17 @@ from typing import Callable, List, Optional
 from comm_layer import list_ports
 from core_logic import HandController
 from data_models import HandModel
-from protocol import ENCODER_COUNT, MOTOR_COUNT
+from protocol import (
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    VALID_MOTOR_MASK,
+    SYSTEM_FAULT_CALIBRATION,
+    SYSTEM_FAULT_CAN_OFFLINE,
+    SYSTEM_FAULT_JOINT16_DUAL,
+    SYSTEM_FAULT_OVERLOAD,
+    SYSTEM_FAULT_RELEASE_GUARD,
+    SYSTEM_FAULT_SERVO_OFFLINE,
+)
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
@@ -93,10 +103,11 @@ class HandGUI(QtWidgets.QMainWindow):
         self.connect_btn = QtWidgets.QPushButton("Refresh")
         self.connect_btn.clicked.connect(lambda _checked=False: self.refresh_ports())
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
-        self.save_data_check.setChecked(True)
+        self.save_data_check.setChecked(False)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.plot_btn = QtWidgets.QPushButton("Plot")
         self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
+        self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
         self.start_indicator.setMinimumWidth(56)
@@ -104,7 +115,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            self.save_data_check, self.plot_btn, self.start_indicator,
+            self.save_data_check, self.plot_btn, self.comm_conn_light, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
@@ -118,9 +129,11 @@ class HandGUI(QtWidgets.QMainWindow):
         initial_status = self._pending_status_text or ("Ready" if self.is_comm_connected() else "Disconnected")
         self.status_label = QtWidgets.QLabel(initial_status)
         self.delay_label = QtWidgets.QLabel("")
+        self.turn_label = QtWidgets.QLabel("Turn: -")
         self.fault_label = QtWidgets.QLabel("Faults: none")
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.fault_label)
+        self.statusBar().addPermanentWidget(self.turn_label)
         self.statusBar().addPermanentWidget(self.delay_label)
 
         self.joint_plot = JointRealtimePlotView(self.context, self)
@@ -223,10 +236,10 @@ class HandGUI(QtWidgets.QMainWindow):
             self._disconnect_current_port(f"Switching port: {port}", clear_selection=False)
         self._connect_selected_port()
 
-    def _disconnect_current_port(self, status: str = "Disconnected", clear_selection: bool = True) -> None:
+    def _disconnect_current_port(self, status: str = "Disconnected", clear_selection: bool = True, stop_lower: bool = False) -> None:
         self._stop_data_recording("disconnected")
         self.control_panel.stop_all_tests("disconnected", update_status=False)
-        self.controller.shutdown()
+        self.controller.shutdown(stop_lower=stop_lower)
         self.current_port = ""
         self._state = None
         self._state_buffer_version = 0
@@ -251,9 +264,15 @@ class HandGUI(QtWidgets.QMainWindow):
             self._set_status(f"Already connected: {self.current_port}")
             return True
         self._ensure_state_callback_registered()
+        self._state = None
+        self._state_buffer_version = 0
+        self._state_buffer = LatestStateBuffer()
+        self._clear_live_displays()
+        self._set_status("Connecting: waiting for lower status and servo feedback")
         if self.controller.initialize(port):
             self.current_port = str(port)
-            self._set_status(f"Connected: {self.current_port}")
+            sync_status = getattr(self.controller, "last_sync_status", "")
+            self._set_status(f"Connected: {self.current_port}" + (f" | {sync_status}" if sync_status else ""))
             self._on_comm_ready()
             return True
         else:
@@ -269,6 +288,10 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _on_comm_ready(self) -> None:
         self._refresh_start_indicator()
+        try:
+            self.control_panel._on_active_scope_changed()
+        except Exception:
+            pass
         self.tendon_guard.sync_to_controller(self.controller, force=True)
         if self.save_data_check.isChecked() and not self._data_logger.is_running():
             self._start_data_recording()
@@ -315,11 +338,73 @@ class HandGUI(QtWidgets.QMainWindow):
         release = [f"J{i}" for i, f in enumerate(getattr(state, "joint_reverse_release_fault", []) or []) if f]
         mode = self.current_mode
         calib = str(getattr(state, "calib_status", "IDLE"))
+        sys_state = self._system_state_name(getattr(state, "system_state", None)) if getattr(state, "has_system_status_data", False) else "-"
+        sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
+        turn_text, turn_ok = self._turn_known_text(state)
+        self.turn_label.setText(turn_text)
+        self.turn_label.setStyleSheet(
+            "font-weight:700; color:#2e7d32;" if turn_ok else "font-weight:700; color:#c62828;"
+        )
         self.fault_label.setText(
-            f"Mode: {mode} | Calib: {calib} | "
+            f"Mode: {mode} | Sys: {sys_state} | Calib: {calib} | "
+            f"SysFault: {','.join(sys_faults) if sys_faults else 'none'} | "
             f"Overload: {','.join(overload) if overload else 'none'} | "
             f"Release: {','.join(release) if release else 'none'}"
         )
+
+    def _turn_known_text(self, state: HandModel) -> tuple[str, bool]:
+        if not getattr(state, "has_system_status_data", False):
+            return "Turn: -", False
+        try:
+            unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
+        except Exception:
+            unknown = 0
+        active_mask = 0
+        try:
+            data = self.control_panel.scope_combo.currentData()
+            if data:
+                active_mask = int(data[0])
+        except Exception:
+            active_mask = 0
+        if active_mask == 0:
+            active_mask = VALID_MOTOR_MASK
+        active_unknown = unknown & active_mask
+        if active_unknown:
+            return f"Turn: UNKNOWN 0x{active_unknown:08X}", False
+        return "Turn: KNOWN", True
+
+    @staticmethod
+    def _system_state_name(value) -> str:
+        names = {
+            0: "UNCTRL",
+            1: "IDLE",
+            2: "RUN_FEEDBACK",
+            3: "STOP",
+            4: "CAL_RUN",
+            5: "READY",
+            6: "RUN_DIRECT",
+            7: "PAUSED",
+        }
+        try:
+            return names.get(int(value), str(value))
+        except Exception:
+            return "-"
+
+    @staticmethod
+    def _system_fault_names(bitmap) -> List[str]:
+        try:
+            value = int(bitmap)
+        except Exception:
+            value = 0
+        names = [
+            (SYSTEM_FAULT_CAN_OFFLINE, "CAN"),
+            (SYSTEM_FAULT_SERVO_OFFLINE, "SERVO"),
+            (SYSTEM_FAULT_CALIBRATION, "CALIB"),
+            (SYSTEM_FAULT_OVERLOAD, "OVERLOAD"),
+            (SYSTEM_FAULT_RELEASE_GUARD, "RELEASE"),
+            (SYSTEM_FAULT_JOINT16_DUAL, "J16"),
+        ]
+        return [name for bit, name in names if (value & bit) != 0]
 
     def _clear_live_displays(self) -> None:
         self.control_panel.clear_live_state()
@@ -344,6 +429,8 @@ class HandGUI(QtWidgets.QMainWindow):
             self.controller.set_target_angles_live(guarded)
         else:
             self.controller.set_target_angles(guarded)
+        if source and not blocked and not str(source).startswith("Hold"):
+            self.controller.request_run_feedback()
         if source and not blocked:
             self.emit_action(source)
 
@@ -354,16 +441,14 @@ class HandGUI(QtWidgets.QMainWindow):
             comp.draw_angles(angles, None, generate=False)
 
     def start_calibration(self) -> None:
-        def progress(current: int, total: int, msg: str):
-            QtCore.QTimer.singleShot(0, lambda: self._set_status(f"Calibration: {current + 1}/{total} {msg}"))
-
-        def done(success: bool, _zero_raw):
-            QtCore.QTimer.singleShot(0, lambda: QtWidgets.QMessageBox.information(
-                self, "Calibration", "Calibration completed" if success else "Calibration failed"
-            ))
-
-        self.controller.calibrate(progress_cb=progress, done_cb=done)
-        self._set_status("Calibration in progress...")
+        if not self.is_comm_connected():
+            if not self._connect_selected_port():
+                return
+        if self.controller.request_firmware_calibration():
+            self._set_status("Calibration command sent")
+            self.emit_action("Calibrate")
+        else:
+            self._set_status("Calibration blocked: serial port is not connected")
 
     def _start_data_recording(self) -> None:
         path = self._build_run_data_csv_path()
@@ -414,19 +499,25 @@ class HandGUI(QtWidgets.QMainWindow):
             self._stop_data_recording()
 
     def _write_run_data_row(self, state: HandModel) -> None:
+        scope_label, active_motor_mask, active_joint_mask, active_require_can = self._current_scope_record_fields()
         row = {
             "host_time": time.time(),
             "device_timestamp": getattr(state, "timestamp", 0.0),
             "mode": self.current_mode,
             "controller_started": 1 if self.controller.is_started() else 0,
             "calib_status": getattr(state, "calib_status", ""),
+            "active_scope_label": scope_label,
+            "active_motor_mask_hex": active_motor_mask,
+            "active_joint_mask_hex": active_joint_mask,
+            "active_require_can": active_require_can,
+            "multi_turn_unknown_mask_hex": f"0x{int(getattr(state, 'multi_turn_unknown_bitmap', 0)):08X}",
             "has_sensor_data": 1 if getattr(state, "has_sensor_data", False) else 0,
             "has_servo_angle_data": 1 if getattr(state, "has_servo_angle_data", False) else 0,
             "has_servo_raw_data": 1 if getattr(state, "has_servo_raw_data", False) else 0,
         }
         for i in range(ENCODER_COUNT):
             row[f"joint_deg_j{i:02d}"] = state.angles[i] if i < len(state.angles) else ""
-            row[f"joint_encoder_raw_j{i:02d}"] = state.encoders[i].raw if i < len(state.encoders) else ""
+            row[f"joint_encoder_raw_j{i:02d}"] = getattr(state.encoders[i], "raw_sensor", state.encoders[i].raw) if i < len(state.encoders) else ""
             row[f"joint_reverse_release_fault_j{i:02d}"] = (
                 1 if i < len(getattr(state, "joint_reverse_release_fault", [])) and state.joint_reverse_release_fault[i] else 0
             )
@@ -450,7 +541,10 @@ class HandGUI(QtWidgets.QMainWindow):
                 1 if i < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[i] else 0
             )
             row[f"servo_speed_m{i:02d}"] = self._seq_value(getattr(state, "servo_speed", []), i)
-            row[f"servo_load_m{i:02d}"] = self._seq_value(getattr(state, "servo_load", []), i)
+            load_value = self._seq_value(getattr(state, "servo_load", []), i)
+            row[f"servo_load_m{i:02d}"] = load_value
+            row[f"servo_load_mag_m{i:02d}"] = self._servo_load_mag(load_value)
+            row[f"servo_load_dir_m{i:02d}"] = self._servo_load_dir(load_value)
             row[f"servo_voltage_m{i:02d}"] = self._seq_value(getattr(state, "servo_voltage", []), i)
             row[f"servo_temperature_m{i:02d}"] = self._seq_value(getattr(state, "servo_temperature", []), i)
             row[f"servo_overload_fault_m{i:02d}"] = (
@@ -464,6 +558,8 @@ class HandGUI(QtWidgets.QMainWindow):
     def _build_run_data_fieldnames(self) -> List[str]:
         fields = [
             "host_time", "device_timestamp", "mode", "controller_started", "calib_status",
+            "active_scope_label", "active_motor_mask_hex", "active_joint_mask_hex",
+            "active_require_can", "multi_turn_unknown_mask_hex",
             "has_sensor_data", "has_servo_angle_data", "has_servo_raw_data",
         ]
         fields += [f"joint_deg_j{i:02d}" for i in range(ENCODER_COUNT)]
@@ -482,11 +578,51 @@ class HandGUI(QtWidgets.QMainWindow):
         fields += [f"servo_raw_online_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += [f"servo_speed_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += [f"servo_load_m{i:02d}" for i in range(MOTOR_COUNT)]
+        fields += [f"servo_load_mag_m{i:02d}" for i in range(MOTOR_COUNT)]
+        fields += [f"servo_load_dir_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += [f"servo_voltage_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += [f"servo_temperature_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += [f"servo_overload_fault_m{i:02d}" for i in range(MOTOR_COUNT)]
         fields += ["tactile_fingers", "tactile_max_force"]
         return fields
+
+    def _current_scope_record_fields(self):
+        combo = getattr(getattr(self, "control_panel", None), "scope_combo", None)
+        if combo is None:
+            return "", "", "", ""
+        try:
+            label = combo.currentText()
+            data = combo.currentData()
+        except RuntimeError:
+            return "", "", "", ""
+        if not isinstance(data, tuple) or len(data) < 3:
+            return label, "", "", ""
+        try:
+            motor_mask = f"0x{int(data[0]):08X}"
+            joint_mask = f"0x{int(data[1]):08X}"
+            require_can = 1 if bool(data[2]) else 0
+        except Exception:
+            return label, "", "", ""
+        return label, motor_mask, joint_mask, require_can
+
+    @staticmethod
+    def _servo_load_mag(value) -> object:
+        try:
+            return abs(int(value))
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _servo_load_dir(value) -> object:
+        try:
+            raw = int(value)
+        except Exception:
+            return ""
+        if raw > 0:
+            return 1
+        if raw < 0:
+            return -1
+        return 0
 
     def _start_joint_debug_packet_log(self, csv_path: str) -> None:
         comm = getattr(self.controller, "comm", None)
@@ -608,6 +744,26 @@ class HandGUI(QtWidgets.QMainWindow):
         self.start_indicator.setStyleSheet(
             "background:#1e8e3e;color:white;padding:4px;" if started else "background:#c62828;color:white;padding:4px;"
         )
+        self._refresh_toolbar_connection_lights()
+
+    def _make_toolbar_connection_light(self) -> QtWidgets.QLabel:
+        light = QtWidgets.QLabel()
+        light.setFixedSize(14, 14)
+        light.setToolTip("Lower serial disconnected")
+        return light
+
+    def _refresh_toolbar_connection_lights(self) -> None:
+        connected = self.is_comm_connected()
+        color = "#2e7d32" if connected else "#c62828"
+        border = "#1b5e20" if connected else "#8e0000"
+        tip = "Lower serial connected" if connected else "Lower serial disconnected"
+        light = getattr(self, "comm_conn_light", None)
+        if light is None:
+            return
+        light.setToolTip(tip)
+        light.setStyleSheet(
+            f"background:{color}; border:1px solid {border}; border-radius:7px;"
+        )
 
     @staticmethod
     def _normalize_mode(mode_name: str) -> str:
@@ -636,7 +792,11 @@ class HandGUI(QtWidgets.QMainWindow):
             self._display_windows.close_all()
             self.joint_plot.close()
             self._stop_data_recording("closed")
-            self.controller.shutdown()
+            try:
+                self.controller.hold_current_motor_positions(delay_s=0.15)
+            except Exception:
+                pass
+            self.controller.shutdown(stop_lower=True)
             if self._on_close_extra:
                 self._on_close_extra()
         finally:

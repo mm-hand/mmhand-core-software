@@ -13,14 +13,17 @@
 
 // 关节/磁编码器通道数。
 #define ENCODER_TOTAL_NUM 21
-// 舵机通道数（joint16 使用双舵机）。
-#define SERVO_TOTAL_NUM 22
+// 固件预留 27 路电机槽位，让灵巧手 1.0 和 2.0 共用同一套协议。
+// 1.0 中 M22-M26 在 HardwareMap.cpp 中标记为 invalid，不读、不控、不参与故障。
+#define SERVO_TOTAL_NUM 27
 #define JOINT_COUNT ENCODER_TOTAL_NUM
+#define MAX_JOINT_ACTUATORS 2
+#define MOTOR_MAP_INVALID_BUS 0xFF
 #define NUM_BUSES 4
 #define MAX_SERVOS_PER_BUS 8
 #define MAX_SERVO_ID 32
 #define SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT 3
-#define SERVO_TARGET_SPEED_DEFAULT 3000
+#define SERVO_TARGET_SPEED_DEFAULT 400
 #define SERVO_TARGET_ACC_DEFAULT 200
 #define TACTILE_GROUP_NUM 5
 #define TACTILE_SENSOR_PER_GROUP 3
@@ -39,29 +42,33 @@
 // 上位机下发的多圈绝对位置（与 clampServoPos 一致），由 CMD_MOTOR_POS_ABS 写入 motorTargetRaw。
 #define MOTOR_DIRECT_SOURCE_ABSOLUTE 3
 
-#define SYSTEM_EVENT_NONE 0
 #define SYSTEM_EVENT_START 1
 #define SYSTEM_EVENT_STOP 2
 #define SYSTEM_EVENT_RESET 3
 #define SYSTEM_EVENT_CALIBRATE 4
 #define SYSTEM_EVENT_CALIBRATION_DONE 5
 #define SYSTEM_EVENT_CALIBRATION_FAILED 6
+#define SYSTEM_EVENT_RUN_DIRECT 7
+#define SYSTEM_EVENT_RUN_DIRECT_DONE 8
+#define SYSTEM_EVENT_RUN_FEEDBACK 9
+#define SYSTEM_EVENT_RUN_FEEDBACK_DONE 10
+#define SYSTEM_EVENT_PAUSE 11
 
-#define SYSTEM_STATE_BOOTING 0
+#define SYSTEM_STATE_UNCONTROLLABLE 0
 #define SYSTEM_STATE_IDLE 1
-#define SYSTEM_STATE_RUNNING 2
+#define SYSTEM_STATE_RUN_FEEDBACK 2
 #define SYSTEM_STATE_STOPPED 3
-#define SYSTEM_STATE_FAULT_HOLD 4
-#define SYSTEM_STATE_CALIBRATION_IDLE 5
-#define SYSTEM_STATE_CALIBRATION_RUNNING 6
-#define SYSTEM_STATE_CALIBRATION_SUCCESS 7
-#define SYSTEM_STATE_CALIBRATION_FAILED 8
+#define SYSTEM_STATE_CALIBRATION_RUNNING 4
+#define SYSTEM_STATE_READY 5
+#define SYSTEM_STATE_RUN_DIRECT 6
+#define SYSTEM_STATE_PAUSED 7
 
 #define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
 #define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
 #define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
 #define SYSTEM_FAULT_RELEASE_GUARD    (1UL << 3)
 #define SYSTEM_FAULT_SERVO_OFFLINE    (1UL << 4)
+#define SYSTEM_FAULT_CALIBRATION      (1UL << 5)
 
 #define SERVO_TARGET_OWNER_NONE 0
 #define SERVO_TARGET_OWNER_CONTROL 1
@@ -103,9 +110,26 @@ struct MotorMapItem {
     uint8_t servoID;
 };
 
+struct JointActuatorItem {
+    // Logical motor channel in motorMap[].
+    uint8_t motorChannel;
+    // +1: actuator pulls in the same direction as the primary actuator.
+    // -1: antagonistic actuator; its target is mirrored around offset/bias.
+    int8_t sign;
+    // Static calibration offset applied after sign mapping.
+    int32_t offset;
+    // Optional bias used to keep antagonist rope preload/tension.
+    int32_t tensionBias;
+};
+
+struct JointActuatorGroup {
+    uint8_t count;
+    JointActuatorItem actuators[MAX_JOINT_ACTUATORS];
+};
+
 extern JointMapItem jointMap[ENCODER_TOTAL_NUM];
-extern MotorMapItem joint16SecondaryMotor;
 extern MotorMapItem motorMap[SERVO_TOTAL_NUM];
+extern JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM];
 
 typedef struct {
     // 预留 CAN 下发命令格式，当前主要为后续扩展保留。
@@ -278,11 +302,34 @@ typedef struct {
     // control_enabled 只由状态机维护，控制任务只读取。
     volatile uint8_t control_mode; // CONTROL_MODE_*
     volatile uint8_t system_state; // SYSTEM_STATE_*
+    volatile uint8_t paused_resume_state; // RUN_DIRECT or RUN_FEEDBACK before PAUSED.
     // servo_target_owner 决定舵机通信层执行 CONTROL 还是 CALIBRATION batch。
     volatile uint8_t servo_target_owner; // SERVO_TARGET_OWNER_*
     volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;
+    volatile uint32_t system_fault_latched_bitmap;
     volatile uint32_t state_transition_count;
+    volatile uint32_t active_motor_mask;
+    volatile uint32_t active_joint_mask;
+    // bit i = 1 means motor channel i has lost its trusted multi-turn origin
+    // after MCU boot/reset. Normal RUN_DIRECT/RUN_FEEDBACK must reject it until
+    // firmware calibration or host-assisted restore confirms the absolute turn.
+    volatile uint32_t multi_turn_unknown_bitmap;
+    int32_t restore_multi_turn_abs[SERVO_TOTAL_NUM];
+    volatile uint32_t restore_multi_turn_mask;
+    volatile uint32_t restore_multi_turn_request_token;
+    volatile uint32_t restore_multi_turn_result_token;
+    volatile uint32_t restore_multi_turn_restored_mask;
+    volatile uint32_t restore_multi_turn_rejected_mask;
+    // Calibration-derived absolute servo travel limits. bit i in valid_bitmap
+    // means motor_abs_limit_min/max[i] is valid; bit i in locked_bitmap means
+    // normal control output is currently constrained to that window.
+    volatile uint32_t motor_abs_limit_valid_bitmap;
+    volatile uint32_t motor_abs_limit_locked_bitmap;
+    int32_t motor_abs_limit_min[SERVO_TOTAL_NUM];
+    int32_t motor_abs_limit_max[SERVO_TOTAL_NUM];
+    volatile uint8_t require_can_feedback;
+    volatile uint8_t calibration_fault_latched;
     volatile uint8_t joint16_dual_feedback_fault;
     // 过载锁存故障位图：bit i 对应电机通道 i。
     volatile uint32_t overload_fault_bitmap;

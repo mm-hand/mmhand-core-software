@@ -1,32 +1,67 @@
 # core_logic.py - 灵巧手控制器核心逻辑（关节角路数与协议 ENCODER_COUNT 一致，电机路数与 MOTOR_COUNT 一致）
 
+import json
 import math
 import queue
 import threading
+import time
+from pathlib import Path
 from typing import List, Optional
 
 from calibration import run_calibration
 from comm_layer import LowerComputerComm, list_ports
 from data_models import HandModel
-from hand_geometry import has_calib_file, load_calib_zero_raw
+from hand_geometry import load_calib_zero_raw
 from protocol import (
+    CMD_ACTIVE_SCOPE,
+    CMD_CALIB_DATA,
+    CMD_MOTOR_ABS_LIMIT_LOCK,
+    CMD_PAUSE,
+    CMD_RESTORE_MULTITURN,
     ENCODER_COUNT,
     MOTOR_COUNT,
     ControlMode,
     MOTOR_ABS_CMD_MAX,
     MOTOR_ABS_CMD_MIN,
+    SYSTEM_STATE_IDLE,
+    SYSTEM_STATE_RUN_FEEDBACK,
+    SYSTEM_STATE_READY,
+    SYSTEM_STATE_RUN_DIRECT,
+    SYSTEM_STATE_PAUSED,
 )
+
+LEGACY_CALIB_DATA_SYNC_ENABLE = False
+LOWER_SYNC_TIMEOUT_S = 2.5
+LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
+ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
+MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
+MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
+MULTITURN_RESTORE_RETRY_S = 0.75
+MULTITURN_CACHE_PATH = Path(__file__).resolve().parent / "multiturn_cache.json"
+MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 
 
 class HandController:
-    """灵巧手控制器：ENCODER_COUNT 路关节目标角，MOTOR_COUNT 路直驱电机原始值。"""
+    """
+    ===========================================================================
+    HandController - 灵巧手控制器的核心业务逻辑层 (大脑)
+    ===========================================================================
+    定位：
+    承上启下，向上对 UI 暴露控制接口（如设置目标角度、多圈直控绝对位置等），
+    向下管理底层的物理通信 (`LowerComputerComm`)，并维护着最新的机器手系统状态 (`HandModel`)。
+
+    主要职责：
+    1. 生命周期管理：建立与断开串口通信，启动后台更新线程 `_update_loop`。
+    2. 数据同步：通过回调函数 (`update_callbacks`) 将底层传来的状态实时推送给 UI 刷新。
+    3. 命令打包过滤：负责对下发的关节目标 (joint angle) 或是电机目标 (motor absolute) 进行范围校验（clamp），
+       并将其打包成安全的命令元组压入通信层的发送队列。
+    ===========================================================================
+    包含：ENCODER_COUNT 路关节目标角，MOTOR_COUNT 路直驱电机原始值。
+    """
 
     def __init__(self):
         self.comm: Optional[LowerComputerComm] = None
         self.current_state = HandModel()
-        if not has_calib_file():
-            self.current_state.calib_status = "NO_CALIB"
-
         self.state_lock = threading.Lock()
         self.running = False
         self.update_callbacks: List[callable] = []
@@ -35,6 +70,188 @@ class HandController:
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
+        self.last_sync_status = "Not connected"
+        self._trusted_servo_abs: List[Optional[int]] = [None] * MOTOR_COUNT
+        self._trusted_servo_raw: List[Optional[int]] = [None] * MOTOR_COUNT
+        self._trusted_servo_online: List[bool] = [False] * MOTOR_COUNT
+        self._last_multiturn_restore_attempt_s = 0.0
+        self._last_multiturn_cache_save_s = 0.0
+        self._load_trusted_multiturn_cache()
+
+    @staticmethod
+    def _clamp_motor_abs(value: int) -> int:
+        return max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(value)))
+
+    @staticmethod
+    def _is_motor_abs_at_limit(value: int) -> bool:
+        margin = 16
+        value = int(value)
+        return value >= (MOTOR_ABS_CMD_MAX - margin) or value <= (MOTOR_ABS_CMD_MIN + margin)
+
+    @staticmethod
+    def _raw_single_turn(value: int) -> int:
+        return max(0, min(4095, int(value) % 4096))
+
+    @staticmethod
+    def _single_turn_diff_counts(a: int, b: int) -> int:
+        diff = abs(int(a) % 4096 - int(b) % 4096) % 4096
+        return min(diff, 4096 - diff)
+
+    def _load_trusted_multiturn_cache(self) -> None:
+        try:
+            with MULTITURN_CACHE_PATH.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            abs_values = data.get("abs", [])
+            raw_values = data.get("raw", [])
+            online_values = data.get("online", [])
+            for i in range(MOTOR_COUNT):
+                if i >= len(abs_values) or i >= len(raw_values) or i >= len(online_values):
+                    continue
+                if not bool(online_values[i]):
+                    continue
+                self._trusted_servo_abs[i] = self._clamp_motor_abs(int(abs_values[i]))
+                self._trusted_servo_raw[i] = self._raw_single_turn(int(raw_values[i]))
+                self._trusted_servo_online[i] = True
+            print(f"[MULTITURN CACHE] loaded {MULTITURN_CACHE_PATH}")
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            print(f"[MULTITURN CACHE] load failed: {exc}")
+
+    def _save_trusted_multiturn_cache(self, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - self._last_multiturn_cache_save_s < MULTITURN_CACHE_SAVE_INTERVAL_S:
+            return
+        try:
+            data = {
+                "timestamp": now,
+                "abs": [0 if v is None else int(v) for v in self._trusted_servo_abs],
+                "raw": [0 if v is None else int(v) for v in self._trusted_servo_raw],
+                "online": [bool(v) for v in self._trusted_servo_online],
+            }
+            tmp_path = MULTITURN_CACHE_PATH.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            tmp_path.replace(MULTITURN_CACHE_PATH)
+            self._last_multiturn_cache_save_s = now
+        except Exception as exc:
+            print(f"[MULTITURN CACHE] save failed: {exc}")
+
+    def _update_trusted_multiturn_cache(self, state: HandModel) -> None:
+        unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
+        if not (getattr(state, "has_servo_angle_data", False) and getattr(state, "has_servo_raw_data", False)):
+            return
+        updated = False
+        for i in range(MOTOR_COUNT):
+            bit = 1 << i
+            if (unknown & bit) != 0:
+                continue
+            if i >= len(state.servo_online) or i >= len(state.servo_raw_online):
+                continue
+            if not (state.servo_online[i] and state.servo_raw_online[i]):
+                continue
+            abs_value = self._clamp_motor_abs(state.servo_angles[i])
+            raw_value = self._raw_single_turn(state.servo_raw_positions[i])
+            if self._trusted_servo_abs[i] != abs_value or self._trusted_servo_raw[i] != raw_value:
+                updated = True
+            self._trusted_servo_abs[i] = abs_value
+            self._trusted_servo_raw[i] = raw_value
+            self._trusted_servo_online[i] = True
+        if updated:
+            self._save_trusted_multiturn_cache()
+
+    def _maybe_restore_multiturn_from_cache(self, state: HandModel) -> None:
+        if not self.comm:
+            return
+        unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
+        if unknown == 0 or not getattr(state, "has_servo_raw_data", False):
+            return
+        now = time.time()
+        if now - self._last_multiturn_restore_attempt_s < MULTITURN_RESTORE_RETRY_S:
+            return
+
+        restore_abs = [0] * MOTOR_COUNT
+        restore_mask = 0
+        for i in range(MOTOR_COUNT):
+            bit = 1 << i
+            if (unknown & bit) == 0:
+                continue
+            if i >= len(state.servo_raw_online) or not state.servo_raw_online[i]:
+                continue
+            if not self._trusted_servo_online[i]:
+                continue
+            last_abs = self._trusted_servo_abs[i]
+            last_raw = self._trusted_servo_raw[i]
+            if last_abs is None or last_raw is None:
+                continue
+            current_raw = self._raw_single_turn(state.servo_raw_positions[i])
+            if self._single_turn_diff_counts(current_raw, last_raw) > MULTITURN_RESTORE_RAW_TOL_COUNTS:
+                continue
+            turn = int(round((int(last_abs) - int(last_raw)) / 4096.0))
+            restore_abs[i] = self._clamp_motor_abs(turn * 4096 + current_raw)
+            restore_mask |= bit
+
+        if restore_mask == 0:
+            return
+        self._last_multiturn_restore_attempt_s = now
+        self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
+        print(f"[MULTITURN RESTORE] request mask=0x{restore_mask:08X}")
+
+    def _safe_motor_hold_targets_from_state(self) -> Optional[List[int]]:
+        with self.state_lock:
+            state = self.current_state
+            has_abs = bool(getattr(state, "has_servo_angle_data", False))
+            has_raw = bool(getattr(state, "has_servo_raw_data", False))
+            unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
+            servo_abs = list(getattr(state, "servo_angles", []) or [])
+            servo_online = list(getattr(state, "servo_online", []) or [])
+            servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
+            servo_raw_online = list(getattr(state, "servo_raw_online", []) or [])
+
+        if unknown != 0:
+            print(f"[MULTITURN HOLD] skipped: unknown=0x{unknown:08X}")
+            return None
+
+        if not has_abs and not has_raw:
+            return None
+
+        targets: List[int] = []
+        any_feedback = False
+        for i in range(MOTOR_COUNT):
+            target: Optional[int] = None
+            raw_single: Optional[int] = None
+            if has_raw and i < len(servo_raw) and i < len(servo_raw_online) and servo_raw_online[i]:
+                raw_single = self._raw_single_turn(servo_raw[i])
+            if has_abs and i < len(servo_abs) and i < len(servo_online) and servo_online[i]:
+                abs_value = self._clamp_motor_abs(servo_abs[i])
+                target = raw_single if raw_single is not None and self._is_motor_abs_at_limit(abs_value) else abs_value
+            elif raw_single is not None:
+                target = raw_single
+
+            if target is None:
+                targets.append(0)
+            else:
+                targets.append(self._clamp_motor_abs(target))
+                any_feedback = True
+        return targets if any_feedback else None
+
+    def hold_current_motor_positions(self, delay_s: float = 0.15) -> bool:
+        if not self.comm:
+            return False
+        targets = self._safe_motor_hold_targets_from_state()
+        if not targets:
+            return False
+        try:
+            self.comm.send_command(("motor_pos_abs", targets))
+            if self._started:
+                self.comm.send_command("start")
+            if delay_s > 0:
+                import time
+                time.sleep(float(delay_s))
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to hold current motor positions: {e}")
+            return False
 
     def set_control_mode(self, mode: ControlMode):
         """设置电机控制模式：JOINT_ANGLE 或 DIRECT_MOTOR"""
@@ -56,11 +273,16 @@ class HandController:
             return 0
 
     def pause(self):
-        """暂停：停止向下位机发送控制指令（数据接收照常）"""
+        """Pause firmware output without clearing the cached target."""
+        if self.comm:
+            self.comm.send_command("pause")
         self._paused = True
+        self._started = False
 
     def resume(self):
-        """恢复：重新允许发送控制指令"""
+        """Resume a firmware PAUSED state with the regular START command."""
+        if self.comm:
+            self.comm.send_command("start")
         self._paused = False
 
     def is_paused(self) -> bool:
@@ -72,13 +294,16 @@ class HandController:
         return self._paused
 
     def initialize(self, comm_port: str) -> bool:
+        self._reset_local_runtime_state("SYNCING")
         try:
             self.comm = LowerComputerComm(comm_port)
         except (ValueError, RuntimeError) as exc:
             print(f"连接失败: {exc}")
+            self.last_sync_status = str(exc)
             return False
 
         if not self.comm.connect():
+            self.last_sync_status = "Serial open failed"
             return False
 
         self.running = True
@@ -86,30 +311,78 @@ class HandController:
         self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self._update_thread.start()
 
-        # 连接成功后下发 calib_deg.json 中的编码器零点
-        zero_raw = load_calib_zero_raw()
-        if zero_raw:
-            self.comm.send_command(("calib_data", zero_raw))
-            with self.state_lock:
-                self.current_state.set_encoder_zeros(zero_raw)
+        sync_ok = self._wait_for_lower_sync(LOWER_SYNC_TIMEOUT_S)
+        legacy_ok = self._sync_legacy_calib_data_if_enabled() if sync_ok else None
+        with self.state_lock:
+            if self.current_state.calib_status == "SYNCING":
+                self.current_state.calib_status = "IDLE"
+        if sync_ok:
+            if legacy_ok is True:
+                self.last_sync_status = "Synced lower status/servo feedback; legacy calib_data ACK OK"
+            elif legacy_ok is False:
+                self.last_sync_status = "Synced lower status/servo feedback; legacy calib_data ACK timeout"
+            else:
+                self.last_sync_status = "Synced lower status/servo feedback"
         else:
-            with self.state_lock:
-                self.current_state.calib_status = "NO_CALIB"
+            self.last_sync_status = "Connected, but lower status/servo feedback sync timed out"
         return True
 
-    def shutdown(self):
+    def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
+        with self.state_lock:
+            self.current_state = HandModel()
+            self.current_state.calib_status = str(calib_status)
+        self._started = False
+        self._pid_enabled = False
+        self._paused = False
+        self._control_mode = ControlMode.JOINT_ANGLE
+
+    def _wait_for_lower_sync(self, timeout_s: float) -> bool:
+        deadline = time.time() + max(0.0, float(timeout_s))
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                has_status = bool(getattr(state, "has_system_status_data", False))
+                has_servo = bool(getattr(state, "has_servo_angle_data", False)) or bool(
+                    getattr(state, "has_servo_raw_data", False)
+                )
+            if has_status and has_servo:
+                return True
+            time.sleep(0.02)
+        return False
+
+    def _sync_legacy_calib_data_if_enabled(self) -> Optional[bool]:
+        if not LEGACY_CALIB_DATA_SYNC_ENABLE or not self.comm:
+            return None
+        zero_raw = load_calib_zero_raw()
+        if not zero_raw:
+            return None
+        try:
+            self.comm.send_command(("calib_data", zero_raw))
+            ack = self.comm.wait_for_ack(CMD_CALIB_DATA, LEGACY_CALIB_DATA_ACK_TIMEOUT_S)
+            if ack is None:
+                return False
+            with self.state_lock:
+                self.current_state.set_encoder_zeros(zero_raw)
+            return True
+        except Exception as exc:
+            print(f"Warning: legacy calib_data sync failed: {exc}")
+            return False
+
+    def shutdown(self, stop_lower: bool = True):
         """
         安全关闭控制器：停止下位机、等待线程、清理资源。
         """
         import time
-        
+        self._save_trusted_multiturn_cache(force=True)
+
         # Step 1: 停止下位机上的运动（即使暂停也要发送 STOP）
         if self.comm:
             try:
-                self.comm.send_command("stop")
-                time.sleep(0.15)  # 等待硬件响应
+                if stop_lower:
+                    self.comm.send_command("stop")
+                    time.sleep(0.15)  # 等待硬件响应
             except Exception as e:
-                print(f"Warning: Failed to send stop command to lower computer: {e}")
+                print(f"Warning: Failed to prepare lower computer for shutdown: {e}")
         
         # Step 2: 标记停止运行
         self.running = False
@@ -146,10 +419,20 @@ class HandController:
                     break
                 new_model = self.comm.rx_queue.get(timeout=0.1)
                 with self.state_lock:
+                    self._maybe_restore_multiturn_from_cache(new_model)
                     self.current_state.copy_state_from(new_model)
                     self.current_state.calib_status = new_model.calib_status
                     self.current_state.tactile_data = new_model.tactile_data
                     self.current_state.timestamp = new_model.timestamp
+                    self._update_trusted_multiturn_cache(new_model)
+                    if getattr(new_model, "has_system_status_data", False):
+                        self._started = int(new_model.system_state) in (
+                            SYSTEM_STATE_IDLE,
+                            SYSTEM_STATE_RUN_FEEDBACK,
+                            SYSTEM_STATE_READY,
+                            SYSTEM_STATE_RUN_DIRECT,
+                        )
+                        self._paused = int(new_model.system_state) == SYSTEM_STATE_PAUSED
                 for cb in self.update_callbacks:
                     try:
                         cb(self.current_state)
@@ -267,26 +550,69 @@ class HandController:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def request_firmware_calibration(self) -> bool:
+        if not self.comm:
+            return False
+        self.comm.send_command("calibrate")
+        self._started = False
+        return True
+
+    def request_run_feedback(self) -> bool:
+        if self._paused or not self.comm:
+            return False
+        with self.state_lock:
+            state = int(getattr(self.current_state, "system_state", -1))
+        if state == SYSTEM_STATE_RUN_FEEDBACK:
+            return True
+        if state != SYSTEM_STATE_READY:
+            return False
+        self.comm.send_command("run_feedback")
+        return True
+
+    def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
+        if not self.comm:
+            return False
+        self.comm.send_command((
+            "active_scope",
+            int(active_motor_mask) & 0xFFFFFFFF,
+            int(active_joint_mask) & 0xFFFFFFFF,
+            bool(require_can_feedback),
+        ))
+        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S)
+        return bool(ack is not None and int(ack[2]) == 0)
+
+    def set_motor_abs_limit_lock(self, active_motor_mask: int, locked: bool) -> bool:
+        if not self.comm:
+            return False
+        self.comm.send_command((
+            "motor_abs_limit_lock",
+            int(active_motor_mask) & 0xFFFFFFFF,
+            bool(locked),
+        ))
+        ack = self.comm.wait_for_ack(CMD_MOTOR_ABS_LIMIT_LOCK, MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S)
+        return bool(ack is not None and int(ack[2]) == 0)
+
     def start(self):
-        if self._paused:
-            return
         if self.comm:
             self.comm.send_command("start")
-            self._started = True
+            # Firmware SYSTEM_STATUS is the source of truth. It will set
+            # _started after the state machine reaches a controllable state.
+            self._started = False
+            self._paused = False
 
     def stop(self):
         """停止：暂停时也可发送，便于紧急停"""
         if self.comm:
             self.comm.send_command("stop")
         self._started = False
+        self._paused = False
 
     def reset(self):
         """发送重置指令；暂停时不发送"""
-        if self._paused:
-            return
         if self.comm:
             self.comm.send_command("reset")
         self._started = False
+        self._paused = False
 
     def is_started(self) -> bool:
         return self._started

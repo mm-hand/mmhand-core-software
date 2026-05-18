@@ -375,6 +375,7 @@ class JointEncoder:
     包含：原始读数、校准零点、当前角度、目标角度及故障标志。
     """
     encoder_id: int = 0
+    raw_sensor: int = 0       # magnetic encoder original raw for UI Raw column
     raw: int = 0              # 原始数据（14 位，0~16383）
     zero_raw: int = 0         # 矫正的零点值（来自 calib_deg.json / 下位机）
     target_angle_deg: float = 0.0   # 目标角度（度）
@@ -422,6 +423,18 @@ class HandModel:
     has_sensor_data: bool = False
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
+    has_system_status_data: bool = False
+    system_state: int = 0
+    control_enabled: bool = False
+    servo_target_owner: int = 0
+    control_mode: int = 0
+    system_fault_bitmap: int = 0
+    state_transition_count: int = 0
+    multi_turn_unknown_bitmap: int = 0
+    motor_abs_limit_valid_bitmap: int = 0
+    motor_abs_limit_locked_bitmap: int = 0
+    motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -484,6 +497,7 @@ class HandModel:
         for i, e in enumerate(self.encoders):
             if i < len(other.encoders):
                 e.raw = other.encoders[i].raw
+                e.raw_sensor = getattr(other.encoders[i], "raw_sensor", other.encoders[i].raw)
                 e.error = other.encoders[i].error
         for i, m in enumerate(self.motors):
             if i < len(other.motors):
@@ -515,3 +529,15 @@ class HandModel:
         self.has_sensor_data = bool(other.has_sensor_data)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
+        self.has_system_status_data = bool(other.has_system_status_data)
+        self.system_state = int(other.system_state)
+        self.control_enabled = bool(other.control_enabled)
+        self.servo_target_owner = int(other.servo_target_owner)
+        self.control_mode = int(other.control_mode)
+        self.system_fault_bitmap = int(other.system_fault_bitmap)
+        self.state_transition_count = int(other.state_transition_count)
+        self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
+        self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
+        self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
+        self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
+        self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))

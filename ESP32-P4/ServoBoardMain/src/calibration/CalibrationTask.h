@@ -13,7 +13,7 @@
 
 // Per-joint calibration config:
 // - angleScope/bottomReserved/topReserved/angleReserved are all degrees.
-// - Manual minraw/maxraw overwrites angleScope with a measured mechanical range.
+// - Manual RANGE100 start/tight points overwrite the usable control range.
 // - Load and motion parameters are used by the optional single-joint search.
 struct JointCalibrationConfig {
     float angleScope;
@@ -39,14 +39,33 @@ struct JointCalibrationResult {
     int32_t encoderMax;
     int32_t offset;
     float angleMax;
+
+    // RANGE100 manual/boot calibration fields:
+    // startEncoder maps to startDeg, tightEncoder maps to tightDeg, and
+    // zeroEncoder is the 0 deg point between them.
+    int32_t startEncoder;
+    int32_t tightEncoder;
+    int32_t zeroEncoder;
+    int32_t encoderSpan;
+    int32_t startServoAbs;
+    int32_t tightServoAbs;
+    int32_t zeroServoAbs;
+    float startDeg;
+    float tightDeg;
+    float totalDeg;
+    bool scaled;
 };
 
 extern JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 
-// Encoder direction table and fallback offset table.
+// Default encoder direction table, runtime encoder direction table, and
+// fallback offset table. Automatic calibration may update the runtime table.
+extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM];
 extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
 extern int32_t g_encoderOffsetManual[ENCODER_TOTAL_NUM];
+void resetEncoderDirectionsToDefault(void);
+bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction);
 
 // Dual-servo constraint used by calibration helpers.
 struct JointDualServoConstraint {
@@ -73,5 +92,10 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                const JointCalibrationConfig& cfg,
                                JointCalibrationResult* out);
+
+bool queueJointCalibrationTarget(TaskSharedData_t* sharedData,
+                                 uint8_t jointIndex,
+                                 int16_t primaryTarget,
+                                 const JointCalibrationConfig& cfg);
 
 #endif // CALIBRATION_TASK_H

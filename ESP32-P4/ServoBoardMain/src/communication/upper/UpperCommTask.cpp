@@ -2,6 +2,7 @@
 #include "../can/CanCommTask.h"
 #include "../../shared/TaskSharedData.h"
 #include "../../calibration/CalibrationTask.h"
+#include "../../hardware/HardwareMap.h"
 #include "../../system/StateMachineTask.h"
 #include "UpperCommCommandRouter.h"
 #include "UpperCommProtocol.h"
@@ -60,6 +61,44 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
     Serial.write(buffer, idx);
 }
 
+// Send the current state-machine status.
+static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    uint8_t buffer[24];
+    size_t idx = 0;
+    const uint32_t faultBitmap = sharedData->system_fault_bitmap;
+    const uint32_t transitionCount = sharedData->state_transition_count;
+
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_SYSTEM_STATUS;
+    buffer[idx++] = sharedData->system_state;
+    buffer[idx++] = sharedData->control_enabled;
+    buffer[idx++] = sharedData->servo_target_owner;
+    buffer[idx++] = sharedData->control_mode;
+    buffer[idx++] = g_calibrationUIStatus;
+    buffer[idx++] = (uint8_t)((faultBitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((faultBitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((faultBitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(faultBitmap & 0xFF);
+    buffer[idx++] = (uint8_t)((transitionCount >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((transitionCount >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((transitionCount >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(transitionCount & 0xFF);
+    const uint32_t unknownBitmap = sharedData->multi_turn_unknown_bitmap;
+    buffer[idx++] = (uint8_t)((unknownBitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((unknownBitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((unknownBitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
 // Send the servo overload fault bitmap.
 static void sendFaultStatusPacket(uint32_t overloadFaultBitmap)
 {
@@ -96,9 +135,68 @@ static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
     Serial.write(buffer, idx);
 }
 
+static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    uint8_t buffer[128];
+    size_t idx = 0;
+    const uint32_t validBitmap = sharedData->motor_abs_limit_valid_bitmap;
+    const uint32_t lockedBitmap = sharedData->motor_abs_limit_locked_bitmap;
+
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_MOTOR_ABS_LIMIT;
+    buffer[idx++] = (uint8_t)((validBitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((validBitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((validBitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(validBitmap & 0xFF);
+    buffer[idx++] = (uint8_t)((lockedBitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((lockedBitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((lockedBitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(lockedBitmap & 0xFF);
+    for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
+        const int16_t minAbs = (int16_t)sharedData->motor_abs_limit_min[i];
+        const int16_t maxAbs = (int16_t)sharedData->motor_abs_limit_max[i];
+        buffer[idx++] = (uint8_t)(((uint16_t)minAbs >> 8) & 0xFF);
+        buffer[idx++] = (uint8_t)((uint16_t)minAbs & 0xFF);
+        buffer[idx++] = (uint8_t)(((uint16_t)maxAbs >> 8) & 0xFF);
+        buffer[idx++] = (uint8_t)((uint16_t)maxAbs & 0xFF);
+    }
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
+static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
+{
+    uint8_t buffer[64];
+    size_t idx = 0;
+
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_ENCODER_RAW;
+    for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
+    {
+        const bool channelValid =
+            sensorRaw.isValid &&
+            (sensorRaw.errorFlags[i] == 0) &&
+            (sensorRaw.encoderValues[i] != kEncoderDisconnectRaw);
+        const uint16_t val = encodeRawEncoderForWire(sensorRaw.encoderValues[i], channelValid);
+        buffer[idx++] = (uint8_t)((val >> 8) & 0xFF);
+        buffer[idx++] = (uint8_t)(val & 0xFF);
+    }
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
 // Serialize one upstream data packet.
 static void sendDataPacket(ServoStatus_t* pServo,
                            RemoteSensorData_t* pSensorRaw,
+                           MappedAngleData_t* pMappedAngle,
                            ServoAngleData_t* pServoAngle,
                            ServoAngleData_t* pServoRaw,
                            ServoTelemetryData_t* pTelemetry,
@@ -129,6 +227,19 @@ static void sendDataPacket(ServoStatus_t* pServo,
             const uint16_t val = encodeRawEncoderForWire(pSensorRaw->encoderValues[i], channelValid);
             buffer[idx++] = (uint8_t)((val >> 8) & 0xFF);
             buffer[idx++] = (uint8_t)(val & 0xFF);
+        }
+    }
+    else if (pMappedAngle)
+    {
+        buffer[idx++] = PACKET_TYPE_SENSOR;
+        for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
+        {
+            const int16_t val = (pMappedAngle->isValid && pMappedAngle->validFlags[i])
+                ? pMappedAngle->angleValues[i]
+                : (int16_t)PROTOCOL_DISCONNECT_SENTINEL;
+            const uint16_t raw = (uint16_t)val;
+            buffer[idx++] = (uint8_t)((raw >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)(raw & 0xFF);
         }
     }
     else if (pServoAngle)
@@ -286,6 +397,14 @@ static bool parseTendonGuardPayload(const uint8_t* payload,
     return true;
 }
 
+static uint32_t readU32BigEndian(const uint8_t* p)
+{
+    return ((uint32_t)p[0] << 24) |
+           ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) |
+           (uint32_t)p[3];
+}
+
 // Return command payload length, excluding the command byte.
 static size_t getCommandPayloadLength(uint8_t cmd)
 {
@@ -295,6 +414,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_START:
         case CMD_STOP:
         case CMD_RESET:
+        case CMD_RUN_FEEDBACK:
+        case CMD_PAUSE:
             return 0;
         case CMD_ANGLE_CTRL:
             return kFloatPayloadBytes;
@@ -308,6 +429,12 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kMotorPosPayloadBytes;
         case CMD_TENDON_GUARD:
             return kTendonGuardPayloadBytes;
+        case CMD_ACTIVE_SCOPE:
+            return kActiveScopePayloadBytes;
+        case CMD_RESTORE_MULTITURN:
+            return kRestoreMultiTurnPayloadBytes;
+        case CMD_MOTOR_ABS_LIMIT_LOCK:
+            return kMotorAbsLimitLockPayloadBytes;
         case CMD_SENSOR_STREAM_MODE:
             return 1;
         default:
@@ -339,24 +466,42 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIBRATE)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
+        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_OK);
         return;
     }
 
     if (cmd == CMD_START)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_START);
+        sendProtoAckPacket(CMD_START, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        return;
+    }
+
+    if (cmd == CMD_RUN_FEEDBACK)
+    {
+        postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
+        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        return;
+    }
+
+    if (cmd == CMD_PAUSE)
+    {
+        postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE);
+        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_OK);
         return;
     }
 
     if (cmd == CMD_STOP)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
+        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_OK);
         return;
     }
 
     if (cmd == CMD_RESET)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
+        sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_OK);
         return;
     }
 
@@ -372,9 +517,14 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIB_DATA)
     {
         float zeroRaw[ENCODER_TOTAL_NUM] = {0.0f};
+        bool ok = false;
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, zeroRaw, ENCODER_TOTAL_NUM)) {
             upperCacheCalibZeroRaw(sharedData, zeroRaw, ENCODER_TOTAL_NUM);
+            ok = true;
         }
+        sendProtoAckPacket(CMD_CALIB_DATA,
+                           sharedData->system_state,
+                           ok ? PROTO_ACK_STATUS_OK : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
 
@@ -416,6 +566,90 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
+    if (cmd == CMD_ACTIVE_SCOPE)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kActiveScopePayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint32_t activeMotorMask = readU32BigEndian(frame + 1);
+            const uint32_t activeJointMask = readU32BigEndian(frame + 5);
+            const uint8_t requireCanFeedback = frame[9] ? 1 : 0;
+            if (activeMotorMask == 0) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            } else {
+                upperApplyActiveScope(sharedData,
+                                      activeMotorMask,
+                                      activeJointMask,
+                                      requireCanFeedback);
+            }
+        }
+        sendProtoAckPacket(CMD_ACTIVE_SCOPE, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_RESTORE_MULTITURN)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kRestoreMultiTurnPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint32_t motorMask = readU32BigEndian(frame + 1);
+            int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
+            if (!parseInt16ArrayBigEndian(frame + 5,
+                                          frameLen - 5,
+                                          motorAbs,
+                                          SERVO_TOTAL_NUM)) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            } else {
+                SemaphoreHandle_t lock = sharedData->commandStateMutex;
+                if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                } else {
+                    memcpy(sharedData->restore_multi_turn_abs,
+                           motorAbs,
+                           sizeof(sharedData->restore_multi_turn_abs));
+                    sharedData->restore_multi_turn_mask =
+                        motorMask & validMotorChannelMask();
+                    sharedData->restore_multi_turn_request_token++;
+                    if (lock) {
+                        xSemaphoreGive(lock);
+                    }
+                }
+            }
+        }
+        Serial.printf("[UPPER] RESTORE_MULTITURN request status=%u mask=0x%08lX token=%lu\r\n",
+                      (unsigned)status,
+                      (unsigned long)sharedData->restore_multi_turn_mask,
+                      (unsigned long)sharedData->restore_multi_turn_request_token);
+        sendProtoAckPacket(CMD_RESTORE_MULTITURN, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_MOTOR_ABS_LIMIT_LOCK)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kMotorAbsLimitLockPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const bool lockEnable = frame[1] != 0;
+            const uint32_t requestedMask = readU32BigEndian(frame + 2) & validMotorChannelMask();
+            const uint32_t validMask = sharedData->motor_abs_limit_valid_bitmap;
+            if (lockEnable) {
+                sharedData->motor_abs_limit_locked_bitmap |= (requestedMask & validMask);
+            } else {
+                sharedData->motor_abs_limit_locked_bitmap &= ~requestedMask;
+            }
+            Serial.printf("[UPPER] ABS_LIMIT_%s mask=0x%08lX locked=0x%08lX valid=0x%08lX\r\n",
+                          lockEnable ? "LOCK" : "UNLOCK",
+                          (unsigned long)requestedMask,
+                          (unsigned long)sharedData->motor_abs_limit_locked_bitmap,
+                          (unsigned long)validMask);
+        }
+        sendProtoAckPacket(CMD_MOTOR_ABS_LIMIT_LOCK, sharedData->system_state, status);
+        return;
+    }
+
     if (cmd == CMD_SENSOR_STREAM_MODE)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
@@ -439,9 +673,11 @@ void upperCommunicationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     RemoteSensorData_t sensorRawData;
+    MappedAngleData_t mappedAngleData;
     uint8_t rxBuffer[kSerialRxBufferSize];
     size_t rxLen = 0;
-    uint32_t lastSensorRawTimestampSent = 0;
+    uint32_t lastSensorTimestampSent = 0;
+    uint32_t lastEncoderRawTimestampSent = 0;
 
     uint32_t lastFaultStatusSent = 0;
     uint32_t lastFaultStatusSentMs = 0;
@@ -449,6 +685,12 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastReleaseFaultSent = 0;
     uint32_t lastReleaseFaultSentMs = 0;
     bool releaseFaultSentInitialized = false;
+    uint32_t lastSystemStatusTransitionSent = 0;
+    uint32_t lastSystemStatusSentMs = 0;
+    bool systemStatusSentInitialized = false;
+    uint32_t lastMotorAbsLimitSentMs = 0;
+    uint32_t lastMotorAbsLimitValidSent = 0xFFFFFFFFUL;
+    uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
 
     Serial.println("<<<SYS_READY>>>");
 
@@ -535,41 +777,57 @@ void upperCommunicationTask(void* parameter)
         }
 
         bool sentPacket = false;
+        if (sharedData->mappedAngleQueue &&
+            xQueuePeek(sharedData->mappedAngleQueue, &mappedAngleData, 0) == pdTRUE &&
+            mappedAngleData.timestamp != lastSensorTimestampSent)
+        {
+            sendDataPacket(NULL, NULL, &mappedAngleData, NULL, NULL, NULL, NULL, NULL);
+            lastSensorTimestampSent = mappedAngleData.timestamp;
+            sentPacket = true;
+        }
+        else if (sharedData->canRxQueue &&
+            xQueuePeek(sharedData->canRxQueue, &sensorRawData, 0) == pdTRUE &&
+            sensorRawData.timestamp != lastSensorTimestampSent)
+        {
+            sendDataPacket(NULL, &sensorRawData, NULL, NULL, NULL, NULL, NULL, NULL);
+            lastSensorTimestampSent = sensorRawData.timestamp;
+            sentPacket = true;
+        }
+
         if (sharedData->canRxQueue &&
             xQueuePeek(sharedData->canRxQueue, &sensorRawData, 0) == pdTRUE &&
-            sensorRawData.timestamp != lastSensorRawTimestampSent)
+            sensorRawData.timestamp != lastEncoderRawTimestampSent)
         {
-            sendDataPacket(NULL, &sensorRawData, NULL, NULL, NULL, NULL, NULL);
-            lastSensorRawTimestampSent = sensorRawData.timestamp;
-            sentPacket = true;
+            sendEncoderRawPacket(sensorRawData);
+            lastEncoderRawTimestampSent = sensorRawData.timestamp;
         }
 
         RemoteTactileData_t tactileData;
         if (sharedData->tactileQueue &&
             xQueueReceive(sharedData->tactileQueue, &tactileData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL, &tactileData, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, &tactileData, NULL);
             sentPacket = true;
         }
 
         JointDebugData_t jointDebugData;
         while (xQueueReceive(sharedData->jointDebugQueue, &jointDebugData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, &jointDebugData);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, NULL, &jointDebugData);
             sentPacket = true;
         }
 
         ServoAngleData_t servoRawData;
         if (xQueueReceive(sharedData->servoRawQueue, &servoRawData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, &servoRawData, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, &servoRawData, NULL, NULL, NULL);
             sentPacket = true;
         }
 
         ServoTelemetryData_t telemetryData;
         if (xQueueReceive(sharedData->servoTelemetryQueue, &telemetryData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, &telemetryData, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, &telemetryData, NULL, NULL);
             sentPacket = true;
         }
 
@@ -577,14 +835,14 @@ void upperCommunicationTask(void* parameter)
         ServoAngleData_t servoAngleData;
         if (xQueueReceive(sharedData->servoAngleQueue, &servoAngleData, 0) == pdTRUE)
         {
-            sendDataPacket(NULL, NULL, &servoAngleData, NULL, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, &servoAngleData, NULL, NULL, NULL, NULL);
             sentServoAngle = true;
             sentPacket = true;
         }
 
         if (!sentPacket && !sentServoAngle && g_calibrationUIStatus != 0)
         {
-            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+            sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         }
 
         const uint32_t nowMs = millis();
@@ -610,6 +868,31 @@ void upperCommunicationTask(void* parameter)
             lastReleaseFaultSent = releaseFaultBitmap;
             lastReleaseFaultSentMs = nowMs;
             releaseFaultSentInitialized = true;
+        }
+
+        const uint32_t stateTransitionCount = sharedData->state_transition_count;
+        const bool systemStatusChanged =
+            (!systemStatusSentInitialized) ||
+            (stateTransitionCount != lastSystemStatusTransitionSent);
+        const bool systemStatusHeartbeatDue =
+            (!systemStatusSentInitialized) ||
+            ((nowMs - lastSystemStatusSentMs) >= kSystemStatusHeartbeatMs);
+        if (systemStatusChanged || systemStatusHeartbeatDue) {
+            sendSystemStatusPacket(sharedData);
+            lastSystemStatusTransitionSent = stateTransitionCount;
+            lastSystemStatusSentMs = nowMs;
+            systemStatusSentInitialized = true;
+        }
+
+        const uint32_t limitValidBitmap = sharedData->motor_abs_limit_valid_bitmap;
+        const uint32_t limitLockedBitmap = sharedData->motor_abs_limit_locked_bitmap;
+        if (limitValidBitmap != lastMotorAbsLimitValidSent ||
+            limitLockedBitmap != lastMotorAbsLimitLockedSent ||
+            (uint32_t)(nowMs - lastMotorAbsLimitSentMs) >= kMotorAbsLimitHeartbeatMs) {
+            sendMotorAbsLimitPacket(sharedData);
+            lastMotorAbsLimitValidSent = limitValidBitmap;
+            lastMotorAbsLimitLockedSent = limitLockedBitmap;
+            lastMotorAbsLimitSentMs = nowMs;
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));

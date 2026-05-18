@@ -2,72 +2,100 @@
 
 #include <string.h>
 
+#include "CalibrationMath.h"
 #include "JointCalibrationProfile.h"
+#include "../hardware/HardwareMap.h"
 
-// CalibrationTask 模块职责：
+// CalibrationTask 模块职责�?
 // 1) 管理关节标定参数与标定结果；
 // 2) 提供单关节自动标定流程；
-// 3) 在当前测试阶段，支持手工标定结果注入，但不作为常驻任务运行。
+// 3) 在当前测试阶段，支持手工标定结果注入，但不作为常驻任务运行�?
 //
-// 数据来源约束：
-// - 编码器原始值来自 canRxQueue（RemoteSensorData_t）；
-// - 舵机运动与反馈通过 servoCommunicationTask 的队列/快照交互；
-// - 标定生命周期与 UI 状态由 StateMachineTask 统一管理。
+// 数据来源约束�?
+// - 编码器原始值来�?canRxQueue（RemoteSensorData_t）；
+// - 舵机运动与反馈通过 servoCommunicationTask 的队�?快照交互�?
+// - 标定生命周期�?UI 状态由 StateMachineTask 统一管理�?
 
-extern JointMapItem jointMap[ENCODER_TOTAL_NUM];
-extern MotorMapItem joint16SecondaryMotor;
-
-// 全局标定配置与结果（按关节索引 0~ENCODER_TOTAL_NUM-1）。
+// 全局标定配置与结果（按关节索�?0~ENCODER_TOTAL_NUM-1）�?
 JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 
-// 编码器安装方向：+1 为正向安装，-1 为反向安装。
-// 所有角度映射前都需通过该表统一方向，避免同一动作出现正负号不一致。
-int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
-    1, -1, -1, 1,
-    1, -1, -1, 1,
-    1, -1, -1, 1,
-    1, -1, -1, -1,
+extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
+    1, -1, -1,  1,
+    1, -1, -1,  1,
+    1, -1, -1,  1,
+    1, -1, -1,  1,
     1,  1, -1, -1, 1
 };
 
+// Runtime encoder direction. It starts from the default installation table, and
+// automatic calibration may update one joint after detecting the real travel
+// direction. Angle display, manual calibration, and PID all read this table.
+int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
+    1, -1, -1,  1,
+    1, -1, -1,  1,
+    1, -1, -1,  1,
+    1, -1, -1,  1,
+    1,  1, -1, -1, 1
+};
+
+void resetEncoderDirectionsToDefault(void)
+{
+    memcpy(g_encoderDirection, kDefaultEncoderDirection, sizeof(g_encoderDirection));
+}
+
+bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM || direction == 0) {
+        return false;
+    }
+    g_encoderDirection[jointIndex] = (direction < 0) ? -1 : 1;
+    return true;
+}
+
 // 手工回退 offset 表：
-// 当自动标定结果不可用时，控制任务会读取该表作为零偏。
+// 当自动标定结果不可用时，控制任务会读取该表作为零偏�?
 int32_t g_encoderOffsetManual[ENCODER_TOTAL_NUM] = {0};
 
 static const uint8_t kJoint16Index = 16;
-static const int32_t kJoint16SecondaryOffsetDefault = 0;
-static const int32_t kJoint16TensionBiasDefault = 0;
+static const float kBootCalibStartDeg = kRange100StartDeg;
+static const float kBootCalibTightDeg = kRange100TightDeg;
+static const float kBootCalibTotalDeg = kRange100TotalDeg;
+static const float kBootCalibZeroFraction = kRange100ZeroFraction;
+static const float kBootCalibControlMaxDeg = kRange100ControlMaxDeg;
+static const float kBootCalibTopGuardDeg = kRange100TopGuardDeg;
 
 // joint16 双舵机标定约束默认配置：
-// 主舵机 bus3-id17，副舵机 bus3-id18，默认偏置为0。
+// 主舵�?bus3-id17，副舵机 bus3-id18，默认偏置为0�?
 JointDualServoConstraint g_joint16DualServoConstraint = {
-    1,
+    0,
     kJoint16Index,
-    3,
-    17,
-    3,
-    18,
-    kJoint16SecondaryOffsetDefault,
-    kJoint16TensionBiasDefault
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
 };
 
-// Manual mechanical limit raw tables. Fill values from the host raw magnetic
-// encoder display directly; direction conversion happens in this file.
+// Manual RANGE100 raw tables. Fill values from the host raw magnetic encoder
+// display directly; direction conversion happens in this file.
+// startRaw = just-tight/preload edge, mapped to -5 deg.
+// tightRaw = fully tight point, mapped to 90 deg.
 // -1 means not configured. Raw value 0 is valid.
 static const uint8_t kTestJointCount = ENCODER_TOTAL_NUM;
-static const int32_t kManualEncoderMinRaw[kTestJointCount] = {
-    -1, -1, -1, -1,
-    -1, -1, -1, -1,
-    -1, -1, -1, -1,
+static const int32_t kManualEncoderStartRaw[kTestJointCount] = {
+    8480, 11660, 4130, 5760,
+    8560, 9530, 9660, 13900,
+    8560, 9530, 9660, 13900,
     5766, 6586, 6248, 12130,
     -1, -1, -1, -1, -1
 };
 
-static const int32_t kManualEncoderMaxRaw[kTestJointCount] = {
-    12037, 12636, 9174, 12822,
-    12440, 9738, 3500, 1232,
-    3339, 2425, 12643, 6464,
+static const int32_t kManualEncoderTightRaw[kTestJointCount] = {
+    11610, 6790, 16090, 10955,
+    12670, 4700, 5090, 2820,
+    12670, 4700, 5090, 2820,
     9061, 3422, 2408, 1457,
     -1, 6542, 6480, 10115, 6535
 };
@@ -75,7 +103,7 @@ static const int32_t kManualEncoderMaxRaw[kTestJointCount] = {
 static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderHalfTurn = kEncoderModulo / 2;
 
-// 按安装方向统一编码器原始值方向，输出范围 [0, modulo)。
+// 按安装方向统一编码器原始值方向，输出范围 [0, modulo)�?
 static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction) {
     int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
     if (direction < 0) {
@@ -107,7 +135,7 @@ static int32_t degToEncoderCount(float deg) {
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
 }
 
-// 舵机绝对位置限幅，防止下发超出协议/硬件安全范围的目标值。
+// 舵机绝对位置限幅，防止下发超出协�?硬件安全范围的目标值�?
 static int16_t clampToServoPos(int32_t value) {
     if (value > 30719) return 30719;
     if (value < -30719) return -30719;
@@ -115,22 +143,33 @@ static int16_t clampToServoPos(int32_t value) {
 }
 
 // 获取关节双舵机约束：
-// - 当前仅 joint16 返回有效约束；
-// - 其余关节返回 false，调用方按单舵机流程处理。
+// - 当前�?joint16 返回有效约束�?
+// - 其余关节返回 false，调用方按单舵机流程处理�?
 bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* out) {
     if (!out) {
         return false;
     }
-    if (g_joint16DualServoConstraint.enabled != 0 &&
-        g_joint16DualServoConstraint.jointIndex == jointIndex) {
-        *out = g_joint16DualServoConstraint;
-        return true;
+    JointActuatorItem primary;
+    JointActuatorItem secondary;
+    if (!getJointActuator(jointIndex, 0, &primary) ||
+        !getJointActuator(jointIndex, 1, &secondary)) {
+        return false;
     }
-    return false;
+    const MotorMapItem& p = motorMap[primary.motorChannel];
+    const MotorMapItem& s = motorMap[secondary.motorChannel];
+    out->enabled = 1;
+    out->jointIndex = jointIndex;
+    out->primaryBusIndex = p.busIndex;
+    out->primaryServoID = p.servoID;
+    out->secondaryBusIndex = s.busIndex;
+    out->secondaryServoID = s.servoID;
+    out->secondaryOffset = secondary.offset;
+    out->tensionBias = secondary.tensionBias;
+    return true;
 }
 
 // 由主舵机目标推导副舵机目标（拮抗关系）：
-// secondary = -primary + secondaryOffset + tensionBias。
+// secondary = -primary + secondaryOffset + tensionBias�?
 bool computeSecondaryServoTargetForJoint(uint8_t jointIndex,
                                          int32_t primaryTarget,
                                          int16_t* outSecondaryTarget) {
@@ -141,13 +180,15 @@ bool computeSecondaryServoTargetForJoint(uint8_t jointIndex,
     if (!getJointDualServoConstraint(jointIndex, &cfg)) {
         return false;
     }
-    // 副舵机目标按拮抗关系计算。
-    const int32_t secondaryTarget = -primaryTarget + cfg.secondaryOffset + cfg.tensionBias;
+    // 副舵机目标按拮抗关系计算�?
+    JointActuatorItem secondary;
+    const int32_t sign = getJointActuator(jointIndex, 1, &secondary) ? secondary.sign : -1;
+    const int32_t secondaryTarget = sign * primaryTarget + cfg.secondaryOffset + cfg.tensionBias;
     *outSecondaryTarget = clampToServoPos(secondaryTarget);
     return true;
 }
 
-// 计算目标与当前编码器差值，并在整圈边界处做环绕归一化（最短路径）。
+// 计算目标与当前编码器差值，并在整圈边界处做环绕归一化（最短路径）�?
 static int32_t wrapEncoderDelta(int32_t target, int32_t actual) {
     int32_t delta = target - actual;
     while (delta > kEncoderHalfTurn) delta -= kEncoderModulo;
@@ -155,8 +196,8 @@ static int32_t wrapEncoderDelta(int32_t target, int32_t actual) {
     return delta;
 }
 
-// 从 CAN 最新快照读取关节编码器值，并做方向统一。
-// 失败条件：队列无数据、数据无效、关节报错、参数越界。
+// �?CAN 最新快照读取关节编码器值，并做方向统一�?
+// 失败条件：队列无数据、数据无效、关节报错、参数越界�?
 static bool readLatestEncoderRaw(TaskSharedData_t* sharedData, uint8_t jointIndex, int32_t* outEncoder) {
     if (!sharedData || !outEncoder || jointIndex >= ENCODER_TOTAL_NUM) return false;
 
@@ -170,18 +211,12 @@ static bool readLatestEncoderRaw(TaskSharedData_t* sharedData, uint8_t jointInde
 }
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
-    // 将物理 bus/id 转换为 motorMap 通道索引，供反馈数组读取使用。
-    for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
-        if (motorMap[i].busIndex == bus && motorMap[i].servoID == id) {
-            return i;
-        }
-    }
-    return -1;
+    return findMotorChannelByBusId(bus, id);
 }
 
 static bool readLatestServoAbs(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int32_t* outAbs)
 {
-    // 标定任务不直接访问舵机总线，只从 servoFeedbackQueue 读取最新快照。
+    // 标定任务不直接访问舵机总线，只�?servoFeedbackQueue 读取最新快照�?
     if (!sharedData || !outAbs) {
         return false;
     }
@@ -202,7 +237,7 @@ static bool readLatestServoAbs(TaskSharedData_t* sharedData, uint8_t bus, uint8_
 
 static bool readLatestServoLoad(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int16_t* outLoad)
 {
-    // 负载来自舵机通信层发布的遥测快照，用于判断是否触碰机械限位。
+    // 负载来自舵机通信层发布的遥测快照，用于判断是否触碰机械限位�?
     if (!sharedData || !outLoad) {
         return false;
     }
@@ -229,7 +264,7 @@ static bool appendServoTarget(ServoTargetBatch_t* batch,
                               uint16_t speed,
                               uint8_t acc)
 {
-    // CalibrationTask 构造的 batch 仍走 servoTargetQueue，由 ServoCommunicationTask 执行。
+    // CalibrationTask 构造的 batch 仍走 servoTargetQueue，由 ServoCommunicationTask 执行�?
     if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX || busIndex >= NUM_BUSES) {
         return false;
     }
@@ -242,12 +277,12 @@ static bool appendServoTarget(ServoTargetBatch_t* batch,
     return true;
 }
 
-static bool queueJointTarget(TaskSharedData_t* sharedData,
-                             uint8_t jointIndex,
-                             int16_t primaryTarget,
-                             const JointCalibrationConfig& cfg)
+bool queueJointCalibrationTarget(TaskSharedData_t* sharedData,
+                                 uint8_t jointIndex,
+                                 int16_t primaryTarget,
+                                 const JointCalibrationConfig& cfg)
 {
-    // 校准目标必须带 CALIBRATION source，且只有当前 owner 为 CALIBRATION 才允许入队。
+    // 校准目标必须�?CALIBRATION source，且只有当前 owner �?CALIBRATION 才允许入队�?
     if (!sharedData || !sharedData->servoTargetQueue || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
@@ -284,9 +319,9 @@ static bool queueJointTarget(TaskSharedData_t* sharedData,
     return xQueueOverwrite(sharedData->servoTargetQueue, &batch) == pdTRUE;
 }
 
-// 标定后回退动作：
-// 将关节移动到 angleReserved 预留角度，避免长时间停在机械限位附近。
-// 成功返回 true；超时或反馈不可用返回 false（不影响标定主结果已写回）。
+// 标定后回退动作�?
+// 将关节移动到 angleReserved 预留角度，避免长时间停在机械限位附近�?
+// 成功返回 true；超时或反馈不可用返�?false（不影响标定主结果已写回）�?
 static bool moveJointToReserved(TaskSharedData_t* sharedData,
                                 uint8_t jointIndex,
                                 const JointCalibrationConfig& cfg,
@@ -325,91 +360,86 @@ static bool moveJointToReserved(TaskSharedData_t* sharedData,
         if (step < -stepLimit) step = -stepLimit;
 
         const int16_t targetPos = clampToServoPos(currentServoPos + step);
-        queueJointTarget(sharedData, jointIndex, targetPos, cfg);
+        queueJointCalibrationTarget(sharedData, jointIndex, targetPos, cfg);
         vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
     }
 
     return false;
 }
-// 装载默认标定参数。
+// 装载默认标定参数�?
 void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count) {
     loadJointCalibrationProfile(cfg, count);
 }
 
 // 测试模式初始化：
-// 1) 装载默认配置；
-// 2) 将手工 minraw/maxraw 按方向自动转换成 oriented min/max；
-// 3) 用 oriented min/max 推导 angleScope/offset/angleMax；
+// 1) 装载默认配置�?
+// 2) 将手�?startRaw/tightRaw 按方向自动转换成 oriented start/tight�?
+// 3) 用两点定�?RANGE100: start=-5deg, tight=90deg, zero=5/95 span�?
 // 4) 将可用结果同步到手工回退表；
-// 5) 保持标定状态为 IDLE（自动标定任务关闭）。
+// 5) 保持标定状态为 IDLE（自动标定任务关闭）�?
 void initManualCalibrationForTest(void) {
     initDefaultCalibrationConfig(g_jointCalibConfig, ENCODER_TOTAL_NUM);
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
+    Serial.printf("[BOOT CALIB] RANGE100 enabled startDeg=%.3f tightDeg=%.3f totalDeg=%.3f zeroFraction=%.3f controlMax=%.3f topGuard=%.3f\r\n",
+                  kBootCalibStartDeg,
+                  kBootCalibTightDeg,
+                  kBootCalibTotalDeg,
+                  kBootCalibZeroFraction,
+                  kBootCalibControlMaxDeg,
+                  kBootCalibTopGuardDeg);
+
     for (uint8_t i = 0; i < kTestJointCount; i++) {
         JointCalibrationConfig& cfg = g_jointCalibConfig[i];
         JointCalibrationResult& out = g_jointCalibResult[i];
-        const int32_t rawEncoderMin = kManualEncoderMinRaw[i];
-        const int32_t rawEncoderMax = kManualEncoderMaxRaw[i];
+        const int32_t rawEncoderStart = kManualEncoderStartRaw[i];
+        const int32_t rawEncoderTight = kManualEncoderTightRaw[i];
 
-        // Manual tables hold raw CAN values. Convert both limits into the
-        // normalized direction, then derive the mechanical scope.
+        // Manual tables hold raw CAN values. Convert both points into the
+        // normalized direction, then derive the RANGE100 span.
         const bool rawValid =
-            isManualEncoderRawValid(rawEncoderMin) &&
-            isManualEncoderRawValid(rawEncoderMax);
-        const int32_t encoderMin = rawValid
-            ? orientEncoderRaw((uint16_t)rawEncoderMin, g_encoderDirection[i])
+            isManualEncoderRawValid(rawEncoderStart) &&
+            isManualEncoderRawValid(rawEncoderTight);
+        const int32_t encoderStart = rawValid
+            ? calibrationOrientEncoderRaw((uint16_t)rawEncoderStart, g_encoderDirection[i])
             : 0;
-        const int32_t encoderMax = rawValid
-            ? orientEncoderRaw((uint16_t)rawEncoderMax, g_encoderDirection[i])
+        const int32_t encoderTight = rawValid
+            ? calibrationOrientEncoderRaw((uint16_t)rawEncoderTight, g_encoderDirection[i])
             : 0;
-        const int32_t derivedAngleScopeCount = rawValid
-            ? forwardEncoderDelta(encoderMin, encoderMax)
-            : 0;
-        const float derivedAngleScopeDeg = encoderCountToDeg(derivedAngleScopeCount);
-        const int32_t bottomReservedCount = degToEncoderCount(cfg.bottomReserved);
-        const int32_t topReservedCount = degToEncoderCount(cfg.topReserved);
-        const float usableAngleMax =
-            derivedAngleScopeDeg - cfg.bottomReserved - cfg.topReserved;
 
-        out.success =
-            rawValid &&
-            derivedAngleScopeCount > 0 &&
-            (bottomReservedCount + topReservedCount) < derivedAngleScopeCount &&
-            usableAngleMax > 0.0f;
-        out.encoderMin = out.success ? encoderMin : 0;
-        out.encoderMax = out.success ? encoderMax : 0;
-        if (out.success) {
-            cfg.angleScope = derivedAngleScopeDeg;
-            out.offset = wrapEncoderCount(encoderMin + bottomReservedCount);
-            out.angleMax = usableAngleMax;
+        const bool built = rawValid &&
+            buildRange100CalibrationResult(i, encoderStart, encoderTight, 0, 0, &out);
+
+        if (built && out.success) {
+            applyRange100CalibrationConfig(&cfg);
+
+            Serial.printf("[BOOT CALIB] RESULT J%02u start=%ld tight=%ld span=%ld zero=%ld startDeg=%.3f tightDeg=%.3f\r\n",
+                          (unsigned)i,
+                          (long)out.startEncoder,
+                          (long)out.tightEncoder,
+                          (long)out.encoderSpan,
+                          (long)out.zeroEncoder,
+                          out.startDeg,
+                          out.tightDeg);
         } else {
-            out.offset = 0;
-            out.angleMax = 0.0f;
+            memset(&out, 0, sizeof(out));
         }
 
-        // 同步写入回退表，便于调试阶段统一读取路径。
+        // 同步写入回退表，便于调试阶段统一读取路径�?
         g_encoderOffsetManual[i] = out.success ? out.offset : 0;
     }
 
-    // 当前测试阶段不运行自动标定任务。
-    g_joint16DualServoConstraint.enabled = 1;
-    g_joint16DualServoConstraint.jointIndex = kJoint16Index;
-    g_joint16DualServoConstraint.primaryBusIndex = jointMap[kJoint16Index].busIndex;
-    g_joint16DualServoConstraint.primaryServoID = jointMap[kJoint16Index].servoID;
-    g_joint16DualServoConstraint.secondaryBusIndex = joint16SecondaryMotor.busIndex;
-    g_joint16DualServoConstraint.secondaryServoID = joint16SecondaryMotor.servoID;
-    g_joint16DualServoConstraint.secondaryOffset = kJoint16SecondaryOffsetDefault;
-    g_joint16DualServoConstraint.tensionBias = kJoint16TensionBiasDefault;
+    // 当前测试阶段不运行自动标定任务�?
+    getJointDualServoConstraint(kJoint16Index, &g_joint16DualServoConstraint);
 
 }
 
-// 单关节自动标定主流程：
-// - 逐步“收紧”舵机直到负载跨阈值，判定触及机械限位；
-// - 读取该时刻编码器值作为 encoderMax；
-// - 根据配置推导 offset/angleMax，并尝试回退到预留角度。
-// 返回 false 的典型原因：参数非法、总线不可用、编码器读取失败、超时未触发阈值。
+// 单关节自动标定主流程�?
+// - 逐步“收紧”舵机直到负载跨阈值，判定触及机械限位�?
+// - 读取该时刻编码器值作�?encoderMax�?
+// - 根据配置推导 offset/angleMax，并尝试回退到预留角度�?
+// 返回 false 的典型原因：参数非法、总线不可用、编码器读取失败、超时未触发阈值�?
 bool runSingleJointCalibration(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                const JointCalibrationConfig& cfg,
@@ -421,6 +451,17 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
     out->encoderMax = 0;
     out->offset = 0;
     out->angleMax = 0.0f;
+    out->startEncoder = 0;
+    out->tightEncoder = 0;
+    out->zeroEncoder = 0;
+    out->encoderSpan = 0;
+    out->startServoAbs = 0;
+    out->tightServoAbs = 0;
+    out->zeroServoAbs = 0;
+    out->startDeg = 0.0f;
+    out->tightDeg = 0.0f;
+    out->totalDeg = 0.0f;
+    out->scaled = false;
 
     const uint8_t bus = jointMap[jointIndex].busIndex;
     const uint8_t servoId = jointMap[jointIndex].servoID;
@@ -441,7 +482,7 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
         int32_t tightenStep = (int32_t)cfg.tightenStep;
         if (tightenStep == 0) tightenStep = 1;
         commandPos = clampToServoPos((int32_t)commandPos + tightenStep);
-        if (!queueJointTarget(sharedData, jointIndex, commandPos, cfg)) {
+        if (!queueJointCalibrationTarget(sharedData, jointIndex, commandPos, cfg)) {
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
@@ -476,6 +517,14 @@ bool runSingleJointCalibration(TaskSharedData_t* sharedData,
             out->encoderMax = encoderMax;
             out->offset = wrapEncoderCount(encoderMin + bottomReservedCount);
             out->angleMax = usableAngleMax;
+            out->startEncoder = encoderMin;
+            out->tightEncoder = encoderMax;
+            out->zeroEncoder = out->offset;
+            out->encoderSpan = derivedAngleScopeCount;
+            out->startDeg = 0.0f;
+            out->tightDeg = usableAngleMax;
+            out->totalDeg = usableAngleMax;
+            out->scaled = false;
             out->success = true;
 
             moveJointToReserved(sharedData, jointIndex, cfg, out->offset);

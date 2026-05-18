@@ -37,6 +37,9 @@ class HandGuiContext:
     def connect_selected_port(self) -> bool:
         return self._app.connect_selected_port()
 
+    def disconnect_current_port(self, status: str = "Disconnected", stop_lower: bool = False) -> None:
+        self._app._disconnect_current_port(status, stop_lower=stop_lower)
+
     def get_state(self) -> Optional[HandModel]:
         return self._app.get_state()
 

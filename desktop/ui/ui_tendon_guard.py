@@ -3,13 +3,18 @@ import os
 import time
 from typing import List, Sequence, Tuple
 
-from protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN
+from protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
 
 MOTOR_TO_JOINT_INDEX = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20,
 ]
+if len(MOTOR_TO_JOINT_INDEX) < MOTOR_COUNT:
+    if HAND_PROFILE.lower() == "v2":
+        MOTOR_TO_JOINT_INDEX.extend([0, 4, 8, 12, 17][:MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)])
+    else:
+        MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
 JOINT_TO_PRIMARY_MOTOR_INDEX = [-1] * ENCODER_COUNT
 for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:

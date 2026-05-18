@@ -15,36 +15,63 @@ from protocol import (
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_RELEASE_FAULT,
+    PACKET_TYPE_ENCODER_RAW,
+    PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_SYSTEM_STATUS,
+    PROTOCOL_HEADER,
+    PROTOCOL_TAIL,
     RX_POLL_SLEEP,
     RX_QUEUE_MAXSIZE,
     SERIAL_TIMEOUT,
     TX_QUEUE_GET_TIMEOUT,
     TX_QUEUE_MAXSIZE,
     build_angle_cmd,
+    build_active_scope_cmd,
     build_calib_data_cmd,
     build_calibrate_cmd,
     build_local_test_params_cmd,
     build_local_test_start_cmd,
     build_local_test_stop_cmd,
+    build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_sweep_cmd,
+    build_pause_cmd,
+    build_restore_multiturn_cmd,
+    build_run_feedback_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
+    CMD_CALIBRATE,
+    CMD_ACTIVE_SCOPE,
+    CMD_CALIB_DATA,
+    CMD_START,
+    CMD_STOP,
+    CMD_RESET,
+    CMD_RUN_FEEDBACK,
+    CMD_PAUSE,
+    CMD_RESTORE_MULTITURN,
+    CMD_MOTOR_ABS_LIMIT_LOCK,
     CMD_SENSOR_STREAM_MODE,
+    SYSTEM_STATE_UNCONTROLLABLE,
+    SYSTEM_STATE_RUN_FEEDBACK,
+    SYSTEM_STATE_STOPPED,
+    SYSTEM_STATE_IDLE,
+    SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_PAUSED,
     parse_calib_ack,
     parse_fault_status_packet,
     parse_release_fault_packet,
-    parse_frame,
     parse_joint_debug_packet,
+    parse_motor_abs_limit_packet,
     parse_proto_ack,
     parse_sensor_packet,
     parse_servo_angle_packet,
     parse_servo_raw_packet,
     parse_servo_telem_packet,
+    parse_system_status_packet,
     PROTO_ACK_STATUS_OK,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
@@ -102,7 +129,27 @@ def choose_serial_port_interactive() -> Optional[str]:
 
 
 class LowerComputerComm:
-    """Serial communication with lower controller."""
+    """
+    ===========================================================================
+    LowerComputerComm - 底层通信与协议解析引擎
+    ===========================================================================
+    定位：
+    这是上位机最底层的硬件交互层。所有的业务逻辑最终都会转换为指令经过本类发往串口；
+    下位机所有的状态回传也都会先经过本类的解析，再向上传递。
+
+    核心机制：
+    1. 异步双线程架构：
+       - TX 线程 (_tx_loop)：阻塞等待 `tx_queue`，一旦有指令对象，就通过 `_encode_command`
+         封包为大端序二进制流，并调用 `serial.write` 下发。
+       - RX 线程 (_rx_loop)：轮询串口读取字节流，处理“粘包”和串口断帧问题。提取出
+         合法的包后，交给 `_process_packets` 根据包头 ID (pkt_type) 进行 `struct.unpack`
+         解包。
+    2. 高频命令截流 (High-rate throttling)：
+       - 对于滑动条拖动等产生的海量实时命令（如 `angle_live`, `motor_pos_abs`），
+         通过 `_enqueue_latest_high_rate` 方法清除队列中积压的旧历史指令，仅保留最新一帧。
+         这极大地防止了 UI 事件堆积导致的手臂运动延迟（Latency）。
+    ===========================================================================
+    """
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
@@ -114,8 +161,11 @@ class LowerComputerComm:
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
         self._tx_lock = threading.Lock()
+        self._ack_lock = threading.Condition()
         self._rx_buffer = bytearray()
+        self._firmware_text_buffer = bytearray()
         self._last_model: Optional[HandModel] = None
+        self._last_proto_ack: Optional[tuple] = None
         self._stream_mode_requested = SENSOR_STREAM_MODE_SIGNED_I16
         self._stream_mode_applied: Optional[int] = None
         self._stream_mode_ack_pending = False
@@ -147,6 +197,11 @@ class LowerComputerComm:
             self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)
             self.running = True
             self._rx_buffer = bytearray()
+            self._firmware_text_buffer = bytearray()
+            self._last_model = None
+            self._last_proto_ack = None
+            self._clear_queue(self.rx_queue)
+            self._clear_queue(self.tx_queue)
             self._reset_rx_diag()
             self._reset_tx_diag()
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
@@ -162,6 +217,13 @@ class LowerComputerComm:
         except Exception as exc:
             print(f"连接失败: {exc}")
             return False
+
+    @staticmethod
+    def _clear_queue(q: queue.Queue) -> None:
+        with q.mutex:
+            q.queue.clear()
+            q.unfinished_tasks = 0
+            q.not_full.notify_all()
 
     def disconnect(self):
         self.running = False
@@ -289,7 +351,7 @@ class LowerComputerComm:
                 if self.serial.in_waiting:
                     chunk = self.serial.read(self.serial.in_waiting)
                     self._rx_buffer.extend(chunk)
-                    packets, self._rx_buffer = parse_frame(bytes(self._rx_buffer))
+                    packets = self._extract_packets_and_firmware_logs()
                     self._update_rx_diag(packets, len(chunk))
                     model = self._process_packets(packets)
                     if model:
@@ -303,6 +365,51 @@ class LowerComputerComm:
                 self._maybe_print_rx_diag()
             except Exception as exc:
                 print(f"RX error: {exc}")
+
+    def _append_firmware_log_byte(self, value: int) -> None:
+        if value in (9, 10, 13) or 32 <= value <= 126:
+            self._firmware_text_buffer.append(value)
+            if value in (10, 13):
+                self._flush_firmware_log_text()
+        elif self._firmware_text_buffer and self._firmware_text_buffer[-1] not in (10, 13, 32):
+            self._firmware_text_buffer.append(32)
+
+    def _flush_firmware_log_text(self) -> None:
+        if not self._firmware_text_buffer:
+            return
+        text = bytes(self._firmware_text_buffer).decode("utf-8", errors="ignore")
+        self._firmware_text_buffer.clear()
+        if text:
+            print(text, end="", flush=True)
+
+    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
+        packets: List[tuple] = []
+        buffer = self._rx_buffer
+        while buffer:
+            if buffer[0] != PROTOCOL_HEADER:
+                self._append_firmware_log_byte(buffer.pop(0))
+                continue
+
+            if len(buffer) < 4:
+                break
+
+            frame_len = 2 + buffer[1]
+            if frame_len < 4:
+                self._append_firmware_log_byte(buffer.pop(0))
+                continue
+
+            if len(buffer) < frame_len:
+                break
+
+            if buffer[frame_len - 1] == PROTOCOL_TAIL:
+                self._flush_firmware_log_text()
+                pkt_type = buffer[2]
+                payload = bytes(buffer[3:frame_len - 1])
+                packets.append((pkt_type, payload))
+                del buffer[:frame_len]
+            else:
+                self._append_firmware_log_byte(buffer.pop(0))
+        return packets
 
     def _check_stream_mode_ack_timeout(self):
         if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
@@ -330,6 +437,7 @@ class LowerComputerComm:
                     for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
                         model.encoders[i].encoder_id = i
                         model.encoders[i].raw = angles[i]
+                        model.encoders[i].zero_raw = 0
                         model.encoders[i].error = errors[i] if i < len(errors) else False
 
                     for i in range(min(ENCODER_COUNT, len(model.motors))):
@@ -340,6 +448,14 @@ class LowerComputerComm:
                         )
 
                     model.has_sensor_data = True
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_ENCODER_RAW:
+                raw_values, errors = parse_sensor_packet(payload)
+                if raw_values:
+                    for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
+                        model.encoders[i].raw_sensor = raw_values[i]
+                        model.encoders[i].error = errors[i] if i < len(errors) else False
                     emitted = True
 
             elif pkt_type == 0x02:
@@ -438,6 +554,46 @@ class LowerComputerComm:
                         model.joint_reverse_release_fault[i] = ((release_fault_bitmap >> i) & 0x01) != 0
                     emitted = True
 
+            elif pkt_type == PACKET_TYPE_SYSTEM_STATUS:
+                parsed = parse_system_status_packet(payload)
+                if parsed is not None:
+                    (
+                        system_state,
+                        control_enabled,
+                        servo_target_owner,
+                        control_mode,
+                        calib_status,
+                        system_fault_bitmap,
+                        state_transition_count,
+                        multi_turn_unknown_bitmap,
+                    ) = parsed
+                    model.system_state = int(system_state)
+                    model.control_enabled = bool(control_enabled)
+                    model.servo_target_owner = int(servo_target_owner)
+                    model.control_mode = int(control_mode)
+                    model.system_fault_bitmap = int(system_fault_bitmap)
+                    model.state_transition_count = int(state_transition_count)
+                    model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
+                    model.has_system_status_data = True
+                    if calib_status == 1:
+                        model.calib_status = "PENDING"
+                    elif calib_status == 2:
+                        model.calib_status = "SUCCESS"
+                    elif calib_status == 3:
+                        model.calib_status = "FAILED"
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_MOTOR_ABS_LIMIT:
+                parsed = parse_motor_abs_limit_packet(payload)
+                if parsed is not None:
+                    valid_bitmap, locked_bitmap, mins, maxs = parsed
+                    model.motor_abs_limit_valid_bitmap = int(valid_bitmap)
+                    model.motor_abs_limit_locked_bitmap = int(locked_bitmap)
+                    for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
+                        model.motor_abs_limit_min[i] = int(mins[i])
+                        model.motor_abs_limit_max[i] = int(maxs[i])
+                    emitted = True
+
             elif pkt_type == 0x06:
                 parsed = parse_proto_ack(payload)
                 if parsed is not None:
@@ -451,6 +607,48 @@ class LowerComputerComm:
                                 f"(status={status}, applied={applied_mode})."
                             )
                             self._stream_mode_ack_warned = True
+                    with self._ack_lock:
+                        self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
+                        self._ack_lock.notify_all()
+                    if ack_cmd in (
+                        CMD_START,
+                        CMD_STOP,
+                        CMD_RESET,
+                        CMD_CALIBRATE,
+                        CMD_CALIB_DATA,
+                        CMD_ACTIVE_SCOPE,
+                        CMD_RUN_FEEDBACK,
+                        CMD_PAUSE,
+                        CMD_RESTORE_MULTITURN,
+                        CMD_MOTOR_ABS_LIMIT_LOCK,
+                    ) and status == PROTO_ACK_STATUS_OK:
+                        model.system_state = int(applied_mode)
+                        model.has_system_status_data = True
+                        if ack_cmd == CMD_START:
+                            model.control_enabled = False
+                        elif ack_cmd == CMD_STOP:
+                            model.control_enabled = False
+                            model.system_state = SYSTEM_STATE_STOPPED
+                        elif ack_cmd == CMD_RESET:
+                            model.control_enabled = False
+                            model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                        elif ack_cmd == CMD_CALIBRATE:
+                            model.control_enabled = False
+                            model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
+                        elif ack_cmd == CMD_CALIB_DATA:
+                            model.control_enabled = False
+                        elif ack_cmd == CMD_ACTIVE_SCOPE:
+                            pass
+                        elif ack_cmd == CMD_RUN_FEEDBACK:
+                            model.control_enabled = int(applied_mode) == SYSTEM_STATE_RUN_FEEDBACK
+                        elif ack_cmd == CMD_PAUSE:
+                            model.control_enabled = False
+                            model.system_state = SYSTEM_STATE_PAUSED
+                        elif ack_cmd == CMD_RESTORE_MULTITURN:
+                            pass
+                        elif ack_cmd == CMD_MOTOR_ABS_LIMIT_LOCK:
+                            pass
+                    emitted = True
 
         self._last_model = model
         return model if emitted else None
@@ -458,6 +656,9 @@ class LowerComputerComm:
     def send_command(self, cmd: SendCmd):
         if cmd == "stop":
             self._enqueue_stop_immediately()
+            return
+        if cmd == "pause":
+            self._enqueue_pause_immediately()
             return
         if self._is_high_rate_command(cmd):
             self._enqueue_latest_high_rate(cmd)
@@ -472,6 +673,16 @@ class LowerComputerComm:
             pending = self.tx_queue.queue
             pending.clear()
             pending.append("stop")
+            self.tx_queue.unfinished_tasks += 1
+            self.tx_queue.not_empty.notify()
+
+    def _enqueue_pause_immediately(self) -> None:
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            kept = [item for item in pending if not self._is_high_rate_command(item)]
+            pending.clear()
+            pending.extend(kept)
+            pending.append("pause")
             self.tx_queue.unfinished_tasks += 1
             self.tx_queue.not_empty.notify()
 
@@ -501,6 +712,18 @@ class LowerComputerComm:
             pending.extend(kept)
             self.tx_queue.not_full.notify_all()
             return removed
+
+    def wait_for_ack(self, cmd: int, timeout_s: float = 1.0) -> Optional[tuple]:
+        deadline = time.time() + max(0.0, float(timeout_s))
+        with self._ack_lock:
+            while True:
+                ack = self._last_proto_ack
+                if ack is not None and int(ack[0]) == int(cmd):
+                    return ack
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None
+                self._ack_lock.wait(timeout=remaining)
 
     def _enqueue_latest_high_rate(self, cmd: SendCmd):
         # Keep only the latest pending high-rate command to avoid UI backlog.
@@ -538,6 +761,12 @@ class LowerComputerComm:
             return build_calibrate_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_data":
             return build_calib_data_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
+            return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
+            return build_restore_multiturn_cmd(cmd[1], cmd[2])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
+            return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
             return build_motor_pos_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":
@@ -556,6 +785,10 @@ class LowerComputerComm:
             return build_local_test_stop_cmd()
         if cmd == "start":
             return build_start_cmd()
+        if cmd == "run_feedback":
+            return build_run_feedback_cmd()
+        if cmd == "pause":
+            return build_pause_cmd()
         if cmd == "stop":
             return build_stop_cmd()
         if cmd == "reset":

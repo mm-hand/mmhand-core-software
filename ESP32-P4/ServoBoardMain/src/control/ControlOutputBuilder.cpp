@@ -1,4 +1,5 @@
 #include "ControlOutputBuilder.h"
+#include "../hardware/HardwareMap.h"
 
 static const int32_t kServoSingleTurnModulo = 4096;
 static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
@@ -9,6 +10,29 @@ int16_t clampServoPos(int32_t value)
     if (value > 30719) return 30719;
     if (value < -30719) return -30719;
     return (int16_t)value;
+}
+
+int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
+                                     uint8_t motorChannel,
+                                     int32_t value)
+{
+    int32_t clamped = value;
+    if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
+        const uint32_t bit = (1UL << motorChannel);
+        if (((sharedData->motor_abs_limit_valid_bitmap & bit) != 0) &&
+            ((sharedData->motor_abs_limit_locked_bitmap & bit) != 0)) {
+            int32_t lo = sharedData->motor_abs_limit_min[motorChannel];
+            int32_t hi = sharedData->motor_abs_limit_max[motorChannel];
+            if (lo > hi) {
+                const int32_t tmp = lo;
+                lo = hi;
+                hi = tmp;
+            }
+            if (clamped < lo) clamped = lo;
+            if (clamped > hi) clamped = hi;
+        }
+    }
+    return clampServoPos(clamped);
 }
 
 // Clamp a single-turn raw servo position to 0..4095.
@@ -57,6 +81,46 @@ int32_t wrapServoRawDelta(int32_t delta)
     return delta;
 }
 
+// Build physical motor targets for one logical joint target. PID code can call
+// this without caring whether a joint is single-motor (V1) or antagonist
+// dual-motor (V2/J16).
+uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
+                                         int32_t primaryTargetAbs,
+                                         JointActuatorRuntimeTarget* outTargets,
+                                         uint8_t outCapacity)
+{
+    if (!outTargets || outCapacity == 0 || jointIndex >= ENCODER_TOTAL_NUM) {
+        return 0;
+    }
+
+    uint8_t outCount = 0;
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    for (uint8_t i = 0; i < actuatorCount && outCount < outCapacity; i++) {
+        JointActuatorItem actuator;
+        if (!getJointActuator(jointIndex, i, &actuator)) {
+            continue;
+        }
+        if (actuator.motorChannel >= SERVO_TOTAL_NUM ||
+            !isMotorChannelValid(actuator.motorChannel)) {
+            continue;
+        }
+
+        const MotorMapItem& motor = motorMap[actuator.motorChannel];
+        const int32_t signedTarget =
+            (int32_t)actuator.sign * primaryTargetAbs +
+            actuator.offset +
+            actuator.tensionBias;
+
+        JointActuatorRuntimeTarget& target = outTargets[outCount++];
+        target.motorChannel = actuator.motorChannel;
+        target.busIndex = motor.busIndex;
+        target.servoId = motor.servoID;
+        target.sign = actuator.sign;
+        target.targetAbs = clampServoPos(signedTarget);
+    }
+    return outCount;
+}
+
 // Append one servo target to a batch.
 bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint8_t busIndex,
@@ -75,4 +139,32 @@ bool appendServoTarget(ServoTargetBatch_t* batch,
     cmd.speed = speed;
     cmd.acc = acc;
     return true;
+}
+
+uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
+                                   uint8_t jointIndex,
+                                   int32_t primaryTargetAbs,
+                                   uint16_t speed,
+                                   uint8_t acc)
+{
+    if (!batch) {
+        return 0;
+    }
+
+    JointActuatorRuntimeTarget targets[MAX_JOINT_ACTUATORS];
+    const uint8_t targetCount =
+        buildJointActuatorRuntimeTargets(jointIndex, primaryTargetAbs, targets, MAX_JOINT_ACTUATORS);
+
+    uint8_t appended = 0;
+    for (uint8_t i = 0; i < targetCount; i++) {
+        if (appendServoTarget(batch,
+                              targets[i].busIndex,
+                              targets[i].servoId,
+                              targets[i].targetAbs,
+                              speed,
+                              acc)) {
+            appended++;
+        }
+    }
+    return appended;
 }

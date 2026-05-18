@@ -3,6 +3,9 @@
 #include <math.h>
 #include <string.h>
 
+#include "../../hardware/HardwareMap.h"
+#include "../../system/StateMachineTask.h"
+
 // Clamp a host absolute motor command to the firmware multi-turn range.
 int16_t clampServoAbsCommand(int32_t value)
 {
@@ -62,6 +65,7 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     if (lock) {
         xSemaphoreGive(lock);
     }
+    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
 }
 
 void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
@@ -87,6 +91,7 @@ void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     if (lock) {
         xSemaphoreGive(lock);
     }
+    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
 }
 
 void upperApplyTendonGuardConfig(TaskSharedData_t* sharedData,
@@ -143,4 +148,28 @@ void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, u
     if (lock) {
         xSemaphoreGive(lock);
     }
+}
+
+void upperApplyActiveScope(TaskSharedData_t* sharedData,
+                           uint32_t activeMotorMask,
+                           uint32_t activeJointMask,
+                           uint8_t requireCanFeedback)
+{
+    if (!sharedData) {
+        return;
+    }
+    const uint32_t motorMaskLimit = validMotorChannelMask();
+    const uint32_t jointMaskLimit = (1UL << ENCODER_TOTAL_NUM) - 1UL;
+    sharedData->active_motor_mask = activeMotorMask & motorMaskLimit;
+    sharedData->active_joint_mask = activeJointMask & jointMaskLimit;
+    sharedData->require_can_feedback = requireCanFeedback ? 1 : 0;
+
+    const uint32_t scopeFaultMask = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE;
+    sharedData->system_fault_bitmap &= ~scopeFaultMask;
+    sharedData->system_fault_latched_bitmap &= ~scopeFaultMask;
+
+    Serial.printf("[UPPER] ACTIVE_SCOPE motor=0x%08lX joint=0x%08lX can=%u\r\n",
+                  (unsigned long)sharedData->active_motor_mask,
+                  (unsigned long)sharedData->active_joint_mask,
+                  (unsigned)sharedData->require_can_feedback);
 }
