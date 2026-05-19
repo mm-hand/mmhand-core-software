@@ -28,6 +28,7 @@ static const int32_t kAutoServoZeroPullCounts = 400;
 static const int32_t kAutoServoZeroPullToleranceCounts = 40;
 static const int32_t kDualAutoSlackCounts = 4800;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
+static const int16_t kAutoCalibrationOverloadLoadThreshold = 250;
 
 // 0 means use cfg.tightenStep sign. Per-joint overrides are reserved for
 // verified hardware exceptions; default automatic tightening remains positive.
@@ -344,6 +345,37 @@ static bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
     return true;
 }
 
+static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
+                                         const ServoTargetBatch_t* batch)
+{
+    if (!sharedData || !batch) {
+        return false;
+    }
+    for (uint8_t i = 0; i < batch->count; i++) {
+        const ServoTargetCommand_t& cmd = batch->commands[i];
+        const int ch = findMotorChannel(cmd.busIndex, cmd.servoId);
+        if (ch < 0 || ch >= SERVO_TOTAL_NUM || !isMotorChannelValid((uint8_t)ch)) {
+            continue;
+        }
+
+        int16_t loadRaw = 0;
+        if (!readLatestMotorServoLoad(sharedData, (uint8_t)ch, &loadRaw)) {
+            continue;
+        }
+        const int16_t loadMag = servoLoadMagnitude(loadRaw);
+        if (loadMag >= kAutoCalibrationOverloadLoadThreshold) {
+            const uint32_t bit = 1UL << (uint8_t)ch;
+            sharedData->overload_fault_bitmap |= bit;
+            Serial.printf("[AUTO CALIB] FAIL OVERLOAD M%02d load=%d threshold=%d\r\n",
+                          ch,
+                          loadMag,
+                          kAutoCalibrationOverloadLoadThreshold);
+            return false;
+        }
+    }
+    return true;
+}
+
 static void logAutoInitialFeedbackDiag(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t bus,
@@ -623,7 +655,6 @@ static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointInd
 
     sharedData->targetAngles[jointIndex] = 0.0f;
     sharedData->joint_command_token++;
-    sharedData->control_mode = CONTROL_MODE_JOINT;
 
     if (lock) {
         xSemaphoreGive(lock);
@@ -669,7 +700,6 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
     params.windowMs = 200;
     params.traceMs = 200;
     params.zeroReturnTimeoutMs = 30000;
-    params.turnNormalizeTimeoutMs = 15000;
     params.windowServoDeltaCounts = 50;
     params.zeroReachAbsTolerance = 200;
     params.followArmDeg = 3.3f;
@@ -685,7 +715,6 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
 enum AutoCalibState {
     AUTO_CALIB_STATE_IDLE = 0,
     AUTO_CALIB_STATE_INIT,
-    AUTO_CALIB_STATE_NORMALIZE,
     AUTO_CALIB_STATE_TIGHTEN,
     AUTO_CALIB_STATE_RETURN_ZERO,
     AUTO_CALIB_STATE_DONE,
@@ -800,6 +829,9 @@ static bool publishCalibrationBatch(TaskSharedData_t* sharedData, ServoTargetBat
     }
     if (!sharedData->servoTargetQueue ||
         sharedData->servo_target_owner != SERVO_TARGET_OWNER_CALIBRATION) {
+        return false;
+    }
+    if (!calibrationBatchOverloadSafe(sharedData, batch)) {
         return false;
     }
     batch->source = SERVO_TARGET_OWNER_CALIBRATION;
@@ -1600,36 +1632,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
             if (!initTightenStateFromFeedback(ctx, sharedData, params)) {
                 failAutoCalibContext(ctx, "missing feedback after init");
-            }
-            return;
-        }
-
-        case AUTO_CALIB_STATE_NORMALIZE:
-        {
-            int32_t absNow = 0;
-            if (!readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &absNow)) {
-                failAutoCalibContext(ctx, "lost servo feedback during normalize");
-                return;
-            }
-            if (!appendJointCalibrationTargetToBatch(batch,
-                                                     ctx->jointIndex,
-                                                     clampToServoPosLocal(ctx->targetAbs),
-                                                     ctx->motionCfg)) {
-                failAutoCalibContext(ctx, "normalize target append failed");
-                return;
-            }
-            if (abs32(absNow - ctx->targetAbs) <= params.zeroReachAbsTolerance) {
-                Serial.printf("[AUTO CALIB] NORMALIZE_DONE J%02u abs=%ld targetAbs=%ld\r\n",
-                              ctx->jointIndex,
-                              (long)absNow,
-                              (long)ctx->targetAbs);
-                if (!initTightenStateFromFeedback(ctx, sharedData, params)) {
-                    failAutoCalibContext(ctx, "missing encoder after turn normalize");
-                }
-                return;
-            }
-            if ((uint32_t)(nowMs - ctx->stateBeginMs) >= params.turnNormalizeTimeoutMs) {
-                failAutoCalibContext(ctx, "normalize timeout");
             }
             return;
         }

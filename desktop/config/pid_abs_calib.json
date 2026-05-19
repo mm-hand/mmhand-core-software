@@ -1,0 +1,11 @@
+{
+  "comment": "PID ABS calibration anchors. Click Save PID ABS in the desktop UI after calibration to write measured values here.",
+  "schema_version": 1,
+  "updated_at_host_time": null,
+  "hand_profile": "",
+  "source_calib_status": "",
+  "zero_capture_tolerance_deg": 0.25,
+  "source_limit_valid_bitmap": "0x00000000",
+  "source_limit_locked_bitmap": "0x00000000",
+  "joints": {}
+}

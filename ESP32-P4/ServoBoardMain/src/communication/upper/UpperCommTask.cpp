@@ -466,42 +466,42 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIBRATE)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_START)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_START);
-        sendProtoAckPacket(CMD_START, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_START, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_RUN_FEEDBACK)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
-        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_PAUSE)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE);
-        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_STOP)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
-        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_RESET)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
-        sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
@@ -578,10 +578,12 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             if (activeMotorMask == 0) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {
-                upperApplyActiveScope(sharedData,
-                                      activeMotorMask,
-                                      activeJointMask,
-                                      requireCanFeedback);
+                if (!upperApplyActiveScope(sharedData,
+                                           activeMotorMask,
+                                           activeJointMask,
+                                           requireCanFeedback)) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                }
             }
         }
         sendProtoAckPacket(CMD_ACTIVE_SCOPE, sharedData->system_state, status);

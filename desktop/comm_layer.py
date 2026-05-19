@@ -57,7 +57,6 @@ from protocol import (
     CMD_SENSOR_STREAM_MODE,
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_RUN_FEEDBACK,
-    SYSTEM_STATE_STOPPED,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_PAUSED,
@@ -628,7 +627,7 @@ class LowerComputerComm:
                             model.control_enabled = False
                         elif ack_cmd == CMD_STOP:
                             model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_STOPPED
+                            model.system_state = SYSTEM_STATE_UNCONTROLLABLE
                         elif ack_cmd == CMD_RESET:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE

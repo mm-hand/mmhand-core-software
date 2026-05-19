@@ -12,7 +12,6 @@ struct AutoCalibrationParams {
     uint32_t windowMs;
     uint32_t traceMs;
     uint32_t zeroReturnTimeoutMs;
-    uint32_t turnNormalizeTimeoutMs;
     int32_t windowServoDeltaCounts;
     int32_t zeroReachAbsTolerance;
     float followArmDeg;

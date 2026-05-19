@@ -28,7 +28,6 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, u
             sharedData->targetAngles[i] = angles[i];
         }
         sharedData->joint_command_token++;
-        sharedData->control_mode = CONTROL_MODE_JOINT;
         xSemaphoreGive(lock);
     }
 }
@@ -61,7 +60,6 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     sharedData->motor_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = source;
-    sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
     if (lock) {
         xSemaphoreGive(lock);
     }
@@ -87,7 +85,6 @@ void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     sharedData->motor_sweep_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
-    sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
     if (lock) {
         xSemaphoreGive(lock);
     }
@@ -150,13 +147,25 @@ void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, u
     }
 }
 
-void upperApplyActiveScope(TaskSharedData_t* sharedData,
+bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeMotorMask,
                            uint32_t activeJointMask,
                            uint8_t requireCanFeedback)
 {
     if (!sharedData) {
-        return;
+        return false;
+    }
+    const uint8_t state = sharedData->system_state;
+    if (sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+        sharedData->control_enabled != 0 ||
+        (state != SYSTEM_STATE_IDLE &&
+         state != SYSTEM_STATE_READY &&
+         state != SYSTEM_STATE_UNCONTROLLABLE)) {
+        Serial.printf("[UPPER] ACTIVE_SCOPE rejected state=%u owner=%u enabled=%u\r\n",
+                      (unsigned)state,
+                      (unsigned)sharedData->servo_target_owner,
+                      (unsigned)sharedData->control_enabled);
+        return false;
     }
     const uint32_t motorMaskLimit = validMotorChannelMask();
     const uint32_t jointMaskLimit = (1UL << ENCODER_TOTAL_NUM) - 1UL;
@@ -172,4 +181,5 @@ void upperApplyActiveScope(TaskSharedData_t* sharedData,
                   (unsigned long)sharedData->active_motor_mask,
                   (unsigned long)sharedData->active_joint_mask,
                   (unsigned)sharedData->require_can_feedback);
+    return true;
 }

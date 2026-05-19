@@ -33,7 +33,7 @@ static const uint8_t kDebugJointCount =
 static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const int16_t kControlOverloadLoadThreshold = 235;
+static const int16_t kControlOverloadLoadThreshold = 250;
 static const uint8_t kControlOverloadLatchCycles = 3;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
@@ -147,7 +147,9 @@ static bool appendSecondaryTargetForJoint(TaskSharedData_t* sharedData,
                                           uint8_t jointIndex,
                                           int32_t primaryTarget,
                                           uint16_t speed,
-                                          uint8_t acc)
+                                          uint8_t acc,
+                                          const ServoAngleData_t* servoData,
+                                          uint32_t overloadFaultMask)
 {
     if (!batch) {
         return false;
@@ -163,9 +165,17 @@ static bool appendSecondaryTargetForJoint(TaskSharedData_t* sharedData,
     }
     const int secondaryCh = findMotorChannel(cfg.secondaryBusIndex, cfg.secondaryServoID);
     if (secondaryCh >= 0 && secondaryCh < SERVO_TOTAL_NUM) {
-        secondaryTarget = clampServoPosByMotorAbsLimit(sharedData,
-                                                       (uint8_t)secondaryCh,
-                                                       secondaryTarget);
+        const uint32_t secondaryBit = 1UL << (uint8_t)secondaryCh;
+        const bool secondaryOverload = (overloadFaultMask & secondaryBit) != 0;
+        const bool secondaryOnline =
+            servoData && (servoData->onlineStatus[(uint8_t)secondaryCh] != 0);
+        if (secondaryOverload && secondaryOnline) {
+            secondaryTarget = clampServoPos(servoData->servoAngles[(uint8_t)secondaryCh]);
+        } else {
+            secondaryTarget = clampServoPosByMotorAbsLimit(sharedData,
+                                                           (uint8_t)secondaryCh,
+                                                           secondaryTarget);
+        }
     }
     const bool appended = appendServoTarget(batch,
                                             cfg.secondaryBusIndex,
@@ -583,6 +593,46 @@ void controlTask(void* parameter)
                                     (feedbackOutputState || directOutputState);
         const bool normalOutputAllowed = controlEnabled;
 
+        if (normalOutputAllowed && telemetryFresh)
+        {
+            const uint32_t validMotorMask = validMotorChannelMask();
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
+            {
+                const uint32_t bit = 1UL << ch;
+                if (((validMotorMask & bit) == 0) ||
+                    telemetryData.onlineStatus[ch] == 0)
+                {
+                    overloadHighCount[ch] = 0;
+                    continue;
+                }
+
+                const int16_t loadMag = servoLoadMagnitude(telemetryData.load[ch]);
+                if (loadMag >= kControlOverloadLoadThreshold) {
+                    if (overloadHighCount[ch] < 255) {
+                        overloadHighCount[ch]++;
+                    }
+                } else {
+                    overloadHighCount[ch] = 0;
+                }
+
+                if (overloadHighCount[ch] >= kControlOverloadLatchCycles &&
+                    (overloadFaultLatched & bit) == 0)
+                {
+                    overloadFaultLatched |= bit;
+                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d mode=%u\r\n",
+                                  (unsigned)ch,
+                                  loadMag,
+                                  kControlOverloadLoadThreshold,
+                                  (unsigned)commandSnapshot.controlMode);
+                }
+            }
+        }
+        else
+        {
+            memset(overloadHighCount, 0, sizeof(overloadHighCount));
+        }
+        sharedData->overload_fault_bitmap = overloadFaultLatched;
+
         // 关节闭环模式下先按标定结果限制目标角度，避免目标超过当前工作空间。
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
@@ -612,7 +662,8 @@ void controlTask(void* parameter)
 
                     const bool isJoint16Motor =
                         ((int)ch == joint16PrimaryCh) || ((int)ch == joint16SecondaryCh);
-                    if (!normalOutputAllowed || (joint16DualFault && isJoint16Motor))
+                    const bool overloadFaultActive = (overloadFaultLatched & (1UL << ch)) != 0;
+                    if (!normalOutputAllowed || overloadFaultActive || (joint16DualFault && isJoint16Motor))
                     {
                         if (servoData.onlineStatus[ch] != 0) {
                             const int16_t holdPos = clampServoPos(servoData.servoAngles[ch]);
@@ -683,38 +734,6 @@ void controlTask(void* parameter)
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
                     ((overloadFaultLatched & (1UL << (uint8_t)jointMotorCh)) != 0);
 
-                if (normalOutputAllowed &&
-                    commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
-                    jointMotorCh >= 0 &&
-                    jointMotorCh < SERVO_TOTAL_NUM &&
-                    servoOnline &&
-                    telemetryFresh &&
-                    telemetryData.onlineStatus[jointMotorCh] != 0)
-                {
-                    const int16_t loadMag = servoLoadMagnitude(telemetryData.load[jointMotorCh]);
-                    if (loadMag >= kControlOverloadLoadThreshold) {
-                        if (overloadHighCount[jointMotorCh] < 255) {
-                            overloadHighCount[jointMotorCh]++;
-                        }
-                    } else {
-                        overloadHighCount[jointMotorCh] = 0;
-                    }
-
-                    if (overloadHighCount[jointMotorCh] >= kControlOverloadLatchCycles) {
-                        const uint32_t bit = (1UL << (uint8_t)jointMotorCh);
-                        if ((overloadFaultLatched & bit) == 0) {
-                            overloadFaultLatched |= bit;
-                            sharedData->overload_fault_bitmap = overloadFaultLatched;
-                            Serial.printf("[CONTROL] OVERLOAD_HOLD J%02u M%02d load=%d threshold=%d\r\n",
-                                          jointIndex,
-                                          jointMotorCh,
-                                          loadMag,
-                                          kControlOverloadLoadThreshold);
-                        }
-                        overloadFaultActive = true;
-                    }
-                }
-
                 if (jointIndex != kJoint16Index)
                 {
                     const int32_t servoPos =
@@ -776,7 +795,8 @@ void controlTask(void* parameter)
                     }
 
                     appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, absolutePosition[jointIndex],
-                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
+                                                  &servoData, overloadFaultLatched);
                     continue;
                 }
 
@@ -791,7 +811,8 @@ void controlTask(void* parameter)
                     }
 
                     appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, absolutePosition[jointIndex],
-                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
+                                                  &servoData, overloadFaultLatched);
                     continue;
                 }
 
@@ -815,7 +836,8 @@ void controlTask(void* parameter)
                 jointCmdPos[jointIndex] = targetPos;
                 jointCmdValid[jointIndex] = 1;
                 appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, targetPos,
-                                              SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                                              SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
+                                              &servoData, overloadFaultLatched);
             }
         }
 

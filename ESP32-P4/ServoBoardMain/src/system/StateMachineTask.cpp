@@ -92,6 +92,22 @@ static void setCommandModeJoint(TaskSharedData_t* sharedData)
     }
 }
 
+static void setCommandModeDirect(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
 static void resetServoTargetQueue(TaskSharedData_t* sharedData)
 {
     if (sharedData && sharedData->servoTargetQueue) {
@@ -111,7 +127,6 @@ static bool canAcceptStart(uint8_t state)
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_STOPPED ||
            state == SYSTEM_STATE_PAUSED;
 }
 
@@ -167,7 +182,7 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
 }
 
-static void resetControlAndFaultTokens(TaskSharedData_t* sharedData)
+static void resetControlProtectionFaults(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
         return;
@@ -364,6 +379,11 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 }
                 sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
                 sharedData->control_enabled = 1;
+                if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
+                    setCommandModeDirect(sharedData);
+                } else if (resumeState == SYSTEM_STATE_RUN_FEEDBACK) {
+                    setCommandModeJoint(sharedData);
+                }
                 setSystemState(sharedData,
                                (resumeState == SYSTEM_STATE_RUN_DIRECT ||
                                 resumeState == SYSTEM_STATE_RUN_FEEDBACK)
@@ -375,7 +395,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
-            resetControlAndFaultTokens(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
@@ -393,7 +412,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             resetServoTargetQueue(sharedData);
             requestServoEmergencyHold(sharedData);
-            resetControlAndFaultTokens(sharedData);
+            resetControlProtectionFaults(sharedData);
             sharedData->calibration_fault_latched = 0;
             sharedData->system_fault_latched_bitmap = 0;
             sharedData->system_fault_bitmap = 0;
@@ -415,7 +434,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            resetControlAndFaultTokens(sharedData);
+            setCommandModeDirect(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
             break;
 
@@ -432,7 +451,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            resetControlAndFaultTokens(sharedData);
             setCommandModeJoint(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_FEEDBACK);
             break;
@@ -489,7 +507,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
             if (!startAutoCalibrationTask(sharedData)) {
                 g_calibrationUIStatus = CALIB_STATUS_FAILED;
-                sharedData->calibration_fault_latched = 0;
+                sharedData->calibration_fault_latched = 1;
                 requestServoEmergencyHold(sharedData);
                 setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             }
@@ -518,7 +536,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            sharedData->calibration_fault_latched = 0;
+            sharedData->calibration_fault_latched = 1;
             g_calibrationUIStatus = CALIB_STATUS_FAILED;
             requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
