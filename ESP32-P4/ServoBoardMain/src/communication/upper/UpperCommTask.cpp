@@ -4,6 +4,9 @@
 #include "../../calibration/CalibrationTask.h"
 #include "../../hardware/HardwareMap.h"
 #include "../../system/StateMachineTask.h"
+#if MULTITURN_NVS_PERSISTENCE_ENABLE
+#include "../../persistence/MultiTurnNvsStore.h"
+#endif
 #include "UpperCommCommandRouter.h"
 #include "UpperCommProtocol.h"
 
@@ -68,7 +71,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[24];
+    uint8_t buffer[28];
     size_t idx = 0;
     const uint32_t faultBitmap = sharedData->system_fault_bitmap;
     const uint32_t transitionCount = sharedData->state_transition_count;
@@ -94,6 +97,8 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((unknownBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((unknownBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
+    buffer[idx++] = sharedData->multiturn_nvs_enabled ? 1 : 0;
+    buffer[idx++] = sharedData->multiturn_nvs_snapshot_valid ? 1 : 0;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -416,7 +421,10 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_RESET:
         case CMD_RUN_FEEDBACK:
         case CMD_PAUSE:
+        case CMD_HOST_HEARTBEAT:
             return 0;
+        case CMD_MULTITURN_NVS_CONTROL:
+            return kMultiTurnNvsControlPayloadBytes;
         case CMD_ANGLE_CTRL:
             return kFloatPayloadBytes;
         case CMD_CALIB_DATA:
@@ -462,46 +470,53 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     }
 
     const uint8_t cmd = frame[0];
+    // 任意合法上位机帧都说明 host 在线；界面空闲时由 heartbeat 帧刷新该时间戳。
+    sharedData->host_rx_heartbeat_ms = millis();
+
+    if (cmd == CMD_HOST_HEARTBEAT)
+    {
+        return;
+    }
 
     if (cmd == CMD_CALIBRATE)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_START)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_START);
-        sendProtoAckPacket(CMD_START, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_START, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_RUN_FEEDBACK)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
-        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_PAUSE)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE);
-        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_STOP)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
-        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
     if (cmd == CMD_RESET)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
-        sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_OK);
+        sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
@@ -578,10 +593,12 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             if (activeMotorMask == 0) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {
-                upperApplyActiveScope(sharedData,
-                                      activeMotorMask,
-                                      activeJointMask,
-                                      requireCanFeedback);
+                if (!upperApplyActiveScope(sharedData,
+                                           activeMotorMask,
+                                           activeJointMask,
+                                           requireCanFeedback)) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                }
             }
         }
         sendProtoAckPacket(CMD_ACTIVE_SCOPE, sharedData->system_state, status);
@@ -647,6 +664,50 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                           (unsigned long)validMask);
         }
         sendProtoAckPacket(CMD_MOTOR_ABS_LIMIT_LOCK, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_MULTITURN_NVS_CONTROL)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kMultiTurnNvsControlPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint8_t action = frame[1];
+#if MULTITURN_NVS_PERSISTENCE_ENABLE
+            if (action == 0) {
+                const bool setOk = multiTurnNvsSetEnabled(false);
+                const bool clearOk = multiTurnNvsClearSnapshots();
+                if (setOk && clearOk) {
+                    sharedData->multiturn_nvs_enabled = 0;
+                    sharedData->multiturn_nvs_snapshot_valid = 0;
+                    sharedData->multiturn_nvs_save_valid_mask = 0;
+                    Serial.println("[NVS MULTITURN] control enabled=0 clear=1");
+                } else {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                    Serial.printf("[NVS MULTITURN] control disable failed set=%u clear=%u\r\n",
+                                  setOk ? 1U : 0U,
+                                  clearOk ? 1U : 0U);
+                }
+            } else if (action == 1) {
+                if (multiTurnNvsSetEnabled(true)) {
+                    sharedData->multiturn_nvs_enabled = 1;
+                    sharedData->multiturn_nvs_snapshot_valid = multiTurnNvsHasSnapshot() ? 1 : 0;
+                    Serial.printf("[NVS MULTITURN] control enabled=1 snapshot=%u\r\n",
+                                  sharedData->multiturn_nvs_snapshot_valid ? 1U : 0U);
+                } else {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                    Serial.println("[NVS MULTITURN] control enable failed");
+                }
+            } else {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            }
+#else
+            (void)action;
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+#endif
+        }
+        sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL, sharedData->system_state, status);
         return;
     }
 

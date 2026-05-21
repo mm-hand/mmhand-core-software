@@ -34,6 +34,21 @@ bool postSystemEvent(TaskSharedData_t* sharedData, uint8_t event)
     return xQueueSend(sharedData->stateEventQueue, &msg, 0) == pdTRUE;
 }
 
+static void requestMultiTurnNvsSave(TaskSharedData_t* sharedData, uint8_t reason)
+{
+    if (!sharedData) {
+        return;
+    }
+#if !MULTITURN_NVS_PERSISTENCE_ENABLE
+    (void)reason;
+    return;
+#else
+    // 状态机只请求持久化；真正写 flash 由舵机通信任务完成，因为那里有最新可信 ABS/raw。
+    sharedData->multiturn_nvs_save_reason = reason;
+    sharedData->multiturn_nvs_save_request_token++;
+#endif
+}
+
 static void setSystemState(TaskSharedData_t* sharedData, uint8_t state)
 {
     if (!sharedData) {
@@ -92,6 +107,22 @@ static void setCommandModeJoint(TaskSharedData_t* sharedData)
     }
 }
 
+static void setCommandModeDirect(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
 static void resetServoTargetQueue(TaskSharedData_t* sharedData)
 {
     if (sharedData && sharedData->servoTargetQueue) {
@@ -111,7 +142,6 @@ static bool canAcceptStart(uint8_t state)
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_STOPPED ||
            state == SYSTEM_STATE_PAUSED;
 }
 
@@ -142,6 +172,35 @@ static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
            ((sharedData->multi_turn_unknown_bitmap & activeMask) == 0);
 }
 
+static bool activeMotorsAbsLimitsCalibrated(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+    const uint32_t activeMask = readyServoRequiredMask(sharedData);
+    if (activeMask == 0) {
+        return false;
+    }
+    const uint32_t missingMask = activeMask & ~sharedData->motor_abs_limit_valid_bitmap;
+    if (missingMask == 0) {
+        return true;
+    }
+
+    static uint32_t s_lastMissingLimitLogMs = 0;
+    static uint32_t s_lastMissingLimitMask = 0;
+    const uint32_t nowMs = millis();
+    if (missingMask != s_lastMissingLimitMask ||
+        (uint32_t)(nowMs - s_lastMissingLimitLogMs) > 1000) {
+        Serial.printf("[STATE] feedback ready rejected: uncalibrated ABS limit active=0x%08lX missing=0x%08lX valid=0x%08lX\r\n",
+                      (unsigned long)activeMask,
+                      (unsigned long)missingMask,
+                      (unsigned long)sharedData->motor_abs_limit_valid_bitmap);
+        s_lastMissingLimitMask = missingMask;
+        s_lastMissingLimitLogMs = nowMs;
+    }
+    return false;
+}
+
 static void logMultiTurnUnknownReject(TaskSharedData_t* sharedData, const char* eventName)
 {
     if (!sharedData) {
@@ -167,7 +226,7 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
 }
 
-static void resetControlAndFaultTokens(TaskSharedData_t* sharedData)
+static void resetControlProtectionFaults(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
         return;
@@ -254,7 +313,6 @@ static bool isControllableEntryReady(TaskSharedData_t* sharedData)
         servoReady = requiredServosOnline(sharedData, servoSnapshot);
     }
 
-    // TODO: Add a calibration-complete bitmap here. READY should require every
     // This is the gate from UNCONTROLLABLE to IDLE(controllable). READY is
     // reserved as a later pre-feedback state and is not entered automatically.
     return canReady &&
@@ -278,6 +336,9 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
         return false;
     }
     if (!activeMotorsMultiTurnKnown(sharedData)) {
+        return false;
+    }
+    if (!activeMotorsAbsLimitsCalibrated(sharedData)) {
         return false;
     }
 
@@ -364,6 +425,11 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 }
                 sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
                 sharedData->control_enabled = 1;
+                if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
+                    setCommandModeDirect(sharedData);
+                } else if (resumeState == SYSTEM_STATE_RUN_FEEDBACK) {
+                    setCommandModeJoint(sharedData);
+                }
                 setSystemState(sharedData,
                                (resumeState == SYSTEM_STATE_RUN_DIRECT ||
                                 resumeState == SYSTEM_STATE_RUN_FEEDBACK)
@@ -375,7 +441,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
-            resetControlAndFaultTokens(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
@@ -393,7 +458,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             resetServoTargetQueue(sharedData);
             requestServoEmergencyHold(sharedData);
-            resetControlAndFaultTokens(sharedData);
+            resetControlProtectionFaults(sharedData);
             sharedData->calibration_fault_latched = 0;
             sharedData->system_fault_latched_bitmap = 0;
             sharedData->system_fault_bitmap = 0;
@@ -415,8 +480,9 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            resetControlAndFaultTokens(sharedData);
+            setCommandModeDirect(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_START);
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK:
@@ -429,12 +495,16 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 logMultiTurnUnknownReject(sharedData, "RUN_FEEDBACK");
                 break;
             }
+            if (!activeMotorsAbsLimitsCalibrated(sharedData)) {
+                Serial.println("[STATE] reject RUN_FEEDBACK: active joints are not calibrated");
+                break;
+            }
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            resetControlAndFaultTokens(sharedData);
             setCommandModeJoint(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_FEEDBACK);
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_START);
             break;
 
         case SYSTEM_EVENT_RUN_DIRECT_DONE:
@@ -446,6 +516,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK_DONE:
@@ -457,6 +528,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
         case SYSTEM_EVENT_PAUSE:
@@ -489,7 +561,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
             if (!startAutoCalibrationTask(sharedData)) {
                 g_calibrationUIStatus = CALIB_STATUS_FAILED;
-                sharedData->calibration_fault_latched = 0;
+                sharedData->calibration_fault_latched = 1;
                 requestServoEmergencyHold(sharedData);
                 setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             }
@@ -508,6 +580,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->multi_turn_unknown_bitmap &= ~readyServoRequiredMask(sharedData);
             g_calibrationUIStatus = CALIB_STATUS_SUCCESS;
             setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
             break;
 
         case SYSTEM_EVENT_CALIBRATION_FAILED:
@@ -518,7 +591,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            sharedData->calibration_fault_latched = 0;
+            sharedData->calibration_fault_latched = 1;
             g_calibrationUIStatus = CALIB_STATUS_FAILED;
             requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);

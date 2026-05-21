@@ -5,7 +5,8 @@
 #include "../shared/TaskSharedData.h"
 
 // Runtime target expanded from one logical joint command to one physical motor.
-// For antagonist pairs, the secondary actuator target is mirrored by sign=-1.
+// Antagonist pairs are controlled by DualTendonControl and should provide both
+// motor targets explicitly instead of deriving a mirrored secondary target.
 struct JointActuatorRuntimeTarget {
     uint8_t motorChannel;
     uint8_t busIndex;
@@ -44,5 +45,11 @@ uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
                                    int32_t primaryTargetAbs,
                                    uint16_t speed,
                                    uint8_t acc);
+
+uint8_t appendJointActuatorRuntimeTargets(ServoTargetBatch_t* batch,
+                                          const JointActuatorRuntimeTarget* targets,
+                                          uint8_t targetCount,
+                                          uint16_t speed,
+                                          uint8_t acc);
 
 #endif // CONTROL_OUTPUT_BUILDER_H

@@ -168,24 +168,15 @@ bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* o
     return true;
 }
 
-// 由主舵机目标推导副舵机目标（拮抗关系）：
-// secondary = -primary + secondaryOffset + tensionBias�?
 bool computeSecondaryServoTargetForJoint(uint8_t jointIndex,
                                          int32_t primaryTarget,
                                          int16_t* outSecondaryTarget) {
-    if (!outSecondaryTarget) {
-        return false;
+    (void)jointIndex;
+    (void)primaryTarget;
+    if (outSecondaryTarget) {
+        *outSecondaryTarget = 0;
     }
-    JointDualServoConstraint cfg;
-    if (!getJointDualServoConstraint(jointIndex, &cfg)) {
-        return false;
-    }
-    // 副舵机目标按拮抗关系计算�?
-    JointActuatorItem secondary;
-    const int32_t sign = getJointActuator(jointIndex, 1, &secondary) ? secondary.sign : -1;
-    const int32_t secondaryTarget = sign * primaryTarget + cfg.secondaryOffset + cfg.tensionBias;
-    *outSecondaryTarget = clampToServoPos(secondaryTarget);
-    return true;
+    return false;
 }
 
 // 计算目标与当前编码器差值，并在整圈边界处做环绕归一化（最短路径）�?

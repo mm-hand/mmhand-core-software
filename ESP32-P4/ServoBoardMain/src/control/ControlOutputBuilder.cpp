@@ -81,9 +81,9 @@ int32_t wrapServoRawDelta(int32_t delta)
     return delta;
 }
 
-// Build physical motor targets for one logical joint target. PID code can call
-// this without caring whether a joint is single-motor (V1) or antagonist
-// dual-motor (V2/J16).
+// Build physical motor targets for one logical joint target. Dual-tendon
+// antagonist joints need an explicit two-motor controller, so this legacy helper
+// only expands the primary actuator for them.
 uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
                                          int32_t primaryTargetAbs,
                                          JointActuatorRuntimeTarget* outTargets,
@@ -95,7 +95,23 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
 
     uint8_t outCount = 0;
     const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
-    for (uint8_t i = 0; i < actuatorCount && outCount < outCapacity; i++) {
+    const bool dualAntagonist =
+        actuatorCount >= 2 &&
+        outCapacity > 0;
+    int8_t primarySign = 1;
+    int8_t secondarySign = 1;
+    if (dualAntagonist) {
+        JointActuatorItem primary;
+        JointActuatorItem secondary;
+        if (getJointActuator(jointIndex, 0, &primary) &&
+            getJointActuator(jointIndex, 1, &secondary)) {
+            primarySign = primary.sign;
+            secondarySign = secondary.sign;
+        }
+    }
+    const uint8_t maxActuatorCount =
+        (actuatorCount >= 2 && primarySign != secondarySign) ? 1 : actuatorCount;
+    for (uint8_t i = 0; i < maxActuatorCount && outCount < outCapacity; i++) {
         JointActuatorItem actuator;
         if (!getJointActuator(jointIndex, i, &actuator)) {
             continue;
@@ -106,17 +122,13 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
         }
 
         const MotorMapItem& motor = motorMap[actuator.motorChannel];
-        const int32_t signedTarget =
-            (int32_t)actuator.sign * primaryTargetAbs +
-            actuator.offset +
-            actuator.tensionBias;
 
         JointActuatorRuntimeTarget& target = outTargets[outCount++];
         target.motorChannel = actuator.motorChannel;
         target.busIndex = motor.busIndex;
         target.servoId = motor.servoID;
         target.sign = actuator.sign;
-        target.targetAbs = clampServoPos(signedTarget);
+        target.targetAbs = clampServoPos(primaryTargetAbs + actuator.offset);
     }
     return outCount;
 }
@@ -154,6 +166,30 @@ uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
     JointActuatorRuntimeTarget targets[MAX_JOINT_ACTUATORS];
     const uint8_t targetCount =
         buildJointActuatorRuntimeTargets(jointIndex, primaryTargetAbs, targets, MAX_JOINT_ACTUATORS);
+
+    uint8_t appended = 0;
+    for (uint8_t i = 0; i < targetCount; i++) {
+        if (appendServoTarget(batch,
+                              targets[i].busIndex,
+                              targets[i].servoId,
+                              targets[i].targetAbs,
+                              speed,
+                              acc)) {
+            appended++;
+        }
+    }
+    return appended;
+}
+
+uint8_t appendJointActuatorRuntimeTargets(ServoTargetBatch_t* batch,
+                                          const JointActuatorRuntimeTarget* targets,
+                                          uint8_t targetCount,
+                                          uint16_t speed,
+                                          uint8_t acc)
+{
+    if (!batch || !targets) {
+        return 0;
+    }
 
     uint8_t appended = 0;
     for (uint8_t i = 0; i < targetCount; i++) {

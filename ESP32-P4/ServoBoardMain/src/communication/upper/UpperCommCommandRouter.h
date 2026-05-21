@@ -31,7 +31,7 @@ void upperApplyTendonGuardConfig(TaskSharedData_t* sharedData,
 // 缓存上位机下发的校准零点 raw 数据，供后续校准流程消费。
 void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count);
 
-void upperApplyActiveScope(TaskSharedData_t* sharedData,
+bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeMotorMask,
                            uint32_t activeJointMask,
                            uint8_t requireCanFeedback);

@@ -54,10 +54,20 @@
 #define SYSTEM_EVENT_RUN_FEEDBACK_DONE 10
 #define SYSTEM_EVENT_PAUSE 11
 
+// 多圈 NVS 保存原因码，仅用于日志/诊断；当前快照是否可信仍由舵机通信任务判断。
+// 开启后：上位机离线、运行起止、校准完成、离线运动/跨圈边界都会触发本地快照保存。
+#define MULTITURN_NVS_PERSISTENCE_ENABLE 1
+#define MULTITURN_NVS_SAVE_REASON_RUN_START 1
+#define MULTITURN_NVS_SAVE_REASON_RUN_DONE 2
+#define MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE 3
+#define MULTITURN_NVS_SAVE_REASON_HOST_RESTORE 4
+#define MULTITURN_NVS_SAVE_REASON_CALIB_DONE 5
+#define MULTITURN_NVS_SAVE_REASON_OFFLINE_MOVE 6
+#define MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE 7
+
 #define SYSTEM_STATE_UNCONTROLLABLE 0
 #define SYSTEM_STATE_IDLE 1
 #define SYSTEM_STATE_RUN_FEEDBACK 2
-#define SYSTEM_STATE_STOPPED 3
 #define SYSTEM_STATE_CALIBRATION_RUNNING 4
 #define SYSTEM_STATE_READY 5
 #define SYSTEM_STATE_RUN_DIRECT 6
@@ -114,11 +124,11 @@ struct JointActuatorItem {
     // Logical motor channel in motorMap[].
     uint8_t motorChannel;
     // +1: actuator pulls in the same direction as the primary actuator.
-    // -1: antagonistic actuator; its target is mirrored around offset/bias.
+    // -1: antagonistic actuator; runtime targets must be built explicitly.
     int8_t sign;
     // Static calibration offset applied after sign mapping.
     int32_t offset;
-    // Optional bias used to keep antagonist rope preload/tension.
+    // Optional calibration field reserved for preload/tension workflows.
     int32_t tensionBias;
 };
 
@@ -321,6 +331,16 @@ typedef struct {
     volatile uint32_t restore_multi_turn_result_token;
     volatile uint32_t restore_multi_turn_restored_mask;
     volatile uint32_t restore_multi_turn_rejected_mask;
+    // 舵机多圈 ABS 的本地 NVS 备份请求。其它任务只递增 token，不直接写 flash。
+    volatile uint32_t multiturn_nvs_save_request_token;
+    volatile uint8_t multiturn_nvs_save_reason;
+    volatile uint32_t multiturn_nvs_save_result_token;
+    volatile uint32_t multiturn_nvs_save_valid_mask;
+    volatile uint32_t multiturn_nvs_save_fail_count;
+    volatile uint8_t multiturn_nvs_enabled;
+    volatile uint8_t multiturn_nvs_snapshot_valid;
+    // 每个合法上位机帧都会刷新；界面空闲时由 heartbeat 帧维持在线状态。
+    volatile uint32_t host_rx_heartbeat_ms;
     // Calibration-derived absolute servo travel limits. bit i in valid_bitmap
     // means motor_abs_limit_min/max[i] is valid; bit i in locked_bitmap means
     // normal control output is currently constrained to that window.

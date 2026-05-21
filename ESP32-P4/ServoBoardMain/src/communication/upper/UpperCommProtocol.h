@@ -40,9 +40,13 @@
 #define CMD_PAUSE 0xD9
 #define CMD_RESTORE_MULTITURN 0xDA
 #define CMD_MOTOR_ABS_LIMIT_LOCK 0xDB
+// 上位机在线心跳；舵机任务通过丢失 heartbeat 判断是否触发 NVS 备份。
+#define CMD_HOST_HEARTBEAT 0xDC
+#define CMD_MULTITURN_NVS_CONTROL 0xDD
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
+#define PROTO_ACK_STATUS_QUEUED 2
 
 #define SENSOR_STREAM_MODE_LEGACY_U16_WRAP 0
 #define SENSOR_STREAM_MODE_SIGNED_I16 1
@@ -53,6 +57,7 @@ static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
 static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5;
+static const size_t kMultiTurnNvsControlPayloadBytes = 1;
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;

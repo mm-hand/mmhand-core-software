@@ -14,7 +14,6 @@ from protocol import (
     SYSTEM_FAULT_CAN_OFFLINE,
     SYSTEM_FAULT_JOINT16_DUAL,
     SYSTEM_FAULT_OVERLOAD,
-    SYSTEM_FAULT_RELEASE_GUARD,
     SYSTEM_FAULT_SERVO_OFFLINE,
 )
 from .ui_context import HandGuiContext
@@ -119,6 +118,14 @@ class HandGUI(QtWidgets.QMainWindow):
         ]:
             toolbar.addWidget(widget)
 
+        toolbar_spacer = QtWidgets.QWidget()
+        toolbar_spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        toolbar.addWidget(toolbar_spacer)
+
+        initial_status = self._pending_status_text or ("Ready" if self.is_comm_connected() else "Disconnected")
+        self.status_label = QtWidgets.QLabel(initial_status)
+        self._build_top_status_strip(toolbar)
+
         central = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(central)
         self.control_panel = ControlPanel(self.context)
@@ -126,17 +133,67 @@ class HandGUI(QtWidgets.QMainWindow):
         central.addWidget(self.control_panel)
         central.setStretchFactor(0, 1)
 
-        initial_status = self._pending_status_text or ("Ready" if self.is_comm_connected() else "Disconnected")
-        self.status_label = QtWidgets.QLabel(initial_status)
-        self.delay_label = QtWidgets.QLabel("")
-        self.turn_label = QtWidgets.QLabel("Turn: -")
-        self.fault_label = QtWidgets.QLabel("Faults: none")
         self.statusBar().addWidget(self.status_label, 1)
-        self.statusBar().addPermanentWidget(self.fault_label)
-        self.statusBar().addPermanentWidget(self.turn_label)
-        self.statusBar().addPermanentWidget(self.delay_label)
 
         self.joint_plot = JointRealtimePlotView(self.context, self)
+
+    def _build_top_status_strip(self, toolbar: QtWidgets.QToolBar) -> None:
+        strip = QtWidgets.QWidget()
+        strip.setObjectName("TopStatusStrip")
+        strip.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        layout = QtWidgets.QHBoxLayout(strip)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(5)
+
+        self.fault_label = self._make_top_status_label("SYS -", 150)
+        self.calib_label = self._make_top_status_label("CALIB -", 82)
+        self.overload_label = self._make_top_status_label("OL OK", 70)
+        self.turn_label = self._make_top_status_label("TURN -", 102)
+        self.delay_label = self._make_top_status_label("--", 62)
+
+        for label in [
+            self.fault_label,
+            self.calib_label,
+            self.overload_label,
+            self.turn_label,
+            self.delay_label,
+        ]:
+            layout.addWidget(label)
+
+        strip.setStyleSheet(
+            "QWidget#TopStatusStrip {"
+            "background:#f6f8fa;"
+            "border:1px solid #d0d7de;"
+            "border-radius:4px;"
+            "}"
+        )
+        toolbar.addWidget(strip)
+
+    def _make_top_status_label(self, text: str, min_width: int) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(text)
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        label.setMinimumHeight(24)
+        label.setMinimumWidth(min_width)
+        self._style_top_status_label(label, "neutral")
+        return label
+
+    @staticmethod
+    def _style_top_status_label(label: QtWidgets.QLabel, state: str = "neutral") -> None:
+        palette = {
+            "neutral": ("#24292f", "#eef2f5", "#d0d7de", 600),
+            "ok": ("#1b5e20", "#e8f5e9", "#81c784", 700),
+            "lag": ("#8a5a00", "#fff8e1", "#ffcc80", 700),
+            "warn": ("#c62828", "#ffebee", "#ef9a9a", 700),
+        }
+        fg, bg, border, weight = palette.get(state, palette["neutral"])
+        label.setStyleSheet(
+            f"color:{fg};"
+            f"background:{bg};"
+            f"border:1px solid {border};"
+            "border-radius:3px;"
+            "padding:2px 5px;"
+            f"font-weight:{weight};"
+        )
 
     def _attach_mode_menu(self) -> None:
         action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
@@ -333,45 +390,71 @@ class HandGUI(QtWidgets.QMainWindow):
         ts = float(getattr(state, "timestamp", 0.0) or 0.0)
         if ts > 0:
             delay_ms = max(0.0, (time.time() - ts) * 1000.0)
-        self.delay_label.setText(f"{delay_ms:.0f} ms" if delay_ms else "")
         overload = [str(i) for i, f in enumerate(getattr(state, "servo_overload_fault", []) or []) if f]
-        release = [f"J{i}" for i, f in enumerate(getattr(state, "joint_reverse_release_fault", []) or []) if f]
-        mode = self.current_mode
-        calib = str(getattr(state, "calib_status", "IDLE"))
+        calib = str(getattr(state, "calib_status", "IDLE") or "IDLE")
         sys_state = self._system_state_name(getattr(state, "system_state", None)) if getattr(state, "has_system_status_data", False) else "-"
         sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
-        turn_text, turn_ok = self._turn_known_text(state)
+        turn_text, turn_ok, turn_tip = self._turn_known_status(state)
+        sys_text = f"SYS {sys_state}" if not sys_faults else f"SYS {sys_state} | {','.join(sys_faults)}"
+        calib_text = f"CALIB {calib}"
+        overload_text = "OL OK" if not overload else f"OL {','.join(overload)}"
+        delay_text, delay_state = self._format_delay_status(delay_ms)
+        self.fault_label.setText(sys_text)
+        self.fault_label.setToolTip(sys_text)
+        self.calib_label.setText(calib_text)
+        self.calib_label.setToolTip(f"Calibration: {calib}")
+        self.overload_label.setText(overload_text)
+        self.overload_label.setToolTip("Overload: none" if not overload else f"Overload motor: {','.join(overload)}")
         self.turn_label.setText(turn_text)
-        self.turn_label.setStyleSheet(
-            "font-weight:700; color:#2e7d32;" if turn_ok else "font-weight:700; color:#c62828;"
-        )
-        self.fault_label.setText(
-            f"Mode: {mode} | Sys: {sys_state} | Calib: {calib} | "
-            f"SysFault: {','.join(sys_faults) if sys_faults else 'none'} | "
-            f"Overload: {','.join(overload) if overload else 'none'} | "
-            f"Release: {','.join(release) if release else 'none'}"
-        )
+        self.turn_label.setToolTip(turn_tip)
+        self.delay_label.setText(delay_text)
+        self.delay_label.setToolTip(f"Delay: {delay_ms:.0f} ms" if delay_ms else "Delay: -")
+        self._style_top_status_label(self.fault_label, "warn" if sys_faults else "ok")
+        self._style_top_status_label(self.calib_label, self._calib_status_style(calib))
+        self._style_top_status_label(self.overload_label, "warn" if overload else "ok")
+        self._style_top_status_label(self.turn_label, "ok" if turn_ok else "warn")
+        self._style_top_status_label(self.delay_label, delay_state)
 
-    def _turn_known_text(self, state: HandModel) -> tuple[str, bool]:
+    @staticmethod
+    def _format_delay_status(delay_ms: float) -> tuple[str, str]:
+        if delay_ms <= 0:
+            return "--", "neutral"
+        text = f"{delay_ms:.0f}ms" if delay_ms < 1000.0 else f"{delay_ms / 1000.0:.1f}s"
+        if delay_ms < 200.0:
+            return text, "ok"
+        if delay_ms < 1000.0:
+            return text, "lag"
+        return text, "warn"
+
+    @staticmethod
+    def _calib_status_style(calib: str) -> str:
+        text = str(calib or "").upper()
+        if text in {"SUCCESS", "DONE"}:
+            return "ok"
+        if text in {"PENDING", "RUNNING", "SYNCING"}:
+            return "lag"
+        if text in {"FAILED", "NO_CALIB", "DISCONNECTED"}:
+            return "warn"
+        return "neutral"
+
+    def _turn_known_status(self, state: HandModel) -> tuple[str, bool, str]:
         if not getattr(state, "has_system_status_data", False):
-            return "Turn: -", False
+            return "TURN -", False, "Turn: unknown"
         try:
             unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
         except Exception:
             unknown = 0
         active_mask = 0
         try:
-            data = self.control_panel.scope_combo.currentData()
-            if data:
-                active_mask = int(data[0])
+            active_mask = int(self.control_panel._active_motor_mask_from_ui())
         except Exception:
             active_mask = 0
         if active_mask == 0:
             active_mask = VALID_MOTOR_MASK
         active_unknown = unknown & active_mask
         if active_unknown:
-            return f"Turn: UNKNOWN 0x{active_unknown:08X}", False
-        return "Turn: KNOWN", True
+            return "TURN UNKNOWN", False, f"Unknown turn mask: 0x{active_unknown:08X}"
+        return "TURN KNOWN", True, "Turn: known"
 
     @staticmethod
     def _system_state_name(value) -> str:
@@ -379,7 +462,6 @@ class HandGUI(QtWidgets.QMainWindow):
             0: "UNCTRL",
             1: "IDLE",
             2: "RUN_FEEDBACK",
-            3: "STOP",
             4: "CAL_RUN",
             5: "READY",
             6: "RUN_DIRECT",
@@ -401,7 +483,6 @@ class HandGUI(QtWidgets.QMainWindow):
             (SYSTEM_FAULT_SERVO_OFFLINE, "SERVO"),
             (SYSTEM_FAULT_CALIBRATION, "CALIB"),
             (SYSTEM_FAULT_OVERLOAD, "OVERLOAD"),
-            (SYSTEM_FAULT_RELEASE_GUARD, "RELEASE"),
             (SYSTEM_FAULT_JOINT16_DUAL, "J16"),
         ]
         return [name for bit, name in names if (value & bit) != 0]
@@ -587,22 +668,19 @@ class HandGUI(QtWidgets.QMainWindow):
         return fields
 
     def _current_scope_record_fields(self):
-        combo = getattr(getattr(self, "control_panel", None), "scope_combo", None)
-        if combo is None:
+        panel = getattr(self, "control_panel", None)
+        if panel is None:
             return "", "", "", ""
         try:
-            label = combo.currentText()
-            data = combo.currentData()
-        except RuntimeError:
-            return "", "", "", ""
-        if not isinstance(data, tuple) or len(data) < 3:
-            return label, "", "", ""
-        try:
+            label = panel._active_scope_label_from_ui()
+            data = panel._current_active_scope_tuple()
+            if data is None:
+                return label, "", "", ""
             motor_mask = f"0x{int(data[0]):08X}"
             joint_mask = f"0x{int(data[1]):08X}"
             require_can = 1 if bool(data[2]) else 0
         except Exception:
-            return label, "", "", ""
+            return "", "", "", ""
         return label, motor_mask, joint_mask, require_can
 
     @staticmethod
