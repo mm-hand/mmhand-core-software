@@ -1,6 +1,7 @@
 #include "DualTendonControl.h"
 
 #include <math.h>
+#include <string.h>
 #include "ControlOutputBuilder.h"
 #include "ControlSafety.h"
 #include "../hardware/HardwareMap.h"
@@ -14,6 +15,7 @@ struct Point2D {
 
 struct DualTendonJointConfig {
     uint8_t enabled;
+    uint8_t model;
     float motorZero[2];
     float gain[2];
     float kp[2];
@@ -34,6 +36,14 @@ static DualTendonJointState g_dualTendonState[ENCODER_TOTAL_NUM];
 static const float kControlPeriodSec = 0.010f;
 static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 
+static const uint8_t kDualTendonModelSharedCadGeometry = 1;
+
+static const float kDefaultDualTendonGain = -40.0f;
+static const float kDefaultDualTendonKp = 2.1f;
+static const float kDefaultDualTendonKi = 0.1f;
+static const float kDefaultDualTendonKd = 0.005f;
+static const float kDefaultDualTendonIntegralLimit = 2000.0f;
+
 static const Point2D kJoint16Origin = {0.0f, 0.0f};
 static const Point2D kJoint16A1_0 = {-5.741894f, 0.244188f};
 static const Point2D kJoint16B1_0 = {-1.808043f, 4.317810f};
@@ -51,23 +61,38 @@ static const float kJoint16ThetaSwitch2 = 30.51f * kDegToRad;
 
 static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 {
-    if (!out || jointIndex != kJoint16Index) {
+    if (!out) {
         return false;
     }
+
+    memset(out, 0, sizeof(*out));
     out->enabled = 1;
-    out->motorZero[0] = 2557.0f;
-    out->motorZero[1] = 358.0f;
-    out->gain[0] = -40.0f;
-    out->gain[1] = -40.0f;
-    out->kp[0] = 2.1f;
-    out->kp[1] = 2.1f;
-    out->ki[0] = 0.1f;
-    out->ki[1] = 0.1f;
-    out->kd[0] = 0.005f;
-    out->kd[1] = 0.005f;
-    out->integralLimit[0] = 2000.0f;
-    out->integralLimit[1] = 2000.0f;
-    return true;
+
+    out->gain[0] = kDefaultDualTendonGain;
+    out->gain[1] = kDefaultDualTendonGain;
+    out->kp[0] = kDefaultDualTendonKp;
+    out->kp[1] = kDefaultDualTendonKp;
+    out->ki[0] = kDefaultDualTendonKi;
+    out->ki[1] = kDefaultDualTendonKi;
+    out->kd[0] = kDefaultDualTendonKd;
+    out->kd[1] = kDefaultDualTendonKd;
+    out->integralLimit[0] = kDefaultDualTendonIntegralLimit;
+    out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
+
+    switch (jointIndex) {
+        case 0:
+        case 4:
+        case 8:
+        case 12:
+        case kJoint16Index:
+            out->model = kDualTendonModelSharedCadGeometry;
+            out->motorZero[0] = 2557.0f;
+            out->motorZero[1] = 358.0f;
+            return true;
+        default:
+            out->enabled = 0;
+            return false;
+    }
 }
 
 static float constrainFloat(float value, float minValue, float maxValue)
@@ -116,19 +141,27 @@ static float joint16Tendon2LengthChange(float qRad)
     return length - kJoint16L2_0;
 }
 
-static bool tendonLengthChange(uint8_t jointIndex, uint8_t actuatorIndex, float qDeg, float* outMm)
+static bool tendonLengthChange(const DualTendonJointConfig& cfg,
+                               uint8_t jointIndex,
+                               uint8_t actuatorIndex,
+                               float qDeg,
+                               float* outMm)
 {
     if (!outMm) {
         return false;
     }
-    const float qRad = qDeg * kDegToRad;
-    if (jointIndex == kJoint16Index) {
-        *outMm = (actuatorIndex == 0)
-            ? joint16Tendon1LengthChange(qRad)
-            : joint16Tendon2LengthChange(qRad);
-        return true;
+    switch (cfg.model) {
+        case kDualTendonModelSharedCadGeometry: {
+            (void)jointIndex;
+            const float qRad = qDeg * kDegToRad;
+            *outMm = (actuatorIndex == 0)
+                ? joint16Tendon1LengthChange(qRad)
+                : joint16Tendon2LengthChange(qRad);
+            return true;
+        }
+        default:
+            return false;
     }
-    return false;
 }
 
 static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActuators[2])
@@ -147,6 +180,10 @@ static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActu
 
 bool isDualTendonJoint(uint8_t jointIndex)
 {
+    DualTendonJointConfig cfg;
+    if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
+        return false;
+    }
     JointActuatorItem actuators[2];
     return getDualTendonActuators(jointIndex, actuators);
 }
@@ -183,8 +220,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
     float xRefMm[2] = {0.0f, 0.0f};
     float xFbMm[2] = {0.0f, 0.0f};
     for (uint8_t i = 0; i < 2; i++) {
-        if (!tendonLengthChange(jointIndex, i, qRefDeg, &xRefMm[i]) ||
-            !tendonLengthChange(jointIndex, i, qFbDeg, &xFbMm[i])) {
+        if (!tendonLengthChange(cfg, jointIndex, i, qRefDeg, &xRefMm[i]) ||
+            !tendonLengthChange(cfg, jointIndex, i, qFbDeg, &xFbMm[i])) {
             return false;
         }
     }
