@@ -1,5 +1,5 @@
 {
-  "comment": "PID ABS calibration anchors. Click Save PID ABS in the desktop UI after calibration to write measured values here.",
+  "comment": "PID ABS calibration anchors. zero_abs_at_encoder_0deg is captured after each joint finishes calibration, the first time it enters +/-0.25 deg around zero.",
   "schema_version": 1,
   "updated_at_host_time": null,
   "hand_profile": "",

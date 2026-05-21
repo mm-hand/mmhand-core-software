@@ -33,10 +33,12 @@ from protocol import (
     build_local_test_params_cmd,
     build_local_test_start_cmd,
     build_local_test_stop_cmd,
+    build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_sweep_cmd,
+    build_multiturn_nvs_control_cmd,
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
@@ -54,6 +56,7 @@ from protocol import (
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     CMD_MOTOR_ABS_LIMIT_LOCK,
+    CMD_MULTITURN_NVS_CONTROL,
     CMD_SENSOR_STREAM_MODE,
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_RUN_FEEDBACK,
@@ -78,6 +81,8 @@ from run_data_logger import RunDataLogger
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
+# 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
+HOST_HEARTBEAT_INTERVAL_S = 0.5
 
 
 def list_ports() -> List[tuple]:
@@ -179,6 +184,8 @@ class LowerComputerComm:
         self._tx_diag_total_cmds = 0
         self._tx_diag_angle_live_cmds = 0
         self._tx_diag_bytes = 0
+        self._last_heartbeat_tx = 0.0
+        self._heartbeat_enabled = False
         self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
 
         if self.port:
@@ -203,6 +210,8 @@ class LowerComputerComm:
             self._clear_queue(self.tx_queue)
             self._reset_rx_diag()
             self._reset_tx_diag()
+            self._last_heartbeat_tx = 0.0
+            self._heartbeat_enabled = False
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -418,6 +427,8 @@ class LowerComputerComm:
                 self._stream_mode_ack_pending = False
 
     def _process_packets(self, packets: List[tuple]) -> Optional[HandModel]:
+        if packets:
+            self._heartbeat_enabled = True
         model = HandModel()
         if self._last_model:
             model.copy_state_from(self._last_model)
@@ -565,6 +576,8 @@ class LowerComputerComm:
                         system_fault_bitmap,
                         state_transition_count,
                         multi_turn_unknown_bitmap,
+                        multiturn_nvs_enabled,
+                        multiturn_nvs_snapshot_valid,
                     ) = parsed
                     model.system_state = int(system_state)
                     model.control_enabled = bool(control_enabled)
@@ -573,6 +586,8 @@ class LowerComputerComm:
                     model.system_fault_bitmap = int(system_fault_bitmap)
                     model.state_transition_count = int(state_transition_count)
                     model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
+                    model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
+                    model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
                     model.has_system_status_data = True
                     if calib_status == 1:
                         model.calib_status = "PENDING"
@@ -620,6 +635,7 @@ class LowerComputerComm:
                         CMD_PAUSE,
                         CMD_RESTORE_MULTITURN,
                         CMD_MOTOR_ABS_LIMIT_LOCK,
+                        CMD_MULTITURN_NVS_CONTROL,
                     ) and status == PROTO_ACK_STATUS_OK:
                         model.system_state = int(applied_mode)
                         model.has_system_status_data = True
@@ -646,6 +662,8 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_RESTORE_MULTITURN:
                             pass
                         elif ack_cmd == CMD_MOTOR_ABS_LIMIT_LOCK:
+                            pass
+                        elif ack_cmd == CMD_MULTITURN_NVS_CONTROL:
                             pass
                     emitted = True
 
@@ -743,6 +761,7 @@ class LowerComputerComm:
     def _tx_loop(self):
         while self.running and self.serial and self.serial.is_open:
             try:
+                self._maybe_send_host_heartbeat()
                 cmd = self.tx_queue.get(timeout=TX_QUEUE_GET_TIMEOUT)
                 data = self._encode_command(cmd)
                 if data:
@@ -755,6 +774,21 @@ class LowerComputerComm:
             except Exception as exc:
                 print(f"TX error: {exc}")
 
+    def _maybe_send_host_heartbeat(self) -> None:
+        """发送轻量在线帧，不占用普通命令队列。"""
+        now = time.time()
+        if now - self._last_heartbeat_tx < HOST_HEARTBEAT_INTERVAL_S:
+            return
+        if not (self.serial and self.serial.is_open):
+            return
+        if not self._heartbeat_enabled:
+            return
+        data = build_host_heartbeat_cmd()
+        with self._tx_lock:
+            self.serial.write(data)
+        self._last_heartbeat_tx = now
+        self._update_tx_diag("host_heartbeat", len(data))
+
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":
             return build_calibrate_cmd()
@@ -766,6 +800,8 @@ class LowerComputerComm:
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
             return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
+            return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
             return build_motor_pos_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":

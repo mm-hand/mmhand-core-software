@@ -16,6 +16,7 @@ from protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_DATA,
     CMD_MOTOR_ABS_LIMIT_LOCK,
+    CMD_MULTITURN_NVS_CONTROL,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     ENCODER_COUNT,
@@ -35,6 +36,7 @@ LOWER_SYNC_TIMEOUT_S = 2.5
 LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
+MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
 MULTITURN_CACHE_PATH = Path(__file__).resolve().parent / "multiturn_cache.json"
@@ -590,6 +592,13 @@ class HandController:
             bool(locked),
         ))
         ack = self.comm.wait_for_ack(CMD_MOTOR_ABS_LIMIT_LOCK, MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S)
+        return bool(ack is not None and int(ack[2]) == 0)
+
+    def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
+        if not self.comm:
+            return False
+        self.comm.send_command(("multiturn_nvs_control", bool(enabled)))
+        ack = self.comm.wait_for_ack(CMD_MULTITURN_NVS_CONTROL, MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S)
         return bool(ack is not None and int(ack[2]) == 0)
 
     def start(self):

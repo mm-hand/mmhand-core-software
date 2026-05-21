@@ -44,6 +44,9 @@ CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
 CMD_RESTORE_MULTITURN = 0xDA
 CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
+# 上位机在线心跳；固件用它判断桌面端是否已经关闭。
+CMD_HOST_HEARTBEAT = 0xDC
+CMD_MULTITURN_NVS_CONTROL = 0xDD
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -125,7 +128,7 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
     return payload[0], payload[1], payload[2]
 
 
-def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int]]:
+def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int]]:
     if len(payload) < 13:
         return None
     system_state = payload[0]
@@ -136,6 +139,8 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
     system_fault_bitmap = struct.unpack(">I", payload[5:9])[0]
     state_transition_count = struct.unpack(">I", payload[9:13])[0]
     multi_turn_unknown_bitmap = struct.unpack(">I", payload[13:17])[0] if len(payload) >= 17 else 0
+    multiturn_nvs_enabled = payload[17] if len(payload) >= 18 else 1
+    multiturn_nvs_snapshot_valid = payload[18] if len(payload) >= 19 else 0
     return (
         system_state,
         control_enabled,
@@ -145,6 +150,8 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
         system_fault_bitmap,
         state_transition_count,
         multi_turn_unknown_bitmap,
+        multiturn_nvs_enabled,
+        multiturn_nvs_snapshot_valid,
     )
 
 
@@ -395,6 +402,16 @@ def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -
         int(active_motor_mask) & 0xFFFFFFFF,
     )
     return _build_command_frame(CMD_MOTOR_ABS_LIMIT_LOCK, payload)
+
+
+def build_host_heartbeat_cmd() -> bytes:
+    """界面打开时维持下位机 host-online 计时器。"""
+    return _build_command_frame(CMD_HOST_HEARTBEAT, b"")
+
+
+def build_multiturn_nvs_control_cmd(enabled: bool) -> bytes:
+    # False means disable and clear old snapshots; True only enables future saves.
+    return _build_command_frame(CMD_MULTITURN_NVS_CONTROL, bytes([1 if enabled else 0]))
 
 
 def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:

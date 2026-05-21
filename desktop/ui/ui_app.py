@@ -446,9 +446,7 @@ class HandGUI(QtWidgets.QMainWindow):
             unknown = 0
         active_mask = 0
         try:
-            data = self.control_panel.scope_combo.currentData()
-            if data:
-                active_mask = int(data[0])
+            active_mask = int(self.control_panel._active_motor_mask_from_ui())
         except Exception:
             active_mask = 0
         if active_mask == 0:
@@ -670,22 +668,19 @@ class HandGUI(QtWidgets.QMainWindow):
         return fields
 
     def _current_scope_record_fields(self):
-        combo = getattr(getattr(self, "control_panel", None), "scope_combo", None)
-        if combo is None:
+        panel = getattr(self, "control_panel", None)
+        if panel is None:
             return "", "", "", ""
         try:
-            label = combo.currentText()
-            data = combo.currentData()
-        except RuntimeError:
-            return "", "", "", ""
-        if not isinstance(data, tuple) or len(data) < 3:
-            return label, "", "", ""
-        try:
+            label = panel._active_scope_label_from_ui()
+            data = panel._current_active_scope_tuple()
+            if data is None:
+                return label, "", "", ""
             motor_mask = f"0x{int(data[0]):08X}"
             joint_mask = f"0x{int(data[1]):08X}"
             require_can = 1 if bool(data[2]) else 0
         except Exception:
-            return label, "", "", ""
+            return "", "", "", ""
         return label, motor_mask, joint_mask, require_can
 
     @staticmethod

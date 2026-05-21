@@ -24,7 +24,7 @@ static const float kAutoCalibrationZeroDeg = 0.0f;
 static const float kAutoCalibrationTightDeg = 90.0f;
 static const float kAutoCalibrationTotalDeg =
     kAutoCalibrationTightDeg - kAutoCalibrationStartDeg;
-static const int32_t kAutoServoZeroPullCounts = 400;
+static const int32_t kAutoServoZeroPullCounts = 600;
 static const int32_t kAutoServoZeroPullToleranceCounts = 40;
 static const int32_t kDualAutoSlackCounts = 4800;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
@@ -83,6 +83,47 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
                   (long)minAbs,
                   (long)maxAbs,
                   (long)kCalibratedMotorAbsWindowCounts);
+}
+
+static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
+                                                  uint8_t jointIndex)
+{
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
+        return;
+    }
+
+    uint32_t clearedMask = 0;
+    JointActuatorGroup group;
+    if (getJointActuatorGroup(jointIndex, &group)) {
+        for (uint8_t i = 0; i < group.count; i++) {
+            const uint8_t motorChannel = group.actuators[i].motorChannel;
+            if (motorChannel < SERVO_TOTAL_NUM && isMotorChannelValid(motorChannel)) {
+                clearedMask |= (1UL << motorChannel);
+            }
+        }
+    } else {
+        const int primaryCh = findMotorChannelByBusId(jointMap[jointIndex].busIndex,
+                                                      jointMap[jointIndex].servoID);
+        if (primaryCh >= 0 && primaryCh < SERVO_TOTAL_NUM) {
+            clearedMask |= (1UL << (uint8_t)primaryCh);
+        }
+    }
+
+    if (clearedMask == 0) {
+        return;
+    }
+
+    sharedData->motor_abs_limit_valid_bitmap &= ~clearedMask;
+    sharedData->motor_abs_limit_locked_bitmap &= ~clearedMask;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        if ((clearedMask & (1UL << ch)) != 0) {
+            sharedData->motor_abs_limit_min[ch] = 0;
+            sharedData->motor_abs_limit_max[ch] = 0;
+        }
+    }
+    Serial.printf("[AUTO CALIB] ABS_LIMIT_CLEAR J%02u mask=0x%08lX\r\n",
+                  (unsigned)jointIndex,
+                  (unsigned long)clearedMask);
 }
 
 static int16_t normalizeServoRawSingleTurn(int32_t value)
@@ -1576,6 +1617,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 ctx->stateBeginMs = nowMs;
                 ctx->lastCommandMs = 0;
                 ctx->lastTraceMs = 0;
+                clearCalibratedMotorAbsLimitsForJoint(sharedData, ctx->jointIndex);
             }
 
             if (!isJointPrimaryServoMultiTurnKnown(sharedData, ctx->jointIndex)) {

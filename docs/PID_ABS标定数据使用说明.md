@@ -15,7 +15,8 @@ desktop/config/pid_abs_calib.json
 1. 连接上位机和 ESP32-P4。
 2. 执行自动标定，等待右上角 `CALIB` 进入成功状态。
 3. 在 Joint Channel 里观察 `0deg ABS` 列。
-   - 当某个关节实际磁编角第一次接近 `0 ± 0.25°` 时，上位机会记录该关节对应舵机的当前绝对 ABS。
+   - 上位机会先等待该关节完成自动标定，也就是对应电机的 `Limit` valid 位先被清除、随后重新变为有效。
+   - 在该关节完成标定之后，实际磁编角第一次接近 `0 ± 0.25°` 时，上位机会记录该关节对应舵机的当前绝对 ABS。
    - 一个关节对应两个拮抗舵机时，会同时记录两个舵机，例如 `M00:12345 M22:22345`。
 4. 确认 Motor Channel 的 `Limit` 已经有有效范围。
    - PID 文件使用 `Limit` 的右端，也就是固件上报的 `motor_abs_limit_max[motor]`。
@@ -62,7 +63,7 @@ desktop/config/pid_abs_calib.json
 
 字段含义：
 
-- `zero_abs_at_encoder_0deg`：磁编码器实际角第一次进入 `0 ± 0.25°` 时，该舵机读到的绝对 ABS。
+- `zero_abs_at_encoder_0deg`：该关节完成自动标定之后，磁编码器实际角第一次进入 `0 ± 0.25°` 时，该舵机读到的绝对 ABS。
 - `tight_abs_right_limit`：绝对绷紧时右端 ABS，来自 Motor Channel 的 `Limit` 右端，也就是 `motor_abs_limit_max[motor]`。
 - `span_abs`：`tight_abs_right_limit - zero_abs_at_encoder_0deg`，可能为正也可能为负，控制时不能假设方向固定。
 

@@ -97,6 +97,14 @@ void System_Init() {
     sharedData.restore_multi_turn_result_token = 0;
     sharedData.restore_multi_turn_restored_mask = 0;
     sharedData.restore_multi_turn_rejected_mask = 0;
+    sharedData.multiturn_nvs_save_request_token = 0;
+    sharedData.multiturn_nvs_save_reason = 0;
+    sharedData.multiturn_nvs_save_result_token = 0;
+    sharedData.multiturn_nvs_save_valid_mask = 0;
+    sharedData.multiturn_nvs_save_fail_count = 0;
+    sharedData.multiturn_nvs_enabled = 1;
+    sharedData.multiturn_nvs_snapshot_valid = 0;
+    sharedData.host_rx_heartbeat_ms = millis();
     sharedData.motor_abs_limit_valid_bitmap = 0;
     sharedData.motor_abs_limit_locked_bitmap = 0;
     memset(sharedData.motor_abs_limit_min, 0, sizeof(sharedData.motor_abs_limit_min));

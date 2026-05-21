@@ -431,6 +431,8 @@ class HandModel:
     system_fault_bitmap: int = 0
     state_transition_count: int = 0
     multi_turn_unknown_bitmap: int = 0
+    multiturn_nvs_enabled: bool = True
+    multiturn_nvs_snapshot_valid: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -537,6 +539,8 @@ class HandModel:
         self.system_fault_bitmap = int(other.system_fault_bitmap)
         self.state_transition_count = int(other.state_transition_count)
         self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
+        self.multiturn_nvs_enabled = bool(getattr(other, "multiturn_nvs_enabled", True))
+        self.multiturn_nvs_snapshot_valid = bool(getattr(other, "multiturn_nvs_snapshot_valid", False))
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
