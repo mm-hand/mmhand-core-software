@@ -498,6 +498,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot.activateWindow()
 
     def send_joint_targets(self, angles: List[float], source: str = "", live: bool = False) -> None:
+        guard = getattr(self.control_panel, "feedback_command_allowed", None)
+        if callable(guard) and not guard(source=source, show_status=True):
+            return
         try:
             self.control_panel._refresh_tendon_guard_from_ui()
         except Exception:

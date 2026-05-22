@@ -66,7 +66,7 @@ static const float kBootCalibControlMaxDeg = kRange100ControlMaxDeg;
 static const float kBootCalibTopGuardDeg = kRange100TopGuardDeg;
 
 // joint16 双舵机标定约束默认配置：
-// 主舵�?bus3-id17，副舵机 bus3-id18，默认偏置为0�?
+// 主舵?bus3-id17，副舵机 bus3-id18，默认偏置为0�?
 JointDualServoConstraint g_joint16DualServoConstraint = {
     0,
     kJoint16Index,
@@ -382,14 +382,13 @@ void initManualCalibrationForTest(void) {
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
-    Serial.printf("[BOOT CALIB] RANGE100 enabled startDeg=%.3f tightDeg=%.3f totalDeg=%.3f zeroFraction=%.3f controlMax=%.3f topGuard=%.3f\r\n",
-                  kBootCalibStartDeg,
-                  kBootCalibTightDeg,
-                  kBootCalibTotalDeg,
-                  kBootCalibZeroFraction,
+    Serial.printf("[BOOT CALIB] default profile loaded; calibration results pending auto calibration controlMax=%.3f topGuard=%.3f\r\n",
                   kBootCalibControlMaxDeg,
                   kBootCalibTopGuardDeg);
 
+    // Disabled on purpose: the static profile is not a completed calibration.
+    // AutoCalibrationTask is the only path that may set g_jointCalibResult[i].success.
+#if 0
     for (uint8_t i = 0; i < kTestJointCount; i++) {
         JointCalibrationConfig& cfg = g_jointCalibConfig[i];
         JointCalibrationResult& out = g_jointCalibResult[i];
@@ -429,6 +428,7 @@ void initManualCalibrationForTest(void) {
         // 同步写入回退表，便于调试阶段统一读取路径�?
         g_encoderOffsetManual[i] = out.success ? out.offset : 0;
     }
+#endif
 
     // 当前测试阶段不运行自动标定任务�?
     getJointDualServoConstraint(kJoint16Index, &g_joint16DualServoConstraint);

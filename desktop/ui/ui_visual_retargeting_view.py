@@ -1,6 +1,6 @@
 import threading
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from protocol import ENCODER_COUNT
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
@@ -123,15 +123,18 @@ class _PostureMocapRunner:
 
 
 class VisualRetargetingView(QtWidgets.QWidget):
-    def __init__(self, context, parent=None):
+    def __init__(self, context, selected_joint_mask_getter: Optional[Callable[[], int]] = None, parent=None):
         super().__init__(parent)
         self.context = context
+        self.selected_joint_mask_getter = selected_joint_mask_getter
         self.bridge = _VisualRetargetingBridge()
         self._runner: Optional[_PostureMocapRunner] = None
         self._scanner: Optional[_CameraScanRunner] = None
         self._camera_scan_started = False
         self._last_frame: Optional[QtGui.QImage] = None
         self._last_targets: list[Optional[float]] = [None] * ENCODER_COUNT
+        self._last_sent_targets: list[Optional[float]] = [None] * ENCODER_COUNT
+        self._feedback_angles: list[Optional[float]] = [None] * ENCODER_COUNT
         self._last_timestamp_ms = 0
         self._build()
         self._connect_bridge()
@@ -268,7 +271,14 @@ class VisualRetargetingView(QtWidgets.QWidget):
     def update_state(self, state) -> None:
         angles = list(getattr(state, "angles", []) or []) if state is not None else []
         for idx in range(ENCODER_COUNT):
-            text = f"{float(angles[idx]):.2f}" if idx < len(angles) else "-"
+            if idx < len(angles):
+                try:
+                    self._feedback_angles[idx] = float(angles[idx])
+                except (TypeError, ValueError):
+                    self._feedback_angles[idx] = None
+            else:
+                self._feedback_angles[idx] = None
+            text = f"{self._feedback_angles[idx]:.2f}" if self._feedback_angles[idx] is not None else "-"
             self.angle_table.item(idx, 0).setText(text)
 
     def close(self) -> None:
@@ -309,15 +319,59 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self.fps_label.setText(f"FPS: {fps:.1f}")
         self._refresh_preview()
 
+    def _selected_joint_mask(self) -> int:
+        if callable(self.selected_joint_mask_getter):
+            try:
+                return int(self.selected_joint_mask_getter()) & ((1 << ENCODER_COUNT) - 1)
+            except Exception:
+                return 0
+        return (1 << ENCODER_COUNT) - 1
+
+    def _targets_for_selected_joints(self, visual_targets: list[float]) -> tuple[Optional[list[float]], list[int]]:
+        mask = self._selected_joint_mask()
+        if mask == 0:
+            return None, []
+
+        targets: list[float] = []
+        missing_feedback: list[int] = []
+        for idx in range(ENCODER_COUNT):
+            if (mask & (1 << idx)) != 0:
+                targets.append(float(visual_targets[idx]))
+                continue
+
+            hold = self._feedback_angles[idx]
+            if hold is None:
+                hold = self._last_sent_targets[idx]
+            if hold is None:
+                missing_feedback.append(idx)
+                hold = 0.0
+            targets.append(float(hold))
+
+        if missing_feedback:
+            return None, missing_feedback
+        return targets, []
+
     def _on_joints_ready(self, targets: list, timestamp_ms: int) -> None:
-        self._last_targets = [float(v) for v in targets[:ENCODER_COUNT]]
+        visual_targets = [float(v) for v in targets[:ENCODER_COUNT]]
+        if len(visual_targets) < ENCODER_COUNT:
+            visual_targets.extend([0.0] * (ENCODER_COUNT - len(visual_targets)))
+        self._last_targets = visual_targets
         self._last_timestamp_ms = int(timestamp_ms)
         self.frame_label.setText(f"Frame: {timestamp_ms}")
         for idx in range(ENCODER_COUNT):
             text = f"{self._last_targets[idx]:.2f}" if idx < len(self._last_targets) else "-"
             self.angle_table.item(idx, 1).setText(text)
         if self.send_enabled.isChecked():
-            self.context.send_joint_targets(self._last_targets, source="Visual Retargeting", live=True)
+            selected_targets, missing_feedback = self._targets_for_selected_joints(self._last_targets)
+            if selected_targets is None:
+                if missing_feedback:
+                    missing = ",".join(f"J{idx:02d}" for idx in missing_feedback[:4])
+                    self._on_status_changed(f"Teleop send blocked: waiting feedback {missing}")
+                else:
+                    self._on_status_changed("Teleop send blocked: no joint selected")
+                return
+            self._last_sent_targets = list(selected_targets)
+            self.context.send_joint_targets(selected_targets, source="Visual Retargeting", live=True)
 
     def _refresh_preview(self) -> None:
         if self._last_frame is None:
