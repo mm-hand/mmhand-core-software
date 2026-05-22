@@ -44,6 +44,11 @@ MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 MOTOR_ABS_LIMIT_RECOVER_MARGIN = 16
 JOINT_ZERO_ABS_CAPTURE_TOL_DEG = 0.25
 ROPE_INIT_STEP_COUNTS = 50
+ROPE_INIT_TIMER_MS = 50
+ROPE_INIT_TIMEOUT_S = 8.0
+ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
+ROPE_INIT_DUAL_TARGET_DEG = 40.0
+ROPE_INIT_DUAL_TOL_DEG = 0.3
 MOTOR_MID_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "motor_mid_calib.json"
 PID_ABS_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "pid_abs_calib.json"
 TEST_ROW_COUNT = 5
@@ -205,9 +210,13 @@ class ControlPanel(QtWidgets.QWidget):
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
         self._selected_joint_mask = int(default_joint_mask)
         self._selected_motor_mask = int(default_motor_mask)
+        self._teleop_selected_joint_mask = int(default_joint_mask)
+        self._teleop_selected_motor_mask = int(default_motor_mask)
         self._scope_update_guard = False
         self.joint_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * ENCODER_COUNT
         self.joint_group_use_checks: List[QtWidgets.QCheckBox] = []
+        self.teleop_joint_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * ENCODER_COUNT
+        self.teleop_group_use_checks: List[QtWidgets.QCheckBox] = []
 
         self.motor_turn_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
@@ -253,6 +262,11 @@ class ControlPanel(QtWidgets.QWidget):
         self._tri_test_timer = QtCore.QTimer(self)
         self._tri_test_timer.setInterval(TEST_TICK_MS)
         self._tri_test_timer.timeout.connect(self._tri_test_tick)
+        self._rope_init_timer = QtCore.QTimer(self)
+        self._rope_init_timer.setInterval(ROPE_INIT_TIMER_MS)
+        self._rope_init_timer.timeout.connect(self._rope_init_tick)
+        self._rope_init_tasks: List[dict] = []
+        self._rope_init_started_at = 0.0
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
         self._test_t0 = 0.0
         self._test_hold_s = float(TEST_DEFAULT_HOLD_S)
@@ -294,8 +308,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.reset_btn = QtWidgets.QPushButton("Reset State")
         self.reset_btn.setToolTip("Clear latched protection flags, clear command state, and return firmware to UNCONTROLLABLE")
         self.calib_btn = QtWidgets.QPushButton("Calibrate")
-        self.rope_init_btn = QtWidgets.QPushButton("Rope Init +50")
-        self.rope_init_btn.setToolTip("Move calibrated joints that still read below 0 deg by +50 counts")
+        self.rope_init_btn = QtWidgets.QPushButton("Rope Init")
+        self.rope_init_btn.setToolTip(
+            "Single motors pull into the workspace; dual motors move antagonistically to 40 deg"
+        )
         self.abs_limit_unlock_btn = QtWidgets.QPushButton("Unlock ABS")
         self.abs_limit_unlock_btn.setToolTip("Temporarily disable calibrated ABS travel limits for the current control set")
         self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock ABS")
@@ -566,6 +582,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_tie_x1_edits = []
         self.joint_use_checks = [None] * ENCODER_COUNT
         self.joint_group_use_checks = []
+        self.teleop_joint_use_checks = [None] * ENCODER_COUNT
+        self.teleop_group_use_checks = []
         self._joint_target_user_set = []
         self.motor_turn_items = []
         self.motor_raw_items = []
@@ -648,16 +666,55 @@ class ControlPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        workflow, wf_layout = self._build_scope_workflow("Teleop Workflow")
-        wf_layout.addStretch(1)
+        workflow = self._build_teleop_scope_workflow()
         layout.addWidget(workflow)
 
-        teleop_view = TeleopView(self.context)
+        teleop_view = TeleopView(
+            self.context,
+            selected_joint_mask_getter=self._teleop_selected_joint_mask_value,
+        )
         body.child = teleop_view
         layout.addWidget(teleop_view, 1)
 
         self.body_layout.addWidget(body)
         self._body_widget = body
+
+    def _build_teleop_scope_workflow(self) -> QtWidgets.QGroupBox:
+        workflow = QtWidgets.QGroupBox("Teleop Workflow")
+        grid = QtWidgets.QGridLayout(workflow)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
+        self._teleop_selected_motor_mask = self._motor_mask_for_joint_mask(self._teleop_selected_joint_mask)
+
+        for row, (label, start, end) in enumerate(FINGER_JOINT_RANGES):
+            group_mask = 0
+            for joint_idx in range(start, end + 1):
+                group_mask |= (1 << joint_idx)
+            group_widget, group_check = self._make_group_use_widget(
+                label,
+                (self._teleop_selected_joint_mask & group_mask) == group_mask,
+                "Select this finger group for Teleop active scope",
+            )
+            group_check.toggled.connect(
+                lambda checked, s=start, e=end: self._on_teleop_joint_group_use_changed(s, e, checked)
+            )
+            self.teleop_group_use_checks.append(group_check)
+            grid.addWidget(group_widget, row, 0)
+
+            for col, joint_idx in enumerate(range(start, end + 1), start=1):
+                use_cell, use_check = self._make_use_checkbox_cell(
+                    (self._teleop_selected_joint_mask & (1 << joint_idx)) != 0,
+                    f"Use J{joint_idx:02d} in Teleop active scope",
+                )
+                use_check.toggled.connect(
+                    lambda checked, idx=joint_idx: self._on_teleop_joint_use_changed(idx, checked)
+                )
+                self.teleop_joint_use_checks[joint_idx] = use_check
+                grid.addWidget(use_cell, row, col)
+        grid.setColumnStretch(6, 1)
+        self._sync_teleop_group_checks()
+        return workflow
 
     def _make_item(self, text: str = "-") -> QtWidgets.QTableWidgetItem:
         item = QtWidgets.QTableWidgetItem(text)
@@ -1157,7 +1214,7 @@ class ControlPanel(QtWidgets.QWidget):
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         interaction = bool(self._interaction_enabled)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
-        ready_for_feedback = system_state == SYSTEM_STATE_READY
+        ready_for_feedback = system_state == SYSTEM_STATE_READY and self._active_scope_feedback_calibrated()
         for btn in [getattr(self, "send_all_btn", None)]:
             if btn is not None:
                 btn.setEnabled(interaction and ready_for_feedback)
@@ -1320,10 +1377,15 @@ class ControlPanel(QtWidgets.QWidget):
     def send_motor_row(self, idx: int) -> None:
         if not self._interaction_enabled:
             return
+        if idx < len(self._motor_run_states) and self._motor_run_states[idx]:
+            if self._hold_motor_row_at_feedback(idx):
+                self._set_row_running(True, idx, False)
+                self._set_status(f"Motor held at current feedback (M{idx:02d})")
+            return
         self._mark_motor_target_user_set(idx)
         self._sync_motor_abs_from_slider_before_send(idx)
         if self._send_motor_abs_from_ui(f"Run M{idx}"):
-            self._set_row_running(True, idx, False)
+            self._set_row_running(True, idx, True)
             if self._active_scope_multiturn_unknown_mask() == 0:
                 self._set_status(f"Motor absolute command sent (M{idx})")
 
@@ -1446,7 +1508,19 @@ class ControlPanel(QtWidgets.QWidget):
             ]
         return list(AUTO_CALIBRATION_JOINT_INDICES)
 
-    def _rope_init_joint_motor_pairs(self) -> Tuple[List[Tuple[int, int, float]], List[str], List[str]]:
+    def _dual_rope_init_motors_for_joint(self, joint_idx: int) -> Optional[Tuple[int, int]]:
+        if joint_idx < 0 or joint_idx >= len(self._motors_by_joint):
+            return None
+        motors = [
+            int(motor_idx)
+            for motor_idx in self._motors_by_joint[joint_idx]
+            if _motor_channel_valid(int(motor_idx))
+        ]
+        if len(motors) < 2:
+            return None
+        return motors[0], motors[1]
+
+    def _build_rope_init_tasks(self) -> Tuple[List[dict], List[str], List[str]]:
         state = self._state
         if state is None or not bool(getattr(state, "has_sensor_data", False)):
             return [], [], ["joint angle feedback"]
@@ -1454,7 +1528,7 @@ class ControlPanel(QtWidgets.QWidget):
         servo_online = getattr(state, "servo_online", []) or []
         servo_angles = getattr(state, "servo_angles", []) or []
 
-        pairs: List[Tuple[int, int, float]] = []
+        tasks: List[dict] = []
         skipped: List[str] = []
         missing: List[str] = []
         seen_motors = set()
@@ -1465,14 +1539,45 @@ class ControlPanel(QtWidgets.QWidget):
                 missing.append(f"J{joint_idx:02d} angle")
                 continue
             joint_deg = float(angles[joint_idx])
-            if joint_deg >= 0.0:
-                skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}")
+
+            dual_motors = self._dual_rope_init_motors_for_joint(joint_idx)
+            if dual_motors is not None:
+                primary_motor, secondary_motor = dual_motors
+                error_deg = ROPE_INIT_DUAL_TARGET_DEG - joint_deg
+                if abs(error_deg) <= ROPE_INIT_DUAL_TOL_DEG:
+                    skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/mid")
+                    continue
+                if primary_motor in seen_motors or secondary_motor in seen_motors:
+                    missing.append(f"J{joint_idx:02d} motor conflict")
+                    continue
+                for motor_idx in (primary_motor, secondary_motor):
+                    if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
+                        missing.append(f"M{motor_idx:02d} online")
+                        break
+                    if motor_idx >= len(servo_angles):
+                        missing.append(f"M{motor_idx:02d} abs")
+                        break
+                else:
+                    seen_motors.add(primary_motor)
+                    seen_motors.add(secondary_motor)
+                    tasks.append({
+                        "type": "dual",
+                        "joint": joint_idx,
+                        "primary": primary_motor,
+                        "secondary": secondary_motor,
+                        "target_deg": ROPE_INIT_DUAL_TARGET_DEG,
+                    })
+                continue
+
+            if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
+                skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/workspace")
                 continue
             motor_idx = TendonGuard.primary_motor_for_joint(joint_idx)
             if motor_idx < 0 or motor_idx >= MOTOR_COUNT:
                 missing.append(f"J{joint_idx:02d} motor")
                 continue
             if motor_idx in seen_motors:
+                missing.append(f"M{motor_idx:02d} conflict")
                 continue
             if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
                 missing.append(f"M{motor_idx:02d} online")
@@ -1481,8 +1586,13 @@ class ControlPanel(QtWidgets.QWidget):
                 missing.append(f"M{motor_idx:02d} abs")
                 continue
             seen_motors.add(motor_idx)
-            pairs.append((joint_idx, motor_idx, joint_deg))
-        return pairs, skipped, missing
+            tasks.append({
+                "type": "single",
+                "joint": joint_idx,
+                "motor": motor_idx,
+                "target_deg": ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG,
+            })
+        return tasks, skipped, missing
 
     # =========================================================================
     # rope_init_controller - 鑷姩瀵绘壘缁崇涓庡井璋冨姛鑳?(Rope Init)
@@ -1494,6 +1604,8 @@ class ControlPanel(QtWidgets.QWidget):
         if self._manual_submode() != "joint":
             self._set_status("Rope Init is only available in Joint Channels")
             return
+        if self._rope_init_timer.isActive():
+            self._stop_rope_init("Rope Init restarted", update_status=False)
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
                 return
@@ -1510,41 +1622,130 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status(f"Rope Init blocked: Turn UNKNOWN 0x{unknown_mask:08X}; recover multi-turn first")
             return
 
-        pairs, skipped, missing = self._rope_init_joint_motor_pairs()
-        if not pairs:
+        tasks, skipped, missing = self._build_rope_init_tasks()
+        if not tasks:
             detail = "; ".join(skipped[:4]) if skipped else ", ".join(missing[:4])
-            self._set_status(f"Rope Init no action: {detail or 'no calibrated joints need pull'}")
+            self._set_status(f"Rope Init no action: {detail or 'all selected joints are inside workspace'}")
             return
 
+        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.controller.set_pid_control(False)
+        self._rope_init_tasks = list(tasks)
+        self._rope_init_started_at = time.monotonic()
+        self.context.emit_action(
+            "Rope Init start: " +
+            ",".join(
+                (
+                    f"J{task['joint']:02d}/M{task['motor']:02d}->workspace"
+                    if task.get("type") == "single"
+                    else f"J{task['joint']:02d}/M{task['primary']:02d},M{task['secondary']:02d}->40deg"
+                )
+                for task in tasks
+            )
+        )
+        skipped_text = f"; skipped {', '.join(skipped[:3])}" if skipped else ""
+        self._set_status(f"Rope Init running for {len(tasks)} joint(s){skipped_text}")
+        self._rope_init_timer.start()
+        self._rope_init_tick()
+
+    def _stop_rope_init(self, reason: str = "stopped", update_status: bool = True) -> None:
+        was_running = self._rope_init_timer.isActive() or bool(self._rope_init_tasks)
+        self._rope_init_timer.stop()
+        self._rope_init_tasks = []
+        if update_status and was_running:
+            self._set_status(reason)
+
+    def _apply_rope_init_motor_target_to_ui(self, motor_idx: int, target_abs: int) -> None:
+        if motor_idx < 0 or motor_idx >= MOTOR_COUNT:
+            return
+        target_abs = clamp_motor_abs(int(target_abs))
+        self._motor_session_origin_abs[motor_idx] = target_abs
+        self._motor_abs_pos[motor_idx] = 0
+        self._motor_last_slider[motor_idx] = 0
+        self._motor_target_user_set[motor_idx] = False
+        self._set_motor_target_widget(motor_idx, 0)
+
+    def _rope_init_tick(self) -> None:
+        if not self._rope_init_tasks:
+            self._stop_rope_init("Rope Init complete")
+            return
+        if (time.monotonic() - self._rope_init_started_at) > ROPE_INIT_TIMEOUT_S:
+            self._stop_rope_init("Rope Init timeout: check joint feedback")
+            return
+
+        state = self._state
+        if state is None or not bool(getattr(state, "has_sensor_data", False)):
+            self._stop_rope_init("Rope Init stopped: missing joint angle feedback")
+            return
+        system_state = getattr(state, "system_state", None)
+        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT):
+            self._stop_rope_init("Rope Init stopped: wait for IDLE/READY")
+            return
+        unknown_mask = self._active_scope_multiturn_unknown_mask()
+        if unknown_mask != 0:
+            self._stop_rope_init(f"Rope Init stopped: Turn UNKNOWN 0x{unknown_mask:08X}")
+            return
+
+        angles = getattr(state, "angles", []) or []
         targets = self._current_motor_hold_targets_from_feedback()
-        feedback_missing = []
-        for _joint_idx, idx, _joint_deg in pairs:
-            feedback_abs = self._motor_feedback_abs(idx)
-            if feedback_abs is None:
-                feedback_missing.append(f"M{idx:02d}")
+        remaining: List[dict] = []
+        moved_motors = set()
+        feedback_missing: List[str] = []
+        completed: List[str] = []
+
+        for task in self._rope_init_tasks:
+            joint_idx = int(task.get("joint", -1))
+            if joint_idx < 0 or joint_idx >= ENCODER_COUNT or joint_idx >= len(angles):
+                feedback_missing.append(f"J{joint_idx:02d} angle")
                 continue
-            targets[idx] = clamp_motor_abs(int(feedback_abs) + ROPE_INIT_STEP_COUNTS)
+            joint_deg = float(angles[joint_idx])
+
+            if task.get("type") == "dual":
+                primary_motor = int(task.get("primary", -1))
+                secondary_motor = int(task.get("secondary", -1))
+                error_deg = float(task.get("target_deg", ROPE_INIT_DUAL_TARGET_DEG)) - joint_deg
+                if abs(error_deg) <= ROPE_INIT_DUAL_TOL_DEG:
+                    completed.append(f"J{joint_idx:02d}={joint_deg:.2f}")
+                    continue
+                primary_abs = self._motor_feedback_abs(primary_motor)
+                secondary_abs = self._motor_feedback_abs(secondary_motor)
+                if primary_abs is None or secondary_abs is None:
+                    feedback_missing.append(f"J{joint_idx:02d} motor feedback")
+                    continue
+                step_sign = 1 if error_deg > 0.0 else -1
+                targets[primary_motor] = clamp_motor_abs(int(primary_abs) + step_sign * ROPE_INIT_STEP_COUNTS)
+                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs) - step_sign * ROPE_INIT_STEP_COUNTS)
+                moved_motors.update((primary_motor, secondary_motor))
+                remaining.append(task)
+            else:
+                motor_idx = int(task.get("motor", -1))
+                if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
+                    completed.append(f"J{joint_idx:02d}={joint_deg:.2f}")
+                    continue
+                feedback_abs = self._motor_feedback_abs(motor_idx)
+                if feedback_abs is None:
+                    feedback_missing.append(f"M{motor_idx:02d}")
+                    continue
+                targets[motor_idx] = clamp_motor_abs(int(feedback_abs) + ROPE_INIT_STEP_COUNTS)
+                moved_motors.add(motor_idx)
+                remaining.append(task)
 
         if feedback_missing:
-            self._set_status(f"Rope Init blocked: waiting for feedback {','.join(feedback_missing)}")
+            self._stop_rope_init(f"Rope Init stopped: waiting for {','.join(feedback_missing[:4])}")
+            return
+
+        if not moved_motors:
+            done_text = f" ({', '.join(completed[:4])})" if completed else ""
+            self._stop_rope_init(f"Rope Init complete{done_text}")
             return
 
         self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
         self.controller.set_pid_control(False)
         self.controller.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
-        for _joint_idx, idx, _joint_deg in pairs:
-            self._motor_session_origin_abs[idx] = int(targets[idx])
-            self._motor_abs_pos[idx] = 0
-            self._motor_last_slider[idx] = 0
-            self._motor_target_user_set[idx] = False
-            self._set_motor_target_widget(idx, 0)
-        self.context.emit_action(
-            f"Rope Init +{ROPE_INIT_STEP_COUNTS}: " +
-            ",".join(f"J{joint_idx:02d}/M{idx:02d} {joint_deg:.2f}->{targets[idx]}" for joint_idx, idx, joint_deg in pairs)
-        )
-        skipped_text = f"; skipped {', '.join(skipped[:3])}" if skipped else ""
-        self._set_status(f"Rope Init sent +{ROPE_INIT_STEP_COUNTS} for {len(pairs)} negative joint(s){skipped_text}")
+        for motor_idx in sorted(moved_motors):
+            self._apply_rope_init_motor_target_to_ui(motor_idx, int(targets[motor_idx]))
+        self._rope_init_tasks = remaining
 
     def calibrate(self) -> None:
         self._clear_joint_zero_abs_capture(wait_for_calibration=True)
@@ -1555,6 +1756,55 @@ class ControlPanel(QtWidgets.QWidget):
         if state is None:
             return 0
         return self._active_motor_mask_from_ui() & int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
+
+    def _active_scope_abs_limit_missing_mask(self) -> int:
+        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        if active_mask == 0:
+            return 0
+        state = self._state
+        if state is None:
+            return active_mask
+        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
+        return active_mask & ~valid_bitmap
+
+    def _active_scope_feedback_calibrated(self) -> bool:
+        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        return active_mask != 0 and self._active_scope_abs_limit_missing_mask() == 0
+
+    def _format_motor_mask(self, mask: int, limit: int = 6) -> str:
+        indices = [
+            idx for idx in range(MOTOR_COUNT)
+            if _motor_channel_valid(idx) and (int(mask) & (1 << idx)) != 0
+        ]
+        if not indices:
+            return "none"
+        text = ",".join(f"M{idx:02d}" for idx in indices[:limit])
+        if len(indices) > limit:
+            text += f"...(+{len(indices) - limit})"
+        return text
+
+    def feedback_command_allowed(self, source: str = "", show_status: bool = True) -> bool:
+        if self._app_mode not in ("manual", "teleop"):
+            return True
+        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        if active_mask == 0:
+            if show_status:
+                self._set_status("Feedback blocked: no active motor selected")
+            return False
+        unknown_mask = self._active_scope_multiturn_unknown_mask()
+        if unknown_mask != 0:
+            if show_status:
+                self._set_status(f"Feedback blocked: Turn UNKNOWN {self._format_motor_mask(unknown_mask)}")
+            return False
+        missing_mask = self._active_scope_abs_limit_missing_mask()
+        if missing_mask != 0:
+            if show_status:
+                label = self._active_scope_label_from_ui() or str(source or "Feedback")
+                self._set_status(
+                    f"{label} blocked: calibrate active motors first ({self._format_motor_mask(missing_mask)})"
+                )
+            return False
+        return True
 
     def set_abs_limit_lock(self, locked: bool) -> None:
         if not self.context.is_comm_connected():
@@ -1738,6 +1988,69 @@ class ControlPanel(QtWidgets.QWidget):
         self._apply_active_scope_for_current_mode()
         self._update_manual_action_buttons()
 
+    def _teleop_selected_joint_mask_value(self) -> int:
+        return int(getattr(self, "_teleop_selected_joint_mask", 0)) & ((1 << ENCODER_COUNT) - 1)
+
+    def _sync_teleop_group_checks(self) -> None:
+        if bool(getattr(self, "_scope_update_guard", False)):
+            return
+        self._scope_update_guard = True
+        try:
+            for check in getattr(self, "teleop_group_use_checks", []):
+                text = str(check.text())
+                target = next((item for item in FINGER_JOINT_RANGES if item[0] == text), None)
+                if target is None:
+                    continue
+                _label, start, end = target
+                group_mask = 0
+                for joint_idx in range(start, end + 1):
+                    group_mask |= (1 << joint_idx)
+                check.blockSignals(True)
+                check.setChecked((self._teleop_selected_joint_mask & group_mask) == group_mask)
+                check.blockSignals(False)
+        finally:
+            self._scope_update_guard = False
+
+    def _on_teleop_joint_use_changed(self, joint_idx: int, checked: bool) -> None:
+        if bool(getattr(self, "_scope_update_guard", False)):
+            return
+        if 0 <= int(joint_idx) < ENCODER_COUNT:
+            bit = 1 << int(joint_idx)
+            if checked:
+                self._teleop_selected_joint_mask |= bit
+            else:
+                self._teleop_selected_joint_mask &= ~bit
+        self._teleop_selected_motor_mask = self._motor_mask_for_joint_mask(self._teleop_selected_joint_mask)
+        self._sync_teleop_group_checks()
+        self._apply_active_scope_for_current_mode()
+
+    def _on_teleop_joint_group_use_changed(self, start: int, end: int, checked: bool) -> None:
+        if bool(getattr(self, "_scope_update_guard", False)):
+            return
+        self._scope_update_guard = True
+        try:
+            for joint_idx in range(int(start), int(end) + 1):
+                if 0 <= joint_idx < ENCODER_COUNT:
+                    bit = 1 << joint_idx
+                    if checked:
+                        self._teleop_selected_joint_mask |= bit
+                    else:
+                        self._teleop_selected_joint_mask &= ~bit
+                    check = (
+                        self.teleop_joint_use_checks[joint_idx]
+                        if joint_idx < len(self.teleop_joint_use_checks)
+                        else None
+                    )
+                    if check is not None:
+                        check.blockSignals(True)
+                        check.setChecked(bool(checked))
+                        check.blockSignals(False)
+        finally:
+            self._scope_update_guard = False
+        self._teleop_selected_motor_mask = self._motor_mask_for_joint_mask(self._teleop_selected_joint_mask)
+        self._sync_teleop_group_checks()
+        self._apply_active_scope_for_current_mode()
+
     def _current_active_scope_tuple(self) -> Optional[Tuple[int, int, bool]]:
         if self._app_mode == "manual":
             mode = self._manual_submode()
@@ -1746,6 +2059,12 @@ class ControlPanel(QtWidgets.QWidget):
             joint_mask = int(self._selected_joint_mask) & ((1 << ENCODER_COUNT) - 1)
             motor_mask = self._motor_mask_for_joint_mask(joint_mask)
             return motor_mask, joint_mask, True
+
+        if self._app_mode == "teleop":
+            joint_mask = self._teleop_selected_joint_mask_value()
+            motor_mask = self._motor_mask_for_joint_mask(joint_mask)
+            self._teleop_selected_motor_mask = int(motor_mask) & VALID_MOTOR_MASK
+            return int(motor_mask), int(joint_mask), True
 
         data = self.scope_combo.currentData() if getattr(self, "scope_combo", None) is not None else None
         if not data:
@@ -1787,6 +2106,13 @@ class ControlPanel(QtWidgets.QWidget):
             if joints:
                 return f"Manual Joints {len(joints)} selected"
             return "Manual Joints none"
+        if self._app_mode == "teleop":
+            joints = self._active_scope_joint_indices()
+            if len(joints) == 1:
+                return f"Teleop Joint J{joints[0]:02d}"
+            if joints:
+                return f"Teleop Joints {len(joints)} selected"
+            return "Teleop Joints none"
         combo = getattr(self, "scope_combo", None)
         if combo is not None:
             try:
@@ -1969,7 +2295,7 @@ class ControlPanel(QtWidgets.QWidget):
             return False
         motor_mask, joint_mask, require_can = data
         if int(motor_mask) == 0 and int(joint_mask) == 0:
-            self._set_status("Active scope blocked: no Manual channel selected")
+            self._set_status("Active scope blocked: no channel selected")
             return False
         if not self.context.is_comm_connected():
             self._set_status("Active scope will apply after connect")
@@ -2075,6 +2401,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._updating = False
 
     def stop_all_tests(self, reason: str = "stopped", update_status: bool = True, include_local: bool = True) -> None:
+        self._stop_rope_init(reason=reason, update_status=update_status)
         self._on_stop_test(reason=reason, update_status=update_status)
         self._on_stop_ff_test(reason=reason, update_status=update_status)
         self._on_stop_tri_test(reason=reason, update_status=update_status)
@@ -2092,6 +2419,9 @@ class ControlPanel(QtWidgets.QWidget):
                 self._set_status("Joint command blocked: wait for READY")
             else:
                 self._set_status("Joint command blocked: controller is not READY")
+            return False
+        if not self.feedback_command_allowed(show_status=True):
+            self.controller.set_pid_control(False)
             return False
         if self.controller.is_started():
             return True
@@ -2758,12 +3088,6 @@ class ControlPanel(QtWidgets.QWidget):
     def _set_row_running(self, is_motor: bool, idx: int, running: bool) -> None:
         states = self._motor_run_states if is_motor else self._joint_run_states
         buttons = self.motor_send_buttons if is_motor else self.joint_send_buttons
-        if is_motor:
-            if 0 <= idx < len(states):
-                states[idx] = False
-            if 0 <= idx < len(buttons):
-                buttons[idx].setText("Send")
-            return
         if 0 <= idx < len(states):
             states[idx] = bool(running)
         if 0 <= idx < len(buttons):
@@ -2781,6 +3105,20 @@ class ControlPanel(QtWidgets.QWidget):
         finally:
             self._updating = False
         self.context.send_joint_targets(self.resolved_joint_targets(), source=f"Hold J{idx}", live=False)
+
+    def _hold_motor_row_at_feedback(self, idx: int) -> bool:
+        if idx < 0 or idx >= MOTOR_COUNT:
+            return False
+        feedback_abs = self._motor_feedback_abs(idx)
+        if feedback_abs is None:
+            self._set_status(f"Motor hold blocked: waiting for M{idx:02d} feedback")
+            return False
+        self._motor_session_origin_abs[idx] = int(feedback_abs)
+        self._motor_abs_pos[idx] = 0
+        self._motor_last_slider[idx] = 0
+        self._motor_target_user_set[idx] = False
+        self._set_motor_target_widget(idx, 0)
+        return self._send_motor_abs_from_ui(f"Hold M{idx}")
 
     def _set_motor_target_widget(self, idx: int, value: int) -> None:
         self._updating = True

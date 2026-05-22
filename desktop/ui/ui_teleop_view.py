@@ -1,13 +1,14 @@
-from typing import Optional
+from typing import Callable, Optional
 
 from .ui_qt_compat import QtWidgets
 from .ui_visual_retargeting_view import VisualRetargetingView
 
 
 class TeleopView(QtWidgets.QWidget):
-    def __init__(self, context, parent=None):
+    def __init__(self, context, selected_joint_mask_getter: Optional[Callable[[], int]] = None, parent=None):
         super().__init__(parent)
         self.context = context
+        self.selected_joint_mask_getter = selected_joint_mask_getter
         self._body_widget: Optional[QtWidgets.QWidget] = None
         self._build()
 
@@ -35,7 +36,10 @@ class TeleopView(QtWidgets.QWidget):
         self.context.emit_action(f"Teleop mode selected: {self.teleop_mode_combo.currentText()}")
         self._clear_body()
         if mode == "visual":
-            self._body_widget = VisualRetargetingView(self.context)
+            self._body_widget = VisualRetargetingView(
+                self.context,
+                selected_joint_mask_getter=self.selected_joint_mask_getter,
+            )
             self.body_layout.addWidget(self._body_widget)
 
     def _clear_body(self) -> None:
