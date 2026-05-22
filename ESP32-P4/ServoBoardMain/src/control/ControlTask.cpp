@@ -35,7 +35,10 @@ static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 static const int16_t kControlOverloadLoadThreshold = 250;
+static const int16_t kJointControlOverloadLoadThreshold = 330;
 static const uint8_t kControlOverloadLatchCycles = 3;
+static const uint8_t kJointControlOverloadLatchCycles = 5;
+static const uint16_t kJointControlUnlimitedSpeed = 0;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
@@ -578,8 +581,16 @@ void controlTask(void* parameter)
                     continue;
                 }
 
+                const bool jointControlMode =
+                    (commandSnapshot.controlMode == CONTROL_MODE_JOINT);
+                const int16_t overloadThreshold = jointControlMode
+                                                      ? kJointControlOverloadLoadThreshold
+                                                      : kControlOverloadLoadThreshold;
+                const uint8_t overloadLatchCycles = jointControlMode
+                                                        ? kJointControlOverloadLatchCycles
+                                                        : kControlOverloadLatchCycles;
                 const int16_t loadMag = servoLoadMagnitude(telemetryData.load[ch]);
-                if (loadMag >= kControlOverloadLoadThreshold) {
+                if (loadMag >= overloadThreshold) {
                     if (overloadHighCount[ch] < 255) {
                         overloadHighCount[ch]++;
                     }
@@ -587,14 +598,15 @@ void controlTask(void* parameter)
                     overloadHighCount[ch] = 0;
                 }
 
-                if (overloadHighCount[ch] >= kControlOverloadLatchCycles &&
+                if (overloadHighCount[ch] >= overloadLatchCycles &&
                     (overloadFaultLatched & bit) == 0)
                 {
                     overloadFaultLatched |= bit;
-                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d mode=%u\r\n",
+                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
                                   (unsigned)ch,
                                   loadMag,
-                                  kControlOverloadLoadThreshold,
+                                  overloadThreshold,
+                                  (unsigned)overloadLatchCycles,
                                   (unsigned)commandSnapshot.controlMode);
                 }
             }
@@ -790,7 +802,7 @@ void controlTask(void* parameter)
                                                 magAngles[jointIndex],
                                                 servoData,
                                                 jointCommandToken,
-                                                SERVO_TARGET_SPEED_DEFAULT,
+                                                kJointControlUnlimitedSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
@@ -814,7 +826,8 @@ void controlTask(void* parameter)
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 } else {
                     appendJointActuatorTargets(&targetBatch, jointIndex, targetPos,
-                                               SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                                               jointActive ? kJointControlUnlimitedSpeed : SERVO_TARGET_SPEED_DEFAULT,
+                                               SERVO_TARGET_ACC_DEFAULT);
                 }
                 jointCmdPos[jointIndex] = targetPos;
                 jointCmdValid[jointIndex] = 1;
