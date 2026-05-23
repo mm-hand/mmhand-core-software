@@ -20,8 +20,11 @@
 #include "../control/ControlTask.h"
 #include "../communication/servo/ServoCommunicationTask.h"
 
-// 全局标志：用于上位机标定流程的一次性状态回传（跨任务共享）。
-extern volatile uint8_t g_calibrationUIStatus;
+// Calibration UI state is split into a persistent SYSTEM_STATUS field and
+// a short-lived CALIB_ACK event stream.
+extern volatile uint8_t g_calibrationStatus;
+extern volatile uint8_t g_calibrationAckStatus;
+extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
 // 系统初始化入口（替代 Arduino setup）：
 // 完成共享资源初始化并创建各业务任务。

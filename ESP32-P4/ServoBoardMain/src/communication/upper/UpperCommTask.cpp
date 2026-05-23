@@ -13,7 +13,9 @@
 #include <math.h>
 #include <string.h>
 
-extern volatile uint8_t g_calibrationUIStatus;
+extern volatile uint8_t g_calibrationStatus;
+extern volatile uint8_t g_calibrationAckStatus;
+extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
 // UpperCommTask responsibilities:
 // 1) parse host commands and update shared command state;
@@ -45,6 +47,25 @@ static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
     }
 
     return rawValue;
+}
+
+static bool calibrationAckPending()
+{
+    return g_calibrationAckStatus != CALIB_STATUS_IDLE &&
+           g_calibrationAckRepeatRemaining > 0;
+}
+
+static uint8_t takeCalibrationAckStatusForPacket()
+{
+    if (!calibrationAckPending()) {
+        return CALIB_STATUS_IDLE;
+    }
+    const uint8_t status = g_calibrationAckStatus;
+    g_calibrationAckRepeatRemaining--;
+    if (g_calibrationAckRepeatRemaining == 0) {
+        g_calibrationAckStatus = CALIB_STATUS_IDLE;
+    }
+    return status;
 }
 
 // Send a protocol ACK packet.
@@ -83,7 +104,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = sharedData->control_enabled;
     buffer[idx++] = sharedData->servo_target_owner;
     buffer[idx++] = sharedData->control_mode;
-    buffer[idx++] = g_calibrationUIStatus;
+    buffer[idx++] = g_calibrationStatus;
     buffer[idx++] = (uint8_t)((faultBitmap >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((faultBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((faultBitmap >> 8) & 0xFF);
@@ -104,10 +125,10 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     Serial.write(buffer, idx);
 }
 
-// Send the servo overload fault bitmap.
-static void sendFaultStatusPacket(uint32_t overloadFaultBitmap)
+// Send the servo overload fault bitmap plus the latched trigger load per motor.
+static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloadFaultBitmap)
 {
-    uint8_t buffer[8];
+    uint8_t buffer[8 + SERVO_TOTAL_NUM * 2];
     size_t idx = 0;
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -117,6 +138,12 @@ static void sendFaultStatusPacket(uint32_t overloadFaultBitmap)
     buffer[idx++] = (uint8_t)((overloadFaultBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((overloadFaultBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(overloadFaultBitmap & 0xFF);
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const int16_t load = sharedData ? sharedData->overload_fault_load[ch] : 0;
+        const uint16_t encodedLoad = (uint16_t)load;
+        buffer[idx++] = (uint8_t)((encodedLoad >> 8) & 0xFF);
+        buffer[idx++] = (uint8_t)(encodedLoad & 0xFF);
+    }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -215,10 +242,11 @@ static void sendDataPacket(ServoStatus_t* pServo,
 
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00; // LEN placeholder.
-    if (g_calibrationUIStatus != 0)
+    const uint8_t calibrationAckStatus = takeCalibrationAckStatusForPacket();
+    if (calibrationAckStatus != CALIB_STATUS_IDLE)
     {
         buffer[idx++] = PACKET_TYPE_CALIB_ACK;
-        buffer[idx++] = g_calibrationUIStatus;
+        buffer[idx++] = calibrationAckStatus;
     }
     else if (pSensorRaw)
     {
@@ -325,10 +353,6 @@ static void sendDataPacket(ServoStatus_t* pServo,
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
-
-    if (g_calibrationUIStatus != 0) {
-        g_calibrationUIStatus = 0;
-    }
 }
 
 // Decode a little-endian float from command payload.
@@ -901,7 +925,7 @@ void upperCommunicationTask(void* parameter)
             sentPacket = true;
         }
 
-        if (!sentPacket && !sentServoAngle && g_calibrationUIStatus != 0)
+        if (!sentPacket && !sentServoAngle && calibrationAckPending())
         {
             sendDataPacket(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
         }
@@ -913,7 +937,7 @@ void upperCommunicationTask(void* parameter)
         const bool heartbeatDue =
             (!faultStatusSentInitialized) || ((nowMs - lastFaultStatusSentMs) >= kFaultStatusHeartbeatMs);
         if (bitmapChanged || heartbeatDue) {
-            sendFaultStatusPacket(faultBitmap);
+            sendFaultStatusPacket(sharedData, faultBitmap);
             lastFaultStatusSent = faultBitmap;
             lastFaultStatusSentMs = nowMs;
             faultStatusSentInitialized = true;

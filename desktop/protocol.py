@@ -250,10 +250,17 @@ def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[boo
     return raw_positions, online_flags
 
 
-def parse_fault_status_packet(payload: bytes) -> Optional[int]:
-    if len(payload) != 4:
+def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
+    if len(payload) < 4:
         return None
-    return struct.unpack(">I", payload)[0]
+    fault_bitmap = struct.unpack(">I", payload[:4])[0]
+    trigger_loads: List[Optional[int]] = [None] * MOTOR_COUNT
+    if len(payload) >= 4 + MOTOR_COUNT * 2:
+        offset = 4
+        for i in range(MOTOR_COUNT):
+            trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
+            offset += 2
+    return fault_bitmap, trigger_loads
 
 
 def parse_release_fault_packet(payload: bytes) -> Optional[int]:

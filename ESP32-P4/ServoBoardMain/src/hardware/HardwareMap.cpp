@@ -35,6 +35,19 @@ MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
     kExtraV2Motors[3], kExtraV2Motors[4]
 };
 
+// Motor channel -> tendon shortening direction in servo absolute counts.
+// +1: increasing ABS shortens the tendon.
+// -1: decreasing ABS shortens the tendon.
+static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
+    1, 1, 1, 1,
+    1, 1, 1, 1,
+    1, 1, 1, 1,
+   -1, 1, -1, 1,
+    1, 1, 1, 1,
+    1, 1,
+    1, 1, 1, -1, 1
+};
+
 #define ACT_NONE {0xFF, 1, 0, 0}
 #define ACT_PRIMARY(ch) {ch, 1, 0, 0}
 #define ACT_SECONDARY_SAME(ch) {ch, 1, 0, 0}
@@ -112,6 +125,14 @@ uint32_t validMotorChannelMask()
         }
     }
     return mask;
+}
+
+int8_t getMotorTendonShortenAbsSign(uint8_t motorChannel)
+{
+    if (motorChannel >= SERVO_TOTAL_NUM) {
+        return 1;
+    }
+    return (kMotorTendonShortenAbsSign[motorChannel] < 0) ? -1 : 1;
 }
 
 uint8_t getJointActuatorCount(uint8_t jointIndex)

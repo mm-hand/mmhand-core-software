@@ -12,8 +12,11 @@
 // 2) 维护跨任务共享对象 sharedData；
 // 3) 创建并拉起上位机通信、状态机、CAN、舵机通信和控制任务。
 
-// 上位机标定 UI 状态的一次性回传标志，由 UpperCommTask 读取并清零。
-volatile uint8_t g_calibrationUIStatus = 0;
+// Persistent calibration state reported in SYSTEM_STATUS.
+volatile uint8_t g_calibrationStatus = CALIB_STATUS_IDLE;
+// Short-lived calibration event stream reported as repeated CALIB_ACK packets.
+volatile uint8_t g_calibrationAckStatus = CALIB_STATUS_IDLE;
+volatile uint8_t g_calibrationAckRepeatRemaining = 0;
 
 // 全局共享数据中心，保存任务间队列句柄与控制状态。
 TaskSharedData_t sharedData;
@@ -113,6 +116,9 @@ void System_Init() {
     sharedData.calibration_fault_latched = 0;
     sharedData.joint16_dual_feedback_fault = 0;
     sharedData.overload_fault_bitmap = 0;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
+        sharedData.overload_fault_load[i] = 0;
+    }
     sharedData.overload_fault_reset_token = 0;
     sharedData.reverse_release_fault_bitmap = 0;
     sharedData.reverse_release_fault_reset_token = 0;

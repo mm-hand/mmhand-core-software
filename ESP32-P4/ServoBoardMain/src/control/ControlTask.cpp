@@ -34,10 +34,10 @@ static const uint8_t kDebugJointCount =
 static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const int16_t kControlOverloadLoadThreshold = 250;
-static const int16_t kJointControlOverloadLoadThreshold = 330;
-static const uint8_t kControlOverloadLatchCycles = 3;
-static const uint8_t kJointControlOverloadLatchCycles = 5;
+static const int16_t kControlOverloadLoadThreshold = 700;
+static const int16_t kJointControlOverloadLoadThreshold = 800;
+static const uint8_t kControlOverloadLatchCycles = 20;
+static const uint8_t kJointControlOverloadLatchCycles = 20;
 static const uint16_t kJointControlUnlimitedSpeed = 0;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
@@ -234,6 +234,50 @@ static int16_t servoLoadMagnitude(int16_t rawLoad)
     return (int16_t)(mag & 0x03FF);
 }
 
+static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
+                                        const ControlCommandSnapshot_t& commandSnapshot)
+{
+    if (!sharedData) {
+        return 0;
+    }
+    const uint32_t validMask = validMotorChannelMask();
+    if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
+        return sharedData->active_motor_mask & validMask;
+    }
+
+    uint32_t mask = 0;
+    const uint32_t activeJointMask =
+        sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+        if ((activeJointMask & (1UL << jointIndex)) == 0) {
+            continue;
+        }
+        const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+        for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
+            JointActuatorItem actuator;
+            if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
+                actuator.motorChannel < SERVO_TOTAL_NUM) {
+                mask |= (1UL << actuator.motorChannel);
+            }
+        }
+    }
+    return mask & validMask;
+}
+
+static bool jointHasOverloadFault(uint8_t jointIndex, uint32_t overloadFaultBitmap)
+{
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
+        JointActuatorItem actuator;
+        if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
+            actuator.motorChannel < SERVO_TOTAL_NUM &&
+            (overloadFaultBitmap & (1UL << actuator.motorChannel)) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int32_t abs32Local(int32_t value)
 {
     return value < 0 ? -value : value;
@@ -372,6 +416,9 @@ void controlTask(void* parameter)
     uint8_t overloadHighCount[SERVO_TOTAL_NUM] = {0};
     uint32_t lastOverloadFaultResetToken = sharedData->overload_fault_reset_token;
     sharedData->overload_fault_bitmap = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        sharedData->overload_fault_load[ch] = 0;
+    }
     ControlCommandSnapshot_t commandSnapshot;
     memset(&commandSnapshot, 0, sizeof(commandSnapshot));
     readControlCommandSnapshot(sharedData, &commandSnapshot);
@@ -444,6 +491,9 @@ void controlTask(void* parameter)
             overloadFaultLatched = 0;
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
             sharedData->overload_fault_bitmap = 0;
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                sharedData->overload_fault_load[ch] = 0;
+            }
             lastOverloadFaultResetToken = overloadFaultResetToken;
         }
 
@@ -485,7 +535,8 @@ void controlTask(void* parameter)
         }
 
         // 过载保护锁存位由运行期检测维护，并继续写入共享状态供上位机显示。
-        sharedData->overload_fault_bitmap = overloadFaultLatched;
+        sharedData->overload_fault_bitmap |= overloadFaultLatched;
+        overloadFaultLatched = sharedData->overload_fault_bitmap;
 
         // 从主执行舵机反馈构建每个关节的绝对位置，供闭环 PID 与安全判断使用。
         memset(absolutePosition, 0, sizeof(absolutePosition));
@@ -570,11 +621,12 @@ void controlTask(void* parameter)
 
         if (normalOutputAllowed && telemetryFresh)
         {
-            const uint32_t validMotorMask = validMotorChannelMask();
+            const uint32_t overloadMotorMask =
+                activeOverloadMotorMask(sharedData, commandSnapshot);
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
             {
                 const uint32_t bit = 1UL << ch;
-                if (((validMotorMask & bit) == 0) ||
+                if (((overloadMotorMask & bit) == 0) ||
                     telemetryData.onlineStatus[ch] == 0)
                 {
                     overloadHighCount[ch] = 0;
@@ -602,6 +654,7 @@ void controlTask(void* parameter)
                     (overloadFaultLatched & bit) == 0)
                 {
                     overloadFaultLatched |= bit;
+                    sharedData->overload_fault_load[ch] = telemetryData.load[ch];
                     Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
                                   (unsigned)ch,
                                   loadMag,
@@ -615,7 +668,8 @@ void controlTask(void* parameter)
         {
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
         }
-        sharedData->overload_fault_bitmap = overloadFaultLatched;
+        sharedData->overload_fault_bitmap |= overloadFaultLatched;
+        overloadFaultLatched = sharedData->overload_fault_bitmap;
 
         // 关节闭环模式下先按标定结果限制目标角度，避免目标超过当前工作空间。
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
@@ -710,10 +764,7 @@ void controlTask(void* parameter)
                 const bool guardInputsValid = servoOnline && mappedValid;
                 bool releaseFaultActive = false;
                 bool holdByTendonGuard = false;
-                bool overloadFaultActive =
-                    (jointMotorCh >= 0) &&
-                    (jointMotorCh < SERVO_TOTAL_NUM) &&
-                    ((overloadFaultLatched & (1UL << (uint8_t)jointMotorCh)) != 0);
+                bool overloadFaultActive = jointHasOverloadFault(jointIndex, overloadFaultLatched);
 
                 if (jointIndex != kJoint16Index)
                 {

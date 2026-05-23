@@ -17,7 +17,7 @@ struct DualTendonJointConfig {
     uint8_t enabled;
     uint8_t model;
     float motorZero[2];
-    float gain[2];
+    float countsPerMm[2];
     float kp[2];
     float ki[2];
     float kd[2];
@@ -38,7 +38,7 @@ static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 
 static const uint8_t kDualTendonModelSharedCadGeometry = 1;
 
-static const float kDefaultDualTendonGain = -40.0f;
+static const float kDefaultDualTendonCountsPerMm = 40.0f;
 static const float kDefaultDualTendonKp = 2.1f;
 static const float kDefaultDualTendonKi = 0.1f;
 static const float kDefaultDualTendonKd = 0.005f;
@@ -68,8 +68,8 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     memset(out, 0, sizeof(*out));
     out->enabled = 1;
 
-    out->gain[0] = kDefaultDualTendonGain;
-    out->gain[1] = kDefaultDualTendonGain;
+    out->countsPerMm[0] = kDefaultDualTendonCountsPerMm;
+    out->countsPerMm[1] = kDefaultDualTendonCountsPerMm;
     out->kp[0] = kDefaultDualTendonKp;
     out->kp[1] = kDefaultDualTendonKp;
     out->ki[0] = kDefaultDualTendonKi;
@@ -237,8 +237,11 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         }
 
         outTargets->motorChannel[i] = motorChannel;
-        outTargets->motorRef[i] = cfg.motorZero[i] + cfg.gain[i] * xRefMm[i];
-        outTargets->motorFbModel[i] = cfg.motorZero[i] + cfg.gain[i] * xFbMm[i];
+        const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
+        const float lengthToAbsGain =
+            -(float)shortenSign * cfg.countsPerMm[i];
+        outTargets->motorRef[i] = cfg.motorZero[i] + lengthToAbsGain * xRefMm[i];
+        outTargets->motorFbModel[i] = cfg.motorZero[i] + lengthToAbsGain * xFbMm[i];
         outTargets->motorErr[i] = outTargets->motorRef[i] - outTargets->motorFbModel[i];
         outTargets->pidCorrection[i] = 0.0f;
     }

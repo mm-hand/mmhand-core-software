@@ -18,6 +18,7 @@
 bool isMotorMapItemValid(const MotorMapItem& item);
 bool isMotorChannelValid(uint8_t motorChannel);
 uint32_t validMotorChannelMask();
+int8_t getMotorTendonShortenAbsSign(uint8_t motorChannel);
 uint8_t getJointActuatorCount(uint8_t jointIndex);
 bool getJointActuator(uint8_t jointIndex, uint8_t actuatorIndex, JointActuatorItem* out);
 bool getJointActuatorGroup(uint8_t jointIndex, JointActuatorGroup* out);

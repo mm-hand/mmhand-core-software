@@ -206,7 +206,7 @@ public:
                 const int16_t rawPos = decodeSigned(rxBuf[0], rxBuf[1]);
                 _updateMultiTurnPosition(id, rawPos);
                 _feedback[id].speed = decodeSigned(rxBuf[2], rxBuf[3]);
-                _feedback[id].load = decodeSigned(rxBuf[4], rxBuf[5]);
+                _feedback[id].load = decodeServoLoad(rxBuf[4], rxBuf[5]);
                 _feedback[id].voltage = rxBuf[6];
                 _feedback[id].temperature = rxBuf[7];
                 _feedback[id].online = true;
@@ -326,6 +326,13 @@ private:
     {
         const uint16_t raw = ((uint16_t)hi << 8) | lo;
         return (raw & (1 << 15)) ? -(int16_t)(raw & ~(1 << 15)) : (int16_t)raw;
+    }
+
+    static int16_t decodeServoLoad(uint8_t lo, uint8_t hi)
+    {
+        const uint16_t raw = ((uint16_t)hi << 8) | lo;
+        const int16_t magnitude = (int16_t)(raw & 0x03FF);
+        return (raw & (1 << 10)) ? (int16_t)-magnitude : magnitude;
     }
 
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)

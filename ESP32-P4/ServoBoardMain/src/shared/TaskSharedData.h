@@ -353,6 +353,7 @@ typedef struct {
     volatile uint8_t joint16_dual_feedback_fault;
     // 过载锁存故障位图：bit i 对应电机通道 i。
     volatile uint32_t overload_fault_bitmap;
+    volatile int16_t overload_fault_load[SERVO_TOTAL_NUM];
     // START/RESET 时自增，用于通知清除过载锁存故障。
     volatile uint32_t overload_fault_reset_token;
     // 反绕保护故障位图：bit i 对应关节 i（joint16 在求解器内排除）。
