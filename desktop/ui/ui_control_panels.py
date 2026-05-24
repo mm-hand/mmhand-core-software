@@ -27,6 +27,7 @@ from .ui_tendon_guard import (
     MOTOR_TO_JOINT_INDEX,
     TendonGuard,
     clamp_motor_abs,
+    motor_abs_after_tendon_action,
     motor_target_from_servo_feedback,
 )
 from .ui_teleop_view import TeleopView
@@ -1719,8 +1720,16 @@ class ControlPanel(QtWidgets.QWidget):
                     feedback_missing.append(f"J{joint_idx:02d} motor feedback")
                     continue
                 step_sign = 1 if error_deg > 0.0 else -1
-                targets[primary_motor] = clamp_motor_abs(int(primary_abs) + step_sign * ROPE_INIT_STEP_COUNTS)
-                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs) - step_sign * ROPE_INIT_STEP_COUNTS)
+                targets[primary_motor] = motor_abs_after_tendon_action(
+                    int(primary_abs),
+                    primary_motor,
+                    step_sign * ROPE_INIT_STEP_COUNTS,
+                )
+                targets[secondary_motor] = motor_abs_after_tendon_action(
+                    int(secondary_abs),
+                    secondary_motor,
+                    -step_sign * ROPE_INIT_STEP_COUNTS,
+                )
                 moved_motors.update((primary_motor, secondary_motor))
                 remaining.append(task)
             else:
@@ -1732,7 +1741,11 @@ class ControlPanel(QtWidgets.QWidget):
                 if feedback_abs is None:
                     feedback_missing.append(f"M{motor_idx:02d}")
                     continue
-                targets[motor_idx] = clamp_motor_abs(int(feedback_abs) + ROPE_INIT_STEP_COUNTS)
+                targets[motor_idx] = motor_abs_after_tendon_action(
+                    int(feedback_abs),
+                    motor_idx,
+                    ROPE_INIT_STEP_COUNTS,
+                )
                 moved_motors.add(motor_idx)
                 remaining.append(task)
 

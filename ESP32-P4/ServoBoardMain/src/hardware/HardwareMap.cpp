@@ -42,7 +42,7 @@ static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
     1, 1, 1, 1,
     1, 1, 1, 1,
     1, 1, 1, 1,
-   -1, 1, -1, 1,
+   -1, -1, -1, -1,
     1, 1, 1, 1,
     1, 1,
     1, 1, 1, -1, 1
