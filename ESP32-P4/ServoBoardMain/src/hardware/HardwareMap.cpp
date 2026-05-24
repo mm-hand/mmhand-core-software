@@ -135,6 +135,26 @@ int8_t getMotorTendonShortenAbsSign(uint8_t motorChannel)
     return (kMotorTendonShortenAbsSign[motorChannel] < 0) ? -1 : 1;
 }
 
+int32_t motorRawAbsToTendonAbs(uint8_t motorChannel, int32_t rawAbs)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * rawAbs;
+}
+
+int32_t motorTendonAbsToRawAbs(uint8_t motorChannel, int32_t tendonAbs)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * tendonAbs;
+}
+
+int32_t motorRawDeltaFromTendonDelta(uint8_t motorChannel, int32_t tendonDelta)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * tendonDelta;
+}
+
+int32_t motorApplyTendonDelta(uint8_t motorChannel, int32_t rawAbs, int32_t tendonDelta)
+{
+    return rawAbs + motorRawDeltaFromTendonDelta(motorChannel, tendonDelta);
+}
+
 uint8_t getJointActuatorCount(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) {

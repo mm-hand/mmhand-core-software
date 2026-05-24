@@ -237,11 +237,14 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         }
 
         outTargets->motorChannel[i] = motorChannel;
-        const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
-        const float lengthToAbsGain =
-            -(float)shortenSign * cfg.countsPerMm[i];
-        outTargets->motorRef[i] = cfg.motorZero[i] + lengthToAbsGain * xRefMm[i];
-        outTargets->motorFbModel[i] = cfg.motorZero[i] + lengthToAbsGain * xFbMm[i];
+        const float zeroTendon =
+            (float)motorRawAbsToTendonAbs(motorChannel, (int32_t)cfg.motorZero[i]);
+        const float motorRefTendon = zeroTendon - cfg.countsPerMm[i] * xRefMm[i];
+        const float motorFbTendon = zeroTendon - cfg.countsPerMm[i] * xFbMm[i];
+        outTargets->motorRef[i] =
+            (float)motorTendonAbsToRawAbs(motorChannel, (int32_t)motorRefTendon);
+        outTargets->motorFbModel[i] =
+            (float)motorTendonAbsToRawAbs(motorChannel, (int32_t)motorFbTendon);
         outTargets->motorErr[i] = outTargets->motorRef[i] - outTargets->motorFbModel[i];
         outTargets->pidCorrection[i] = 0.0f;
     }

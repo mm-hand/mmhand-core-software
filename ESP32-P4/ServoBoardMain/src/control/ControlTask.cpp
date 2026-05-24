@@ -403,8 +403,9 @@ void controlTask(void* parameter)
 
     float localTargets[ENCODER_TOTAL_NUM] = {0.0f};
     float magAngles[ENCODER_TOTAL_NUM] = {0.0f};
-    int32_t absolutePosition[ENCODER_TOTAL_NUM] = {0};
-    int16_t outPulses[ENCODER_TOTAL_NUM] = {0};
+    int32_t absolutePositionRaw[ENCODER_TOTAL_NUM] = {0};
+    int32_t absolutePositionTendon[ENCODER_TOTAL_NUM] = {0};
+    int32_t outPulsesTendon[ENCODER_TOTAL_NUM] = {0};
 
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
@@ -539,14 +540,18 @@ void controlTask(void* parameter)
         overloadFaultLatched = sharedData->overload_fault_bitmap;
 
         // 从主执行舵机反馈构建每个关节的绝对位置，供闭环 PID 与安全判断使用。
-        memset(absolutePosition, 0, sizeof(absolutePosition));
+        memset(absolutePositionRaw, 0, sizeof(absolutePositionRaw));
+        memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
         {
             const uint8_t bus = jointMap[jointIndex].busIndex;
             const uint8_t id = jointMap[jointIndex].servoID;
             const int ch = findMotorChannel(bus, id);
             if (ch >= 0 && servoData.onlineStatus[ch]) {
-                absolutePosition[jointIndex] = servoData.servoAngles[ch];
+                const int32_t rawAbs = servoData.servoAngles[ch];
+                absolutePositionRaw[jointIndex] = rawAbs;
+                absolutePositionTendon[jointIndex] =
+                    motorRawAbsToTendonAbs((uint8_t)ch, rawAbs);
             }
         }
 
@@ -679,7 +684,7 @@ void controlTask(void* parameter)
         }
 
         // 根据目标角、磁编码器反馈和当前舵机位置计算各关节 PID 输出。
-        g_controlSolver.compute(localTargets, magAngles, absolutePosition, outPulses);
+        g_controlSolver.compute(localTargets, magAngles, absolutePositionTendon, outPulsesTendon);
 
         if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
@@ -769,7 +774,7 @@ void controlTask(void* parameter)
                 if (jointIndex != kJoint16Index)
                 {
                     const int32_t servoPos =
-                        (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePosition[jointIndex];
+                        (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePositionRaw[jointIndex];
 #if REVERSE_GUARD_ENABLE
                     const bool reverseGuardCalibrationReady = g_jointCalibResult[jointIndex].success;
                     if (controlEnabled && reverseGuardCalibrationReady) {
@@ -783,7 +788,7 @@ void controlTask(void* parameter)
                             jointIndex,
                             localTargets[jointIndex],
                             magAngles[jointIndex],
-                            absolutePosition[jointIndex],
+                            absolutePositionRaw[jointIndex],
                             guardInputsValid
                         );
                     }
@@ -818,7 +823,7 @@ void controlTask(void* parameter)
                 if (emergency)
                 {
                     // 故障或保护触发时保持当前位置，避免异常状态下继续运动。
-                    const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
+                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                     jointCmdPos[jointIndex] = holdPos;
@@ -828,7 +833,7 @@ void controlTask(void* parameter)
 
                 if (hotplugHoldActive)
                 {
-                    const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
+                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                     jointCmdPos[jointIndex] = holdPos;
@@ -836,7 +841,7 @@ void controlTask(void* parameter)
                     continue;
                 }
 
-                int16_t targetPos = clampServoPos(absolutePosition[jointIndex]);
+                int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
                 // Only active joints follow PID. Inactive joints hold their
                 // current absolute position so partial-scope tests do not move
@@ -865,11 +870,16 @@ void controlTask(void* parameter)
                 }
 
                 if (jointActive) {
-                    targetPos = (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
-                        ? clampServoPosByMotorAbsLimit(sharedData,
-                                                       (uint8_t)jointMotorCh,
-                                                       outPulses[jointIndex])
-                        : clampServoPos(outPulses[jointIndex]);
+                    if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
+                        const uint8_t motorCh = (uint8_t)jointMotorCh;
+                        const int32_t rawTarget =
+                            motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
+                        targetPos = clampServoPosByMotorAbsLimit(sharedData,
+                                                                 motorCh,
+                                                                 rawTarget);
+                    } else {
+                        targetPos = clampServoPos(outPulsesTendon[jointIndex]);
+                    }
                 }
 
                 if (dualTendonJoint) {
@@ -906,7 +916,7 @@ void controlTask(void* parameter)
                 debugData.targetDeg = localTargets[jointIndex];
                 debugData.magActualDeg = magAngles[jointIndex];
                 debugData.loop1Output = g_controlSolver.getPidOutput(jointIndex, 0);
-                debugData.loop2Actual = (float)absolutePosition[jointIndex];
+                debugData.loop2Actual = (float)absolutePositionTendon[jointIndex];
                 debugData.loop2Output = g_controlSolver.getPidOutput(jointIndex, 1);
                 debugData.cmdTargetPos = jointCmdPos[jointIndex];
                 debugData.cmdValid = jointCmdValid[jointIndex];

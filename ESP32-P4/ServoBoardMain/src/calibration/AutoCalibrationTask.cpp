@@ -34,16 +34,6 @@ static const int16_t kDualPrimaryTightLoadThreshold = 175;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 175;
 static const float kReverseMinFollowDeg = 12.0f;
 
-// 0 means use the motor-level tendon shortening direction. Per-joint overrides
-// are reserved for verified hardware exceptions.
-static const int8_t kAutoTightenServoDirection[ENCODER_TOTAL_NUM] = {
-    0, 0, 0, 0,
-    0, 0, 0, 0,
-    0, 0, 0, 0,
-    0, 0, 0, 0,
-    0, 0, 0, 0, 0
-};
-
 static int32_t abs32(int32_t value)
 {
     return value < 0 ? -value : value;
@@ -75,29 +65,22 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
         return;
     }
 
-    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
     const int32_t tightClamped = clampToServoAbsRangeLocal(tightAbs);
-    int32_t minAbs = 0;
-    int32_t maxAbs = 0;
-    if (shortenSign >= 0) {
-        maxAbs = tightClamped;
-        minAbs =
-            clampToServoAbsRangeLocal((int32_t)maxAbs - kCalibratedMotorAbsWindowCounts);
-    } else {
-        minAbs = tightClamped;
-        maxAbs =
-            clampToServoAbsRangeLocal((int32_t)minAbs + kCalibratedMotorAbsWindowCounts);
-    }
+    const int32_t slackClamped = clampToServoAbsRangeLocal(
+        motorApplyTendonDelta(motorChannel, tightClamped, -kCalibratedMotorAbsWindowCounts));
+    const int32_t minAbs = (slackClamped < tightClamped) ? slackClamped : tightClamped;
+    const int32_t maxAbs = (slackClamped > tightClamped) ? slackClamped : tightClamped;
     sharedData->motor_abs_limit_min[motorChannel] = minAbs;
     sharedData->motor_abs_limit_max[motorChannel] = maxAbs;
     sharedData->motor_abs_limit_valid_bitmap |= (1UL << motorChannel);
     sharedData->motor_abs_limit_locked_bitmap |= (1UL << motorChannel);
-    Serial.printf("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld tight=%ld shortenSign=%d window=%ld\r\n",
+    Serial.printf("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld tight=%ld slack=%ld shortenSign=%d window=%ld\r\n",
                   (unsigned)motorChannel,
                   (long)minAbs,
                   (long)maxAbs,
                   (long)tightClamped,
-                  (int)shortenSign,
+                  (long)slackClamped,
+                  (int)getMotorTendonShortenAbsSign(motorChannel),
                   (long)kCalibratedMotorAbsWindowCounts);
 }
 
@@ -177,21 +160,6 @@ static bool autoCalibrationStillOwnsControl(TaskSharedData_t* sharedData)
 static bool isServoCommandInsideLimit(int32_t commandAbs)
 {
     return commandAbs >= -30719 && commandAbs <= 30719;
-}
-
-static int32_t getAutoTightenDirectionSign(uint8_t jointIndex, const JointCalibrationConfig& cfg)
-{
-    if (jointIndex < ENCODER_TOTAL_NUM && kAutoTightenServoDirection[jointIndex] != 0) {
-        return kAutoTightenServoDirection[jointIndex] < 0 ? -1 : 1;
-    }
-    if (jointIndex < ENCODER_TOTAL_NUM) {
-        const int motorChannel = findMotorChannelByBusId(jointMap[jointIndex].busIndex,
-                                                         jointMap[jointIndex].servoID);
-        if (motorChannel >= 0 && motorChannel < SERVO_TOTAL_NUM) {
-            return getMotorTendonShortenAbsSign((uint8_t)motorChannel);
-        }
-    }
-    return (cfg.tightenStep < 0) ? -1 : 1;
 }
 
 static int findMotorChannel(uint8_t bus, uint8_t id)
@@ -850,6 +818,7 @@ struct JointCalibContext {
     uint8_t jointIndex;
     uint8_t bus;
     uint8_t servoId;
+    uint8_t motorChannel;
     int32_t directionSign;
     int8_t encoderTravelSign;
     JointCalibrationConfig motionCfg;
@@ -1375,7 +1344,7 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
             const int32_t stepCounts = numerator / 1000;
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
-                commandAbs += (int32_t)motorShortenSign * stepCounts;
+                commandAbs = motorApplyTendonDelta(motorChannel, commandAbs, stepCounts);
                 if (holdOtherMotor) {
                     if (!publishDualMotorCalibrationTargets(sharedData,
                                                             motorChannel,
@@ -1499,7 +1468,7 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
             const int32_t stepCounts = numerator / 1000;
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
-                commandAbs += (int32_t)secondaryShortenSign * stepCounts;
+                commandAbs = motorApplyTendonDelta(secondaryMotor, commandAbs, stepCounts);
                 if (!publishDualMotorCalibrationTargets(sharedData,
                                                         secondaryMotor,
                                                         commandAbs,
@@ -1695,8 +1664,12 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
             const int32_t stepCounts = numerator / 1000;
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
-                secondaryCommandAbs += (int32_t)secondaryShortenSign * stepCounts;
-                primaryCommandAbs -= (int32_t)primaryShortenSign * stepCounts;
+                secondaryCommandAbs = motorApplyTendonDelta(secondaryMotor,
+                                                            secondaryCommandAbs,
+                                                            stepCounts);
+                primaryCommandAbs = motorApplyTendonDelta(primaryMotor,
+                                                          primaryCommandAbs,
+                                                          -stepCounts);
                 if (!publishDualMotorCalibrationTargets(sharedData,
                                                         secondaryMotor,
                                                         secondaryCommandAbs,
@@ -1787,7 +1760,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (long)secondaryAbs);
 
     const int32_t secondarySlackTarget =
-        secondaryAbs - (int32_t)secondaryShortenSign * kDualAutoSlackCounts;
+        motorApplyTendonDelta(secondaryMotor, secondaryAbs, -kDualAutoSlackCounts);
     Serial.printf("[AUTO CALIB] DUAL_SLACK_SECONDARY_BEGIN J%02u M%02u targetAbs=%ld from=%ld shortenSign=%d\r\n",
                   jointIndex,
                   secondaryMotor,
@@ -2056,6 +2029,7 @@ static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
     memset(ctx, 0, sizeof(*ctx));
     ctx->state = AUTO_CALIB_STATE_INIT;
     ctx->jointIndex = jointIndex;
+    ctx->motorChannel = 0xFF;
 }
 
 // ============================================================================
@@ -2108,7 +2082,13 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             ctx->motionCfg.settleMs = params.loopMs;
             ctx->bus = jointMap[ctx->jointIndex].busIndex;
             ctx->servoId = jointMap[ctx->jointIndex].servoID;
-            ctx->directionSign = getAutoTightenDirectionSign(ctx->jointIndex, cfg);
+            const int motorChannel = findMotorChannel(ctx->bus, ctx->servoId);
+            if (motorChannel < 0 || motorChannel >= SERVO_TOTAL_NUM) {
+                failAutoCalibContext(ctx, "primary motor channel not mapped");
+                return;
+            }
+            ctx->motorChannel = (uint8_t)motorChannel;
+            ctx->directionSign = getMotorTendonShortenAbsSign(ctx->motorChannel);
             if (!ctx->initStarted) {
                 ctx->initStarted = true;
                 ctx->stateBeginMs = nowMs;
@@ -2284,7 +2264,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     const int32_t stepCounts = numerator / 1000;
                     ctx->commandRemainder = numerator % 1000;
                     if (stepCounts > 0) {
-                        ctx->commandAbs += ctx->directionSign * stepCounts;
+                        ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
+                                                                ctx->commandAbs,
+                                                                stepCounts);
                         if (!isServoCommandInsideLimit(ctx->commandAbs)) {
                             appendJointCalibrationTargetToBatch(batch,
                                                                 ctx->jointIndex,
@@ -2313,7 +2295,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 const int32_t stepCounts = numerator / 1000;
                 ctx->commandRemainder = numerator % 1000;
                 if (stepCounts > 0) {
-                    ctx->commandAbs -= ctx->directionSign * stepCounts;
+                    ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
+                                                            ctx->commandAbs,
+                                                            -stepCounts);
                     if (!isServoCommandInsideLimit(ctx->commandAbs)) {
                         appendJointCalibrationTargetToBatch(batch,
                                                             ctx->jointIndex,
@@ -2394,7 +2378,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         failAutoCalibContext(ctx, "zero find has no servo travel");
                         return;
                     }
-                    ctx->directionSign = (maxServoAbs > tightServoAbs) ? 1 : -1;
                     const int32_t resultTautEncoder =
                         encoderForPositiveTravelResult(ctx->zeroEncoder, ctx->encoderTravelSign);
                     const int32_t resultTightEncoder =
@@ -2409,7 +2392,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                             resultTautEncoder +
                             roundToInt32Local((float)resultSpan * zeroFraction));
                     const int32_t servoZeroAbs =
-                        tightServoAbs + (ctx->directionSign * kAutoServoZeroPullCounts);
+                        motorApplyTendonDelta(ctx->motorChannel,
+                                              tightServoAbs,
+                                              kAutoServoZeroPullCounts);
 
                     JointCalibrationResult result;
                     if (!buildAutoZeroTightCalibrationResult(ctx->jointIndex,
@@ -2469,14 +2454,13 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   loadMag,
                                   releaseFromMaxDeg,
                                   windowAngleDeltaDeg);
-                    Serial.printf("[AUTO CALIB] ZERO_FOUND J%02u zeroDeg=%.3f encoder=%ld servoZero=%ld formula=tightAbs(%ld)+directionSign(%ld)*pullCounts(%ld)\r\n",
+                    Serial.printf("[AUTO CALIB] ZERO_FOUND J%02u zeroDeg=%.3f encoder=%ld servoZero=%ld formula=tendon(tightAbs)+pullCounts(%ld) shortenSign=%ld\r\n",
                                   ctx->jointIndex,
                                   kAutoCalibrationZeroDeg,
                                   (long)result.zeroEncoder,
                                   (long)result.zeroServoAbs,
-                                  (long)tightServoAbs,
-                                  (long)ctx->directionSign,
-                                  (long)kAutoServoZeroPullCounts);
+                                  (long)kAutoServoZeroPullCounts,
+                                  (long)ctx->directionSign);
                     Serial.printf("[AUTO CALIB] RESULT J%02u start=%ld zero=%ld tight=%ld span=%ld servoStart=%ld servoZero=%ld servoTight=%ld\r\n",
                                   ctx->jointIndex,
                                   (long)result.startEncoder,
@@ -2531,8 +2515,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             const int32_t absError = absFeedbackValid
                 ? abs32(currentAbs - ctx->targetAbs)
                 : 0;
-            const int32_t returnTravel =
-                absFeedbackValid ? ((currentAbs - ctx->returnZeroStartAbs) * ctx->directionSign) : 0;
+            const int32_t returnTravel = absFeedbackValid
+                ? (motorRawAbsToTendonAbs(ctx->motorChannel, currentAbs) -
+                   motorRawAbsToTendonAbs(ctx->motorChannel, ctx->returnZeroStartAbs))
+                : 0;
             const int32_t requiredReturnTravel =
                 kAutoServoZeroPullCounts - kAutoServoZeroPullToleranceCounts;
             const bool returnTravelReached =
