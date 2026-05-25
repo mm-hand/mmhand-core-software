@@ -27,6 +27,7 @@ from .ui_tendon_guard import (
     MOTOR_TO_JOINT_INDEX,
     TendonGuard,
     clamp_motor_abs,
+    motor_abs_after_tendon_action,
     motor_target_from_servo_feedback,
 )
 from .ui_teleop_view import TeleopView
@@ -221,6 +222,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_turn_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_abs_items: List[QtWidgets.QTableWidgetItem] = []
+        self.motor_load_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_limit_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_joint_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_target_spins: List[QtWidgets.QSpinBox] = []
@@ -583,6 +585,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_turn_items = []
         self.motor_raw_items = []
         self.motor_abs_items = []
+        self.motor_load_items = []
         self.motor_limit_items = []
         self.motor_joint_items = []
         self.motor_target_spins = []
@@ -842,9 +845,9 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _build_motor_table(self) -> QtWidgets.QTableWidget:
         motor_rows, group_ranges = _motor_rows_by_finger_group()
-        table = QtWidgets.QTableWidget(len(motor_rows), 14)
+        table = QtWidgets.QTableWidget(len(motor_rows), 15)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Motor", "Turn", "RawNow", "AbsNow", "Limit", "Target(rel)", "Action", "Raw",
+            "Group", "Use", "Motor", "Turn", "RawNow", "AbsNow", "Load", "Limit", "Target(rel)", "Action", "Raw",
             "-", "Raw Slider", "+", "Joint Angle",
         ])
         table.verticalHeader().setVisible(False)
@@ -852,6 +855,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_turn_items = [None] * MOTOR_COUNT
         self.motor_raw_items = [None] * MOTOR_COUNT
         self.motor_abs_items = [None] * MOTOR_COUNT
+        self.motor_load_items = [None] * MOTOR_COUNT
         self.motor_limit_items = [None] * MOTOR_COUNT
         self.motor_joint_items = [None] * MOTOR_COUNT
         self.motor_target_spins = [None] * MOTOR_COUNT
@@ -929,19 +933,22 @@ class ControlPanel(QtWidgets.QWidget):
             turn = self._make_item("-")
             raw_now = self._make_item("-")
             abs_now = self._make_item("-")
+            load = self._make_item("-")
             limit = self._make_item("-")
             joint = self._make_item("-")
-            for item in (turn, raw_now, abs_now, limit, joint):
+            for item in (turn, raw_now, abs_now, load, limit, joint):
                 apply_group_background(item, row)
             self.motor_turn_items[i] = turn
             self.motor_raw_items[i] = raw_now
             self.motor_abs_items[i] = abs_now
+            self.motor_load_items[i] = load
             self.motor_limit_items[i] = limit
             self.motor_joint_items[i] = joint
             table.setItem(row, 3, turn)
             table.setItem(row, 4, raw_now)
             table.setItem(row, 5, abs_now)
-            table.setItem(row, 6, limit)
+            table.setItem(row, 6, load)
+            table.setItem(row, 7, limit)
             spin = QtWidgets.QSpinBox()
             spin.setRange(MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX)
             spin.setSingleStep(10)
@@ -949,23 +956,23 @@ class ControlPanel(QtWidgets.QWidget):
             spin.editingFinished.connect(lambda idx=i: self._mark_motor_target_user_set(idx))
             apply_group_widget_background(spin, row)
             self.motor_target_spins[i] = spin
-            table.setCellWidget(row, 7, spin)
+            table.setCellWidget(row, 8, spin)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: self.send_motor_row(idx))
             apply_group_widget_background(send, row)
             self.motor_send_buttons[i] = send
-            table.setCellWidget(row, 8, send)
+            table.setCellWidget(row, 9, send)
             recover = QtWidgets.QPushButton("Raw")
             recover.clicked.connect(lambda _=False, idx=i: self.recover_motor_row_to_raw(idx))
             recover.setToolTip("Recover this motor from +/-30719 using its current single-turn raw feedback")
             apply_group_widget_background(recover, row)
             self.motor_recover_buttons[i] = recover
-            table.setCellWidget(row, 9, recover)
+            table.setCellWidget(row, 10, recover)
             minus = QtWidgets.QPushButton("-")
             minus.setMaximumWidth(34)
             minus.clicked.connect(lambda _=False, idx=i: self._step_motor_target(idx, -1))
             apply_group_widget_background(minus, row)
-            table.setCellWidget(row, 10, minus)
+            table.setCellWidget(row, 11, minus)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setMinimumWidth(72)
             slider.setRange(MOTOR_TARGET_SCALE_LO, MOTOR_TARGET_SCALE_HI)
@@ -974,13 +981,13 @@ class ControlPanel(QtWidgets.QWidget):
             slider.valueChanged.connect(lambda value, idx=i: self._motor_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             self.motor_sliders[i] = slider
-            table.setCellWidget(row, 11, slider)
+            table.setCellWidget(row, 12, slider)
             plus = QtWidgets.QPushButton("+")
             plus.setMaximumWidth(34)
             plus.clicked.connect(lambda _=False, idx=i: self._step_motor_target(idx, 1))
             apply_group_widget_background(plus, row)
-            table.setCellWidget(row, 12, plus)
-            table.setItem(row, 13, joint)
+            table.setCellWidget(row, 13, plus)
+            table.setItem(row, 14, joint)
             self._control_widgets.extend([spin, send, recover, minus, slider, plus])
             if not _motor_channel_valid(i):
                 table.setRowHidden(row, True)
@@ -991,12 +998,12 @@ class ControlPanel(QtWidgets.QWidget):
         table.setColumnWidth(1, 44)
         table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(2, 58)
-        table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(6, 126)
-        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Stretch)
-        table.setColumnWidth(11, 150)
-        table.horizontalHeader().setSectionResizeMode(13, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(13, 82)
+        table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(7, 126)
+        table.horizontalHeader().setSectionResizeMode(12, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(12, 150)
+        table.horizontalHeader().setSectionResizeMode(14, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(14, 82)
         return table
 
     def _build_test_panel(self) -> QtWidgets.QWidget:
@@ -1689,8 +1696,16 @@ class ControlPanel(QtWidgets.QWidget):
                     feedback_missing.append(f"J{joint_idx:02d} motor feedback")
                     continue
                 step_sign = 1 if error_deg > 0.0 else -1
-                targets[primary_motor] = clamp_motor_abs(int(primary_abs) + step_sign * ROPE_INIT_STEP_COUNTS)
-                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs))
+                targets[primary_motor] = motor_abs_after_tendon_action(
+                    int(primary_abs),
+                    primary_motor,
+                    step_sign * ROPE_INIT_STEP_COUNTS,
+                )
+                targets[secondary_motor] = motor_abs_after_tendon_action(
+                    int(secondary_abs),
+                    secondary_motor,
+                    -step_sign * ROPE_INIT_STEP_COUNTS,
+                )
                 moved_motors.update((primary_motor, secondary_motor))
                 remaining.append(task)
             else:
@@ -1702,7 +1717,11 @@ class ControlPanel(QtWidgets.QWidget):
                 if feedback_abs is None:
                     feedback_missing.append(f"M{motor_idx:02d}")
                     continue
-                targets[motor_idx] = clamp_motor_abs(int(feedback_abs) + ROPE_INIT_STEP_COUNTS)
+                targets[motor_idx] = motor_abs_after_tendon_action(
+                    int(feedback_abs),
+                    motor_idx,
+                    ROPE_INIT_STEP_COUNTS,
+                )
                 moved_motors.add(motor_idx)
                 remaining.append(task)
 
@@ -2368,7 +2387,7 @@ class ControlPanel(QtWidgets.QWidget):
         try:
             for item in self.joint_current_items + self.joint_encoder_items + self.joint_zero_abs_items:
                 item.setText("-")
-            for item in self.motor_turn_items + self.motor_raw_items + self.motor_abs_items + self.motor_limit_items + self.motor_joint_items:
+            for item in self.motor_turn_items + self.motor_raw_items + self.motor_abs_items + self.motor_load_items + self.motor_limit_items + self.motor_joint_items:
                 if item is not None:
                     item.setText("-")
             for i in range(ENCODER_COUNT):
@@ -2996,6 +3015,13 @@ class ControlPanel(QtWidgets.QWidget):
                     self.motor_raw_items[i].setText(f"{raw_single:4d}" if raw_single is not None else "-")
                 if i < len(self.motor_abs_items):
                     self.motor_abs_items[i].setText(str(int(dev_abs)) if dev_abs is not None else "-")
+                if i < len(self.motor_load_items):
+                    load_text = "-"
+                    loads = getattr(state, "servo_load", [])
+                    online = getattr(state, "servo_telem_online", [])
+                    if i < len(loads) and i < len(online) and online[i]:
+                        load_text = str(int(loads[i]))
+                    self.motor_load_items[i].setText(load_text)
                 if i < len(self.motor_limit_items) and self.motor_limit_items[i] is not None:
                     limit_text = "-"
                     valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))

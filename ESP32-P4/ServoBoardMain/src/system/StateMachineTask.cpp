@@ -8,11 +8,14 @@
 #include "../calibration/CalibrationTask.h"
 #include "../hardware/HardwareMap.h"
 
-extern volatile uint8_t g_calibrationUIStatus;
+extern volatile uint8_t g_calibrationStatus;
+extern volatile uint8_t g_calibrationAckStatus;
+extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
 static const uint32_t kStateCanOfflineTimeoutMs = 300;
 static const uint32_t kStateServoFeedbackTimeoutMs = 500;
 static const float kWorkspaceToleranceDeg = 1.0f;
+static const uint8_t kCalibrationAckRepeatCount = 20;
 #ifndef BOOT_AUTO_CALIBRATION_ENABLE
 #define BOOT_AUTO_CALIBRATION_ENABLE 0
 #endif
@@ -21,6 +24,20 @@ static const uint32_t kBootAutoCalibrationDelayMs = 1500;
 static uint32_t collectSystemFaults(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData);
 static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData);
+
+static void setCalibrationStatus(uint8_t status, bool emitAck)
+{
+    g_calibrationStatus = status;
+    if (status == CALIB_STATUS_IDLE) {
+        g_calibrationAckStatus = CALIB_STATUS_IDLE;
+        g_calibrationAckRepeatRemaining = 0;
+        return;
+    }
+    if (emitAck) {
+        g_calibrationAckStatus = status;
+        g_calibrationAckRepeatRemaining = kCalibrationAckRepeatCount;
+    }
+}
 
 bool postSystemEvent(TaskSharedData_t* sharedData, uint8_t event)
 {
@@ -232,6 +249,10 @@ static void resetControlProtectionFaults(TaskSharedData_t* sharedData)
         return;
     }
     sharedData->joint16_dual_feedback_fault = 0;
+    sharedData->overload_fault_bitmap = 0;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
+        sharedData->overload_fault_load[i] = 0;
+    }
     sharedData->overload_fault_reset_token++;
     sharedData->reverse_release_fault_reset_token++;
 }
@@ -462,7 +483,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->calibration_fault_latched = 0;
             sharedData->system_fault_latched_bitmap = 0;
             sharedData->system_fault_bitmap = 0;
-            g_calibrationUIStatus = CALIB_STATUS_IDLE;
+            setCalibrationStatus(CALIB_STATUS_IDLE, false);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
 
@@ -557,10 +578,10 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->calibration_fault_latched = 0;
             setCommandModeJoint(sharedData);
-            g_calibrationUIStatus = CALIB_STATUS_RUNNING;
+            setCalibrationStatus(CALIB_STATUS_RUNNING, true);
             setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
             if (!startAutoCalibrationTask(sharedData)) {
-                g_calibrationUIStatus = CALIB_STATUS_FAILED;
+                setCalibrationStatus(CALIB_STATUS_FAILED, true);
                 sharedData->calibration_fault_latched = 1;
                 requestServoEmergencyHold(sharedData);
                 setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
@@ -578,7 +599,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->calibration_fault_latched = 0;
             sharedData->multi_turn_unknown_bitmap &= ~readyServoRequiredMask(sharedData);
-            g_calibrationUIStatus = CALIB_STATUS_SUCCESS;
+            setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
             break;
@@ -592,7 +613,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->calibration_fault_latched = 1;
-            g_calibrationUIStatus = CALIB_STATUS_FAILED;
+            setCalibrationStatus(CALIB_STATUS_FAILED, true);
             requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;

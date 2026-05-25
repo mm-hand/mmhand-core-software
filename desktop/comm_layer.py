@@ -62,7 +62,9 @@ from protocol import (
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_READY,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_FAULT_CALIBRATION,
     parse_calib_ack,
     parse_fault_status_packet,
     parse_release_fault_packet,
@@ -551,10 +553,14 @@ class LowerComputerComm:
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_FAULT_STATUS:
-                fault_bitmap = parse_fault_status_packet(payload)
-                if fault_bitmap is not None:
+                parsed_fault = parse_fault_status_packet(payload)
+                if parsed_fault is not None:
+                    fault_bitmap, trigger_loads = parsed_fault
                     for i in range(MOTOR_COUNT):
-                        model.servo_overload_fault[i] = ((fault_bitmap >> i) & 0x01) != 0
+                        faulted = ((fault_bitmap >> i) & 0x01) != 0
+                        model.servo_overload_fault[i] = faulted
+                        if i < len(trigger_loads):
+                            model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_RELEASE_FAULT:
@@ -589,7 +595,20 @@ class LowerComputerComm:
                     model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
                     model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
                     model.has_system_status_data = True
-                    if calib_status == 1:
+                    if calib_status == 0:
+                        if (
+                            model.calib_status == "PENDING" and
+                            model.system_state != SYSTEM_STATE_CALIBRATION_RUNNING
+                        ):
+                            if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
+                                model.calib_status = "FAILED"
+                            elif model.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
+                                model.calib_status = "SUCCESS"
+                            else:
+                                model.calib_status = "IDLE"
+                        else:
+                            model.calib_status = "IDLE"
+                    elif calib_status == 1:
                         model.calib_status = "PENDING"
                     elif calib_status == 2:
                         model.calib_status = "SUCCESS"

@@ -408,8 +408,10 @@ bool ServoManager::SyncReadPosLoad(uint8_t maxRetries, bool update) {
             
             // 解析负载数据（2字节）
             int32_t raw_load = (rx_packet[4] | (rx_packet[5] << 8));
-            if(raw_load & (1<<15)){
-                raw_load = -(raw_load & ~(1<<15));
+            if(raw_load & (1<<10)){
+                raw_load = -(raw_load & 0x03FF);
+            } else {
+                raw_load = raw_load & 0x03FF;
             }
             
             // 更新内部位置和负载状态

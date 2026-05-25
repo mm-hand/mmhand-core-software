@@ -20,9 +20,25 @@ for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
+MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
+for _motor_idx in (12, 13, 14, 15, 25):
+    if 0 <= _motor_idx < MOTOR_COUNT:
+        MOTOR_TENDON_SHORTEN_ABS_SIGN[_motor_idx] = -1
+
 
 def clamp_motor_abs(value: int) -> int:
     return max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(value)))
+
+
+def motor_tendon_shorten_abs_sign(motor_idx: int) -> int:
+    if 0 <= int(motor_idx) < len(MOTOR_TENDON_SHORTEN_ABS_SIGN):
+        return -1 if int(MOTOR_TENDON_SHORTEN_ABS_SIGN[int(motor_idx)]) < 0 else 1
+    return 1
+
+
+def motor_abs_after_tendon_action(current_abs: int, motor_idx: int, shorten_counts: int) -> int:
+    sign = motor_tendon_shorten_abs_sign(motor_idx)
+    return clamp_motor_abs(int(current_abs) + sign * int(shorten_counts))
 
 
 def motor_target_from_servo_feedback(servo_raw_single: int) -> int:

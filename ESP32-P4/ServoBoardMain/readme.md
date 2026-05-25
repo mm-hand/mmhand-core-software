@@ -236,7 +236,7 @@ CAN 使用 ESP32 TWAI，默认引脚：
 当前策略：
 
 - `CMD_CALIBRATE` 只进入校准生命周期，不自动跑完整机械标定。
-- `StateMachineTask` 设置 `g_calibrationUIStatus`，由 `UpperCommTask` 一次性上报给上位机。
+- `StateMachineTask` 维护持久 `g_calibrationStatus`，并通过 `g_calibrationAckStatus` / `g_calibrationAckRepeatRemaining` 触发 `UpperCommTask` 重发校准 ACK。
 - 校准期间 `servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION`。
 - 普通控制目标不会覆盖校准目标。
 - 退出校准需要通过 START、STOP 或 RESET。
