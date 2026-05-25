@@ -316,6 +316,11 @@ static void sendDataPacket(ServoStatus_t* pServo,
         const uint16_t cmdPosRaw = (uint16_t)pJointDebug->cmdTargetPos;
         buffer[idx++] = (uint8_t)((cmdPosRaw >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(cmdPosRaw & 0xFF);
+        const uint32_t ts = pJointDebug->timestamp;
+        buffer[idx++] = (uint8_t)((ts >> 24) & 0xFF);
+        buffer[idx++] = (uint8_t)((ts >> 16) & 0xFF);
+        buffer[idx++] = (uint8_t)((ts >> 8) & 0xFF);
+        buffer[idx++] = (uint8_t)(ts & 0xFF);
     }
     else
     {
@@ -422,9 +427,13 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_RUN_FEEDBACK:
         case CMD_PAUSE:
         case CMD_HOST_HEARTBEAT:
+        case CMD_SINE_TEST_START:
+        case CMD_SINE_TEST_STOP:
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
+        case CMD_SINE_TEST_PARAMS:
+            return kSineTestParamsPayloadBytes;
         case CMD_ANGLE_CTRL:
             return kFloatPayloadBytes;
         case CMD_CALIB_DATA:
@@ -508,6 +517,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_STOP)
     {
+        sharedData->sine_test_enabled = 0;
         postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
         sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
@@ -515,6 +525,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_RESET)
     {
+        sharedData->sine_test_enabled = 0;
         postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
         sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
@@ -708,6 +719,119 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 #endif
         }
         sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_SINE_TEST_PARAMS)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kSineTestParamsPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint32_t holdMs = readU32BigEndian(frame + 1);
+            uint8_t rowCount = frame[5];
+            if (rowCount > kSineTestMaxRows) {
+                rowCount = kSineTestMaxRows;
+            }
+            uint32_t jointMask = 0;
+            float center[ENCODER_TOTAL_NUM] = {0.0f};
+            float amp[ENCODER_TOTAL_NUM] = {0.0f};
+            float freq[ENCODER_TOTAL_NUM] = {0.0f};
+            float phase[ENCODER_TOTAL_NUM] = {0.0f};
+            size_t offset = 6;
+            for (uint8_t row = 0; row < kSineTestMaxRows; row++) {
+                const uint8_t jointIndex = frame[offset++];
+                const float rowCenter = decodeFloatLittleEndian(frame + offset);
+                offset += sizeof(float);
+                const float rowAmp = decodeFloatLittleEndian(frame + offset);
+                offset += sizeof(float);
+                const float rowFreq = decodeFloatLittleEndian(frame + offset);
+                offset += sizeof(float);
+                const float rowPhase = decodeFloatLittleEndian(frame + offset);
+                offset += sizeof(float);
+
+                if (row >= rowCount) {
+                    continue;
+                }
+                if (jointIndex >= ENCODER_TOTAL_NUM ||
+                    !isfinite(rowCenter) ||
+                    !isfinite(rowAmp) || rowAmp < 0.0f || rowAmp > 180.0f ||
+                    !isfinite(rowFreq) || rowFreq < 0.001f || rowFreq > 100.0f ||
+                    !isfinite(rowPhase)) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                    continue;
+                }
+                jointMask |= (1UL << jointIndex);
+                center[jointIndex] = rowCenter;
+                amp[jointIndex] = rowAmp;
+                freq[jointIndex] = rowFreq;
+                phase[jointIndex] = rowPhase;
+            }
+            if (status == PROTO_ACK_STATUS_OK) {
+                SemaphoreHandle_t lock = sharedData->commandStateMutex;
+                if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                } else {
+                    sharedData->sine_test_joint_mask = jointMask;
+                    sharedData->sine_test_hold_ms = holdMs;
+                    memcpy(sharedData->sine_test_center_deg, center, sizeof(center));
+                    memcpy(sharedData->sine_test_amp_deg, amp, sizeof(amp));
+                    memcpy(sharedData->sine_test_freq_hz, freq, sizeof(freq));
+                    memcpy(sharedData->sine_test_phase_rad, phase, sizeof(phase));
+                    if (lock) {
+                        xSemaphoreGive(lock);
+                    }
+                }
+            }
+        }
+        Serial.printf("[UPPER] SINE_TEST_PARAMS mask=0x%08lX hold=%lums status=%u\r\n",
+                      (unsigned long)sharedData->sine_test_joint_mask,
+                      (unsigned long)sharedData->sine_test_hold_ms,
+                      (unsigned)status);
+        sendProtoAckPacket(CMD_SINE_TEST_PARAMS, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_SINE_TEST_START)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        SemaphoreHandle_t lock = sharedData->commandStateMutex;
+        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            sharedData->sine_test_enabled = 1;
+            sharedData->sine_test_start_ms = millis();
+            sharedData->sine_test_request_token++;
+            sharedData->joint_command_token++;
+            if (lock) {
+                xSemaphoreGive(lock);
+            }
+        }
+        Serial.printf("[UPPER] SINE_TEST_START enabled=%u token=%lu jointMask=0x%08lX status=%u\r\n",
+                      sharedData->sine_test_enabled ? 1U : 0U,
+                      (unsigned long)sharedData->sine_test_request_token,
+                      (unsigned long)sharedData->sine_test_joint_mask,
+                      (unsigned)status);
+        sendProtoAckPacket(CMD_SINE_TEST_START, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_SINE_TEST_STOP)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        SemaphoreHandle_t lock = sharedData->commandStateMutex;
+        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            sharedData->sine_test_enabled = 0;
+            sharedData->sine_test_request_token++;
+            sharedData->joint_command_token++;
+            if (lock) {
+                xSemaphoreGive(lock);
+            }
+        }
+        Serial.printf("[UPPER] SINE_TEST_STOP status=%u\r\n", (unsigned)status);
+        sendProtoAckPacket(CMD_SINE_TEST_STOP, sharedData->system_state, status);
         return;
     }
 

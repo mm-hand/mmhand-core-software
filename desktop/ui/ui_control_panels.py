@@ -252,7 +252,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._test_running = False
         self._ff_test_running = False
         self._tri_test_running = False
-        self._local_test_running = False
         self._test_timer = QtCore.QTimer(self)
         self._test_timer.setInterval(TEST_TICK_MS)
         self._test_timer.timeout.connect(self._test_tick)
@@ -562,10 +561,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.tri_min_spin = None
         self.tri_max_spin = None
         self.tri_freq_spin = None
-        self.local_start_btn = None
-        self.local_stop_btn = None
-        self.local_freq = None
-        self.local_amp = None
         self.test_joint_combos = []
         self.test_min_spins = []
         self.test_max_spins = []
@@ -1010,7 +1005,6 @@ class ControlPanel(QtWidgets.QWidget):
         layout.addWidget(self._build_sine_test_box())
         layout.addWidget(self._build_feedforward_test_box())
         layout.addWidget(self._build_triangle_test_box())
-        layout.addWidget(self._build_local_test_box())
         layout.addStretch(1)
         return box
 
@@ -1110,24 +1104,6 @@ class ControlPanel(QtWidgets.QWidget):
             self.tri_joint_combo, self.tri_min_spin, self.tri_max_spin, self.tri_freq_spin,
             self.tri_start_btn, self.tri_stop_btn,
         ])
-        return group
-
-    def _build_local_test_box(self) -> QtWidgets.QGroupBox:
-        group = QtWidgets.QGroupBox("Local Test Mode")
-        layout = QtWidgets.QHBoxLayout(group)
-        self.local_freq = self._make_float_spin(0.001, 100.0, 0.5, 4)
-        self.local_amp = self._make_float_spin(-180.0, 180.0, 20.0, 3)
-        self.local_start_btn = QtWidgets.QPushButton("Start Local Test")
-        self.local_stop_btn = QtWidgets.QPushButton("Stop Local Test")
-        self.local_start_btn.clicked.connect(lambda _checked=False: self._on_start_local_test())
-        self.local_stop_btn.clicked.connect(lambda _checked=False: self._on_stop_local_test())
-        for widget in [
-            QtWidgets.QLabel("Freq(Hz)"), self.local_freq, QtWidgets.QLabel("Amp(deg)"), self.local_amp,
-            self.local_start_btn, self.local_stop_btn,
-        ]:
-            layout.addWidget(widget)
-        layout.addStretch(1)
-        self._control_widgets.extend([self.local_freq, self.local_amp, self.local_start_btn, self.local_stop_btn])
         return group
 
     @staticmethod
@@ -1714,7 +1690,7 @@ class ControlPanel(QtWidgets.QWidget):
                     continue
                 step_sign = 1 if error_deg > 0.0 else -1
                 targets[primary_motor] = clamp_motor_abs(int(primary_abs) + step_sign * ROPE_INIT_STEP_COUNTS)
-                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs) - step_sign * ROPE_INIT_STEP_COUNTS)
+                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs))
                 moved_motors.update((primary_motor, secondary_motor))
                 remaining.append(task)
             else:
@@ -2405,8 +2381,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._on_stop_test(reason=reason, update_status=update_status)
         self._on_stop_ff_test(reason=reason, update_status=update_status)
         self._on_stop_tri_test(reason=reason, update_status=update_status)
-        if include_local:
-            self._on_stop_local_test(reason=reason, update_status=update_status)
 
     def _guard_joint_command_started(self) -> bool:
         self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
@@ -3298,13 +3272,12 @@ class ControlPanel(QtWidgets.QWidget):
         return active or None
 
     def _set_test_button_states(self) -> None:
-        any_running = self._test_running or self._ff_test_running or self._tri_test_running or self._local_test_running
+        any_running = self._test_running or self._ff_test_running or self._tri_test_running
         manual = bool(self._interaction_enabled)
         for btn, running in [
             (getattr(self, "test_stop_btn", None), self._test_running),
             (getattr(self, "ff_stop_btn", None), self._ff_test_running),
             (getattr(self, "tri_stop_btn", None), self._tri_test_running),
-            (getattr(self, "local_stop_btn", None), self._local_test_running),
         ]:
             if btn is not None:
                 try:
@@ -3315,7 +3288,6 @@ class ControlPanel(QtWidgets.QWidget):
             (getattr(self, "test_start_btn", None), self._test_running),
             (getattr(self, "ff_start_btn", None), self._ff_test_running),
             (getattr(self, "tri_start_btn", None), self._tri_test_running),
-            (getattr(self, "local_start_btn", None), self._local_test_running),
         ]:
             if btn is not None:
                 try:
@@ -3347,12 +3319,17 @@ class ControlPanel(QtWidgets.QWidget):
             return
         self._test_active_rows = active
         self._test_hold_s = max(0.0, float(self.test_hold_spin.value()))
+        try:
+            self.controller.set_sine_test_params(active, self._test_hold_s)
+            self.controller.start_sine_test()
+        except Exception as exc:
+            self.context.stop_recording_for_test("sine test failed")
+            self._error("Start Test Failed", f"{type(exc).__name__}: {exc}")
+            return
         self._test_running = True
         self._test_t0 = time.time()
         self._set_test_button_states()
-        self.context.emit_action("Test started")
-        self._test_tick()
-        self._test_timer.start()
+        self.context.emit_action("Sine Test started on firmware")
 
     def _on_stop_test(self, reason: str = "stopped by test", update_status: bool = True) -> None:
         was_running = self._test_running
@@ -3361,6 +3338,10 @@ class ControlPanel(QtWidgets.QWidget):
         self._test_active_rows = []
         self._set_test_button_states()
         if was_running:
+            try:
+                self.controller.stop_sine_test()
+            except Exception:
+                pass
             self.context.stop_recording_for_test(reason)
             if update_status:
                 self.context.emit_action(f"Test stopped ({reason})")
@@ -3481,42 +3462,6 @@ class ControlPanel(QtWidgets.QWidget):
             self.context.stop_recording_for_test(reason)
             if update_status:
                 self.context.emit_action(f"Triangle Wave Test stopped ({reason})")
-
-    def _on_start_local_test(self) -> None:
-        if not self._interaction_enabled:
-            self._set_status("Local Test blocked: Hand Manual must be ON")
-            return
-        self.stop_all_tests("restarted by local test", update_status=False)
-        if not self.context.is_comm_connected():
-            self._set_status("Local Test blocked: serial port is not connected")
-            return
-        if not self._start_test_recording("local test"):
-            return
-        try:
-            self.controller.set_local_test_params(float(self.local_freq.value()), float(self.local_amp.value()))
-            self.controller.start_local_test()
-        except Exception as exc:
-            self.context.stop_recording_for_test("local test failed")
-            self._error("Start Local Test Failed", f"{type(exc).__name__}: {exc}")
-            return
-        self._local_test_running = True
-        self._set_test_button_states()
-        self.context.emit_action(
-            f"Local Test started (freq={float(self.local_freq.value()):.4g} Hz, amp={float(self.local_amp.value()):.4g} deg)"
-        )
-
-    def _on_stop_local_test(self, reason: str = "stopped by local test", update_status: bool = True) -> None:
-        was_running = self._local_test_running
-        self._local_test_running = False
-        if was_running:
-            try:
-                self.controller.stop_local_test()
-            except Exception:
-                pass
-            self.context.stop_recording_for_test(reason)
-            if update_status:
-                self.context.emit_action(f"Local Test stopped ({reason})")
-        self._set_test_button_states()
 
     def _test_tick(self) -> None:
         if not self._test_running:

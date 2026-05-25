@@ -213,6 +213,15 @@ typedef struct {
     uint32_t motorDirectCommandGeneration;
     uint8_t motorDirectCommandSource;
     uint8_t controlMode;
+    uint8_t sineTestEnabled;
+    uint32_t sineTestRequestToken;
+    uint32_t sineTestStartMs;
+    uint32_t sineTestJointMask;
+    uint32_t sineTestHoldMs;
+    float sineTestCenterDeg[ENCODER_TOTAL_NUM];
+    float sineTestAmpDeg[ENCODER_TOTAL_NUM];
+    float sineTestFreqHz[ENCODER_TOTAL_NUM];
+    float sineTestPhaseRad[ENCODER_TOTAL_NUM];
     uint8_t tendonGuardEnabled[ENCODER_TOTAL_NUM];
     int8_t tendonGuardSign[ENCODER_TOTAL_NUM];
     int16_t tendonGuardX1Abs[ENCODER_TOTAL_NUM];
@@ -321,6 +330,15 @@ typedef struct {
     volatile uint32_t state_transition_count;
     volatile uint32_t active_motor_mask;
     volatile uint32_t active_joint_mask;
+    volatile uint8_t sine_test_enabled;
+    volatile uint32_t sine_test_request_token;
+    volatile uint32_t sine_test_start_ms;
+    volatile uint32_t sine_test_joint_mask;
+    volatile uint32_t sine_test_hold_ms;
+    float sine_test_center_deg[ENCODER_TOTAL_NUM];
+    float sine_test_amp_deg[ENCODER_TOTAL_NUM];
+    float sine_test_freq_hz[ENCODER_TOTAL_NUM];
+    float sine_test_phase_rad[ENCODER_TOTAL_NUM];
     // bit i = 1 means motor channel i has lost its trusted multi-turn origin
     // after MCU boot/reset. Normal RUN_DIRECT/RUN_FEEDBACK must reject it until
     // firmware calibration or host-assisted restore confirms the absolute turn.

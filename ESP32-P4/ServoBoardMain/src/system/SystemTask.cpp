@@ -91,6 +91,15 @@ void System_Init() {
     const uint32_t validMotorMask = validMotorChannelMask();
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
+    sharedData.sine_test_enabled = 0;
+    sharedData.sine_test_request_token = 0;
+    sharedData.sine_test_start_ms = 0;
+    sharedData.sine_test_joint_mask = 0;
+    sharedData.sine_test_hold_ms = 0;
+    memset(sharedData.sine_test_center_deg, 0, sizeof(sharedData.sine_test_center_deg));
+    memset(sharedData.sine_test_amp_deg, 0, sizeof(sharedData.sine_test_amp_deg));
+    memset(sharedData.sine_test_freq_hz, 0, sizeof(sharedData.sine_test_freq_hz));
+    memset(sharedData.sine_test_phase_rad, 0, sizeof(sharedData.sine_test_phase_rad));
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     sharedData.restore_multi_turn_mask = 0;
     sharedData.restore_multi_turn_request_token = 0;

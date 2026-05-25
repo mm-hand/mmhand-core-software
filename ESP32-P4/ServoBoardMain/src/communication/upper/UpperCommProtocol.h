@@ -43,6 +43,9 @@
 // 上位机在线心跳；舵机任务通过丢失 heartbeat 判断是否触发 NVS 备份。
 #define CMD_HOST_HEARTBEAT 0xDC
 #define CMD_MULTITURN_NVS_CONTROL 0xDD
+#define CMD_SINE_TEST_PARAMS 0xDE
+#define CMD_SINE_TEST_START 0xDF
+#define CMD_SINE_TEST_STOP 0xE0
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -58,6 +61,10 @@ static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5;
 static const size_t kMultiTurnNvsControlPayloadBytes = 1;
+static const uint8_t kSineTestMaxRows = 5;
+static const size_t kSineTestRowPayloadBytes = 1 + (4 * sizeof(float));
+static const size_t kSineTestParamsPayloadBytes =
+    5 + (kSineTestMaxRows * kSineTestRowPayloadBytes);
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;

@@ -30,9 +30,9 @@ from protocol import (
     build_active_scope_cmd,
     build_calib_data_cmd,
     build_calibrate_cmd,
-    build_local_test_params_cmd,
-    build_local_test_start_cmd,
-    build_local_test_stop_cmd,
+    build_sine_test_params_cmd,
+    build_sine_test_start_cmd,
+    build_sine_test_stop_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
@@ -812,12 +812,12 @@ class LowerComputerComm:
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "local_test_params":
-            return build_local_test_params_cmd(cmd[1], cmd[2])
-        if cmd == "local_test_start":
-            return build_local_test_start_cmd()
-        if cmd == "local_test_stop":
-            return build_local_test_stop_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "sine_test_params":
+            return build_sine_test_params_cmd(cmd[1], cmd[2])
+        if cmd == "sine_test_start":
+            return build_sine_test_start_cmd()
+        if cmd == "sine_test_stop":
+            return build_sine_test_stop_cmd()
         if cmd == "start":
             return build_start_cmd()
         if cmd == "run_feedback":

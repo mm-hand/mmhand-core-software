@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-绘制运行数据中 J02 的目标角度与当前角度曲线。
-
-默认行为：
-- 自动读取工程根目录 run_data/ 下“最新修改”的 CSV 文件；
-- 横坐标：时间（秒，基于 ts_wall 相对首帧）；
-- 纵坐标：角度（度）；
-- 同时显示 J02 current/target 两条曲线。
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -21,10 +11,6 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 
 
-NA_MODE_MARKER = "NA_MODE"
-JIDX = 2
-
-
 def _default_run_data_dir() -> str:
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(project_root, "run_data")
@@ -32,7 +18,7 @@ def _default_run_data_dir() -> str:
 
 def _latest_csv_file(run_data_dir: str) -> str:
     if not os.path.isdir(run_data_dir):
-        raise FileNotFoundError(f"run_data 目录不存在: {run_data_dir}")
+        raise FileNotFoundError(f"run_data directory not found: {run_data_dir}")
 
     candidates: List[str] = []
     for name in os.listdir(run_data_dir):
@@ -42,92 +28,115 @@ def _latest_csv_file(run_data_dir: str) -> str:
                 candidates.append(path)
 
     if not candidates:
-        raise FileNotFoundError(f"未找到 CSV 文件: {run_data_dir}")
+        raise FileNotFoundError(f"No CSV file found: {run_data_dir}")
 
     candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return candidates[0]
 
 
-def _safe_float(value: str) -> float:
+def _debug_csv_for(csv_path: str) -> str:
+    if csv_path.lower().endswith("_joint_debug_packets.csv"):
+        return csv_path
+    base, _ext = os.path.splitext(os.path.abspath(csv_path))
+    return f"{base}_joint_debug_packets.csv"
+
+
+def _safe_float(value: object) -> float:
     try:
-        v = float(value)
-        if math.isfinite(v):
-            return v
+        out = float(value)
+        if math.isfinite(out):
+            return out
     except Exception:
         pass
     return float("nan")
 
 
-def _load_j02_series(csv_path: str) -> Tuple[List[float], List[float], List[float], str]:
-    host_ts: List[float] = []
-    host_current: List[float] = []
-    host_target: List[float] = []
-    debug_ts: List[float] = []
-    debug_current: List[float] = []
-    debug_target: List[float] = []
-
-    curr_key = f"joint_curr_deg_j{JIDX:02d}"
-    tgt_key = f"joint_target_deg_j{JIDX:02d}"
-    dbg_ts_key = f"joint_debug_ts_ms_j{JIDX:02d}"
-    dbg_tgt_key = f"joint_debug_target_deg_j{JIDX:02d}"
-    dbg_act_key = f"joint_debug_actual_deg_j{JIDX:02d}"
-
-    with open(csv_path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
+def _load_debug_packet_series(csv_path: str, joint_index: int) -> Tuple[List[float], List[float], List[float], str]:
+    device_ts: List[float] = []
+    actual: List[float] = []
+    target: List[float] = []
+    with open(csv_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
         if not reader.fieldnames:
-            raise ValueError(f"CSV 表头为空: {csv_path}")
-        required = {"ts_wall", curr_key, tgt_key}
-        missing = [k for k in required if k not in reader.fieldnames]
+            raise ValueError(f"Empty CSV header: {csv_path}")
+        required = {"device_ts_ms", "joint_index", "target_deg", "actual_deg"}
+        missing = sorted(required.difference(reader.fieldnames))
         if missing:
-            raise ValueError(f"CSV 缺少必要列: {missing}")
-
+            raise ValueError(f"Debug CSV missing columns: {missing}")
         for row in reader:
-            t = _safe_float(str(row.get("ts_wall", "")))
-            if not math.isfinite(t):
+            try:
+                if int(row.get("joint_index", -1)) != int(joint_index):
+                    continue
+            except Exception:
                 continue
+            ts = _safe_float(row.get("device_ts_ms", ""))
+            tgt = _safe_float(row.get("target_deg", ""))
+            act = _safe_float(row.get("actual_deg", ""))
+            if ts <= 0 or not (math.isfinite(tgt) and math.isfinite(act)):
+                continue
+            if device_ts and ts <= device_ts[-1]:
+                continue
+            device_ts.append(ts)
+            target.append(tgt)
+            actual.append(act)
 
-            c = _safe_float(str(row.get(curr_key, "")))
-            raw_tgt = str(row.get(tgt_key, "")).strip()
-            if raw_tgt == "" or raw_tgt == NA_MODE_MARKER:
-                g = float("nan")
-            else:
-                g = _safe_float(raw_tgt)
-
-            host_ts.append(t)
-            host_current.append(c)
-            host_target.append(g)
-
-            dbg_t = _safe_float(str(row.get(dbg_ts_key, "")))
-            dbg_c = _safe_float(str(row.get(dbg_act_key, "")))
-            dbg_g = _safe_float(str(row.get(dbg_tgt_key, "")))
-            if math.isfinite(dbg_t) and math.isfinite(dbg_c) and math.isfinite(dbg_g):
-                if dbg_t > 0 and (not debug_ts or dbg_t > debug_ts[-1]):
-                    debug_ts.append(dbg_t)
-                    debug_current.append(dbg_c)
-                    debug_target.append(dbg_g)
-
-    if debug_ts:
-        t0 = debug_ts[0]
-        rel_t = [(t - t0) / 1000.0 for t in debug_ts]
-        return rel_t, debug_current, debug_target, "Device Time (s)"
-
-    if not host_ts:
-        raise ValueError(f"CSV 中没有可用数据行: {csv_path}")
-
-    t0 = host_ts[0]
-    rel_t = [t - t0 for t in host_ts]
-    return rel_t, host_current, host_target, "Host Time (s)"
+    if not device_ts:
+        raise ValueError(f"No debug packet rows for J{joint_index:02d}: {csv_path}")
+    t0 = device_ts[0]
+    return [(ts - t0) / 1000.0 for ts in device_ts], actual, target, "Device Time (s)"
 
 
-def _plot_j02(csv_path: str, save_path: str | None = None) -> None:
-    t, curr, tgt, time_label = _load_j02_series(csv_path)
+def _load_main_csv_debug_series(csv_path: str, joint_index: int) -> Tuple[List[float], List[float], List[float], str]:
+    ts_key = f"joint_debug_timestamp_ms_j{joint_index:02d}"
+    tgt_key = f"joint_debug_target_deg_j{joint_index:02d}"
+    act_key = f"joint_debug_actual_deg_j{joint_index:02d}"
+    device_ts: List[float] = []
+    actual: List[float] = []
+    target: List[float] = []
+    with open(csv_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"Empty CSV header: {csv_path}")
+        required = {ts_key, tgt_key, act_key}
+        missing = sorted(required.difference(reader.fieldnames))
+        if missing:
+            raise ValueError(f"Main CSV missing columns: {missing}")
+        for row in reader:
+            ts = _safe_float(row.get(ts_key, ""))
+            tgt = _safe_float(row.get(tgt_key, ""))
+            act = _safe_float(row.get(act_key, ""))
+            if ts <= 0 or not (math.isfinite(tgt) and math.isfinite(act)):
+                continue
+            if device_ts and ts <= device_ts[-1]:
+                continue
+            device_ts.append(ts)
+            target.append(tgt)
+            actual.append(act)
+
+    if not device_ts:
+        raise ValueError(f"No main CSV debug rows for J{joint_index:02d}: {csv_path}")
+    t0 = device_ts[0]
+    return [(ts - t0) / 1000.0 for ts in device_ts], actual, target, "Device Time (s)"
+
+
+def _load_series(csv_path: str, joint_index: int) -> Tuple[List[float], List[float], List[float], str, str]:
+    debug_csv = _debug_csv_for(csv_path)
+    if os.path.exists(debug_csv):
+        t, actual, target, label = _load_debug_packet_series(debug_csv, joint_index)
+        return t, actual, target, label, debug_csv
+    t, actual, target, label = _load_main_csv_debug_series(csv_path, joint_index)
+    return t, actual, target, label, csv_path
+
+
+def _plot(csv_path: str, joint_index: int, save_path: str | None = None) -> None:
+    t, actual, target, time_label, source_path = _load_series(csv_path, joint_index)
 
     plt.figure(figsize=(10, 4.8))
-    plt.plot(t, curr, label="J02 Current Angle", linewidth=1.8)
-    plt.plot(t, tgt, label="J02 Target Angle", linewidth=1.8, linestyle="--")
+    plt.plot(t, target, label=f"J{joint_index:02d} Target from firmware debug", linewidth=1.8)
+    plt.plot(t, actual, label=f"J{joint_index:02d} Actual from firmware debug", linewidth=1.8)
     plt.xlabel(time_label)
     plt.ylabel("Angle (deg)")
-    plt.title(f"J02 Runtime Curve: {os.path.basename(csv_path)}")
+    plt.title(f"J{joint_index:02d} Debug Packet Curve: {os.path.basename(source_path)}")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -140,31 +149,17 @@ def _plot_j02(csv_path: str, save_path: str | None = None) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot J02 current/target angle from runtime CSV")
-    parser.add_argument(
-        "--csv",
-        type=str,
-        default=None,
-        help="指定 CSV 文件路径；不指定时自动读取 run_data 下最新文件",
-    )
-    parser.add_argument(
-        "--run-data-dir",
-        type=str,
-        default=_default_run_data_dir(),
-        help="run_data 目录（仅在未指定 --csv 时生效）",
-    )
-    parser.add_argument(
-        "--save",
-        type=str,
-        default=None,
-        help="可选：保存图像路径（如 output.png）",
-    )
+    parser = argparse.ArgumentParser(description="Plot joint target/actual angle from firmware debug packets")
+    parser.add_argument("--csv", type=str, default=None, help="Runtime CSV or *_joint_debug_packets.csv path")
+    parser.add_argument("--joint", type=int, default=2, help="Joint index, default J02")
+    parser.add_argument("--run-data-dir", type=str, default=_default_run_data_dir())
+    parser.add_argument("--save", type=str, default=None, help="Optional output PNG path")
     args = parser.parse_args()
 
     try:
         csv_path = os.path.abspath(args.csv) if args.csv else _latest_csv_file(os.path.abspath(args.run_data_dir))
         print(f"Using CSV: {csv_path}")
-        _plot_j02(csv_path, save_path=args.save)
+        _plot(csv_path, int(args.joint), save_path=args.save)
         return 0
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)

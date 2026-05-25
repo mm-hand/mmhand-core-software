@@ -36,9 +36,6 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
-CMD_LOCAL_TEST_PARAMS = 0xD4
-CMD_LOCAL_TEST_START = 0xD5
-CMD_LOCAL_TEST_STOP = 0xD6
 CMD_ACTIVE_SCOPE = 0xD7
 CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
@@ -47,6 +44,9 @@ CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
 # 上位机在线心跳；固件用它判断桌面端是否已经关闭。
 CMD_HOST_HEARTBEAT = 0xDC
 CMD_MULTITURN_NVS_CONTROL = 0xDD
+CMD_SINE_TEST_PARAMS = 0xDE
+CMD_SINE_TEST_START = 0xDF
+CMD_SINE_TEST_STOP = 0xE0
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -462,14 +462,30 @@ def build_stream_mode_cmd(mode: int) -> bytes:
     return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
 
 
-def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:
-    payload = struct.pack("<ff", freq_hz, amplitude_deg)
-    return _build_command_frame(CMD_LOCAL_TEST_PARAMS, payload)
+def build_sine_test_params_cmd(rows: List[Tuple[int, float, float, float, float]], hold_s: float) -> bytes:
+    hold_ms = max(0, min(3600000, int(round(float(hold_s) * 1000.0))))
+    valid_rows = []
+    for joint_idx, lo, hi, freq_hz, phase_deg in rows[:5]:
+        idx = int(joint_idx)
+        if not 0 <= idx < ENCODER_COUNT:
+            continue
+        center = 0.5 * (float(lo) + float(hi))
+        amp = 0.5 * abs(float(hi) - float(lo))
+        phase = float(phase_deg) * 3.14159265358979323846 / 180.0
+        valid_rows.append((idx, center, amp, float(freq_hz), phase))
+    payload = bytearray(struct.pack(">IB", hold_ms & 0xFFFFFFFF, len(valid_rows) & 0xFF))
+    for idx, center, amp, freq_hz, phase in valid_rows:
+        payload.append(idx & 0xFF)
+        payload.extend(struct.pack("<ffff", center, amp, freq_hz, phase))
+    for _ in range(5 - len(valid_rows)):
+        payload.append(0)
+        payload.extend(struct.pack("<ffff", 0.0, 0.0, 0.0, 0.0))
+    return _build_command_frame(CMD_SINE_TEST_PARAMS, payload)
 
 
-def build_local_test_start_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_START, b"")
+def build_sine_test_start_cmd() -> bytes:
+    return _build_command_frame(CMD_SINE_TEST_START, b"")
 
 
-def build_local_test_stop_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_STOP, b"")
+def build_sine_test_stop_cmd() -> bytes:
+    return _build_command_frame(CMD_SINE_TEST_STOP, b"")

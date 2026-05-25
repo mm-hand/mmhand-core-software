@@ -35,7 +35,7 @@ static const uint32_t kCanBusOfflineTimeoutMs = 300;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 static const int16_t kControlOverloadLoadThreshold = 250;
-static const int16_t kJointControlOverloadLoadThreshold = 330;
+static const int16_t kJointControlOverloadLoadThreshold = 350;
 static const uint8_t kControlOverloadLatchCycles = 3;
 static const uint8_t kJointControlOverloadLatchCycles = 5;
 static const uint16_t kJointControlUnlimitedSpeed = 0;
@@ -43,6 +43,7 @@ static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
+static const float kLocalTestTwoPi = 6.28318530717958647692f;
 
 // 协议字段使用 int16 传输，保留最大正值 32767 作为异常/占位，正常值限制到 32766。
 
@@ -85,6 +86,31 @@ static int32_t degToEncoderCount(float deg)
 {
     const float scaled = deg * (float)kEncoderModulo / 360.0f;
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
+}
+
+static float sanitizeLocalTestFreq(float freqHz)
+{
+    if (!isfinite(freqHz) || freqHz < 0.001f) {
+        return 0.001f;
+    }
+    if (freqHz > 100.0f) {
+        return 100.0f;
+    }
+    return freqHz;
+}
+
+static float sanitizeLocalTestAmp(float ampDeg)
+{
+    if (!isfinite(ampDeg)) {
+        return 0.0f;
+    }
+    if (ampDeg > 180.0f) {
+        return 180.0f;
+    }
+    if (ampDeg < -180.0f) {
+        return -180.0f;
+    }
+    return ampDeg;
 }
 
 static float mapCalibratedEncoderToDeg(const JointCalibrationResult& calib, int32_t orientedRaw)
@@ -326,6 +352,15 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
     out->motorDirectCommandSource = sharedData->motor_direct_command_source;
     out->controlMode = sharedData->control_mode;
+    out->sineTestEnabled = sharedData->sine_test_enabled;
+    out->sineTestRequestToken = sharedData->sine_test_request_token;
+    out->sineTestStartMs = sharedData->sine_test_start_ms;
+    out->sineTestJointMask = sharedData->sine_test_joint_mask;
+    out->sineTestHoldMs = sharedData->sine_test_hold_ms;
+    memcpy(out->sineTestCenterDeg, sharedData->sine_test_center_deg, sizeof(out->sineTestCenterDeg));
+    memcpy(out->sineTestAmpDeg, sharedData->sine_test_amp_deg, sizeof(out->sineTestAmpDeg));
+    memcpy(out->sineTestFreqHz, sharedData->sine_test_freq_hz, sizeof(out->sineTestFreqHz));
+    memcpy(out->sineTestPhaseRad, sharedData->sine_test_phase_rad, sizeof(out->sineTestPhaseRad));
     memcpy(out->tendonGuardEnabled, (const void*)sharedData->tendon_guard_enabled, sizeof(out->tendonGuardEnabled));
     memcpy(out->tendonGuardSign, (const void*)sharedData->tendon_guard_sign, sizeof(out->tendonGuardSign));
     memcpy(out->tendonGuardX1Abs, (const void*)sharedData->tendon_guard_x1_abs, sizeof(out->tendonGuardX1Abs));
@@ -393,6 +428,9 @@ void controlTask(void* parameter)
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
+    uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
+    bool sineTestActive = false;
+    uint32_t sineTestStartMs = 0;
 
     while (1)
     {
@@ -553,6 +591,46 @@ void controlTask(void* parameter)
         }
 
         memcpy(localTargets, commandSnapshot.targetAngles, sizeof(localTargets));
+        const bool sineTestEnabled =
+            commandSnapshot.sineTestEnabled != 0 &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT;
+        if (sineTestEnabled)
+        {
+            const uint32_t sineTestToken = commandSnapshot.sineTestRequestToken;
+            if (!sineTestActive || sineTestToken != lastSineTestRequestToken)
+            {
+                sineTestStartMs = commandSnapshot.sineTestStartMs != 0
+                                       ? commandSnapshot.sineTestStartMs
+                                       : millis();
+                sineTestActive = true;
+                lastSineTestRequestToken = sineTestToken;
+                feedbackRunDoneStableCount = 0;
+            }
+
+            const float elapsedSec =
+                (float)((uint32_t)(millis() - sineTestStartMs)) * 0.001f;
+            const float waveSec =
+                elapsedSec > ((float)commandSnapshot.sineTestHoldMs * 0.001f)
+                    ? elapsedSec - ((float)commandSnapshot.sineTestHoldMs * 0.001f)
+                    : 0.0f;
+            const uint32_t activeJointMask = commandSnapshot.sineTestJointMask;
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
+            {
+                if ((activeJointMask & (1UL << jointIndex)) != 0)
+                {
+                    const float freqHz = sanitizeLocalTestFreq(commandSnapshot.sineTestFreqHz[jointIndex]);
+                    const float ampDeg = sanitizeLocalTestAmp(commandSnapshot.sineTestAmpDeg[jointIndex]);
+                    const float phaseRad = commandSnapshot.sineTestPhaseRad[jointIndex];
+                    localTargets[jointIndex] =
+                        commandSnapshot.sineTestCenterDeg[jointIndex] +
+                        ampDeg * sinf(kLocalTestTwoPi * freqHz * waveSec + phaseRad);
+                }
+            }
+        }
+        else
+        {
+            sineTestActive = false;
+        }
         const bool hostControlEnabled = (sharedData->control_enabled != 0);
         const uint8_t systemState = sharedData->system_state;
         const uint8_t targetOwner = sharedData->servo_target_owner;
