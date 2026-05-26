@@ -5,7 +5,8 @@ from typing import List, Sequence, Tuple
 
 from protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
-
+# rope init 所使用的松紧绳方向对应表
+# 目前状态所有电机均是正转紧绳
 MOTOR_TO_JOINT_INDEX = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20,
@@ -21,7 +22,9 @@ for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
 MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
-
+for _motor_idx in (12, 13, 14, 15, 25):
+    if 0 <= _motor_idx < MOTOR_COUNT:
+        MOTOR_TENDON_SHORTEN_ABS_SIGN[_motor_idx] = -1
 
 
 def clamp_motor_abs(value: int) -> int:
