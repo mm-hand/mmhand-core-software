@@ -1001,7 +1001,7 @@ static bool appendCalibrationHoldTargetsExcept(TaskSharedData_t* sharedData,
 
     return true;
 }
-
+// 判断是不是双电机对抗校准的关节，并获取主副电机通道
 static bool getDualAntagonistAutoCalibrationMotors(uint8_t jointIndex,
                                                    uint8_t* primaryMotor,
                                                    uint8_t* secondaryMotor)
@@ -1384,7 +1384,7 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
     }
     return false;
 }
-
+// 找被动电机预紧点
 static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
                                           uint8_t jointIndex,
                                           uint8_t secondaryMotor,
@@ -1507,7 +1507,7 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
     }
     return false;
 }
-
+// 交换拉动寻找极限点
 static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t secondaryMotor,
@@ -1711,7 +1711,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
     }
     return false;
 }
-
+// 双绳拮抗标定入口
 static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                                   uint8_t jointIndex,
                                                   const AutoCalibrationParams& params)

@@ -1701,11 +1701,7 @@ class ControlPanel(QtWidgets.QWidget):
                     primary_motor,
                     step_sign * ROPE_INIT_STEP_COUNTS,
                 )
-                targets[secondary_motor] = motor_abs_after_tendon_action(
-                    int(secondary_abs),
-                    secondary_motor,
-                    -step_sign * ROPE_INIT_STEP_COUNTS,
-                )
+                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs))
                 moved_motors.update((primary_motor, secondary_motor))
                 remaining.append(task)
             else:

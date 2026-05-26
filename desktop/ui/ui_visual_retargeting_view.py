@@ -6,6 +6,14 @@ from protocol import ENCODER_COUNT
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
+TELEOP_CENTER_ZERO_JOINTS = {0, 4, 8, 12, 16}
+TELEOP_CENTER_ZERO_MIN_DEG = 0.0
+TELEOP_CENTER_ZERO_MAX_DEG = 79.2
+TELEOP_CENTER_ZERO_MID_DEG = (
+    TELEOP_CENTER_ZERO_MIN_DEG + TELEOP_CENTER_ZERO_MAX_DEG
+) * 0.5
+
+
 class _LazyCameraCombo(QtWidgets.QComboBox):
     popup_requested = Signal()
 
@@ -351,18 +359,33 @@ class VisualRetargetingView(QtWidgets.QWidget):
             return None, missing_feedback
         return targets, []
 
+    @staticmethod
+    def _map_visual_targets_to_robot_targets(visual_targets: list[float]) -> list[float]:
+        robot_targets = list(visual_targets)
+        for idx in TELEOP_CENTER_ZERO_JOINTS:
+            if idx >= len(robot_targets):
+                continue
+            mapped = TELEOP_CENTER_ZERO_MID_DEG + float(robot_targets[idx])
+            if mapped < TELEOP_CENTER_ZERO_MIN_DEG:
+                mapped = TELEOP_CENTER_ZERO_MIN_DEG
+            elif mapped > TELEOP_CENTER_ZERO_MAX_DEG:
+                mapped = TELEOP_CENTER_ZERO_MAX_DEG
+            robot_targets[idx] = mapped
+        return robot_targets
+
     def _on_joints_ready(self, targets: list, timestamp_ms: int) -> None:
         visual_targets = [float(v) for v in targets[:ENCODER_COUNT]]
         if len(visual_targets) < ENCODER_COUNT:
             visual_targets.extend([0.0] * (ENCODER_COUNT - len(visual_targets)))
-        self._last_targets = visual_targets
+        robot_targets = self._map_visual_targets_to_robot_targets(visual_targets)
+        self._last_targets = robot_targets
         self._last_timestamp_ms = int(timestamp_ms)
         self.frame_label.setText(f"Frame: {timestamp_ms}")
         for idx in range(ENCODER_COUNT):
             text = f"{self._last_targets[idx]:.2f}" if idx < len(self._last_targets) else "-"
             self.angle_table.item(idx, 1).setText(text)
         if self.send_enabled.isChecked():
-            selected_targets, missing_feedback = self._targets_for_selected_joints(self._last_targets)
+            selected_targets, missing_feedback = self._targets_for_selected_joints(robot_targets)
             if selected_targets is None:
                 if missing_feedback:
                     missing = ",".join(f"J{idx:02d}" for idx in missing_feedback[:4])
