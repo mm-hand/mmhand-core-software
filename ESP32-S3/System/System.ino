@@ -14,7 +14,8 @@ extern TaskHandle_t xCanTask;
 
 void setup() {
     Serial.begin(115200);
-    delay(2000);
+    tactile.prepareBootSelectPins();
+    delay(20000);
     Serial.println("\n\n--- System Boot (XSimple AI) ---");
 
 #if ESP_IDF_VERSION_MAJOR >= 5
@@ -66,11 +67,5 @@ void printSystemMonitor() {
 }
 
 void loop() {
-    static uint32_t lastPrintTime = 0;
-    if (millis() - lastPrintTime > 500) {
-        lastPrintTime = millis();
-        printSystemMonitor();
-    }
-
     vTaskDelay(pdMS_TO_TICKS(100));
 }

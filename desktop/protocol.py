@@ -21,6 +21,7 @@ PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
+PACKET_TYPE_TACTILE = 0x0A
 PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
@@ -36,6 +37,7 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
+CMD_MOTOR_POS_ABS_ONE = 0xDE
 CMD_LOCAL_TEST_PARAMS = 0xD4
 CMD_LOCAL_TEST_START = 0xD5
 CMD_LOCAL_TEST_STOP = 0xD6
@@ -77,6 +79,10 @@ SERVO_TARGET_OWNER_CALIBRATION = 2
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 27
+TACTILE_GROUP_COUNT = 5
+TACTILE_SENSOR_PER_GROUP = 3
+TACTILE_AXIS_COUNT = 3
+TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -250,16 +256,47 @@ def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[boo
     return raw_positions, online_flags
 
 
-def parse_fault_status_packet(payload: bytes) -> Optional[int]:
-    if len(payload) != 4:
+def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
+    if len(payload) < 4:
         return None
-    return struct.unpack(">I", payload)[0]
+    fault_bitmap = struct.unpack(">I", payload[:4])[0]
+    trigger_loads: List[Optional[int]] = [None] * MOTOR_COUNT
+    if len(payload) >= 4 + MOTOR_COUNT * 2:
+        offset = 4
+        for i in range(MOTOR_COUNT):
+            trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
+            offset += 2
+    return fault_bitmap, trigger_loads
 
 
 def parse_release_fault_packet(payload: bytes) -> Optional[int]:
     if len(payload) != 4:
         return None
     return struct.unpack(">I", payload)[0]
+
+
+def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
+    if len(payload) == (1 + TACTILE_SUMMARY_BYTES):
+        seq = payload[0]
+        data = payload[1:]
+    elif len(payload) == TACTILE_SUMMARY_BYTES:
+        seq = 0
+        data = payload
+    else:
+        return None
+
+    out: List[List[List[int]]] = []
+    cursor = 0
+    for _group in range(TACTILE_GROUP_COUNT):
+        group_data: List[List[int]] = []
+        for _sensor in range(TACTILE_SENSOR_PER_GROUP):
+            fx = struct.unpack("b", bytes([data[cursor]]))[0]
+            fy = struct.unpack("b", bytes([data[cursor + 1]]))[0]
+            fz = int(data[cursor + 2])
+            group_data.append([fx, fy, fz])
+            cursor += TACTILE_AXIS_COUNT
+        out.append(group_data)
+    return seq, out
 
 
 def parse_joint_debug_packet(
@@ -453,6 +490,19 @@ def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
             v = MOTOR_ABS_CMD_MAX
         payload.extend(struct.pack(">h", v))
     return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
+
+
+def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
+    idx = int(motor_index)
+    if idx < 0 or idx >= MOTOR_COUNT:
+        raise ValueError(f"motor index out of range: {idx}")
+    v = int(motor_abs)
+    if v < MOTOR_ABS_CMD_MIN:
+        v = MOTOR_ABS_CMD_MIN
+    elif v > MOTOR_ABS_CMD_MAX:
+        v = MOTOR_ABS_CMD_MAX
+    payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
+    return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:

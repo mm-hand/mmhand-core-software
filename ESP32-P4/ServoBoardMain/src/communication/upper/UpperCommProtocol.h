@@ -34,6 +34,7 @@
 #define CMD_SENSOR_STREAM_MODE 0xD1
 #define CMD_MOTOR_POS_SWEEP 0xD2
 #define CMD_MOTOR_POS_ABS 0xD3
+#define CMD_MOTOR_POS_ABS_ONE 0xDE
 #define CMD_TENDON_GUARD 0xD4
 #define CMD_ACTIVE_SCOPE 0xD7
 #define CMD_RUN_FEEDBACK 0xD8
@@ -53,6 +54,7 @@
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
+static const size_t kMotorPosAbsOnePayloadBytes = 3;
 static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
 static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);

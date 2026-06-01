@@ -4,10 +4,11 @@ import threading
 import time
 from typing import List, Optional, Union
 
+import numpy as np
 import serial
 import serial.tools.list_ports
 
-from data_models import HandModel, MotorState
+from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
 from protocol import (
     BAUDRATE,
     ENCODER_COUNT,
@@ -19,6 +20,7 @@ from protocol import (
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
+    PACKET_TYPE_TACTILE,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     RX_POLL_SLEEP,
@@ -37,6 +39,7 @@ from protocol import (
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
+    build_motor_pos_abs_one_cmd,
     build_motor_pos_sweep_cmd,
     build_multiturn_nvs_control_cmd,
     build_pause_cmd,
@@ -62,7 +65,9 @@ from protocol import (
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_READY,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_FAULT_CALIBRATION,
     parse_calib_ack,
     parse_fault_status_packet,
     parse_release_fault_packet,
@@ -74,7 +79,9 @@ from protocol import (
     parse_servo_raw_packet,
     parse_servo_telem_packet,
     parse_system_status_packet,
+    parse_tactile_packet,
     PROTO_ACK_STATUS_OK,
+    PROTO_ACK_STATUS_QUEUED,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
 from run_data_logger import RunDataLogger
@@ -83,6 +90,69 @@ from run_data_logger import RunDataLogger
 SendCmd = Union[str, HandModel, tuple]
 # 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
 HOST_HEARTBEAT_INTERVAL_S = 0.5
+TACTILE_ZERO_NOISE_FLOOR = 3
+TACTILE_ZERO_HOLD_FRAMES = 6
+TACTILE_HOLD_MIN_MAGNITUDE = 12
+
+
+def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
+    """Project one resultant force sample into a tactile-looking taxel field."""
+    y, x = np.mgrid[0:rows, 0:cols]
+    cx = (cols - 1) / 2.0
+    cy = (rows - 1) / 2.0
+
+    pressure = float(max(0, fz))
+    if pressure <= 3.0:
+        pressure = 0.0
+
+    if pressure > 0.0:
+        direction_scale = max(24.0, min(96.0, pressure))
+        cx += max(-0.48, min(0.48, float(fx) / direction_scale)) * max(1.0, (cols - 1) / 2.0)
+        cy += max(-0.48, min(0.48, float(fy) / direction_scale)) * max(1.0, (rows - 1) / 2.0)
+
+    normalized = min(1.0, pressure / 180.0)
+    sigma_x = max(0.62, cols * (0.13 + 0.11 * normalized))
+    sigma_y = max(0.62, rows * (0.15 + 0.13 * normalized))
+    core = np.exp(-(((x - cx) ** 2) / (2.0 * sigma_x * sigma_x) + ((y - cy) ** 2) / (2.0 * sigma_y * sigma_y)))
+    skirt = np.exp(-(((x - cx) ** 2) / (2.0 * (sigma_x * 2.2) ** 2) + ((y - cy) ** 2) / (2.0 * (sigma_y * 2.2) ** 2)))
+    weight = core + 0.18 * normalized * skirt
+    max_weight = float(np.max(weight))
+    if max_weight > 1e-9:
+        weight = weight / max_weight
+
+    contact = np.zeros((rows, cols, 3), dtype=float)
+    contact[:, :, 0] = float(fx) * weight
+    contact[:, :, 1] = float(fy) * weight
+    contact[:, :, 2] = pressure * weight
+    return contact
+
+
+def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
+    fingers: List[FingerTactile] = []
+    for group in groups:
+        sensors: List[TactileSensor] = []
+        for sensor_idx in range(3):
+            if sensor_idx < len(group):
+                fx, fy, fz = group[sensor_idx]
+            else:
+                fx, fy, fz = 0, 0, 0
+
+            if sensor_idx == 0:
+                rows, cols = tactile_segment_shape(2)
+            else:
+                rows, cols = tactile_segment_shape(0)
+
+            contact = _synthetic_contact_grid(rows, cols, fx, fy, fz)
+            resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
+            sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
+        fingers.append(FingerTactile(sensors=sensors))
+    return fingers
+
+
+def _tactile_axis_magnitude(values: List[int]) -> int:
+    if not values or len(values) < 3:
+        return 0
+    return max(abs(int(values[0])), abs(int(values[1])), max(0, int(values[2])))
 
 
 def list_ports() -> List[tuple]:
@@ -187,6 +257,10 @@ class LowerComputerComm:
         self._last_heartbeat_tx = 0.0
         self._heartbeat_enabled = False
         self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
+        self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
+        self._tactile_zero_counts: List[List[int]] = [
+            [0 for _ in range(3)] for _ in range(5)
+        ]
 
         if self.port:
             if not is_valid_port(self.port):
@@ -212,6 +286,8 @@ class LowerComputerComm:
             self._reset_tx_diag()
             self._last_heartbeat_tx = 0.0
             self._heartbeat_enabled = False
+            self._tactile_hold_groups = None
+            self._tactile_zero_counts = [[0 for _ in range(3)] for _ in range(5)]
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -426,6 +502,41 @@ class LowerComputerComm:
                 self._stream_mode_ack_warned = True
                 self._stream_mode_ack_pending = False
 
+    def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
+        stable: List[List[List[int]]] = []
+        if self._tactile_hold_groups is None:
+            self._tactile_hold_groups = [
+                [[0, 0, 0] for _ in range(3)] for _ in range(5)
+            ]
+
+        for gi in range(5):
+            group_out: List[List[int]] = []
+            src_group = groups[gi] if gi < len(groups) else []
+            for si in range(3):
+                incoming = list(src_group[si]) if si < len(src_group) else [0, 0, 0]
+                while len(incoming) < 3:
+                    incoming.append(0)
+                incoming = [int(incoming[0]), int(incoming[1]), int(incoming[2])]
+                held = self._tactile_hold_groups[gi][si]
+
+                incoming_active = _tactile_axis_magnitude(incoming) > TACTILE_ZERO_NOISE_FLOOR
+                held_mag = _tactile_axis_magnitude(held)
+                if incoming_active:
+                    out = incoming
+                    self._tactile_zero_counts[gi][si] = 0
+                elif held_mag >= TACTILE_HOLD_MIN_MAGNITUDE and self._tactile_zero_counts[gi][si] < TACTILE_ZERO_HOLD_FRAMES:
+                    out = list(held)
+                    self._tactile_zero_counts[gi][si] += 1
+                else:
+                    out = [0, 0, 0]
+                    if self._tactile_zero_counts[gi][si] < 255:
+                        self._tactile_zero_counts[gi][si] += 1
+
+                self._tactile_hold_groups[gi][si] = list(out)
+                group_out.append(out)
+            stable.append(group_out)
+        return stable
+
     def _process_packets(self, packets: List[tuple]) -> Optional[HandModel]:
         if packets:
             self._heartbeat_enabled = True
@@ -471,7 +582,7 @@ class LowerComputerComm:
             elif pkt_type == 0x02:
                 code = parse_calib_ack(payload)
                 if code == 1:
-                    model.calib_status = "PENDING"
+                    model.calib_status = "RUNNING"
                 elif code == 2:
                     model.calib_status = "SUCCESS"
                 elif code == 3:
@@ -551,10 +662,14 @@ class LowerComputerComm:
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_FAULT_STATUS:
-                fault_bitmap = parse_fault_status_packet(payload)
-                if fault_bitmap is not None:
+                parsed_fault = parse_fault_status_packet(payload)
+                if parsed_fault is not None:
+                    fault_bitmap, trigger_loads = parsed_fault
                     for i in range(MOTOR_COUNT):
-                        model.servo_overload_fault[i] = ((fault_bitmap >> i) & 0x01) != 0
+                        faulted = ((fault_bitmap >> i) & 0x01) != 0
+                        model.servo_overload_fault[i] = faulted
+                        if i < len(trigger_loads):
+                            model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_RELEASE_FAULT:
@@ -589,8 +704,21 @@ class LowerComputerComm:
                     model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
                     model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
                     model.has_system_status_data = True
-                    if calib_status == 1:
-                        model.calib_status = "PENDING"
+                    if calib_status == 0:
+                        if (
+                            model.calib_status in ("PENDING", "RUNNING") and
+                            model.system_state != SYSTEM_STATE_CALIBRATION_RUNNING
+                        ):
+                            if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
+                                model.calib_status = "FAILED"
+                            elif model.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
+                                model.calib_status = "SUCCESS"
+                            else:
+                                model.calib_status = "IDLE"
+                        else:
+                            model.calib_status = "IDLE"
+                    elif calib_status == 1:
+                        model.calib_status = "RUNNING"
                     elif calib_status == 2:
                         model.calib_status = "SUCCESS"
                     elif calib_status == 3:
@@ -606,6 +734,13 @@ class LowerComputerComm:
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.motor_abs_limit_min[i] = int(mins[i])
                         model.motor_abs_limit_max[i] = int(maxs[i])
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_TACTILE:
+                parsed = parse_tactile_packet(payload)
+                if parsed is not None:
+                    _seq, groups = parsed
+                    model.tactile_data = _build_tactile_fingers(self._stabilize_tactile_groups(groups))
                     emitted = True
 
             elif pkt_type == 0x06:
@@ -624,6 +759,15 @@ class LowerComputerComm:
                     with self._ack_lock:
                         self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
                         self._ack_lock.notify_all()
+                    if (
+                        ack_cmd in (CMD_STOP, CMD_RESET) and
+                        status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
+                    ):
+                        model.control_enabled = False
+                        model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                        model.has_system_status_data = True
+                        if model.calib_status in ("PENDING", "RUNNING"):
+                            model.calib_status = "IDLE"
                     if ack_cmd in (
                         CMD_START,
                         CMD_STOP,
@@ -644,9 +788,13 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_STOP:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_RESET:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_CALIBRATE:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
@@ -705,9 +853,10 @@ class LowerComputerComm:
 
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
-        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] in (
+        return isinstance(cmd, tuple) and cmd[0] in (
             "motor_pos_sweep",
             "motor_pos_abs",
+            "motor_pos_abs_one",
             "angle_live",
         )
 
@@ -808,6 +957,8 @@ class LowerComputerComm:
             return build_motor_pos_sweep_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":
+            return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":

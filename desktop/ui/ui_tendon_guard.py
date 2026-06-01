@@ -7,22 +7,38 @@ from protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_C
 
 
 MOTOR_TO_JOINT_INDEX = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-    11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20,
+    0, 0, 1, 2, 3,
+    4, 4, 5, 6, 7,
+    8, 8, 9, 10, 11,
+    12, 12, 13, 14, 15,
+    16, 16, 17, 18, 19, 20, 20,
 ]
 if len(MOTOR_TO_JOINT_INDEX) < MOTOR_COUNT:
-    if HAND_PROFILE.lower() == "v2":
-        MOTOR_TO_JOINT_INDEX.extend([0, 4, 8, 12, 17][:MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)])
-    else:
-        MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
+    MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
 JOINT_TO_PRIMARY_MOTOR_INDEX = [-1] * ENCODER_COUNT
 for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
+MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
+for _motor_idx in (15, 16, 17, 18, 19):
+    if 0 <= _motor_idx < MOTOR_COUNT:
+        MOTOR_TENDON_SHORTEN_ABS_SIGN[_motor_idx] = -1
+
 
 def clamp_motor_abs(value: int) -> int:
     return max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(value)))
+
+
+def motor_tendon_shorten_abs_sign(motor_idx: int) -> int:
+    if 0 <= int(motor_idx) < len(MOTOR_TENDON_SHORTEN_ABS_SIGN):
+        return -1 if int(MOTOR_TENDON_SHORTEN_ABS_SIGN[int(motor_idx)]) < 0 else 1
+    return 1
+
+
+def motor_abs_after_tendon_action(current_abs: int, motor_idx: int, shorten_counts: int) -> int:
+    sign = motor_tendon_shorten_abs_sign(motor_idx)
+    return clamp_motor_abs(int(current_abs) + sign * int(shorten_counts))
 
 
 def motor_target_from_servo_feedback(servo_raw_single: int) -> int:

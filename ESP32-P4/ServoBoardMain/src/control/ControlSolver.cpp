@@ -26,7 +26,7 @@ void ControlSolver::begin()
     init(zeros, ratios, dirs);
 
     float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {16.5f, 0.0f, 0.5f, 0.0f, 100.0f, 600.0f},
+        {5.5f, 0.0f, 0.7f, 0.0f, 100.0f, 600.0f},
         {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
     };
     setPIDParams(pidConfigs);
@@ -55,7 +55,7 @@ void ControlSolver::setPIDParams(float pidParams[][PID_PARAMETER_NUM])
 bool ControlSolver::compute(float* targetDegs,
                             float* magActualDegs,
                             const int32_t* absolutePosition,
-                            int16_t* outServoPulses)
+                            int32_t* outServoPulses)
 {
     if (!targetDegs || !magActualDegs || !absolutePosition || !outServoPulses) {
         return false;
@@ -70,7 +70,7 @@ bool ControlSolver::compute(float* targetDegs,
         const float loop2Actual = (float)absolutePosition[i];
         f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual);
 
-        outServoPulses[i] = (int16_t)_pids[i][1].Output + absolutePosition[i];
+        outServoPulses[i] = (int32_t)_pids[i][1].Output + absolutePosition[i];
     }
     return true;
 }

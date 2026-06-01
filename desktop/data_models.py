@@ -417,7 +417,7 @@ class HandModel:
     encoders: List[JointEncoder] = field(default_factory=_default_encoders)
     motors: List[MotorSlot] = field(default_factory=_default_motors)
     tactile_data: List[FingerTactile] = field(default_factory=list)
-    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, SUCCESS, FAILED
+    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
@@ -453,6 +453,7 @@ class HandModel:
     servo_telem_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     # 伺服过载保护锁存状态（来自 PACKET_TYPE_FAULT_STATUS，按 motor channel 位图映射）
     servo_overload_fault: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
+    servo_overload_trigger_load: List[Optional[int]] = field(default_factory=lambda: [None] * MOTOR_COUNT)
     # 关节反绕保护锁存状态（来自 PACKET_TYPE_RELEASE_FAULT，按 joint index 位图映射）
     joint_reverse_release_fault: List[bool] = field(default_factory=lambda: [False] * ENCODER_COUNT)
 
@@ -516,6 +517,7 @@ class HandModel:
         self.servo_temperature = list(other.servo_temperature)
         self.servo_telem_online = list(other.servo_telem_online)
         self.servo_overload_fault = list(other.servo_overload_fault)
+        self.servo_overload_trigger_load = list(getattr(other, "servo_overload_trigger_load", [None] * MOTOR_COUNT))
         self.joint_reverse_release_fault = list(other.joint_reverse_release_fault)
         # 复制关节调试信息
         self.joint_debug_valid = list(other.joint_debug_valid)
@@ -545,3 +547,4 @@ class HandModel:
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
+        self.tactile_data = list(getattr(other, "tactile_data", []) or [])

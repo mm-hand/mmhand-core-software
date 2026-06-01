@@ -119,7 +119,7 @@ public:
 
     bool configureMultiTurnMode(uint8_t id)
     {
-        if (!_serial || id == 0 || id > MAX_SERVO_ID) {
+        if (!_serial || id > MAX_SERVO_ID) {
             return false;
         }
 
@@ -148,7 +148,7 @@ public:
 
     void queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
     {
-        if (id == 0 || id > MAX_SERVO_ID || _writeCount >= MAX_SERVOS_PER_BUS) {
+        if (id > MAX_SERVO_ID || _writeCount >= MAX_SERVOS_PER_BUS) {
             return;
         }
         if (_torqueDisabled[id]) {
@@ -206,7 +206,7 @@ public:
                 const int16_t rawPos = decodeSigned(rxBuf[0], rxBuf[1]);
                 _updateMultiTurnPosition(id, rawPos);
                 _feedback[id].speed = decodeSigned(rxBuf[2], rxBuf[3]);
-                _feedback[id].load = decodeSigned(rxBuf[4], rxBuf[5]);
+                _feedback[id].load = decodeServoLoad(rxBuf[4], rxBuf[5]);
                 _feedback[id].voltage = rxBuf[6];
                 _feedback[id].temperature = rxBuf[7];
                 _feedback[id].online = true;
@@ -253,7 +253,7 @@ public:
 
     bool setTorqueEnabled(uint8_t id, bool enabled)
     {
-        if (!_serial || id == 0 || id > MAX_SERVO_ID) {
+        if (!_serial || id > MAX_SERVO_ID) {
             return false;
         }
         const bool ok = (_sms.EnableTorque(id, enabled ? 1 : 0) >= 0);
@@ -265,7 +265,7 @@ public:
 
     bool restoreAbsolutePosition(uint8_t id, int32_t absPosition, uint16_t rawToleranceCounts)
     {
-        if (id == 0 || id > MAX_SERVO_ID) {
+        if (id > MAX_SERVO_ID) {
             return false;
         }
         ServoFeedbackInternal& fb = _feedback[id];
@@ -326,6 +326,13 @@ private:
     {
         const uint16_t raw = ((uint16_t)hi << 8) | lo;
         return (raw & (1 << 15)) ? -(int16_t)(raw & ~(1 << 15)) : (int16_t)raw;
+    }
+
+    static int16_t decodeServoLoad(uint8_t lo, uint8_t hi)
+    {
+        const uint16_t raw = ((uint16_t)hi << 8) | lo;
+        const int16_t magnitude = (int16_t)(raw & 0x03FF);
+        return (raw & (1 << 10)) ? (int16_t)-magnitude : magnitude;
     }
 
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)
@@ -421,7 +428,7 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
         ServoBusDriver* bus = getBusByIndex(busIndex);
-        if (!bus || id == 0 || id > MAX_SERVO_ID ||
+        if (!bus || id > MAX_SERVO_ID ||
             !bus->restoreAbsolutePosition(id, motorAbs[ch], rawToleranceCounts)) {
             rejected |= bit;
             continue;
@@ -472,7 +479,7 @@ static void configureMappedServosForMultiTurn()
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
-        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
             continue;
         }
 
@@ -534,7 +541,7 @@ static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
         const uint32_t bit = (1UL << ch);
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
-        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
             continue;
         }
 
@@ -606,7 +613,7 @@ static void bootRecoverLimitServosToRaw(uint32_t bootRecoverDeadlineMs)
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
-        if (busIndex >= NUM_BUSES || id == 0 || id > MAX_SERVO_ID) {
+        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
             continue;
         }
         if (attempted[busIndex][id]) {

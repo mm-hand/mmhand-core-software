@@ -103,6 +103,7 @@ def _snapshot_controller_state(controller: HandController) -> Dict[str, object]:
             "servo_temp": list(s.servo_temperature),
             "servo_telem_online": list(s.servo_telem_online),
             "servo_overload_fault": list(s.servo_overload_fault),
+            "servo_overload_trigger_load": list(getattr(s, "servo_overload_trigger_load", [])),
             "jd_valid": list(s.joint_debug_valid),
             "jd_target": list(s.joint_debug_target_deg),
             "jd_actual": list(s.joint_debug_actual_deg),
@@ -162,6 +163,7 @@ def _print_console(controller: HandController, connected_port: str, plot_status:
     servo_temp = snap["servo_temp"]
     telem_online = snap["servo_telem_online"]
     overload_fault = snap["servo_overload_fault"]
+    overload_trigger_load = snap["servo_overload_trigger_load"]
     for row in range(rows):
         cells = []
         for col in range(3):
@@ -178,7 +180,11 @@ def _print_console(controller: HandController, connected_port: str, plot_status:
                     )
                 )
         print("   ".join(cells))
-    active_fault_idx = [str(i) for i, f in enumerate(overload_fault) if bool(f)]
+    active_fault_idx = [
+        f"M{i:02d}:{int(overload_trigger_load[i]) if i < len(overload_trigger_load) and overload_trigger_load[i] is not None else '?'}"
+        for i, f in enumerate(overload_fault)
+        if bool(f)
+    ]
     print(f"Overload latch: {', '.join(active_fault_idx) if active_fault_idx else 'none'}")
     print("-" * 88)
 

@@ -9,9 +9,14 @@
 #include "ControlOutputBuilder.h"
 #include "ControlSafety.h"
 #include "ControlSolver.h"
+#include "DualTendonControl.h"
 
 #ifndef SOLVER_DIAG_LOG_ENABLE
 #define SOLVER_DIAG_LOG_ENABLE 0
+#endif
+
+#ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
+#define FEEDBACK_SERIAL_DEBUG_ENABLE 1
 #endif
 
 // Match the legacy RoboticHand protection policy: keep reverse/release guard
@@ -26,15 +31,19 @@ static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 
 // 默认上报的关节调试通道。
-static const uint8_t kDebugJointIndices[] = {8,9,10,11};
+static const uint8_t kDebugJointIndices[] = {0,1,2,3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
+static const uint32_t kFeedbackSerialDebugIntervalMs = 100;
 
-static const uint32_t kCanBusOfflineTimeoutMs = 300;
+static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const int16_t kControlOverloadLoadThreshold = 250;
-static const uint8_t kControlOverloadLatchCycles = 3;
+static const int16_t kControlOverloadLoadThreshold = 700;
+static const int16_t kJointControlOverloadLoadThreshold = 800;
+static const uint8_t kControlOverloadLatchCycles = 20;
+static const uint8_t kJointControlOverloadLatchCycles = 20;
+static const uint16_t kJointControlFeedbackSpeed = 0;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
@@ -142,65 +151,83 @@ static int findMotorChannel(uint8_t bus, uint8_t id)
     return findMotorChannelByBusId(bus, id);
 }
 
-static bool appendSecondaryTargetForJoint(TaskSharedData_t* sharedData,
-                                          ServoTargetBatch_t* batch,
-                                          uint8_t jointIndex,
-                                          int32_t primaryTarget,
-                                          uint16_t speed,
-                                          uint8_t acc,
-                                          const ServoAngleData_t* servoData,
-                                          uint32_t overloadFaultMask)
+static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
+                                              uint8_t jointIndex,
+                                              const ServoAngleData_t& servoData,
+                                              uint16_t speed,
+                                              uint8_t acc)
 {
     if (!batch) {
-        return false;
+        return 0;
     }
-    JointDualServoConstraint cfg;
-    int16_t secondaryTarget = 0;
-    if (!getJointDualServoConstraint(jointIndex, &cfg) ||
-        !computeSecondaryServoTargetForJoint(jointIndex, primaryTarget, &secondaryTarget)) {
-        return false;
-    }
-    if (cfg.secondaryBusIndex >= NUM_BUSES || cfg.secondaryServoID == 0) {
-        return false;
-    }
-    const int secondaryCh = findMotorChannel(cfg.secondaryBusIndex, cfg.secondaryServoID);
-    if (secondaryCh >= 0 && secondaryCh < SERVO_TOTAL_NUM) {
-        const uint32_t secondaryBit = 1UL << (uint8_t)secondaryCh;
-        const bool secondaryOverload = (overloadFaultMask & secondaryBit) != 0;
-        const bool secondaryOnline =
-            servoData && (servoData->onlineStatus[(uint8_t)secondaryCh] != 0);
-        if (secondaryOverload && secondaryOnline) {
-            secondaryTarget = clampServoPos(servoData->servoAngles[(uint8_t)secondaryCh]);
-        } else {
-            secondaryTarget = clampServoPosByMotorAbsLimit(sharedData,
-                                                           (uint8_t)secondaryCh,
-                                                           secondaryTarget);
+
+    JointActuatorRuntimeTarget targets[MAX_JOINT_ACTUATORS];
+    uint8_t targetCount = 0;
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    for (uint8_t i = 0; i < actuatorCount && targetCount < MAX_JOINT_ACTUATORS; i++) {
+        JointActuatorItem actuator;
+        if (!getJointActuator(jointIndex, i, &actuator) ||
+            actuator.motorChannel >= SERVO_TOTAL_NUM ||
+            servoData.onlineStatus[actuator.motorChannel] == 0) {
+            continue;
         }
+        const MotorMapItem& motor = motorMap[actuator.motorChannel];
+        JointActuatorRuntimeTarget& target = targets[targetCount++];
+        target.motorChannel = actuator.motorChannel;
+        target.busIndex = motor.busIndex;
+        target.servoId = motor.servoID;
+        target.sign = actuator.sign;
+        target.targetAbs = clampServoPos(servoData.servoAngles[actuator.motorChannel]);
     }
-    const bool appended = appendServoTarget(batch,
-                                            cfg.secondaryBusIndex,
-                                            cfg.secondaryServoID,
-                                            secondaryTarget,
-                                            speed,
-                                            acc);
-    if (appended) {
-        static uint32_t s_lastDualActuatorLogMs[ENCODER_TOTAL_NUM] = {0};
-        const uint32_t nowMs = millis();
-        if (jointIndex < ENCODER_TOTAL_NUM &&
-            (uint32_t)(nowMs - s_lastDualActuatorLogMs[jointIndex]) > 1000) {
-            JointActuatorItem secondary;
-            const int32_t sign = getJointActuator(jointIndex, 1, &secondary) ? secondary.sign : 0;
-            Serial.printf("[PID ACT] J%02u primary=%ld secondary=%d sign=%ld bus%u id%u\r\n",
-                          (unsigned)jointIndex,
-                          (long)primaryTarget,
-                          (int)secondaryTarget,
-                          (long)sign,
-                          (unsigned)cfg.secondaryBusIndex,
-                          (unsigned)cfg.secondaryServoID);
-            s_lastDualActuatorLogMs[jointIndex] = nowMs;
+
+    return appendJointActuatorRuntimeTargets(batch, targets, targetCount, speed, acc);
+}
+
+static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
+                                       TaskSharedData_t* sharedData,
+                                       uint8_t jointIndex,
+                                       float qRefDeg,
+                                       float qFbDeg,
+                                       const ServoAngleData_t& servoData,
+                                       uint32_t commandToken,
+                                       uint16_t speed,
+                                       uint8_t acc)
+{
+    if (!batch || !sharedData) {
+        return 0;
+    }
+
+    DualTendonMotorTargets tendonTargets;
+    memset(&tendonTargets, 0, sizeof(tendonTargets));
+    if (!computeDualTendonMotorTargets(jointIndex,
+                                       qRefDeg,
+                                       qFbDeg,
+                                       &servoData,
+                                       commandToken,
+                                       &tendonTargets)) {
+        return 0;
+    }
+
+    JointActuatorRuntimeTarget runtimeTargets[MAX_JOINT_ACTUATORS];
+    uint8_t targetCount = 0;
+    for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
+        const uint8_t motorChannel = tendonTargets.motorChannel[i];
+        if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
+            continue;
         }
+        const MotorMapItem& motor = motorMap[motorChannel];
+        const int16_t clampedTarget = clampServoPosByMotorAbsLimit(sharedData,
+                                                                   motorChannel,
+                                                                   tendonTargets.targetAbs[i]);
+        JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
+        target.motorChannel = motorChannel;
+        target.busIndex = motor.busIndex;
+        target.servoId = motor.servoID;
+        target.sign = 1;
+        target.targetAbs = clampedTarget;
     }
-    return appended;
+
+    return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
 }
 
 static int16_t servoLoadMagnitude(int16_t rawLoad)
@@ -210,6 +237,50 @@ static int16_t servoLoadMagnitude(int16_t rawLoad)
         mag = -mag;
     }
     return (int16_t)(mag & 0x03FF);
+}
+
+static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
+                                        const ControlCommandSnapshot_t& commandSnapshot)
+{
+    if (!sharedData) {
+        return 0;
+    }
+    const uint32_t validMask = validMotorChannelMask();
+    if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
+        return sharedData->active_motor_mask & validMask;
+    }
+
+    uint32_t mask = 0;
+    const uint32_t activeJointMask =
+        sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+        if ((activeJointMask & (1UL << jointIndex)) == 0) {
+            continue;
+        }
+        const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+        for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
+            JointActuatorItem actuator;
+            if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
+                actuator.motorChannel < SERVO_TOTAL_NUM) {
+                mask |= (1UL << actuator.motorChannel);
+            }
+        }
+    }
+    return mask & validMask;
+}
+
+static bool jointHasOverloadFault(uint8_t jointIndex, uint32_t overloadFaultBitmap)
+{
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
+        JointActuatorItem actuator;
+        if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
+            actuator.motorChannel < SERVO_TOTAL_NUM &&
+            (overloadFaultBitmap & (1UL << actuator.motorChannel)) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static int32_t abs32Local(int32_t value)
@@ -337,20 +408,12 @@ void controlTask(void* parameter)
 
     float localTargets[ENCODER_TOTAL_NUM] = {0.0f};
     float magAngles[ENCODER_TOTAL_NUM] = {0.0f};
-    int32_t absolutePosition[ENCODER_TOTAL_NUM] = {0};
-    int16_t outPulses[ENCODER_TOTAL_NUM] = {0};
+    int32_t absolutePositionRaw[ENCODER_TOTAL_NUM] = {0};
+    int32_t absolutePositionTendon[ENCODER_TOTAL_NUM] = {0};
+    int32_t outPulsesTendon[ENCODER_TOTAL_NUM] = {0};
 
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
-    uint8_t joint16DiffFaultCounter = 0;
-    JointDualServoConstraint joint16DualCfg;
-    const bool joint16DualConfigured = getJointDualServoConstraint(kJoint16Index, &joint16DualCfg);
-    const int joint16PrimaryCh = joint16DualConfigured
-        ? findMotorChannel(joint16DualCfg.primaryBusIndex, joint16DualCfg.primaryServoID)
-        : -1;
-    const int joint16SecondaryCh = joint16DualConfigured
-        ? findMotorChannel(joint16DualCfg.secondaryBusIndex, joint16DualCfg.secondaryServoID)
-        : -1;
     ReleaseGuardState releaseGuards[ENCODER_TOTAL_NUM];
     resetAllReleaseGuardStates(releaseGuards);
     uint32_t lastReleaseFaultResetToken = sharedData->reverse_release_fault_reset_token;
@@ -359,6 +422,9 @@ void controlTask(void* parameter)
     uint8_t overloadHighCount[SERVO_TOTAL_NUM] = {0};
     uint32_t lastOverloadFaultResetToken = sharedData->overload_fault_reset_token;
     sharedData->overload_fault_bitmap = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        sharedData->overload_fault_load[ch] = 0;
+    }
     ControlCommandSnapshot_t commandSnapshot;
     memset(&commandSnapshot, 0, sizeof(commandSnapshot));
     readControlCommandSnapshot(sharedData, &commandSnapshot);
@@ -380,6 +446,7 @@ void controlTask(void* parameter)
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
+    uint32_t lastFeedbackSerialDebugMs = 0;
 
     while (1)
     {
@@ -431,6 +498,9 @@ void controlTask(void* parameter)
             overloadFaultLatched = 0;
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
             sharedData->overload_fault_bitmap = 0;
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                sharedData->overload_fault_load[ch] = 0;
+            }
             lastOverloadFaultResetToken = overloadFaultResetToken;
         }
 
@@ -472,67 +542,34 @@ void controlTask(void* parameter)
         }
 
         // 过载保护锁存位由运行期检测维护，并继续写入共享状态供上位机显示。
-        sharedData->overload_fault_bitmap = overloadFaultLatched;
+        sharedData->overload_fault_bitmap |= overloadFaultLatched;
+        overloadFaultLatched = sharedData->overload_fault_bitmap;
 
         // 从主执行舵机反馈构建每个关节的绝对位置，供闭环 PID 与安全判断使用。
-        memset(absolutePosition, 0, sizeof(absolutePosition));
+        memset(absolutePositionRaw, 0, sizeof(absolutePositionRaw));
+        memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
         {
             const uint8_t bus = jointMap[jointIndex].busIndex;
             const uint8_t id = jointMap[jointIndex].servoID;
             const int ch = findMotorChannel(bus, id);
             if (ch >= 0 && servoData.onlineStatus[ch]) {
-                absolutePosition[jointIndex] = servoData.servoAngles[ch];
+                const int32_t rawAbs = servoData.servoAngles[ch];
+                absolutePositionRaw[jointIndex] = rawAbs;
+                absolutePositionTendon[jointIndex] =
+                    motorRawAbsToTendonAbs((uint8_t)ch, rawAbs);
             }
         }
 
-        bool joint16DualFault = false;
-        if (joint16DualConfigured) {
-            const int pCh = joint16PrimaryCh;
-            const int sCh = joint16SecondaryCh;
-            const bool pOnline = (pCh >= 0) && (servoData.onlineStatus[pCh] != 0);
-            const bool sOnline = (sCh >= 0) && (servoData.onlineStatus[sCh] != 0);
-
-            if (pOnline && sOnline)
-            {
-                const int32_t p = servoData.servoAngles[pCh];
-                const int32_t s = servoData.servoAngles[sCh];
-                const int32_t sProj = -s + joint16DualCfg.secondaryOffset;
-                const int32_t fused = (p + sProj) / 2;
-                const int32_t diff = (p >= sProj) ? (p - sProj) : (sProj - p);
-
-                // J16 双舵机反馈融合后的位置作为该关节的闭环输入。
-                absolutePosition[kJoint16Index] = fused;
-
-                // 连续超过主/副舵机差值阈值才锁存故障，避免单周期抖动误触发。
-                if (diff > kJoint16DiffThresholdCounts) {
-                    if (joint16DiffFaultCounter < 255) {
-                        joint16DiffFaultCounter++;
-                    }
-                } else {
-                    joint16DiffFaultCounter = 0;
-                }
-                joint16DualFault = (joint16DiffFaultCounter >= kJoint16DiffFaultCycles);
-            }
-            else
-            {
-                joint16DiffFaultCounter = 0;
-                joint16DualFault = true;
-            }
-        } else {
-            joint16DiffFaultCounter = 0;
-        }
-        sharedData->joint16_dual_feedback_fault = joint16DualFault ? 1 : 0;
+        sharedData->joint16_dual_feedback_fault = 0;
 
 #if SOLVER_DIAG_LOG_ENABLE
         const uint32_t nowMs = millis();
         if (nowMs - lastDiagLogMs >= 500) {
             lastDiagLogMs = nowMs;
-            const int pCh = joint16PrimaryCh;
-            const int sCh = joint16SecondaryCh;
-            const long pAbs = (pCh >= 0) ? (long)servoData.servoAngles[pCh] : 0;
-            const long sAbs = (sCh >= 0) ? (long)servoData.servoAngles[sCh] : 0;
-            Serial.printf("[Solver] j16 p=%ld s=%ld fault=%d\r\n", pAbs, sAbs, joint16DualFault ? 1 : 0);
+            Serial.printf("[Solver] j16 qRef=%.2f qFb=%.2f\r\n",
+                          (double)localTargets[kJoint16Index],
+                          (double)magAngles[kJoint16Index]);
         }
 #endif
 
@@ -595,19 +632,28 @@ void controlTask(void* parameter)
 
         if (normalOutputAllowed && telemetryFresh)
         {
-            const uint32_t validMotorMask = validMotorChannelMask();
+            const uint32_t overloadMotorMask =
+                activeOverloadMotorMask(sharedData, commandSnapshot);
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
             {
                 const uint32_t bit = 1UL << ch;
-                if (((validMotorMask & bit) == 0) ||
+                if (((overloadMotorMask & bit) == 0) ||
                     telemetryData.onlineStatus[ch] == 0)
                 {
                     overloadHighCount[ch] = 0;
                     continue;
                 }
 
+                const bool jointControlMode =
+                    (commandSnapshot.controlMode == CONTROL_MODE_JOINT);
+                const int16_t overloadThreshold = jointControlMode
+                                                      ? kJointControlOverloadLoadThreshold
+                                                      : kControlOverloadLoadThreshold;
+                const uint8_t overloadLatchCycles = jointControlMode
+                                                        ? kJointControlOverloadLatchCycles
+                                                        : kControlOverloadLatchCycles;
                 const int16_t loadMag = servoLoadMagnitude(telemetryData.load[ch]);
-                if (loadMag >= kControlOverloadLoadThreshold) {
+                if (loadMag >= overloadThreshold) {
                     if (overloadHighCount[ch] < 255) {
                         overloadHighCount[ch]++;
                     }
@@ -615,14 +661,16 @@ void controlTask(void* parameter)
                     overloadHighCount[ch] = 0;
                 }
 
-                if (overloadHighCount[ch] >= kControlOverloadLatchCycles &&
+                if (overloadHighCount[ch] >= overloadLatchCycles &&
                     (overloadFaultLatched & bit) == 0)
                 {
                     overloadFaultLatched |= bit;
-                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d mode=%u\r\n",
+                    sharedData->overload_fault_load[ch] = telemetryData.load[ch];
+                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
                                   (unsigned)ch,
                                   loadMag,
-                                  kControlOverloadLoadThreshold,
+                                  overloadThreshold,
+                                  (unsigned)overloadLatchCycles,
                                   (unsigned)commandSnapshot.controlMode);
                 }
             }
@@ -631,7 +679,8 @@ void controlTask(void* parameter)
         {
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
         }
-        sharedData->overload_fault_bitmap = overloadFaultLatched;
+        sharedData->overload_fault_bitmap |= overloadFaultLatched;
+        overloadFaultLatched = sharedData->overload_fault_bitmap;
 
         // 关节闭环模式下先按标定结果限制目标角度，避免目标超过当前工作空间。
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
@@ -640,9 +689,10 @@ void controlTask(void* parameter)
             }
         }
 
-        // 根据目标角、磁编码器反馈和当前舵机位置计算各关节 PID 输出。
-        g_controlSolver.compute(localTargets, magAngles, absolutePosition, outPulses);
-
+        // PID uses tendon-space ABS so a positive correction has the same "shorten tendon"
+        // meaning on motors with opposite raw ABS directions. Single-motor output converts
+        // the final tendon-space target back to raw motor ABS before sending.
+        g_controlSolver.compute(localTargets, magAngles, absolutePositionTendon, outPulsesTendon);
         if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
             // 直控模式：motorTargetRaw 按 motor channel 对齐，支持绝对多圈、单圈 raw 和 sweep 输入。
@@ -660,10 +710,7 @@ void controlTask(void* parameter)
                         continue;
                     }
 
-                    const bool isJoint16Motor =
-                        ((int)ch == joint16PrimaryCh) || ((int)ch == joint16SecondaryCh);
-                    const bool overloadFaultActive = (overloadFaultLatched & (1UL << ch)) != 0;
-                    if (!normalOutputAllowed || overloadFaultActive || (joint16DualFault && isJoint16Motor))
+                    if (!normalOutputAllowed)
                     {
                         if (servoData.onlineStatus[ch] != 0) {
                             const int16_t holdPos = clampServoPos(servoData.servoAngles[ch]);
@@ -729,15 +776,12 @@ void controlTask(void* parameter)
                 const bool guardInputsValid = servoOnline && mappedValid;
                 bool releaseFaultActive = false;
                 bool holdByTendonGuard = false;
-                bool overloadFaultActive =
-                    (jointMotorCh >= 0) &&
-                    (jointMotorCh < SERVO_TOTAL_NUM) &&
-                    ((overloadFaultLatched & (1UL << (uint8_t)jointMotorCh)) != 0);
+                bool overloadFaultActive = jointHasOverloadFault(jointIndex, overloadFaultLatched);
 
                 if (jointIndex != kJoint16Index)
                 {
                     const int32_t servoPos =
-                        (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePosition[jointIndex];
+                        (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePositionRaw[jointIndex];
 #if REVERSE_GUARD_ENABLE
                     const bool reverseGuardCalibrationReady = g_jointCalibResult[jointIndex].success;
                     if (controlEnabled && reverseGuardCalibrationReady) {
@@ -751,7 +795,7 @@ void controlTask(void* parameter)
                             jointIndex,
                             localTargets[jointIndex],
                             magAngles[jointIndex],
-                            absolutePosition[jointIndex],
+                            absolutePositionRaw[jointIndex],
                             guardInputsValid
                         );
                     }
@@ -764,7 +808,7 @@ void controlTask(void* parameter)
                     (!normalOutputAllowed) ||
                     shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
                 if (jointIndex == kJoint16Index) {
-                    emergency = emergency || joint16DualFault || overloadFaultActive;
+                    emergency = emergency || overloadFaultActive;
                 } else {
                     emergency = emergency || releaseFaultActive || holdByTendonGuard || overloadFaultActive;
                 }
@@ -772,6 +816,8 @@ void controlTask(void* parameter)
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
                     hotplugHoldMotor[jointMotorCh];
+                const bool jointActive =
+                    (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
 
                 if (bus >= NUM_BUSES) {
                     continue;
@@ -783,61 +829,81 @@ void controlTask(void* parameter)
                     continue;
                 }
 
+                if (!jointActive)
+                {
+                    jointCmdPos[jointIndex] = clampServoPos(absolutePositionRaw[jointIndex]);
+                    jointCmdValid[jointIndex] = 0;
+                    continue;
+                }
+
                 if (emergency)
                 {
                     // 故障或保护触发时保持当前位置，避免异常状态下继续运动。
-                    if (servoOnline) {
-                        const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
-                        appendServoTarget(&targetBatch, bus, id, holdPos,
-                                          SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-                        jointCmdPos[jointIndex] = holdPos;
-                        jointCmdValid[jointIndex] = 1;
-                    }
-
-                    appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, absolutePosition[jointIndex],
-                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
-                                                  &servoData, overloadFaultLatched);
+                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
+                    appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
+                                                   SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                    jointCmdPos[jointIndex] = holdPos;
+                    jointCmdValid[jointIndex] = servoOnline ? 1 : 0;
                     continue;
                 }
 
                 if (hotplugHoldActive)
                 {
-                    if (servoOnline) {
-                        const int16_t holdPos = clampServoPos(absolutePosition[jointIndex]);
-                        appendServoTarget(&targetBatch, bus, id, holdPos,
-                                          SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-                        jointCmdPos[jointIndex] = holdPos;
-                        jointCmdValid[jointIndex] = 1;
-                    }
-
-                    appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, absolutePosition[jointIndex],
-                                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
-                                                  &servoData, overloadFaultLatched);
+                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
+                    appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
+                                                   SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                    jointCmdPos[jointIndex] = holdPos;
+                    jointCmdValid[jointIndex] = servoOnline ? 1 : 0;
                     continue;
                 }
 
-                int16_t targetPos;
+                int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
-                // Only active joints follow PID. Inactive joints hold their
-                // current absolute position so partial-scope tests do not move
-                // unrelated channels.
-                if ((sharedData->active_joint_mask & (1UL << jointIndex)) != 0) {
-                    targetPos = (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
-                        ? clampServoPosByMotorAbsLimit(sharedData,
-                                                       (uint8_t)jointMotorCh,
-                                                       outPulses[jointIndex])
-                        : clampServoPos(outPulses[jointIndex]);
-                } else {
-                    targetPos = clampServoPos(absolutePosition[jointIndex]);
+                // Only active joints follow PID and emit servo targets.
+                const bool dualTendonJoint = isDualTendonJoint(jointIndex);
+                if (jointActive && dualTendonJoint) {
+                    const uint8_t appended =
+                        appendDualTendonTargets(&targetBatch,
+                                                sharedData,
+                                                jointIndex,
+                                                localTargets[jointIndex],
+                                                magAngles[jointIndex],
+                                                servoData,
+                                                jointCommandToken,
+                                                kJointControlFeedbackSpeed,
+                                                SERVO_TARGET_ACC_DEFAULT);
+                    if (appended == 0) {
+                        appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
+                                                       SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                    }
+                    jointCmdPos[jointIndex] = targetPos;
+                    jointCmdValid[jointIndex] = (appended > 0) ? 1 : 0;
+                    continue;
                 }
 
-                appendServoTarget(&targetBatch, bus, id, targetPos,
-                                  SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                if (jointActive) {
+                    if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
+                        const uint8_t motorCh = (uint8_t)jointMotorCh;
+                        const int32_t targetRawAbs =
+                            motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
+                        targetPos = clampServoPosByMotorAbsLimit(sharedData,
+                                                                 motorCh,
+                                                                 targetRawAbs);
+                    } else {
+                        targetPos = clampServoPos(outPulsesTendon[jointIndex]);
+                    }
+                }
+
+                if (dualTendonJoint) {
+                    appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
+                                                   SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                } else {
+                    appendJointActuatorTargets(&targetBatch, jointIndex, targetPos,
+                                               jointActive ? kJointControlFeedbackSpeed : SERVO_TARGET_SPEED_DEFAULT,
+                                               SERVO_TARGET_ACC_DEFAULT);
+                }
                 jointCmdPos[jointIndex] = targetPos;
                 jointCmdValid[jointIndex] = 1;
-                appendSecondaryTargetForJoint(sharedData, &targetBatch, jointIndex, targetPos,
-                                              SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT,
-                                              &servoData, overloadFaultLatched);
             }
         }
 
@@ -862,7 +928,7 @@ void controlTask(void* parameter)
                 debugData.targetDeg = localTargets[jointIndex];
                 debugData.magActualDeg = magAngles[jointIndex];
                 debugData.loop1Output = g_controlSolver.getPidOutput(jointIndex, 0);
-                debugData.loop2Actual = (float)absolutePosition[jointIndex];
+                debugData.loop2Actual = (float)absolutePositionTendon[jointIndex];
                 debugData.loop2Output = g_controlSolver.getPidOutput(jointIndex, 1);
                 debugData.cmdTargetPos = jointCmdPos[jointIndex];
                 debugData.cmdValid = jointCmdValid[jointIndex];
@@ -874,6 +940,35 @@ void controlTask(void* parameter)
                 }
             }
         }
+
+#if FEEDBACK_SERIAL_DEBUG_ENABLE
+        if (feedbackRunningState && commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
+            const uint32_t nowMs = millis();
+            if ((uint32_t)(nowMs - lastFeedbackSerialDebugMs) >= kFeedbackSerialDebugIntervalMs) {
+                lastFeedbackSerialDebugMs = nowMs;
+                for (uint8_t di = 0; di < kDebugJointCount; di++) {
+                    const uint8_t jointIndex = kDebugJointIndices[di];
+                    const bool jointActive =
+                        (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
+                    if (!jointActive) {
+                        continue;
+                    }
+                    Serial.printf(
+                        "[FB DBG] J%02u valid=%u tgt=%.3f act=%.3f l1=%.3f l2act=%ld l2out=%.3f cmd=%d curAbs=%ld cmdValid=%u\r\n",
+                        jointIndex,
+                        (unsigned)(mappedData.validFlags[jointIndex] != 0 ? 1 : 0),
+                        localTargets[jointIndex],
+                        magAngles[jointIndex],
+                        g_controlSolver.getPidOutput(jointIndex, 0),
+                        (long)absolutePositionTendon[jointIndex],
+                        g_controlSolver.getPidOutput(jointIndex, 1),
+                        (int)jointCmdPos[jointIndex],
+                        (long)absolutePositionRaw[jointIndex],
+                        (unsigned)jointCmdValid[jointIndex]);
+                }
+            }
+        }
+#endif
 
         if (sharedData->servoTargetQueue && targetBatch.count > 0) {
             xQueueOverwrite(sharedData->servoTargetQueue, &targetBatch);

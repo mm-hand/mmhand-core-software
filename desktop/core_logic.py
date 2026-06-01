@@ -120,6 +120,21 @@ class HandController:
         except Exception as exc:
             print(f"[MULTITURN CACHE] load failed: {exc}")
 
+    def _clear_trusted_multiturn_cache(self) -> None:
+        self._trusted_servo_abs = [None] * MOTOR_COUNT
+        self._trusted_servo_raw = [None] * MOTOR_COUNT
+        self._trusted_servo_online = [False] * MOTOR_COUNT
+        self._last_multiturn_restore_attempt_s = 0.0
+        self._last_multiturn_cache_save_s = 0.0
+        for path in (MULTITURN_CACHE_PATH, MULTITURN_CACHE_PATH.with_suffix(".tmp")):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                print(f"[MULTITURN CACHE] clear failed for {path}: {exc}")
+        print("[MULTITURN CACHE] cleared")
+
     def _save_trusted_multiturn_cache(self, force: bool = False) -> None:
         now = time.time()
         if not force and now - self._last_multiturn_cache_save_s < MULTITURN_CACHE_SAVE_INTERVAL_S:
@@ -140,6 +155,10 @@ class HandController:
             print(f"[MULTITURN CACHE] save failed: {exc}")
 
     def _update_trusted_multiturn_cache(self, state: HandModel) -> None:
+        if not bool(getattr(state, "multiturn_nvs_enabled", True)):
+            if any(self._trusted_servo_online) or MULTITURN_CACHE_PATH.exists() or MULTITURN_CACHE_PATH.with_suffix(".tmp").exists():
+                self._clear_trusted_multiturn_cache()
+            return
         unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
         if not (getattr(state, "has_servo_angle_data", False) and getattr(state, "has_servo_raw_data", False)):
             return
@@ -164,6 +183,8 @@ class HandController:
 
     def _maybe_restore_multiturn_from_cache(self, state: HandModel) -> None:
         if not self.comm:
+            return
+        if not bool(getattr(state, "multiturn_nvs_enabled", True)):
             return
         unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
         if unknown == 0 or not getattr(state, "has_servo_raw_data", False):
@@ -506,6 +527,16 @@ class HandController:
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs", raw))
 
+    def set_single_motor_position_absolute(self, motor_index: int, motor_abs: int) -> None:
+        if self._paused:
+            return
+        idx = int(motor_index)
+        if idx < 0 or idx >= MOTOR_COUNT:
+            raise ValueError(f"motor index out of range: {idx}")
+        raw = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(motor_abs)))
+        if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
+            self.comm.send_command(("motor_pos_abs_one", idx, raw))
+
     def set_local_test_params(self, freq_hz: float, amplitude_deg: float):
         """设置本地测试参数：频率（Hz）和幅值（度）"""
         if self.comm:
@@ -599,7 +630,10 @@ class HandController:
             return False
         self.comm.send_command(("multiturn_nvs_control", bool(enabled)))
         ack = self.comm.wait_for_ack(CMD_MULTITURN_NVS_CONTROL, MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S)
-        return bool(ack is not None and int(ack[2]) == 0)
+        ok = bool(ack is not None and int(ack[2]) == 0)
+        if ok and not enabled:
+            self._clear_trusted_multiturn_cache()
+        return ok
 
     def start(self):
         if self.comm:
@@ -613,6 +647,8 @@ class HandController:
         """停止：暂停时也可发送，便于紧急停"""
         if self.comm:
             self.comm.send_command("stop")
+        if getattr(self.current_state, "calib_status", None) in ("PENDING", "RUNNING"):
+            self.current_state.calib_status = "IDLE"
         self._started = False
         self._paused = False
 

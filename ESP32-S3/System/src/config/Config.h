@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <Arduino.h>
+#include <freertos/semphr.h>
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 #include "driver/twai.h"
@@ -13,6 +14,7 @@
 #define TACTILE_GROUP_NUM 5
 
 extern uint16_t g_enc_diag[ENCODER_TOTAL_NUM];
+extern SemaphoreHandle_t g_sensorMuxMutex;
 
 // ===========================================
 // [AS5047P] error bits and latched code ranges
@@ -56,11 +58,13 @@ struct CheckData {
 struct TacIndent1610 {
     uint8_t forces[25][3];
     uint8_t global[3];
+    uint8_t rawSummary[15];
 };
 
 struct TacIndent2015 {
     uint8_t forces[52][3];
     uint8_t global[3];
+    uint8_t rawSummary[15];
 };
 
 struct TacGroup {
@@ -89,12 +93,16 @@ struct RemoteCommand {
 #define PIN_ENC_CS      7
 
 // VSPI: tactile sensors
-#define PIN_TAC_MISO    13
-#define PIN_TAC_MOSI    11
+#define PIN_TAC_MISO    21
+#define PIN_TAC_MOSI    10
 #define PIN_TAC_SCLK    8
 #define PIN_TAC_CS_A    7
 #define PIN_TAC_CS_B    6
-// #define PIN_TAC_CS_C  8
+#define PIN_TAC_GRP_A   13
+#define PIN_TAC_GRP_B   14
+#define PIN_TAC_GRP_C   17
+#define PIN_TAC_GRP_EN  -1
+#define PIN_TAC_GRP_EN_ACTIVE_LEVEL LOW
 
 // TWAI (CAN)
 #define PIN_TWAI_TX     48
@@ -122,11 +130,15 @@ struct RemoteCommand {
 #define ENC_HW_MODE ENC_HW_MODE_138_CS_DEMUX
 #endif
 
-// 138 encoder SPI path uses Y0..Y4 on the new board
-#define ENC_MUX_BASE_CHANNEL 0
+// Encoder logical group order follows the assembled finger order:
+// group0/J00-J03=pinky(SPI5), group1/J04-J07=ring(SPI4),
+// group2/J08-J11=middle(SPI3), group3/J12-J15=index(SPI2),
+// group4/J16-J20=thumb(SPI1).
+static constexpr uint8_t ENC_138_GROUP_CHANNEL_MAP[5] = {4, 3, 2, 1, 0};
 
-// 151 path mapping: D3..D7 -> group 0..4
-static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {4,3, 5, 6, 7};
+// 151 path keeps the board-specific channel numbers but applies the same
+// logical finger order as above.
+static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {7, 6, 5, 3, 4};
 
 // 151 diagnostics
 // SAFE: on-demand ERRFL only (default)
@@ -142,7 +154,14 @@ static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {4,3, 5, 6, 7};
 // [Parameter] tasks and communication
 // ===========================================
 #define SPI_FREQ_ENC    10000000
-#define SPI_FREQ_TAC    5000000
+#define SPI_FREQ_TAC    1000000
+#define TACTILE_SENSOR_PER_GROUP 3
+#define TACTILE_AXIS_COUNT 3
+#define TACTILE_SUMMARY_BYTES (TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT)
+
+// Tactile logical order follows the assembled finger order:
+// G0=pinky(SPI5), G1=ring(SPI4), G2=middle(SPI3), G3=index(SPI2), G4=thumb(SPI1).
+static constexpr uint8_t TACTILE_GROUP_CHANNEL_MAP[TACTILE_GROUP_NUM] = {7, 6, 5, 4, 3};
 
 #define TASK_ENC_PRIO   10
 #define TASK_ENC_CORE   0

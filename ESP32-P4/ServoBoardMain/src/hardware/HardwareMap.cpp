@@ -1,38 +1,37 @@
 #include "HardwareMap.h"
 
-static const MotorMapItem kInvalidMotor = {MOTOR_MAP_INVALID_BUS, 0};
-
-#if HAND_PROFILE == HAND_PROFILE_V2
-static const MotorMapItem kExtraV2Motors[5] = {
-    {0, 23}, {0, 24}, {1, 25}, {2, 26}, {3, 23}
-};
-#else
-static const MotorMapItem kExtraV2Motors[5] = {
-    kInvalidMotor, kInvalidMotor, kInvalidMotor, kInvalidMotor, kInvalidMotor
-};
-#endif
-
 // Primary joint -> servo map. Keep this table for legacy code paths and for the
 // primary actuator of each joint. Multi-actuator ownership lives in
 // jointActuatorGroups below.
 JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
-    {0, 1},  {0, 2},  {0, 3},  {0, 4},
-    {0, 5},  {0, 6},  {1, 7},  {2, 8},
-    {1, 9},  {1, 10}, {1, 11}, {1, 12},
-    {2, 13}, {2, 14}, {2, 15}, {2, 16},
-    {3, 17}, {3, 19}, {3, 20}, {3, 21}, {3, 22}
+    {0, 0},  {0, 2},  {0, 3},  {0, 4},
+    {0, 5},  {0, 7},  {1, 8},  {2, 9},
+    {1, 10}, {1, 12}, {1, 13}, {1, 14},
+    {2, 15}, {2, 17}, {2, 18}, {2, 19},
+    {3, 20}, {3, 22}, {3, 23}, {3, 24}, {3, 25}
 };
 
-// Motor channel -> physical bus/id. M22-M26 are reserved for Hand 2.0.
+// Motor channel -> physical bus/id. Servo IDs are zero-based and match Mxx.
 MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
-    {0, 1},  {0, 2},  {0, 3},  {0, 4},
-    {0, 5},  {0, 6},  {1, 7},  {2, 8},
-    {1, 9},  {1, 10}, {1, 11}, {1, 12},
-    {2, 13}, {2, 14}, {2, 15}, {2, 16},
-    {3, 17}, {3, 18}, {3, 19}, {3, 20},
-    {3, 21}, {3, 22},
-    kExtraV2Motors[0], kExtraV2Motors[1], kExtraV2Motors[2],
-    kExtraV2Motors[3], kExtraV2Motors[4]
+    {0, 0},  {0, 1},  {0, 2},  {0, 3},  {0, 4},
+    {0, 5},  {0, 6},  {0, 7},  {1, 8},  {2, 9},
+    {1, 10}, {1, 11}, {1, 12}, {1, 13}, {1, 14},
+    {2, 15}, {2, 16}, {2, 17}, {2, 18}, {2, 19},
+    {3, 20}, {3, 21}, {3, 22}, {3, 23}, {3, 24},
+    {3, 25}, {3, 26}
+};
+
+// Motor channel -> tendon shortening direction in servo absolute counts.
+// +1: increasing ABS shortens the tendon.
+// -1: decreasing ABS shortens the tendon.
+static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
+    1, 1, 1, 1,
+    1, 1, 1, 1,
+    1, 1, 1, 1,
+    1, 1, 1, -1,
+   -1, -1, -1, -1,
+    1, 1, 1, 1,
+    1, 1, 1
 };
 
 #define ACT_NONE {0xFF, 1, 0, 0}
@@ -44,46 +43,42 @@ MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
 
 JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
 #if HAND_PROFILE == HAND_PROFILE_V2
-    GROUP2(0, ACT_SECONDARY_OPPOSE(22)),
+    GROUP2(0, ACT_SECONDARY_OPPOSE(1)),
 #else
     GROUP1(0),
 #endif
-    GROUP1(1),
     GROUP1(2),
     GROUP1(3),
-#if HAND_PROFILE == HAND_PROFILE_V2
-    GROUP2(4, ACT_SECONDARY_OPPOSE(23)),
-#else
     GROUP1(4),
-#endif
+#if HAND_PROFILE == HAND_PROFILE_V2
+    GROUP2(5, ACT_SECONDARY_OPPOSE(6)),
+#else
     GROUP1(5),
-    GROUP1(6),
+#endif
     GROUP1(7),
-#if HAND_PROFILE == HAND_PROFILE_V2
-    GROUP2(8, ACT_SECONDARY_OPPOSE(24)),
-#else
     GROUP1(8),
-#endif
     GROUP1(9),
-    GROUP1(10),
-    GROUP1(11),
 #if HAND_PROFILE == HAND_PROFILE_V2
-    GROUP2(12, ACT_SECONDARY_OPPOSE(25)),
+    GROUP2(10, ACT_SECONDARY_OPPOSE(11)),
 #else
-    GROUP1(12),
+    GROUP1(10),
 #endif
+    GROUP1(12),
     GROUP1(13),
     GROUP1(14),
-    GROUP1(15),
-    GROUP2(16, ACT_SECONDARY_OPPOSE(17)),
 #if HAND_PROFILE == HAND_PROFILE_V2
-    GROUP2(18, ACT_SECONDARY_OPPOSE(26)),
+    GROUP2(15, ACT_SECONDARY_OPPOSE(16)),
 #else
-    GROUP1(18),
+    GROUP1(15),
 #endif
+    GROUP1(17),
+    GROUP1(18),
     GROUP1(19),
-    GROUP1(20),
-    GROUP1(21)
+    GROUP2(20, ACT_SECONDARY_OPPOSE(21)),
+    GROUP1(22),
+    GROUP1(23),
+    GROUP1(24),
+    GROUP2(25, ACT_SECONDARY_OPPOSE(26))
 };
 
 #undef GROUP2
@@ -95,7 +90,7 @@ JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
 
 bool isMotorMapItemValid(const MotorMapItem& item)
 {
-    return item.busIndex < NUM_BUSES && item.servoID != 0 && item.servoID <= MAX_SERVO_ID;
+    return item.busIndex < NUM_BUSES && item.servoID <= MAX_SERVO_ID;
 }
 
 bool isMotorChannelValid(uint8_t motorChannel)
@@ -112,6 +107,34 @@ uint32_t validMotorChannelMask()
         }
     }
     return mask;
+}
+
+int8_t getMotorTendonShortenAbsSign(uint8_t motorChannel)
+{
+    if (motorChannel >= SERVO_TOTAL_NUM) {
+        return 1;
+    }
+    return (kMotorTendonShortenAbsSign[motorChannel] < 0) ? -1 : 1;
+}
+
+int32_t motorRawAbsToTendonAbs(uint8_t motorChannel, int32_t rawAbs)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * rawAbs;
+}
+
+int32_t motorTendonAbsToRawAbs(uint8_t motorChannel, int32_t tendonAbs)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * tendonAbs;
+}
+
+int32_t motorRawDeltaFromTendonDelta(uint8_t motorChannel, int32_t tendonDelta)
+{
+    return (int32_t)getMotorTendonShortenAbsSign(motorChannel) * tendonDelta;
+}
+
+int32_t motorApplyTendonDelta(uint8_t motorChannel, int32_t rawAbs, int32_t tendonDelta)
+{
+    return rawAbs + motorRawDeltaFromTendonDelta(motorChannel, tendonDelta);
 }
 
 uint8_t getJointActuatorCount(uint8_t jointIndex)

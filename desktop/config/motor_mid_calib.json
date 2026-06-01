@@ -1,104 +1,12 @@
 {
-  "comment": "Motor middle calibration. Record motor ABS when the tendon/rope is unwrapped; intended for later side-sway joint calibration.",
-  "updated_at_host_time": 1779074852.0929353,
+  "comment": "Motor middle calibration reset after zero-based motor remap. Re-record values with the new M00-M26 mapping before using side-sway calibration.",
+  "mapping_version": "zero_based_contiguous_v2",
   "hand_profile": "v2",
   "active_scope": {
-    "label": "Control Set: Finger J00-J03",
-    "motor_mask": "0x0040000F",
-    "joint_mask": "0x0000000F"
+    "label": "",
+    "motor_mask": "0x00000000",
+    "joint_mask": "0x00000000"
   },
-  "motors": [
-    {
-      "motor": 0,
-      "motor_label": "M00",
-      "joint": 0,
-      "joint_label": "J00",
-      "abs": -29773,
-      "raw": 2995,
-      "multi_turn_known": true
-    },
-    {
-      "motor": 1,
-      "motor_label": "M01",
-      "joint": 1,
-      "joint_label": "J01",
-      "abs": 1145,
-      "raw": 1145,
-      "multi_turn_known": true
-    },
-    {
-      "motor": 2,
-      "motor_label": "M02",
-      "joint": 2,
-      "joint_label": "J02",
-      "abs": 0,
-      "raw": 0,
-      "multi_turn_known": true
-    },
-    {
-      "motor": 3,
-      "motor_label": "M03",
-      "joint": 3,
-      "joint_label": "J03",
-      "abs": 1636,
-      "raw": 1636,
-      "multi_turn_known": true
-    },
-    {
-      "motor": 22,
-      "motor_label": "M22",
-      "joint": 0,
-      "joint_label": "J00",
-      "abs": 1312,
-      "raw": 1312,
-      "multi_turn_known": true
-    }
-  ],
-  "by_motor": {
-    "M00": {
-      "motor": 0,
-      "motor_label": "M00",
-      "joint": 0,
-      "joint_label": "J00",
-      "abs": -29773,
-      "raw": 2995,
-      "multi_turn_known": true
-    },
-    "M01": {
-      "motor": 1,
-      "motor_label": "M01",
-      "joint": 1,
-      "joint_label": "J01",
-      "abs": 1145,
-      "raw": 1145,
-      "multi_turn_known": true
-    },
-    "M02": {
-      "motor": 2,
-      "motor_label": "M02",
-      "joint": 2,
-      "joint_label": "J02",
-      "abs": 0,
-      "raw": 0,
-      "multi_turn_known": true
-    },
-    "M03": {
-      "motor": 3,
-      "motor_label": "M03",
-      "joint": 3,
-      "joint_label": "J03",
-      "abs": 1636,
-      "raw": 1636,
-      "multi_turn_known": true
-    },
-    "M22": {
-      "motor": 22,
-      "motor_label": "M22",
-      "joint": 0,
-      "joint_label": "J00",
-      "abs": 1312,
-      "raw": 1312,
-      "multi_turn_known": true
-    }
-  }
+  "motors": [],
+  "by_motor": {}
 }

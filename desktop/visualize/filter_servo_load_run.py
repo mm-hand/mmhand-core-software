@@ -9,7 +9,7 @@ The output keeps only:
 
 Examples:
   python desktop/visualize/filter_servo_load_run.py --csv run_data/hand_run_xxx.csv
-  python desktop/visualize/filter_servo_load_run.py --motors M04,M23
+  python desktop/visualize/filter_servo_load_run.py --motors M05,M06
   python desktop/visualize/filter_servo_load_run.py --joint 4
 """
 
@@ -116,7 +116,7 @@ def _resolve_motors(rows: Sequence[Dict[str, str]], motors_text: str, joint: Opt
     if not motors:
         motors = _motors_from_active_mask(rows)
     if not motors:
-        raise ValueError("No motors selected. Use --motors M04,M23 or --joint 4.")
+        raise ValueError("No motors selected. Use --motors M05,M06 or --joint 4.")
     return motors
 
 
@@ -229,7 +229,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Filter runtime CSV to controlled motor load/abs and joint angle columns.")
     parser.add_argument("--csv", default="", help="CSV path. Defaults to latest runtime CSV under run_data.")
     parser.add_argument("--run-data-dir", default=_default_run_data_dir(), help="Directory used when --csv is omitted.")
-    parser.add_argument("--motors", default="", help="Comma-separated motors, for example M04,M23.")
+    parser.add_argument("--motors", default="", help="Comma-separated motors, for example M05,M06.")
     parser.add_argument("--joint", type=int, default=None, help="Export all motors mapped to this joint.")
     parser.add_argument("--out", default="", help="Output CSV path. Defaults to *_load_slim.csv.")
     args = parser.parse_args()

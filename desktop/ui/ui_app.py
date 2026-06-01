@@ -14,6 +14,7 @@ from protocol import (
     SYSTEM_FAULT_CAN_OFFLINE,
     SYSTEM_FAULT_JOINT16_DUAL,
     SYSTEM_FAULT_OVERLOAD,
+    SYSTEM_FAULT_RELEASE_GUARD,
     SYSTEM_FAULT_SERVO_OFFLINE,
 )
 from .ui_context import HandGuiContext
@@ -88,6 +89,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._camera_timer.timeout.connect(self._display_windows.update_cameras)
         self._camera_timer.start(CAMERA_UI_POLL_MS)
         QtCore.QTimer.singleShot(200, self._display_windows.open_pose)
+        QtCore.QTimer.singleShot(320, self._display_windows.open_tactile)
         QtCore.QTimer.singleShot(250, self._clear_live_displays)
 
     def _build_ui(self) -> None:
@@ -106,6 +108,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.plot_btn = QtWidgets.QPushButton("Plot")
         self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
+        self.tactile_btn = QtWidgets.QPushButton("Tactile")
+        self.tactile_btn.clicked.connect(lambda _checked=False: self._display_windows.open_tactile())
         self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -114,7 +118,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            self.save_data_check, self.plot_btn, self.comm_conn_light, self.start_indicator,
+            self.save_data_check, self.plot_btn, self.tactile_btn, self.comm_conn_light, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
@@ -390,28 +394,27 @@ class HandGUI(QtWidgets.QMainWindow):
         ts = float(getattr(state, "timestamp", 0.0) or 0.0)
         if ts > 0:
             delay_ms = max(0.0, (time.time() - ts) * 1000.0)
-        overload = [str(i) for i, f in enumerate(getattr(state, "servo_overload_fault", []) or []) if f]
         calib = str(getattr(state, "calib_status", "IDLE") or "IDLE")
         sys_state = self._system_state_name(getattr(state, "system_state", None)) if getattr(state, "has_system_status_data", False) else "-"
         sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
         turn_text, turn_ok, turn_tip = self._turn_known_status(state)
-        sys_text = f"SYS {sys_state}" if not sys_faults else f"SYS {sys_state} | {','.join(sys_faults)}"
+        sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
         calib_text = f"CALIB {calib}"
-        overload_text = "OL OK" if not overload else f"OL {','.join(overload)}"
+        overload_text, overload_tip, overload_active = self._format_overload_summary(state)
         delay_text, delay_state = self._format_delay_status(delay_ms)
         self.fault_label.setText(sys_text)
-        self.fault_label.setToolTip(sys_text)
+        self.fault_label.setToolTip(sys_tip)
         self.calib_label.setText(calib_text)
         self.calib_label.setToolTip(f"Calibration: {calib}")
         self.overload_label.setText(overload_text)
-        self.overload_label.setToolTip("Overload: none" if not overload else f"Overload motor: {','.join(overload)}")
+        self.overload_label.setToolTip(overload_tip)
         self.turn_label.setText(turn_text)
         self.turn_label.setToolTip(turn_tip)
         self.delay_label.setText(delay_text)
         self.delay_label.setToolTip(f"Delay: {delay_ms:.0f} ms" if delay_ms else "Delay: -")
         self._style_top_status_label(self.fault_label, "warn" if sys_faults else "ok")
         self._style_top_status_label(self.calib_label, self._calib_status_style(calib))
-        self._style_top_status_label(self.overload_label, "warn" if overload else "ok")
+        self._style_top_status_label(self.overload_label, "warn" if overload_active else "ok")
         self._style_top_status_label(self.turn_label, "ok" if turn_ok else "warn")
         self._style_top_status_label(self.delay_label, delay_state)
 
@@ -436,6 +439,63 @@ class HandGUI(QtWidgets.QMainWindow):
         if text in {"FAILED", "NO_CALIB", "DISCONNECTED"}:
             return "warn"
         return "neutral"
+
+    @staticmethod
+    def _overload_detail_lines(state: HandModel) -> List[str]:
+        overload_flags = getattr(state, "servo_overload_fault", []) or []
+        overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
+        lines: List[str] = []
+        for i, faulted in enumerate(overload_flags):
+            if not faulted:
+                continue
+            load_text = "?"
+            if i < len(overload_loads) and overload_loads[i] is not None:
+                try:
+                    load_text = str(int(overload_loads[i]))
+                except Exception:
+                    load_text = str(overload_loads[i])
+            lines.append(f"M{i:02d} trigger load: {load_text}")
+        return lines
+
+    @staticmethod
+    def _release_guard_detail_lines(state: HandModel) -> List[str]:
+        release_flags = getattr(state, "joint_reverse_release_fault", []) or []
+        return [f"J{i:02d}" for i, faulted in enumerate(release_flags) if faulted]
+
+    def _format_overload_summary(self, state: HandModel) -> tuple[str, str, bool]:
+        overload_lines = self._overload_detail_lines(state)
+        if not overload_lines:
+            return "OL OK", "Overload motors: none", False
+        return "OL OVERLOAD", "Overload motors:\n" + "\n".join(overload_lines), True
+
+    def _format_system_fault_summary(self, state: HandModel, sys_state: str, sys_faults: List[str]) -> tuple[str, str]:
+        if not sys_faults:
+            text = f"SYS {sys_state}" if sys_state != "-" else "SYS -"
+        elif len(sys_faults) == 1:
+            text = f"SYS {sys_faults[0]}"
+        else:
+            text = f"SYS FAULT x{len(sys_faults)}"
+
+        lines = [f"System state: {sys_state}"]
+        if sys_faults:
+            lines.append("System faults: " + ", ".join(sys_faults))
+        else:
+            lines.append("System faults: none")
+
+        overload_lines = self._overload_detail_lines(state)
+        if overload_lines:
+            lines.append("Overload motors:")
+            lines.extend(overload_lines)
+        elif "OVERLOAD" in sys_faults:
+            lines.append("Overload motors: unknown")
+
+        release_lines = self._release_guard_detail_lines(state)
+        if release_lines:
+            lines.append("Release guard joints: " + ", ".join(release_lines))
+        elif "RELEASE" in sys_faults:
+            lines.append("Release guard joints: unknown")
+
+        return text, "\n".join(lines)
 
     def _turn_known_status(self, state: HandModel) -> tuple[str, bool, str]:
         if not getattr(state, "has_system_status_data", False):
@@ -483,6 +543,7 @@ class HandGUI(QtWidgets.QMainWindow):
             (SYSTEM_FAULT_SERVO_OFFLINE, "SERVO"),
             (SYSTEM_FAULT_CALIBRATION, "CALIB"),
             (SYSTEM_FAULT_OVERLOAD, "OVERLOAD"),
+            (SYSTEM_FAULT_RELEASE_GUARD, "RELEASE"),
             (SYSTEM_FAULT_JOINT16_DUAL, "J16"),
         ]
         return [name for bit, name in names if (value & bit) != 0]
