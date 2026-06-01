@@ -329,6 +329,13 @@ void HalEncoders::collectGroup151(uint8_t groupIndex, int groupStart, uint8_t co
 }
 
 void HalEncoders::getData(EncoderData &outData) {
+    const bool locked = (g_sensorMuxMutex == NULL) ||
+        (xSemaphoreTake(g_sensorMuxMutex, portMAX_DELAY) == pdTRUE);
+    if (!locked) {
+        outData = {};
+        return;
+    }
+
     int globalIdx = 0;
     outData = {};
 
@@ -345,4 +352,8 @@ void HalEncoders::getData(EncoderData &outData) {
     }
 
     memcpy(outData.latchedErrors, _latchedErrorCodes, sizeof(_latchedErrorCodes));
+
+    if (g_sensorMuxMutex != NULL) {
+        xSemaphoreGive(g_sensorMuxMutex);
+    }
 }

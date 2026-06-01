@@ -8,6 +8,7 @@
 
 // 队列定义
 QueueHandle_t xQueueEncoderData = NULL;
+SemaphoreHandle_t g_sensorMuxMutex = NULL;
 
 /**
  * 启动系统任务
@@ -18,6 +19,16 @@ void startSystemTasks() {
     xQueueEncoderData = xQueueCreate(1, sizeof(EncoderData));
     if (xQueueEncoderData == NULL) {
         Serial.println("[FATAL] Queue creation failed!");
+        while(1) {
+            vTaskDelay(1000);
+        }
+    }
+
+    if (g_sensorMuxMutex == NULL) {
+        g_sensorMuxMutex = xSemaphoreCreateMutex();
+    }
+    if (g_sensorMuxMutex == NULL) {
+        Serial.println("[FATAL] Sensor mux mutex creation failed!");
         while(1) {
             vTaskDelay(1000);
         }

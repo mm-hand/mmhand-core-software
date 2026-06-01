@@ -223,7 +223,7 @@ class DisplayWindowManager:
         if key == "pose":
             return "Hand Pose", Pose3DView(self.context), (760, 520)
         if key == "tactile":
-            return "Tactile", TactileView(self.context), (760, 520)
+            return "Tactile", TactileView(self.context), (980, 680)
         if key == "cameras":
             return "Cameras", CameraView(self.context), (860, 460)
         raise ValueError(f"Unknown display window: {key}")

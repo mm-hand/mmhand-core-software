@@ -82,9 +82,8 @@ void HalTWAI::sendEncoderData(const EncoderData &encData) {
 }
 
 void HalTWAI::sendTactileSummary(const TactileData &tacData) {
-    uint8_t buffer[8];
-    uint8_t bufPtr = 0;
-    uint32_t frameId = 0x200;
+    uint8_t payload[TACTILE_SUMMARY_BYTES] = {0};
+    uint8_t cursor = 0;
 
     for (int g = 0; g < TACTILE_GROUP_NUM; g++) {
         const TacGroup &grp = tacData.groups[g];
@@ -96,18 +95,22 @@ void HalTWAI::sendTactileSummary(const TactileData &tacData) {
 
         for (int s = 0; s < 3; s++) {
             for (int k = 0; k < 3; k++) {
-                buffer[bufPtr++] = ptrs[s][k];
-                if (bufPtr == 8) {
-                    sendFrame(frameId++, buffer, 8);
-                    bufPtr = 0;
-                    memset(buffer, 0, 8);
-                }
+                payload[cursor++] = ptrs[s][k];
             }
         }
     }
-    if (bufPtr > 0) {
-        sendFrame(frameId, buffer, bufPtr);
+
+    static uint8_t seq = 0;
+    uint8_t buffer[CAN_TAC_SUMMARY_DLC] = {0};
+    for (uint8_t frame = 0; frame < CAN_TAC_SUMMARY_FRAME_COUNT; frame++) {
+        buffer[0] = seq;
+        for (uint8_t slot = 0; slot < CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME; slot++) {
+            const uint8_t idx = frame * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME + slot;
+            buffer[slot + 1] = (idx < TACTILE_SUMMARY_BYTES) ? payload[idx] : 0;
+        }
+        sendFrame(CAN_ID_TAC_SUMMARY_BASE + frame, buffer, CAN_TAC_SUMMARY_DLC);
     }
+    seq++;
 }
 
 void HalTWAI::sendTactileFullDump(const TactileData &tacData) {

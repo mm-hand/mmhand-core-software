@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <Arduino.h>
+#include <freertos/semphr.h>
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 #include "driver/twai.h"
@@ -13,6 +14,7 @@
 #define TACTILE_GROUP_NUM 5
 
 extern uint16_t g_enc_diag[ENCODER_TOTAL_NUM];
+extern SemaphoreHandle_t g_sensorMuxMutex;
 
 // ===========================================
 // [AS5047P] error bits and latched code ranges
@@ -56,11 +58,13 @@ struct CheckData {
 struct TacIndent1610 {
     uint8_t forces[25][3];
     uint8_t global[3];
+    uint8_t rawSummary[15];
 };
 
 struct TacIndent2015 {
     uint8_t forces[52][3];
     uint8_t global[3];
+    uint8_t rawSummary[15];
 };
 
 struct TacGroup {
@@ -89,12 +93,16 @@ struct RemoteCommand {
 #define PIN_ENC_CS      7
 
 // VSPI: tactile sensors
-#define PIN_TAC_MISO    13
-#define PIN_TAC_MOSI    11
+#define PIN_TAC_MISO    21
+#define PIN_TAC_MOSI    10
 #define PIN_TAC_SCLK    8
 #define PIN_TAC_CS_A    7
 #define PIN_TAC_CS_B    6
-// #define PIN_TAC_CS_C  8
+#define PIN_TAC_GRP_A   13
+#define PIN_TAC_GRP_B   14
+#define PIN_TAC_GRP_C   17
+#define PIN_TAC_GRP_EN  -1
+#define PIN_TAC_GRP_EN_ACTIVE_LEVEL LOW
 
 // TWAI (CAN)
 #define PIN_TWAI_TX     48
@@ -142,7 +150,13 @@ static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {4,3, 5, 6, 7};
 // [Parameter] tasks and communication
 // ===========================================
 #define SPI_FREQ_ENC    10000000
-#define SPI_FREQ_TAC    5000000
+#define SPI_FREQ_TAC    1000000
+#define TACTILE_SENSOR_PER_GROUP 3
+#define TACTILE_AXIS_COUNT 3
+#define TACTILE_SUMMARY_BYTES (TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT)
+
+// Tactile SPI route selector: the five connected tactile routes are on D3..D7.
+static constexpr uint8_t TACTILE_GROUP_CHANNEL_MAP[TACTILE_GROUP_NUM] = {3, 4, 5, 6, 7};
 
 #define TASK_ENC_PRIO   10
 #define TASK_ENC_CORE   0

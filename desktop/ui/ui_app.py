@@ -89,6 +89,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._camera_timer.timeout.connect(self._display_windows.update_cameras)
         self._camera_timer.start(CAMERA_UI_POLL_MS)
         QtCore.QTimer.singleShot(200, self._display_windows.open_pose)
+        QtCore.QTimer.singleShot(320, self._display_windows.open_tactile)
         QtCore.QTimer.singleShot(250, self._clear_live_displays)
 
     def _build_ui(self) -> None:
@@ -107,6 +108,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.plot_btn = QtWidgets.QPushButton("Plot")
         self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
+        self.tactile_btn = QtWidgets.QPushButton("Tactile")
+        self.tactile_btn.clicked.connect(lambda _checked=False: self._display_windows.open_tactile())
         self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -115,7 +118,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            self.save_data_check, self.plot_btn, self.comm_conn_light, self.start_indicator,
+            self.save_data_check, self.plot_btn, self.tactile_btn, self.comm_conn_light, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
