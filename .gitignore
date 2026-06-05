@@ -1,8 +1,26 @@
 *.zip
 *.mp4
+log/
 
 .DS_Store
 __pycache__/
 *.py[cod]
 *.pyo
 desktop/teleop/Posture/.vscode/
+
+# MANUS bridge local build files
+manus/build/
+manus/**/build/
+manus/**/build_*/
+manus/out/
+manus/.vs/
+manus/**/*.pdb
+manus/**/*.ilk
+manus/**/*.obj
+manus/**/*.exe
+
+# MANUS SDK local files
+manus/third_party/ManusSDK/
+manus/**/*.dll
+manus/**/*.lib
+manus/**/*.so

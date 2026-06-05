@@ -568,6 +568,14 @@ class ControlPanel(QtWidgets.QWidget):
         self.test_max_spins = []
         self.test_freq_spins = []
         self.test_phase_spins = []
+        self.finger_test_group_combo = None
+        self.finger_test_same_check = None
+        self.finger_test_same_spin = None
+        self.finger_test_spins = []
+        self.finger_test_current_items = []
+        self.finger_test_error_items = []
+        self.finger_test_apply_btn = None
+        self.finger_test_sync_btn = None
         self.joint_current_items = []
         self.joint_encoder_items = []
         self.joint_status_items = []
@@ -1009,6 +1017,7 @@ class ControlPanel(QtWidgets.QWidget):
     def _build_test_panel(self) -> QtWidgets.QWidget:
         box = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(box)
+        layout.addWidget(self._build_finger_static_test_box())
         layout.addWidget(self._build_sine_test_box())
         layout.addWidget(self._build_feedforward_test_box())
         layout.addWidget(self._build_triangle_test_box())
@@ -1017,6 +1026,68 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _joint_choices(self) -> List[str]:
         return ["None"] + [f"J{i:02d}" for i in range(ENCODER_COUNT)]
+
+    def _build_finger_static_test_box(self) -> QtWidgets.QGroupBox:
+        group = QtWidgets.QGroupBox("Finger Static Q Test")
+        layout = QtWidgets.QGridLayout(group)
+        self.finger_test_group_combo = QtWidgets.QComboBox()
+        for label, joint_start, joint_end in FINGER_JOINT_RANGES:
+            self.finger_test_group_combo.addItem(label, (joint_start, joint_end))
+        self.finger_test_group_combo.currentIndexChanged.connect(
+            lambda _idx=0: self._refresh_finger_static_test_controls()
+        )
+        self.finger_test_same_check = QtWidgets.QCheckBox("Same angle")
+        self.finger_test_same_check.setChecked(True)
+        self.finger_test_same_check.stateChanged.connect(
+            lambda _state=0: self._refresh_finger_static_test_controls()
+        )
+        self.finger_test_same_spin = self._make_float_spin(0.0, 120.0, 30.0, 2)
+        self.finger_test_same_spin.valueChanged.connect(
+            lambda value: self._on_finger_static_same_angle_changed(float(value))
+        )
+        self.finger_test_apply_btn = QtWidgets.QPushButton("Apply Finger Q")
+        self.finger_test_sync_btn = QtWidgets.QPushButton("Use Current")
+        self.finger_test_apply_btn.clicked.connect(lambda _checked=False: self._on_apply_finger_static_test())
+        self.finger_test_sync_btn.clicked.connect(lambda _checked=False: self._sync_finger_static_test_from_current())
+
+        layout.addWidget(QtWidgets.QLabel("Finger"), 0, 0)
+        layout.addWidget(self.finger_test_group_combo, 0, 1)
+        layout.addWidget(self.finger_test_same_check, 0, 2)
+        layout.addWidget(QtWidgets.QLabel("Angle(deg)"), 0, 3)
+        layout.addWidget(self.finger_test_same_spin, 0, 4)
+        layout.addWidget(self.finger_test_apply_btn, 0, 5)
+        layout.addWidget(self.finger_test_sync_btn, 0, 6)
+        for col, text in enumerate(["Joint", "Target(deg)", "Current(deg)", "Err(deg)"]):
+            layout.addWidget(QtWidgets.QLabel(text), 1, col)
+
+        self.finger_test_spins = []
+        self.finger_test_current_items = []
+        self.finger_test_error_items = []
+        for row in range(5):
+            joint_label = QtWidgets.QLabel("-")
+            spin = self._make_float_spin(0.0, 120.0, 30.0, 2)
+            current = QtWidgets.QLabel("-")
+            error = QtWidgets.QLabel("-")
+            layout.addWidget(joint_label, row + 2, 0)
+            layout.addWidget(spin, row + 2, 1)
+            layout.addWidget(current, row + 2, 2)
+            layout.addWidget(error, row + 2, 3)
+            spin.valueChanged.connect(lambda _value=0.0: self._refresh_finger_static_test_feedback())
+            self.finger_test_spins.append(spin)
+            self.finger_test_current_items.append(current)
+            self.finger_test_error_items.append(error)
+            setattr(self, f"_finger_test_joint_label_{row}", joint_label)
+            self._control_widgets.append(spin)
+
+        self._control_widgets.extend([
+            self.finger_test_group_combo,
+            self.finger_test_same_check,
+            self.finger_test_same_spin,
+            self.finger_test_apply_btn,
+            self.finger_test_sync_btn,
+        ])
+        self._refresh_finger_static_test_controls()
+        return group
 
     def _build_sine_test_box(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("Joint Sine Test")
@@ -1121,6 +1192,121 @@ class ControlPanel(QtWidgets.QWidget):
         spin.setSingleStep(0.1 if decimals <= 2 else 0.01)
         spin.setValue(float(value))
         return spin
+
+    def _selected_finger_static_joints(self) -> List[int]:
+        combo = getattr(self, "finger_test_group_combo", None)
+        if combo is None:
+            return []
+        data = combo.currentData()
+        if not isinstance(data, tuple) or len(data) != 2:
+            return []
+        start, end = int(data[0]), int(data[1])
+        return [idx for idx in range(start, end + 1) if 0 <= idx < ENCODER_COUNT]
+
+    def _refresh_finger_static_test_controls(self) -> None:
+        joints = self._selected_finger_static_joints()
+        same = bool(
+            getattr(self, "finger_test_same_check", None) is not None and
+            self.finger_test_same_check.isChecked()
+        )
+        if getattr(self, "finger_test_same_spin", None) is not None:
+            self.finger_test_same_spin.setEnabled(same)
+        for row, spin in enumerate(getattr(self, "finger_test_spins", [])):
+            joint_idx = joints[row] if row < len(joints) else None
+            label = getattr(self, f"_finger_test_joint_label_{row}", None)
+            if label is not None:
+                label.setText(f"J{joint_idx:02d}" if joint_idx is not None else "-")
+                label.setVisible(joint_idx is not None)
+            spin.setVisible(joint_idx is not None)
+            spin.setEnabled(not same and joint_idx is not None)
+            if joint_idx is not None:
+                spin.setRange(self._joint_target_min_deg(joint_idx), self._joint_target_max_deg(joint_idx))
+                if same and getattr(self, "finger_test_same_spin", None) is not None:
+                    spin.setValue(self._clamp_joint_target_deg(joint_idx, self.finger_test_same_spin.value()))
+            if row < len(getattr(self, "finger_test_current_items", [])):
+                self.finger_test_current_items[row].setVisible(joint_idx is not None)
+            if row < len(getattr(self, "finger_test_error_items", [])):
+                self.finger_test_error_items[row].setVisible(joint_idx is not None)
+        self._refresh_finger_static_test_feedback()
+
+    def _on_finger_static_same_angle_changed(self, value: float) -> None:
+        if not (
+            getattr(self, "finger_test_same_check", None) is not None and
+            self.finger_test_same_check.isChecked()
+        ):
+            return
+        joints = self._selected_finger_static_joints()
+        for row, joint_idx in enumerate(joints[:len(getattr(self, "finger_test_spins", []))]):
+            self.finger_test_spins[row].setValue(self._clamp_joint_target_deg(joint_idx, float(value)))
+        self._refresh_finger_static_test_feedback()
+
+    def _sync_finger_static_test_from_current(self) -> None:
+        state = self._state
+        angles = getattr(state, "angles", []) if state is not None else []
+        if not angles:
+            self._set_status("Finger Q Test sync blocked: no joint feedback")
+            return
+        joints = self._selected_finger_static_joints()
+        if not joints:
+            return
+        same_values: List[float] = []
+        for row, joint_idx in enumerate(joints[:len(getattr(self, "finger_test_spins", []))]):
+            if joint_idx >= len(angles):
+                continue
+            value = self._clamp_joint_target_deg(joint_idx, float(angles[joint_idx]))
+            self.finger_test_spins[row].setValue(value)
+            same_values.append(value)
+        if same_values and getattr(self, "finger_test_same_spin", None) is not None:
+            self.finger_test_same_spin.setValue(sum(same_values) / float(len(same_values)))
+        self._refresh_finger_static_test_feedback()
+        self._set_status("Finger Q Test synced from current angles")
+
+    def _on_apply_finger_static_test(self) -> None:
+        if self._manual_submode() != "test" and hasattr(self, "tabs"):
+            self.tabs.setCurrentWidget(self.test_panel)
+        if not self._guard_joint_command_started():
+            return
+        joints = self._selected_finger_static_joints()
+        if not joints:
+            self._set_status("Finger Q Test blocked: no finger selected")
+            return
+        angles = self.resolved_joint_targets()
+        same = bool(
+            getattr(self, "finger_test_same_check", None) is not None and
+            self.finger_test_same_check.isChecked()
+        )
+        same_value = float(self.finger_test_same_spin.value()) if getattr(self, "finger_test_same_spin", None) else 0.0
+        for row, joint_idx in enumerate(joints[:len(getattr(self, "finger_test_spins", []))]):
+            raw = same_value if same else float(self.finger_test_spins[row].value())
+            target = self._clamp_joint_target_deg(joint_idx, raw)
+            angles[joint_idx] = target
+            self._set_joint_target_widget(joint_idx, target)
+            self._joint_target_user_set[joint_idx] = True
+            self.finger_test_spins[row].setValue(target)
+        try:
+            self.context.send_joint_targets(angles, source="Finger Q Test", live=True)
+        except Exception as exc:
+            self._set_status(f"Finger Q Test send failed: {exc}")
+            return
+        self._refresh_finger_static_test_feedback()
+        joint_text = ",".join(f"J{idx:02d}" for idx in joints)
+        self._set_status(f"Finger Q Test sent: {joint_text}")
+
+    def _refresh_finger_static_test_feedback(self) -> None:
+        state = self._state
+        angles = getattr(state, "angles", []) if state is not None else []
+        joints = self._selected_finger_static_joints()
+        for row, joint_idx in enumerate(joints[:len(getattr(self, "finger_test_current_items", []))]):
+            current_label = self.finger_test_current_items[row]
+            error_label = self.finger_test_error_items[row]
+            if joint_idx < len(angles):
+                current = float(angles[joint_idx])
+                target = float(self.finger_test_spins[row].value())
+                current_label.setText(f"{current:.2f}")
+                error_label.setText(f"{(target - current):+.2f}")
+            else:
+                current_label.setText("-")
+                error_label.setText("-")
 
     def _set_status(self, text: str) -> None:
         self.context.set_status(text)
@@ -2989,6 +3175,7 @@ class ControlPanel(QtWidgets.QWidget):
                     self.joint_sliders[i].setValue(int(round(target * 100.0)))
                     self._joint_target_user_set[i] = False
                 self._joint_target_initialized = True
+            self._refresh_finger_static_test_feedback()
         finally:
             self._updating = False
 

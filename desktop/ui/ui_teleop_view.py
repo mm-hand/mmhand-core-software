@@ -1,6 +1,7 @@
 from typing import Callable, Optional
 
 from .ui_qt_compat import QtWidgets
+from .ui_manus_view import ManusUdpView
 from .ui_visual_retargeting_view import VisualRetargetingView
 
 
@@ -21,7 +22,7 @@ class TeleopView(QtWidgets.QWidget):
         self.teleop_mode_combo = QtWidgets.QComboBox()
         self.teleop_mode_combo.addItem("Select teleop source...", "")
         self.teleop_mode_combo.addItem("Mode 1: Visual Retargeting", "visual")
-        self.teleop_mode_combo.addItem("Mode 2: Rokoko Glove", "rokoko")
+        self.teleop_mode_combo.addItem("Mode 2: MANUS / Rokoko Glove", "rokoko")
         self.teleop_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_mode_changed())
         form.addRow("Teleop Mode:", self.teleop_mode_combo)
         layout.addWidget(panel)
@@ -40,6 +41,9 @@ class TeleopView(QtWidgets.QWidget):
                 self.context,
                 selected_joint_mask_getter=self.selected_joint_mask_getter,
             )
+            self.body_layout.addWidget(self._body_widget)
+        elif mode == "rokoko":
+            self._body_widget = ManusUdpView(self.context)
             self.body_layout.addWidget(self._body_widget)
 
     def _clear_body(self) -> None:
