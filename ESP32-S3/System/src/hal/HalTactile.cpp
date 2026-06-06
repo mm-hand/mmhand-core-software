@@ -46,6 +46,7 @@ void configureSelectPinHighWithPullup(int pin) {
 
     pinMode(pin, INPUT_PULLUP);
     digitalWrite(pin, HIGH);
+    
     pinMode(pin, OUTPUT);
     digitalWrite(pin, HIGH);
     gpio_pulldown_dis((gpio_num_t)pin);

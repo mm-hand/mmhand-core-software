@@ -121,7 +121,7 @@ struct MultiTurnNvsSnapshot {
 
 ## NVS ON / OFF 按钮
 
-上位机 Device 区 `Save PID ABS` 下方有 `NVS ON / NVS OFF` 按钮。
+上位机 Device 区有 `Flash ON / Flash OFF` 按钮，用于控制多圈缓存是否写入下位机 flash，并同步启用或禁用上位机缓存恢复。
 
 ### NVS ON
 

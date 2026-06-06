@@ -353,16 +353,16 @@ motor_cmd = f(errorA, errorB, current_abs, zero_abs, tight_abs)
 - 没有 `motor -> joints` 的映射表
 - 没有双关节误差融合函数
 - 没有针对一个 motor 同时服务两个 joint 的 PID 状态
-- 没有读取 `pid_abs_calib.json` 的固件侧逻辑
+- 旧版 `pid_abs_calib.json` 上位机保存链路已经移除，当前不再生成或读取这类 ABS 锚点文件。
 
 所以单电机双关节目前不能认为已经接入 PID。
 
-## PID ABS 标定数据的位置
+## PID ABS 标定数据状态
 
 上位机已经增加 PID 控制锚点文件：
 
 ```text
-desktop/config/pid_abs_calib.json
+该文件已废弃并移除。当前负反馈控制使用实时反馈、自动标定限位和当前控制参数，不依赖独立的 `pid_abs_calib.json`。
 ```
 
 说明文档：

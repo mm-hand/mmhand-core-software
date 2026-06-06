@@ -25,6 +25,7 @@ PACKET_TYPE_TACTILE = 0x0A
 PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
+PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -49,6 +50,9 @@ CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
 # 上位机在线心跳；固件用它判断桌面端是否已经关闭。
 CMD_HOST_HEARTBEAT = 0xDC
 CMD_MULTITURN_NVS_CONTROL = 0xDD
+CMD_HOST_HEARTBEAT = 0xDC
+CMD_CALIB_LOAD_JOINT = 0xDF
+CMD_CALIB_LOAD_LIMITS = 0xE0
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -180,6 +184,45 @@ def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, Lis
         maxs.append(struct.unpack(">h", payload[offset + 2:offset + 4])[0])
         offset += 4
     return valid_bitmap, locked_bitmap, mins, maxs
+
+
+def _unpack_float_be(data: bytes) -> float:
+    return struct.unpack(">f", data)[0]
+
+
+def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
+    # One joint per frame keeps the existing 1-byte LEN protocol unchanged.
+    if len(payload) < 54:
+        return None
+    idx = 0
+    joint = payload[idx]
+    idx += 1
+    if joint >= ENCODER_COUNT:
+        return None
+
+    result = {
+        "joint": int(joint),
+        "success": bool(payload[idx]),
+    }
+    idx += 1
+    for key in ("encoderMin", "encoderMax", "offset"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    result["angleMax"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        result[key] = struct.unpack(">h", payload[idx:idx + 2])[0]
+        idx += 2
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        result[key] = _unpack_float_be(payload[idx:idx + 4])
+        idx += 4
+    result["scaled"] = bool(payload[idx])
+    idx += 1
+    result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
+    return result
 
 
 def parse_calib_ack(payload: bytes) -> Optional[int]:
@@ -439,6 +482,52 @@ def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -
         int(active_motor_mask) & 0xFFFFFFFF,
     )
     return _build_command_frame(CMD_MOTOR_ABS_LIMIT_LOCK, payload)
+
+
+def _pack_float_be(value: float) -> bytes:
+    return struct.pack(">f", float(value))
+
+
+def _clamp_i16(value: int) -> int:
+    v = int(value)
+    if v < -32768:
+        return -32768
+    if v > 32767:
+        return 32767
+    return v
+
+
+def build_calib_load_limits_cmd(valid_bitmap: int, locked_bitmap: int, mins: List[int], maxs: List[int]) -> bytes:
+    if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor limit values")
+    payload = bytearray()
+    payload.extend(struct.pack(">II", int(valid_bitmap) & 0xFFFFFFFF, int(locked_bitmap) & 0xFFFFFFFF))
+    for i in range(MOTOR_COUNT):
+        payload.extend(struct.pack(">h", _clamp_i16(mins[i])))
+        payload.extend(struct.pack(">h", _clamp_i16(maxs[i])))
+    return _build_command_frame(CMD_CALIB_LOAD_LIMITS, bytes(payload))
+
+
+def build_calib_load_joint_cmd(result: dict) -> bytes:
+    joint = int(result.get("joint", -1))
+    if joint < 0 or joint >= ENCODER_COUNT:
+        raise ValueError(f"invalid joint index {joint}")
+    payload = bytearray()
+    payload.append(joint & 0xFF)
+    payload.append(1 if bool(result.get("success", False)) else 0)
+    for key in ("encoderMin", "encoderMax", "offset"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    payload.extend(_pack_float_be(float(result.get("angleMax", 0.0))))
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        payload.extend(struct.pack(">h", _clamp_i16(result.get(key, 0))))
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        payload.extend(_pack_float_be(float(result.get(key, 0.0))))
+    payload.append(1 if bool(result.get("scaled", False)) else 0)
+    direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
+    payload.extend(struct.pack(">b", direction))
+    return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
 
 
 def build_host_heartbeat_cmd() -> bytes:

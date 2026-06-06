@@ -35,6 +35,29 @@ static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
     buffer[(*idx)++] = (uint8_t)(bits & 0xFF);
 }
 
+static void appendI32BigEndian(uint8_t* buffer, size_t* idx, int32_t value)
+{
+    const uint32_t v = (uint32_t)value;
+    buffer[(*idx)++] = (uint8_t)((v >> 24) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)((v >> 16) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)((v >> 8) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)(v & 0xFF);
+}
+
+static void appendI16BigEndian(uint8_t* buffer, size_t* idx, int16_t value)
+{
+    const uint16_t v = (uint16_t)value;
+    buffer[(*idx)++] = (uint8_t)((v >> 8) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)(v & 0xFF);
+}
+
+static int16_t clampI16Local(int32_t value)
+{
+    if (value > 32767) return 32767;
+    if (value < -32768) return -32768;
+    return (int16_t)value;
+}
+
 // Encode raw CAN magnetic encoder values for the sensor packet.
 static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
 {
@@ -197,6 +220,41 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
         buffer[idx++] = (uint8_t)(((uint16_t)maxAbs >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)((uint16_t)maxAbs & 0xFF);
     }
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
+static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM) {
+        return;
+    }
+
+    const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
+    uint8_t buffer[72];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_JOINT_CALIB_SNAPSHOT;
+    buffer[idx++] = jointIndex;
+    buffer[idx++] = result.success ? 1 : 0;
+    appendI32BigEndian(buffer, &idx, result.encoderMin);
+    appendI32BigEndian(buffer, &idx, result.encoderMax);
+    appendI32BigEndian(buffer, &idx, result.offset);
+    appendFloatBigEndian(buffer, &idx, result.angleMax);
+    appendI32BigEndian(buffer, &idx, result.startEncoder);
+    appendI32BigEndian(buffer, &idx, result.tightEncoder);
+    appendI32BigEndian(buffer, &idx, result.zeroEncoder);
+    appendI32BigEndian(buffer, &idx, result.encoderSpan);
+    appendI16BigEndian(buffer, &idx, clampI16Local(result.startServoAbs));
+    appendI16BigEndian(buffer, &idx, clampI16Local(result.tightServoAbs));
+    appendI16BigEndian(buffer, &idx, clampI16Local(result.zeroServoAbs));
+    appendFloatBigEndian(buffer, &idx, result.startDeg);
+    appendFloatBigEndian(buffer, &idx, result.tightDeg);
+    appendFloatBigEndian(buffer, &idx, result.totalDeg);
+    buffer[idx++] = result.scaled ? 1 : 0;
+    buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -434,6 +492,25 @@ static uint32_t readU32BigEndian(const uint8_t* p)
            (uint32_t)p[3];
 }
 
+static int32_t readI32BigEndian(const uint8_t* p)
+{
+    return (int32_t)readU32BigEndian(p);
+}
+
+static int16_t readI16BigEndian(const uint8_t* p)
+{
+    const uint16_t raw = ((uint16_t)p[0] << 8) | (uint16_t)p[1];
+    return (int16_t)raw;
+}
+
+static float readFloatBigEndian(const uint8_t* p)
+{
+    const uint32_t bits = readU32BigEndian(p);
+    float value = 0.0f;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
 // Return command payload length, excluding the command byte.
 static size_t getCommandPayloadLength(uint8_t cmd)
 {
@@ -469,6 +546,10 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kRestoreMultiTurnPayloadBytes;
         case CMD_MOTOR_ABS_LIMIT_LOCK:
             return kMotorAbsLimitLockPayloadBytes;
+        case CMD_CALIB_LOAD_JOINT:
+            return kCalibLoadJointPayloadBytes;
+        case CMD_CALIB_LOAD_LIMITS:
+            return kCalibLoadLimitsPayloadBytes;
         case CMD_SENSOR_STREAM_MODE:
             return 1;
         default:
@@ -706,6 +787,98 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
+    if (cmd == CMD_CALIB_LOAD_LIMITS)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kCalibLoadLimitsPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+                   sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint32_t validMask = readU32BigEndian(frame + 1) & validMotorChannelMask();
+            const uint32_t lockedMask = readU32BigEndian(frame + 5) & validMotorChannelMask();
+            const uint8_t* p = frame + 9;
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                sharedData->motor_abs_limit_min[ch] = readI16BigEndian(p);
+                p += 2;
+                sharedData->motor_abs_limit_max[ch] = readI16BigEndian(p);
+                p += 2;
+            }
+            sharedData->motor_abs_limit_valid_bitmap = validMask;
+            sharedData->motor_abs_limit_locked_bitmap = lockedMask & validMask;
+            Serial.printf("[UPPER] CALIB_LOAD_LIMITS valid=0x%08lX locked=0x%08lX\r\n",
+                          (unsigned long)sharedData->motor_abs_limit_valid_bitmap,
+                          (unsigned long)sharedData->motor_abs_limit_locked_bitmap);
+        }
+        sendProtoAckPacket(CMD_CALIB_LOAD_LIMITS, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_CALIB_LOAD_JOINT)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (frameLen < 1 + kCalibLoadJointPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+                   sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            const uint8_t* p = frame + 1;
+            const uint8_t jointIndex = *p++;
+            if (jointIndex >= ENCODER_TOTAL_NUM) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            } else {
+                JointCalibrationResult result;
+                memset(&result, 0, sizeof(result));
+                result.success = (*p++ != 0);
+                result.encoderMin = readI32BigEndian(p); p += 4;
+                result.encoderMax = readI32BigEndian(p); p += 4;
+                result.offset = readI32BigEndian(p); p += 4;
+                result.angleMax = readFloatBigEndian(p); p += 4;
+                result.startEncoder = readI32BigEndian(p); p += 4;
+                result.tightEncoder = readI32BigEndian(p); p += 4;
+                result.zeroEncoder = readI32BigEndian(p); p += 4;
+                result.encoderSpan = readI32BigEndian(p); p += 4;
+                result.startServoAbs = readI16BigEndian(p); p += 2;
+                result.tightServoAbs = readI16BigEndian(p); p += 2;
+                result.zeroServoAbs = readI16BigEndian(p); p += 2;
+                result.startDeg = readFloatBigEndian(p); p += 4;
+                result.tightDeg = readFloatBigEndian(p); p += 4;
+                result.totalDeg = readFloatBigEndian(p); p += 4;
+                result.scaled = (*p++ != 0);
+                const int8_t direction = ((int8_t)(*p++)) < 0 ? (int8_t)-1 : (int8_t)1;
+                if (result.success &&
+                    (!isfinite(result.angleMax) || !isfinite(result.startDeg) ||
+                     !isfinite(result.tightDeg) || !isfinite(result.totalDeg) ||
+                     result.encoderSpan <= 0 || result.totalDeg <= 0.0f)) {
+                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                } else {
+                    g_jointCalibResult[jointIndex] = result;
+                    g_encoderOffsetManual[jointIndex] = result.success ? result.offset : 0;
+                    setRuntimeEncoderDirection(jointIndex, direction);
+                    if (result.success) {
+                        g_calibrationStatus = CALIB_STATUS_SUCCESS;
+                        g_calibrationAckStatus = CALIB_STATUS_SUCCESS;
+                        g_calibrationAckRepeatRemaining = 5;
+                        sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CALIBRATION;
+                    }
+                    Serial.printf("[UPPER] CALIB_LOAD_JOINT J%02u success=%u start=%ld tight=%ld span=%ld dir=%d\r\n",
+                                  jointIndex,
+                                  result.success ? 1U : 0U,
+                                  (long)result.startEncoder,
+                                  (long)result.tightEncoder,
+                                  (long)result.encoderSpan,
+                                  (int)direction);
+                }
+            }
+        }
+        sendProtoAckPacket(CMD_CALIB_LOAD_JOINT, sharedData->system_state, status);
+        return;
+    }
+
     if (cmd == CMD_MULTITURN_NVS_CONTROL)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
@@ -791,6 +964,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastMotorAbsLimitSentMs = 0;
     uint32_t lastMotorAbsLimitValidSent = 0xFFFFFFFFUL;
     uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
+    uint32_t lastJointCalibSnapshotSentMs = 0;
+    uint8_t nextJointCalibSnapshotIndex = 0;
 
     Serial.println("<<<SYS_READY>>>");
 
@@ -993,6 +1168,18 @@ void upperCommunicationTask(void* parameter)
             lastMotorAbsLimitValidSent = limitValidBitmap;
             lastMotorAbsLimitLockedSent = limitLockedBitmap;
             lastMotorAbsLimitSentMs = nowMs;
+        }
+
+        if (g_calibrationStatus == CALIB_STATUS_SUCCESS &&
+            (uint32_t)(nowMs - lastJointCalibSnapshotSentMs) >= kJointCalibSnapshotHeartbeatMs) {
+            for (uint8_t n = 0; n < ENCODER_TOTAL_NUM; n++) {
+                const uint8_t jointIndex = (uint8_t)((nextJointCalibSnapshotIndex + n) % ENCODER_TOTAL_NUM);
+                if (g_jointCalibResult[jointIndex].success) {
+                    sendJointCalibSnapshotPacket(jointIndex);
+                }
+            }
+            nextJointCalibSnapshotIndex = 0;
+            lastJointCalibSnapshotSentMs = nowMs;
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));

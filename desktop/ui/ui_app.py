@@ -16,7 +16,11 @@ from protocol import (
     SYSTEM_FAULT_OVERLOAD,
     SYSTEM_FAULT_RELEASE_GUARD,
     SYSTEM_FAULT_SERVO_OFFLINE,
+    SYSTEM_STATE_PAUSED,
+    SYSTEM_STATE_RUN_DIRECT,
+    SYSTEM_STATE_RUN_FEEDBACK,
 )
+from session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
@@ -65,6 +69,12 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_draw = 0.0
         self._draw_interval = 0.1
         self._pending_status_text = ""
+        self._last_overload_popup_mask = 0
+        self._last_fault_popup_key = ""
+        self._last_fault_popup_time = 0.0
+        self._fault_dialog_active = False
+        self._fault_stop_sent = False
+        self._fault_previous_runtime_active = False
         self.context = HandGuiContext(self)
         self.tendon_guard = TendonGuard(os.path.join(DESKTOP_DIR, "config", "tendon_manual_calib.json"))
 
@@ -151,7 +161,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         self.fault_label = self._make_top_status_label("SYS -", 150)
         self.calib_label = self._make_top_status_label("CALIB -", 82)
-        self.overload_label = self._make_top_status_label("OL OK", 70)
+        self.overload_label = self._make_top_status_label("OL OK", 120)
         self.turn_label = self._make_top_status_label("TURN -", 102)
         self.delay_label = self._make_top_status_label("--", 62)
 
@@ -417,6 +427,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._style_top_status_label(self.overload_label, "warn" if overload_active else "ok")
         self._style_top_status_label(self.turn_label, "ok" if turn_ok else "warn")
         self._style_top_status_label(self.delay_label, delay_state)
+        self._handle_fault_side_effects(state)
 
     @staticmethod
     def _format_delay_status(delay_ms: float) -> tuple[str, str]:
@@ -441,10 +452,10 @@ class HandGUI(QtWidgets.QMainWindow):
         return "neutral"
 
     @staticmethod
-    def _overload_detail_lines(state: HandModel) -> List[str]:
+    def _overload_detail_items(state: HandModel) -> List[tuple[int, str]]:
         overload_flags = getattr(state, "servo_overload_fault", []) or []
         overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
-        lines: List[str] = []
+        items: List[tuple[int, str]] = []
         for i, faulted in enumerate(overload_flags):
             if not faulted:
                 continue
@@ -454,8 +465,21 @@ class HandGUI(QtWidgets.QMainWindow):
                     load_text = str(int(overload_loads[i]))
                 except Exception:
                     load_text = str(overload_loads[i])
-            lines.append(f"M{i:02d} trigger load: {load_text}")
-        return lines
+            items.append((i, load_text))
+        return items
+
+    @staticmethod
+    def _overload_detail_lines(state: HandModel) -> List[str]:
+        return [f"M{i:02d} load={load}" for i, load in HandGUI._overload_detail_items(state)]
+
+    @staticmethod
+    def _overload_mask_from_state(state: HandModel) -> int:
+        mask = 0
+        overload_flags = getattr(state, "servo_overload_fault", []) or []
+        for i, faulted in enumerate(overload_flags):
+            if faulted:
+                mask |= (1 << i)
+        return mask
 
     @staticmethod
     def _release_guard_detail_lines(state: HandModel) -> List[str]:
@@ -463,10 +487,207 @@ class HandGUI(QtWidgets.QMainWindow):
         return [f"J{i:02d}" for i, faulted in enumerate(release_flags) if faulted]
 
     def _format_overload_summary(self, state: HandModel) -> tuple[str, str, bool]:
-        overload_lines = self._overload_detail_lines(state)
-        if not overload_lines:
+        overload_items = self._overload_detail_items(state)
+        if not overload_items:
             return "OL OK", "Overload motors: none", False
-        return "OL OVERLOAD", "Overload motors:\n" + "\n".join(overload_lines), True
+        if len(overload_items) <= 2:
+            text = "OL " + " ".join(f"M{i:02d}:{load}" for i, load in overload_items)
+        else:
+            text = f"OL x{len(overload_items)}"
+        lines = [f"M{i:02d} load={load}" for i, load in overload_items]
+        return text, "Overload motors:\n" + "\n".join(lines), True
+
+    def _maybe_show_overload_popup(self, state: HandModel) -> None:
+        mask = self._overload_mask_from_state(state)
+        if mask == 0:
+            self._last_overload_popup_mask = 0
+            return
+        new_mask = mask & ~int(getattr(self, "_last_overload_popup_mask", 0) or 0)
+        if new_mask == 0:
+            return
+        self._last_overload_popup_mask = mask
+        items = [(i, load) for i, load in self._overload_detail_items(state) if (new_mask & (1 << i)) != 0]
+        if not items:
+            return
+        detail = "\n".join(f"M{i:02d}: 触发负载 {load}" for i, load in items)
+        log_session("OVERLOAD", "; ".join(f"M{i:02d} load={load}" for i, load in items))
+        QtWidgets.QMessageBox.warning(
+            self,
+            "电机过载保护",
+            "检测到电机过载，控制已进入保护状态。\n\n"
+            f"{detail}\n\n"
+            "请检查机构受力和绳索状态，确认安全后点击 Clear Fault 恢复。",
+        )
+
+    @staticmethod
+    def _fault_bitmap_value(state: HandModel) -> int:
+        try:
+            return int(getattr(state, "system_fault_bitmap", 0) or 0)
+        except Exception:
+            return 0
+
+    def _build_fault_summary(self, state: HandModel) -> dict:
+        bitmap = self._fault_bitmap_value(state)
+        overload_items = self._overload_detail_items(state)
+        overload_mask = self._overload_mask_from_state(state)
+        release_joints = self._release_guard_detail_lines(state)
+        release_mask = 0
+        release_flags = getattr(state, "joint_reverse_release_fault", []) or []
+        for i, faulted in enumerate(release_flags):
+            if faulted:
+                release_mask |= (1 << i)
+
+        lines: List[str] = []
+        suggestions: List[str] = []
+        titles: List[str] = []
+
+        if (bitmap & SYSTEM_FAULT_OVERLOAD) or overload_items:
+            titles.append("舵机过载")
+            if overload_items:
+                lines.append("舵机过载：")
+                lines.extend(f"  M{i:02d} load={load}" for i, load in overload_items)
+            else:
+                lines.append("舵机过载：触发电机未知")
+            suggestions.append("检查机构是否卡住、绳索是否过紧、目标角度是否过大，以及是否误加载了旧标定。")
+
+        if (bitmap & SYSTEM_FAULT_RELEASE_GUARD) or release_joints:
+            titles.append("反向松绳保护")
+            if release_joints:
+                lines.append("反向松绳保护：" + ", ".join(release_joints))
+            else:
+                lines.append("反向松绳保护：触发关节未知")
+            suggestions.append("检查 tendon 方向、标定方向、磁编码器方向和绳路，确认松绳时关节角度没有反向异常。")
+
+        if bitmap & SYSTEM_FAULT_SERVO_OFFLINE:
+            titles.append("舵机离线")
+            lines.append("舵机离线：下位机未获得完整舵机反馈。")
+            suggestions.append("检查舵机电源、总线、ID 映射和接线。")
+
+        if bitmap & SYSTEM_FAULT_CAN_OFFLINE:
+            titles.append("CAN/磁编码器离线")
+            lines.append("CAN/磁编码器离线：下位机未获得有效磁编码器/CAN 数据。")
+            suggestions.append("检查 S3/P4 CAN 通信、磁编码器供电、SPI 接线和传感器板状态。")
+
+        if bitmap & SYSTEM_FAULT_CALIBRATION:
+            titles.append("标定故障")
+            lines.append("标定故障：下位机标定流程失败或被保护中断。")
+            suggestions.append("检查负载阈值、编码器方向、机械限位和绳索预紧后重新标定。")
+
+        if bitmap & SYSTEM_FAULT_JOINT16_DUAL:
+            titles.append("J16 双电机约束异常")
+            lines.append("J16 双电机约束异常：主/副电机反馈差异超出限制。")
+            suggestions.append("检查 J16 双电机映射、副电机反馈、对抗绳路和预紧。")
+
+        if not lines and bitmap != 0:
+            titles.append("未知系统故障")
+            lines.append(f"未知系统故障 bitmap=0x{bitmap:08X}")
+            suggestions.append("记录日志后检查下位机状态机和通信包解析。")
+
+        active = bool(lines or bitmap != 0)
+        offline_bits = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE
+        offline_only = active and (bitmap & ~offline_bits) == 0 and not overload_items and not release_joints
+        title = " / ".join(titles[:2]) if titles else "系统状态正常"
+        if len(titles) > 2:
+            title += f" 等 {len(titles)} 项"
+        key = f"{bitmap:08X}:{overload_mask:08X}:{release_mask:08X}"
+        return {
+            "active": active,
+            "title": title,
+            "lines": lines,
+            "suggestions": suggestions,
+            "key": key,
+            "offline_only": offline_only,
+            "bitmap": bitmap,
+        }
+
+    @staticmethod
+    def _fault_body_text(summary: dict, include_title: bool = False) -> str:
+        parts: List[str] = []
+        if include_title:
+            parts.append(str(summary.get("title") or "系统故障"))
+        parts.extend(list(summary.get("lines") or []))
+        suggestions = list(summary.get("suggestions") or [])
+        if suggestions:
+            parts.append("")
+            parts.append("建议：")
+            for item in suggestions:
+                parts.append(f"- {item}")
+        return "\n".join(parts).strip()
+
+    def _fault_popup_allowed(self, summary: dict, state: HandModel) -> bool:
+        if not summary.get("active"):
+            return False
+        if not summary.get("offline_only"):
+            return True
+        system_state = getattr(state, "system_state", None)
+        runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PAUSED)
+        return bool(runtime_state or self._fault_previous_runtime_active)
+
+    def _fault_stop_allowed(self, summary: dict, state: HandModel) -> bool:
+        if not summary.get("active"):
+            return False
+        if not summary.get("offline_only"):
+            return True
+        return self._fault_popup_allowed(summary, state)
+
+    def _handle_fault_side_effects(self, state: HandModel) -> None:
+        system_state = getattr(state, "system_state", None)
+        runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PAUSED)
+        if runtime_state:
+            self._fault_previous_runtime_active = True
+
+        summary = self._build_fault_summary(state)
+        if not summary.get("active"):
+            self._last_overload_popup_mask = 0
+            self._last_fault_popup_key = ""
+            self._fault_stop_sent = False
+            self._fault_previous_runtime_active = bool(runtime_state)
+            return
+
+        if self._fault_stop_allowed(summary, state) and not self._fault_stop_sent:
+            self._fault_stop_sent = True
+            try:
+                self.control_panel.stop_all_tests("fault detected", update_status=False)
+            except Exception:
+                pass
+            try:
+                self.controller.stop()
+            except Exception:
+                pass
+            log_session("FAULT", f"stop requested: {summary.get('key')} {summary.get('title')}")
+            self._set_status("检测到故障，已发送 STOP")
+
+        if not self._fault_popup_allowed(summary, state):
+            return
+
+        key = str(summary.get("key") or "")
+        now = time.time()
+        if key == self._last_fault_popup_key:
+            return
+        if self._fault_dialog_active or (now - self._last_fault_popup_time) < 1.0:
+            return
+
+        self._last_fault_popup_key = key
+        self._last_fault_popup_time = now
+        self._fault_dialog_active = True
+        try:
+            log_session("FAULT", self._fault_body_text(summary).replace("\n", " | "))
+            QtWidgets.QMessageBox.warning(
+                self,
+                "系统故障保护",
+                "检测到系统故障，控制已停止。\n\n"
+                f"{self._fault_body_text(summary)}\n\n"
+                "确认机械和接线安全后，点击 Clear Fault 清除故障。",
+            )
+        finally:
+            self._fault_dialog_active = False
+
+    def _on_clear_fault_confirmed(self) -> None:
+        self._last_overload_popup_mask = 0
+        self._last_fault_popup_key = ""
+        self._last_fault_popup_time = 0.0
+        self._fault_stop_sent = False
+        self._fault_previous_runtime_active = False
 
     def _format_system_fault_summary(self, state: HandModel, sys_state: str, sys_faults: List[str]) -> tuple[str, str]:
         if not sys_faults:
@@ -494,6 +715,13 @@ class HandGUI(QtWidgets.QMainWindow):
             lines.append("Release guard joints: " + ", ".join(release_lines))
         elif "RELEASE" in sys_faults:
             lines.append("Release guard joints: unknown")
+
+        summary = self._build_fault_summary(state)
+        if summary.get("active"):
+            body = self._fault_body_text(summary)
+            if body:
+                lines.append("")
+                lines.append(body)
 
         return text, "\n".join(lines)
 
@@ -859,6 +1087,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._update_display(self._state or HandModel())
 
     def emit_action(self, msg: str) -> None:
+        log_session("UI", msg)
         if self._action_callback:
             try:
                 self._action_callback(msg)
@@ -929,7 +1158,9 @@ class HandGUI(QtWidgets.QMainWindow):
         return normalized
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        session_log_path = None
         try:
+            log_session("APP", "window closing")
             self.control_panel.stop_all_tests("window closed")
             self._display_windows.close_all()
             self.joint_plot.close()
@@ -942,6 +1173,9 @@ class HandGUI(QtWidgets.QMainWindow):
             if self._on_close_extra:
                 self._on_close_extra()
         finally:
+            session_log_path = close_session_log()
+            if session_log_path:
+                print(f"[SESSION LOG] saved {session_log_path}")
             super().closeEvent(event)
 
     def run(self) -> None:

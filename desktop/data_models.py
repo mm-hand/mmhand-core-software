@@ -437,6 +437,7 @@ class HandModel:
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -547,4 +548,8 @@ class HandModel:
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
+        self.joint_calib_results = [
+            dict(item) if isinstance(item, dict) else None
+            for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
+        ]
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])

@@ -37,13 +37,13 @@ from .ui_algorithm_view import AlgorithmView
 MOTOR_TARGET_SCALE_LO = 0
 MOTOR_TARGET_SCALE_HI = 4095
 MOTOR_SINGLE_TURN_STEPS = 4096
+MOTOR_RELEASE_HALF_TURN_COUNTS = MOTOR_SINGLE_TURN_STEPS // 2
 MOTOR_JUMP_RESYNC_THRESH = 2048
 MOTOR_SLIDER_WRAP_MARGIN = 512
 MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 MOTOR_ABS_LIMIT_RECOVER_MARGIN = 16
-JOINT_ZERO_ABS_CAPTURE_TOL_DEG = 0.25
 ROPE_INIT_STEP_COUNTS = 50
 ROPE_INIT_TIMER_MS = 50
 ROPE_INIT_TIMEOUT_S = 8.0
@@ -51,7 +51,7 @@ ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
 ROPE_INIT_DUAL_TARGET_DEG = 40.0
 ROPE_INIT_DUAL_TOL_DEG = 0.3
 MOTOR_MID_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "motor_mid_calib.json"
-PID_ABS_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "pid_abs_calib.json"
+CALIB_LOAD_SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "config" / "calib_load_snapshot.json"
 TEST_ROW_COUNT = 5
 TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
@@ -224,7 +224,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_current_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_status_items: List[QtWidgets.QTableWidgetItem] = []
-        self.joint_zero_abs_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_target_spins: List[QtWidgets.QDoubleSpinBox] = []
         self.joint_sliders: List[QtWidgets.QSlider] = []
         self.joint_send_buttons: List[QtWidgets.QPushButton] = []
@@ -234,10 +233,8 @@ class ControlPanel(QtWidgets.QWidget):
         self._joint_target_initialized = False
         self._joint_run_states = [False] * ENCODER_COUNT
         self._motors_by_joint = _motors_by_joint_index()
-        self._joint_zero_abs_capture: List[Optional[List[Tuple[int, int]]]] = [None] * ENCODER_COUNT
-        self._joint_zero_abs_waiting_for_calib: List[bool] = [False] * ENCODER_COUNT
-        self._joint_zero_abs_limit_reset_seen: List[bool] = [False] * ENCODER_COUNT
         self._last_calib_status: Optional[str] = None
+        self._last_calib_snapshot_signature: Optional[str] = None
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
         self._selected_joint_mask = int(default_joint_mask)
         self._selected_motor_mask = int(default_motor_mask)
@@ -248,6 +245,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_group_use_checks: List[QtWidgets.QCheckBox] = []
         self.teleop_joint_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * ENCODER_COUNT
         self.teleop_group_use_checks: List[QtWidgets.QCheckBox] = []
+        self.teleop_hand_use_check: Optional[QtWidgets.QCheckBox] = None
 
         self.motor_turn_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
@@ -336,7 +334,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn = QtWidgets.QPushButton("ENABLE")
         self.stop_btn = QtWidgets.QPushButton("E-STOP")
         self.pause_btn = QtWidgets.QPushButton("Pause")
-        self.home_btn = QtWidgets.QPushButton("Home")
         self.reset_btn = QtWidgets.QPushButton("Clear Fault")
         self.reset_btn.setToolTip("Clear latched protection/fault flags, clear command state, and return firmware to UNCONTROLLABLE")
         self.calib_btn = QtWidgets.QPushButton("Calibrate")
@@ -348,21 +345,17 @@ class ControlPanel(QtWidgets.QWidget):
         self.abs_limit_unlock_btn.setToolTip("Temporarily disable calibrated ABS travel limits for the current control set")
         self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock ABS")
         self.abs_limit_lock_btn.setToolTip("Re-enable calibrated ABS travel limits for the current control set")
-        self.pid_abs_calib_btn = QtWidgets.QPushButton("Save PID ABS")
-        self.pid_abs_calib_btn.setToolTip("Save zero-degree servo ABS and tight-side ABS limit for PID control")
         self.nvs_control_btn = QtWidgets.QPushButton("Flash ON")
         self.nvs_control_btn.setToolTip("Toggle multi-turn persistence. OFF clears lower flash snapshots and desktop restore cache.")
         self.enable_btn.setMinimumHeight(46)
         self.stop_btn.setMinimumHeight(46)
         self.pause_btn.setMinimumHeight(46)
         for btn in (
-            self.home_btn,
             self.calib_btn,
             self.reset_btn,
             self.rope_init_btn,
             self.abs_limit_unlock_btn,
             self.abs_limit_lock_btn,
-            self.pid_abs_calib_btn,
             self.nvs_control_btn,
         ):
             btn.setMinimumHeight(34)
@@ -383,22 +376,15 @@ class ControlPanel(QtWidgets.QWidget):
         dev_layout.addWidget(centered_action_cell(self.enable_btn), 0, 0, 2, 1)
         dev_layout.addWidget(centered_action_cell(self.stop_btn), 0, 1, 2, 1)
         dev_layout.addWidget(centered_action_cell(self.pause_btn), 0, 2, 2, 1)
-        dev_layout.addWidget(self.home_btn, 0, 3)
-        dev_layout.addWidget(self.calib_btn, 1, 3)
+        dev_layout.addWidget(self.calib_btn, 0, 3)
         dev_layout.addWidget(self.reset_btn, 0, 4)
-        dev_layout.addWidget(self.rope_init_btn, 1, 4)
         dev_layout.addWidget(self.abs_limit_unlock_btn, 0, 5)
+        dev_layout.addWidget(self.rope_init_btn, 1, 3)
+        dev_layout.addWidget(self.nvs_control_btn, 1, 4)
         dev_layout.addWidget(self.abs_limit_lock_btn, 1, 5)
-        pid_nvs_box = QtWidgets.QWidget()
-        pid_nvs_layout = QtWidgets.QVBoxLayout(pid_nvs_box)
-        pid_nvs_layout.setContentsMargins(0, 0, 0, 0)
-        pid_nvs_layout.setSpacing(6)
-        pid_nvs_layout.addWidget(self.pid_abs_calib_btn)
-        pid_nvs_layout.addWidget(self.nvs_control_btn)
-        dev_layout.addWidget(pid_nvs_box, 0, 6, 2, 1)
         dev_layout.setRowStretch(0, 1)
         dev_layout.setRowStretch(1, 1)
-        for col in range(7):
+        for col in range(6):
             dev_layout.setColumnStretch(col, 1)
         layout.addWidget(device)
         self._update_connection_lights()
@@ -406,13 +392,11 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn.clicked.connect(lambda _checked=False: self.start_controller())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_controller())
         self.pause_btn.clicked.connect(lambda _checked=False: self.pause_controller())
-        self.home_btn.clicked.connect(lambda _checked=False: self.apply_home())
-        self.reset_btn.clicked.connect(lambda _checked=False: self.reset_controller())
+        self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_with_confirm())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate())
         self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_controller())
         self.abs_limit_unlock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(False))
         self.abs_limit_lock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(True))
-        self.pid_abs_calib_btn.clicked.connect(lambda _checked=False: self.save_pid_abs_calibration())
         self.nvs_control_btn.clicked.connect(lambda _checked=False: self.toggle_multiturn_nvs())
         self.body_container = QtWidgets.QWidget()
         self.body_layout = QtWidgets.QVBoxLayout(self.body_container)
@@ -573,7 +557,9 @@ class ControlPanel(QtWidgets.QWidget):
         self._control_widgets = []
         self.manual_check = None
         self.send_all_btn = None
+        self.calib_load_btn = None
         self.open_btn = None
+        self.release_half_turn_btn = None
         self.fist_btn = None
         self.zero_btn = None
         self.tabs = None
@@ -606,7 +592,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_current_items = []
         self.joint_encoder_items = []
         self.joint_status_items = []
-        self.joint_zero_abs_items = []
         self.joint_target_spins = []
         self.joint_sliders = []
         self.joint_send_buttons = []
@@ -616,6 +601,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_group_use_checks = []
         self.teleop_joint_use_checks = [None] * ENCODER_COUNT
         self.teleop_group_use_checks = []
+        self.teleop_hand_use_check = None
         self._joint_target_user_set = []
         self.motor_turn_items = []
         self.motor_raw_items = []
@@ -658,18 +644,23 @@ class ControlPanel(QtWidgets.QWidget):
         self.manual_check = QtWidgets.QCheckBox("Hand Manual")
         self.manual_check.setChecked(False)
         self.send_all_btn = QtWidgets.QPushButton("Send All")
+        self.calib_load_btn = QtWidgets.QPushButton("Calib Load")
+        self.calib_load_btn.setToolTip("Load the last saved calibration snapshot when mechanics have not changed")
         self.open_btn = QtWidgets.QPushButton("Open Pose")
+        self.release_half_turn_btn = QtWidgets.QPushButton("Release Half Turn")
         self.fist_btn = QtWidgets.QPushButton("Fist Pose")
         self.zero_btn = QtWidgets.QPushButton("Zero Pose")
         wf_layout.addWidget(self.manual_check)
         wf_layout.addStretch(1)
-        for btn in [self.open_btn, self.fist_btn, self.zero_btn, self.send_all_btn]:
+        for btn in [self.calib_load_btn, self.open_btn, self.release_half_turn_btn, self.fist_btn, self.zero_btn, self.send_all_btn]:
             wf_layout.addWidget(btn)
         layout.addWidget(workflow)
 
         self.manual_check.toggled.connect(self._apply_interaction_enabled)
         self.send_all_btn.clicked.connect(lambda _checked=False: self.send_all())
+        self.calib_load_btn.clicked.connect(lambda _checked=False: self.load_calibration_snapshot())
         self.open_btn.clicked.connect(lambda _checked=False: self.apply_preset(_preset_20rad_to_21deg(_OPEN_20_RAD)))
+        self.release_half_turn_btn.clicked.connect(lambda _checked=False: self.release_all_motors_half_turn())
         self.fist_btn.clicked.connect(lambda _checked=False: self.apply_preset(_preset_20rad_to_21deg(_FIST_20_RAD)))
         self.zero_btn.clicked.connect(lambda _checked=False: self.apply_preset([0.0] * ENCODER_COUNT))
 
@@ -714,36 +705,56 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _build_teleop_scope_workflow(self) -> QtWidgets.QGroupBox:
         workflow = QtWidgets.QGroupBox("Teleop Workflow")
-        grid = QtWidgets.QGridLayout(workflow)
-        grid.setContentsMargins(8, 6, 8, 6)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(4)
+        row_layout = QtWidgets.QHBoxLayout(workflow)
+        row_layout.setContentsMargins(8, 4, 8, 4)
+        row_layout.setSpacing(10)
         self._teleop_selected_motor_mask = self._motor_mask_for_joint_mask(self._teleop_selected_joint_mask)
 
-        for row, (label, start, end) in enumerate(FINGER_JOINT_RANGES):
+        all_joint_mask = (1 << ENCODER_COUNT) - 1
+        hand_check = QtWidgets.QCheckBox("Hand")
+        hand_check.setToolTip("Select all teleop joints")
+        hand_check.setChecked((self._teleop_selected_joint_mask & all_joint_mask) == all_joint_mask)
+        hand_check.toggled.connect(lambda checked: self._on_teleop_hand_use_changed(checked))
+        hand_check.setMinimumWidth(64)
+        self.teleop_hand_use_check = hand_check
+        row_layout.addWidget(hand_check, 0)
+
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.VLine)
+        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        row_layout.addWidget(separator)
+
+        for label, start, end in FINGER_JOINT_RANGES:
             group_mask = _joint_group_mask(label, start, end)
-            group_widget, group_check = self._make_group_use_widget(
-                label,
-                (self._teleop_selected_joint_mask & group_mask) == group_mask,
-                "Select this finger group for Teleop active scope",
-            )
+            column = QtWidgets.QWidget()
+            col_layout = QtWidgets.QVBoxLayout(column)
+            col_layout.setContentsMargins(0, 0, 0, 0)
+            col_layout.setSpacing(2)
+            group_check = QtWidgets.QCheckBox(label)
+            group_check.setToolTip("Select this finger group for Teleop active scope")
+            group_check.setChecked((self._teleop_selected_joint_mask & group_mask) == group_mask)
             group_check.toggled.connect(
                 lambda checked, s=start, e=end: self._on_teleop_joint_group_use_changed(s, e, checked)
             )
             self.teleop_group_use_checks.append(group_check)
-            grid.addWidget(group_widget, row, 0)
+            col_layout.addWidget(group_check)
 
-            for col, joint_idx in enumerate(_joint_indices_for_group(label, start, end), start=1):
-                use_cell, use_check = self._make_use_checkbox_cell(
-                    (self._teleop_selected_joint_mask & (1 << joint_idx)) != 0,
-                    f"Use J{joint_idx:02d} in Teleop active scope",
-                )
+            joint_row = QtWidgets.QHBoxLayout()
+            joint_row.setContentsMargins(14, 0, 0, 0)
+            joint_row.setSpacing(4)
+            for joint_idx in _joint_indices_for_group(label, start, end):
+                use_check = QtWidgets.QCheckBox(f"J{joint_idx:02d}")
+                use_check.setToolTip(f"Use J{joint_idx:02d} in Teleop active scope")
+                use_check.setChecked((self._teleop_selected_joint_mask & (1 << joint_idx)) != 0)
                 use_check.toggled.connect(
                     lambda checked, idx=joint_idx: self._on_teleop_joint_use_changed(idx, checked)
                 )
                 self.teleop_joint_use_checks[joint_idx] = use_check
-                grid.addWidget(use_cell, row, col)
-        grid.setColumnStretch(6, 1)
+                joint_row.addWidget(use_check)
+            col_layout.addLayout(joint_row)
+            row_layout.addWidget(column, 1)
+
+        row_layout.addStretch(1)
         self._sync_teleop_group_checks()
         return workflow
 
@@ -754,9 +765,9 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _build_joint_table(self) -> QtWidgets.QTableWidget:
         joint_rows, group_ranges = _joint_rows_by_finger_group()
-        table = QtWidgets.QTableWidget(len(joint_rows), 12)
+        table = QtWidgets.QTableWidget(len(joint_rows), 11)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Joint", "Enc", "Current", "Raw", "0deg ABS", "Min", "Target", "Max", "Action",
+            "Group", "Use", "Joint", "Enc", "Current", "Raw", "Min", "Target", "Max", "Action",
             "Target Slider",
         ])
         table.verticalHeader().setVisible(False)
@@ -764,7 +775,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_current_items = [None] * ENCODER_COUNT
         self.joint_encoder_items = [None] * ENCODER_COUNT
         self.joint_status_items = [None] * ENCODER_COUNT
-        self.joint_zero_abs_items = [None] * ENCODER_COUNT
         self.joint_target_spins = [None] * ENCODER_COUNT
         self.joint_sliders = [None] * ENCODER_COUNT
         self.joint_send_buttons = [None] * ENCODER_COUNT
@@ -834,24 +844,17 @@ class ControlPanel(QtWidgets.QWidget):
             status.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
             enc = self._make_item("-")
             cur = self._make_item("-")
-            zero_abs = self._make_item("-")
-            zero_abs.setToolTip(
-                f"After this joint finishes calibration, capture the first servo ABS "
-                f"when calibrated joint angle enters +/-{JOINT_ZERO_ABS_CAPTURE_TOL_DEG:.2f} deg of zero"
-            )
             min_item = self._make_item(f"{self._joint_target_min_deg(i):.2f}")
             max_item = self._make_item(f"{self._joint_target_max_deg(i):.2f}")
-            for item in (status, enc, cur, zero_abs, min_item, max_item):
+            for item in (status, enc, cur, min_item, max_item):
                 apply_group_background(item, row)
             self.joint_status_items[i] = status
             self.joint_current_items[i] = cur
             self.joint_encoder_items[i] = enc
-            self.joint_zero_abs_items[i] = zero_abs
             table.setItem(row, 3, status)
             table.setItem(row, 4, cur)
             table.setItem(row, 5, enc)
-            table.setItem(row, 6, zero_abs)
-            table.setItem(row, 7, min_item)
+            table.setItem(row, 6, min_item)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(self._joint_target_min_deg(i), self._joint_target_max_deg(i))
             spin.setDecimals(2)
@@ -860,19 +863,19 @@ class ControlPanel(QtWidgets.QWidget):
             spin.editingFinished.connect(lambda idx=i: self._mark_joint_target_user_set(idx))
             apply_group_widget_background(spin, row)
             self.joint_target_spins[i] = spin
-            table.setCellWidget(row, 8, spin)
-            table.setItem(row, 9, max_item)
+            table.setCellWidget(row, 7, spin)
+            table.setItem(row, 8, max_item)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: self.send_joint_row(idx))
             apply_group_widget_background(send, row)
             self.joint_send_buttons[i] = send
-            table.setCellWidget(row, 10, send)
+            table.setCellWidget(row, 9, send)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setRange(int(self._joint_target_min_deg(i) * 100), int(self._joint_target_max_deg(i) * 100))
             slider.valueChanged.connect(lambda value, idx=i: self._joint_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             self.joint_sliders[i] = slider
-            table.setCellWidget(row, 11, slider)
+            table.setCellWidget(row, 10, slider)
             self._control_widgets.extend([spin, send, slider])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
@@ -881,9 +884,22 @@ class ControlPanel(QtWidgets.QWidget):
         table.setColumnWidth(1, 44)
         table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(2, 58)
+        table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(3, 32)
+        table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(4, 70)
+        table.horizontalHeader().setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(5, 68)
         table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(6, 132)
-        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(6, 64)
+        table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(7, 78)
+        table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(8, 60)
+        table.horizontalHeader().setSectionResizeMode(9, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(9, 82)
+        table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(10, 420)
         return table
 
     def _build_motor_table(self) -> QtWidgets.QTableWidget:
@@ -1263,7 +1279,20 @@ class ControlPanel(QtWidgets.QWidget):
         for btn in [getattr(self, "send_all_btn", None)]:
             if btn is not None:
                 btn.setEnabled(interaction and ready_for_feedback)
-        for btn in [getattr(self, "open_btn", None), getattr(self, "fist_btn", None), getattr(self, "zero_btn", None), self.home_btn]:
+        if getattr(self, "open_btn", None) is not None:
+            self.open_btn.setVisible(mode in ("joint", "test"))
+            self.open_btn.setEnabled(interaction and ready_for_feedback and mode in ("joint", "test"))
+        if getattr(self, "release_half_turn_btn", None) is not None:
+            self.release_half_turn_btn.setVisible(mode == "motor")
+            self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
+        if getattr(self, "calib_load_btn", None) is not None:
+            can_load = (
+                bool(self.context.is_comm_connected()) and
+                CALIB_LOAD_SNAPSHOT_PATH.exists() and
+                system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
+            )
+            self.calib_load_btn.setEnabled(can_load)
+        for btn in [getattr(self, "fist_btn", None), getattr(self, "zero_btn", None)]:
             if btn is not None:
                 btn.setEnabled(interaction and ready_for_feedback and mode in ("joint", "test"))
         if getattr(self, "rope_init_btn", None) is not None:
@@ -1272,8 +1301,6 @@ class ControlPanel(QtWidgets.QWidget):
             self.calib_btn.setEnabled(system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY))
         if getattr(self, "mid_calib_btn", None) is not None:
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
-        if getattr(self, "pid_abs_calib_btn", None) is not None:
-            self.pid_abs_calib_btn.setEnabled(self._state is not None and bool(self.context.is_comm_connected()))
         has_abs_limit = self._active_scope_abs_limit_valid_mask() != 0
         if getattr(self, "abs_limit_unlock_btn", None) is not None:
             self.abs_limit_unlock_btn.setEnabled(bool(self.context.is_comm_connected()) and has_abs_limit)
@@ -1443,6 +1470,88 @@ class ControlPanel(QtWidgets.QWidget):
         except Exception as exc:
             self._error("Send Failed", f"{type(exc).__name__}: {exc}")
 
+    def release_all_motors_half_turn(self) -> None:
+        if not self._interaction_enabled:
+            return
+        if self._manual_submode() != "motor":
+            self._set_status("Release Half Turn is only available in Motor Channels")
+            return
+        try:
+            if not self.context.is_comm_connected():
+                raise RuntimeError("Serial port is not connected")
+            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.controller.set_pid_control(False)
+            if self._estop_latched and not self.controller.is_started():
+                self._set_status("Release blocked: press ENABLE after E-STOP")
+                return
+            if not self.controller.is_started():
+                self._set_status("Release blocked: waiting for controllable IDLE after ENABLE")
+                return
+            unknown_mask = self._active_scope_multiturn_unknown_mask()
+            if unknown_mask != 0:
+                self._set_status(f"Release blocked: Turn UNKNOWN 0x{unknown_mask:08X}; recover multi-turn first")
+                return
+            state = self._state
+            if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
+                self._set_status("Release blocked: waiting for motor ABS feedback")
+                return
+
+            active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)
+            if active_mask == 0:
+                self._set_status("Release blocked: no active motor selected")
+                return
+            targets = self._current_motor_hold_targets_from_feedback()
+            current_abs: List[Optional[int]] = [None] * MOTOR_COUNT
+            missing: List[str] = []
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                if (
+                    idx >= len(getattr(state, "servo_online", [])) or
+                    not state.servo_online[idx] or
+                    idx >= len(getattr(state, "servo_angles", []))
+                ):
+                    missing.append(f"M{idx:02d}")
+                    continue
+                current = clamp_motor_abs(int(state.servo_angles[idx]))
+                current_abs[idx] = current
+                targets[idx] = motor_abs_after_tendon_action(current, idx, -MOTOR_RELEASE_HALF_TURN_COUNTS)
+
+            if missing:
+                self._set_status(f"Release blocked: waiting ABS feedback {','.join(missing[:4])}")
+                return
+
+            targets, limit_hits = self._clamp_motor_targets_to_calibrated_limits(targets, active_mask=active_mask)
+            if limit_hits:
+                self._show_motor_abs_limit_warning(limit_hits)
+            self.controller.set_motor_positions_absolute(targets)
+            self._motor_last_sent_abs = list(targets)
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                self._motor_session_origin_abs[idx] = int(targets[idx])
+                self._motor_abs_pos[idx] = 0
+                self._motor_last_slider[idx] = 0
+                self._motor_target_user_set[idx] = False
+                if idx < len(self.motor_target_spins) and idx < len(self.motor_sliders):
+                    self._set_motor_target_widget(idx, 0)
+
+            preview_items = []
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                if current_abs[idx] is not None:
+                    preview_items.append(f"M{idx:02d}:{current_abs[idx]}->{targets[idx]}")
+                if len(preview_items) >= 4:
+                    break
+            active_count = bin(active_mask).count("1")
+            suffix = "" if active_count <= 4 else f" ... +{active_count - 4}"
+            preview = ", ".join(preview_items)
+            self.context.emit_action(f"Release Half Turn sent: {preview}{suffix}")
+            self._set_status(f"Released {active_count} active motor(s) by 1/2 turn ({MOTOR_RELEASE_HALF_TURN_COUNTS} counts)")
+        except Exception as exc:
+            self._error("Release Failed", f"{type(exc).__name__}: {exc}")
+
     def apply_preset(self, angles: List[float]) -> None:
         if not self._interaction_enabled:
             return
@@ -1456,13 +1565,6 @@ class ControlPanel(QtWidgets.QWidget):
         finally:
             self._updating = False
         self.context.draw_pose_angles(angles)
-
-    def apply_home(self) -> None:
-        if not self._interaction_enabled:
-            self._set_status("Home requires Hand Manual ON")
-            return
-        self.apply_preset([0.0] * ENCODER_COUNT)
-        self.send_all()
 
     def start_controller(self) -> None:
         if not self.context.is_comm_connected():
@@ -1528,6 +1630,62 @@ class ControlPanel(QtWidgets.QWidget):
         except Exception:
             pass
         self.context.disconnect_current_port("Safe closed: holding current motor targets, then STOP", stop_lower=True)
+
+    def clear_fault_with_confirm(self) -> None:
+        state = self._state
+        if state is None:
+            try:
+                state = self.context.get_state()
+            except Exception:
+                state = None
+
+        summary = None
+        root = getattr(self.context, "root", None)
+        builder = getattr(root, "_build_fault_summary", None)
+        if callable(builder) and state is not None:
+            try:
+                summary = builder(state)
+            except Exception:
+                summary = None
+
+        if summary and summary.get("active"):
+            body_builder = getattr(root, "_fault_body_text", None)
+            if callable(body_builder):
+                detail = body_builder(summary)
+            else:
+                detail = "\n".join(summary.get("lines") or [])
+            text = (
+                "当前检测到以下故障：\n\n"
+                f"{detail}\n\n"
+                "请确认已经排除机械卡滞、绳索异常、接线/供电问题后，再清除故障。\n"
+                "清除后不会自动恢复运行，需要重新 ENABLE 或重新发送目标。"
+            )
+            title = "清除故障确认"
+            accept_text = "我已检查，清除故障"
+        else:
+            text = (
+                "当前未检测到故障，是否仍要清除状态？\n\n"
+                "这会向下位机发送 reset，清除本地运行状态，并回到需要重新 ENABLE 的状态。"
+            )
+            title = "Clear Fault"
+            accept_text = "仍然清除"
+
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Warning if summary and summary.get("active") else QtWidgets.QMessageBox.Question)
+        box.setWindowTitle(title)
+        box.setText(text)
+        clear_button = box.addButton(accept_text, QtWidgets.QMessageBox.AcceptRole)
+        box.addButton("取消", QtWidgets.QMessageBox.RejectRole)
+        box.setDefaultButton(clear_button)
+        box.exec()
+        if box.clickedButton() is not clear_button:
+            self._set_status("Clear Fault cancelled")
+            return
+
+        self.reset_controller()
+        notifier = getattr(root, "_on_clear_fault_confirmed", None)
+        if callable(notifier):
+            notifier()
 
     def reset_controller(self) -> None:
         self._estop_latched = True
@@ -1797,7 +1955,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._rope_init_tasks = remaining
 
     def calibrate(self) -> None:
-        self._clear_joint_zero_abs_capture(wait_for_calibration=True)
         for joint_idx in self._active_scope_joint_indices():
             if 0 <= joint_idx < len(self._joint_target_user_set):
                 self._joint_target_user_set[joint_idx] = False
@@ -2047,6 +2204,12 @@ class ControlPanel(QtWidgets.QWidget):
             return
         self._scope_update_guard = True
         try:
+            hand_check = getattr(self, "teleop_hand_use_check", None)
+            if hand_check is not None:
+                all_mask = (1 << ENCODER_COUNT) - 1
+                hand_check.blockSignals(True)
+                hand_check.setChecked((self._teleop_selected_joint_mask & all_mask) == all_mask)
+                hand_check.blockSignals(False)
             for check in getattr(self, "teleop_group_use_checks", []):
                 text = str(check.text())
                 target = next((item for item in FINGER_JOINT_RANGES if item[0] == text), None)
@@ -2059,6 +2222,27 @@ class ControlPanel(QtWidgets.QWidget):
                 check.blockSignals(False)
         finally:
             self._scope_update_guard = False
+
+    def _on_teleop_hand_use_changed(self, checked: bool) -> None:
+        if bool(getattr(self, "_scope_update_guard", False)):
+            return
+        self._scope_update_guard = True
+        try:
+            all_mask = (1 << ENCODER_COUNT) - 1
+            self._teleop_selected_joint_mask = all_mask if checked else 0
+            for joint_idx, check in enumerate(getattr(self, "teleop_joint_use_checks", [])):
+                if check is not None:
+                    check.blockSignals(True)
+                    check.setChecked(bool(checked))
+                    check.blockSignals(False)
+            for check in getattr(self, "teleop_group_use_checks", []):
+                check.blockSignals(True)
+                check.setChecked(bool(checked))
+                check.blockSignals(False)
+        finally:
+            self._scope_update_guard = False
+        self._teleop_selected_motor_mask = self._motor_mask_for_joint_mask(self._teleop_selected_joint_mask)
+        self._apply_active_scope_for_current_mode()
 
     def _on_teleop_joint_use_changed(self, joint_idx: int, checked: bool) -> None:
         if bool(getattr(self, "_scope_update_guard", False)):
@@ -2263,80 +2447,131 @@ class ControlPanel(QtWidgets.QWidget):
         suffix = f"; skipped {', '.join(missing[:3])}" if missing else ""
         self._set_status(f"Mid Calib saved {len(records)} motor ABS to {MOTOR_MID_CALIB_PATH.name}{suffix}")
 
-    def save_pid_abs_calibration(self) -> None:
-        state = self._state
-        if state is None:
-            self._set_status("PID ABS save blocked: no live state")
+    def _valid_joint_calib_results_for_mask(self, state, joint_mask: int) -> List[Optional[dict]]:
+        source = getattr(state, "joint_calib_results", []) or []
+        results: List[Optional[dict]] = [None] * ENCODER_COUNT
+        for joint_idx in range(ENCODER_COUNT):
+            if joint_idx >= len(source):
+                continue
+            item = source[joint_idx]
+            if not isinstance(item, dict) or not bool(item.get("success", False)):
+                continue
+            if (int(joint_mask) & (1 << joint_idx)) == 0:
+                results[joint_idx] = dict(item)
+                continue
+            results[joint_idx] = dict(item)
+        return results
+
+    def _maybe_save_calibration_snapshot(self, state) -> None:
+        if state is None or str(getattr(state, "calib_status", "IDLE")) != "SUCCESS":
+            return
+        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
+        if valid_bitmap == 0:
+            return
+        active_joint_mask = int(self._active_joint_mask_from_ui())
+        active_motor_mask = int(self._active_motor_mask_from_ui())
+        if active_joint_mask == 0:
+            return
+        required_motor_mask = active_motor_mask & VALID_MOTOR_MASK
+        if required_motor_mask != 0 and (valid_bitmap & required_motor_mask) != required_motor_mask:
             return
 
-        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap))
-        limit_max = getattr(state, "motor_abs_limit_max", []) or []
-        joints = {}
-        missing_zero = []
-        missing_limit = []
+        joint_results = self._valid_joint_calib_results_for_mask(state, active_joint_mask)
+        if not any(item is not None for item in joint_results):
+            return
+        required_joints = [
+            idx for idx in range(ENCODER_COUNT)
+            if (active_joint_mask & (1 << idx)) != 0
+        ]
+        if required_joints and not all(joint_results[idx] for idx in required_joints):
+            return
 
-        for joint_idx in range(ENCODER_COUNT):
-            captures = self._joint_zero_abs_capture[joint_idx]
-            if not captures:
-                missing_zero.append(f"J{joint_idx:02d}")
-                continue
-
-            motor_records = {}
-            for motor_idx, zero_abs in captures:
-                bit = 1 << int(motor_idx)
-                if ((valid_bitmap & bit) == 0) or int(motor_idx) >= len(limit_max):
-                    missing_limit.append(f"M{int(motor_idx):02d}")
-                    continue
-                tight_abs = int(limit_max[int(motor_idx)])
-                motor_records[f"M{int(motor_idx):02d}"] = {
-                    "motor": int(motor_idx),
-                    "zero_abs_at_encoder_0deg": int(zero_abs),
-                    "tight_abs_right_limit": tight_abs,
-                    "span_abs": tight_abs - int(zero_abs),
-                }
-
-            if motor_records:
-                joints[f"J{joint_idx:02d}"] = {
-                    "joint": int(joint_idx),
-                    "motors": motor_records,
-                }
-
-        if not joints:
-            detail = ", ".join((missing_zero + missing_limit)[:4])
-            self._set_status(f"PID ABS save blocked: missing {detail or 'zero ABS / right limit'}")
+        mins = [int(v) for v in list(getattr(state, "motor_abs_limit_min", []) or [])[:MOTOR_COUNT]]
+        maxs = [int(v) for v in list(getattr(state, "motor_abs_limit_max", []) or [])[:MOTOR_COUNT]]
+        if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
             return
 
         payload = {
-            "comment": "PID ABS calibration anchors. zero_abs_at_encoder_0deg is captured after that joint finishes calibration, the first time the calibrated encoder angle enters +/-0.25 deg around zero. tight_abs_right_limit is motor_abs_limit_max.",
             "schema_version": 1,
-            "updated_at_host_time": time.time(),
+            "saved_at_host_time": time.time(),
             "hand_profile": HAND_PROFILE,
-            "source_calib_status": str(getattr(state, "calib_status", "IDLE")),
-            "zero_capture_tolerance_deg": JOINT_ZERO_ABS_CAPTURE_TOL_DEG,
-            "source_limit_valid_bitmap": f"0x{valid_bitmap:08X}",
-            "source_limit_locked_bitmap": f"0x{locked_bitmap:08X}",
-            "joints": joints,
+            "active_joint_mask": f"0x{active_joint_mask:08X}",
+            "active_motor_mask": f"0x{active_motor_mask:08X}",
+            "motor_abs_limit_valid_bitmap": f"0x{valid_bitmap:08X}",
+            "motor_abs_limit_locked_bitmap": f"0x{int(getattr(state, 'motor_abs_limit_locked_bitmap', valid_bitmap) or 0):08X}",
+            "motor_abs_limit_min": mins,
+            "motor_abs_limit_max": maxs,
+            "joint_calib_results": joint_results,
         }
-
+        signature = json.dumps(
+            {
+                "active_joint_mask": payload["active_joint_mask"],
+                "active_motor_mask": payload["active_motor_mask"],
+                "valid": payload["motor_abs_limit_valid_bitmap"],
+                "locked": payload["motor_abs_limit_locked_bitmap"],
+                "mins": mins,
+                "maxs": maxs,
+                "joints": joint_results,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        if signature == self._last_calib_snapshot_signature:
+            return
         try:
-            PID_ABS_CALIB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            PID_ABS_CALIB_PATH.write_text(
+            CALIB_LOAD_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CALIB_LOAD_SNAPSHOT_PATH.write_text(
                 json.dumps(payload, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
         except OSError as exc:
-            self._set_status(f"PID ABS save failed: {exc}")
+            self._set_status(f"Calib snapshot save failed: {exc}")
             return
+        self._last_calib_snapshot_signature = signature
+        self.context.emit_action(f"Calib snapshot saved: {CALIB_LOAD_SNAPSHOT_PATH.name}")
+        self._set_status(f"Calib snapshot saved to {CALIB_LOAD_SNAPSHOT_PATH.name}")
+        self._update_manual_action_buttons()
 
-        missing = []
-        if missing_zero:
-            missing.append(f"missing zero {len(missing_zero)}")
-        if missing_limit:
-            missing.append(f"missing limit {len(set(missing_limit))}")
-        suffix = f"; {'; '.join(missing)}" if missing else ""
-        self.context.emit_action(f"PID ABS saved: joints={len(joints)} path={PID_ABS_CALIB_PATH.name}")
-        self._set_status(f"PID ABS saved {len(joints)} joints to {PID_ABS_CALIB_PATH.name}{suffix}")
+    def load_calibration_snapshot(self) -> None:
+        if not CALIB_LOAD_SNAPSHOT_PATH.exists():
+            self._warn("Calib Load", "没有找到上一次标定快照文件。请先完成一次 Calibrate。")
+            return
+        try:
+            snapshot = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._error("Calib Load", f"读取标定快照失败：{exc}")
+            return
+        if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
+            self._error(
+                "Calib Load",
+                f"标定快照 hand_profile 不一致：{snapshot.get('hand_profile')} != {HAND_PROFILE}",
+            )
+            return
+        state = self._state
+        system_state = getattr(state, "system_state", None) if state is not None else None
+        if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
+            self._warn("Calib Load", "当前正在运行控制，请先停止后再加载标定。")
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Calib Load",
+            "确认机械结构、绳长、舵机安装、磁编码器安装都没有改变？\n\n"
+            "点击确认后会把上一次标定结果恢复到下位机。",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        self._set_status("Calib Load sending snapshot...")
+        ok, message = self.controller.load_calibration_snapshot(snapshot)
+        if ok:
+            self._joint_target_initialized = False
+            self._motor_target_initialized = False
+            self._set_status(f"Calib Load success: {message}")
+            self.context.emit_action(f"Calib Load success: {message}")
+        else:
+            self._error("Calib Load", f"加载失败：{message}")
+            self._set_status(f"Calib Load failed: {message}")
 
     def _apply_active_scope_for_current_mode(self) -> bool:
         data = self._current_active_scope_tuple()
@@ -2370,18 +2605,13 @@ class ControlPanel(QtWidgets.QWidget):
             calib_status == "SUCCESS" and
             self._last_calib_status in active_calib_statuses
         )
-        if (
-            calib_status in active_calib_statuses and
-            self._last_calib_status not in active_calib_statuses
-        ):
-            self._clear_joint_zero_abs_capture(wait_for_calibration=True)
         if calib_finished_success:
             self._joint_target_initialized = False
         self._last_calib_status = calib_status
-        self._update_joint_zero_abs_calibration_gate(state)
         self._update_connection_lights()
         self._refresh_nvs_control_button()
         self._check_feedback_abs_limit_violation()
+        self._maybe_save_calibration_snapshot(state)
         if self._app_mode != "manual":
             updater = getattr(self._body_widget, "update_state", None)
             if callable(updater):
@@ -2434,7 +2664,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._refresh_nvs_control_button()
         self._joint_target_initialized = False
         self._motor_target_initialized = False
-        self._clear_joint_zero_abs_capture(wait_for_calibration=False)
         self._last_calib_status = None
         self._motor_abs_pos = [None] * MOTOR_COUNT
         self._motor_session_origin_abs = [None] * MOTOR_COUNT
@@ -2451,11 +2680,13 @@ class ControlPanel(QtWidgets.QWidget):
         self._clear_run_states()
         self._updating = True
         try:
-            for item in self.joint_current_items + self.joint_encoder_items + self.joint_zero_abs_items:
+            for item in self.joint_current_items + self.joint_encoder_items:
                 item.setText("-")
             for item in self.motor_turn_items + self.motor_raw_items + self.motor_abs_items + self.motor_load_items + self.motor_limit_items + self.motor_joint_items:
                 if item is not None:
                     item.setText("-")
+                    item.setToolTip("")
+                    item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
             for i in range(ENCODER_COUNT):
                 self._set_joint_encoder_dot(i, None)
         finally:
@@ -2821,13 +3052,17 @@ class ControlPanel(QtWidgets.QWidget):
             return limited, None
         return limited, (idx, requested, lo, hi)
 
-    def _clamp_motor_targets_to_calibrated_limits(self, targets: List[int]) -> Tuple[List[int], List[Tuple[int, int, int, int]]]:
+    def _clamp_motor_targets_to_calibrated_limits(
+        self,
+        targets: List[int],
+        active_mask: Optional[int] = None,
+    ) -> Tuple[List[int], List[Tuple[int, int, int, int]]]:
         state = self._state
         if state is None:
             return targets, []
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
         locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap))
-        active_mask = self._active_motor_mask_from_ui()
+        active_mask = self._active_motor_mask_from_ui() if active_mask is None else int(active_mask)
         mins = getattr(state, "motor_abs_limit_min", [])
         maxs = getattr(state, "motor_abs_limit_max", [])
         clamped = list(targets)
@@ -3042,80 +3277,6 @@ class ControlPanel(QtWidgets.QWidget):
             self.context.tendon_guard.config = config
         self.context.tendon_guard.sync_to_controller(self.controller, force=False)
 
-    def _clear_joint_zero_abs_capture(self, wait_for_calibration: bool = False) -> None:
-        self._joint_zero_abs_capture = [None] * ENCODER_COUNT
-        self._joint_zero_abs_waiting_for_calib = [bool(wait_for_calibration)] * ENCODER_COUNT
-        self._joint_zero_abs_limit_reset_seen = [False] * ENCODER_COUNT
-        for item in self.joint_zero_abs_items:
-            item.setText("-")
-
-    def _format_joint_zero_abs_capture(self, captures: List[Tuple[int, int]]) -> str:
-        return " ".join(f"M{motor_idx:02d}:{abs_value}" for motor_idx, abs_value in captures)
-
-    def _joint_zero_abs_calibration_complete(self, joint_idx: int, state) -> bool:
-        if not (0 <= joint_idx < ENCODER_COUNT) or state is None:
-            return False
-        motors = self._motors_by_joint[joint_idx] if joint_idx < len(self._motors_by_joint) else []
-        if not motors:
-            return False
-        try:
-            valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
-        except (TypeError, ValueError):
-            valid_bitmap = 0
-        return all((valid_bitmap & (1 << int(motor_idx))) != 0 for motor_idx in motors)
-
-    def _update_joint_zero_abs_calibration_gate(self, state) -> None:
-        if state is None:
-            return
-        for joint_idx in range(ENCODER_COUNT):
-            if not self._joint_zero_abs_waiting_for_calib[joint_idx]:
-                continue
-            if not self._joint_zero_abs_calibration_complete(joint_idx, state):
-                self._joint_zero_abs_limit_reset_seen[joint_idx] = True
-
-    def _try_capture_joint_zero_abs(self, joint_idx: int, state) -> None:
-        if not (0 <= joint_idx < ENCODER_COUNT):
-            return
-        if self._joint_zero_abs_capture[joint_idx] is not None:
-            return
-        if not self._joint_zero_abs_waiting_for_calib[joint_idx]:
-            return
-        if not self._joint_zero_abs_limit_reset_seen[joint_idx]:
-            return
-        if not self._joint_zero_abs_calibration_complete(joint_idx, state):
-            return
-        if joint_idx >= len(getattr(state, "angles", [])):
-            return
-        try:
-            joint_deg = float(state.angles[joint_idx])
-        except (TypeError, ValueError):
-            return
-        if abs(joint_deg) > JOINT_ZERO_ABS_CAPTURE_TOL_DEG:
-            return
-        if not bool(getattr(state, "has_servo_angle_data", False)):
-            return
-
-        motors = self._motors_by_joint[joint_idx] if joint_idx < len(self._motors_by_joint) else []
-        if not motors:
-            return
-        servo_abs = getattr(state, "servo_angles", []) or []
-        servo_online = getattr(state, "servo_online", []) or []
-        captures: List[Tuple[int, int]] = []
-        for motor_idx in motors:
-            if motor_idx >= len(servo_abs):
-                return
-            if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
-                return
-            captures.append((int(motor_idx), int(servo_abs[motor_idx])))
-        self._joint_zero_abs_capture[joint_idx] = captures
-        self._joint_zero_abs_waiting_for_calib[joint_idx] = False
-        if joint_idx < len(self.joint_zero_abs_items):
-            text = self._format_joint_zero_abs_capture(captures)
-            self.joint_zero_abs_items[joint_idx].setText(text)
-            self.joint_zero_abs_items[joint_idx].setToolTip(
-                f"Captured after J{joint_idx:02d} calibration at {joint_deg:.2f} deg: {text}"
-            )
-
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
         joint_has_data = bool(state is not None and getattr(state, "has_sensor_data", False))
@@ -3124,7 +3285,6 @@ class ControlPanel(QtWidgets.QWidget):
             for i in range(ENCODER_COUNT):
                 if joint_has_data and i < len(getattr(state, "angles", [])):
                     self.joint_current_items[i].setText(f"{float(state.angles[i]):.2f}")
-                    self._try_capture_joint_zero_abs(i, state)
                     if i < len(getattr(state, "encoders", [])):
                         self.joint_encoder_items[i].setText(str(getattr(state.encoders[i], "raw_sensor", getattr(state.encoders[i], "raw", "-"))))
                         self._set_joint_encoder_dot(i, not bool(getattr(state.encoders[i], "error", False)))
@@ -3158,6 +3318,8 @@ class ControlPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+            overload_flags = getattr(state, "servo_overload_fault", []) or []
+            overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
             for i in range(MOTOR_COUNT):
                 dev_abs = self._motor_feedback_abs(i)
                 if i < len(self.motor_turn_items):
@@ -3168,13 +3330,29 @@ class ControlPanel(QtWidgets.QWidget):
                     self.motor_raw_items[i].setText(f"{raw_single:4d}" if raw_single is not None else "-")
                 if i < len(self.motor_abs_items):
                     self.motor_abs_items[i].setText(str(int(dev_abs)) if dev_abs is not None else "-")
-                if i < len(self.motor_load_items):
+                if i < len(self.motor_load_items) and self.motor_load_items[i] is not None:
+                    item = self.motor_load_items[i]
                     load_text = "-"
                     loads = getattr(state, "servo_load", [])
                     online = getattr(state, "servo_telem_online", [])
+                    overload_active = i < len(overload_flags) and bool(overload_flags[i])
+                    if overload_active:
+                        trigger_load = "?"
+                        if i < len(overload_loads) and overload_loads[i] is not None:
+                            try:
+                                trigger_load = str(int(overload_loads[i]))
+                            except Exception:
+                                trigger_load = str(overload_loads[i])
+                        load_text = f"OL {trigger_load}"
+                        item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
+                        item.setToolTip(f"M{i:02d} overload trigger load={trigger_load}")
+                    else:
+                        item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
+                        item.setToolTip("")
                     if i < len(loads) and i < len(online) and online[i]:
-                        load_text = str(int(loads[i]))
-                    self.motor_load_items[i].setText(load_text)
+                        if not overload_active:
+                            load_text = str(int(loads[i]))
+                    item.setText(load_text)
                 if i < len(self.motor_limit_items) and self.motor_limit_items[i] is not None:
                     limit_text = "-"
                     valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
