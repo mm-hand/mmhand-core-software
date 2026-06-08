@@ -148,7 +148,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         self.fault_label = self._make_top_status_label("SYS -", 150)
         self.calib_label = self._make_top_status_label("CALIB -", 82)
-        self.overload_label = self._make_top_status_label("OL OK", 70)
+        self.overload_label = self._make_top_status_label("OL OK", 118)
         self.turn_label = self._make_top_status_label("TURN -", 102)
         self.delay_label = self._make_top_status_label("--", 62)
 
@@ -448,11 +448,30 @@ class HandGUI(QtWidgets.QMainWindow):
             load_text = "?"
             if i < len(overload_loads) and overload_loads[i] is not None:
                 try:
-                    load_text = str(int(overload_loads[i]))
+                    raw_load = int(overload_loads[i])
+                    load_mag = abs(raw_load) & 0x03FF
+                    load_text = f"raw={raw_load}, mag={load_mag}"
                 except Exception:
                     load_text = str(overload_loads[i])
             lines.append(f"M{i:02d} trigger load: {load_text}")
         return lines
+
+    @staticmethod
+    def _overload_short_items(state: HandModel) -> List[str]:
+        overload_flags = getattr(state, "servo_overload_fault", []) or []
+        overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
+        items: List[str] = []
+        for i, faulted in enumerate(overload_flags):
+            if not faulted:
+                continue
+            load_text = "?"
+            if i < len(overload_loads) and overload_loads[i] is not None:
+                try:
+                    load_text = str(abs(int(overload_loads[i])) & 0x03FF)
+                except Exception:
+                    load_text = str(overload_loads[i])
+            items.append(f"M{i:02d} L{load_text}")
+        return items
 
     @staticmethod
     def _release_guard_detail_lines(state: HandModel) -> List[str]:
@@ -463,7 +482,11 @@ class HandGUI(QtWidgets.QMainWindow):
         overload_lines = self._overload_detail_lines(state)
         if not overload_lines:
             return "OL OK", "Overload motors: none", False
-        return "OL OVERLOAD", "Overload motors:\n" + "\n".join(overload_lines), True
+        short_items = self._overload_short_items(state)
+        short_text = short_items[0] if short_items else "OVERLOAD"
+        if len(short_items) > 1:
+            short_text = f"{short_text} +{len(short_items) - 1}"
+        return f"OL {short_text}", "Overload motors:\n" + "\n".join(overload_lines), True
 
     def _format_system_fault_summary(self, state: HandModel, sys_state: str, sys_faults: List[str]) -> tuple[str, str]:
         if not sys_faults:
