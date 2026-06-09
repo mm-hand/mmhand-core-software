@@ -43,7 +43,10 @@ class TeleopView(QtWidgets.QWidget):
             )
             self.body_layout.addWidget(self._body_widget)
         elif mode == "rokoko":
-            self._body_widget = ManusUdpView(self.context)
+            self._body_widget = ManusUdpView(
+                self.context,
+                selected_joint_mask_getter=self.selected_joint_mask_getter,
+            )
             self.body_layout.addWidget(self._body_widget)
 
     def _clear_body(self) -> None:

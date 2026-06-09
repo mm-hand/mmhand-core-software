@@ -4,10 +4,11 @@ import threading
 import time
 from typing import List, Optional, Union
 
+import numpy as np
 import serial
 import serial.tools.list_ports
 
-from data_models import HandModel, MotorState
+from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
 from protocol import (
     BAUDRATE,
     ENCODER_COUNT,
@@ -16,9 +17,11 @@ from protocol import (
     PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_ENCODER_RAW,
+    PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
+    PACKET_TYPE_TACTILE,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     RX_POLL_SLEEP,
@@ -29,6 +32,8 @@ from protocol import (
     build_angle_cmd,
     build_active_scope_cmd,
     build_calib_data_cmd,
+    build_calib_load_joint_cmd,
+    build_calib_load_limits_cmd,
     build_calibrate_cmd,
     build_sine_test_params_cmd,
     build_sine_test_start_cmd,
@@ -37,6 +42,7 @@ from protocol import (
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
+    build_motor_pos_abs_one_cmd,
     build_motor_pos_sweep_cmd,
     build_multiturn_nvs_control_cmd,
     build_pause_cmd,
@@ -47,6 +53,8 @@ from protocol import (
     build_start_cmd,
     build_stop_cmd,
     CMD_CALIBRATE,
+    CMD_CALIB_LOAD_JOINT,
+    CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_DATA,
     CMD_START,
@@ -69,6 +77,7 @@ from protocol import (
     parse_fault_status_packet,
     parse_release_fault_packet,
     parse_joint_debug_packet,
+    parse_joint_calib_snapshot_packet,
     parse_motor_abs_limit_packet,
     parse_proto_ack,
     parse_sensor_packet,
@@ -76,15 +85,86 @@ from protocol import (
     parse_servo_raw_packet,
     parse_servo_telem_packet,
     parse_system_status_packet,
+    parse_tactile_packet,
     PROTO_ACK_STATUS_OK,
+    PROTO_ACK_STATUS_QUEUED,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
 from run_data_logger import RunDataLogger
+from session_log import log_session
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
 # 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
 HOST_HEARTBEAT_INTERVAL_S = 0.5
+TACTILE_ZERO_NOISE_FLOOR = 3
+TACTILE_ZERO_HOLD_FRAMES = 6
+TACTILE_HOLD_MIN_MAGNITUDE = 12
+TERMINAL_DIAG_ENABLE = False
+TERMINAL_DIAG_INTERVAL_S = 20.0
+SESSION_DIAG_INTERVAL_S = 20.0
+FIRMWARE_LOG_TO_TERMINAL = True
+FIRMWARE_LOG_FILTER_PREFIXES = ("[RX diag]", "[TX diag]")
+
+
+def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
+    """Project one resultant force sample into a tactile-looking taxel field."""
+    y, x = np.mgrid[0:rows, 0:cols]
+    cx = (cols - 1) / 2.0
+    cy = (rows - 1) / 2.0
+
+    pressure = float(max(0, fz))
+    if pressure <= 3.0:
+        pressure = 0.0
+
+    if pressure > 0.0:
+        direction_scale = max(24.0, min(96.0, pressure))
+        cx += max(-0.48, min(0.48, float(fx) / direction_scale)) * max(1.0, (cols - 1) / 2.0)
+        cy += max(-0.48, min(0.48, float(fy) / direction_scale)) * max(1.0, (rows - 1) / 2.0)
+
+    normalized = min(1.0, pressure / 180.0)
+    sigma_x = max(0.62, cols * (0.13 + 0.11 * normalized))
+    sigma_y = max(0.62, rows * (0.15 + 0.13 * normalized))
+    core = np.exp(-(((x - cx) ** 2) / (2.0 * sigma_x * sigma_x) + ((y - cy) ** 2) / (2.0 * sigma_y * sigma_y)))
+    skirt = np.exp(-(((x - cx) ** 2) / (2.0 * (sigma_x * 2.2) ** 2) + ((y - cy) ** 2) / (2.0 * (sigma_y * 2.2) ** 2)))
+    weight = core + 0.18 * normalized * skirt
+    max_weight = float(np.max(weight))
+    if max_weight > 1e-9:
+        weight = weight / max_weight
+
+    contact = np.zeros((rows, cols, 3), dtype=float)
+    contact[:, :, 0] = float(fx) * weight
+    contact[:, :, 1] = float(fy) * weight
+    contact[:, :, 2] = pressure * weight
+    return contact
+
+
+def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
+    fingers: List[FingerTactile] = []
+    for group in groups:
+        sensors: List[TactileSensor] = []
+        for sensor_idx in range(3):
+            if sensor_idx < len(group):
+                fx, fy, fz = group[sensor_idx]
+            else:
+                fx, fy, fz = 0, 0, 0
+
+            if sensor_idx == 0:
+                rows, cols = tactile_segment_shape(2)
+            else:
+                rows, cols = tactile_segment_shape(0)
+
+            contact = _synthetic_contact_grid(rows, cols, fx, fy, fz)
+            resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
+            sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
+        fingers.append(FingerTactile(sensors=sensors))
+    return fingers
+
+
+def _tactile_axis_magnitude(values: List[int]) -> int:
+    if not values or len(values) < 3:
+        return 0
+    return max(abs(int(values[0])), abs(int(values[1])), max(0, int(values[2])))
 
 
 def list_ports() -> List[tuple]:
@@ -189,6 +269,10 @@ class LowerComputerComm:
         self._last_heartbeat_tx = 0.0
         self._heartbeat_enabled = False
         self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
+        self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
+        self._tactile_zero_counts: List[List[int]] = [
+            [0 for _ in range(3)] for _ in range(5)
+        ]
 
         if self.port:
             if not is_valid_port(self.port):
@@ -198,6 +282,7 @@ class LowerComputerComm:
 
     def connect(self) -> bool:
         if self.serial and getattr(self.serial, "is_open", False):
+            log_session("COMM", f"serial connected port={self.port} baud={self.baudrate}")
             return True
         if not self.port:
             return False
@@ -214,6 +299,8 @@ class LowerComputerComm:
             self._reset_tx_diag()
             self._last_heartbeat_tx = 0.0
             self._heartbeat_enabled = False
+            self._tactile_hold_groups = None
+            self._tactile_zero_counts = [[0 for _ in range(3)] for _ in range(5)]
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -225,6 +312,7 @@ class LowerComputerComm:
             self.send_command(("stream_mode", self._stream_mode_requested))
             return True
         except Exception as exc:
+            log_session("COMM", f"serial connect failed port={self.port}: {exc}")
             print(f"连接失败: {exc}")
             return False
 
@@ -238,9 +326,11 @@ class LowerComputerComm:
     def disconnect(self):
         self.running = False
         self.stop_joint_debug_packet_log()
+        log_session("COMM", "serial disconnect requested")
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
+        log_session("COMM", "serial disconnected")
 
     def start_joint_debug_packet_log(self, path: str) -> None:
         fieldnames = [
@@ -318,19 +408,21 @@ class LowerComputerComm:
     def _maybe_print_rx_diag(self) -> None:
         now = time.time()
         elapsed = now - self._rx_diag_last_print
-        if elapsed < 1.0:
+        if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._rx_diag_total_packets / elapsed
         joint_debug_rate = self._rx_diag_joint_debug_packets / elapsed
         sensor_rate = self._rx_diag_sensor_packets / elapsed
         byte_rate = self._rx_diag_bytes / elapsed
-        print(
-            "[RX diag] "
+        diag_msg = (
             f"total={total_rate:.1f} pkt/s "
             f"jointDebug={joint_debug_rate:.1f} pkt/s "
             f"sensor={sensor_rate:.1f} pkt/s "
             f"bytes={byte_rate:.0f} B/s"
         )
+        log_session("RX diag", diag_msg)
+        if TERMINAL_DIAG_ENABLE:
+            print(f"[RX diag] {diag_msg}")
         self._reset_rx_diag()
 
     def _update_tx_diag(self, cmd: SendCmd, data_len: int) -> None:
@@ -342,17 +434,19 @@ class LowerComputerComm:
     def _maybe_print_tx_diag(self) -> None:
         now = time.time()
         elapsed = now - self._tx_diag_last_print
-        if elapsed < 1.0:
+        if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._tx_diag_total_cmds / elapsed
         angle_live_rate = self._tx_diag_angle_live_cmds / elapsed
         byte_rate = self._tx_diag_bytes / elapsed
-        print(
-            "[TX diag] "
+        diag_msg = (
             f"total={total_rate:.1f} cmd/s "
             f"angle_live={angle_live_rate:.1f} cmd/s "
             f"bytes={byte_rate:.0f} B/s"
         )
+        log_session("TX diag", diag_msg)
+        if TERMINAL_DIAG_ENABLE:
+            print(f"[TX diag] {diag_msg}")
         self._reset_tx_diag()
 
     def _rx_loop(self):
@@ -374,6 +468,7 @@ class LowerComputerComm:
                 self._check_stream_mode_ack_timeout()
                 self._maybe_print_rx_diag()
             except Exception as exc:
+                log_session("COMM", f"RX error: {exc}")
                 print(f"RX error: {exc}")
 
     def _append_firmware_log_byte(self, value: int) -> None:
@@ -389,8 +484,16 @@ class LowerComputerComm:
             return
         text = bytes(self._firmware_text_buffer).decode("utf-8", errors="ignore")
         self._firmware_text_buffer.clear()
-        if text:
-            print(text, end="", flush=True)
+        if not text:
+            return
+        stripped = text.strip()
+        if stripped:
+            log_session("FW", stripped)
+        if not FIRMWARE_LOG_TO_TERMINAL:
+            return
+        if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
+            return
+        print(text, end="", flush=True)
 
     def _extract_packets_and_firmware_logs(self) -> List[tuple]:
         packets: List[tuple] = []
@@ -424,9 +527,45 @@ class LowerComputerComm:
     def _check_stream_mode_ack_timeout(self):
         if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
             if time.time() >= self._stream_mode_ack_deadline:
+                log_session("PROTO", "no stream-mode ACK from firmware; continue with current decoding")
                 print("Protocol warning: no stream-mode ACK from firmware; continue with current decoding.")
                 self._stream_mode_ack_warned = True
                 self._stream_mode_ack_pending = False
+
+    def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
+        stable: List[List[List[int]]] = []
+        if self._tactile_hold_groups is None:
+            self._tactile_hold_groups = [
+                [[0, 0, 0] for _ in range(3)] for _ in range(5)
+            ]
+
+        for gi in range(5):
+            group_out: List[List[int]] = []
+            src_group = groups[gi] if gi < len(groups) else []
+            for si in range(3):
+                incoming = list(src_group[si]) if si < len(src_group) else [0, 0, 0]
+                while len(incoming) < 3:
+                    incoming.append(0)
+                incoming = [int(incoming[0]), int(incoming[1]), int(incoming[2])]
+                held = self._tactile_hold_groups[gi][si]
+
+                incoming_active = _tactile_axis_magnitude(incoming) > TACTILE_ZERO_NOISE_FLOOR
+                held_mag = _tactile_axis_magnitude(held)
+                if incoming_active:
+                    out = incoming
+                    self._tactile_zero_counts[gi][si] = 0
+                elif held_mag >= TACTILE_HOLD_MIN_MAGNITUDE and self._tactile_zero_counts[gi][si] < TACTILE_ZERO_HOLD_FRAMES:
+                    out = list(held)
+                    self._tactile_zero_counts[gi][si] += 1
+                else:
+                    out = [0, 0, 0]
+                    if self._tactile_zero_counts[gi][si] < 255:
+                        self._tactile_zero_counts[gi][si] += 1
+
+                self._tactile_hold_groups[gi][si] = list(out)
+                group_out.append(out)
+            stable.append(group_out)
+        return stable
 
     def _process_packets(self, packets: List[tuple]) -> Optional[HandModel]:
         if packets:
@@ -473,7 +612,7 @@ class LowerComputerComm:
             elif pkt_type == 0x02:
                 code = parse_calib_ack(payload)
                 if code == 1:
-                    model.calib_status = "PENDING"
+                    model.calib_status = "RUNNING"
                 elif code == 2:
                     model.calib_status = "SUCCESS"
                 elif code == 3:
@@ -597,7 +736,7 @@ class LowerComputerComm:
                     model.has_system_status_data = True
                     if calib_status == 0:
                         if (
-                            model.calib_status == "PENDING" and
+                            model.calib_status in ("PENDING", "RUNNING") and
                             model.system_state != SYSTEM_STATE_CALIBRATION_RUNNING
                         ):
                             if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
@@ -609,7 +748,7 @@ class LowerComputerComm:
                         else:
                             model.calib_status = "IDLE"
                     elif calib_status == 1:
-                        model.calib_status = "PENDING"
+                        model.calib_status = "RUNNING"
                     elif calib_status == 2:
                         model.calib_status = "SUCCESS"
                     elif calib_status == 3:
@@ -625,6 +764,21 @@ class LowerComputerComm:
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.motor_abs_limit_min[i] = int(mins[i])
                         model.motor_abs_limit_max[i] = int(maxs[i])
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_JOINT_CALIB_SNAPSHOT:
+                parsed = parse_joint_calib_snapshot_packet(payload)
+                if parsed is not None:
+                    joint_idx = int(parsed.get("joint", -1))
+                    if 0 <= joint_idx < ENCODER_COUNT:
+                        model.joint_calib_results[joint_idx] = dict(parsed)
+                        emitted = True
+
+            elif pkt_type == PACKET_TYPE_TACTILE:
+                parsed = parse_tactile_packet(payload)
+                if parsed is not None:
+                    _seq, groups = parsed
+                    model.tactile_data = _build_tactile_fingers(self._stabilize_tactile_groups(groups))
                     emitted = True
 
             elif pkt_type == 0x06:
@@ -643,6 +797,15 @@ class LowerComputerComm:
                     with self._ack_lock:
                         self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
                         self._ack_lock.notify_all()
+                    if (
+                        ack_cmd in (CMD_STOP, CMD_RESET) and
+                        status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
+                    ):
+                        model.control_enabled = False
+                        model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                        model.has_system_status_data = True
+                        if model.calib_status in ("PENDING", "RUNNING"):
+                            model.calib_status = "IDLE"
                     if ack_cmd in (
                         CMD_START,
                         CMD_STOP,
@@ -663,9 +826,13 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_STOP:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_RESET:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_CALIBRATE:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
@@ -724,9 +891,10 @@ class LowerComputerComm:
 
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
-        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] in (
+        return isinstance(cmd, tuple) and cmd[0] in (
             "motor_pos_sweep",
             "motor_pos_abs",
+            "motor_pos_abs_one",
             "angle_live",
         )
 
@@ -791,6 +959,7 @@ class LowerComputerComm:
             except queue.Empty:
                 self._maybe_print_tx_diag()
             except Exception as exc:
+                log_session("COMM", f"TX error: {exc}")
                 print(f"TX error: {exc}")
 
     def _maybe_send_host_heartbeat(self) -> None:
@@ -819,6 +988,10 @@ class LowerComputerComm:
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
             return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
+        if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
+            return build_calib_load_limits_cmd(cmd[1], cmd[2], cmd[3], cmd[4])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
+            return build_calib_load_joint_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
@@ -827,6 +1000,8 @@ class LowerComputerComm:
             return build_motor_pos_sweep_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":
+            return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":

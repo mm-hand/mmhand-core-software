@@ -135,6 +135,7 @@ class TendonGuard:
         if len(guarded) < ENCODER_COUNT:
             guarded.extend([0.0] * (ENCODER_COUNT - len(guarded)))
         blocked: List[int] = []
+        warnings: List[int] = []
         if not state:
             return guarded, blocked, ""
         if not bool(getattr(state, "has_sensor_data", False)):
@@ -168,17 +169,16 @@ class TendonGuard:
                 or (sign < 0 and abs_now >= (x1_abs - self.release_margin_counts))
             )
             if hit_boundary:
-                guarded[joint_idx] = cur_joint_deg
-                blocked.append(joint_idx)
+                warnings.append(joint_idx)
 
         msg = ""
-        if blocked:
+        if warnings:
             now = time.time()
             if now - self._last_warn_ts >= self.warn_interval_s:
                 self._last_warn_ts = now
-                joints = ", ".join(f"J{i}" for i in blocked)
+                joints = ", ".join(f"J{i}" for i in warnings)
                 suffix = f" ({source})" if source else ""
-                msg = f"Tendon guard blocked release on {joints}{suffix}"
+                msg = f"Tendon guard release boundary warning on {joints}{suffix}"
         return guarded, blocked, msg
 
     @staticmethod

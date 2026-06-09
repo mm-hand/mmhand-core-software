@@ -307,9 +307,12 @@ ESP32-P4/ServoBoardMain/src/control/ControlOutputBuilder.cpp:144
 
 说明：
 
-这套接口更通用，理论上可以统一处理一个 joint 对一个或多个 motor 的情况。但当前 `ControlTask.cpp` 正常 PID 下发路径仍然主要使用 `appendSecondaryTargetForJoint()`，没有完全切换到 `appendJointActuatorTargets()`。
+当前 `ControlTask.cpp` 的正常 PID 下发路径已经按关节执行分流：
 
-后续如果要整理结构，建议把 `ControlTask.cpp` 中的主/副舵机下发逻辑统一改成 `appendJointActuatorTargets()`，这样 PID 同学只需要关心“joint PID 输出 primaryTargetAbs”，映射层统一展开到一个或多个电机。
+- 单电机关节：根据 `jointMap` 找到 motor 后，输出经过 `clampServoPosByMotorAbsLimit()`，再通过 `appendJointActuatorTargets()` 下发。
+- 双绳拮抗关节：进入 `DualTendonControl.cpp`，分别计算两个 motor 的 `targetAbs`，并逐 motor 执行 ABS limit clamp。
+
+因此当前不再应描述为“主要使用 `appendSecondaryTargetForJoint()` 推导副舵机”。后续调 PID 时，单电机关节看 `ControlSolver.cpp`，双绳关节看 `DualTendonControl.cpp`。
 
 ## 单电机控制双关节
 
@@ -353,16 +356,16 @@ motor_cmd = f(errorA, errorB, current_abs, zero_abs, tight_abs)
 - 没有 `motor -> joints` 的映射表
 - 没有双关节误差融合函数
 - 没有针对一个 motor 同时服务两个 joint 的 PID 状态
-- 没有读取 `pid_abs_calib.json` 的固件侧逻辑
+- 旧版 `pid_abs_calib.json` 上位机保存链路已经移除，当前不再生成或读取这类 ABS 锚点文件。
 
 所以单电机双关节目前不能认为已经接入 PID。
 
-## PID ABS 标定数据的位置
+## PID ABS 标定数据状态
 
 上位机已经增加 PID 控制锚点文件：
 
 ```text
-desktop/config/pid_abs_calib.json
+该文件已废弃并移除。当前负反馈控制使用实时反馈、自动标定限位和当前控制参数，不依赖独立的 `pid_abs_calib.json`。
 ```
 
 说明文档：
@@ -381,7 +384,25 @@ docs/PID_ABS标定数据使用说明.md
 
 ## 建议后续怎么接
 
+## 当前代码校正：多电机下发接口
+
+文档前面提到的 `appendSecondaryTargetForJoint(...)` 是旧接口说明，当前固件源码中已经不存在该函数，不应再作为当前控制路径理解。
+
+当前实现为：
+
+```text
+单电机关节:
+  ControlSolver -> motorTendonAbsToRawAbs -> clampServoPosByMotorAbsLimit -> appendJointActuatorTargets
+
+双绳拮抗关节:
+  DualTendonControl -> 两个 motor targetAbs -> 每个 motor 各自 clampServoPosByMotorAbsLimit -> appendJointActuatorRuntimeTargets
+```
+
+也就是说，多电机输出已经不是“主电机 PID + appendSecondaryTargetForJoint 推导副电机”的旧模式。双绳关节的两个电机目标由电机域模型分别计算，ABS limit 也逐 motor 生效。
+
 ### 第一阶段：先整理单关节多电机下发接口
+
+本阶段内容是历史建议。当前代码已经不再使用 `appendSecondaryTargetForJoint(...)`，单电机和双绳路径已分别整理到 `appendJointActuatorTargets(...)` / `appendJointActuatorRuntimeTargets(...)`。
 
 把 `ControlTask.cpp` 中当前的：
 

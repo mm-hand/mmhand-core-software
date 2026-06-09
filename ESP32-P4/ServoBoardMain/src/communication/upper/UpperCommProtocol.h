@@ -1,11 +1,12 @@
-#ifndef UPPER_COMM_PROTOCOL_H
+﻿#ifndef UPPER_COMM_PROTOCOL_H
 #define UPPER_COMM_PROTOCOL_H
 
 #include <Arduino.h>
 #include "../../shared/TaskSharedData.h"
 
-// UpperCommProtocol 闆嗕腑缁存姢涓插彛绾垮崗璁父閲忋€?// 娉ㄦ剰锛氳繖閲岀殑鍛戒护 ID 涓?desktop 涓婁綅鏈轰繚鎸佸吋瀹癸紝淇敼鏃堕渶瑕佸悓姝ユ洿鏂版闈㈢瑙ｆ瀽/鎵撳寘閫昏緫銆?
-// 涓婅甯э紙璁惧 -> 涓婁綅鏈猴級锛歔0xFE][LEN][TYPE][PAYLOAD][0xFF]
+// UpperCommProtocol centralizes the serial wire protocol constants.
+// Keep command IDs synchronized with desktop/protocol.py.
+// Upstream frame: [0xFE][LEN][TYPE][PAYLOAD][0xFF].
 #define PROTOCOL_HEADER 0xFE
 #define PROTOCOL_TAIL 0xFF
 #define PACKET_TYPE_SENSOR 0x01
@@ -21,6 +22,7 @@
 #define PACKET_TYPE_ENCODER_RAW 0x0B
 #define PACKET_TYPE_SYSTEM_STATUS 0x0C
 #define PACKET_TYPE_MOTOR_ABS_LIMIT 0x0D
+#define PACKET_TYPE_JOINT_CALIB_SNAPSHOT 0x0E
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -34,18 +36,21 @@
 #define CMD_SENSOR_STREAM_MODE 0xD1
 #define CMD_MOTOR_POS_SWEEP 0xD2
 #define CMD_MOTOR_POS_ABS 0xD3
+#define CMD_SINE_TEST_PARAMS 0xDE
+#define CMD_SINE_TEST_START 0xDF
+#define CMD_SINE_TEST_STOP 0xE0
+#define CMD_MOTOR_POS_ABS_ONE 0xE1
 #define CMD_TENDON_GUARD 0xD4
 #define CMD_ACTIVE_SCOPE 0xD7
 #define CMD_RUN_FEEDBACK 0xD8
 #define CMD_PAUSE 0xD9
 #define CMD_RESTORE_MULTITURN 0xDA
 #define CMD_MOTOR_ABS_LIMIT_LOCK 0xDB
-// 上位机在线心跳；舵机任务通过丢失 heartbeat 判断是否触发 NVS 备份。
+// Host heartbeat keeps the desktop-online timer alive.
 #define CMD_HOST_HEARTBEAT 0xDC
 #define CMD_MULTITURN_NVS_CONTROL 0xDD
-#define CMD_SINE_TEST_PARAMS 0xDE
-#define CMD_SINE_TEST_START 0xDF
-#define CMD_SINE_TEST_STOP 0xE0
+#define CMD_CALIB_LOAD_JOINT 0xE2
+#define CMD_CALIB_LOAD_LIMITS 0xE3
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -56,6 +61,7 @@
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
+static const size_t kMotorPosAbsOnePayloadBytes = 3;
 static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
 static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
@@ -65,10 +71,13 @@ static const uint8_t kSineTestMaxRows = 5;
 static const size_t kSineTestRowPayloadBytes = 1 + (4 * sizeof(float));
 static const size_t kSineTestParamsPayloadBytes =
     5 + (kSineTestMaxRows * kSineTestRowPayloadBytes);
+static const size_t kCalibLoadJointPayloadBytes = 54;
+static const size_t kCalibLoadLimitsPayloadBytes = 8 + SERVO_TOTAL_NUM * 4;
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
 static const uint32_t kSystemStatusHeartbeatMs = 100;
 static const uint32_t kMotorAbsLimitHeartbeatMs = 500;
+static const uint32_t kJointCalibSnapshotHeartbeatMs = 1000;
 
 #endif // UPPER_COMM_PROTOCOL_H

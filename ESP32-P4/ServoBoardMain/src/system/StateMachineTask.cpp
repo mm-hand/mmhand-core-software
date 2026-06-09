@@ -12,7 +12,7 @@ extern volatile uint8_t g_calibrationStatus;
 extern volatile uint8_t g_calibrationAckStatus;
 extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
-static const uint32_t kStateCanOfflineTimeoutMs = 300;
+static const uint32_t kStateCanOfflineTimeoutMs = 1000;
 static const uint32_t kStateServoFeedbackTimeoutMs = 500;
 static const float kWorkspaceToleranceDeg = 1.0f;
 static const uint8_t kCalibrationAckRepeatCount = 20;
@@ -147,6 +147,57 @@ static void resetServoTargetQueue(TaskSharedData_t* sharedData)
     }
 }
 
+static void resetRuntimeQueues(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    QueueHandle_t queues[] = {
+        sharedData->cmdQueue,
+        sharedData->statusQueue,
+        sharedData->canTxQueue,
+        sharedData->canRxQueue,
+        sharedData->servoTargetQueue,
+        sharedData->servoFeedbackQueue,
+        sharedData->servoAngleQueue,
+        sharedData->servoRawQueue,
+        sharedData->servoTelemetryQueue,
+        sharedData->servoTelemetrySnapshotQueue,
+        sharedData->mappedAngleQueue,
+        sharedData->jointDebugQueue,
+        sharedData->tactileQueue,
+    };
+
+    for (size_t i = 0; i < sizeof(queues) / sizeof(queues[0]); i++) {
+        if (queues[i]) {
+            xQueueReset(queues[i]);
+        }
+    }
+}
+
+static void resetCommandOutputQueues(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    QueueHandle_t queues[] = {
+        sharedData->cmdQueue,
+        sharedData->statusQueue,
+        sharedData->canTxQueue,
+        sharedData->servoTargetQueue,
+        sharedData->jointDebugQueue,
+        sharedData->tactileQueue,
+    };
+
+    for (size_t i = 0; i < sizeof(queues) / sizeof(queues[0]); i++) {
+        if (queues[i]) {
+            xQueueReset(queues[i]);
+        }
+    }
+}
+
 static void requestServoEmergencyHold(TaskSharedData_t* sharedData)
 {
     if (sharedData) {
@@ -234,11 +285,11 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     if (!sharedData) {
         return;
     }
-    resetServoTargetQueue(sharedData);
     sharedData->system_fault_latched_bitmap |= faultBits;
     sharedData->system_fault_bitmap |= sharedData->system_fault_latched_bitmap;
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
+    resetRuntimeQueues(sharedData);
     requestServoEmergencyHold(sharedData);
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
 }
@@ -430,6 +481,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
     switch (event.event)
     {
         case SYSTEM_EVENT_START:
+        {
             if (!canAcceptStart(sharedData->system_state)) {
                 Serial.printf("[STATE] reject START in state=%u\r\n",
                               (unsigned)sharedData->system_state);
@@ -459,16 +511,21 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 break;
             }
 
-            resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
-            setSystemState(sharedData, idleOrReadyState(sharedData));
+            const uint8_t nextState = idleOrReadyState(sharedData);
+            resetCommandOutputQueues(sharedData);
+            setSystemState(sharedData, nextState);
             break;
+        }
 
         case SYSTEM_EVENT_STOP:
-            resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
+            resetRuntimeQueues(sharedData);
+            if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+                setCalibrationStatus(CALIB_STATUS_IDLE, false);
+            }
             requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
@@ -477,7 +534,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             resetCommandState(sharedData);
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            resetServoTargetQueue(sharedData);
+            resetRuntimeQueues(sharedData);
             requestServoEmergencyHold(sharedData);
             resetControlProtectionFaults(sharedData);
             sharedData->calibration_fault_latched = 0;
@@ -498,7 +555,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                               (unsigned long)readyServoRequiredMask(sharedData),
                               (unsigned long)sharedData->multi_turn_unknown_bitmap);
             }
-            resetServoTargetQueue(sharedData);
+            resetCommandOutputQueues(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
             setCommandModeDirect(sharedData);
@@ -520,7 +577,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 Serial.println("[STATE] reject RUN_FEEDBACK: active joints are not calibrated");
                 break;
             }
-            resetServoTargetQueue(sharedData);
+            resetCommandOutputQueues(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
             setCommandModeJoint(sharedData);
@@ -562,6 +619,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->paused_resume_state = sharedData->system_state;
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            resetServoTargetQueue(sharedData);
             requestServoEmergencyHold(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;
@@ -573,7 +631,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                               (unsigned)sharedData->system_state);
                 break;
             }
-            resetServoTargetQueue(sharedData);
+            resetCommandState(sharedData);
+            resetRuntimeQueues(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
             sharedData->control_enabled = 0;
             sharedData->calibration_fault_latched = 0;
@@ -597,6 +656,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            resetServoTargetQueue(sharedData);
             sharedData->calibration_fault_latched = 0;
             sharedData->multi_turn_unknown_bitmap &= ~readyServoRequiredMask(sharedData);
             setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
@@ -612,6 +672,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            resetRuntimeQueues(sharedData);
             sharedData->calibration_fault_latched = 1;
             setCalibrationStatus(CALIB_STATUS_FAILED, true);
             requestServoEmergencyHold(sharedData);

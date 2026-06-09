@@ -12,7 +12,8 @@ from .manus_receiver import ManusFrame, ManusReceiver
 
 
 MANUS_CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "config" / "manus_calibration.json"
-MANUS_PREVIEW_ONLY = True
+MANUS_JOINT_SEND_GATED = True
+MANUS_PREVIEW_ONLY = not MANUS_JOINT_SEND_GATED
 ACTUAL_ROBOT_COMMAND_ENABLED = False
 DEFAULT_MANUS_SIDE = "left"
 
@@ -26,11 +27,15 @@ FINGER_TO_ROBOT_JOINTS = {
 }
 
 MAGNETIC_RANGE100_CONTROL_MAX_DEG = 83.98
-DUAL_AUTO_CONTROL_MAX_DEG = 80.0
 DUAL_AUTO_JOINT_INDICES = {0, 4, 8, 12, 16, 20}
 ROBOT_JOINT_LIMIT_SOURCE = "magnetic calib clamp"
+ROBOT_JOINT_MAX_DEG_BY_INDEX = [
+    63.98, 73.98, 88.00, 92.99, 64.99, 74.99, 88.00, 92.99,
+    83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98,
+    83.98, 83.98, 83.98, 83.98, 83.98,
+]
 ROBOT_JOINT_LIMITS_DEG = [
-    (0.0, DUAL_AUTO_CONTROL_MAX_DEG if idx in DUAL_AUTO_JOINT_INDICES else MAGNETIC_RANGE100_CONTROL_MAX_DEG)
+    (0.0, ROBOT_JOINT_MAX_DEG_BY_INDEX[idx])
     for idx in range(ENCODER_COUNT)
 ]
 ROBOT_JOINT_ROLE_BY_INDEX = {
@@ -276,7 +281,7 @@ class ManusCalibrationManager:
                     human_joint_angle=human_angles[idx],
                     joint_limit_deg=f"[{lo:.2f}, {hi:.2f}] deg",
                     joint_limit_source=source_text,
-                    actual_robot_command="preview only / not sent",
+                    actual_robot_command="gated until Enable Joint Send",
                     lower_deg=lo,
                     upper_deg=hi,
                     over_limit=(unclipped < lo or unclipped > hi),
@@ -343,6 +348,7 @@ class ManusCalibrationManager:
 __all__ = [
     "ACTUAL_ROBOT_COMMAND_ENABLED",
     "DEFAULT_MANUS_SIDE",
+    "MANUS_JOINT_SEND_GATED",
     "MANUS_PREVIEW_ONLY",
     "ManusCalibrationManager",
     "NormalizedFeature",

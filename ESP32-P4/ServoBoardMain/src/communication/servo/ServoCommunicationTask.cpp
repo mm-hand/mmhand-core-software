@@ -204,6 +204,12 @@ public:
             }
             if (rxLen == feedbackLen) {
                 const int16_t rawPos = decodeSigned(rxBuf[0], rxBuf[1]);
+                if (!_feedback[id].online) {
+                    _feedback[id].initialized = false;
+                    _feedback[id].absoluteReliable = false;
+                    _feedback[id].logicalOffset = 0;
+                    _feedback[id].turnCount = 0;
+                }
                 _updateMultiTurnPosition(id, rawPos);
                 _feedback[id].speed = decodeSigned(rxBuf[2], rxBuf[3]);
                 _feedback[id].load = decodeServoLoad(rxBuf[4], rxBuf[5]);
@@ -669,6 +675,8 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return;
     }
+    static bool s_onlineMaskInitialized = false;
+    static uint32_t s_lastOnlineMask = 0;
 
     ServoAngleData_t servoData;
     ServoAngleData_t servoRawData;
@@ -681,11 +689,13 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
 
+    uint32_t onlineMask = 0;
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
         ServoBusDriver* bus = getBusByIndex(busIndex);
         if (bus && bus->isOnline(id)) {
+            onlineMask |= (1UL << ch);
             const ServoFeedbackInternal& fb = bus->getFeedback(id);
             servoData.servoAngles[ch] = bus->getAbsolutePosition(id);
             servoData.servoRawPositions[ch] = bus->getRawPosition(id);
@@ -722,6 +732,27 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             }
         }
     }
+
+    if (s_onlineMaskInitialized) {
+        const uint32_t validMask = validMotorChannelMask();
+        const uint32_t lostMask = (s_lastOnlineMask & ~onlineMask) & validMask;
+        const uint32_t reconnectedMask = (onlineMask & ~s_lastOnlineMask) & validMask;
+        const uint32_t powerSessionChangedMask = lostMask | reconnectedMask;
+        if (powerSessionChangedMask != 0) {
+            if (sharedData->servoTargetQueue) {
+                xQueueReset(sharedData->servoTargetQueue);
+            }
+            if (sharedData->multiturn_nvs_enabled && lostMask != 0) {
+                sharedData->multi_turn_unknown_bitmap |= lostMask;
+            }
+            Serial.printf("[SERVO POWER] online change lost=0x%08lX reconnected=0x%08lX unknown=0x%08lX\r\n",
+                          (unsigned long)lostMask,
+                          (unsigned long)reconnectedMask,
+                          (unsigned long)sharedData->multi_turn_unknown_bitmap);
+        }
+    }
+    s_onlineMaskInitialized = true;
+    s_lastOnlineMask = onlineMask;
 
     if (sharedData->servoFeedbackQueue) {
         xQueueOverwrite(sharedData->servoFeedbackQueue, &servoData);

@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 from teleop.manus_calibration import (
     ACTUAL_ROBOT_COMMAND_ENABLED,
@@ -8,22 +8,30 @@ from teleop.manus_calibration import (
     ManusCalibrationManager,
 )
 from teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
-from protocol import ControlMode
+try:
+    from teleop.manus_sdk_receiver import ManusSdkReceiver
+except Exception:
+    ManusSdkReceiver = None
+from protocol import ControlMode, ENCODER_COUNT
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
 
 class ManusUdpView(QtWidgets.QWidget):
-    def __init__(self, context, parent=None):
+    def __init__(self, context, selected_joint_mask_getter: Optional[Callable[[], int]] = None, parent=None):
         super().__init__(parent)
         self.context = context
-        self.receiver = ManusReceiver(ip="127.0.0.1", port=9001, timeout_s=MANUS_TIMEOUT_S)
+        self.selected_joint_mask_getter = selected_joint_mask_getter
+        self._source_mode = "tcp"
+        self.receiver = self._make_receiver(self._source_mode)
         self.calibration = ManusCalibrationManager()
         self._last_status = ""
         self._last_displayed_seq: Optional[int] = None
         self._last_sent_seq: Optional[int] = None
         self._sent_count = 0
         self._recording_pose: Optional[str] = None
+        self._feedback_angles: list[Optional[float]] = [None] * ENCODER_COUNT
+        self._last_sent_targets: list[Optional[float]] = [None] * ENCODER_COUNT
         self._build()
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(50)
@@ -34,8 +42,17 @@ class ManusUdpView(QtWidgets.QWidget):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
 
-        panel = QtWidgets.QGroupBox("MANUS TCP Receive Only")
+        panel = QtWidgets.QGroupBox("MANUS Input / Preview")
         layout = QtWidgets.QVBoxLayout(panel)
+
+        source_row = QtWidgets.QHBoxLayout()
+        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo.addItem("TCP Bridge 127.0.0.1:9001", "tcp")
+        self.source_combo.addItem("Direct SDK", "sdk")
+        self.source_combo.currentIndexChanged.connect(lambda _idx: self._on_source_changed())
+        source_row.addWidget(QtWidgets.QLabel("Source:"))
+        source_row.addWidget(self.source_combo, 1)
+        layout.addLayout(source_row)
 
         status_row = QtWidgets.QHBoxLayout()
         self.status_label = QtWidgets.QLabel("Stopped")
@@ -51,7 +68,7 @@ class ManusUdpView(QtWidgets.QWidget):
         layout.addLayout(status_row)
 
         info = QtWidgets.QFormLayout()
-        self.endpoint_label = QtWidgets.QLabel(f"127.0.0.1:9001 timeout={MANUS_TIMEOUT_S:.1f}s")
+        self.endpoint_label = QtWidgets.QLabel("")
         self.thread_label = QtWidgets.QLabel("-")
         self.source_label = QtWidgets.QLabel("-")
         self.connection_label = QtWidgets.QLabel("0")
@@ -118,6 +135,8 @@ class ManusUdpView(QtWidgets.QWidget):
         self.calib_status_label = QtWidgets.QLabel("Preview only until Enable Joint Send is checked")
         calib_layout.addWidget(self.calib_status_label)
         layout.addWidget(calib)
+        self._apply_source_safety()
+        self._update_endpoint_label()
 
         self.record_open_btn.clicked.connect(lambda _checked=False: self._record_calibration("open"))
         self.record_close_btn.clicked.connect(lambda _checked=False: self._record_calibration("close"))
@@ -169,9 +188,59 @@ class ManusUdpView(QtWidgets.QWidget):
         try:
             self.receiver.start()
             self._timer.start()
-            self._set_status("MANUS waiting for TCP connection")
+            self._set_status(self._waiting_status_text())
         except Exception as exc:
             self._set_status(f"MANUS receiver failed: {exc}")
+
+    def _make_receiver(self, mode: str):
+        if mode == "sdk":
+            if ManusSdkReceiver is None:
+                raise RuntimeError("MANUS Direct SDK receiver is not available")
+            return ManusSdkReceiver(timeout_s=MANUS_TIMEOUT_S)
+        return ManusReceiver(ip="127.0.0.1", port=9001, timeout_s=MANUS_TIMEOUT_S)
+
+    def _on_source_changed(self) -> None:
+        mode = str(self.source_combo.currentData() or "tcp")
+        if mode == self._source_mode:
+            return
+        self._timer.stop()
+        try:
+            self.receiver.stop()
+        except Exception:
+            pass
+        self._source_mode = mode
+        self.receiver = self._make_receiver(mode)
+        self._last_displayed_seq = None
+        self._last_sent_seq = None
+        self._apply_source_safety()
+        self._update_endpoint_label()
+        self._start_receiver()
+
+    def _apply_source_safety(self) -> None:
+        if not hasattr(self, "send_enable_check"):
+            return
+        self.send_enable_check.setEnabled(True)
+        self.safety_label.setText("MANUS direct motor disabled; joint send gated")
+        self.calib_status_label.setText("Preview only until Enable Joint Send is checked")
+
+    def _update_endpoint_label(self) -> None:
+        if not hasattr(self, "endpoint_label"):
+            return
+        if self._source_mode == "sdk":
+            dll_path = getattr(self.receiver, "dll_path", "")
+            self.endpoint_label.setText(f"Direct SDK dll={dll_path or '-'} timeout={MANUS_TIMEOUT_S:.1f}s")
+        else:
+            self.endpoint_label.setText(f"TCP 127.0.0.1:9001 timeout={MANUS_TIMEOUT_S:.1f}s")
+
+    def _waiting_status_text(self) -> str:
+        if self._source_mode == "sdk":
+            return "MANUS Direct SDK waiting for frames"
+        return "MANUS waiting for TCP connection"
+
+    def _frame_waiting_text(self) -> str:
+        if self._source_mode == "sdk":
+            return "MANUS Direct SDK waiting for frames"
+        return "MANUS waiting for TCP frames"
 
     def _refresh(self) -> None:
         error = self.receiver.last_error()
@@ -183,7 +252,7 @@ class ManusUdpView(QtWidgets.QWidget):
         if error:
             self._set_status(error)
         elif frame is None:
-            self._set_status("MANUS waiting for TCP frames")
+            self._set_status(self._frame_waiting_text())
         elif alive:
             self._set_status("MANUS connected")
         else:
@@ -307,7 +376,7 @@ class ManusUdpView(QtWidgets.QWidget):
         if not self.send_enable_check.isChecked():
             return
         if not self.receiver.is_alive():
-            self._set_status("MANUS joint send paused: TCP stale")
+            self._set_status("MANUS joint send paused: source stale")
             return
         if not self.calibration.has_open_close():
             self.send_enable_check.setChecked(False)
@@ -315,14 +384,23 @@ class ManusUdpView(QtWidgets.QWidget):
             return
         if frame.seq == self._last_sent_seq:
             return
-        angles = [0.0] * len(preview)
+        angles = [0.0] * ENCODER_COUNT
         for item in preview:
             if 0 <= item.joint_index < len(angles):
                 angles[item.joint_index] = float(item.robot_q_target_preview)
+        selected_targets, missing_feedback = self._targets_for_selected_joints(angles)
+        if selected_targets is None:
+            if missing_feedback:
+                missing = ",".join(f"J{idx:02d}" for idx in missing_feedback[:4])
+                self._set_status(f"MANUS joint send blocked: waiting feedback {missing}")
+            else:
+                self._set_status("MANUS joint send blocked: no teleop joint selected")
+            return
         try:
             self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
             self.context.controller.set_pid_control(True)
-            self.context.send_joint_targets(angles, source="MANUS left glove joint send", live=True)
+            self.context.send_joint_targets(selected_targets, source="MANUS left glove joint send", live=True)
+            self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
             self._sent_count += 1
             self.send_count_label.setText(f"sent={self._sent_count}")
@@ -396,6 +474,38 @@ class ManusUdpView(QtWidgets.QWidget):
                 if item is not None:
                     item.setForeground(brush)
 
+    def _selected_joint_mask(self) -> int:
+        if callable(self.selected_joint_mask_getter):
+            try:
+                return int(self.selected_joint_mask_getter()) & ((1 << ENCODER_COUNT) - 1)
+            except Exception:
+                return 0
+        return (1 << ENCODER_COUNT) - 1
+
+    def _targets_for_selected_joints(self, manus_targets: list[float]) -> tuple[Optional[list[float]], list[int]]:
+        mask = self._selected_joint_mask()
+        if mask == 0:
+            return None, []
+
+        targets: list[float] = []
+        missing_feedback: list[int] = []
+        for idx in range(ENCODER_COUNT):
+            if (mask & (1 << idx)) != 0:
+                targets.append(float(manus_targets[idx]))
+                continue
+
+            hold = self._feedback_angles[idx]
+            if hold is None:
+                hold = self._last_sent_targets[idx]
+            if hold is None:
+                missing_feedback.append(idx)
+                hold = 0.0
+            targets.append(float(hold))
+
+        if missing_feedback:
+            return None, missing_feedback
+        return targets, []
+
     def _set_status(self, text: str) -> None:
         text = str(text)
         self.status_label.setText(text)
@@ -403,8 +513,16 @@ class ManusUdpView(QtWidgets.QWidget):
             self.context.set_status(text)
             self._last_status = text
 
-    def update_state(self, _state) -> None:
-        pass
+    def update_state(self, state) -> None:
+        angles = list(getattr(state, "angles", []) or []) if state is not None else []
+        for idx in range(ENCODER_COUNT):
+            if idx < len(angles):
+                try:
+                    self._feedback_angles[idx] = float(angles[idx])
+                except (TypeError, ValueError):
+                    self._feedback_angles[idx] = None
+            else:
+                self._feedback_angles[idx] = None
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
         self._timer.stop()

@@ -21,9 +21,11 @@ PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
 PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
+PACKET_TYPE_TACTILE = 0x0A
 PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
+PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -47,6 +49,9 @@ CMD_MULTITURN_NVS_CONTROL = 0xDD
 CMD_SINE_TEST_PARAMS = 0xDE
 CMD_SINE_TEST_START = 0xDF
 CMD_SINE_TEST_STOP = 0xE0
+CMD_MOTOR_POS_ABS_ONE = 0xE1
+CMD_CALIB_LOAD_JOINT = 0xE2
+CMD_CALIB_LOAD_LIMITS = 0xE3
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -77,6 +82,10 @@ SERVO_TARGET_OWNER_CALIBRATION = 2
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 27
+TACTILE_GROUP_COUNT = 5
+TACTILE_SENSOR_PER_GROUP = 3
+TACTILE_AXIS_COUNT = 3
+TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -176,6 +185,45 @@ def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, Lis
     return valid_bitmap, locked_bitmap, mins, maxs
 
 
+def _unpack_float_be(data: bytes) -> float:
+    return struct.unpack(">f", data)[0]
+
+
+def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
+    # One joint per frame keeps the existing 1-byte LEN protocol unchanged.
+    if len(payload) < 54:
+        return None
+    idx = 0
+    joint = payload[idx]
+    idx += 1
+    if joint >= ENCODER_COUNT:
+        return None
+
+    result = {
+        "joint": int(joint),
+        "success": bool(payload[idx]),
+    }
+    idx += 1
+    for key in ("encoderMin", "encoderMax", "offset"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    result["angleMax"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        result[key] = struct.unpack(">h", payload[idx:idx + 2])[0]
+        idx += 2
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        result[key] = _unpack_float_be(payload[idx:idx + 4])
+        idx += 4
+    result["scaled"] = bool(payload[idx])
+    idx += 1
+    result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
+    return result
+
+
 def parse_calib_ack(payload: bytes) -> Optional[int]:
     if len(payload) < 1:
         return None
@@ -267,6 +315,30 @@ def parse_release_fault_packet(payload: bytes) -> Optional[int]:
     if len(payload) != 4:
         return None
     return struct.unpack(">I", payload)[0]
+
+
+def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
+    if len(payload) == (1 + TACTILE_SUMMARY_BYTES):
+        seq = payload[0]
+        data = payload[1:]
+    elif len(payload) == TACTILE_SUMMARY_BYTES:
+        seq = 0
+        data = payload
+    else:
+        return None
+
+    out: List[List[List[int]]] = []
+    cursor = 0
+    for _group in range(TACTILE_GROUP_COUNT):
+        group_data: List[List[int]] = []
+        for _sensor in range(TACTILE_SENSOR_PER_GROUP):
+            fx = struct.unpack("b", bytes([data[cursor]]))[0]
+            fy = struct.unpack("b", bytes([data[cursor + 1]]))[0]
+            fz = int(data[cursor + 2])
+            group_data.append([fx, fy, fz])
+            cursor += TACTILE_AXIS_COUNT
+        out.append(group_data)
+    return seq, out
 
 
 def parse_joint_debug_packet(
@@ -411,6 +483,52 @@ def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -
     return _build_command_frame(CMD_MOTOR_ABS_LIMIT_LOCK, payload)
 
 
+def _pack_float_be(value: float) -> bytes:
+    return struct.pack(">f", float(value))
+
+
+def _clamp_i16(value: int) -> int:
+    v = int(value)
+    if v < -32768:
+        return -32768
+    if v > 32767:
+        return 32767
+    return v
+
+
+def build_calib_load_limits_cmd(valid_bitmap: int, locked_bitmap: int, mins: List[int], maxs: List[int]) -> bytes:
+    if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor limit values")
+    payload = bytearray()
+    payload.extend(struct.pack(">II", int(valid_bitmap) & 0xFFFFFFFF, int(locked_bitmap) & 0xFFFFFFFF))
+    for i in range(MOTOR_COUNT):
+        payload.extend(struct.pack(">h", _clamp_i16(mins[i])))
+        payload.extend(struct.pack(">h", _clamp_i16(maxs[i])))
+    return _build_command_frame(CMD_CALIB_LOAD_LIMITS, bytes(payload))
+
+
+def build_calib_load_joint_cmd(result: dict) -> bytes:
+    joint = int(result.get("joint", -1))
+    if joint < 0 or joint >= ENCODER_COUNT:
+        raise ValueError(f"invalid joint index {joint}")
+    payload = bytearray()
+    payload.append(joint & 0xFF)
+    payload.append(1 if bool(result.get("success", False)) else 0)
+    for key in ("encoderMin", "encoderMax", "offset"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    payload.extend(_pack_float_be(float(result.get("angleMax", 0.0))))
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        payload.extend(struct.pack(">h", _clamp_i16(result.get(key, 0))))
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        payload.extend(_pack_float_be(float(result.get(key, 0.0))))
+    payload.append(1 if bool(result.get("scaled", False)) else 0)
+    direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
+    payload.extend(struct.pack(">b", direction))
+    return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
+
+
 def build_host_heartbeat_cmd() -> bytes:
     """界面打开时维持下位机 host-online 计时器。"""
     return _build_command_frame(CMD_HOST_HEARTBEAT, b"")
@@ -460,6 +578,19 @@ def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
             v = MOTOR_ABS_CMD_MAX
         payload.extend(struct.pack(">h", v))
     return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
+
+
+def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
+    idx = int(motor_index)
+    if idx < 0 or idx >= MOTOR_COUNT:
+        raise ValueError(f"motor index out of range: {idx}")
+    v = int(motor_abs)
+    if v < MOTOR_ABS_CMD_MIN:
+        v = MOTOR_ABS_CMD_MIN
+    elif v > MOTOR_ABS_CMD_MAX:
+        v = MOTOR_ABS_CMD_MAX
+    payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
+    return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:

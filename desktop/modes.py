@@ -25,7 +25,7 @@ def _run_monitor_gui(controller: HandController, port: Optional[str] = None) -> 
         title_suffix="Monitor",
         current_port=port,
         current_mode="Monitor",
-        action_callback=lambda msg: print(f"UI action: {msg}", flush=True),
+        action_callback=None,
         pose_generate=POSE_DISPLAY_FROM_TEXT,
     )
     gui_win.run()

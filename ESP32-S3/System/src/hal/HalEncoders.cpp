@@ -171,8 +171,12 @@ uint8_t HalEncoders::getGroupMuxChannel(uint8_t groupIndex) const {
     if (groupIndex < GROUP_COUNT) {
         return ENC_151_GROUP_CHANNEL_MAP[groupIndex];
     }
+#else
+    if (groupIndex < GROUP_COUNT) {
+        return ENC_138_GROUP_CHANNEL_MAP[groupIndex];
+    }
 #endif
-    return static_cast<uint8_t>(ENC_MUX_BASE_CHANNEL + groupIndex);
+    return groupIndex;
 }
 
 void HalEncoders::markLinkLost(EncoderData &outData, int encoderId) {
@@ -262,7 +266,7 @@ void HalEncoders::collectGroup138(uint8_t groupIndex, int groupStart, uint8_t co
         txBuf[k] = static_cast<uint16_t>((frame >> 8) | (frame << 8));
     }
 
-    const uint8_t muxChannel = static_cast<uint8_t>(ENC_MUX_BASE_CHANNEL + groupIndex);
+    const uint8_t muxChannel = getGroupMuxChannel(groupIndex);
     const bool transferOk = transferOnce(muxChannel, count, txBuf, rxBuf);
 
     for (uint8_t k = 0; k < count; k++) {
@@ -329,6 +333,13 @@ void HalEncoders::collectGroup151(uint8_t groupIndex, int groupStart, uint8_t co
 }
 
 void HalEncoders::getData(EncoderData &outData) {
+    const bool locked = (g_sensorMuxMutex == NULL) ||
+        (xSemaphoreTake(g_sensorMuxMutex, portMAX_DELAY) == pdTRUE);
+    if (!locked) {
+        outData = {};
+        return;
+    }
+
     int globalIdx = 0;
     outData = {};
 
@@ -345,4 +356,8 @@ void HalEncoders::getData(EncoderData &outData) {
     }
 
     memcpy(outData.latchedErrors, _latchedErrorCodes, sizeof(_latchedErrorCodes));
+
+    if (g_sensorMuxMutex != NULL) {
+        xSemaphoreGive(g_sensorMuxMutex);
+    }
 }

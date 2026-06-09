@@ -66,6 +66,38 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
 }
 
+void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
+                                 uint8_t motorIndex,
+                                 int32_t target,
+                                 uint8_t source)
+{
+    if (!sharedData || motorIndex >= SERVO_TOTAL_NUM) {
+        return;
+    }
+    const uint32_t motorMask = (1UL << motorIndex) & validMotorChannelMask();
+    if (motorMask == 0) {
+        return;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    sharedData->motorTargetRaw[motorIndex] = clampServoAbsCommand(target);
+    sharedData->active_motor_mask = motorMask;
+    sharedData->active_joint_mask = 0;
+    sharedData->motor_command_token++;
+    sharedData->motor_direct_command_generation++;
+    sharedData->motor_direct_command_source = source;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+    Serial.printf("[UPPER] SINGLE_MOTOR_TARGET M%02u target=%ld mask=0x%08lX\r\n",
+                  (unsigned)motorIndex,
+                  (long)clampServoAbsCommand(target),
+                  (unsigned long)motorMask);
+    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
+}
+
 void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
 {
     if (!sharedData || !targets) {

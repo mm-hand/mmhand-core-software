@@ -8,19 +8,20 @@ __pycache__/
 *.pyo
 desktop/teleop/Posture/.vscode/
 
-# MANUS bridge local build files
-manus/build/
-manus/**/build/
-manus/**/build_*/
-manus/out/
-manus/.vs/
-manus/**/*.pdb
-manus/**/*.ilk
-manus/**/*.obj
-manus/**/*.exe
+# Local run artifacts
+run_data/
+desktop/logs/
+desktop/multiturn_cache.json
 
-# MANUS SDK local files
-manus/third_party/ManusSDK/
+# Local SDK/build artifacts
+manus/**/build/
+manus/**/build_codex/
+manus/**/Temp/
+manus/**/*.so
+manus/**/*.a
 manus/**/*.dll
 manus/**/*.lib
-manus/**/*.so
+manus/**/*.exe
+manus/**/*.pdb
+manus/**/*.exp
+manus/**/*.obj

@@ -15,6 +15,10 @@
 #define SOLVER_DIAG_LOG_ENABLE 0
 #endif
 
+#ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
+#define FEEDBACK_SERIAL_DEBUG_ENABLE 1
+#endif
+
 // Match the legacy RoboticHand protection policy: keep reverse/release guard
 // disabled during wiring and manual bring-up unless explicitly enabled.
 #ifndef REVERSE_GUARD_ENABLE
@@ -27,18 +31,19 @@ static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 
 // 默认上报的关节调试通道。
-static const uint8_t kDebugJointIndices[] = {8,9,10,11};
+static const uint8_t kDebugJointIndices[] = {0,1,2,3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
+static const uint32_t kFeedbackSerialDebugIntervalMs = 100;
 
-static const uint32_t kCanBusOfflineTimeoutMs = 300;
+static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const int16_t kControlOverloadLoadThreshold = 700;
+static const int16_t kControlOverloadLoadThreshold = 800;
 static const int16_t kJointControlOverloadLoadThreshold = 800;
 static const uint8_t kControlOverloadLatchCycles = 20;
 static const uint8_t kJointControlOverloadLatchCycles = 20;
-static const uint16_t kJointControlUnlimitedSpeed = 0;
+static const uint16_t kJointControlFeedbackSpeed = 0;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
@@ -479,6 +484,7 @@ void controlTask(void* parameter)
     uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
     bool sineTestActive = false;
     uint32_t sineTestStartMs = 0;
+    uint32_t lastFeedbackSerialDebugMs = 0;
 
     while (1)
     {
@@ -761,9 +767,10 @@ void controlTask(void* parameter)
             }
         }
 
-        // 根据目标角、磁编码器反馈和当前舵机位置计算各关节 PID 输出。
+        // PID uses tendon-space ABS so a positive correction has the same "shorten tendon"
+        // meaning on motors with opposite raw ABS directions. Single-motor output converts
+        // the final tendon-space target back to raw motor ABS before sending.
         g_controlSolver.compute(localTargets, magAngles, absolutePositionTendon, outPulsesTendon);
-
         if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
             // 直控模式：motorTargetRaw 按 motor channel 对齐，支持绝对多圈、单圈 raw 和 sweep 输入。
@@ -878,15 +885,20 @@ void controlTask(void* parameter)
                 bool emergency =
                     (!normalOutputAllowed) ||
                     shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
+                (void)holdByTendonGuard;
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || overloadFaultActive;
                 } else {
-                    emergency = emergency || releaseFaultActive || holdByTendonGuard || overloadFaultActive;
+                    // Tendon boundary hits are advisory; release risk is latched only
+                    // after the joint fails to return during sustained release motion.
+                    emergency = emergency || releaseFaultActive || overloadFaultActive;
                 }
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
                     hotplugHoldMotor[jointMotorCh];
+                const bool jointActive =
+                    (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
 
                 if (bus >= NUM_BUSES) {
                     continue;
@@ -895,6 +907,13 @@ void controlTask(void* parameter)
                 if (!controlEnabled)
                 {
                     // 状态机未授权 START/RUN 时，不向舵机追加新的控制目标。
+                    continue;
+                }
+
+                if (!jointActive)
+                {
+                    jointCmdPos[jointIndex] = clampServoPos(absolutePositionRaw[jointIndex]);
+                    jointCmdValid[jointIndex] = 0;
                     continue;
                 }
 
@@ -921,11 +940,7 @@ void controlTask(void* parameter)
 
                 int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
-                // Only active joints follow PID. Inactive joints hold their
-                // current absolute position so partial-scope tests do not move
-                // unrelated channels.
-                const bool jointActive =
-                    (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
+                // Only active joints follow PID and emit servo targets.
                 const bool dualTendonJoint = isDualTendonJoint(jointIndex);
                 if (jointActive && dualTendonJoint) {
                     const uint8_t appended =
@@ -936,7 +951,7 @@ void controlTask(void* parameter)
                                                 magAngles[jointIndex],
                                                 servoData,
                                                 jointCommandToken,
-                                                kJointControlUnlimitedSpeed,
+                                                kJointControlFeedbackSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
@@ -950,11 +965,11 @@ void controlTask(void* parameter)
                 if (jointActive) {
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                         const uint8_t motorCh = (uint8_t)jointMotorCh;
-                        const int32_t rawTarget =
+                        const int32_t targetRawAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
                         targetPos = clampServoPosByMotorAbsLimit(sharedData,
                                                                  motorCh,
-                                                                 rawTarget);
+                                                                 targetRawAbs);
                     } else {
                         targetPos = clampServoPos(outPulsesTendon[jointIndex]);
                     }
@@ -965,7 +980,7 @@ void controlTask(void* parameter)
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 } else {
                     appendJointActuatorTargets(&targetBatch, jointIndex, targetPos,
-                                               jointActive ? kJointControlUnlimitedSpeed : SERVO_TARGET_SPEED_DEFAULT,
+                                               jointActive ? kJointControlFeedbackSpeed : SERVO_TARGET_SPEED_DEFAULT,
                                                SERVO_TARGET_ACC_DEFAULT);
                 }
                 jointCmdPos[jointIndex] = targetPos;
@@ -1007,6 +1022,35 @@ void controlTask(void* parameter)
             }
         }
 
+#if FEEDBACK_SERIAL_DEBUG_ENABLE
+        if (feedbackRunningState && commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
+            const uint32_t nowMs = millis();
+            if ((uint32_t)(nowMs - lastFeedbackSerialDebugMs) >= kFeedbackSerialDebugIntervalMs) {
+                lastFeedbackSerialDebugMs = nowMs;
+                for (uint8_t di = 0; di < kDebugJointCount; di++) {
+                    const uint8_t jointIndex = kDebugJointIndices[di];
+                    const bool jointActive =
+                        (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
+                    if (!jointActive) {
+                        continue;
+                    }
+                    Serial.printf(
+                        "[FB DBG] J%02u valid=%u tgt=%.3f act=%.3f l1=%.3f l2act=%ld l2out=%.3f cmd=%d curAbs=%ld cmdValid=%u\r\n",
+                        jointIndex,
+                        (unsigned)(mappedData.validFlags[jointIndex] != 0 ? 1 : 0),
+                        localTargets[jointIndex],
+                        magAngles[jointIndex],
+                        g_controlSolver.getPidOutput(jointIndex, 0),
+                        (long)absolutePositionTendon[jointIndex],
+                        g_controlSolver.getPidOutput(jointIndex, 1),
+                        (int)jointCmdPos[jointIndex],
+                        (long)absolutePositionRaw[jointIndex],
+                        (unsigned)jointCmdValid[jointIndex]);
+                }
+            }
+        }
+#endif
+
         if (sharedData->servoTargetQueue && targetBatch.count > 0) {
             xQueueOverwrite(sharedData->servoTargetQueue, &targetBatch);
         }
@@ -1031,6 +1075,7 @@ void controlTask(void* parameter)
 
         if (feedbackRunningState &&
             commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            !sineTestActive &&
             feedbackJointTargetsReached(sharedData, mappedData, localTargets, magAngles)) {
             if (feedbackRunDoneStableCount < 255) {
                 feedbackRunDoneStableCount++;

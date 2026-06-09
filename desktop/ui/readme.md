@@ -16,7 +16,7 @@ from ui_main import HandGUI, LauncherWindow
 
 ## Components
 
-- `ui_control_panels.py`: Qt-native control surface with `QTableWidget` channel tables, Start/Stop/Home/Reset/Calibrate, Send All, local test controls, Teleop toggle, and Algorithm output.
+- `ui_control_panels.py`: Qt-native control surface with `QTableWidget` channel tables, ENABLE/E-STOP/Pause, Calibrate/Clear Fault/Rope Init/Flash/ABS-limit controls, Send All, local test controls, Teleop toggle, and Algorithm output.
 - `ui_pose_view.py`: `pyqtgraph.opengl.GLViewWidget` URDF skeleton view. It reuses line/scatter items for updates.
 - `ui_tactile_view.py`: `pyqtgraph.ImageItem` tactile heatmap with latest-only background matrix preparation and throttled refresh.
 - `ui_camera_view.py`: OpenCV capture thread with main-thread `QImage/QPixmap` display.
