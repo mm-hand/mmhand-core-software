@@ -15,6 +15,10 @@ static_assert(
     CAN_ERROR_DETAIL_DLC == (1 + CAN_ERROR_DETAIL_CODES_PER_FRAME),
     "Error-detail DLC must be seq(1) + channel codes.");
 static_assert(ENCODER_TOTAL_NUM <= 32, "errorBitmap only supports up to 32 channels.");
+static_assert(
+    CAN_ENC_FRAME_COUNT == (CAN_ID_ENC_LAST - CAN_ID_ENC_BASE + 1),
+    "Encoder frame ID range must match frame count.");
+static_assert(CAN_ID_ENC_CRC <= 0x7FF, "Encoder CRC CAN ID must fit standard CAN.");
 
 static_assert(
     CAN_TAC_SUMMARY_FRAME_COUNT == (CAN_ID_TAC_SUMMARY_LAST - CAN_ID_TAC_SUMMARY_BASE + 1),
@@ -23,8 +27,16 @@ static_assert(
     CAN_TAC_SUMMARY_DLC == (1 + CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
     "Tactile DLC must be seq(1) + payload bytes.");
 static_assert(
-    TACTILE_SUMMARY_BYTES <= (CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
-    "Tactile summary payload budget too small.");
+    CAN_TAC_SUMMARY_PACKET_BYTES <=
+        (CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
+    "Tactile summary payload plus CRC budget too small.");
+static_assert(
+    CAN_TAC_FULL_DLC == (1 + CAN_TAC_FULL_PAYLOAD_PER_FRAME),
+    "Tactile full DLC must be seq(1) + payload bytes.");
+static_assert(
+    TACTILE_FULL_BYTES <= (CAN_TAC_FULL_FRAME_COUNT * CAN_TAC_FULL_PAYLOAD_PER_FRAME),
+    "Tactile full payload budget too small.");
+static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
 // 错误详情帧重组状态：
 // 三帧使用相同 seq 才会组成一批完整的 21 通道错误码。
@@ -35,6 +47,13 @@ typedef struct {
     uint8_t codes[ENCODER_TOTAL_NUM];
     uint32_t firstFrameTimeMs;
 } ErrorDetailReassemblyState;
+
+typedef struct {
+    uint8_t active;
+    uint8_t frameMask;
+    uint8_t bytes[CAN_ENC_PAYLOAD_BYTES];
+    uint32_t firstFrameTimeMs;
+} EncoderReassemblyState;
 
 static esp_ldo_channel_handle_t s_canVo4Ldo = NULL;
 
@@ -81,9 +100,18 @@ typedef struct {
     uint8_t active;
     uint8_t seq;
     uint8_t frameMask;
-    uint8_t bytes[TACTILE_SUMMARY_BYTES];
+    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES];
     uint32_t firstFrameTimeMs;
 } TactileReassemblyState;
+
+typedef struct {
+    uint8_t active;
+    uint8_t seq;
+    uint16_t receivedFrames;
+    uint8_t frameMask[CAN_TAC_FULL_FRAME_MASK_BYTES];
+    uint8_t bytes[TACTILE_FULL_BYTES];
+    uint32_t firstFrameTimeMs;
+} TactileFullReassemblyState;
 
 static inline void resetErrorDetailReassembly(ErrorDetailReassemblyState* state) {
     if (!state) {
@@ -96,6 +124,16 @@ static inline void resetErrorDetailReassembly(ErrorDetailReassemblyState* state)
     memset(state->codes, 0, sizeof(state->codes));
 }
 
+static inline void resetEncoderReassembly(EncoderReassemblyState* state) {
+    if (!state) {
+        return;
+    }
+    state->active = 0;
+    state->frameMask = 0;
+    state->firstFrameTimeMs = 0;
+    memset(state->bytes, 0, sizeof(state->bytes));
+}
+
 static inline void resetTactileReassembly(TactileReassemblyState* state) {
     if (!state) {
         return;
@@ -104,7 +142,53 @@ static inline void resetTactileReassembly(TactileReassemblyState* state) {
     state->seq = 0;
     state->frameMask = 0;
     state->firstFrameTimeMs = 0;
+    memset(state->packet, 0, sizeof(state->packet));
+}
+
+static inline void resetTactileFullReassembly(TactileFullReassemblyState* state) {
+    if (!state) {
+        return;
+    }
+    state->active = 0;
+    state->seq = 0;
+    state->receivedFrames = 0;
+    state->firstFrameTimeMs = 0;
+    memset(state->frameMask, 0, sizeof(state->frameMask));
     memset(state->bytes, 0, sizeof(state->bytes));
+}
+
+static inline bool tactileFullFrameSeen(const TactileFullReassemblyState* state, uint16_t frameIdx) {
+    return (state->frameMask[frameIdx >> 3] & (uint8_t)(1U << (frameIdx & 0x07))) != 0;
+}
+
+static inline void markTactileFullFrameSeen(TactileFullReassemblyState* state, uint16_t frameIdx) {
+    state->frameMask[frameIdx >> 3] |= (uint8_t)(1U << (frameIdx & 0x07));
+}
+
+static uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (crc & 0x8000) {
+                crc = (uint16_t)((crc << 1) ^ 0x1021);
+            } else {
+                crc = (uint16_t)(crc << 1);
+            }
+        }
+    }
+    return crc;
+}
+
+static void queueLatestTactile(QueueHandle_t queue, const RemoteTactileData_t* data) {
+    if (!queue || !data) {
+        return;
+    }
+    if (xQueueSend(queue, data, 0) != pdTRUE) {
+        RemoteTactileData_t dropped;
+        xQueueReceive(queue, &dropped, 0);
+        xQueueSend(queue, data, 0);
+    }
 }
 
 static uint32_t buildErrorBitmap(const uint8_t* codes) {
@@ -137,7 +221,7 @@ static void setupTwai() {
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
-    g_config.rx_queue_len = 64;
+    g_config.rx_queue_len = 512;
     if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
         twai_start();
         installed = true;
@@ -152,17 +236,32 @@ void canCommunicationTask(void* parameter) {
     RemoteSensorData_t rxBuffer;
     memset(&rxBuffer, 0, sizeof(rxBuffer));
 
+    EncoderReassemblyState encoderState;
+    resetEncoderReassembly(&encoderState);
+
     ErrorDetailReassemblyState errorState;
     resetErrorDetailReassembly(&errorState);
 
     TactileReassemblyState tactileState;
     resetTactileReassembly(&tactileState);
 
+    static TactileFullReassemblyState tactileFullState;
+    resetTactileFullReassembly(&tactileFullState);
+
+    static RemoteTactileData_t latestTactileData;
+    memset(&latestTactileData, 0, sizeof(latestTactileData));
+    static uint8_t pendingFullBytes[TACTILE_FULL_BYTES];
+    static bool pendingFullValid = false;
+    static uint8_t pendingFullSeq = 0;
+    static uint32_t pendingFullTimestamp = 0;
+    memset(pendingFullBytes, 0, sizeof(pendingFullBytes));
+
     twai_message_t rxMsg;
     uint32_t lastRxTime = 0;
     uint32_t lastCompleteErrorBatchTime = millis();
     RemoteCommand_t txCmd;
 
+    const uint8_t kAllEncoderFramesMask = (uint8_t)((1U << CAN_ENC_FRAME_COUNT) - 1U);
     const uint8_t kAllErrorFramesMask = (uint8_t)((1U << CAN_ERROR_DETAIL_FRAME_COUNT) - 1U);
     const uint8_t kAllTactileFramesMask = (uint8_t)((1U << CAN_TAC_SUMMARY_FRAME_COUNT) - 1U);
 
@@ -172,30 +271,55 @@ void canCommunicationTask(void* parameter) {
             lastRxTime = nowMs;
 
             if (rxMsg.identifier >= CAN_ID_ENC_BASE && rxMsg.identifier <= CAN_ID_ENC_LAST) {
-                // 编码器帧按 4 通道一帧连续排列，最后一帧到达时发布完整快照。
-                const int frameIdx = (int)(rxMsg.identifier - CAN_ID_ENC_BASE);
-                const int baseIdx = frameIdx * 4;
-                const int payloadLen = (int)rxMsg.data_length_code;
+                if (rxMsg.data_length_code != 8) {
+                    continue;
+                }
 
+                const uint8_t frameIdx = (uint8_t)(rxMsg.identifier - CAN_ID_ENC_BASE);
+                if (!encoderState.active) {
+                    encoderState.active = 1;
+                    encoderState.frameMask = 0;
+                    encoderState.firstFrameTimeMs = nowMs;
+                    memset(encoderState.bytes, 0, sizeof(encoderState.bytes));
+                }
+
+                const int baseIdx = (int)frameIdx * 4;
                 for (int i = 0; i < 4; i++) {
                     const int realIdx = baseIdx + i;
                     const int dataOffset = i * 2;
                     if (realIdx >= ENCODER_TOTAL_NUM) {
-                        continue;
-                    }
-                    if ((dataOffset + 1) >= payloadLen) {
                         break;
                     }
-                    const uint16_t val = ((uint16_t)rxMsg.data[dataOffset] << 8) |
-                                         rxMsg.data[dataOffset + 1];
-                    rxBuffer.encoderValues[realIdx] = val;
+                    encoderState.bytes[realIdx * 2] = rxMsg.data[dataOffset];
+                    encoderState.bytes[realIdx * 2 + 1] = rxMsg.data[dataOffset + 1];
+                }
+                encoderState.frameMask |= (uint8_t)(1U << frameIdx);
+            } else if (rxMsg.identifier == CAN_ID_ENC_CRC) {
+                if (rxMsg.data_length_code != CAN_ENC_CRC_DLC) {
+                    resetEncoderReassembly(&encoderState);
+                    continue;
+                }
+                if (!encoderState.active || encoderState.frameMask != kAllEncoderFramesMask) {
+                    resetEncoderReassembly(&encoderState);
+                    continue;
                 }
 
-                if (rxMsg.identifier == CAN_ID_ENC_LAST) {
+                const uint16_t expectedCrc = ((uint16_t)rxMsg.data[1] << 8) | rxMsg.data[2];
+                const uint16_t actualCrc = crc16Ccitt(encoderState.bytes, sizeof(encoderState.bytes));
+                const bool metadataOk =
+                    rxMsg.data[3] == CAN_ENC_FRAME_COUNT &&
+                    rxMsg.data[4] == CAN_ENC_PAYLOAD_BYTES;
+                if (metadataOk && actualCrc == expectedCrc) {
+                    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
+                        rxBuffer.encoderValues[i] =
+                            ((uint16_t)encoderState.bytes[i * 2] << 8) |
+                            encoderState.bytes[i * 2 + 1];
+                    }
                     rxBuffer.timestamp = nowMs;
                     rxBuffer.isValid = true;
                     xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
                 }
+                resetEncoderReassembly(&encoderState);
             } else if (rxMsg.identifier >= CAN_ID_ERROR_DETAIL_BASE &&
                        rxMsg.identifier <= CAN_ID_ERROR_DETAIL_LAST) {
                 // 错误详情为分片协议，seq 改变或超时都表示上一批丢弃。
@@ -262,29 +386,138 @@ void canCommunicationTask(void* parameter) {
                     tactileState.seq = seq;
                     tactileState.frameMask = 0;
                     tactileState.firstFrameTimeMs = nowMs;
-                    memset(tactileState.bytes, 0, sizeof(tactileState.bytes));
+                    memset(tactileState.packet, 0, sizeof(tactileState.packet));
                 }
 
                 const int baseIdx = (int)frameIdx * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME;
                 for (int i = 0; i < CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME; i++) {
                     const int tactileIdx = baseIdx + i;
-                    if (tactileIdx < TACTILE_SUMMARY_BYTES) {
-                        tactileState.bytes[tactileIdx] = rxMsg.data[1 + i];
+                    if (tactileIdx < CAN_TAC_SUMMARY_PACKET_BYTES) {
+                        tactileState.packet[tactileIdx] = rxMsg.data[1 + i];
                     }
                 }
 
                 tactileState.frameMask |= (uint8_t)(1U << frameIdx);
                 if (tactileState.frameMask == kAllTactileFramesMask) {
+                    const uint16_t expectedCrc =
+                        ((uint16_t)tactileState.packet[TACTILE_SUMMARY_BYTES] << 8) |
+                        tactileState.packet[TACTILE_SUMMARY_BYTES + 1];
+                    const uint16_t actualCrc =
+                        crc16Ccitt(tactileState.packet, TACTILE_SUMMARY_BYTES);
+                    if (actualCrc != expectedCrc) {
+                        resetTactileReassembly(&tactileState);
+                        continue;
+                    }
+
                     if (sharedData->tactileQueue) {
                         RemoteTactileData_t tactileData;
-                        memset(&tactileData, 0, sizeof(tactileData));
-                        memcpy(tactileData.values, tactileState.bytes, sizeof(tactileData.values));
-                        tactileData.seq = tactileState.seq;
-                        tactileData.timestamp = nowMs;
-                        tactileData.isValid = true;
-                        xQueueOverwrite(sharedData->tactileQueue, &tactileData);
+                        memcpy(latestTactileData.values, tactileState.packet, sizeof(latestTactileData.values));
+                        latestTactileData.seq = tactileState.seq;
+                        latestTactileData.timestamp = nowMs;
+                        latestTactileData.isValid = true;
+                        latestTactileData.fullValid = false;
+                        tactileData = latestTactileData;
+                        tactileData.fullValid = false;
+                        queueLatestTactile(sharedData->tactileQueue, &tactileData);
+
+                        if (pendingFullValid && pendingFullSeq == latestTactileData.seq) {
+                            memcpy(latestTactileData.fullValues,
+                                   pendingFullBytes,
+                                   sizeof(latestTactileData.fullValues));
+                            latestTactileData.fullSeq = pendingFullSeq;
+                            latestTactileData.fullTimestamp = pendingFullTimestamp;
+                            latestTactileData.fullValid = true;
+                            queueLatestTactile(sharedData->tactileQueue, &latestTactileData);
+                            pendingFullValid = false;
+                        }
                     }
                     resetTactileReassembly(&tactileState);
+                }
+            } else if (rxMsg.identifier == CAN_ID_TAC_RAW_DIAG) {
+                if (rxMsg.data_length_code != 8) {
+                    continue;
+                }
+                const uint8_t seq = rxMsg.data[0];
+                const uint8_t group = rxMsg.data[1];
+                const uint8_t sensor = rxMsg.data[2];
+                const int8_t minZ = (int8_t)rxMsg.data[3];
+                const int8_t maxZ = (int8_t)rxMsg.data[4];
+                const uint16_t absSum = (uint16_t)rxMsg.data[5] |
+                                        ((uint16_t)rxMsg.data[6] << 8);
+                const uint8_t nonZero = rxMsg.data[7];
+                Serial.printf("[S3TactileRawZ] seq=%u G%uS%u min=%d max=%d sum=%u nz=%u\r\n",
+                              seq,
+                              group,
+                              sensor,
+                              minZ,
+                              maxZ,
+                              absSum,
+                              nonZero);
+            } else if (rxMsg.identifier >= CAN_ID_TAC_FULL_DUMP_BASE &&
+                       rxMsg.identifier <= CAN_ID_TAC_FULL_DUMP_LAST) {
+                if (rxMsg.data_length_code != CAN_TAC_FULL_DLC) {
+                    continue;
+                }
+
+                const uint8_t seq = rxMsg.data[0];
+                const uint16_t frameIdx = (uint16_t)(rxMsg.identifier - CAN_ID_TAC_FULL_DUMP_BASE);
+                if (frameIdx >= CAN_TAC_FULL_FRAME_COUNT) {
+                    continue;
+                }
+
+                if (tactileFullState.active) {
+                    const bool seqChanged = (seq != tactileFullState.seq);
+                    const bool timedOut =
+                        ((uint32_t)(nowMs - tactileFullState.firstFrameTimeMs) > CAN_TAC_FULL_REASSEMBLY_TIMEOUT_MS);
+                    if (seqChanged || timedOut) {
+                        resetTactileFullReassembly(&tactileFullState);
+                    }
+                }
+
+                if (!tactileFullState.active) {
+                    tactileFullState.active = 1;
+                    tactileFullState.seq = seq;
+                    tactileFullState.receivedFrames = 0;
+                    tactileFullState.firstFrameTimeMs = nowMs;
+                    memset(tactileFullState.frameMask, 0, sizeof(tactileFullState.frameMask));
+                    memset(tactileFullState.bytes, 0, sizeof(tactileFullState.bytes));
+                }
+
+                const int baseIdx = (int)frameIdx * CAN_TAC_FULL_PAYLOAD_PER_FRAME;
+                for (int i = 0; i < CAN_TAC_FULL_PAYLOAD_PER_FRAME; i++) {
+                    const int tactileIdx = baseIdx + i;
+                    if (tactileIdx < TACTILE_FULL_BYTES) {
+                        tactileFullState.bytes[tactileIdx] = rxMsg.data[1 + i];
+                    }
+                }
+
+                if (!tactileFullFrameSeen(&tactileFullState, frameIdx)) {
+                    markTactileFullFrameSeen(&tactileFullState, frameIdx);
+                    tactileFullState.receivedFrames++;
+                }
+
+                if (tactileFullState.receivedFrames >= CAN_TAC_FULL_FRAME_COUNT) {
+                    if (sharedData->tactileQueue) {
+                        if (latestTactileData.isValid &&
+                            latestTactileData.seq == tactileFullState.seq) {
+                            memcpy(latestTactileData.fullValues,
+                                   tactileFullState.bytes,
+                                   sizeof(latestTactileData.fullValues));
+                            latestTactileData.fullSeq = tactileFullState.seq;
+                            latestTactileData.fullTimestamp = nowMs;
+                            latestTactileData.timestamp = nowMs;
+                            latestTactileData.fullValid = true;
+                            queueLatestTactile(sharedData->tactileQueue, &latestTactileData);
+                        } else {
+                            memcpy(pendingFullBytes,
+                                   tactileFullState.bytes,
+                                   sizeof(pendingFullBytes));
+                            pendingFullSeq = tactileFullState.seq;
+                            pendingFullTimestamp = nowMs;
+                            pendingFullValid = true;
+                        }
+                    }
+                    resetTactileFullReassembly(&tactileFullState);
                 }
             }
         }
@@ -296,9 +529,19 @@ void canCommunicationTask(void* parameter) {
             resetErrorDetailReassembly(&errorState);
         }
 
+        if (encoderState.active &&
+            (uint32_t)(nowMs - encoderState.firstFrameTimeMs) > CAN_ENC_REASSEMBLY_TIMEOUT_MS) {
+            resetEncoderReassembly(&encoderState);
+        }
+
         if (tactileState.active &&
             (uint32_t)(nowMs - tactileState.firstFrameTimeMs) > CAN_TAC_REASSEMBLY_TIMEOUT_MS) {
             resetTactileReassembly(&tactileState);
+        }
+
+        if (tactileFullState.active &&
+            (uint32_t)(nowMs - tactileFullState.firstFrameTimeMs) > CAN_TAC_FULL_REASSEMBLY_TIMEOUT_MS) {
+            resetTactileFullReassembly(&tactileFullState);
         }
 
         if ((uint32_t)(nowMs - lastCompleteErrorBatchTime) > CAN_ERROR_TABLE_CLEAR_TIMEOUT_MS &&
@@ -322,6 +565,6 @@ void canCommunicationTask(void* parameter) {
             twai_transmit(&txMsg, pdMS_TO_TICKS(10));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

@@ -29,8 +29,9 @@ extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
 };
 
 // Runtime encoder direction. It starts from the default installation table, and
-// automatic calibration may update one joint after detecting the real travel
-// direction. Angle display, manual calibration, and PID all read this table.
+// automatic calibration resets the active joint to that fixed table instead of
+// learning direction from noisy travel samples. Angle display, manual
+// calibration, and PID all read this table.
 int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
     1, -1, -1,  1,
     1, -1, -1,  1,

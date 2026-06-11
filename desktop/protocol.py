@@ -25,6 +25,8 @@ PACKET_TYPE_TACTILE = 0x0A
 PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
+PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
+PACKET_TYPE_TACTILE_FULL = 0x0F
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -37,9 +39,7 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
-CMD_LOCAL_TEST_PARAMS = 0xD4
-CMD_LOCAL_TEST_START = 0xD5
-CMD_LOCAL_TEST_STOP = 0xD6
+CMD_TENDON_GUARD = 0xD4
 CMD_ACTIVE_SCOPE = 0xD7
 CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
@@ -48,6 +48,12 @@ CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
 # 上位机在线心跳；固件用它判断桌面端是否已经关闭。
 CMD_HOST_HEARTBEAT = 0xDC
 CMD_MULTITURN_NVS_CONTROL = 0xDD
+CMD_SINE_TEST_PARAMS = 0xDE
+CMD_SINE_TEST_START = 0xDF
+CMD_SINE_TEST_STOP = 0xE0
+CMD_MOTOR_POS_ABS_ONE = 0xE1
+CMD_CALIB_LOAD_JOINT = 0xE2
+CMD_CALIB_LOAD_LIMITS = 0xE3
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -82,6 +88,11 @@ TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
 TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
+TACTILE_TIP_TAXELS = 25
+TACTILE_PAD_TAXELS = 52
+TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_PAD_TAXELS, TACTILE_TIP_TAXELS, TACTILE_TIP_TAXELS)
+TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TACTILE_AXIS_COUNT
+TACTILE_FULL_PACKET_MAGIC = b"T2"
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -179,6 +190,45 @@ def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, Lis
         maxs.append(struct.unpack(">h", payload[offset + 2:offset + 4])[0])
         offset += 4
     return valid_bitmap, locked_bitmap, mins, maxs
+
+
+def _unpack_float_be(data: bytes) -> float:
+    return struct.unpack(">f", data)[0]
+
+
+def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
+    # One joint per frame keeps the existing 1-byte LEN protocol unchanged.
+    if len(payload) < 54:
+        return None
+    idx = 0
+    joint = payload[idx]
+    idx += 1
+    if joint >= ENCODER_COUNT:
+        return None
+
+    result = {
+        "joint": int(joint),
+        "success": bool(payload[idx]),
+    }
+    idx += 1
+    for key in ("encoderMin", "encoderMax", "offset"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    result["angleMax"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        result[key] = struct.unpack(">h", payload[idx:idx + 2])[0]
+        idx += 2
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        result[key] = _unpack_float_be(payload[idx:idx + 4])
+        idx += 4
+    result["scaled"] = bool(payload[idx])
+    idx += 1
+    result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
+    return result
 
 
 def parse_calib_ack(payload: bytes) -> Optional[int]:
@@ -296,6 +346,54 @@ def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[i
             cursor += TACTILE_AXIS_COUNT
         out.append(group_data)
     return seq, out
+
+
+def crc16_ccitt(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in bytes(data):
+        crc ^= (int(byte) & 0xFF) << 8
+        for _bit in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc & 0xFFFF
+
+
+def parse_tactile_full_fragment(
+    payload: bytes,
+) -> Optional[Tuple[int, int, int, bytes, Optional[int], Optional[int]]]:
+    if len(payload) >= 9 and payload[:2] == TACTILE_FULL_PACKET_MAGIC:
+        seq = payload[2]
+        summary_seq = payload[3]
+        frag_idx = payload[4]
+        frag_count = payload[5]
+        chunk_len = payload[6]
+        full_crc = payload[7] | (payload[8] << 8)
+        if frag_count <= 0 or frag_idx >= frag_count:
+            return None
+        if len(payload) != 9 + chunk_len:
+            return None
+        return (
+            seq,
+            frag_idx,
+            frag_count,
+            bytes(payload[9:9 + chunk_len]),
+            summary_seq,
+            full_crc,
+        )
+
+    if len(payload) < 4:
+        return None
+    seq = payload[0]
+    frag_idx = payload[1]
+    frag_count = payload[2]
+    chunk_len = payload[3]
+    if frag_count <= 0 or frag_idx >= frag_count:
+        return None
+    if len(payload) != 4 + chunk_len:
+        return None
+    return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
 
 
 def parse_joint_debug_packet(
@@ -440,6 +538,63 @@ def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -
     return _build_command_frame(CMD_MOTOR_ABS_LIMIT_LOCK, payload)
 
 
+def _pack_float_be(value: float) -> bytes:
+    return struct.pack(">f", float(value))
+
+
+def _clamp_i16(value: int) -> int:
+    v = int(value)
+    if v < -32768:
+        return -32768
+    if v > 32767:
+        return 32767
+    return v
+
+
+def build_tendon_guard_cmd(config: List[Tuple[bool, int, int]]) -> bytes:
+    if len(config) != ENCODER_COUNT:
+        raise ValueError(f"need exactly {ENCODER_COUNT} tendon guard rows")
+    payload = bytearray()
+    for enabled, sign, x1_abs in config:
+        payload.append(1 if bool(enabled) else 0)
+        payload.append(0xFF if int(sign) < 0 else 0x01)
+        payload.extend(struct.pack(">h", _clamp_i16(int(x1_abs))))
+    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))
+
+
+def build_calib_load_limits_cmd(valid_bitmap: int, locked_bitmap: int, mins: List[int], maxs: List[int]) -> bytes:
+    if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
+        raise ValueError(f"need exactly {MOTOR_COUNT} motor limit values")
+    payload = bytearray()
+    payload.extend(struct.pack(">II", int(valid_bitmap) & 0xFFFFFFFF, int(locked_bitmap) & 0xFFFFFFFF))
+    for i in range(MOTOR_COUNT):
+        payload.extend(struct.pack(">h", _clamp_i16(mins[i])))
+        payload.extend(struct.pack(">h", _clamp_i16(maxs[i])))
+    return _build_command_frame(CMD_CALIB_LOAD_LIMITS, bytes(payload))
+
+
+def build_calib_load_joint_cmd(result: dict) -> bytes:
+    joint = int(result.get("joint", -1))
+    if joint < 0 or joint >= ENCODER_COUNT:
+        raise ValueError(f"invalid joint index {joint}")
+    payload = bytearray()
+    payload.append(joint & 0xFF)
+    payload.append(1 if bool(result.get("success", False)) else 0)
+    for key in ("encoderMin", "encoderMax", "offset"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    payload.extend(_pack_float_be(float(result.get("angleMax", 0.0))))
+    for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
+    for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
+        payload.extend(struct.pack(">h", _clamp_i16(result.get(key, 0))))
+    for key in ("startDeg", "tightDeg", "totalDeg"):
+        payload.extend(_pack_float_be(float(result.get(key, 0.0))))
+    payload.append(1 if bool(result.get("scaled", False)) else 0)
+    direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
+    payload.extend(struct.pack(">b", direction))
+    return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
+
+
 def build_host_heartbeat_cmd() -> bytes:
     """界面打开时维持下位机 host-online 计时器。"""
     return _build_command_frame(CMD_HOST_HEARTBEAT, b"")
@@ -491,6 +646,19 @@ def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
     return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
 
 
+def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
+    idx = int(motor_index)
+    if idx < 0 or idx >= MOTOR_COUNT:
+        raise ValueError(f"motor index out of range: {idx}")
+    v = int(motor_abs)
+    if v < MOTOR_ABS_CMD_MIN:
+        v = MOTOR_ABS_CMD_MIN
+    elif v > MOTOR_ABS_CMD_MAX:
+        v = MOTOR_ABS_CMD_MAX
+    payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
+    return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
+
+
 def build_stream_mode_cmd(mode: int) -> bytes:
     mode_int = int(mode)
     if mode_int not in (SENSOR_STREAM_MODE_LEGACY_U16_WRAP, SENSOR_STREAM_MODE_SIGNED_I16):
@@ -498,14 +666,30 @@ def build_stream_mode_cmd(mode: int) -> bytes:
     return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
 
 
-def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:
-    payload = struct.pack("<ff", freq_hz, amplitude_deg)
-    return _build_command_frame(CMD_LOCAL_TEST_PARAMS, payload)
+def build_sine_test_params_cmd(rows: List[Tuple[int, float, float, float, float]], hold_s: float) -> bytes:
+    hold_ms = max(0, min(3600000, int(round(float(hold_s) * 1000.0))))
+    valid_rows = []
+    for joint_idx, lo, hi, freq_hz, phase_deg in rows[:5]:
+        idx = int(joint_idx)
+        if not 0 <= idx < ENCODER_COUNT:
+            continue
+        center = 0.5 * (float(lo) + float(hi))
+        amp = 0.5 * abs(float(hi) - float(lo))
+        phase = float(phase_deg) * 3.14159265358979323846 / 180.0
+        valid_rows.append((idx, center, amp, float(freq_hz), phase))
+    payload = bytearray(struct.pack(">IB", hold_ms & 0xFFFFFFFF, len(valid_rows) & 0xFF))
+    for idx, center, amp, freq_hz, phase in valid_rows:
+        payload.append(idx & 0xFF)
+        payload.extend(struct.pack("<ffff", center, amp, freq_hz, phase))
+    for _ in range(5 - len(valid_rows)):
+        payload.append(0)
+        payload.extend(struct.pack("<ffff", 0.0, 0.0, 0.0, 0.0))
+    return _build_command_frame(CMD_SINE_TEST_PARAMS, payload)
 
 
-def build_local_test_start_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_START, b"")
+def build_sine_test_start_cmd() -> bytes:
+    return _build_command_frame(CMD_SINE_TEST_START, b"")
 
 
-def build_local_test_stop_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_STOP, b"")
+def build_sine_test_stop_cmd() -> bytes:
+    return _build_command_frame(CMD_SINE_TEST_STOP, b"")

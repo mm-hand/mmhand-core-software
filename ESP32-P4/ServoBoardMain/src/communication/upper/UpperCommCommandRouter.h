@@ -36,4 +36,9 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeJointMask,
                            uint8_t requireCanFeedback);
 
+void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
+                                 uint8_t motorIndex,
+                                 int32_t target,
+                                 uint8_t source);
+
 #endif // UPPER_COMM_COMMAND_ROUTER_H

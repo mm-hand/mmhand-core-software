@@ -39,10 +39,10 @@ static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 static const uint8_t kDualTendonModelSharedCadGeometry = 1;
 
 static const float kDefaultDualTendonCountsPerMm = 40.0f;
-static const float kDefaultDualTendonKp = 2.1f;
-static const float kDefaultDualTendonKi = 0.1f;
-static const float kDefaultDualTendonKd = 0.005f;
-static const float kDefaultDualTendonIntegralLimit = 2000.0f;
+static const float kDefaultDualTendonKp = 1.25f;
+static const float kDefaultDualTendonKi = 0.0f;
+static const float kDefaultDualTendonKd = 0.03f;
+static const float kDefaultDualTendonIntegralLimit = 0.0f;
 
 static const Point2D kJoint16Origin = {0.0f, 0.0f};
 static const Point2D kJoint16A1_0 = {-5.741894f, 0.244188f};
@@ -85,6 +85,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
         case 8:
         case 12:
         case kJoint16Index:
+        case 20:
             out->model = kDualTendonModelSharedCadGeometry;
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;

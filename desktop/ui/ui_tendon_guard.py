@@ -3,27 +3,25 @@ import os
 import time
 from typing import List, Sequence, Tuple
 
-from protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
+from protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
-
+# rope init 所使用的松紧绳方向对应表
+# 目前状态所有电机均是正转紧绳
 MOTOR_TO_JOINT_INDEX = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-    11, 12, 13, 14, 15, 16, 16, 17, 18, 19, 20,
+    0, 0, 1, 2, 3,
+    4, 4, 5, 6, 7,
+    8, 8, 9, 10, 11,
+    12, 12, 13, 14, 15,
+    16, 16, 17, 18, 19, 20, 20,
 ]
 if len(MOTOR_TO_JOINT_INDEX) < MOTOR_COUNT:
-    if HAND_PROFILE.lower() == "v2":
-        MOTOR_TO_JOINT_INDEX.extend([0, 4, 8, 12, 17][:MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)])
-    else:
-        MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
+    MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
 JOINT_TO_PRIMARY_MOTOR_INDEX = [-1] * ENCODER_COUNT
 for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
 MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
-for _motor_idx in (12, 13, 14, 15, 25):
-    if 0 <= _motor_idx < MOTOR_COUNT:
-        MOTOR_TENDON_SHORTEN_ABS_SIGN[_motor_idx] = -1
 
 
 def clamp_motor_abs(value: int) -> int:
@@ -137,6 +135,7 @@ class TendonGuard:
         if len(guarded) < ENCODER_COUNT:
             guarded.extend([0.0] * (ENCODER_COUNT - len(guarded)))
         blocked: List[int] = []
+        warnings: List[int] = []
         if not state:
             return guarded, blocked, ""
         if not bool(getattr(state, "has_sensor_data", False)):
@@ -145,6 +144,7 @@ class TendonGuard:
         servo_abs = getattr(state, "servo_angles", []) or []
         servo_online = getattr(state, "servo_online", []) or []
         angles = getattr(state, "angles", []) or []
+        encoders = getattr(state, "encoders", []) or []
         if not servo_abs or not servo_online:
             return guarded, blocked, ""
 
@@ -156,6 +156,8 @@ class TendonGuard:
             if motor_idx < 0 or motor_idx >= len(servo_abs) or motor_idx >= len(servo_online):
                 continue
             if joint_idx >= len(angles) or not bool(servo_online[motor_idx]):
+                continue
+            if joint_idx < len(encoders) and bool(getattr(encoders[joint_idx], "angle_error", getattr(encoders[joint_idx], "error", False))):
                 continue
             sign = 1 if int(cfg.get("pull_sign", 1)) >= 0 else -1
             x1_abs = clamp_motor_abs(int(cfg.get("x1_abs", 0)))
@@ -170,17 +172,16 @@ class TendonGuard:
                 or (sign < 0 and abs_now >= (x1_abs - self.release_margin_counts))
             )
             if hit_boundary:
-                guarded[joint_idx] = cur_joint_deg
-                blocked.append(joint_idx)
+                warnings.append(joint_idx)
 
         msg = ""
-        if blocked:
+        if warnings:
             now = time.time()
             if now - self._last_warn_ts >= self.warn_interval_s:
                 self._last_warn_ts = now
-                joints = ", ".join(f"J{i}" for i in blocked)
+                joints = ", ".join(f"J{i}" for i in warnings)
                 suffix = f" ({source})" if source else ""
-                msg = f"Tendon guard blocked release on {joints}{suffix}"
+                msg = f"Tendon guard release boundary warning on {joints}{suffix}"
         return guarded, blocked, msg
 
     @staticmethod

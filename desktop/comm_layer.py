@@ -2,7 +2,7 @@ import os
 import queue
 import threading
 import time
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import serial
@@ -17,10 +17,12 @@ from protocol import (
     PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_ENCODER_RAW,
+    PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
     PACKET_TYPE_TACTILE,
+    PACKET_TYPE_TACTILE_FULL,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     RX_POLL_SLEEP,
@@ -31,14 +33,17 @@ from protocol import (
     build_angle_cmd,
     build_active_scope_cmd,
     build_calib_data_cmd,
+    build_calib_load_joint_cmd,
+    build_calib_load_limits_cmd,
     build_calibrate_cmd,
-    build_local_test_params_cmd,
-    build_local_test_start_cmd,
-    build_local_test_stop_cmd,
+    build_sine_test_params_cmd,
+    build_sine_test_start_cmd,
+    build_sine_test_stop_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
+    build_motor_pos_abs_one_cmd,
     build_motor_pos_sweep_cmd,
     build_multiturn_nvs_control_cmd,
     build_pause_cmd,
@@ -48,7 +53,10 @@ from protocol import (
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
+    build_tendon_guard_cmd,
     CMD_CALIBRATE,
+    CMD_CALIB_LOAD_JOINT,
+    CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_DATA,
     CMD_START,
@@ -71,6 +79,7 @@ from protocol import (
     parse_fault_status_packet,
     parse_release_fault_packet,
     parse_joint_debug_packet,
+    parse_joint_calib_snapshot_packet,
     parse_motor_abs_limit_packet,
     parse_proto_ack,
     parse_sensor_packet,
@@ -78,61 +87,36 @@ from protocol import (
     parse_servo_raw_packet,
     parse_servo_telem_packet,
     parse_system_status_packet,
+    parse_tactile_full_fragment,
     parse_tactile_packet,
+    TACTILE_FULL_BYTES,
+    TACTILE_SENSOR_TAXEL_COUNTS,
+    crc16_ccitt,
     PROTO_ACK_STATUS_OK,
+    PROTO_ACK_STATUS_QUEUED,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
 from run_data_logger import RunDataLogger
+from session_log import log_session
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
 # 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
 HOST_HEARTBEAT_INTERVAL_S = 0.5
-TACTILE_ZERO_NOISE_FLOOR = 3
-TACTILE_ZERO_HOLD_FRAMES = 6
-TACTILE_HOLD_MIN_MAGNITUDE = 12
+TACTILE_FULL_STALE_AFTER_S = 1.0
+TERMINAL_DIAG_ENABLE = False
+TERMINAL_DIAG_INTERVAL_S = 20.0
+SESSION_DIAG_INTERVAL_S = 20.0
+FIRMWARE_LOG_TO_TERMINAL = True
+FIRMWARE_LOG_FILTER_PREFIXES = ("[RX diag]", "[TX diag]")
 
-
-def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
-    """Project one resultant force sample into a tactile-looking taxel field.
-
-    The firmware currently uploads only Fx/Fy/Fz for each module.  The desktop
-    view still benefits from a local contact patch instead of filling the whole
-    module uniformly, so Fx/Fy shifts the patch center and Fz controls its
-    pressure and spread.
-    """
-    y, x = np.mgrid[0:rows, 0:cols]
-    cx = (cols - 1) / 2.0
-    cy = (rows - 1) / 2.0
-
-    pressure = float(max(0, fz))
-    if pressure <= 3.0:
-        pressure = 0.0
-
-    if pressure > 0.0:
-        direction_scale = max(24.0, min(96.0, pressure))
-        cx += max(-0.48, min(0.48, float(fx) / direction_scale)) * max(1.0, (cols - 1) / 2.0)
-        cy += max(-0.48, min(0.48, float(fy) / direction_scale)) * max(1.0, (rows - 1) / 2.0)
-
-    normalized = min(1.0, pressure / 180.0)
-    sigma_x = max(0.62, cols * (0.13 + 0.11 * normalized))
-    sigma_y = max(0.62, rows * (0.15 + 0.13 * normalized))
-    core = np.exp(-(((x - cx) ** 2) / (2.0 * sigma_x * sigma_x) + ((y - cy) ** 2) / (2.0 * sigma_y * sigma_y)))
-    skirt = np.exp(-(((x - cx) ** 2) / (2.0 * (sigma_x * 2.2) ** 2) + ((y - cy) ** 2) / (2.0 * (sigma_y * 2.2) ** 2)))
-    weight = core + 0.18 * normalized * skirt
-    max_weight = float(np.max(weight))
-    if max_weight > 1e-9:
-        weight = weight / max_weight
-
-    contact = np.zeros((rows, cols, 3), dtype=float)
-    contact[:, :, 0] = float(fx) * weight
-    contact[:, :, 1] = float(fy) * weight
-    contact[:, :, 2] = pressure * weight
-    return contact
-
+# S3 tactile mux routes are wired pinky, ring, middle, index, thumb.
+# The UI model expects thumb, index, middle, ring, pinky.
+TACTILE_UI_GROUP_FROM_RAW = (4, 3, 2, 1, 0)
+TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
 
 def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]:
-    fingers: List[FingerTactile] = []
+    raw_fingers: List[FingerTactile] = []
     for group in groups:
         sensors: List[TactileSensor] = []
         for sensor_idx in range(3):
@@ -142,15 +126,84 @@ def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]
                 fx, fy, fz = 0, 0, 0
 
             if sensor_idx == 0:
-                rows, cols = tactile_segment_shape(2)
-            else:
                 rows, cols = tactile_segment_shape(0)
+            else:
+                rows, cols = tactile_segment_shape(2)
 
-            contact = _synthetic_contact_grid(rows, cols, fx, fy, fz)
+            # Summary packets are only a 3-axis resultant. Keep the resultant
+            # for labels, but draw the taxel grid from full-matrix packets.
+            contact = np.zeros((rows, cols, 3), dtype=float)
             resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
             sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
-        fingers.append(FingerTactile(sensors=sensors))
-    return fingers
+        raw_fingers.append(FingerTactile(sensors=sensors))
+    return [
+        raw_fingers[idx] if idx < len(raw_fingers) else FingerTactile(sensors=[])
+        for idx in TACTILE_UI_GROUP_FROM_RAW
+    ]
+
+
+def _u8_to_i8(value: int) -> int:
+    value = int(value) & 0xFF
+    return value - 256 if value >= 128 else value
+
+
+def _summary_groups_all_zero(summary_groups: List[List[List[int]]]) -> bool:
+    for group in summary_groups:
+        for force in group:
+            if len(force) >= 3 and (int(force[0]) != 0 or int(force[1]) != 0 or int(force[2]) != 0):
+                return False
+    return True
+
+
+def _build_tactile_fingers_from_full(
+    raw: bytes,
+    summary_groups: Optional[List[List[List[int]]]] = None,
+) -> List[FingerTactile]:
+    raw_fingers: List[FingerTactile] = []
+    cursor = 0
+    for group_idx in range(5):
+        sensors: List[TactileSensor] = []
+        for sensor_idx, taxel_count in enumerate(TACTILE_SENSOR_TAXEL_COUNTS):
+            rows, cols = tactile_segment_shape(0 if sensor_idx == 0 else 2)
+            raw_contact = np.zeros((rows, cols, 3), dtype=float)
+            raw_unsigned_contact = np.zeros((rows, cols, 3), dtype=float)
+            flat = raw_contact.reshape((-1, 3))
+            flat_unsigned = raw_unsigned_contact.reshape((-1, 3))
+            for taxel_idx in range(min(taxel_count, flat.shape[0])):
+                if cursor + 2 >= len(raw):
+                    break
+                flat_unsigned[taxel_idx, 0] = float(raw[cursor])
+                flat_unsigned[taxel_idx, 1] = float(raw[cursor + 1])
+                flat_unsigned[taxel_idx, 2] = float(raw[cursor + 2])
+                flat[taxel_idx, 0] = float(_u8_to_i8(raw[cursor]))
+                flat[taxel_idx, 1] = float(_u8_to_i8(raw[cursor + 1]))
+                flat[taxel_idx, 2] = float(raw[cursor + 2])
+                cursor += 3
+            contact = raw_contact.copy()
+
+            if summary_groups and group_idx < len(summary_groups) and sensor_idx < len(summary_groups[group_idx]):
+                fx, fy, fz = summary_groups[group_idx][sensor_idx]
+                resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
+            else:
+                resultant = np.array(
+                    [
+                        float(np.sum(contact[:, :, 0])),
+                        float(np.sum(contact[:, :, 1])),
+                        float(np.sum(contact[:, :, 2])),
+                    ],
+                    dtype=float,
+                )
+            sensors.append(TactileSensor(
+                contact_forces=contact,
+                resultant=resultant,
+                raw_contact_forces=raw_contact,
+                raw_unsigned_contact_forces=raw_unsigned_contact,
+            ))
+        raw_fingers.append(FingerTactile(sensors=sensors))
+    return [
+        raw_fingers[idx] if idx < len(raw_fingers) else FingerTactile(sensors=[])
+        for idx in TACTILE_UI_GROUP_FROM_RAW
+    ]
 
 
 def _tactile_axis_magnitude(values: List[int]) -> int:
@@ -213,6 +266,346 @@ def choose_serial_port_interactive() -> Optional[str]:
             return None
 
 
+class TactileSerialComm:
+    """Read-only S3 tactile serial stream using the desktop binary protocol."""
+
+    def __init__(self, port: str, baudrate: int = BAUDRATE):
+        self.port = (port or "").strip()
+        self.baudrate = int(baudrate)
+        self.serial: Optional[serial.Serial] = None
+        self.rx_queue: queue.Queue = queue.Queue(maxsize=20)
+        self.running = False
+        self._rx_thread: Optional[threading.Thread] = None
+        self._rx_buffer = bytearray()
+        self._firmware_text_buffer = bytearray()
+        self._last_model: Optional[HandModel] = None
+        self._last_tactile_summary_groups: Optional[List[List[List[int]]]] = None
+        self._last_tactile_summary_seq: Optional[int] = None
+        self._tactile_full_seq: Optional[int] = None
+        self._tactile_full_count = 0
+        self._tactile_full_fragments: Dict[int, bytes] = {}
+        self._tactile_full_summary_seq: Optional[int] = None
+        self._tactile_full_crc16: Optional[int] = None
+        self._tactile_full_started_ts = 0.0
+        self._tactile_full_crc_errors = 0
+        self._tactile_full_seq_mismatches = 0
+        self._tactile_full_dropped = 0
+        self._last_tactile_full_ts = 0.0
+        self._rx_diag_last_print = time.time()
+        self._rx_diag_total_packets = 0
+        self._rx_diag_bytes = 0
+
+    def connect(self) -> bool:
+        if self.serial and getattr(self.serial, "is_open", False):
+            return True
+        if not self.port:
+            return False
+        try:
+            if not is_valid_port(self.port):
+                raise ValueError(f"tactile port '{self.port}' is not available")
+            self.serial = serial.Serial()
+            self.serial.port = self.port
+            self.serial.baudrate = self.baudrate
+            self.serial.timeout = SERIAL_TIMEOUT
+            self.serial.dtr = False
+            self.serial.rts = False
+            self.serial.open()
+            self.serial.setDTR(False)
+            self.serial.setRTS(False)
+            self.running = True
+            self._rx_buffer = bytearray()
+            self._firmware_text_buffer = bytearray()
+            self._last_model = None
+            self._clear_queue(self.rx_queue)
+            self._reset_tactile_full_reassembly()
+            self._last_tactile_summary_groups = None
+            self._last_tactile_summary_seq = None
+            self._last_tactile_full_ts = 0.0
+            self._rx_diag_last_print = time.time()
+            self._rx_diag_total_packets = 0
+            self._rx_diag_bytes = 0
+            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
+            self._rx_thread.start()
+            return True
+        except Exception as exc:
+            print(f"Tactile serial connect failed: {exc}")
+            return False
+
+    def disconnect(self) -> None:
+        self.running = False
+        if self.serial and self.serial.is_open:
+            try:
+                self.serial.close()
+            except Exception:
+                pass
+            self.serial = None
+        thread = self._rx_thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        self._rx_thread = None
+
+    @staticmethod
+    def _clear_queue(q: queue.Queue) -> None:
+        with q.mutex:
+            q.queue.clear()
+            q.unfinished_tasks = 0
+            q.not_full.notify_all()
+
+    def _put_latest_model(self, model: HandModel) -> None:
+        try:
+            self.rx_queue.put_nowait(model)
+            return
+        except queue.Full:
+            pass
+        try:
+            self.rx_queue.get_nowait()
+            self.rx_queue.task_done()
+        except queue.Empty:
+            pass
+        try:
+            self.rx_queue.put_nowait(model)
+        except queue.Full:
+            pass
+
+    def _reset_tactile_full_reassembly(self) -> None:
+        self._tactile_full_seq = None
+        self._tactile_full_count = 0
+        self._tactile_full_fragments = {}
+        self._tactile_full_summary_seq = None
+        self._tactile_full_crc16 = None
+        self._tactile_full_started_ts = 0.0
+
+    def _accept_tactile_full_fragment(
+        self,
+        seq: int,
+        frag_idx: int,
+        frag_count: int,
+        chunk: bytes,
+        summary_seq: Optional[int] = None,
+        full_crc: Optional[int] = None,
+    ) -> Optional[tuple]:
+        now = time.time()
+        if self._tactile_full_started_ts and (now - self._tactile_full_started_ts) > 0.5:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+
+        if frag_count <= 0 or frag_count > 64 or frag_idx < 0 or frag_idx >= frag_count:
+            self._tactile_full_dropped += 1
+            return None
+
+        if (
+            self._tactile_full_seq != seq or
+            self._tactile_full_count != frag_count or
+            self._tactile_full_summary_seq != summary_seq or
+            self._tactile_full_crc16 != full_crc or
+            (frag_idx == 0 and self._tactile_full_fragments)
+        ):
+            self._tactile_full_seq = seq
+            self._tactile_full_count = frag_count
+            self._tactile_full_fragments = {}
+            self._tactile_full_summary_seq = summary_seq
+            self._tactile_full_crc16 = full_crc
+            self._tactile_full_started_ts = now
+
+        chunk_bytes = bytes(chunk)
+        existing = self._tactile_full_fragments.get(int(frag_idx))
+        if existing is not None and existing != chunk_bytes:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+            return None
+
+        self._tactile_full_fragments[int(frag_idx)] = chunk_bytes
+        if len(self._tactile_full_fragments) < frag_count:
+            return None
+        if any(idx not in self._tactile_full_fragments for idx in range(frag_count)):
+            return None
+
+        raw = b"".join(self._tactile_full_fragments[idx] for idx in range(frag_count))
+        accepted_summary_seq = self._tactile_full_summary_seq
+        accepted_crc = self._tactile_full_crc16
+        self._reset_tactile_full_reassembly()
+        if len(raw) != TACTILE_FULL_BYTES:
+            self._tactile_full_dropped += 1
+            return None
+        if accepted_crc is not None and crc16_ccitt(raw) != accepted_crc:
+            self._tactile_full_crc_errors += 1
+            return None
+        return raw, accepted_summary_seq, accepted_crc
+
+    def _rx_loop(self) -> None:
+        while self.running and self.serial and self.serial.is_open:
+            try:
+                waiting = self.serial.in_waiting
+                if waiting:
+                    chunk = self.serial.read(waiting)
+                    self._rx_buffer.extend(chunk)
+                    packets = self._extract_packets_and_firmware_logs()
+                    self._rx_diag_total_packets += len(packets)
+                    self._rx_diag_bytes += len(chunk)
+                    model = self._process_tactile_packets(packets)
+                    if model:
+                        self._put_latest_model(model)
+                    self._maybe_print_rx_diag()
+                else:
+                    time.sleep(RX_POLL_SLEEP)
+            except Exception as exc:
+                if self.running:
+                    print(f"Tactile RX error: {exc}")
+
+    def _append_firmware_log_byte(self, value: int) -> None:
+        if value in (9, 10, 13) or 32 <= value <= 126:
+            self._firmware_text_buffer.append(value)
+            if value in (10, 13):
+                self._flush_firmware_log_text()
+        elif self._firmware_text_buffer and self._firmware_text_buffer[-1] not in (10, 13, 32):
+            self._firmware_text_buffer.append(32)
+
+    def _flush_firmware_log_text(self) -> None:
+        self._firmware_text_buffer.clear()
+
+    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
+        packets: List[tuple] = []
+        buffer = self._rx_buffer
+        while buffer:
+            if buffer[0] != PROTOCOL_HEADER:
+                self._append_firmware_log_byte(buffer.pop(0))
+                continue
+
+            if len(buffer) < 4:
+                break
+
+            frame_len = 2 + buffer[1]
+            if frame_len < 4:
+                self._append_firmware_log_byte(buffer.pop(0))
+                continue
+
+            if len(buffer) < frame_len:
+                break
+
+            if buffer[frame_len - 1] == PROTOCOL_TAIL:
+                self._flush_firmware_log_text()
+                pkt_type = buffer[2]
+                payload = bytes(buffer[3:frame_len - 1])
+                packets.append((pkt_type, payload))
+                del buffer[:frame_len]
+            else:
+                self._append_firmware_log_byte(buffer.pop(0))
+        return packets
+
+    @staticmethod
+    def _stabilize_tactile_groups(groups: List[List[List[int]]]) -> List[List[List[int]]]:
+        stable: List[List[List[int]]] = []
+        for gi in range(5):
+            group_out: List[List[int]] = []
+            src_group = groups[gi] if gi < len(groups) else []
+            for si in range(3):
+                incoming = list(src_group[si]) if si < len(src_group) else [0, 0, 0]
+                while len(incoming) < 3:
+                    incoming.append(0)
+                group_out.append([int(incoming[0]), int(incoming[1]), int(incoming[2])])
+            stable.append(group_out)
+        return stable
+
+    def _process_tactile_packets(self, packets: List[tuple]) -> Optional[HandModel]:
+        if not packets:
+            return None
+        model = HandModel()
+        if self._last_model is not None:
+            model.copy_state_from(self._last_model)
+        model.timestamp = time.time()
+        emitted = False
+
+        for pkt_type, payload in packets:
+            if pkt_type == PACKET_TYPE_TACTILE:
+                parsed = parse_tactile_packet(payload)
+                if parsed is None:
+                    continue
+                seq, groups = parsed
+                stable_groups = self._stabilize_tactile_groups(groups)
+                self._last_tactile_summary_groups = stable_groups
+                self._last_tactile_summary_seq = int(seq)
+                model.tactile_summary_seq = int(seq)
+                model.tactile_full_crc_errors = self._tactile_full_crc_errors
+                model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                model.tactile_full_dropped = self._tactile_full_dropped
+                if _summary_groups_all_zero(stable_groups):
+                    self._last_tactile_full_ts = 0.0
+                    model.tactile_data = _build_tactile_fingers(stable_groups)
+                elif self._last_tactile_full_ts == 0.0 or (
+                    time.time() - self._last_tactile_full_ts
+                ) > TACTILE_FULL_STALE_AFTER_S:
+                    model.tactile_data = _build_tactile_fingers(stable_groups)
+                emitted = True
+
+            elif pkt_type in TACTILE_SERIAL_FULL_PACKET_TYPES:
+                parsed = parse_tactile_full_fragment(payload)
+                if parsed is None:
+                    continue
+                seq, frag_idx, frag_count, chunk, summary_seq, full_crc = parsed
+                accepted = self._accept_tactile_full_fragment(
+                    seq,
+                    frag_idx,
+                    frag_count,
+                    chunk,
+                    summary_seq,
+                    full_crc,
+                )
+                if accepted is None:
+                    continue
+                raw, accepted_summary_seq, accepted_crc = accepted
+                if (
+                    accepted_summary_seq is not None and
+                    self._last_tactile_summary_seq != accepted_summary_seq
+                ):
+                    self._tactile_full_seq_mismatches += 1
+                    model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                    emitted = True
+                    continue
+                model.tactile_data = _build_tactile_fingers_from_full(
+                    raw,
+                    self._last_tactile_summary_groups,
+                )
+                model.tactile_full_seq = int(seq)
+                model.tactile_full_summary_seq = (
+                    int(accepted_summary_seq)
+                    if accepted_summary_seq is not None
+                    else None
+                )
+                model.tactile_full_crc = (
+                    int(accepted_crc)
+                    if accepted_crc is not None
+                    else None
+                )
+                model.tactile_full_crc_errors = self._tactile_full_crc_errors
+                model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                model.tactile_full_dropped = self._tactile_full_dropped
+                self._last_tactile_full_ts = time.time()
+                emitted = True
+
+        if emitted:
+            self._last_model = model
+            return model
+        return None
+
+    def _maybe_print_rx_diag(self) -> None:
+        now = time.time()
+        elapsed = now - self._rx_diag_last_print
+        if elapsed < TERMINAL_DIAG_INTERVAL_S:
+            return
+        packet_rate = self._rx_diag_total_packets / elapsed
+        byte_rate = self._rx_diag_bytes / elapsed
+        log_session(
+            "Tactile RX diag",
+            f"packets={packet_rate:.1f} pkt/s bytes={byte_rate:.0f} B/s "
+            f"crc_err={self._tactile_full_crc_errors} "
+            f"seq_mismatch={self._tactile_full_seq_mismatches} "
+            f"dropped={self._tactile_full_dropped}",
+        )
+        self._rx_diag_last_print = now
+        self._rx_diag_total_packets = 0
+        self._rx_diag_bytes = 0
+
+
 class LowerComputerComm:
     """
     ===========================================================================
@@ -260,6 +653,8 @@ class LowerComputerComm:
         self._rx_diag_total_packets = 0
         self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
+        self._rx_diag_encoder_raw_packets = 0
+        self._rx_diag_queue_drops = 0
         self._rx_diag_bytes = 0
         self._tx_diag_last_print = time.time()
         self._tx_diag_total_cmds = 0
@@ -272,6 +667,18 @@ class LowerComputerComm:
         self._tactile_zero_counts: List[List[int]] = [
             [0 for _ in range(3)] for _ in range(5)
         ]
+        self._last_tactile_summary_groups: Optional[List[List[List[int]]]] = None
+        self._last_tactile_summary_seq: Optional[int] = None
+        self._tactile_full_seq: Optional[int] = None
+        self._tactile_full_count = 0
+        self._tactile_full_fragments: Dict[int, bytes] = {}
+        self._tactile_full_summary_seq: Optional[int] = None
+        self._tactile_full_crc16: Optional[int] = None
+        self._tactile_full_started_ts = 0.0
+        self._tactile_full_crc_errors = 0
+        self._tactile_full_seq_mismatches = 0
+        self._tactile_full_dropped = 0
+        self._last_tactile_full_ts = 0.0
 
         if self.port:
             if not is_valid_port(self.port):
@@ -281,6 +688,7 @@ class LowerComputerComm:
 
     def connect(self) -> bool:
         if self.serial and getattr(self.serial, "is_open", False):
+            log_session("COMM", f"serial connected port={self.port} baud={self.baudrate}")
             return True
         if not self.port:
             return False
@@ -299,6 +707,10 @@ class LowerComputerComm:
             self._heartbeat_enabled = False
             self._tactile_hold_groups = None
             self._tactile_zero_counts = [[0 for _ in range(3)] for _ in range(5)]
+            self._last_tactile_summary_groups = None
+            self._last_tactile_summary_seq = None
+            self._last_tactile_full_ts = 0.0
+            self._reset_tactile_full_reassembly()
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -310,6 +722,7 @@ class LowerComputerComm:
             self.send_command(("stream_mode", self._stream_mode_requested))
             return True
         except Exception as exc:
+            log_session("COMM", f"serial connect failed port={self.port}: {exc}")
             print(f"连接失败: {exc}")
             return False
 
@@ -320,12 +733,30 @@ class LowerComputerComm:
             q.unfinished_tasks = 0
             q.not_full.notify_all()
 
+    def _put_latest_model(self, model: HandModel) -> None:
+        try:
+            self.rx_queue.put_nowait(model)
+            return
+        except queue.Full:
+            self._rx_diag_queue_drops += 1
+        try:
+            self.rx_queue.get_nowait()
+            self.rx_queue.task_done()
+        except queue.Empty:
+            pass
+        try:
+            self.rx_queue.put_nowait(model)
+        except queue.Full:
+            self._rx_diag_queue_drops += 1
+
     def disconnect(self):
         self.running = False
         self.stop_joint_debug_packet_log()
+        log_session("COMM", "serial disconnect requested")
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
+        log_session("COMM", "serial disconnected")
 
     def start_joint_debug_packet_log(self, path: str) -> None:
         fieldnames = [
@@ -383,6 +814,8 @@ class LowerComputerComm:
         self._rx_diag_total_packets = 0
         self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
+        self._rx_diag_encoder_raw_packets = 0
+        self._rx_diag_queue_drops = 0
         self._rx_diag_bytes = 0
 
     def _reset_tx_diag(self) -> None:
@@ -390,6 +823,71 @@ class LowerComputerComm:
         self._tx_diag_total_cmds = 0
         self._tx_diag_angle_live_cmds = 0
         self._tx_diag_bytes = 0
+
+    def _reset_tactile_full_reassembly(self) -> None:
+        self._tactile_full_seq = None
+        self._tactile_full_count = 0
+        self._tactile_full_fragments = {}
+        self._tactile_full_summary_seq = None
+        self._tactile_full_crc16 = None
+        self._tactile_full_started_ts = 0.0
+
+    def _accept_tactile_full_fragment(
+        self,
+        seq: int,
+        frag_idx: int,
+        frag_count: int,
+        chunk: bytes,
+        summary_seq: Optional[int] = None,
+        full_crc: Optional[int] = None,
+    ) -> Optional[tuple]:
+        now = time.time()
+        if self._tactile_full_started_ts and (now - self._tactile_full_started_ts) > 0.5:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+
+        if frag_count <= 0 or frag_count > 64 or frag_idx < 0 or frag_idx >= frag_count:
+            self._tactile_full_dropped += 1
+            return None
+
+        if (
+            self._tactile_full_seq != seq or
+            self._tactile_full_count != frag_count or
+            self._tactile_full_summary_seq != summary_seq or
+            self._tactile_full_crc16 != full_crc or
+            (frag_idx == 0 and self._tactile_full_fragments)
+        ):
+            self._tactile_full_seq = seq
+            self._tactile_full_count = frag_count
+            self._tactile_full_fragments = {}
+            self._tactile_full_summary_seq = summary_seq
+            self._tactile_full_crc16 = full_crc
+            self._tactile_full_started_ts = now
+
+        chunk_bytes = bytes(chunk)
+        existing = self._tactile_full_fragments.get(int(frag_idx))
+        if existing is not None and existing != chunk_bytes:
+            self._tactile_full_dropped += 1
+            self._reset_tactile_full_reassembly()
+            return None
+
+        self._tactile_full_fragments[int(frag_idx)] = chunk_bytes
+        if len(self._tactile_full_fragments) < frag_count:
+            return None
+        if any(idx not in self._tactile_full_fragments for idx in range(frag_count)):
+            return None
+
+        raw = b"".join(self._tactile_full_fragments[idx] for idx in range(frag_count))
+        accepted_summary_seq = self._tactile_full_summary_seq
+        accepted_crc = self._tactile_full_crc16
+        self._reset_tactile_full_reassembly()
+        if len(raw) != TACTILE_FULL_BYTES:
+            self._tactile_full_dropped += 1
+            return None
+        if accepted_crc is not None and crc16_ccitt(raw) != accepted_crc:
+            self._tactile_full_crc_errors += 1
+            return None
+        return raw, accepted_summary_seq, accepted_crc
 
     def _update_rx_diag(self, packets: List[tuple], chunk_len: int) -> None:
         self._rx_diag_bytes += int(chunk_len)
@@ -399,23 +897,30 @@ class LowerComputerComm:
                 self._rx_diag_joint_debug_packets += 1
             elif pkt_type == 0x01:
                 self._rx_diag_sensor_packets += 1
+            elif pkt_type == PACKET_TYPE_ENCODER_RAW:
+                self._rx_diag_encoder_raw_packets += 1
 
     def _maybe_print_rx_diag(self) -> None:
         now = time.time()
         elapsed = now - self._rx_diag_last_print
-        if elapsed < 1.0:
+        if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._rx_diag_total_packets / elapsed
         joint_debug_rate = self._rx_diag_joint_debug_packets / elapsed
         sensor_rate = self._rx_diag_sensor_packets / elapsed
+        encoder_raw_rate = self._rx_diag_encoder_raw_packets / elapsed
         byte_rate = self._rx_diag_bytes / elapsed
-        print(
-            "[RX diag] "
+        diag_msg = (
             f"total={total_rate:.1f} pkt/s "
             f"jointDebug={joint_debug_rate:.1f} pkt/s "
             f"sensor={sensor_rate:.1f} pkt/s "
-            f"bytes={byte_rate:.0f} B/s"
+            f"encoderRaw={encoder_raw_rate:.1f} pkt/s "
+            f"bytes={byte_rate:.0f} B/s "
+            f"queueDrop={self._rx_diag_queue_drops}"
         )
+        log_session("RX diag", diag_msg)
+        if TERMINAL_DIAG_ENABLE:
+            print(f"[RX diag] {diag_msg}")
         self._reset_rx_diag()
 
     def _update_tx_diag(self, cmd: SendCmd, data_len: int) -> None:
@@ -427,17 +932,19 @@ class LowerComputerComm:
     def _maybe_print_tx_diag(self) -> None:
         now = time.time()
         elapsed = now - self._tx_diag_last_print
-        if elapsed < 1.0:
+        if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._tx_diag_total_cmds / elapsed
         angle_live_rate = self._tx_diag_angle_live_cmds / elapsed
         byte_rate = self._tx_diag_bytes / elapsed
-        print(
-            "[TX diag] "
+        diag_msg = (
             f"total={total_rate:.1f} cmd/s "
             f"angle_live={angle_live_rate:.1f} cmd/s "
             f"bytes={byte_rate:.0f} B/s"
         )
+        log_session("TX diag", diag_msg)
+        if TERMINAL_DIAG_ENABLE:
+            print(f"[TX diag] {diag_msg}")
         self._reset_tx_diag()
 
     def _rx_loop(self):
@@ -450,15 +957,13 @@ class LowerComputerComm:
                     self._update_rx_diag(packets, len(chunk))
                     model = self._process_packets(packets)
                     if model:
-                        try:
-                            self.rx_queue.put_nowait(model)
-                        except queue.Full:
-                            pass
+                        self._put_latest_model(model)
                 else:
                     time.sleep(RX_POLL_SLEEP)
                 self._check_stream_mode_ack_timeout()
                 self._maybe_print_rx_diag()
             except Exception as exc:
+                log_session("COMM", f"RX error: {exc}")
                 print(f"RX error: {exc}")
 
     def _append_firmware_log_byte(self, value: int) -> None:
@@ -474,8 +979,16 @@ class LowerComputerComm:
             return
         text = bytes(self._firmware_text_buffer).decode("utf-8", errors="ignore")
         self._firmware_text_buffer.clear()
-        if text:
-            print(text, end="", flush=True)
+        if not text:
+            return
+        stripped = text.strip()
+        if stripped:
+            log_session("FW", stripped)
+        if not FIRMWARE_LOG_TO_TERMINAL:
+            return
+        if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
+            return
+        print(text, end="", flush=True)
 
     def _extract_packets_and_firmware_logs(self) -> List[tuple]:
         packets: List[tuple] = []
@@ -509,17 +1022,13 @@ class LowerComputerComm:
     def _check_stream_mode_ack_timeout(self):
         if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
             if time.time() >= self._stream_mode_ack_deadline:
+                log_session("PROTO", "no stream-mode ACK from firmware; continue with current decoding")
                 print("Protocol warning: no stream-mode ACK from firmware; continue with current decoding.")
                 self._stream_mode_ack_warned = True
                 self._stream_mode_ack_pending = False
 
     def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
         stable: List[List[List[int]]] = []
-        if self._tactile_hold_groups is None:
-            self._tactile_hold_groups = [
-                [[0, 0, 0] for _ in range(3)] for _ in range(5)
-            ]
-
         for gi in range(5):
             group_out: List[List[int]] = []
             src_group = groups[gi] if gi < len(groups) else []
@@ -527,24 +1036,7 @@ class LowerComputerComm:
                 incoming = list(src_group[si]) if si < len(src_group) else [0, 0, 0]
                 while len(incoming) < 3:
                     incoming.append(0)
-                incoming = [int(incoming[0]), int(incoming[1]), int(incoming[2])]
-                held = self._tactile_hold_groups[gi][si]
-
-                incoming_active = _tactile_axis_magnitude(incoming) > TACTILE_ZERO_NOISE_FLOOR
-                held_mag = _tactile_axis_magnitude(held)
-                if incoming_active:
-                    out = incoming
-                    self._tactile_zero_counts[gi][si] = 0
-                elif held_mag >= TACTILE_HOLD_MIN_MAGNITUDE and self._tactile_zero_counts[gi][si] < TACTILE_ZERO_HOLD_FRAMES:
-                    out = list(held)
-                    self._tactile_zero_counts[gi][si] += 1
-                else:
-                    out = [0, 0, 0]
-                    if self._tactile_zero_counts[gi][si] < 255:
-                        self._tactile_zero_counts[gi][si] += 1
-
-                self._tactile_hold_groups[gi][si] = list(out)
-                group_out.append(out)
+                group_out.append([int(incoming[0]), int(incoming[1]), int(incoming[2])])
             stable.append(group_out)
         return stable
 
@@ -556,6 +1048,7 @@ class LowerComputerComm:
             model.copy_state_from(self._last_model)
             model.calib_status = self._last_model.calib_status
             model.has_sensor_data = bool(self._last_model.has_sensor_data)
+            model.has_encoder_raw_data = bool(getattr(self._last_model, "has_encoder_raw_data", False))
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
             model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
 
@@ -570,7 +1063,10 @@ class LowerComputerComm:
                         model.encoders[i].encoder_id = i
                         model.encoders[i].raw = angles[i]
                         model.encoders[i].zero_raw = 0
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
+                        angle_error = errors[i] if i < len(errors) else False
+                        model.encoders[i].angle_error = angle_error
+                        if not model.has_encoder_raw_data:
+                            model.encoders[i].error = angle_error
 
                     for i in range(min(ENCODER_COUNT, len(model.motors))):
                         model.motors[i].motor_id = i
@@ -587,13 +1083,16 @@ class LowerComputerComm:
                 if raw_values:
                     for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
                         model.encoders[i].raw_sensor = raw_values[i]
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
+                        raw_error = errors[i] if i < len(errors) else False
+                        model.encoders[i].raw_sensor_error = raw_error
+                        model.encoders[i].error = raw_error
+                    model.has_encoder_raw_data = True
                     emitted = True
 
             elif pkt_type == 0x02:
                 code = parse_calib_ack(payload)
                 if code == 1:
-                    model.calib_status = "PENDING"
+                    model.calib_status = "RUNNING"
                 elif code == 2:
                     model.calib_status = "SUCCESS"
                 elif code == 3:
@@ -717,7 +1216,7 @@ class LowerComputerComm:
                     model.has_system_status_data = True
                     if calib_status == 0:
                         if (
-                            model.calib_status == "PENDING" and
+                            model.calib_status in ("PENDING", "RUNNING") and
                             model.system_state != SYSTEM_STATE_CALIBRATION_RUNNING
                         ):
                             if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
@@ -729,7 +1228,7 @@ class LowerComputerComm:
                         else:
                             model.calib_status = "IDLE"
                     elif calib_status == 1:
-                        model.calib_status = "PENDING"
+                        model.calib_status = "RUNNING"
                     elif calib_status == 2:
                         model.calib_status = "SUCCESS"
                     elif calib_status == 3:
@@ -747,12 +1246,77 @@ class LowerComputerComm:
                         model.motor_abs_limit_max[i] = int(maxs[i])
                     emitted = True
 
+            elif pkt_type == PACKET_TYPE_JOINT_CALIB_SNAPSHOT:
+                parsed = parse_joint_calib_snapshot_packet(payload)
+                if parsed is not None:
+                    joint_idx = int(parsed.get("joint", -1))
+                    if 0 <= joint_idx < ENCODER_COUNT:
+                        model.joint_calib_results[joint_idx] = dict(parsed)
+                        emitted = True
+
             elif pkt_type == PACKET_TYPE_TACTILE:
                 parsed = parse_tactile_packet(payload)
                 if parsed is not None:
                     _seq, groups = parsed
-                    model.tactile_data = _build_tactile_fingers(self._stabilize_tactile_groups(groups))
+                    stable_groups = self._stabilize_tactile_groups(groups)
+                    self._last_tactile_summary_groups = stable_groups
+                    self._last_tactile_summary_seq = int(_seq)
+                    model.tactile_summary_seq = int(_seq)
+                    model.tactile_full_crc_errors = self._tactile_full_crc_errors
+                    model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                    model.tactile_full_dropped = self._tactile_full_dropped
+                    if _summary_groups_all_zero(stable_groups):
+                        self._last_tactile_full_ts = 0.0
+                        model.tactile_data = _build_tactile_fingers(stable_groups)
+                    elif (
+                        not model.tactile_data or
+                        (time.time() - self._last_tactile_full_ts) > TACTILE_FULL_STALE_AFTER_S
+                    ):
+                        model.tactile_data = _build_tactile_fingers(stable_groups)
                     emitted = True
+
+            elif pkt_type == PACKET_TYPE_TACTILE_FULL:
+                parsed = parse_tactile_full_fragment(payload)
+                if parsed is not None:
+                    seq, frag_idx, frag_count, chunk, summary_seq, full_crc = parsed
+                    accepted = self._accept_tactile_full_fragment(
+                        seq,
+                        frag_idx,
+                        frag_count,
+                        chunk,
+                        summary_seq,
+                        full_crc,
+                    )
+                    if accepted is not None:
+                        raw, accepted_summary_seq, accepted_crc = accepted
+                        if (
+                            accepted_summary_seq is not None and
+                            self._last_tactile_summary_seq != accepted_summary_seq
+                        ):
+                            self._tactile_full_seq_mismatches += 1
+                            model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                            emitted = True
+                            continue
+                        model.tactile_data = _build_tactile_fingers_from_full(
+                            raw,
+                            self._last_tactile_summary_groups,
+                        )
+                        model.tactile_full_seq = int(seq)
+                        model.tactile_full_summary_seq = (
+                            int(accepted_summary_seq)
+                            if accepted_summary_seq is not None
+                            else None
+                        )
+                        model.tactile_full_crc = (
+                            int(accepted_crc)
+                            if accepted_crc is not None
+                            else None
+                        )
+                        model.tactile_full_crc_errors = self._tactile_full_crc_errors
+                        model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
+                        model.tactile_full_dropped = self._tactile_full_dropped
+                        self._last_tactile_full_ts = time.time()
+                        emitted = True
 
             elif pkt_type == 0x06:
                 parsed = parse_proto_ack(payload)
@@ -770,6 +1334,15 @@ class LowerComputerComm:
                     with self._ack_lock:
                         self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
                         self._ack_lock.notify_all()
+                    if (
+                        ack_cmd in (CMD_STOP, CMD_RESET) and
+                        status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
+                    ):
+                        model.control_enabled = False
+                        model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                        model.has_system_status_data = True
+                        if model.calib_status in ("PENDING", "RUNNING"):
+                            model.calib_status = "IDLE"
                     if ack_cmd in (
                         CMD_START,
                         CMD_STOP,
@@ -790,9 +1363,13 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_STOP:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_RESET:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_UNCONTROLLABLE
+                            if model.calib_status in ("PENDING", "RUNNING"):
+                                model.calib_status = "IDLE"
                         elif ack_cmd == CMD_CALIBRATE:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
@@ -851,9 +1428,10 @@ class LowerComputerComm:
 
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
-        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] in (
+        return isinstance(cmd, tuple) and cmd[0] in (
             "motor_pos_sweep",
             "motor_pos_abs",
+            "motor_pos_abs_one",
             "angle_live",
         )
 
@@ -918,6 +1496,7 @@ class LowerComputerComm:
             except queue.Empty:
                 self._maybe_print_tx_diag()
             except Exception as exc:
+                log_session("COMM", f"TX error: {exc}")
                 print(f"TX error: {exc}")
 
     def _maybe_send_host_heartbeat(self) -> None:
@@ -942,10 +1521,16 @@ class LowerComputerComm:
             return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "tendon_guard":
+            return build_tendon_guard_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
             return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
+        if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
+            return build_calib_load_limits_cmd(cmd[1], cmd[2], cmd[3], cmd[4])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
+            return build_calib_load_joint_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
@@ -954,16 +1539,18 @@ class LowerComputerComm:
             return build_motor_pos_sweep_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":
+            return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
             return build_stream_mode_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "local_test_params":
-            return build_local_test_params_cmd(cmd[1], cmd[2])
-        if cmd == "local_test_start":
-            return build_local_test_start_cmd()
-        if cmd == "local_test_stop":
-            return build_local_test_stop_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "sine_test_params":
+            return build_sine_test_params_cmd(cmd[1], cmd[2])
+        if cmd == "sine_test_start":
+            return build_sine_test_start_cmd()
+        if cmd == "sine_test_stop":
+            return build_sine_test_stop_cmd()
         if cmd == "start":
             return build_start_cmd()
         if cmd == "run_feedback":

@@ -26,7 +26,7 @@ void ControlSolver::begin()
     init(zeros, ratios, dirs);
 
     float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {16.5f, 0.0f, 0.5f, 0.0f, 100.0f, 600.0f},
+        {10.0f, 0.0f, 0.7f, 0.0f, 100.0f, 600.0f},
         {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
     };
     setPIDParams(pidConfigs);

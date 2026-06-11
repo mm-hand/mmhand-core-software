@@ -348,6 +348,8 @@ class TactileSensor:
     """单组触觉元：指尖为 (5,5,3)，指腹为 (4,13,3)；末维 Fx,Fy,Fz"""
     contact_forces: np.ndarray  # (5,5,3) 或 (4,13,3)
     resultant: np.ndarray       # (3,)
+    raw_contact_forces: Optional[np.ndarray] = None
+    raw_unsigned_contact_forces: Optional[np.ndarray] = None
 
     @property
     def n_rows(self) -> int:
@@ -380,6 +382,8 @@ class JointEncoder:
     zero_raw: int = 0         # 矫正的零点值（来自 calib_deg.json / 下位机）
     target_angle_deg: float = 0.0   # 目标角度（度）
     error: bool = False       # 传感器/读数异常
+    angle_error: bool = False
+    raw_sensor_error: bool = False
 
     @property
     def current_angle_deg(self) -> float:
@@ -417,10 +421,18 @@ class HandModel:
     encoders: List[JointEncoder] = field(default_factory=_default_encoders)
     motors: List[MotorSlot] = field(default_factory=_default_motors)
     tactile_data: List[FingerTactile] = field(default_factory=list)
-    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, SUCCESS, FAILED
+    tactile_summary_seq: Optional[int] = None
+    tactile_full_seq: Optional[int] = None
+    tactile_full_summary_seq: Optional[int] = None
+    tactile_full_crc: Optional[int] = None
+    tactile_full_crc_errors: int = 0
+    tactile_full_seq_mismatches: int = 0
+    tactile_full_dropped: int = 0
+    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
+    has_encoder_raw_data: bool = False
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
     has_system_status_data: bool = False
@@ -437,6 +449,7 @@ class HandModel:
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -502,6 +515,8 @@ class HandModel:
                 e.raw = other.encoders[i].raw
                 e.raw_sensor = getattr(other.encoders[i], "raw_sensor", other.encoders[i].raw)
                 e.error = other.encoders[i].error
+                e.angle_error = bool(getattr(other.encoders[i], "angle_error", other.encoders[i].error))
+                e.raw_sensor_error = bool(getattr(other.encoders[i], "raw_sensor_error", other.encoders[i].error))
         for i, m in enumerate(self.motors):
             if i < len(other.motors):
                 m.error = other.motors[i].error
@@ -531,6 +546,7 @@ class HandModel:
         self.joint_debug_timestamp_ms = list(other.joint_debug_timestamp_ms)
         # 复制数据有效性标志
         self.has_sensor_data = bool(other.has_sensor_data)
+        self.has_encoder_raw_data = bool(getattr(other, "has_encoder_raw_data", False))
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
         self.has_system_status_data = bool(other.has_system_status_data)
@@ -547,4 +563,15 @@ class HandModel:
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
+        self.joint_calib_results = [
+            dict(item) if isinstance(item, dict) else None
+            for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
+        ]
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
+        self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
+        self.tactile_full_seq = getattr(other, "tactile_full_seq", None)
+        self.tactile_full_summary_seq = getattr(other, "tactile_full_summary_seq", None)
+        self.tactile_full_crc = getattr(other, "tactile_full_crc", None)
+        self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
+        self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
+        self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))

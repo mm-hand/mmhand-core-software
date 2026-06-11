@@ -27,18 +27,39 @@ from data_models import (
     TACTILE_JOINT_BAND_INDICES,
     tactile_apply_fingertip_round_cap,
 )
+from .official_tactile_layout import get_official_tactile_layout
 from .ui_qt_compat import QtCore, QtWidgets
 import pyqtgraph as pg
 
 
-TACTILE_REAL_INTERVAL_S = 0.10
+TACTILE_REAL_INTERVAL_S = 0.033
 TACTILE_FAKE_INTERVAL_S = 0.25
-TACTILE_NOISE_FLOOR = 3.0
-TACTILE_RISE_ALPHA = 0.55
-TACTILE_FALL_ALPHA = 0.45
+TACTILE_NOISE_FLOOR = 1.0
+TACTILE_RISE_ALPHA = 0.50
+TACTILE_FALL_ALPHA = 0.30
 TACTILE_DISPLAY_FLOOR = 6.0
 TACTILE_AXIS_LEVELS = (70.0, 70.0, 180.0)
 TACTILE_2D_ARRAY_SCALE = 8
+TACTILE_2D_MIN_DOT_RADIUS = 2.4
+TACTILE_2D_MAX_DOT_RADIUS = 13.0
+TACTILE_2D_DENSE_POINT_LIMIT = 1500
+TACTILE_2D_DENSE_MIN_DOT_RADIUS = 1.0
+TACTILE_2D_DENSE_MAX_DOT_RADIUS = 4.2
+TACTILE_2D_OFFICIAL_INTERP_STRIDE = 12
+TACTILE_2D_Z_VISUAL_LEVEL = 35.0
+TACTILE_2D_ARROW_FLOOR = 5.0
+TACTILE_2D_ARROW_PAD_FLOOR = 3.0
+TACTILE_2D_ARROW_CONTACT_FLOOR = TACTILE_DISPLAY_FLOOR
+TACTILE_2D_ARROW_CONTACT_RATIO = 0.16
+TACTILE_2D_ARROW_MAX_LEVEL = 12.0
+TACTILE_2D_ARROW_GRID_STEP = 18
+TACTILE_2D_ARROW_MAX_COUNT = 12
+TACTILE_2D_ARROW_RESULTANT_FLOOR = 3.0
+TACTILE_2D_ARROW_RESULTANT_Z_RATIO = 0.35
+TACTILE_2D_SHOW_ARROWS_IN_Z_VIEW = True
+TACTILE_2D_MANUAL_ORIGIN_AT_ROOT = True
+TACTILE_2D_MANUAL_MIRROR_COLS = False
+TACTILE_2D_REQUIRE_RESULTANT_GATE = False
 TACTILE_3D_RISE_ALPHA = 0.62
 TACTILE_3D_FALL_ALPHA = 0.48
 TACTILE_3D_PRESS_LIFT = 0.0
@@ -51,6 +72,7 @@ URDF_HAND_PATH = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urd
 URDF_MAX_TRIANGLES_PER_LINK = 0
 _URDF_HAND_MESH_CACHE = None
 _URDF_HAND_LINK_VERTEX_CACHE = None
+_OFFICIAL_TACTILE_PROJECTION_CACHE = {}
 
 
 @dataclass
@@ -68,6 +90,28 @@ class _TactileRenderResult:
     has_data: bool
 
 
+@dataclass(frozen=True)
+class _TaxelPeak:
+    score: float
+    raw_index: int
+    raw_row: int
+    raw_col: int
+    ui_row: int
+    ui_col: int
+    raw_xyz: Tuple[int, int, int]
+    processed_xyz: Tuple[int, int, int]
+    byte_z: Optional[int]
+
+
+@dataclass(frozen=True)
+class _TaxelCenter:
+    total: float
+    raw_row: float
+    raw_col: float
+    ui_row: float
+    ui_col: float
+
+
 class _LatestTactileMatrixWorker:
     def __init__(self, build_matrix):
         self._build_matrix = build_matrix
@@ -83,6 +127,11 @@ class _LatestTactileMatrixWorker:
         with self._lock:
             self._pending = job
         self._event.set()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._pending = None
+            self._latest = None
 
     def consume_latest(self) -> Optional[_TactileRenderResult]:
         with self._lock:
@@ -1191,6 +1240,8 @@ class TactileView(QtWidgets.QWidget):
         self._worker = _LatestTactileMatrixWorker(self._build_matrix)
         self.hand_3d: Optional[_TactileHand3DWidget] = None
         self.use_3d = False
+        self.raw_visible = False
+        self._raw_text_cache = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1207,6 +1258,9 @@ class TactileView(QtWidgets.QWidget):
         self.fake_check = QtWidgets.QCheckBox("Fake")
         self.fake_check.setChecked(False)
         top.addWidget(self.fake_check)
+        self.raw_check = QtWidgets.QCheckBox("Raw")
+        self.raw_check.setChecked(False)
+        top.addWidget(self.raw_check)
         self.view3d_check = QtWidgets.QCheckBox("3D")
         self.view3d_check.setChecked(False)
         top.addWidget(self.view3d_check)
@@ -1214,6 +1268,7 @@ class TactileView(QtWidgets.QWidget):
         layout.addLayout(top)
         self.axis_group.idClicked.connect(self._set_axis)
         self.fake_check.toggled.connect(self._set_fake)
+        self.raw_check.toggled.connect(self._set_raw_visible)
         self.view3d_check.toggled.connect(self._set_view3d)
 
         self.plot = pg.GraphicsLayoutWidget()
@@ -1260,6 +1315,25 @@ class TactileView(QtWidgets.QWidget):
         self.values_label = QtWidgets.QLabel("")
         self.values_label.setStyleSheet("color: #334155; font-family: Consolas, 'Courier New', monospace;")
         layout.addWidget(self.values_label)
+        self.values_label.setVisible(False)
+        self.peak_label = QtWidgets.QLabel("")
+        self.peak_label.setWordWrap(True)
+        self.peak_label.setStyleSheet("color: #0f172a; font-family: Consolas, 'Courier New', monospace;")
+        layout.addWidget(self.peak_label)
+        self.peak_label.setVisible(False)
+        self.raw_text = QtWidgets.QPlainTextEdit()
+        self.raw_text.setReadOnly(True)
+        self.raw_text.setMaximumHeight(260)
+        self.raw_text.setVisible(False)
+        try:
+            self.raw_text.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        except AttributeError:
+            self.raw_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self.raw_text.setStyleSheet(
+            "color: #0f172a; background: #f8fafc; "
+            "font-family: Consolas, 'Courier New', monospace; font-size: 11px;"
+        )
+        layout.addWidget(self.raw_text)
         self._apply_matrix(self._build_matrix(None, self.axis), self.axis, False)
 
     def build(self, _parent) -> None:
@@ -1269,7 +1343,6 @@ class TactileView(QtWidgets.QWidget):
         self.update_if_due(state, force=True)
 
     def update_if_due(self, state: Optional[HandModel], *, force: bool = False) -> bool:
-        self._apply_ready_frame()
         use_fake = self._should_use_fake(state)
         interval = TACTILE_FAKE_INTERVAL_S if use_fake else TACTILE_REAL_INTERVAL_S
         now = time.time()
@@ -1277,10 +1350,17 @@ class TactileView(QtWidgets.QWidget):
             return False
         self._last_update_ts = now
         display_state = self._fake_display_state(state) if use_fake else state
-        self.values_label.setText(self._format_values(display_state))
+        if self.values_label.isVisible():
+            self.values_label.setText(self._format_values(display_state))
+        if self.peak_label.isVisible():
+            self.peak_label.setText(self._format_peak_values(display_state, self.axis))
+        if self.raw_visible:
+            self._update_raw_text(self._format_raw_values(display_state, self.axis))
         has_data = bool(display_state and getattr(display_state, "tactile_data", None))
         if self.use_3d and self.hand_3d is not None:
             self.hand_3d.update_state(display_state, self.axis, has_data)
+
+        self._apply_ready_frame()
         if force:
             mat = self._build_matrix(display_state, self.axis)
             self._apply_matrix(mat, self.axis, has_data)
@@ -1296,6 +1376,8 @@ class TactileView(QtWidgets.QWidget):
 
     def clear(self) -> None:
         self._display_matrix = None
+        self.raw_text.clear()
+        self._raw_text_cache = ""
         if self.hand_3d is not None:
             self.hand_3d.clear()
         self._apply_matrix(self._build_matrix(None, self.axis), self.axis, False)
@@ -1310,6 +1392,37 @@ class TactileView(QtWidgets.QWidget):
         self._fake_state = None
         self._display_matrix = None
         self.update_if_due(self.context.get_state(), force=True)
+
+    def _set_raw_visible(self, checked: bool) -> None:
+        self.raw_visible = bool(checked)
+        self.raw_text.setVisible(self.raw_visible)
+        if not self.raw_visible:
+            self.raw_text.clear()
+            self._raw_text_cache = ""
+            return
+        self.update_if_due(self.context.get_state(), force=True)
+
+    def _update_raw_text(self, text: str) -> None:
+        if text == self._raw_text_cache:
+            return
+        self._raw_text_cache = text
+        vbar = self.raw_text.verticalScrollBar()
+        hbar = self.raw_text.horizontalScrollBar()
+        old_v = vbar.value()
+        old_h = hbar.value()
+        self.raw_text.setUpdatesEnabled(False)
+        try:
+            self.raw_text.setPlainText(text)
+            vbar.setValue(min(old_v, vbar.maximum()))
+            hbar.setValue(min(old_h, hbar.maximum()))
+        finally:
+            self.raw_text.setUpdatesEnabled(True)
+
+        def restore_scroll() -> None:
+            vbar.setValue(min(old_v, vbar.maximum()))
+            hbar.setValue(min(old_h, hbar.maximum()))
+
+        QtCore.QTimer.singleShot(0, restore_scroll)
 
     def _set_view3d(self, checked: bool) -> None:
         if not checked:
@@ -1341,6 +1454,389 @@ class TactileView(QtWidgets.QWidget):
         self.update_if_due(self.context.get_state(), force=True)
 
     @staticmethod
+    def _axis_name(axis: int) -> str:
+        names = ("X", "Y", "Z")
+        return names[min(max(int(axis), 0), len(names) - 1)]
+
+    @staticmethod
+    def _channel_matrix(values, axis: int) -> Optional[np.ndarray]:
+        if values is None:
+            return None
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim == 2:
+            return arr
+        if arr.ndim < 3 or arr.shape[2] <= 0:
+            return None
+        axis_index = min(max(int(axis), 0), arr.shape[2] - 1)
+        return np.asarray(arr[:, :, axis_index], dtype=float)
+
+    @staticmethod
+    def _matrix_stats(matrix: Optional[np.ndarray]) -> str:
+        if matrix is None:
+            return "none"
+        arr = np.asarray(matrix, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return "none"
+        return (
+            f"min={int(round(float(np.min(finite))))} "
+            f"max={int(round(float(np.max(finite))))} "
+            f"abs_sum={int(round(float(np.sum(np.abs(finite)))))}"
+        )
+
+    @staticmethod
+    def _vector_sum(values) -> Tuple[int, int, int]:
+        if values is None:
+            return (0, 0, 0)
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim < 3 or arr.shape[2] <= 0:
+            return (0, 0, 0)
+        out = []
+        for channel in range(3):
+            if channel >= arr.shape[2]:
+                out.append(0)
+                continue
+            ch = np.asarray(arr[:, :, channel], dtype=float)
+            finite = np.where(np.isfinite(ch), ch, 0.0)
+            out.append(int(round(float(np.sum(finite)))))
+        return (out[0], out[1], out[2])
+
+    @staticmethod
+    def _resultant_tuple(sensor: TactileSensor) -> Tuple[int, int, int]:
+        resultant = getattr(sensor, "resultant", None)
+        if resultant is None or len(resultant) < 3:
+            return (0, 0, 0)
+        out = []
+        for channel in range(3):
+            value = float(resultant[channel])
+            out.append(int(round(value)) if np.isfinite(value) else 0)
+        return (out[0], out[1], out[2])
+
+    @staticmethod
+    def _vector_at(values, row: int, col: int) -> Tuple[int, int, int]:
+        if values is None:
+            return (0, 0, 0)
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim < 3 or arr.shape[2] <= 0 or row >= arr.shape[0] or col >= arr.shape[1]:
+            return (0, 0, 0)
+        out = []
+        for channel in range(3):
+            if channel >= arr.shape[2]:
+                out.append(0)
+                continue
+            value = arr[row, col, channel]
+            out.append(int(round(float(value))) if np.isfinite(value) else 0)
+        return (out[0], out[1], out[2])
+
+    @staticmethod
+    def _ui_rc_from_raw_rc(rows: int, cols: int, row: int, col: int) -> Tuple[int, int]:
+        ui_row = rows - 1 - row if TACTILE_2D_MANUAL_ORIGIN_AT_ROOT else row
+        ui_col = cols - 1 - col if TACTILE_2D_MANUAL_MIRROR_COLS else col
+        return ui_row, ui_col
+
+    @staticmethod
+    def _ui_rc_from_raw_xy(rows: int, cols: int, row: float, col: float) -> Tuple[float, float]:
+        ui_row = float(rows - 1) - row if TACTILE_2D_MANUAL_ORIGIN_AT_ROOT else row
+        ui_col = float(cols - 1) - col if TACTILE_2D_MANUAL_MIRROR_COLS else col
+        return ui_row, ui_col
+
+    @staticmethod
+    def _is_dp52_shape(rows: int, cols: int) -> bool:
+        return int(rows) == 4 and int(cols) == 13
+
+    @classmethod
+    def _ui_rc_from_raw_rc_for_sensor(
+        cls,
+        sensor_index: int,
+        rows: int,
+        cols: int,
+        row: int,
+        col: int,
+    ) -> Tuple[int, int]:
+        if int(sensor_index) == 0 and cls._is_dp52_shape(rows, cols):
+            return int(cols) - 1 - int(col), int(row)
+        return cls._ui_rc_from_raw_rc(rows, cols, row, col)
+
+    @classmethod
+    def _ui_rc_from_raw_xy_for_sensor(
+        cls,
+        sensor_index: int,
+        rows: int,
+        cols: int,
+        row: float,
+        col: float,
+    ) -> Tuple[float, float]:
+        if int(sensor_index) == 0 and cls._is_dp52_shape(rows, cols):
+            return float(cols - 1) - float(col), float(row)
+        return cls._ui_rc_from_raw_xy(rows, cols, row, col)
+
+    @classmethod
+    def _find_sensor_peak(
+        cls,
+        sensor: TactileSensor,
+        axis: int,
+        sensor_index: int = -1,
+    ) -> Optional[_TaxelPeak]:
+        raw_values = getattr(sensor, "raw_contact_forces", None)
+        processed_values = getattr(sensor, "contact_forces", None)
+        source = raw_values if raw_values is not None else processed_values
+        if source is None:
+            return None
+        arr = np.asarray(source, dtype=float)
+        if arr.ndim < 3 or arr.shape[0] <= 0 or arr.shape[1] <= 0 or arr.shape[2] <= 0:
+            return None
+
+        axis_index = min(max(int(axis), 0), arr.shape[2] - 1)
+        channel = np.asarray(arr[:, :, axis_index], dtype=float)
+        if axis_index == 2:
+            scores = np.where(np.isfinite(channel), np.clip(channel, 0.0, None), -np.inf)
+        else:
+            scores = np.where(np.isfinite(channel), np.abs(channel), -np.inf)
+        if not np.any(np.isfinite(scores)):
+            return None
+        score = float(np.nanmax(scores))
+        if score <= 0.0:
+            return None
+
+        raw_row, raw_col = np.unravel_index(int(np.nanargmax(scores)), scores.shape)
+        raw_row = int(raw_row)
+        raw_col = int(raw_col)
+        raw_index = raw_row * int(scores.shape[1]) + raw_col
+        ui_row, ui_col = cls._ui_rc_from_raw_rc_for_sensor(
+            sensor_index,
+            int(scores.shape[0]),
+            int(scores.shape[1]),
+            raw_row,
+            raw_col,
+        )
+        raw_unsigned = getattr(sensor, "raw_unsigned_contact_forces", None)
+        byte_z = None
+        if raw_unsigned is not None:
+            unsigned_arr = np.asarray(raw_unsigned, dtype=float)
+            if (
+                unsigned_arr.ndim >= 3
+                and raw_row < unsigned_arr.shape[0]
+                and raw_col < unsigned_arr.shape[1]
+                and unsigned_arr.shape[2] >= 3
+            ):
+                z_value = unsigned_arr[raw_row, raw_col, 2]
+                byte_z = int(round(float(z_value))) if np.isfinite(z_value) else None
+        return _TaxelPeak(
+            score=score,
+            raw_index=raw_index,
+            raw_row=raw_row,
+            raw_col=raw_col,
+            ui_row=int(ui_row),
+            ui_col=int(ui_col),
+            raw_xyz=cls._vector_at(raw_values, raw_row, raw_col),
+            processed_xyz=cls._vector_at(processed_values, raw_row, raw_col),
+            byte_z=byte_z,
+        )
+
+    @classmethod
+    def _find_sensor_center(
+        cls,
+        sensor: TactileSensor,
+        axis: int,
+        sensor_index: int = -1,
+    ) -> Optional[_TaxelCenter]:
+        raw_values = getattr(sensor, "raw_contact_forces", None)
+        processed_values = getattr(sensor, "contact_forces", None)
+        source = raw_values if raw_values is not None else processed_values
+        if source is None:
+            return None
+        arr = np.asarray(source, dtype=float)
+        if arr.ndim < 3 or arr.shape[0] <= 0 or arr.shape[1] <= 0 or arr.shape[2] <= 0:
+            return None
+
+        axis_index = min(max(int(axis), 0), arr.shape[2] - 1)
+        channel = np.asarray(arr[:, :, axis_index], dtype=float)
+        if axis_index == 2:
+            weights = np.where(np.isfinite(channel), np.clip(channel, 0.0, None), 0.0)
+        else:
+            weights = np.where(np.isfinite(channel), np.abs(channel), 0.0)
+        total = float(np.sum(weights))
+        if total <= 0.0:
+            return None
+
+        row_grid, col_grid = np.indices(weights.shape, dtype=float)
+        raw_row = float(np.sum(row_grid * weights) / total)
+        raw_col = float(np.sum(col_grid * weights) / total)
+        ui_row, ui_col = cls._ui_rc_from_raw_xy_for_sensor(
+            sensor_index,
+            int(weights.shape[0]),
+            int(weights.shape[1]),
+            raw_row,
+            raw_col,
+        )
+        return _TaxelCenter(
+            total=total,
+            raw_row=raw_row,
+            raw_col=raw_col,
+            ui_row=float(ui_row),
+            ui_col=float(ui_col),
+        )
+
+    @staticmethod
+    def _format_peak_detail(peak: Optional[_TaxelPeak]) -> str:
+        if peak is None:
+            return "none"
+        address = 1038 + peak.raw_index * 3
+        byte_z = "-" if peak.byte_z is None else str(peak.byte_z)
+        return (
+            f"i0={peak.raw_index:02d} i1={peak.raw_index + 1:02d} addr={address} "
+            f"raw_rc=({peak.raw_row},{peak.raw_col}) ui_rc=({peak.ui_row},{peak.ui_col}) "
+            f"raw=({peak.raw_xyz[0]},{peak.raw_xyz[1]},{peak.raw_xyz[2]}) "
+            f"byteZ={byte_z} "
+            f"proc=({peak.processed_xyz[0]},{peak.processed_xyz[1]},{peak.processed_xyz[2]}) "
+            f"score={int(round(peak.score))}"
+        )
+
+    @staticmethod
+    def _format_center_detail(center: Optional[_TaxelCenter]) -> str:
+        if center is None:
+            return "none"
+        return (
+            f"raw_rc=({center.raw_row:.2f},{center.raw_col:.2f}) "
+            f"ui_rc=({center.ui_row:.2f},{center.ui_col:.2f}) "
+            f"total={int(round(center.total))}"
+        )
+
+    @classmethod
+    def _format_sum_detail(cls, sensor: TactileSensor) -> str:
+        raw_sum = cls._vector_sum(getattr(sensor, "raw_contact_forces", None))
+        proc_sum = cls._vector_sum(getattr(sensor, "contact_forces", None))
+        summary = cls._resultant_tuple(sensor)
+        raw_delta = (
+            raw_sum[0] - summary[0],
+            raw_sum[1] - summary[1],
+            raw_sum[2] - summary[2],
+        )
+        proc_delta = (
+            proc_sum[0] - summary[0],
+            proc_sum[1] - summary[1],
+            proc_sum[2] - summary[2],
+        )
+        return (
+            f"raw_sum=({raw_sum[0]},{raw_sum[1]},{raw_sum[2]}) "
+            f"proc_sum=({proc_sum[0]},{proc_sum[1]},{proc_sum[2]}) "
+            f"summary=({summary[0]},{summary[1]},{summary[2]}) "
+            f"raw-summary=({raw_delta[0]},{raw_delta[1]},{raw_delta[2]}) "
+            f"proc-summary=({proc_delta[0]},{proc_delta[1]},{proc_delta[2]})"
+        )
+
+    @classmethod
+    def _format_peak_values(cls, state: Optional[HandModel], axis: int) -> str:
+        tactile = state.tactile_data if state and state.tactile_data else []
+        axis_index = min(max(int(axis), 0), 2)
+        axis_name = cls._axis_name(axis_index)
+        threshold = TACTILE_DISPLAY_FLOOR if axis_index == 2 else TACTILE_NOISE_FLOOR
+        chunks = []
+        for fi in range(5):
+            finger = tactile[fi] if fi < len(tactile) else FingerTactile(sensors=[])
+            for si in range(3):
+                if si >= len(finger.sensors):
+                    continue
+                peak = cls._find_sensor_peak(finger.sensors[si], axis_index, si)
+                if peak is None or peak.score < threshold:
+                    continue
+                center = cls._find_sensor_center(finger.sensors[si], axis_index, si)
+                chunks.append(
+                    f"G{fi}S{si} {axis_name}:i0={peak.raw_index:02d}/i1={peak.raw_index + 1:02d} "
+                    f"raw_rc={peak.raw_row},{peak.raw_col} ui_rc={peak.ui_row},{peak.ui_col} "
+                    f"center={cls._format_center_detail(center)} "
+                    f"raw=({peak.raw_xyz[0]},{peak.raw_xyz[1]},{peak.raw_xyz[2]}) "
+                    f"{cls._format_sum_detail(finger.sensors[si])}"
+                )
+        if not chunks:
+            return f"Peak {axis_name}: none >= {int(round(threshold))}"
+        return "Peak " + " | ".join(chunks)
+
+    @staticmethod
+    def _format_matrix(matrix: Optional[np.ndarray]) -> str:
+        if matrix is None:
+            return "  <none>"
+        arr = np.asarray(matrix, dtype=float)
+        if arr.ndim != 2:
+            return "  <bad-shape>"
+        lines = []
+        for row in arr:
+            cells = []
+            for value in row:
+                if not np.isfinite(value):
+                    cells.append("   .")
+                else:
+                    cells.append(f"{int(round(float(value))):4d}")
+            lines.append(" ".join(cells))
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_raw_values(cls, state: Optional[HandModel], axis: int) -> str:
+        tactile = state.tactile_data if state and state.tactile_data else []
+        axis_index = min(max(int(axis), 0), 2)
+        axis_name = cls._axis_name(axis_index)
+        if not tactile:
+            return f"Axis {axis_name}\nNo tactile data."
+
+        lines = [f"Axis {axis_name} raw debug"]
+        if state is not None:
+            summary_seq = getattr(state, "tactile_summary_seq", None)
+            full_seq = getattr(state, "tactile_full_seq", None)
+            full_summary_seq = getattr(state, "tactile_full_summary_seq", None)
+            full_crc = getattr(state, "tactile_full_crc", None)
+            crc_text = f"0x{int(full_crc) & 0xFFFF:04X}" if full_crc is not None else "-"
+            lines.append(
+                "link "
+                f"summary_seq={summary_seq if summary_seq is not None else '-'} "
+                f"full_seq={full_seq if full_seq is not None else '-'} "
+                f"full_summary_seq={full_summary_seq if full_summary_seq is not None else '-'} "
+                f"full_crc={crc_text} "
+                f"crc_err={int(getattr(state, 'tactile_full_crc_errors', 0))} "
+                f"seq_mismatch={int(getattr(state, 'tactile_full_seq_mismatches', 0))} "
+                f"dropped={int(getattr(state, 'tactile_full_dropped', 0))}"
+            )
+        for fi in range(5):
+            finger = tactile[fi] if fi < len(tactile) else FingerTactile(sensors=[])
+            for si in range(3):
+                if si >= len(finger.sensors):
+                    continue
+                sensor = finger.sensors[si]
+                resultant = getattr(sensor, "resultant", None)
+                if resultant is not None and len(resultant) >= 3:
+                    result_text = (
+                        f"({int(round(float(resultant[0]))):4d},"
+                        f"{int(round(float(resultant[1]))):4d},"
+                        f"{int(round(float(resultant[2]))):4d})"
+                    )
+                else:
+                    result_text = "(   0,   0,   0)"
+
+                raw_signed = cls._channel_matrix(getattr(sensor, "raw_contact_forces", None), axis_index)
+                raw_unsigned_z = cls._channel_matrix(
+                    getattr(sensor, "raw_unsigned_contact_forces", None),
+                    2,
+                )
+                processed = cls._channel_matrix(getattr(sensor, "contact_forces", None), axis_index)
+
+                lines.append(
+                    f"G{fi} S{si} resultant={result_text} "
+                    f"raw[{cls._matrix_stats(raw_signed)}] "
+                    f"proc[{cls._matrix_stats(processed)}]"
+                )
+                lines.append(f"PEAK {axis_name}: {cls._format_peak_detail(cls._find_sensor_peak(sensor, axis_index, si))}")
+                lines.append(f"CENTER {axis_name}: {cls._format_center_detail(cls._find_sensor_center(sensor, axis_index, si))}")
+                lines.append(f"SUM: {cls._format_sum_detail(sensor)}")
+                lines.append(f"RAW signed {axis_name}")
+                lines.append(cls._format_matrix(raw_signed))
+                if axis_index == 2:
+                    lines.append("RAW byte Z")
+                    lines.append(cls._format_matrix(raw_unsigned_z))
+                lines.append(f"PROC {axis_name}")
+                lines.append(cls._format_matrix(processed))
+                lines.append("")
+        return "\n".join(lines).rstrip()
+
+    @staticmethod
     def _format_values(state: Optional[HandModel]) -> str:
         tactile = state.tactile_data if state and state.tactile_data else []
         chunks = []
@@ -1366,6 +1862,21 @@ class TactileView(QtWidgets.QWidget):
             return False
         return True
 
+    @staticmethod
+    def _state_has_active_tactile_summary(state: Optional[HandModel]) -> bool:
+        tactile = state.tactile_data if state and state.tactile_data else []
+        for finger in tactile:
+            for sensor in getattr(finger, "sensors", []) or []:
+                resultant = getattr(sensor, "resultant", None)
+                if resultant is None or len(resultant) < 3:
+                    continue
+                try:
+                    if max(0.0, float(resultant[2])) >= TACTILE_DISPLAY_FLOOR:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+        return False
+
     def _apply_ready_frame(self) -> None:
         result = self._worker.consume_latest()
         if result is None or result.axis != self.axis or result.token <= self._last_applied_token:
@@ -1373,39 +1884,301 @@ class TactileView(QtWidgets.QWidget):
         self._last_applied_token = result.token
         self._apply_matrix(result.matrix, result.axis, result.has_data)
 
-    def _apply_matrix(self, mat: np.ndarray, axis: int, has_data: bool) -> None:
-        data = np.asarray(mat, dtype=float)
-        finite_mask = np.isfinite(data) & (data >= 0.0)
-        filtered = data.copy()
-        low_mask = finite_mask & (np.abs(filtered) < TACTILE_NOISE_FLOOR)
-        filtered[low_mask] = 0.0
+    @staticmethod
+    def _zero_tactile_data() -> List[FingerTactile]:
+        fingers: List[FingerTactile] = []
+        for _finger_idx in range(5):
+            sensors: List[TactileSensor] = []
+            for sensor_idx in range(3):
+                rows, cols = tactile_segment_shape(0 if sensor_idx == 0 else 2)
+                sensors.append(
+                    TactileSensor(
+                        contact_forces=np.zeros((rows, cols, 3), dtype=float),
+                        resultant=np.zeros(3, dtype=float),
+                    )
+                )
+            fingers.append(FingerTactile(sensors=sensors))
+        return fingers
 
-        if self._display_matrix is None or self._display_matrix.shape != filtered.shape:
-            smoothed = filtered
+    def _build_zero_matrix(self, axis: int) -> np.ndarray:
+        state = HandModel(tactile_data=self._zero_tactile_data())
+        return self._build_matrix(state, axis)
+
+    def _apply_matrix(
+        self,
+        mat: np.ndarray,
+        axis: int,
+        has_data: bool,
+        *,
+        reset_smoothing: bool = False,
+    ) -> None:
+        data = np.asarray(mat, dtype=float)
+        if data.ndim == 2:
+            vector_data = np.full(data.shape + (3,), np.nan, dtype=float)
+            vector_data[:, :, 2] = data
         else:
-            prev = self._display_matrix
-            smoothed = filtered.copy()
-            blend_mask = finite_mask & np.isfinite(prev)
-            rise_mask = blend_mask & (filtered >= prev)
-            fall_mask = blend_mask & ~rise_mask
-            smoothed[rise_mask] = prev[rise_mask] + TACTILE_RISE_ALPHA * (filtered[rise_mask] - prev[rise_mask])
-            smoothed[fall_mask] = prev[fall_mask] + TACTILE_FALL_ALPHA * (filtered[fall_mask] - prev[fall_mask])
-        display_floor_mask = np.isfinite(smoothed) & (smoothed >= 0.0) & (smoothed < TACTILE_DISPLAY_FLOOR)
-        smoothed[display_floor_mask] = 0.0
+            vector_data = data.copy()
+
+        finite_mask = np.isfinite(vector_data[:, :, 2])
+        current = vector_data.copy()
+        z_low_mask = finite_mask & (np.abs(current[:, :, 2]) < TACTILE_NOISE_FLOOR)
+        current[:, :, 2][z_low_mask] = 0.0
+        xy_mag = np.sqrt(current[:, :, 0] * current[:, :, 0] + current[:, :, 1] * current[:, :, 1])
+        xy_low_mask = finite_mask & (xy_mag < TACTILE_NOISE_FLOOR)
+        current[:, :, 0][xy_low_mask] = 0.0
+        current[:, :, 1][xy_low_mask] = 0.0
+
+        smoothed = current.copy()
+        previous = self._display_matrix
+        if (
+            not reset_smoothing
+            and previous is not None
+            and previous.shape == current.shape
+        ):
+            prev_finite = np.isfinite(previous[:, :, 2])
+            blend_mask = finite_mask & prev_finite
+            if np.any(blend_mask):
+                current_abs = np.abs(current)
+                previous_abs = np.abs(previous)
+                alpha = np.where(
+                    current_abs >= previous_abs,
+                    TACTILE_RISE_ALPHA,
+                    TACTILE_FALL_ALPHA,
+                )
+                smoothed[blend_mask] = (
+                    previous[blend_mask] * (1.0 - alpha[blend_mask])
+                    + current[blend_mask] * alpha[blend_mask]
+                )
+
+        display_floor_mask = finite_mask & (smoothed[:, :, 2] >= 0.0) & (smoothed[:, :, 2] < TACTILE_DISPLAY_FLOOR)
+        smoothed[:, :, 2][display_floor_mask] = 0.0
         self._display_matrix = smoothed
 
-        vmax = TACTILE_AXIS_LEVELS[min(max(int(axis), 0), len(TACTILE_AXIS_LEVELS) - 1)]
-        finite = np.isfinite(smoothed)
-        display = np.zeros(smoothed.shape, dtype=float)
-        display[finite] = 1.0
-        positive = finite & (smoothed > 0.0)
-        norm = np.sqrt(np.clip(smoothed[positive] / vmax, 0.0, 1.0))
-        display[positive] = 2.0 + norm * 253.0
-        self.image.setImage(display.T, levels=(0.0, 255.0), autoLevels=False)
-        if self._last_matrix_shape != data.shape:
-            self._last_matrix_shape = data.shape
+        rendered = self._render_vector_matrix(smoothed, axis)
+        self.image.setLookupTable(None)
+        self.image.setImage(rendered.transpose(1, 0, 2), autoLevels=False)
+        if self._last_matrix_shape != data.shape[:2]:
+            self._last_matrix_shape = data.shape[:2]
             self.view.setRange(xRange=(0, data.shape[0]), yRange=(0, data.shape[1]), padding=0.02)
         self.no_data.setVisible(not has_data)
+
+    @staticmethod
+    def _tactile_band_for_matrix_point(row: int, col: int) -> Optional[int]:
+        scale = max(1, int(TACTILE_2D_ARRAY_SCALE))
+        base_row = int(row) // scale
+        base_col = int(col) // scale
+        spec = TACTILE_STITCH_SPEC
+
+        def find_in_strip(top: int, left: int) -> Optional[int]:
+            if not (
+                top <= base_row < top + TACTILE_FINGER_STRIP_ROWS
+                and left <= base_col < left + TACTILE_BAND_WIDTH
+            ):
+                return None
+            local_row = base_row - top
+            band_top = 0
+            for band in range(TACTILE_NBANDS):
+                band_h, _band_w = tactile_band_shape(band)
+                if band_top <= local_row < band_top + band_h:
+                    return band
+                band_top += band_h
+            return None
+
+        thumb_band = find_in_strip(spec.thumb_r, spec.thumb_c)
+        if thumb_band is not None:
+            return thumb_band
+
+        step = TACTILE_BAND_WIDTH + TACTILE_FOUR_FINGER_GAP
+        for fi in range(4):
+            band = find_in_strip(spec.four_r, spec.four_c + fi * step)
+            if band is not None:
+                return band
+        return None
+
+    def _render_vector_matrix(self, field: np.ndarray, axis: int) -> np.ndarray:
+        rows, cols = field.shape[:2]
+        image = np.full((rows, cols, 4), 255, dtype=np.uint8)
+        finite = np.isfinite(field[:, :, 2])
+        if not np.any(finite):
+            return image
+
+        vmax_z = TACTILE_2D_Z_VISUAL_LEVEL
+        positions = np.argwhere(finite)
+        dense_mode = positions.shape[0] >= TACTILE_2D_DENSE_POINT_LIMIT
+        min_radius = TACTILE_2D_DENSE_MIN_DOT_RADIUS if dense_mode else TACTILE_2D_MIN_DOT_RADIUS
+        max_radius = TACTILE_2D_DENSE_MAX_DOT_RADIUS if dense_mode else TACTILE_2D_MAX_DOT_RADIUS
+        base_rows = positions[:, 0]
+        base_cols = positions[:, 1]
+        image[base_rows, base_cols] = (0, 0, 0, 255)
+
+        z_values = np.where(finite, np.clip(field[:, :, 2], 0.0, None), 0.0)
+        active = finite & (z_values > 0.0)
+        if np.any(active):
+            active_positions = np.argwhere(active)
+            active_rows = active_positions[:, 0]
+            active_cols = active_positions[:, 1]
+            z_norm = np.clip(z_values[active] / max(vmax_z, 1.0), 0.0, 1.0)
+            radii = np.rint(
+                min_radius
+                + np.sqrt(z_norm) * (max_radius - min_radius)
+            ).astype(np.int16)
+            for radius in np.unique(radii):
+                group = radii == radius
+                ratio = (float(radius) - min_radius) / max(
+                    1.0,
+                    max_radius - min_radius,
+                )
+                red = int(round(180 + 75 * np.clip(ratio, 0.0, 1.0)))
+                self._draw_many_circles(
+                    image,
+                    active_rows[group],
+                    active_cols[group],
+                    int(radius),
+                    (red, 0, 0, 255),
+                )
+
+        if int(axis) == 2 and not TACTILE_2D_SHOW_ARROWS_IN_Z_VIEW:
+            return image
+
+        arrow_color = (0, 92, 255, 255)
+        arrow_samples: Dict[Tuple[int, int], Tuple[float, int, int, float, float]] = {}
+        fx_values = np.asarray(field[base_rows, base_cols, 0], dtype=float)
+        fy_values = np.asarray(field[base_rows, base_cols, 1], dtype=float)
+        fx_values = np.where(np.isfinite(fx_values), fx_values, 0.0)
+        fy_values = np.where(np.isfinite(fy_values), fy_values, 0.0)
+        mag_values = np.hypot(fx_values, fy_values)
+        z_at_points = z_values[base_rows, base_cols]
+        arrow_floor = np.full(mag_values.shape, float(TACTILE_2D_ARROW_PAD_FLOOR), dtype=float)
+        contact = z_at_points >= TACTILE_2D_ARROW_CONTACT_FLOOR
+        arrow_floor[contact] = np.maximum(
+            arrow_floor[contact],
+            z_at_points[contact] * TACTILE_2D_ARROW_CONTACT_RATIO,
+        )
+        arrow_indices = np.nonzero(mag_values >= arrow_floor)[0]
+        for point_index in arrow_indices:
+            row = int(base_rows[point_index])
+            col = int(base_cols[point_index])
+            fx = float(fx_values[point_index])
+            fy = float(fy_values[point_index])
+            mag = float(mag_values[point_index])
+            z = max(0.0, float(z_at_points[point_index]))
+            score = mag + z * 0.25
+            key = (int(row) // TACTILE_2D_ARROW_GRID_STEP, int(col) // TACTILE_2D_ARROW_GRID_STEP)
+            if key not in arrow_samples or score > arrow_samples[key][0]:
+                arrow_samples[key] = (score, int(row), int(col), fx, fy)
+
+        arrow_values = sorted(arrow_samples.values(), key=lambda item: item[0], reverse=True)
+        for _score, row, col, fx, fy in arrow_values[:TACTILE_2D_ARROW_MAX_COUNT]:
+            mag = math.hypot(fx, fy)
+            unit_x = fx / max(mag, 1e-9)
+            unit_y = -fy / max(mag, 1e-9)
+            length = 12.0 + min(1.0, mag / max(TACTILE_2D_ARROW_MAX_LEVEL, 1.0)) * 34.0
+            end_row = row + unit_y * length
+            end_col = col + unit_x * length
+            self._draw_line(image, row, col, end_row, end_col, (255, 255, 255, 255), width=4)
+            self._draw_line(image, row, col, end_row, end_col, arrow_color, width=2)
+            self._draw_arrow_head(image, row, col, end_row, end_col, arrow_color, width=3)
+        return image
+
+    @staticmethod
+    def _draw_many_circles(
+        image: np.ndarray,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        radius: int,
+        color: Tuple[int, int, int, int],
+    ) -> None:
+        if radius <= 0 or rows.size == 0:
+            return
+        rows = np.asarray(rows, dtype=np.int32)
+        cols = np.asarray(cols, dtype=np.int32)
+        r2 = radius * radius
+        for dy in range(-radius, radius + 1):
+            span = int(math.floor(math.sqrt(max(0, r2 - dy * dy))))
+            rr = rows + dy
+            row_mask = (rr >= 0) & (rr < image.shape[0])
+            if not np.any(row_mask):
+                continue
+            valid_rr = rr[row_mask]
+            valid_cols = cols[row_mask]
+            for dx in range(-span, span + 1):
+                cc = valid_cols + dx
+                mask = (cc >= 0) & (cc < image.shape[1])
+                if np.any(mask):
+                    image[valid_rr[mask], cc[mask]] = color
+
+    @staticmethod
+    def _draw_circle(
+        image: np.ndarray,
+        row: float,
+        col: float,
+        radius: int,
+        color: Tuple[int, int, int, int],
+    ) -> None:
+        r0 = max(0, int(math.floor(row - radius)))
+        r1 = min(image.shape[0], int(math.ceil(row + radius + 1)))
+        c0 = max(0, int(math.floor(col - radius)))
+        c1 = min(image.shape[1], int(math.ceil(col + radius + 1)))
+        if r1 <= r0 or c1 <= c0:
+            return
+        yy, xx = np.ogrid[r0:r1, c0:c1]
+        mask = (yy - row) * (yy - row) + (xx - col) * (xx - col) <= radius * radius
+        image[r0:r1, c0:c1][mask] = color
+
+    @classmethod
+    def _draw_line(
+        cls,
+        image: np.ndarray,
+        row0: float,
+        col0: float,
+        row1: float,
+        col1: float,
+        color: Tuple[int, int, int, int],
+        *,
+        width: int = 1,
+    ) -> None:
+        steps = max(1, int(math.ceil(max(abs(row1 - row0), abs(col1 - col0)) * 1.6)))
+        t = np.linspace(0.0, 1.0, steps + 1, dtype=float)
+        rows = np.rint(row0 + (row1 - row0) * t).astype(np.int32)
+        cols = np.rint(col0 + (col1 - col0) * t).astype(np.int32)
+        radius = max(0, int(width))
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if dy * dy + dx * dx > radius * radius:
+                    continue
+                rr = rows + dy
+                cc = cols + dx
+                mask = (rr >= 0) & (rr < image.shape[0]) & (cc >= 0) & (cc < image.shape[1])
+                if np.any(mask):
+                    image[rr[mask], cc[mask]] = color
+
+    @classmethod
+    def _draw_arrow_head(
+        cls,
+        image: np.ndarray,
+        row0: float,
+        col0: float,
+        row1: float,
+        col1: float,
+        color: Tuple[int, int, int, int],
+        *,
+        width: int = 2,
+    ) -> None:
+        dx = col1 - col0
+        dy = row1 - row0
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return
+        ux = dx / length
+        uy = dy / length
+        head = min(11.0, max(6.0, length * 0.42))
+        spread = 0.62
+        left_col = col1 - ux * head - uy * head * spread
+        left_row = row1 - uy * head + ux * head * spread
+        right_col = col1 - ux * head + uy * head * spread
+        right_row = row1 - uy * head - ux * head * spread
+        cls._draw_line(image, row1, col1, left_row, left_col, color, width=width)
+        cls._draw_line(image, row1, col1, right_row, right_col, color, width=width)
 
     def _fake_display_state(self, state: Optional[HandModel]) -> HandModel:
         now = time.time()
@@ -1421,7 +2194,7 @@ class TactileView(QtWidgets.QWidget):
         out: List[FingerTactile] = []
         for finger_idx in range(5):
             sensors: List[TactileSensor] = []
-            for seg in (2, 0, 0):
+            for seg in (0, 2, 2):
                 r, c = tactile_segment_shape(seg)
                 cf = np.zeros((r, c, 3), dtype=float)
                 phase = t * 0.8 + finger_idx + len(sensors) * 1.3
@@ -1457,27 +2230,242 @@ class TactileView(QtWidgets.QWidget):
         return strip
 
     @staticmethod
-    def _extract_sensor_array(fd: FingerTactile, sensor_index: int, axis: int) -> np.ndarray:
-        expected = tactile_segment_shape(2 if sensor_index == 0 else 0)
-        out = np.zeros(expected, dtype=float)
+    def _orient_manual_sensor_array(values: np.ndarray) -> np.ndarray:
+        out = np.asarray(values, dtype=float)
+        if TACTILE_2D_MANUAL_ORIGIN_AT_ROOT:
+            out = np.flip(out, axis=0)
+        if TACTILE_2D_MANUAL_MIRROR_COLS:
+            out = np.flip(out, axis=1)
+        return np.ascontiguousarray(out)
+
+    @classmethod
+    def _orient_sensor_array(cls, values: np.ndarray, sensor_index: int) -> np.ndarray:
+        out = np.asarray(values, dtype=float)
+        if int(sensor_index) == 0 and out.ndim >= 2 and cls._is_dp52_shape(out.shape[0], out.shape[1]):
+            out = np.swapaxes(out, 0, 1)
+            out = np.flip(out, axis=0)
+            return np.ascontiguousarray(out)
+        return cls._orient_manual_sensor_array(out)
+
+    @staticmethod
+    def _sensor_resultant_is_active(sensor: TactileSensor) -> bool:
+        if not TACTILE_2D_REQUIRE_RESULTANT_GATE:
+            return True
+        cf = getattr(sensor, "contact_forces", None)
+        if cf is not None and hasattr(cf, "shape") and len(cf.shape) >= 3:
+            arr = np.asarray(cf, dtype=float)
+            if arr.size and arr.shape[2] >= 3:
+                z = np.clip(arr[:, :, 2], 0.0, None)
+                if np.any(np.isfinite(z)) and float(np.nanmax(z)) >= TACTILE_DISPLAY_FLOOR:
+                    return True
+        resultant = getattr(sensor, "resultant", None)
+        if resultant is None or len(resultant) < 3:
+            return True
+        force = np.asarray(resultant[:3], dtype=float)
+        if not np.all(np.isfinite(force)):
+            return True
+        return max(0.0, float(force[2])) >= TACTILE_DISPLAY_FLOOR
+
+    @staticmethod
+    def _sensor_resultant_allows_arrows(sensor: TactileSensor) -> bool:
+        resultant = getattr(sensor, "resultant", None)
+        if resultant is None or len(resultant) < 3:
+            return True
+        force = np.asarray(resultant[:3], dtype=float)
+        if not np.all(np.isfinite(force)):
+            return True
+        xy_mag = math.hypot(float(force[0]), float(force[1]))
+        z_mag = max(0.0, float(force[2]))
+        if xy_mag < TACTILE_2D_ARROW_RESULTANT_FLOOR:
+            return False
+        if z_mag >= TACTILE_DISPLAY_FLOOR and xy_mag < z_mag * TACTILE_2D_ARROW_RESULTANT_Z_RATIO:
+            return False
+        return True
+
+    @classmethod
+    def _extract_sensor_vector_array_raw(cls, fd: FingerTactile, sensor_index: int) -> np.ndarray:
+        expected = tactile_segment_shape(0 if sensor_index == 0 else 2)
+        out = np.zeros(expected + (3,), dtype=float)
         if sensor_index >= len(fd.sensors):
             return out
-        cf = getattr(fd.sensors[sensor_index], "contact_forces", None)
+        sensor = fd.sensors[sensor_index]
+        if not cls._sensor_resultant_is_active(sensor):
+            return out
+        cf = getattr(sensor, "contact_forces", None)
         if cf is None or not hasattr(cf, "shape") or len(cf.shape) < 3:
             return out
+
+        arr = np.asarray(cf, dtype=float)
+        rows = min(expected[0], arr.shape[0])
+        cols = min(expected[1], arr.shape[1])
+        chans = min(3, arr.shape[2])
+        out[:rows, :cols, :chans] = arr[:rows, :cols, :chans]
+        out[:, :, 2] = np.clip(out[:, :, 2], 0.0, None)
+        return out
+
+    @classmethod
+    def _extract_sensor_vector_array(cls, fd: FingerTactile, sensor_index: int) -> np.ndarray:
+        expected = tactile_segment_shape(0 if sensor_index == 0 else 2)
+        out = np.zeros(expected + (3,), dtype=float)
+        if sensor_index >= len(fd.sensors):
+            return cls._orient_sensor_array(out, sensor_index)
+        sensor = fd.sensors[sensor_index]
+        if not cls._sensor_resultant_is_active(sensor):
+            return cls._orient_sensor_array(out, sensor_index)
+        cf = getattr(sensor, "contact_forces", None)
+        if cf is None or not hasattr(cf, "shape") or len(cf.shape) < 3:
+            return cls._orient_sensor_array(out, sensor_index)
+
+        arr = np.asarray(cf, dtype=float)
+        rows = min(expected[0], arr.shape[0])
+        cols = min(expected[1], arr.shape[1])
+        chans = min(3, arr.shape[2])
+        out[:rows, :cols, :chans] = arr[:rows, :cols, :chans]
+        out[:, :, 2] = np.clip(out[:, :, 2], 0.0, None)
+        return cls._orient_sensor_array(out, sensor_index)
+
+    @classmethod
+    def _place_official_sensor_array(
+        cls,
+        mat: np.ndarray,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        values: np.ndarray,
+    ) -> bool:
+        arr = np.asarray(values, dtype=float)
+        if arr.ndim < 3 or arr.shape[2] < 3:
+            return False
+
+        flat = arr.reshape((-1, arr.shape[2]))
+        scale = max(1, int(TACTILE_2D_ARRAY_SCALE))
+        region_top = int(top * scale)
+        region_left = int(left * scale)
+        region_h = max(1, int(height * scale))
+        region_w = max(1, int(width * scale))
+        projection = cls._official_sensor_projection(flat.shape[0], region_h, region_w)
+        if projection is None:
+            return False
+
+        local_rows, local_cols, raw_indices, neighbors, weights, interp_mask = projection
+        vectors = np.zeros((local_rows.shape[0], 3), dtype=float)
+        raw_mask = raw_indices >= 0
+        if np.any(raw_mask):
+            vectors[raw_mask] = flat[raw_indices[raw_mask], :3]
+            vectors[raw_mask, 2] = np.clip(vectors[raw_mask, 2], 0.0, None)
+
+        if np.any(interp_mask):
+            interp_neighbors = neighbors[interp_mask]
+            interp_weights = weights[interp_mask]
+            safe_neighbors = np.clip(interp_neighbors, 0, flat.shape[0] - 1)
+            gathered = flat[safe_neighbors, :3] * interp_weights[:, :, None]
+            gathered[interp_neighbors < 0] = 0.0
+            vectors[interp_mask] = np.sum(gathered, axis=1)
+            vectors[interp_mask, 2] = np.abs(vectors[interp_mask, 2])
+
+        vectors = np.where(np.isfinite(vectors), vectors, 0.0)
+        rows = region_top + local_rows
+        cols = region_left + local_cols
+        in_bounds = (
+            (rows >= 0)
+            & (rows < mat.shape[0])
+            & (cols >= 0)
+            & (cols < mat.shape[1])
+        )
+        if not np.any(in_bounds):
+            return True
+
+        scores = np.abs(vectors[:, 2]) + 0.2 * np.hypot(vectors[:, 0], vectors[:, 1])
+        order = np.argsort(scores[in_bounds])
+        use_rows = rows[in_bounds][order]
+        use_cols = cols[in_bounds][order]
+        use_vectors = vectors[in_bounds][order]
+        mat[use_rows, use_cols, :] = use_vectors
+        return True
+
+    @staticmethod
+    def _official_sensor_projection(taxel_count: int, region_h: int, region_w: int):
+        key = (
+            int(taxel_count),
+            int(region_h),
+            int(region_w),
+            int(TACTILE_2D_OFFICIAL_INTERP_STRIDE),
+        )
+        cached = _OFFICIAL_TACTILE_PROJECTION_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+        layout = get_official_tactile_layout(taxel_count)
+        if layout is None:
+            return None
+
+        span_x = max(1e-9, float(layout.max_x - layout.min_x))
+        span_y = max(1e-9, float(layout.max_y - layout.min_y))
+        pad = max(2.0, min(region_h, region_w) * 0.035)
+        usable_h = max(1.0, region_h - 1 - 2.0 * pad)
+        usable_w = max(1.0, region_w - 1 - 2.0 * pad)
+
+        selected = []
+        interp_stride = max(1, int(TACTILE_2D_OFFICIAL_INTERP_STRIDE))
+        for point_index, point in enumerate(layout.points):
+            if point.idx is None and interp_stride > 1 and point_index % interp_stride != 0:
+                continue
+            local_col = pad + ((float(point.x) - float(layout.min_x)) / span_x) * usable_w
+            local_row = pad + ((float(layout.max_y) - float(point.y)) / span_y) * usable_h
+            selected.append((int(round(local_row)), int(round(local_col)), point))
+
+        if not selected:
+            return None
+
+        max_neighbors = max((len(point.neighbor) for _row, _col, point in selected), default=0)
+        max_neighbors = max(1, max_neighbors)
+        local_rows = np.asarray([row for row, _col, _point in selected], dtype=np.int32)
+        local_cols = np.asarray([col for _row, col, _point in selected], dtype=np.int32)
+        raw_indices = np.full((len(selected),), -1, dtype=np.int32)
+        neighbors = np.full((len(selected), max_neighbors), -1, dtype=np.int32)
+        weights = np.zeros((len(selected), max_neighbors), dtype=float)
+        interp_mask = np.zeros((len(selected),), dtype=bool)
+
+        for index, (_row, _col, point) in enumerate(selected):
+            if point.idx is not None:
+                raw_indices[index] = int(point.idx)
+                continue
+            interp_mask[index] = True
+            count = min(max_neighbors, len(point.neighbor), len(point.shape))
+            if count:
+                neighbors[index, :count] = np.asarray(point.neighbor[:count], dtype=np.int32)
+                weights[index, :count] = np.asarray(point.shape[:count], dtype=float)
+
+        projection = (local_rows, local_cols, raw_indices, neighbors, weights, interp_mask)
+        _OFFICIAL_TACTILE_PROJECTION_CACHE[key] = projection
+        return projection
+
+    @classmethod
+    def _extract_sensor_array(cls, fd: FingerTactile, sensor_index: int, axis: int) -> np.ndarray:
+        expected = tactile_segment_shape(0 if sensor_index == 0 else 2)
+        out = np.zeros(expected, dtype=float)
+        if sensor_index >= len(fd.sensors):
+            return cls._orient_sensor_array(out, sensor_index)
+        sensor = fd.sensors[sensor_index]
+        if not cls._sensor_resultant_is_active(sensor):
+            return cls._orient_sensor_array(out, sensor_index)
+        cf = getattr(sensor, "contact_forces", None)
+        if cf is None or not hasattr(cf, "shape") or len(cf.shape) < 3:
+            return cls._orient_sensor_array(out, sensor_index)
 
         arr = np.asarray(cf, dtype=float)
         axis_index = min(max(int(axis), 0), arr.shape[2] - 1)
         raw = arr[:, :, axis_index]
         values = np.clip(raw, 0.0, None) if axis_index == 2 else np.abs(raw)
         if values.shape == expected:
-            return values
+            return cls._orient_sensor_array(values, sensor_index)
         if values.size == expected[0] * expected[1]:
-            return values.reshape(expected)
+            return cls._orient_sensor_array(values.reshape(expected), sensor_index)
         rows = min(expected[0], values.shape[0])
         cols = min(expected[1], values.shape[1])
         out[:rows, :cols] = values[:rows, :cols]
-        return out
+        return cls._orient_sensor_array(out, sensor_index)
 
     @staticmethod
     def _place_sensor_array(
@@ -1493,27 +2481,23 @@ class TactileView(QtWidgets.QWidget):
         region_left = int(left * scale)
         region_h = max(1, int(height * scale))
         region_w = max(1, int(width * scale))
-        rows, cols = values.shape
+        rows, cols = values.shape[:2]
         if rows <= 0 or cols <= 0:
             return
 
         row_pitch = region_h / rows
         col_pitch = region_w / cols
-        radius = max(2, int(round(min(row_pitch, col_pitch) * 0.38)))
         for r in range(rows):
             cy = region_top + (r + 0.5) * row_pitch
+            rr = int(round(cy))
+            if rr < 0 or rr >= mat.shape[0]:
+                continue
             for c in range(cols):
                 cx = region_left + (c + 0.5) * col_pitch
-                r0 = max(0, int(math.floor(cy - radius)))
-                r1 = min(mat.shape[0], int(math.ceil(cy + radius + 1)))
-                c0 = max(0, int(math.floor(cx - radius)))
-                c1 = min(mat.shape[1], int(math.ceil(cx + radius + 1)))
-                if r1 <= r0 or c1 <= c0:
+                cc = int(round(cx))
+                if cc < 0 or cc >= mat.shape[1]:
                     continue
-                yy, xx = np.ogrid[r0:r1, c0:c1]
-                mask = (yy - cy) * (yy - cy) + (xx - cx) * (xx - cx) <= radius * radius
-                patch = mat[r0:r1, c0:c1]
-                patch[mask] = values[r, c]
+                mat[rr, cc, ...] = values[r, c, ...] if values.ndim == 3 else values[r, c]
 
     def _place_finger_arrays(
         self,
@@ -1523,19 +2507,30 @@ class TactileView(QtWidgets.QWidget):
         left: int,
         axis: int,
     ) -> None:
-        strip = self._extract_finger_strip(finger, axis)
+        _ = axis
         row = 0
         for band in range(TACTILE_NBANDS):
             h, w = tactile_band_shape(band)
             if band not in TACTILE_JOINT_BAND_INDICES:
-                values = strip[row:row + h, :w]
-                self._place_sensor_array(mat, top + row, left, h, w, values)
+                si = TACTILE_BAND_SENSOR_INDEX.get(band)
+                if si is not None:
+                    raw_values = self._extract_sensor_vector_array_raw(finger, si)
+                    if not self._place_official_sensor_array(
+                        mat,
+                        top + row,
+                        left,
+                        h,
+                        w,
+                        raw_values,
+                    ):
+                        values = self._extract_sensor_vector_array(finger, si)
+                        self._place_sensor_array(mat, top + row, left, h, w, values)
             row += h
 
     def _build_matrix(self, state: Optional[HandModel], axis: int) -> np.ndarray:
         spec = TACTILE_STITCH_SPEC
         scale = int(TACTILE_2D_ARRAY_SCALE)
-        mat = np.full((spec.height * scale, spec.width * scale), np.nan, dtype=float)
+        mat = np.full((spec.height * scale, spec.width * scale, 3), np.nan, dtype=float)
         tactile_list = state.tactile_data if state and state.tactile_data else []
 
         def fd(idx: int) -> FingerTactile:

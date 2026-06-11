@@ -5,7 +5,7 @@ Plot servo load data exported by the current Qt upper-computer Save Data flow.
 Examples:
   python desktop/visualize/plot_servo_load_run.py --motors 4,23
   python desktop/visualize/plot_servo_load_run.py --joint 4 --save
-  python desktop/visualize/plot_servo_load_run.py --csv run_data/hand_run_xxx.csv --motors M00,M22
+  python desktop/visualize/plot_servo_load_run.py --csv run_data/hand_run_xxx.csv --motors M00,M01
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def _resolve_motors(args) -> List[int]:
     motors = _parse_motor_list(args.motors)
     motors.extend(m for m in _motors_for_joint(args.joint) if m not in motors)
     if not motors:
-        raise ValueError("Please provide --motors M04,M23 or --joint 4")
+        raise ValueError("Please provide --motors M05,M06 or --joint 4")
     return motors
 
 
@@ -176,7 +176,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Plot servo load curves from current run_data CSV.")
     parser.add_argument("--csv", default="", help="CSV path. Defaults to latest file under run_data.")
     parser.add_argument("--run-data-dir", default=_default_run_data_dir(), help="Directory used when --csv is omitted.")
-    parser.add_argument("--motors", default="", help="Comma-separated motors, for example M04,M23 or 4,23.")
+    parser.add_argument("--motors", default="", help="Comma-separated motors, for example M05,M06 or 5,6.")
     parser.add_argument("--joint", type=int, default=None, help="Plot all motors mapped to this joint.")
     parser.add_argument("--save", nargs="?", const="AUTO", default="", help="Save PNG. Optional explicit output path.")
     args = parser.parse_args()

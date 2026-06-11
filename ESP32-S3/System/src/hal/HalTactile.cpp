@@ -1,4 +1,5 @@
 #include "HalTactile.h"
+#include "HalSensorSpi.h"
 
 #include <SPI.h>
 #include <cstring>
@@ -10,33 +11,36 @@ constexpr uint16_t kLenStatus = 1;
 constexpr uint16_t kLenCrc = 1;
 constexpr uint16_t kForceSummaryAddr = 1008;
 constexpr uint16_t kForceSummaryLen = 3;
+constexpr uint16_t kForceDistributionAddr = 1038;
+constexpr uint16_t kForceDistributionMaxLen = TACTILE_PAD_TAXELS * TACTILE_AXIS_COUNT;
 constexpr uint16_t kDelayCsHoldUs = 10;
 constexpr uint16_t kDelayResponseUs = 100;
 constexpr uint16_t kDelaySelectSettleUs = 80;
-constexpr uint8_t kReadRetryCount = 3;
-constexpr uint8_t kRetryDelayMs = 8;
-constexpr uint8_t kZeroNoiseFloor = 3;
-constexpr uint8_t kZeroHoldFrames = 6;
-constexpr uint8_t kHoldMinMagnitude = 12;
+constexpr uint8_t kReadRetryCount = 1;
+constexpr uint8_t kRetryDelayMs = 2;
 
 struct SensorPattern {
     bool enabled;
     uint8_t pattern;
 };
 
+constexpr uint8_t makeSelectorPattern(uint8_t group, uint8_t sensorBits) {
+    return (uint8_t)((TACTILE_GROUP_CHANNEL_MAP[group] << 2) | (sensorBits & 0x03));
+}
+
 // Logical desktop order is thumb, index, middle, ring, pinky.
 // Pattern bits are GPIO17 GPIO14 GPIO13 GPIO6 GPIO7 as printed by the scanner.
-// Disabled slots are left zero so the 5x3 upload format stays compatible while
-// Each finger uses tip/middle/base sensors in desktop order.
+// Keep the explicit group map from Config.h so logical fingers stay aligned
+// with the PCB route selector discovered during bring-up.
+// CS_A/CS_B are selector address bits on this board. The scanner default is:
+// S0=DP/fingertip: 11, S1=IP/middle phalanx: 10, S2=CP/proximal phalanx: 01.
 constexpr SensorPattern kSensorPatterns[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP] = {
-    {{true, 0x03}, {true, 0x02}, {true, 0x01}}, // thumb: 00011, 00010, 00001
-    {{true, 0x07}, {true, 0x06}, {true, 0x05}}, // index: 00111, 00110, 00101
-    {{true, 0x0B}, {true, 0x0A}, {true, 0x09}}, // middle: 01011, 01010, 01001
-    {{true, 0x0F}, {true, 0x0E}, {true, 0x0D}}, // ring: 01111, 01110, 01101
-    {{true, 0x13}, {true, 0x12}, {true, 0x11}}, // pinky: 10011, 10010, 10001
+    {{true, makeSelectorPattern(0, 0x03)}, {true, makeSelectorPattern(0, 0x02)}, {true, makeSelectorPattern(0, 0x01)}},
+    {{true, makeSelectorPattern(1, 0x03)}, {true, makeSelectorPattern(1, 0x02)}, {true, makeSelectorPattern(1, 0x01)}},
+    {{true, makeSelectorPattern(2, 0x03)}, {true, makeSelectorPattern(2, 0x02)}, {true, makeSelectorPattern(2, 0x01)}},
+    {{true, makeSelectorPattern(3, 0x03)}, {true, makeSelectorPattern(3, 0x02)}, {true, makeSelectorPattern(3, 0x01)}},
+    {{true, makeSelectorPattern(4, 0x03)}, {true, makeSelectorPattern(4, 0x02)}, {true, makeSelectorPattern(4, 0x01)}},
 };
-
-SPIClass tactileSpi(HSPI);
 
 void configureSelectPinHighWithPullup(int pin) {
     if (pin < 0) {
@@ -65,7 +69,69 @@ uint8_t axisMagnitude(const uint8_t* axes) {
     return (uint8_t)value;
 }
 
-void sensorPointers(TactileData& data, uint8_t group, uint8_t sensor, uint8_t** global, uint8_t** rawSummary) {
+uint16_t sensorForceLen(uint8_t sensor) {
+    switch (sensor) {
+        case 0:
+            return TACTILE_SENSOR0_TAXELS * TACTILE_AXIS_COUNT;
+        case 1:
+            return TACTILE_SENSOR1_TAXELS * TACTILE_AXIS_COUNT;
+        case 2:
+            return TACTILE_SENSOR2_TAXELS * TACTILE_AXIS_COUNT;
+        default:
+            return 0;
+    }
+}
+
+void deriveGlobalFromForces(const uint8_t* forces, uint16_t forceLen, uint8_t* globalOut, uint8_t* rawOut) {
+    if (!forces || !globalOut || forceLen < TACTILE_AXIS_COUNT) {
+        return;
+    }
+
+    int8_t bestX = 0;
+    int8_t bestY = 0;
+    uint8_t bestXMag = 0;
+    uint8_t bestYMag = 0;
+    uint8_t bestZ = 0;
+
+    for (uint16_t idx = 0; idx + 2 < forceLen; idx += TACTILE_AXIS_COUNT) {
+        const int8_t x = (int8_t)forces[idx];
+        const int8_t y = (int8_t)forces[idx + 1];
+        const uint8_t z = forces[idx + 2];
+        const uint8_t xMag = (uint8_t)abs((int)x);
+        const uint8_t yMag = (uint8_t)abs((int)y);
+
+        if (xMag > bestXMag) {
+            bestXMag = xMag;
+            bestX = x;
+        }
+        if (yMag > bestYMag) {
+            bestYMag = yMag;
+            bestY = y;
+        }
+        if (z > bestZ) {
+            bestZ = z;
+        }
+    }
+
+    globalOut[0] = (uint8_t)bestX;
+    globalOut[1] = (uint8_t)bestY;
+    globalOut[2] = bestZ;
+    if (rawOut) {
+        rawOut[0] = globalOut[0];
+        rawOut[1] = globalOut[1];
+        rawOut[2] = globalOut[2];
+    }
+}
+
+void sensorPointers(
+    TactileData& data,
+    uint8_t group,
+    uint8_t sensor,
+    uint8_t** global,
+    uint8_t** rawSummary,
+    uint8_t** forces = nullptr,
+    uint16_t* forceLen = nullptr
+) {
     TacGroup& grp = data.groups[group];
     uint8_t* globals[TACTILE_SENSOR_PER_GROUP] = {
         grp.sensor_A.global,
@@ -77,24 +143,23 @@ void sensorPointers(TactileData& data, uint8_t group, uint8_t sensor, uint8_t** 
         grp.sensor_B.rawSummary,
         grp.sensor_C.rawSummary,
     };
+    uint8_t* forcePtrs[TACTILE_SENSOR_PER_GROUP] = {
+        &grp.sensor_A.forces[0][0],
+        &grp.sensor_B.forces[0][0],
+        &grp.sensor_C.forces[0][0],
+    };
     if (global) {
         *global = globals[sensor];
     }
     if (rawSummary) {
         *rawSummary = raws[sensor];
     }
-}
-
-void copySensor(TactileData& dst, const TactileData& src, uint8_t group, uint8_t sensor) {
-    TactileData& mutableSrc = const_cast<TactileData&>(src);
-    uint8_t* dstGlobal = nullptr;
-    uint8_t* dstRaw = nullptr;
-    uint8_t* srcGlobal = nullptr;
-    uint8_t* srcRaw = nullptr;
-    sensorPointers(dst, group, sensor, &dstGlobal, &dstRaw);
-    sensorPointers(mutableSrc, group, sensor, &srcGlobal, &srcRaw);
-    memcpy(dstGlobal, srcGlobal, TACTILE_AXIS_COUNT);
-    memcpy(dstRaw, srcRaw, kForceSummaryLen);
+    if (forces) {
+        *forces = forcePtrs[sensor];
+    }
+    if (forceLen) {
+        *forceLen = sensorForceLen(sensor);
+    }
 }
 
 constexpr uint8_t kCrc8Table[] = {
@@ -119,14 +184,11 @@ constexpr uint8_t kCrc8Table[] = {
 
 HalTactile tactile;
 
-HalTactile::HalTactile() : _mutex(xSemaphoreCreateMutex()), _data(new TactileData()), _spi(nullptr), _spiReady(false), _diag{}, _zeroHoldCounts{} {
+HalTactile::HalTactile() : _mutex(xSemaphoreCreateMutex()), _data(new TactileData()), _spi(nullptr), _spiReady(false), _diag{} {
     memset(_data, 0, sizeof(TactileData));
 }
 
 void HalTactile::prepareBootSelectPins() {
-    configureSelectPinHighWithPullup(PIN_MUX_A);
-    configureSelectPinHighWithPullup(PIN_MUX_B);
-    configureSelectPinHighWithPullup(PIN_MUX_C);
     configureSelectPinHighWithPullup(PIN_MUX_G);
 
     configureSelectPinHighWithPullup(PIN_TAC_CS_A);
@@ -151,9 +213,9 @@ void HalTactile::begin() {
 }
 
 bool HalTactile::setupSPI() {
-    tactileSpi.begin(PIN_TAC_SCLK, PIN_TAC_MISO, PIN_TAC_MOSI, -1);
+    _spi = beginTactileSensorSpi() ? tactileSpiDevice : nullptr;
     setAllSelectPinsHigh();
-    return true;
+    return _spi != nullptr;
 }
 
 uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
@@ -165,9 +227,6 @@ uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
 }
 
 void HalTactile::setAllSelectPinsHigh() {
-    digitalWrite(PIN_MUX_A, HIGH);
-    digitalWrite(PIN_MUX_B, HIGH);
-    digitalWrite(PIN_MUX_C, HIGH);
     digitalWrite(PIN_MUX_G, HIGH);
     digitalWrite(PIN_TAC_CS_A, HIGH);
     digitalWrite(PIN_TAC_CS_B, HIGH);
@@ -192,36 +251,59 @@ void HalTactile::setSelectorPattern(uint8_t pattern) {
     delayMicroseconds(kDelaySelectSettleUs);
 }
 
-bool HalTactile::readRegisters(uint8_t selectorPattern, uint8_t* payload, uint16_t payloadLen) {
-    if (!_spiReady || !payload || payloadLen == 0 || payloadLen > kForceSummaryLen) {
+bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen) {
+    if (!_spiReady || _spi == nullptr || !payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
         return false;
     }
 
-    uint8_t raw[kLenCmdHead + kLenStatus + kForceSummaryLen + kLenCrc] = {0};
+    const bool locked =
+        (g_sensorSelectMutex == NULL) ||
+        (xSemaphoreTake(g_sensorSelectMutex, pdMS_TO_TICKS(20)) == pdTRUE);
+    if (!locked) {
+        memset(payload, 0, payloadLen);
+        return false;
+    }
+
+    uint8_t raw[kLenCmdHead + kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
+    uint8_t zeros[kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
+    uint8_t response[kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
     const uint16_t totalLen = kLenCmdHead + kLenStatus + payloadLen + kLenCrc;
+    const uint16_t responseLen = kLenStatus + payloadLen + kLenCrc;
 
     raw[0] = kCmdRead;
-    raw[1] = (uint8_t)(kForceSummaryAddr & 0xFF);
-    raw[2] = (uint8_t)(kForceSummaryAddr >> 8);
+    raw[1] = (uint8_t)(startAddr & 0xFF);
+    raw[2] = (uint8_t)(startAddr >> 8);
     raw[3] = (uint8_t)(payloadLen & 0xFF);
     raw[4] = (uint8_t)(payloadLen >> 8);
 
-    tactileSpi.beginTransaction(SPISettings(SPI_FREQ_TAC, MSBFIRST, SPI_MODE3));
     setAllSelectPinsHigh();
     setSelectorPattern(selectorPattern);
     delayMicroseconds(kDelayCsHoldUs);
 
-    for (uint16_t i = 0; i < kLenCmdHead; i++) {
-        tactileSpi.transfer(raw[i]);
-    }
+    spi_transaction_t commandTransaction = {};
+    commandTransaction.length = kLenCmdHead * 8U;
+    commandTransaction.tx_buffer = raw;
+    const bool commandOk = (spi_device_transmit(_spi, &commandTransaction) == ESP_OK);
+
     delayMicroseconds(kDelayResponseUs);
-    for (uint16_t i = kLenCmdHead; i < totalLen; i++) {
-        raw[i] = tactileSpi.transfer(0x00);
-    }
+
+    spi_transaction_t responseTransaction = {};
+    responseTransaction.length = responseLen * 8U;
+    responseTransaction.tx_buffer = zeros;
+    responseTransaction.rx_buffer = response;
+    const bool responseOk = (spi_device_transmit(_spi, &responseTransaction) == ESP_OK);
 
     delayMicroseconds(kDelayCsHoldUs);
     setAllSelectPinsHigh();
-    tactileSpi.endTransaction();
+
+    if (!commandOk || !responseOk) {
+        memset(payload, 0, payloadLen);
+        if (g_sensorSelectMutex != NULL) {
+            xSemaphoreGive(g_sensorSelectMutex);
+        }
+        return false;
+    }
+    memcpy(raw + kLenCmdHead, response, responseLen);
 
     const uint8_t recvCrc = raw[totalLen - 1];
     const uint8_t calcCrc = crc8(raw, totalLen - 1);
@@ -235,10 +317,16 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint8_t* payload, uint16
         _diag.lastFailRecvCrc = recvCrc;
         _diag.lastFailCalcCrc = calcCrc;
         memset(payload, 0, payloadLen);
+        if (g_sensorSelectMutex != NULL) {
+            xSemaphoreGive(g_sensorSelectMutex);
+        }
         return false;
     }
 
     memcpy(payload, raw + kLenCmdHead + kLenStatus, payloadLen);
+    if (g_sensorSelectMutex != NULL) {
+        xSemaphoreGive(g_sensorSelectMutex);
+    }
     return true;
 }
 
@@ -261,7 +349,7 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
 
     bool ok = false;
     for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
-        ok = readRegisters(selectorPattern, payload, kForceSummaryLen);
+        ok = readRegisters(selectorPattern, kForceSummaryAddr, payload, kForceSummaryLen);
         if (ok) {
             break;
         }
@@ -285,6 +373,38 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
     return ok;
 }
 
+bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* forcesOut, uint16_t forcesLen) {
+    if (
+        !forcesOut ||
+        groupIndex >= TACTILE_GROUP_NUM ||
+        sensorIndex >= TACTILE_SENSOR_PER_GROUP ||
+        forcesLen == 0 ||
+        forcesLen > kForceDistributionMaxLen
+    ) {
+        return false;
+    }
+
+    const SensorPattern cfg = kSensorPatterns[groupIndex][sensorIndex];
+    if (!cfg.enabled) {
+        memset(forcesOut, 0, forcesLen);
+        return false;
+    }
+
+    const uint8_t selectorPattern = cfg.pattern;
+    bool ok = false;
+    for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
+        ok = readRegisters(selectorPattern, kForceDistributionAddr, forcesOut, forcesLen);
+        if (ok) {
+            break;
+        }
+        delay(kRetryDelayMs);
+    }
+    if (!ok) {
+        memset(forcesOut, 0, forcesLen);
+    }
+    return ok;
+}
+
 void HalTactile::update() {
     TactileData next{};
     TactileReadDiag nextDiag = _diag;
@@ -295,8 +415,6 @@ void HalTactile::update() {
     nextDiag.okMask = 0;
 
     if (_spiReady) {
-        const bool locked = (g_sensorMuxMutex == NULL) ||
-            (xSemaphoreTake(g_sensorMuxMutex, portMAX_DELAY) == pdTRUE);
         for (uint8_t g = 0; g < TACTILE_GROUP_NUM; g++) {
             TacGroup& grp = next.groups[g];
             uint8_t* globals[TACTILE_SENSOR_PER_GROUP] = {
@@ -309,14 +427,25 @@ void HalTactile::update() {
                 grp.sensor_B.rawSummary,
                 grp.sensor_C.rawSummary,
             };
+            uint8_t* forces[TACTILE_SENSOR_PER_GROUP] = {
+                &grp.sensor_A.forces[0][0],
+                &grp.sensor_B.forces[0][0],
+                &grp.sensor_C.forces[0][0],
+            };
             for (uint8_t s = 0; s < TACTILE_SENSOR_PER_GROUP; s++) {
+                const uint16_t forceLen = sensorForceLen(s);
                 if (!kSensorPatterns[g][s].enabled) {
                     memset(globals[s], 0, TACTILE_AXIS_COUNT);
                     memset(rawSummaries[s], 0, kForceSummaryLen);
+                    memset(forces[s], 0, forceLen);
                     continue;
                 }
                 nextDiag.enabledMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
-                if (readSensorSummary(g, s, globals[s], rawSummaries[s])) {
+
+                const bool summaryOk = readSensorSummary(g, s, globals[s], rawSummaries[s]);
+                const bool forcesOk = readSensorForces(g, s, forces[s], forceLen);
+
+                if (summaryOk && forcesOk) {
                     nextDiag.okReads++;
                     nextDiag.okMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
                 } else {
@@ -324,52 +453,11 @@ void HalTactile::update() {
                 }
             }
         }
-        if (locked && g_sensorMuxMutex != NULL) {
-            xSemaphoreGive(g_sensorMuxMutex);
-        }
     } else {
         nextDiag.failedReads = TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP;
     }
 
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(10))) {
-        for (uint8_t g = 0; g < TACTILE_GROUP_NUM; g++) {
-            for (uint8_t s = 0; s < TACTILE_SENSOR_PER_GROUP; s++) {
-                const uint16_t bit = (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
-                if ((nextDiag.enabledMask & bit) == 0) {
-                    _zeroHoldCounts[g][s] = 0;
-                    continue;
-                }
-
-                uint8_t* currGlobal = nullptr;
-                uint8_t* currRaw = nullptr;
-                uint8_t* prevGlobal = nullptr;
-                uint8_t* prevRaw = nullptr;
-                sensorPointers(next, g, s, &currGlobal, &currRaw);
-                sensorPointers(*_data, g, s, &prevGlobal, &prevRaw);
-
-                const bool readOk = (nextDiag.okMask & bit) != 0;
-                const bool currZero = axisMagnitude(currGlobal) <= kZeroNoiseFloor;
-                const uint8_t prevMag = axisMagnitude(prevGlobal);
-
-                if (!readOk) {
-                    memcpy(currGlobal, prevGlobal, TACTILE_AXIS_COUNT);
-                    memcpy(currRaw, prevRaw, kForceSummaryLen);
-                    continue;
-                }
-
-                if (currZero && prevMag >= kHoldMinMagnitude && _zeroHoldCounts[g][s] < kZeroHoldFrames) {
-                    _zeroHoldCounts[g][s]++;
-                    memcpy(currGlobal, prevGlobal, TACTILE_AXIS_COUNT);
-                    memcpy(currRaw, prevRaw, kForceSummaryLen);
-                } else if (currZero) {
-                    if (_zeroHoldCounts[g][s] < 0xFF) {
-                        _zeroHoldCounts[g][s]++;
-                    }
-                } else {
-                    _zeroHoldCounts[g][s] = 0;
-                }
-            }
-        }
         *_data = next;
         _diag.frameCount = nextDiag.frameCount;
         _diag.enabledMask = nextDiag.enabledMask;

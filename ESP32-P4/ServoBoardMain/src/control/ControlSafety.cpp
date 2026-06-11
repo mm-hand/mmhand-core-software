@@ -11,9 +11,8 @@ static const float kReleaseWindowExitTargetDeltaDeg = 0.3f;
 static const float kReleaseFilterAlpha = 0.25f;
 static const float kReleaseActualDeadbandDeg = 0.2f;
 static const int32_t kReleaseAccumPrecheckCounts = 256;
-static const int32_t kReleaseAccumEarlyFaultCounts = 512;
-static const int32_t kReleaseAccumHalfTurnCounts = 2048;
-static const int32_t kReleaseAccumFullTurnCounts = 4096;
+static const int32_t kReleaseAccumNoReturnFaultCounts = 2048;
+static const int32_t kReleaseAccumCatastrophicCounts = 4096;
 static const float kReleaseForwardDeltaDeg = 2.0f;
 static const float kReleaseMinReturnAccumDeg = 1.5f;
 static const uint8_t kReleaseForwardAnomalyCycles = 3;
@@ -146,13 +145,14 @@ bool updateReleaseGuardState(ReleaseGuardState* guard,
             guard->forwardAnomalyCycles = 0;
         }
 
-        if (guard->releaseServoAccumCounts >= kReleaseAccumFullTurnCounts) {
+        const bool noActualReturn =
+            guard->actualReturnAccumDeg <= kReleaseMinReturnAccumDeg;
+        if ((guard->releaseServoAccumCounts >= kReleaseAccumCatastrophicCounts) &&
+            noActualReturn) {
             guard->faultActive = 1;
             guard->catastrophicFault = 1;
-        } else if (guard->releaseServoAccumCounts >= kReleaseAccumHalfTurnCounts) {
-            guard->faultActive = 1;
-        } else if ((guard->releaseServoAccumCounts >= kReleaseAccumEarlyFaultCounts) &&
-                   (guard->actualReturnAccumDeg <= kReleaseMinReturnAccumDeg)) {
+        } else if ((guard->releaseServoAccumCounts >= kReleaseAccumNoReturnFaultCounts) &&
+                   noActualReturn) {
             guard->faultActive = 1;
         } else if ((guard->releaseServoAccumCounts >= kReleaseAccumPrecheckCounts) &&
                    (guard->forwardAnomalyCycles >= kReleaseForwardAnomalyCycles)) {

@@ -4,6 +4,9 @@
 
 // 任务句柄
 TaskHandle_t xCanTask = NULL;
+namespace {
+constexpr uint32_t kCanTaskPeriodMs = 4;
+}
 
 // 队列（外部声明，在SystemTasks中定义）
 extern QueueHandle_t xQueueEncoderData;
@@ -22,7 +25,7 @@ void Task_CanBus(void *pvParameters) {
     static uint8_t errorSendCounter = 0;
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10);
+    const TickType_t xFrequency = pdMS_TO_TICKS(kCanTaskPeriodMs);
 
     Serial.println("[Task_CanBus] Started!");
 

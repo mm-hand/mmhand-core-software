@@ -11,12 +11,61 @@ constexpr uint8_t kErrorFrameCount =
 
 constexpr uint16_t kDiagMagLowBit = 0x0800;
 constexpr uint16_t kDiagMagHighBit = 0x0400;
+
+uint8_t tactileAxisMagnitude(const uint8_t* axes) {
+    const int x = abs((int8_t)axes[0]);
+    const int y = abs((int8_t)axes[1]);
+    const int z = axes[2];
+    return (uint8_t)max(z, max(x, y));
+}
+
+void writeFilteredTactileSummary(uint8_t* dst, const uint8_t* src) {
+    if (tactileAxisMagnitude(src) <= TACTILE_SUMMARY_NOISE_FLOOR) {
+        dst[0] = 0;
+        dst[1] = 0;
+        dst[2] = 0;
+        return;
+    }
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+}
+
+uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (crc & 0x8000) {
+                crc = (uint16_t)((crc << 1) ^ 0x1021);
+            } else {
+                crc = (uint16_t)(crc << 1);
+            }
+        }
+    }
+    return crc;
+}
 } // namespace
 
 static_assert(
     kErrorFrameCount ==
         (CAN_ID_ERROR_DETAIL_LAST - CAN_ID_ERROR_DETAIL_BASE + 1),
     "Error detail frame ID range does not match frame count.");
+static_assert(
+    CAN_TAC_FULL_DLC == (1 + CAN_TAC_FULL_PAYLOAD_PER_FRAME),
+    "Tactile full DLC must be seq(1) + payload bytes.");
+static_assert(
+    CAN_ENC_FRAME_COUNT == (CAN_ID_ENC_LAST - CAN_ID_ENC_BASE + 1),
+    "Encoder frame ID range does not match frame count.");
+static_assert(CAN_ID_ENC_CRC <= 0x7FF, "Encoder CRC CAN ID must fit standard CAN.");
+static_assert(
+    CAN_TAC_SUMMARY_PACKET_BYTES <=
+        (CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
+    "Tactile summary payload plus CRC budget too small.");
+static_assert(
+    TACTILE_FULL_BYTES <= (CAN_TAC_FULL_FRAME_COUNT * CAN_TAC_FULL_PAYLOAD_PER_FRAME),
+    "Tactile full payload budget too small.");
+static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
 HalTWAI::HalTWAI() : _is_initialized(false) {}
 
@@ -26,7 +75,7 @@ bool HalTWAI::begin() {
         (gpio_num_t)PIN_TWAI_RX,
         TWAI_MODE_NORMAL
     );
-    g_config.tx_queue_len = 50;
+    g_config.tx_queue_len = 512;
     g_config.rx_queue_len = 10;
 
     twai_timing_config_t t_config = CAN_BAUD_RATE;
@@ -53,36 +102,45 @@ void HalTWAI::sendFrame(uint32_t id, const uint8_t *data, uint8_t len) {
     message.data_length_code = len;
     memcpy(message.data, data, len);
 
-    twai_transmit(&message, 0);
+    twai_transmit(&message, pdMS_TO_TICKS(5));
 }
 
 void HalTWAI::sendEncoderData(const EncoderData &encData) {
-    uint8_t buffer[8];
-    int idx = 0;
+    uint8_t packet[CAN_ENC_PAYLOAD_BYTES] = {0};
+    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        const uint16_t val = encData.rawAngles[i];
+        packet[i * 2] = (uint8_t)(val >> 8);
+        packet[i * 2 + 1] = (uint8_t)(val & 0xFF);
+    }
 
-    // First 5 frames contain 20 encoder values.
-    for (int frame = 0; frame < 5; frame++) {
+    uint8_t buffer[8];
+    for (int frame = 0; frame < CAN_ENC_FRAME_COUNT; frame++) {
+        memset(buffer, 0, sizeof(buffer));
         for (int i = 0; i < 4; i++) {
-            uint16_t val = encData.rawAngles[idx + i];
-            buffer[i * 2] = (uint8_t)(val >> 8);
-            buffer[i * 2 + 1] = (uint8_t)(val & 0xFF);
+            const int realIdx = frame * 4 + i;
+            if (realIdx >= ENCODER_TOTAL_NUM) {
+                break;
+            }
+            buffer[i * 2] = packet[realIdx * 2];
+            buffer[i * 2 + 1] = packet[realIdx * 2 + 1];
         }
 
         sendFrame(CAN_ID_ENC_BASE + frame, buffer, 8);
-        idx += 4;
     }
 
-    // Last frame contains encoder #21 in byte[0..1].
+    static uint8_t seq = 0;
+    const uint16_t crc = crc16Ccitt(packet, sizeof(packet));
     memset(buffer, 0, 8);
-    uint16_t lastVal = encData.rawAngles[idx];
-    buffer[0] = (uint8_t)(lastVal >> 8);
-    buffer[1] = (uint8_t)(lastVal & 0xFF);
-
-    sendFrame(CAN_ID_ENC_BASE + 5, buffer, 8);
+    buffer[0] = seq++;
+    buffer[1] = (uint8_t)(crc >> 8);
+    buffer[2] = (uint8_t)(crc & 0xFF);
+    buffer[3] = CAN_ENC_FRAME_COUNT;
+    buffer[4] = CAN_ENC_PAYLOAD_BYTES;
+    sendFrame(CAN_ID_ENC_CRC, buffer, CAN_ENC_CRC_DLC);
 }
 
-void HalTWAI::sendTactileSummary(const TactileData &tacData) {
-    uint8_t payload[TACTILE_SUMMARY_BYTES] = {0};
+uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData) {
+    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES] = {0};
     uint8_t cursor = 0;
 
     for (int g = 0; g < TACTILE_GROUP_NUM; g++) {
@@ -94,28 +152,123 @@ void HalTWAI::sendTactileSummary(const TactileData &tacData) {
         };
 
         for (int s = 0; s < 3; s++) {
-            for (int k = 0; k < 3; k++) {
-                payload[cursor++] = ptrs[s][k];
-            }
+            writeFilteredTactileSummary(packet + cursor, ptrs[s]);
+            cursor += 3;
         }
     }
 
+    const uint16_t crc = crc16Ccitt(packet, TACTILE_SUMMARY_BYTES);
+    packet[TACTILE_SUMMARY_BYTES] = (uint8_t)(crc >> 8);
+    packet[TACTILE_SUMMARY_BYTES + 1] = (uint8_t)(crc & 0xFF);
+
     static uint8_t seq = 0;
+    const uint8_t thisSeq = seq++;
     uint8_t buffer[CAN_TAC_SUMMARY_DLC] = {0};
     for (uint8_t frame = 0; frame < CAN_TAC_SUMMARY_FRAME_COUNT; frame++) {
-        buffer[0] = seq;
+        buffer[0] = thisSeq;
         for (uint8_t slot = 0; slot < CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME; slot++) {
             const uint8_t idx = frame * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME + slot;
-            buffer[slot + 1] = (idx < TACTILE_SUMMARY_BYTES) ? payload[idx] : 0;
+            buffer[slot + 1] = (idx < CAN_TAC_SUMMARY_PACKET_BYTES) ? packet[idx] : 0;
         }
         sendFrame(CAN_ID_TAC_SUMMARY_BASE + frame, buffer, CAN_TAC_SUMMARY_DLC);
     }
-    seq++;
+    return thisSeq;
 }
 
-void HalTWAI::sendTactileFullDump(const TactileData &tacData) {
-    (void)tacData;
-    // Placeholder
+void HalTWAI::sendTactileFullDump(const TactileData &tacData, uint8_t seq) {
+    uint8_t buffer[CAN_TAC_FULL_DLC] = {0};
+    uint16_t frameIdx = 0;
+    uint8_t slot = 0;
+
+    auto beginFrame = [&]() {
+        memset(buffer, 0, sizeof(buffer));
+        buffer[0] = seq;
+    };
+
+    auto flushFrame = [&]() {
+        sendFrame(CAN_ID_TAC_FULL_DUMP_BASE + frameIdx, buffer, CAN_TAC_FULL_DLC);
+        frameIdx++;
+        slot = 0;
+        if ((frameIdx & 0x3F) == 0) {
+            delay(1);
+        }
+    };
+
+    auto pushByte = [&](uint8_t value) {
+        if (slot == 0) {
+            beginFrame();
+        }
+        buffer[1 + slot] = value;
+        slot++;
+        if (slot >= CAN_TAC_FULL_PAYLOAD_PER_FRAME) {
+            flushFrame();
+        }
+    };
+
+    auto pushBlock = [&](const uint8_t* bytes, uint16_t len) {
+        for (uint16_t i = 0; i < len; i++) {
+            pushByte(bytes[i]);
+        }
+    };
+
+    for (int g = 0; g < TACTILE_GROUP_NUM; g++) {
+        const TacGroup& grp = tacData.groups[g];
+        pushBlock(&grp.sensor_A.forces[0][0], TACTILE_SENSOR0_TAXELS * TACTILE_AXIS_COUNT);
+        pushBlock(&grp.sensor_B.forces[0][0], TACTILE_SENSOR1_TAXELS * TACTILE_AXIS_COUNT);
+        pushBlock(&grp.sensor_C.forces[0][0], TACTILE_SENSOR2_TAXELS * TACTILE_AXIS_COUNT);
+    }
+
+    if (slot != 0) {
+        flushFrame();
+    }
+}
+
+void HalTWAI::sendTactileRawDiag(const TactileData &tacData) {
+    static uint8_t seq = 0;
+    const uint8_t thisSeq = seq++;
+
+    auto sendSensorStats = [&](uint8_t group, uint8_t sensor, const uint8_t* forces, uint16_t forceLen) {
+        int minZ = 127;
+        int maxZ = -128;
+        uint16_t absSum = 0;
+        uint8_t nonZero = 0;
+        for (uint16_t idx = 2; idx < forceLen; idx += TACTILE_AXIS_COUNT) {
+            const int z = (int8_t)forces[idx];
+            if (z < minZ) {
+                minZ = z;
+            }
+            if (z > maxZ) {
+                maxZ = z;
+            }
+            const int mag = abs(z);
+            absSum = (uint16_t)min(0xFFFF, (int)absSum + mag);
+            if (mag > 3 && nonZero < 0xFF) {
+                nonZero++;
+            }
+        }
+        if (absSum <= 50 && nonZero <= 4) {
+            return;
+        }
+
+        uint8_t payload[8] = {
+            thisSeq,
+            group,
+            sensor,
+            (uint8_t)(int8_t)minZ,
+            (uint8_t)(int8_t)maxZ,
+            (uint8_t)(absSum & 0xFF),
+            (uint8_t)((absSum >> 8) & 0xFF),
+            nonZero,
+        };
+        sendFrame(CAN_ID_TAC_RAW_DIAG, payload, sizeof(payload));
+    };
+
+    for (uint8_t g = 0; g < TACTILE_GROUP_NUM; g++) {
+        const TacGroup& grp = tacData.groups[g];
+        sendSensorStats(g, 0, &grp.sensor_A.forces[0][0], TACTILE_SENSOR0_TAXELS * TACTILE_AXIS_COUNT);
+        sendSensorStats(g, 1, &grp.sensor_B.forces[0][0], TACTILE_SENSOR1_TAXELS * TACTILE_AXIS_COUNT);
+        sendSensorStats(g, 2, &grp.sensor_C.forces[0][0], TACTILE_SENSOR2_TAXELS * TACTILE_AXIS_COUNT);
+    }
 }
 
 bool HalTWAI::sendCalibrationAck(bool success) {

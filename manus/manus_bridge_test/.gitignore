@@ -1,0 +1,7 @@
+build/
+*.csv
+*.log
+*.user
+*.suo
+*.VC.db
+*.pdb

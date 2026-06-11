@@ -1,4 +1,5 @@
 #include "HalEncoders.h"
+#include "HalSensorSpi.h"
 #include <cstring>
 
 #if ENC_HW_MODE != ENC_HW_MODE_138_CS_DEMUX && ENC_HW_MODE != ENC_HW_MODE_151_MISO_MUX
@@ -22,33 +23,20 @@ HalEncoders::HalEncoders() : _spi(nullptr) {
 
 void HalEncoders::begin() {
 #if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
+#if PIN_ENC_CS >= 0
     pinMode(PIN_ENC_CS, OUTPUT);
     digitalWrite(PIN_ENC_CS, HIGH);
+#endif
 #endif
     pinMode(PIN_MUX_A, OUTPUT);
     pinMode(PIN_MUX_B, OUTPUT);
     pinMode(PIN_MUX_C, OUTPUT);
+    setMux(ENC_151_IDLE_CHANNEL);
     setupSPI();
 }
 
 void HalEncoders::setupSPI() {
-    spi_bus_config_t buscfg = {
-        .mosi_io_num = PIN_ENC_MOSI,
-        .miso_io_num = PIN_ENC_MISO,
-        .sclk_io_num = PIN_ENC_SCLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 32,
-    };
-    spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
-
-    spi_device_interface_config_t devcfg = {
-        .mode = 1,
-        .clock_speed_hz = 1000 * 1000,
-        .spics_io_num = -1,
-        .queue_size = 1,
-    };
-    spi_bus_add_device(SPI2_HOST, &devcfg, &_spi);
+    _spi = beginEncoderSensorSpi() ? encoderSpiDevice : nullptr;
 }
 
 void HalEncoders::setMux(uint8_t ch) {
@@ -59,25 +47,65 @@ void HalEncoders::setMux(uint8_t ch) {
 }
 
 bool HalEncoders::transferOnce(uint8_t muxChannel, uint8_t count, const uint16_t *txBuf, uint16_t *rxBuf) {
+    if (count == 0 || count > MAX_GROUP_SIZE || txBuf == nullptr || rxBuf == nullptr) {
+        return false;
+    }
+
+    if (_spi == nullptr) {
+        setupSPI();
+    }
+    if (_spi == nullptr) {
+        return false;
+    }
+
+    const bool locked =
+        (g_sensorSelectMutex == NULL) ||
+        (xSemaphoreTake(g_sensorSelectMutex, pdMS_TO_TICKS(20)) == pdTRUE);
+    if (!locked) {
+        return false;
+    }
+
     setMux(muxChannel);
 
-    spi_transaction_t t = {};
-    t.length = static_cast<size_t>(count) * 16;
-    t.tx_buffer = txBuf;
-    t.rx_buffer = rxBuf;
+    uint8_t txBytes[MAX_GROUP_SIZE * 2] __attribute__((aligned(4))) = {0};
+    uint8_t rxBytes[MAX_GROUP_SIZE * 2] __attribute__((aligned(4))) = {0};
+    const size_t byteCount = (size_t)count * 2U;
+    for (uint8_t i = 0; i < count; i++) {
+        txBytes[i * 2] = (uint8_t)(txBuf[i] >> 8);
+        txBytes[i * 2 + 1] = (uint8_t)(txBuf[i] & 0xFF);
+    }
 
 #if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
+#if PIN_ENC_CS >= 0
     digitalWrite(PIN_ENC_CS, LOW);
     delayMicroseconds(1);
-    const esp_err_t err = spi_device_polling_transmit(_spi, &t);
-    digitalWrite(PIN_ENC_CS, HIGH);
-    delayMicroseconds(2);
-#else
-    const esp_err_t err = spi_device_polling_transmit(_spi, &t);
-    delayMicroseconds(2);
+#endif
 #endif
 
-    return err == ESP_OK;
+    spi_transaction_t transaction = {};
+    transaction.length = byteCount * 8U;
+    transaction.tx_buffer = txBytes;
+    transaction.rx_buffer = rxBytes;
+    const bool ok = (spi_device_transmit(_spi, &transaction) == ESP_OK);
+
+    if (ok) {
+        for (uint8_t i = 0; i < count; i++) {
+            rxBuf[i] = ((uint16_t)rxBytes[i * 2] << 8) | rxBytes[i * 2 + 1];
+        }
+    }
+
+#if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
+#if PIN_ENC_CS >= 0
+    digitalWrite(PIN_ENC_CS, HIGH);
+    delayMicroseconds(2);
+#endif
+#endif
+
+    setMux(ENC_151_IDLE_CHANNEL);
+    if (g_sensorSelectMutex != NULL) {
+        xSemaphoreGive(g_sensorSelectMutex);
+    }
+    return ok;
 }
 
 uint8_t HalEncoders::get_parity(uint16_t n) {
@@ -259,7 +287,7 @@ void HalEncoders::collectGroup138(uint8_t groupIndex, int groupStart, uint8_t co
         const uint16_t reg = pickRegisterForState(id, true);
         pendingCmds[k] = reg;
         const uint16_t frame = build_command_frame(reg, true);
-        txBuf[k] = static_cast<uint16_t>((frame >> 8) | (frame << 8));
+        txBuf[k] = frame;
     }
 
     const uint8_t muxChannel = static_cast<uint8_t>(ENC_MUX_BASE_CHANNEL + groupIndex);
@@ -279,7 +307,7 @@ void HalEncoders::collectGroup138(uint8_t groupIndex, int groupStart, uint8_t co
             continue;
         }
 
-        const uint16_t rawVal = static_cast<uint16_t>((rxBuf[k] << 8) | (rxBuf[k] >> 8));
+        const uint16_t rawVal = rxBuf[k];
         decodeFrame(outData, id, rawVal, prevCmd, true);
     }
 }
@@ -305,7 +333,7 @@ void HalEncoders::collectGroup151(uint8_t groupIndex, int groupStart, uint8_t co
         const uint16_t reg = pickRegisterForState(id, fullDiag);
         issuedCmds[k] = reg;
         const uint16_t frame = build_command_frame(reg, true);
-        txBuf[k] = static_cast<uint16_t>((frame >> 8) | (frame << 8));
+        txBuf[k] = frame;
     }
 
     const uint8_t muxChannel = getGroupMuxChannel(groupIndex);
@@ -323,24 +351,31 @@ void HalEncoders::collectGroup151(uint8_t groupIndex, int groupStart, uint8_t co
             continue;
         }
 
-        const uint16_t rawVal = static_cast<uint16_t>((rxBuf[k] << 8) | (rxBuf[k] >> 8));
+        const uint16_t rawVal = rxBuf[k];
         decodeFrame(outData, id, rawVal, issuedCmds[k], fullDiag);
     }
 }
 
 void HalEncoders::getData(EncoderData &outData) {
-    const bool locked = (g_sensorMuxMutex == NULL) ||
-        (xSemaphoreTake(g_sensorMuxMutex, portMAX_DELAY) == pdTRUE);
-    if (!locked) {
-        outData = {};
-        return;
-    }
-
     int globalIdx = 0;
     outData = {};
 
     for (uint8_t grp = 0; grp < GROUP_COUNT; grp++) {
         const uint8_t count = group_sizes_[grp];
+        if ((ENC_ACTIVE_GROUP_MASK & (1U << grp)) == 0) {
+            for (uint8_t k = 0; k < count; k++) {
+                const int id = globalIdx + k;
+                if (id >= ENCODER_TOTAL_NUM) {
+                    continue;
+                }
+                outData.rawAngles[id] = 0;
+                outData.errorFlags[id] = 1;
+                _latchedErrorCodes[id] = ERR_CODE_LINK_LOST;
+                _fsmStates[id] = FSM_READ_ANGLE;
+            }
+            globalIdx += count;
+            continue;
+        }
 
 #if ENC_HW_MODE == ENC_HW_MODE_151_MISO_MUX
         collectGroup151(grp, globalIdx, count, outData);
@@ -352,8 +387,4 @@ void HalEncoders::getData(EncoderData &outData) {
     }
 
     memcpy(outData.latchedErrors, _latchedErrorCodes, sizeof(_latchedErrorCodes));
-
-    if (g_sensorMuxMutex != NULL) {
-        xSemaphoreGive(g_sensorMuxMutex);
-    }
 }
