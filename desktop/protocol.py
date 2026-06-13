@@ -1,6 +1,6 @@
 import struct
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 
 class ControlMode(Enum):
@@ -26,6 +26,7 @@ PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
 PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
+PACKET_TYPE_TACTILE_FULL = 0x0F
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -39,9 +40,7 @@ CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
 CMD_MOTOR_POS_ABS_ONE = 0xDE
-CMD_LOCAL_TEST_PARAMS = 0xD4
-CMD_LOCAL_TEST_START = 0xD5
-CMD_LOCAL_TEST_STOP = 0xD6
+CMD_TENDON_GUARD = 0xD4
 CMD_ACTIVE_SCOPE = 0xD7
 CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
@@ -53,6 +52,9 @@ CMD_MULTITURN_NVS_CONTROL = 0xDD
 CMD_HOST_HEARTBEAT = 0xDC
 CMD_CALIB_LOAD_JOINT = 0xDF
 CMD_CALIB_LOAD_LIMITS = 0xE0
+CMD_LOCAL_TEST_PARAMS = 0xE1
+CMD_LOCAL_TEST_START = 0xE2
+CMD_LOCAL_TEST_STOP = 0xE3
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -87,6 +89,11 @@ TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
 TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
+TACTILE_TIP_TAXELS = 25
+TACTILE_PAD_TAXELS = 52
+TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_PAD_TAXELS, TACTILE_TIP_TAXELS, TACTILE_TIP_TAXELS)
+TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TACTILE_AXIS_COUNT
+TACTILE_FULL_PACKET_MAGIC = b"T2"
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -342,6 +349,54 @@ def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[i
     return seq, out
 
 
+def crc16_ccitt(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in bytes(data):
+        crc ^= (int(byte) & 0xFF) << 8
+        for _bit in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc & 0xFFFF
+
+
+def parse_tactile_full_fragment(
+    payload: bytes,
+) -> Optional[Tuple[int, int, int, bytes, Optional[int], Optional[int]]]:
+    if len(payload) >= 9 and payload[:2] == TACTILE_FULL_PACKET_MAGIC:
+        seq = payload[2]
+        summary_seq = payload[3]
+        frag_idx = payload[4]
+        frag_count = payload[5]
+        chunk_len = payload[6]
+        full_crc = payload[7] | (payload[8] << 8)
+        if frag_count <= 0 or frag_idx >= frag_count:
+            return None
+        if len(payload) != 9 + chunk_len:
+            return None
+        return (
+            seq,
+            frag_idx,
+            frag_count,
+            bytes(payload[9:9 + chunk_len]),
+            summary_seq,
+            full_crc,
+        )
+
+    if len(payload) < 4:
+        return None
+    seq = payload[0]
+    frag_idx = payload[1]
+    frag_count = payload[2]
+    chunk_len = payload[3]
+    if frag_count <= 0 or frag_idx >= frag_count:
+        return None
+    if len(payload) != 4 + chunk_len:
+        return None
+    return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
+
+
 def parse_joint_debug_packet(
     payload: bytes,
 ) -> Optional[Tuple[int, bool, float, float, float, float, float, bool, int, int]]:
@@ -592,6 +647,24 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
         v = MOTOR_ABS_CMD_MAX
     payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
+
+
+def build_tendon_guard_cmd(config: Sequence[Tuple[bool, int, int]]) -> bytes:
+    payload = bytearray()
+    for idx in range(ENCODER_COUNT):
+        if idx < len(config):
+            enabled, pull_sign, x1_abs = config[idx]
+        else:
+            enabled, pull_sign, x1_abs = False, 1, 0
+        sign_byte = 0xFF if int(pull_sign) < 0 else 0x01
+        x1 = int(x1_abs)
+        if x1 < MOTOR_ABS_CMD_MIN:
+            x1 = MOTOR_ABS_CMD_MIN
+        elif x1 > MOTOR_ABS_CMD_MAX:
+            x1 = MOTOR_ABS_CMD_MAX
+        payload.extend(bytes([1 if enabled else 0, sign_byte]))
+        payload.extend(struct.pack(">h", x1))
+    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:

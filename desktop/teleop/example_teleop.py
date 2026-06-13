@@ -9,9 +9,19 @@ from typing import Optional
 from core_logic import HandController
 
 
-def run(controller: HandController, port: Optional[str] = None) -> None:
+def run(
+    controller: HandController,
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+) -> None:
     """遥操作入口：接收 controller 与 port，在此填写你的遥操逻辑。"""
     from ui_main import HandGUI
     controller.set_pid_control(True)
-    gui = HandGUI(controller, title_suffix="Teleoperation", current_port=port, current_mode="Teleoperation")
+    gui = HandGUI(
+        controller,
+        title_suffix="Teleoperation",
+        current_port=port,
+        current_mode="Teleoperation",
+        tactile_port=tactile_port,
+    )
     gui.run()

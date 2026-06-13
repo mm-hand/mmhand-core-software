@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from comm_layer import list_ports
+from comm_layer import TactileSerialComm, list_ports
 from core_logic import HandController
 from data_models import HandModel
 from protocol import (
@@ -33,7 +33,7 @@ from .ui_windows import DisplayWindowManager
 
 DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT_DIR = os.path.dirname(DESKTOP_DIR)
-DISPLAY_POLL_MS = 50
+DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
 
 
@@ -48,6 +48,7 @@ class HandGUI(QtWidgets.QMainWindow):
         action_callback: Optional[Callable[[str], None]] = None,
         pose_generate: bool = False,
         pose_generate_path: Optional[str] = None,
+        tactile_port: Optional[str] = None,
     ):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
@@ -59,6 +60,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._action_callback = action_callback
         self._pose_generate = bool(pose_generate)
         self._pose_generate_path = pose_generate_path or os.path.join(DESKTOP_DIR, "pose_fist_21deg.txt")
+        self.tactile_port = tactile_port or ""
+        self.tactile_comm: Optional[TactileSerialComm] = None
+        self._tactile_state: Optional[HandModel] = None
         self._state: Optional[HandModel] = None
         self._state_buffer = LatestStateBuffer()
         self._state_buffer_version = 0
@@ -67,7 +71,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._recording_csv_path = ""
         self._joint_debug_csv_path = ""
         self._last_draw = 0.0
-        self._draw_interval = 0.1
+        self._draw_interval = 0.033
         self._pending_status_text = ""
         self._last_overload_popup_mask = 0
         self._last_fault_popup_key = ""
@@ -98,6 +102,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._camera_timer = QtCore.QTimer(self)
         self._camera_timer.timeout.connect(self._display_windows.update_cameras)
         self._camera_timer.start(CAMERA_UI_POLL_MS)
+        if self.tactile_port:
+            self._start_tactile_port(self.tactile_port)
         QtCore.QTimer.singleShot(200, self._display_windows.open_pose)
         QtCore.QTimer.singleShot(320, self._display_windows.open_tactile)
         QtCore.QTimer.singleShot(250, self._clear_live_displays)
@@ -378,11 +384,66 @@ class HandGUI(QtWidgets.QMainWindow):
         if latest is not None:
             self._state_buffer_version = version
             self._state = latest
+        has_new_tactile = self._consume_tactile_state()
         state = self._state or HandModel()
-        if has_new_state or not self.is_comm_connected():
+        if has_new_state or has_new_tactile or not self.is_comm_connected():
             self._update_display(state)
-        if has_new_state and self._data_logger.is_running():
+        if (has_new_state or has_new_tactile) and self._data_logger.is_running():
             self._write_run_data_row(state)
+
+    def _consume_tactile_state(self) -> bool:
+        comm = self.tactile_comm
+        if comm is None:
+            return False
+        latest = comm.get_latest_model()
+        if latest is None:
+            return False
+        self._tactile_state = latest
+        if self._state is None:
+            self._state = HandModel()
+        self._merge_tactile_state(self._state, latest)
+        return True
+
+    @staticmethod
+    def _merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
+        state.tactile_data = list(getattr(tactile_state, "tactile_data", []) or [])
+        state.tactile_summary_seq = getattr(tactile_state, "tactile_summary_seq", None)
+        state.tactile_full_seq = getattr(tactile_state, "tactile_full_seq", None)
+        state.tactile_full_summary_seq = getattr(tactile_state, "tactile_full_summary_seq", None)
+        state.tactile_full_crc = getattr(tactile_state, "tactile_full_crc", None)
+        state.tactile_full_crc_errors = int(getattr(tactile_state, "tactile_full_crc_errors", 0))
+        state.tactile_full_seq_mismatches = int(getattr(tactile_state, "tactile_full_seq_mismatches", 0))
+        state.tactile_full_dropped = int(getattr(tactile_state, "tactile_full_dropped", 0))
+        ts = float(getattr(tactile_state, "timestamp", 0.0) or 0.0)
+        if ts > 0:
+            state.timestamp = ts
+
+    def _start_tactile_port(self, port: str) -> None:
+        self._stop_tactile_port()
+        if not port:
+            return
+        comm = TactileSerialComm(port)
+        try:
+            ok = comm.connect()
+        except Exception as exc:
+            self._set_status(f"Tactile serial failed: {exc}")
+            return
+        if not ok:
+            self._set_status(f"Tactile serial failed: {port}")
+            return
+        self.tactile_port = port
+        self.tactile_comm = comm
+        self._tactile_state = None
+        self._set_status(f"Tactile serial connected: {port}")
+
+    def _stop_tactile_port(self) -> None:
+        if self.tactile_comm is not None:
+            try:
+                self.tactile_comm.disconnect()
+            except Exception:
+                pass
+            self.tactile_comm = None
+        self._tactile_state = None
 
     def _update_display(self, state: HandModel) -> None:
         now = time.time()
@@ -1165,6 +1226,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self._display_windows.close_all()
             self.joint_plot.close()
             self._stop_data_recording("closed")
+            self._stop_tactile_port()
             try:
                 self.controller.hold_current_motor_positions(delay_s=0.15)
             except Exception:

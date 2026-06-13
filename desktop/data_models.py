@@ -348,6 +348,8 @@ class TactileSensor:
     """单组触觉元：指尖为 (5,5,3)，指腹为 (4,13,3)；末维 Fx,Fy,Fz"""
     contact_forces: np.ndarray  # (5,5,3) 或 (4,13,3)
     resultant: np.ndarray       # (3,)
+    raw_contact_forces: Optional[np.ndarray] = None
+    raw_unsigned_contact_forces: Optional[np.ndarray] = None
 
     @property
     def n_rows(self) -> int:
@@ -417,6 +419,13 @@ class HandModel:
     encoders: List[JointEncoder] = field(default_factory=_default_encoders)
     motors: List[MotorSlot] = field(default_factory=_default_motors)
     tactile_data: List[FingerTactile] = field(default_factory=list)
+    tactile_summary_seq: Optional[int] = None
+    tactile_full_seq: Optional[int] = None
+    tactile_full_summary_seq: Optional[int] = None
+    tactile_full_crc: Optional[int] = None
+    tactile_full_crc_errors: int = 0
+    tactile_full_seq_mismatches: int = 0
+    tactile_full_dropped: int = 0
     calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
@@ -553,3 +562,10 @@ class HandModel:
             for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
         ]
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
+        self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
+        self.tactile_full_seq = getattr(other, "tactile_full_seq", None)
+        self.tactile_full_summary_seq = getattr(other, "tactile_full_summary_seq", None)
+        self.tactile_full_crc = getattr(other, "tactile_full_crc", None)
+        self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
+        self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
+        self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))

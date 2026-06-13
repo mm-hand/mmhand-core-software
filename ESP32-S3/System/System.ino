@@ -13,8 +13,10 @@ extern TaskHandle_t xTacTask;
 extern TaskHandle_t xCanTask;
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(921600);
+#if ENABLE_TACTILE_TASK
     tactile.prepareBootSelectPins();
+#endif
     delay(20000);
     Serial.println("\n\n--- System Boot (XSimple AI) ---");
 
@@ -35,7 +37,9 @@ void setup() {
     encoders.begin();
     Serial.println("[Init] Encoders... OK");
 
+#if ENABLE_TACTILE_TASK
     tactile.begin();
+#endif
     Serial.println("[Init] Tactile... OK");
 
     if (twaiBus.begin()) {

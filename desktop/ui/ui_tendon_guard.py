@@ -11,6 +11,8 @@ MOTOR_TO_JOINT_INDEX = [
     4, 4, 5, 6, 7,
     8, 8, 9, 10, 11,
     12, 12, 13, 14, 15,
+    # Thumb motor order: M20/M21 -> J16, M22 -> J17, M23 -> J18,
+    # M24 -> J19, M25/M26 -> J20.
     16, 16, 17, 18, 19, 20, 20,
 ]
 if len(MOTOR_TO_JOINT_INDEX) < MOTOR_COUNT:

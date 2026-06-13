@@ -85,6 +85,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
         case 8:
         case 12:
         case kJoint16Index:
+        case 20:
             out->model = kDualTendonModelSharedCadGeometry;
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;

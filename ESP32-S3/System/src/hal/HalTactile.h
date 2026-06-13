@@ -32,8 +32,9 @@ private:
     bool setupSPI();
     void setAllSelectPinsHigh();
     void setSelectorPattern(uint8_t pattern);
-    bool readRegisters(uint8_t selectorPattern, uint8_t* payload, uint16_t payloadLen);
+    bool readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen);
     bool readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut);
+    bool readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* forcesOut, uint16_t forcesLen);
     static uint8_t crc8(const uint8_t* data, uint32_t len);
 
     SemaphoreHandle_t _mutex;
@@ -41,7 +42,6 @@ private:
     spi_device_handle_t _spi;
     bool _spiReady;
     TactileReadDiag _diag;
-    uint8_t _zeroHoldCounts[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP];
 };
 
 extern HalTactile tactile;

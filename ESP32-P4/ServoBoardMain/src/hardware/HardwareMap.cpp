@@ -28,8 +28,7 @@ static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
     1, 1, 1, 1,
     1, 1, 1, 1,
     1, 1, 1, 1,
-    1, 1, 1, -1,
-   -1, -1, -1, -1,
+    1, 1, 1, 1,
     1, 1, 1, 1,
     1, 1, 1
 };
@@ -74,6 +73,8 @@ JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
     GROUP1(17),
     GROUP1(18),
     GROUP1(19),
+    // Thumb mapping: J16 -> M20/M21, J17 -> M22, J18 -> M23,
+    // J19 -> M24, J20 -> M25/M26.
     GROUP2(20, ACT_SECONDARY_OPPOSE(21)),
     GROUP1(22),
     GROUP1(23),

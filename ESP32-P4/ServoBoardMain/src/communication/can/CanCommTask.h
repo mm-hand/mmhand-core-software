@@ -5,16 +5,16 @@
 
 #include "../../shared/TaskSharedData.h"
 
-// CanCommTask 模块职责：
-// 1) 接收编码器与错误详情 CAN 帧并重组；
-// 2) 将最新传感器快照写入共享队列；
-// 3) 处理来自上层的 CAN 下发命令。
-
-// 编码器数据帧：每帧携带 4 个通道。
+// Encoder frames: 6 data frames plus one CRC metadata frame.
 #define CAN_ID_ENC_BASE 0x100
 #define CAN_ID_ENC_LAST (CAN_ID_ENC_BASE + (ENCODER_TOTAL_NUM + 3) / 4 - 1)
+#define CAN_ID_ENC_CRC (CAN_ID_ENC_LAST + 1)
+#define CAN_ENC_FRAME_COUNT ((ENCODER_TOTAL_NUM + 3) / 4)
+#define CAN_ENC_PAYLOAD_BYTES (ENCODER_TOTAL_NUM * 2)
+#define CAN_ENC_CRC_DLC 8
+#define CAN_ENC_REASSEMBLY_TIMEOUT_MS 20
 
-// 错误详情协议：共 3 帧，每帧携带 7 个通道错误码。
+// Encoder error detail frames.
 #define CAN_ID_ERROR_DETAIL_BASE 0x1F0
 #define CAN_ID_ERROR_DETAIL_LAST 0x1F2
 #define CAN_ERROR_DETAIL_FRAME_COUNT 3
@@ -23,15 +23,24 @@
 #define CAN_ERROR_REASSEMBLY_TIMEOUT_MS 100
 #define CAN_ERROR_TABLE_CLEAR_TIMEOUT_MS 300
 
+// Tactile summary frames: 45 summary bytes plus 2 CRC bytes over 7 frames.
 #define CAN_ID_TAC_SUMMARY_BASE 0x240
 #define CAN_ID_TAC_SUMMARY_LAST 0x246
 #define CAN_TAC_SUMMARY_FRAME_COUNT 7
-// 触觉汇总协议：每帧首字节为 seq，后 7 字节为连续触觉数据片段。
 #define CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME 7
 #define CAN_TAC_SUMMARY_DLC 8
 #define CAN_TAC_REASSEMBLY_TIMEOUT_MS 80
+#define CAN_TAC_SUMMARY_CRC_BYTES 2
+#define CAN_TAC_SUMMARY_PACKET_BYTES (TACTILE_SUMMARY_BYTES + CAN_TAC_SUMMARY_CRC_BYTES)
+#define CAN_ID_TAC_RAW_DIAG 0x3F0
+#define CAN_ID_TAC_FULL_DUMP_BASE 0x400
+#define CAN_TAC_FULL_PAYLOAD_PER_FRAME 7
+#define CAN_TAC_FULL_DLC 8
+#define CAN_TAC_FULL_FRAME_COUNT ((TACTILE_FULL_BYTES + CAN_TAC_FULL_PAYLOAD_PER_FRAME - 1) / CAN_TAC_FULL_PAYLOAD_PER_FRAME)
+#define CAN_ID_TAC_FULL_DUMP_LAST (CAN_ID_TAC_FULL_DUMP_BASE + CAN_TAC_FULL_FRAME_COUNT - 1)
+#define CAN_TAC_FULL_FRAME_MASK_BYTES ((CAN_TAC_FULL_FRAME_COUNT + 7) / 8)
+#define CAN_TAC_FULL_REASSEMBLY_TIMEOUT_MS 400
 
-// CAN 通信任务入口（FreeRTOS 任务函数）。
 void canCommunicationTask(void* parameter);
 
 #endif

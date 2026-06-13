@@ -101,6 +101,15 @@ static void resetCommandState(TaskSharedData_t* sharedData)
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData->control_mode = CONTROL_MODE_JOINT;
+    sharedData->sine_test_enabled = 0;
+    sharedData->sine_test_request_token++;
+    sharedData->sine_test_start_ms = 0;
+    sharedData->sine_test_joint_mask = 0;
+    sharedData->sine_test_hold_ms = 0;
+    memset(sharedData->sine_test_center_deg, 0, sizeof(sharedData->sine_test_center_deg));
+    memset(sharedData->sine_test_amp_deg, 0, sizeof(sharedData->sine_test_amp_deg));
+    memset(sharedData->sine_test_freq_hz, 0, sizeof(sharedData->sine_test_freq_hz));
+    memset(sharedData->sine_test_phase_rad, 0, sizeof(sharedData->sine_test_phase_rad));
 
     if (lock) {
         xSemaphoreGive(lock);

@@ -564,6 +564,10 @@ class HandController:
         if self.comm:
             self.comm.send_command(("local_test_params", freq_hz, amplitude_deg))
 
+    def set_tendon_guard_config(self, config: List[Tuple[bool, int, int]]) -> None:
+        if self.comm:
+            self.comm.send_command(("tendon_guard", config))
+
     def start_local_test(self):
         """开始本地测试模式"""
         if self.comm:

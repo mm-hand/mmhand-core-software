@@ -16,7 +16,11 @@ class Mode(Enum):
     ALGORITHM = "algorithm"
 
 
-def _run_monitor_gui(controller: HandController, port: Optional[str] = None) -> None:
+def _run_monitor_gui(
+    controller: HandController,
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+) -> None:
     controller.reset()
     # 涓嬩綅鏈?start 涓庢樉绀虹敱涓荤晫闈?[Start]/[Stop] 鎺у埗
     from ui_main import HandGUI
@@ -27,11 +31,16 @@ def _run_monitor_gui(controller: HandController, port: Optional[str] = None) -> 
         current_mode="Monitor",
         action_callback=None,
         pose_generate=POSE_DISPLAY_FROM_TEXT,
+        tactile_port=tactile_port,
     )
     gui_win.run()
 
 
-def _run_teleop_gui(controller: HandController, port: Optional[str] = None) -> None:
+def _run_teleop_gui(
+    controller: HandController,
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+) -> None:
     controller.reset()
     try:
         from teleop.example_teleop import run as teleop_run
@@ -41,10 +50,19 @@ def _run_teleop_gui(controller: HandController, port: Optional[str] = None) -> N
     if not callable(teleop_run):
         print("example_teleop.run must be callable: run(controller, port).")
         return
-    teleop_run(controller, port)
+    try:
+        teleop_run(controller, port, tactile_port=tactile_port)
+    except TypeError as exc:
+        if "tactile_port" not in str(exc):
+            raise
+        teleop_run(controller, port)
 
 
-def _run_algorithm_gui(controller: HandController, port: Optional[str] = None) -> None:
+def _run_algorithm_gui(
+    controller: HandController,
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+) -> None:
     controller.reset()
     try:
         from algorithm.example_algorithm import run as algorithm_run
@@ -70,6 +88,7 @@ def _run_algorithm_gui(controller: HandController, port: Optional[str] = None) -
         current_mode="Algorithm",
         on_close_extra=lambda: stop_event.set(),
         pose_generate=POSE_DISPLAY_FROM_TEXT,
+        tactile_port=tactile_port,
     )
     gui_win.run()
     stop_event.set()
@@ -81,6 +100,7 @@ def run(
     controller: HandController,
     *,
     port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
     gui: bool = True,
 ) -> None:
     """
@@ -88,15 +108,15 @@ def run(
     The `gui` argument is kept only for backward compatibility.
     """
     if mode == Mode.MONITOR:
-        _run_monitor_gui(controller, port)
+        _run_monitor_gui(controller, port, tactile_port)
         return
 
     if mode == Mode.TELEOP:
-        _run_teleop_gui(controller, port)
+        _run_teleop_gui(controller, port, tactile_port)
         return
 
     if mode == Mode.ALGORITHM:
-        _run_algorithm_gui(controller, port)
+        _run_algorithm_gui(controller, port, tactile_port)
         return
 
     raise ValueError(f"Unknown mode: {mode}")

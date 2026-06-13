@@ -666,13 +666,13 @@ static uint8_t buildAutoCalibrationJointListFromActiveScope(TaskSharedData_t* sh
     }
 
     uint8_t count = 0;
-    for (int jointIndex = ENCODER_TOTAL_NUM - 1;
-         jointIndex >= 0 && count < maxCount;
-         jointIndex--) {
+    for (uint8_t jointIndex = 0;
+         jointIndex < ENCODER_TOTAL_NUM && count < maxCount;
+         jointIndex++) {
         if ((activeMask & (1UL << jointIndex)) == 0) {
             continue;
         }
-        outJoints[count++] = (uint8_t)jointIndex;
+        outJoints[count++] = jointIndex;
     }
 
     return count;
@@ -805,7 +805,7 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
     params.zeroReachAbsTolerance = 200;
     params.followArmDeg = 3.3f;
     params.zeroFollowDeg = 5.0f;
-    params.stallActualDeg = 0.5f;
+    params.stallActualDeg = 0.75f;
     params.minTightTravelDeg = 5.0f;
     params.startLoadDelta = 25;
     params.tightLoadHigh = 220;
@@ -2871,7 +2871,7 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
 
     for (uint8_t i = 0; i < jointCount; i++) {
         for (uint8_t j = (uint8_t)(i + 1); j < jointCount; j++) {
-            if (orderedJoints[j] > orderedJoints[i]) {
+            if (orderedJoints[j] < orderedJoints[i]) {
                 const uint8_t tmp = orderedJoints[i];
                 orderedJoints[i] = orderedJoints[j];
                 orderedJoints[j] = tmp;

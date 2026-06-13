@@ -30,6 +30,11 @@ def main():
         action="store_true",
         help="development 模式下关闭调试曲线窗口",
     )
+    parser.add_argument(
+        "--tactile-port",
+        default=None,
+        help="Optional S3 tactile serial port. Other data/control stay on --port.",
+    )
     args = parser.parse_args()
 
     # Development mode: run desktop-native console monitor (no client.py import)
@@ -42,6 +47,7 @@ def main():
         show_gui = True
         run_mode = Mode(args.mode)
         port = args.port
+        tactile_port = args.tactile_port
 
         controller = HandController()
         if port:
@@ -55,7 +61,7 @@ def main():
             controller.set_pid_control(False)
         else:
             controller.set_pid_control(True)
-        run(run_mode, controller, port=port, gui=show_gui)
+        run(run_mode, controller, port=port, tactile_port=tactile_port, gui=show_gui)
 
     else:
         print("无效的应用模式，退出")

@@ -22,6 +22,7 @@
 #define PACKET_TYPE_SYSTEM_STATUS 0x0C
 #define PACKET_TYPE_MOTOR_ABS_LIMIT 0x0D
 #define PACKET_TYPE_JOINT_CALIB_SNAPSHOT 0x0E
+#define PACKET_TYPE_TACTILE_FULL 0x0F
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -47,6 +48,9 @@
 #define CMD_HOST_HEARTBEAT 0xDC
 #define CMD_CALIB_LOAD_JOINT 0xDF
 #define CMD_CALIB_LOAD_LIMITS 0xE0
+#define CMD_LOCAL_TEST_PARAMS 0xE1
+#define CMD_LOCAL_TEST_START 0xE2
+#define CMD_LOCAL_TEST_STOP 0xE3
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -65,6 +69,7 @@ static const size_t kMotorAbsLimitLockPayloadBytes = 5;
 static const size_t kMultiTurnNvsControlPayloadBytes = 1;
 static const size_t kCalibLoadJointPayloadBytes = 54;
 static const size_t kCalibLoadLimitsPayloadBytes = 8 + SERVO_TOTAL_NUM * 4;
+static const size_t kLocalTestParamsPayloadBytes = 2 * sizeof(float);
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;

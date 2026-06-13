@@ -28,6 +28,7 @@ from .ui_tendon_guard import (
     TendonGuard,
     clamp_motor_abs,
     motor_abs_after_tendon_action,
+    motor_tendon_shorten_abs_sign,
     motor_target_from_servo_feedback,
 )
 from .ui_teleop_view import TeleopView
@@ -44,12 +45,12 @@ MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 MOTOR_ABS_LIMIT_RECOVER_MARGIN = 16
-ROPE_INIT_STEP_COUNTS = 50
+ROPE_INIT_TIGHTEN_STEP_COUNTS = 60
+ROPE_INIT_RELEASE_STEP_COUNTS = 30
+ROPE_INIT_STEP_COUNTS = ROPE_INIT_TIGHTEN_STEP_COUNTS
 ROPE_INIT_TIMER_MS = 50
 ROPE_INIT_TIMEOUT_S = 8.0
 ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
-ROPE_INIT_DUAL_TARGET_DEG = 40.0
-ROPE_INIT_DUAL_TOL_DEG = 0.3
 MOTOR_MID_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "motor_mid_calib.json"
 CALIB_LOAD_SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "config" / "calib_load_snapshot.json"
 TEST_ROW_COUNT = 5
@@ -62,7 +63,7 @@ FF_TEST_DEFAULT_STEP_S = 1.0
 TRI_TEST_DEFAULT_FREQ_HZ = 0.20
 JOINT_TARGET_MIN_DEG_BY_INDEX = [0.0] * ENCODER_COUNT
 JOINT_TARGET_MAX_DEG_BY_INDEX = [
-    63.98, 73.98, 88.00, 92.99, 64.99, 74.99, 88.00, 92.99,
+    83.98, 83.98, 88.00, 82.99, 84.99, 84.99, 88.00, 82.99,
     83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98,
     83.98, 83.98, 83.98, 83.98, 83.98,
 ]
@@ -113,7 +114,8 @@ FINGER_JOINT_RANGES = [
 ]
 
 FINGER_JOINT_ORDER = {
-    "Thumb J16-J20": [19, 18, 17, 16, 20],
+    # Thumb rows follow the physical chain order J16 -> J20.
+    "Thumb J16-J20": [16, 17, 18, 19, 20],
 }
 
 
@@ -184,6 +186,34 @@ def _motors_by_joint_index() -> List[List[int]]:
     return motors_by_joint
 
 
+def _antagonist_motor_row_groups(motor_rows: List[int]) -> List[Tuple[int, int, List[int], int]]:
+    groups: List[Tuple[int, int, List[int], int]] = []
+    row = 0
+    while row < len(motor_rows):
+        motor_idx = int(motor_rows[row])
+        joint_idx = (
+            int(MOTOR_TO_JOINT_INDEX[motor_idx])
+            if 0 <= motor_idx < len(MOTOR_TO_JOINT_INDEX)
+            else -1
+        )
+        end = row + 1
+        while end < len(motor_rows):
+            next_motor = int(motor_rows[end])
+            next_joint = (
+                int(MOTOR_TO_JOINT_INDEX[next_motor])
+                if 0 <= next_motor < len(MOTOR_TO_JOINT_INDEX)
+                else -1
+            )
+            if next_joint != joint_idx:
+                break
+            end += 1
+        motors = [int(motor_rows[idx]) for idx in range(row, end)]
+        if joint_idx >= 0 and len(motors) == 2 and all(_motor_channel_valid(idx) for idx in motors):
+            groups.append((row, end - 1, motors, joint_idx))
+        row = end
+    return groups
+
+
 class _ModeBody(QtWidgets.QWidget):
     def __init__(self, child: Optional[QtWidgets.QWidget] = None, parent=None):
         super().__init__(parent)
@@ -223,6 +253,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         self.joint_current_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
+        self.joint_abs_limit_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_status_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_target_spins: List[QtWidgets.QDoubleSpinBox] = []
         self.joint_sliders: List[QtWidgets.QSlider] = []
@@ -251,12 +282,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_abs_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_load_items: List[QtWidgets.QTableWidgetItem] = []
-        self.motor_limit_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_joint_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_target_spins: List[QtWidgets.QSpinBox] = []
         self.motor_sliders: List[QtWidgets.QSlider] = []
         self.motor_send_buttons: List[QtWidgets.QPushButton] = []
-        self.motor_recover_buttons: List[QtWidgets.QPushButton] = []
         self._motor_target_user_set: List[bool] = []
         self._motor_target_initialized = False
         self.motor_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * MOTOR_COUNT
@@ -276,7 +305,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_run_states = [False] * MOTOR_COUNT
         self._last_state_transition_count: Optional[int] = None
         self._last_multi_turn_unknown_bitmap: Optional[int] = None
-        self._last_abs_limit_warning_ts = 0.0
         self._last_feedback_abs_limit_warning_ts = 0.0
 
         self._test_running = False
@@ -341,10 +369,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.rope_init_btn.setToolTip(
             "Single motors pull into the workspace; dual motors move antagonistically to 40 deg"
         )
-        self.abs_limit_unlock_btn = QtWidgets.QPushButton("Unlock ABS")
-        self.abs_limit_unlock_btn.setToolTip("Temporarily disable calibrated ABS travel limits for the current control set")
-        self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock ABS")
-        self.abs_limit_lock_btn.setToolTip("Re-enable calibrated ABS travel limits for the current control set")
         self.nvs_control_btn = QtWidgets.QPushButton("Flash ON")
         self.nvs_control_btn.setToolTip("Toggle multi-turn persistence. OFF clears lower flash snapshots and desktop restore cache.")
         self.enable_btn.setMinimumHeight(46)
@@ -354,8 +378,6 @@ class ControlPanel(QtWidgets.QWidget):
             self.calib_btn,
             self.reset_btn,
             self.rope_init_btn,
-            self.abs_limit_unlock_btn,
-            self.abs_limit_lock_btn,
             self.nvs_control_btn,
         ):
             btn.setMinimumHeight(34)
@@ -378,13 +400,11 @@ class ControlPanel(QtWidgets.QWidget):
         dev_layout.addWidget(centered_action_cell(self.pause_btn), 0, 2, 2, 1)
         dev_layout.addWidget(self.calib_btn, 0, 3)
         dev_layout.addWidget(self.reset_btn, 0, 4)
-        dev_layout.addWidget(self.abs_limit_unlock_btn, 0, 5)
         dev_layout.addWidget(self.rope_init_btn, 1, 3)
         dev_layout.addWidget(self.nvs_control_btn, 1, 4)
-        dev_layout.addWidget(self.abs_limit_lock_btn, 1, 5)
         dev_layout.setRowStretch(0, 1)
         dev_layout.setRowStretch(1, 1)
-        for col in range(6):
+        for col in range(5):
             dev_layout.setColumnStretch(col, 1)
         layout.addWidget(device)
         self._update_connection_lights()
@@ -395,8 +415,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_with_confirm())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate())
         self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_controller())
-        self.abs_limit_unlock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(False))
-        self.abs_limit_lock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(True))
         self.nvs_control_btn.clicked.connect(lambda _checked=False: self.toggle_multiturn_nvs())
         self.body_container = QtWidgets.QWidget()
         self.body_layout = QtWidgets.QVBoxLayout(self.body_container)
@@ -591,6 +609,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.test_phase_spins = []
         self.joint_current_items = []
         self.joint_encoder_items = []
+        self.joint_abs_limit_items = []
         self.joint_status_items = []
         self.joint_target_spins = []
         self.joint_sliders = []
@@ -607,12 +626,12 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_raw_items = []
         self.motor_abs_items = []
         self.motor_load_items = []
-        self.motor_limit_items = []
         self.motor_joint_items = []
         self.motor_target_spins = []
         self.motor_sliders = []
         self.motor_send_buttons = []
-        self.motor_recover_buttons = []
+        self.abs_limit_unlock_btn = None
+        self.abs_limit_lock_btn = None
         self.motor_use_checks = [None] * MOTOR_COUNT
         self.motor_group_use_checks = []
         self._motor_target_user_set = []
@@ -667,9 +686,32 @@ class ControlPanel(QtWidgets.QWidget):
         self.tabs = QtWidgets.QTabWidget()
         self.joint_table = self._build_joint_table()
         self.motor_table = self._build_motor_table()
+        joint_page = QtWidgets.QWidget()
+        joint_page_layout = QtWidgets.QVBoxLayout(joint_page)
+        joint_page_layout.setContentsMargins(0, 0, 0, 0)
+        joint_page_layout.setSpacing(4)
+        abs_limit_bar = QtWidgets.QWidget()
+        abs_limit_layout = QtWidgets.QHBoxLayout(abs_limit_bar)
+        abs_limit_layout.setContentsMargins(6, 2, 6, 2)
+        abs_limit_layout.addWidget(QtWidgets.QLabel("Feedback ABS Limit"))
+        abs_limit_layout.addStretch(1)
+        self.abs_limit_unlock_btn = QtWidgets.QPushButton("Unlock")
+        self.abs_limit_unlock_btn.setToolTip(
+            "Temporarily disable calibrated ABS travel limits for the selected feedback joints"
+        )
+        self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock")
+        self.abs_limit_lock_btn.setToolTip(
+            "Re-enable calibrated ABS travel limits for the selected feedback joints"
+        )
+        self.abs_limit_unlock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(False))
+        self.abs_limit_lock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(True))
+        abs_limit_layout.addWidget(self.abs_limit_unlock_btn)
+        abs_limit_layout.addWidget(self.abs_limit_lock_btn)
+        joint_page_layout.addWidget(abs_limit_bar)
+        joint_page_layout.addWidget(self.joint_table, 1)
         self._sync_scope_group_checks()
         self.test_panel = self._build_test_panel()
-        self.tabs.addTab(self.joint_table, "Joint Channels")
+        self.tabs.addTab(joint_page, "Joint Channels")
         self.tabs.addTab(self.motor_table, "Motor Channels")
         self.tabs.addTab(self.test_panel, "Test")
         self.tabs.currentChanged.connect(lambda _idx: self._on_manual_tab_changed())
@@ -765,15 +807,17 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _build_joint_table(self) -> QtWidgets.QTableWidget:
         joint_rows, group_ranges = _joint_rows_by_finger_group()
-        table = QtWidgets.QTableWidget(len(joint_rows), 11)
+        table = QtWidgets.QTableWidget(len(joint_rows), 12)
+        table.setWordWrap(False)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Joint", "Enc", "Current", "Raw", "Min", "Target", "Max", "Action",
-            "Target Slider",
+            "Group", "Use", "Joint", "Enc", "Current", "Raw", "ABS Limit", "Min", "Target", "Max",
+            "Action", "Target Slider",
         ])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         self.joint_current_items = [None] * ENCODER_COUNT
         self.joint_encoder_items = [None] * ENCODER_COUNT
+        self.joint_abs_limit_items = [None] * ENCODER_COUNT
         self.joint_status_items = [None] * ENCODER_COUNT
         self.joint_target_spins = [None] * ENCODER_COUNT
         self.joint_sliders = [None] * ENCODER_COUNT
@@ -844,17 +888,20 @@ class ControlPanel(QtWidgets.QWidget):
             status.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
             enc = self._make_item("-")
             cur = self._make_item("-")
+            abs_limit = self._make_item("-")
             min_item = self._make_item(f"{self._joint_target_min_deg(i):.2f}")
             max_item = self._make_item(f"{self._joint_target_max_deg(i):.2f}")
-            for item in (status, enc, cur, min_item, max_item):
+            for item in (status, enc, cur, abs_limit, min_item, max_item):
                 apply_group_background(item, row)
             self.joint_status_items[i] = status
             self.joint_current_items[i] = cur
             self.joint_encoder_items[i] = enc
+            self.joint_abs_limit_items[i] = abs_limit
             table.setItem(row, 3, status)
             table.setItem(row, 4, cur)
             table.setItem(row, 5, enc)
-            table.setItem(row, 6, min_item)
+            table.setItem(row, 6, abs_limit)
+            table.setItem(row, 7, min_item)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(self._joint_target_min_deg(i), self._joint_target_max_deg(i))
             spin.setDecimals(2)
@@ -863,19 +910,19 @@ class ControlPanel(QtWidgets.QWidget):
             spin.editingFinished.connect(lambda idx=i: self._mark_joint_target_user_set(idx))
             apply_group_widget_background(spin, row)
             self.joint_target_spins[i] = spin
-            table.setCellWidget(row, 7, spin)
-            table.setItem(row, 8, max_item)
+            table.setCellWidget(row, 8, spin)
+            table.setItem(row, 9, max_item)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: self.send_joint_row(idx))
             apply_group_widget_background(send, row)
             self.joint_send_buttons[i] = send
-            table.setCellWidget(row, 9, send)
+            table.setCellWidget(row, 10, send)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setRange(int(self._joint_target_min_deg(i) * 100), int(self._joint_target_max_deg(i) * 100))
             slider.valueChanged.connect(lambda value, idx=i: self._joint_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             self.joint_sliders[i] = slider
-            table.setCellWidget(row, 10, slider)
+            table.setCellWidget(row, 11, slider)
             self._control_widgets.extend([spin, send, slider])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
@@ -891,22 +938,32 @@ class ControlPanel(QtWidgets.QWidget):
         table.horizontalHeader().setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(5, 68)
         table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(6, 64)
+        table.setColumnWidth(6, 190)
         table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(7, 78)
+        table.setColumnWidth(7, 64)
         table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(8, 60)
+        table.setColumnWidth(8, 78)
         table.horizontalHeader().setSectionResizeMode(9, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(9, 82)
-        table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Stretch)
-        table.setColumnWidth(10, 420)
+        table.setColumnWidth(9, 60)
+        table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(10, 82)
+        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(11, 420)
         return table
 
     def _build_motor_table(self) -> QtWidgets.QTableWidget:
         motor_rows, group_ranges = _motor_rows_by_finger_group()
-        table = QtWidgets.QTableWidget(len(motor_rows), 15)
+        antagonist_groups = _antagonist_motor_row_groups(motor_rows)
+        antagonist_by_row = {}
+        antagonist_start_rows = set()
+        for start, end, motors, joint_idx in antagonist_groups:
+            antagonist_start_rows.add(start)
+            group = (start, end, motors, joint_idx)
+            for row in range(start, end + 1):
+                antagonist_by_row[row] = group
+        table = QtWidgets.QTableWidget(len(motor_rows), 13)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Motor", "Turn", "RawNow", "AbsNow", "Load", "Limit", "Target(rel)", "Action", "Raw",
+            "Group", "Use", "Motor", "Turn", "RawNow", "AbsNow", "Load", "Target(rel)", "Action",
             "-", "Raw Slider", "+", "Joint Angle",
         ])
         table.verticalHeader().setVisible(False)
@@ -915,12 +972,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_raw_items = [None] * MOTOR_COUNT
         self.motor_abs_items = [None] * MOTOR_COUNT
         self.motor_load_items = [None] * MOTOR_COUNT
-        self.motor_limit_items = [None] * MOTOR_COUNT
         self.motor_joint_items = [None] * MOTOR_COUNT
         self.motor_target_spins = [None] * MOTOR_COUNT
         self.motor_sliders = [None] * MOTOR_COUNT
         self.motor_send_buttons = [None] * MOTOR_COUNT
-        self.motor_recover_buttons = [None] * MOTOR_COUNT
         self._motor_target_user_set = [False] * MOTOR_COUNT
         group_colors = [QtGui.QColor("#ffffff"), QtGui.QColor("#eeeeee")]
         row_to_group_label = {}
@@ -975,39 +1030,79 @@ class ControlPanel(QtWidgets.QWidget):
                 filler = self._make_item("")
                 apply_group_background(filler, row)
                 table.setItem(row, 0, filler)
-            motor_item = self._make_item(f"M{i:02d}")
-            apply_group_background(motor_item, row)
             joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
-            if group_label:
-                motor_item.setToolTip(f"{group_label}; mapped joint J{int(joint_idx):02d}" if int(joint_idx) >= 0 else group_label)
-            table.setItem(row, 2, motor_item)
-            use_cell, use_check = self._make_use_checkbox_cell(
-                (self._selected_motor_mask & (1 << i)) != 0,
-                f"Use M{i:02d} in Manual Motor Channels active scope",
-            )
-            apply_group_widget_background(use_cell, row)
-            use_check.toggled.connect(lambda checked, idx=i: self._on_motor_use_changed(idx, checked))
-            self.motor_use_checks[i] = use_check
-            table.setCellWidget(row, 1, use_cell)
+            antagonist = antagonist_by_row.get(row)
+            if antagonist is None:
+                motor_item = self._make_item(f"M{i:02d}")
+                apply_group_background(motor_item, row)
+                if group_label:
+                    motor_item.setToolTip(
+                        f"{group_label}; mapped joint J{int(joint_idx):02d}"
+                        if int(joint_idx) >= 0
+                        else group_label
+                    )
+                table.setItem(row, 2, motor_item)
+                use_cell, use_check = self._make_use_checkbox_cell(
+                    (self._selected_motor_mask & (1 << i)) != 0,
+                    f"Use M{i:02d} in Manual Motor Channels active scope",
+                )
+                apply_group_widget_background(use_cell, row)
+                use_check.toggled.connect(lambda checked, idx=i: self._on_motor_use_changed(idx, checked))
+                self.motor_use_checks[i] = use_check
+                table.setCellWidget(row, 1, use_cell)
+            elif row in antagonist_start_rows:
+                pair_start, pair_end, pair_motors, pair_joint = antagonist
+
+                pair_cell = QtWidgets.QWidget()
+                pair_layout = QtWidgets.QGridLayout(pair_cell)
+                pair_layout.setContentsMargins(0, 0, 0, 0)
+                pair_layout.setHorizontalSpacing(0)
+                pair_layout.setVerticalSpacing(0)
+                pair_layout.setColumnMinimumWidth(0, 44)
+                pair_layout.setColumnMinimumWidth(1, 58)
+                pair_layout.setColumnStretch(0, 0)
+                pair_layout.setColumnStretch(1, 1)
+                for pair_row, motor_idx in enumerate(pair_motors):
+                    check_row, use_check = self._make_use_checkbox_cell(
+                        (self._selected_motor_mask & (1 << motor_idx)) != 0,
+                        f"Use M{motor_idx:02d} in Manual Motor Channels active scope",
+                    )
+                    use_check.toggled.connect(
+                        lambda checked, idx=motor_idx: self._on_motor_use_changed(idx, checked)
+                    )
+                    self.motor_use_checks[motor_idx] = use_check
+                    pair_layout.addWidget(check_row, pair_row, 0)
+
+                    label = QtWidgets.QLabel(f"M{motor_idx:02d}")
+                    label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                    label.setContentsMargins(4, 0, 0, 0)
+                    label.setToolTip(
+                        f"J{pair_joint:02d} antagonist motor; feedback and commands remain independent"
+                    )
+                    font = label.font()
+                    font.setBold(True)
+                    label.setFont(font)
+                    pair_layout.addWidget(label, pair_row, 1)
+                    pair_layout.setRowStretch(pair_row, 1)
+                apply_group_widget_background(pair_cell, row)
+                table.setCellWidget(row, 1, pair_cell)
+                table.setSpan(pair_start, 1, pair_end - pair_start + 1, 2)
             turn = self._make_item("-")
             raw_now = self._make_item("-")
             abs_now = self._make_item("-")
             load = self._make_item("-")
-            limit = self._make_item("-")
             joint = self._make_item("-")
-            for item in (turn, raw_now, abs_now, load, limit, joint):
+            for item in (turn, raw_now, abs_now, load, joint):
                 apply_group_background(item, row)
             self.motor_turn_items[i] = turn
             self.motor_raw_items[i] = raw_now
             self.motor_abs_items[i] = abs_now
             self.motor_load_items[i] = load
-            self.motor_limit_items[i] = limit
             self.motor_joint_items[i] = joint
             table.setItem(row, 3, turn)
             table.setItem(row, 4, raw_now)
             table.setItem(row, 5, abs_now)
             table.setItem(row, 6, load)
-            table.setItem(row, 7, limit)
             spin = QtWidgets.QSpinBox()
             spin.setRange(MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX)
             spin.setSingleStep(10)
@@ -1015,23 +1110,17 @@ class ControlPanel(QtWidgets.QWidget):
             spin.editingFinished.connect(lambda idx=i: self._mark_motor_target_user_set(idx))
             apply_group_widget_background(spin, row)
             self.motor_target_spins[i] = spin
-            table.setCellWidget(row, 8, spin)
+            table.setCellWidget(row, 7, spin)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: self.send_motor_row(idx))
             apply_group_widget_background(send, row)
             self.motor_send_buttons[i] = send
-            table.setCellWidget(row, 9, send)
-            recover = QtWidgets.QPushButton("Raw")
-            recover.clicked.connect(lambda _=False, idx=i: self.recover_motor_row_to_raw(idx))
-            recover.setToolTip("Recover this motor from +/-30719 using its current single-turn raw feedback")
-            apply_group_widget_background(recover, row)
-            self.motor_recover_buttons[i] = recover
-            table.setCellWidget(row, 10, recover)
+            table.setCellWidget(row, 8, send)
             minus = QtWidgets.QPushButton("-")
             minus.setMaximumWidth(34)
             minus.clicked.connect(lambda _=False, idx=i: self._step_motor_target(idx, -1))
             apply_group_widget_background(minus, row)
-            table.setCellWidget(row, 11, minus)
+            table.setCellWidget(row, 9, minus)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setMinimumWidth(72)
             slider.setRange(MOTOR_TARGET_SCALE_LO, MOTOR_TARGET_SCALE_HI)
@@ -1040,14 +1129,14 @@ class ControlPanel(QtWidgets.QWidget):
             slider.valueChanged.connect(lambda value, idx=i: self._motor_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             self.motor_sliders[i] = slider
-            table.setCellWidget(row, 12, slider)
+            table.setCellWidget(row, 10, slider)
             plus = QtWidgets.QPushButton("+")
             plus.setMaximumWidth(34)
             plus.clicked.connect(lambda _=False, idx=i: self._step_motor_target(idx, 1))
             apply_group_widget_background(plus, row)
-            table.setCellWidget(row, 13, plus)
-            table.setItem(row, 14, joint)
-            self._control_widgets.extend([spin, send, recover, minus, slider, plus])
+            table.setCellWidget(row, 11, plus)
+            table.setItem(row, 12, joint)
+            self._control_widgets.extend([spin, send, minus, slider, plus])
             if not _motor_channel_valid(i):
                 table.setRowHidden(row, True)
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
@@ -1059,10 +1148,10 @@ class ControlPanel(QtWidgets.QWidget):
         table.setColumnWidth(2, 58)
         table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(7, 126)
-        table.horizontalHeader().setSectionResizeMode(12, QtWidgets.QHeaderView.Stretch)
-        table.setColumnWidth(12, 150)
-        table.horizontalHeader().setSectionResizeMode(14, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(14, 82)
+        table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(10, 150)
+        table.horizontalHeader().setSectionResizeMode(12, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(12, 82)
         return table
 
     def _build_test_panel(self) -> QtWidgets.QWidget:
@@ -1303,9 +1392,13 @@ class ControlPanel(QtWidgets.QWidget):
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
         has_abs_limit = self._active_scope_abs_limit_valid_mask() != 0
         if getattr(self, "abs_limit_unlock_btn", None) is not None:
-            self.abs_limit_unlock_btn.setEnabled(bool(self.context.is_comm_connected()) and has_abs_limit)
+            self.abs_limit_unlock_btn.setEnabled(
+                mode == "joint" and bool(self.context.is_comm_connected()) and has_abs_limit
+            )
         if getattr(self, "abs_limit_lock_btn", None) is not None:
-            self.abs_limit_lock_btn.setEnabled(bool(self.context.is_comm_connected()) and has_abs_limit)
+            self.abs_limit_lock_btn.setEnabled(
+                mode == "joint" and bool(self.context.is_comm_connected()) and has_abs_limit
+            )
         if getattr(self, "pause_btn", None) is not None:
             self.pause_btn.setEnabled(system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK))
         self._set_test_button_states()
@@ -1388,47 +1481,6 @@ class ControlPanel(QtWidgets.QWidget):
 
     def motor_sweep_targets(self) -> List[int]:
         return [self._read_motor_target_slider_int(i) for i in range(MOTOR_COUNT)]
-
-    def recover_motor_row_to_raw(self, idx: int) -> None:
-        if not self._interaction_enabled:
-            return
-        if idx < 0 or idx >= MOTOR_COUNT:
-            return
-        try:
-            raw_target = self._motor_raw_single_feedback(idx)
-            if raw_target is None:
-                self._set_status(f"Raw recover blocked: waiting for M{idx:02d} raw feedback")
-                return
-            if not self.context.is_comm_connected():
-                raise RuntimeError("Serial port is not connected")
-
-            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.controller.set_pid_control(False)
-            if self._estop_latched and not self.controller.is_started():
-                self._set_status("Raw recover blocked: press ENABLE after E-STOP")
-                return
-            if not self.controller.is_started():
-                self._set_status("Raw recover blocked: waiting for controllable IDLE after ENABLE")
-                return
-            unknown_mask = self._active_scope_multiturn_unknown_mask()
-            if unknown_mask != 0 and (unknown_mask & ~(1 << idx)) != 0:
-                self._set_status(
-                    f"Raw recover blocked: choose a single-motor scope for M{idx:02d} while Turn is UNKNOWN"
-                )
-                return
-
-            if not self._send_motor_raw_recovery_target(idx, int(raw_target), f"Raw recover M{idx:02d}"):
-                return
-            self._motor_session_origin_abs[idx] = int(raw_target)
-            self._motor_abs_pos[idx] = 0
-            self._motor_last_slider[idx] = 0
-            self._motor_target_user_set[idx] = False
-            self._set_motor_target_widget(idx, 0)
-            self._set_row_running(True, idx, True)
-            self.context.emit_action(f"Raw recover M{idx:02d}: targetAbs={int(raw_target)}")
-            self._set_status(f"M{idx:02d} raw recover sent: abs={int(raw_target)}")
-        except Exception as exc:
-            self._error("Raw Recover Failed", f"{type(exc).__name__}: {exc}")
 
     def send_joint_row(self, idx: int) -> None:
         if not self._interaction_enabled:
@@ -1521,9 +1573,6 @@ class ControlPanel(QtWidgets.QWidget):
                 self._set_status(f"Release blocked: waiting ABS feedback {','.join(missing[:4])}")
                 return
 
-            targets, limit_hits = self._clamp_motor_targets_to_calibrated_limits(targets, active_mask=active_mask)
-            if limit_hits:
-                self._show_motor_abs_limit_warning(limit_hits)
             self.controller.set_motor_positions_absolute(targets)
             self._motor_last_sent_abs = list(targets)
             for idx in range(MOTOR_COUNT):
@@ -1655,21 +1704,20 @@ class ControlPanel(QtWidgets.QWidget):
             else:
                 detail = "\n".join(summary.get("lines") or [])
             text = (
-                "当前检测到以下故障：\n\n"
+                "??????????\n\n"
                 f"{detail}\n\n"
-                "请确认已经排除机械卡滞、绳索异常、接线/供电问题后，再清除故障。\n"
-                "清除后不会自动恢复运行，需要重新 ENABLE 或重新发送目标。"
+                "???????????????????????????????\n"
+                "???????????????? ENABLE ????????"
             )
-            title = "清除故障确认"
-            accept_text = "我已检查，清除故障"
+            title = "??????"
+            accept_text = "?????????"
         else:
             text = (
-                "当前未检测到故障，是否仍要清除状态？\n\n"
-                "这会向下位机发送 reset，清除本地运行状态，并回到需要重新 ENABLE 的状态。"
+                "??????????????????\n\n"
+                "???????? reset????????????????? ENABLE ????"
             )
             title = "Clear Fault"
-            accept_text = "仍然清除"
-
+            accept_text = "????"
         box = QtWidgets.QMessageBox(self)
         box.setIcon(QtWidgets.QMessageBox.Warning if summary and summary.get("active") else QtWidgets.QMessageBox.Question)
         box.setWindowTitle(title)
@@ -1730,7 +1778,7 @@ class ControlPanel(QtWidgets.QWidget):
         for joint_idx in self._active_scope_joint_indices():
             if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
                 continue
-            if joint_idx >= len(angles):
+            if joint_idx >= len(angles) or not self._joint_angle_feedback_valid(joint_idx, state):
                 missing.append(f"J{joint_idx:02d} angle")
                 continue
             joint_deg = float(angles[joint_idx])
@@ -1738,9 +1786,8 @@ class ControlPanel(QtWidgets.QWidget):
             dual_motors = self._dual_rope_init_motors_for_joint(joint_idx)
             if dual_motors is not None:
                 primary_motor, secondary_motor = dual_motors
-                error_deg = ROPE_INIT_DUAL_TARGET_DEG - joint_deg
-                if abs(error_deg) <= ROPE_INIT_DUAL_TOL_DEG:
-                    skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/mid")
+                if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
+                    skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/workspace")
                     continue
                 if primary_motor in seen_motors or secondary_motor in seen_motors:
                     missing.append(f"J{joint_idx:02d} motor conflict")
@@ -1760,7 +1807,7 @@ class ControlPanel(QtWidgets.QWidget):
                         "joint": joint_idx,
                         "primary": primary_motor,
                         "secondary": secondary_motor,
-                        "target_deg": ROPE_INIT_DUAL_TARGET_DEG,
+                        "target_deg": ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG,
                     })
                 continue
 
@@ -1790,11 +1837,11 @@ class ControlPanel(QtWidgets.QWidget):
         return tasks, skipped, missing
 
     # =========================================================================
-    # rope_init_controller - 鑷姩瀵绘壘缁崇涓庡井璋冨姛鑳?(Rope Init)
+    # rope_init_controller - 鑷姩瀵绘壘缁崇涓庡井璋冨姛�?(Rope Init)
     # =========================================================================
-    # 鏍稿績浣滅敤锛氬湪绯荤粺宸茬粡瀹屾垚杩囦竴娆″叏闈㈣嚜鍔ㄦ爣瀹氾紝浣嗗洜闀挎湡鏈€氱數鎴栫幆澧冨彉鍖栧鑷?    # 閮ㄥ垎宸叉爣瀹氬叧鑺傚湪涓婄數鍚庤鍙栫殑纾佺紪鐮佸櫒瑙掑害浠嶅井灏忎簬 0 搴?(濡?-0.5掳) 鏃朵娇鐢ㄣ€?    #
-    # 杩囨护涓庢嫤鎴€昏緫 (_rope_init_joint_motor_pairs)锛?    # 1. 浠呴拡瀵瑰畾涔夊湪 AUTO_CALIBRATION_JOINT_INDICES 涓殑闇€瑕佹媺浼哥殑鍏宠妭銆?    # 2. 濡傛灉瑙掑害宸茬粡 >= 0.0锛屽垽瀹氫负鏃犻渶鎷夌揣锛岀洿鎺ヨ烦杩?(skipped)銆?    # 3. 濡傛灉缂哄皯纾佺紪鐮佸櫒瑙掑害銆佽埖鏈烘帀绾跨瓑锛屽垽瀹氫负缂虹姸鎬?(missing)锛屼笉浜堟墽琛屻€?    #
-    # 鎵ц閫昏緫锛?    # 閽堝绛涢€夊嚭鐨勫叧鑺傚搴旂殑鑸垫満锛屽己鍒跺皢鍏跺綋鍓嶇殑缁濆浣嶇疆鍐嶁€滄鍚戞敹绱р€?ROPE_INIT_STEP_COUNTS 涓剦鍐?    # (甯镐负 +50)锛屼互閫艰揩鍏惰秺杩囨満姊版鍖恒€傝繖鏄竴绉嶅皬姝ュ揩璺戠殑杞婚噺绾ч噸鏍囧畾銆?    # =========================================================================
+    # 鏍稿績浣滅敤锛氬湪绯荤粺宸茬粡瀹屾垚杩囦竴娆″叏闈㈣嚜鍔ㄦ爣瀹氾紝浣嗗洜闀挎湡鏈€氱數鎴栫幆澧冨彉鍖栧�?    # 閮ㄥ垎宸叉爣瀹氬叧鑺傚湪涓婄數鍚庤鍙栫殑纾佺紪鐮佸櫒瑙掑害浠嶅井灏忎簬 0 �?(�?-0.5�? 鏃朵娇鐢ㄣ€?    #
+    # 杩囨护涓庢嫤鎴€昏�?(_rope_init_joint_motor_pairs)�?    # 1. 浠呴拡瀵瑰畾涔夊湪 AUTO_CALIBRATION_JOINT_INDICES 涓殑闇€瑕佹媺浼哥殑鍏宠妭�?    # 2. 濡傛灉瑙掑害宸茬�?>= 0.0锛屽垽瀹氫负鏃犻渶鎷夌揣锛岀洿鎺ヨ烦�?(skipped)�?    # 3. 濡傛灉缂哄皯纾佺紪鐮佸櫒瑙掑害銆佽埖鏈烘帀绾跨瓑锛屽垽瀹氫负缂虹姸�?(missing)锛屼笉浜堟墽琛屻�?    #
+    # 鎵ц閫昏緫锛?    # 閽堝绛涢€夊嚭鐨勫叧鑺傚搴旂殑鑸垫満锛屽己鍒跺皢鍏跺綋鍓嶇殑缁濆浣嶇疆鍐嶁€滄鍚戞敹绱р�?ROPE_INIT_STEP_COUNTS 涓剦鍐?    # (甯镐�?+50)锛屼互閫艰揩鍏惰秺杩囨満姊版鍖恒€傝繖鏄竴绉嶅皬姝ュ揩璺戠殑杞婚噺绾ч噸鏍囧畾�?    # =========================================================================
     def rope_init_controller(self) -> None:
         if self._manual_submode() != "joint":
             self._set_status("Rope Init is only available in Joint Channels")
@@ -1833,7 +1880,7 @@ class ControlPanel(QtWidgets.QWidget):
                 (
                     f"J{task['joint']:02d}/M{task['motor']:02d}->workspace"
                     if task.get("type") == "single"
-                    else f"J{task['joint']:02d}/M{task['primary']:02d},M{task['secondary']:02d}->40deg"
+                    else f"J{task['joint']:02d}/M{task['primary']:02d},M{task['secondary']:02d}->workspace"
                 )
                 for task in tasks
             )
@@ -1859,6 +1906,12 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_last_slider[motor_idx] = 0
         self._motor_target_user_set[motor_idx] = False
         self._set_motor_target_widget(motor_idx, 0)
+
+    def _rope_init_dual_motor_delta(self, motor_idx: int, raw_direction: int) -> int:
+        direction = 1 if int(raw_direction) >= 0 else -1
+        is_tightening = direction == motor_tendon_shorten_abs_sign(motor_idx)
+        counts = ROPE_INIT_TIGHTEN_STEP_COUNTS if is_tightening else ROPE_INIT_RELEASE_STEP_COUNTS
+        return direction * counts
 
     def _rope_init_tick(self) -> None:
         if not self._rope_init_tasks:
@@ -1890,7 +1943,12 @@ class ControlPanel(QtWidgets.QWidget):
 
         for task in self._rope_init_tasks:
             joint_idx = int(task.get("joint", -1))
-            if joint_idx < 0 or joint_idx >= ENCODER_COUNT or joint_idx >= len(angles):
+            if (
+                joint_idx < 0 or
+                joint_idx >= ENCODER_COUNT or
+                joint_idx >= len(angles) or
+                not self._joint_angle_feedback_valid(joint_idx, state)
+            ):
                 feedback_missing.append(f"J{joint_idx:02d} angle")
                 continue
             joint_deg = float(angles[joint_idx])
@@ -1898,26 +1956,21 @@ class ControlPanel(QtWidgets.QWidget):
             if task.get("type") == "dual":
                 primary_motor = int(task.get("primary", -1))
                 secondary_motor = int(task.get("secondary", -1))
-                error_deg = float(task.get("target_deg", ROPE_INIT_DUAL_TARGET_DEG)) - joint_deg
-                if abs(error_deg) <= ROPE_INIT_DUAL_TOL_DEG:
+                target_deg = float(task.get("target_deg", ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG))
+                if joint_deg >= target_deg:
                     completed.append(f"J{joint_idx:02d}={joint_deg:.2f}")
                     continue
+                error_deg = target_deg - joint_deg
                 primary_abs = self._motor_feedback_abs(primary_motor)
                 secondary_abs = self._motor_feedback_abs(secondary_motor)
                 if primary_abs is None or secondary_abs is None:
                     feedback_missing.append(f"J{joint_idx:02d} motor feedback")
                     continue
                 step_sign = 1 if error_deg > 0.0 else -1
-                targets[primary_motor] = motor_abs_after_tendon_action(
-                    int(primary_abs),
-                    primary_motor,
-                    step_sign * ROPE_INIT_STEP_COUNTS,
-                )
-                targets[secondary_motor] = motor_abs_after_tendon_action(
-                    int(secondary_abs),
-                    secondary_motor,
-                    -step_sign * ROPE_INIT_STEP_COUNTS,
-                )
+                primary_delta = self._rope_init_dual_motor_delta(primary_motor, step_sign)
+                secondary_delta = self._rope_init_dual_motor_delta(secondary_motor, -step_sign)
+                targets[primary_motor] = clamp_motor_abs(int(primary_abs) + primary_delta)
+                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs) + secondary_delta)
                 moved_motors.update((primary_motor, secondary_motor))
                 remaining.append(task)
             else:
@@ -2017,6 +2070,9 @@ class ControlPanel(QtWidgets.QWidget):
         return True
 
     def set_abs_limit_lock(self, locked: bool) -> None:
+        if self._app_mode == "manual" and self._manual_submode() != "joint":
+            self._set_status("ABS limit lock is only available in Joint Channels")
+            return
         if not self.context.is_comm_connected():
             self._set_status("ABS limit lock blocked: serial port is not connected")
             return
@@ -2534,7 +2590,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def load_calibration_snapshot(self) -> None:
         if not CALIB_LOAD_SNAPSHOT_PATH.exists():
-            self._warn("Calib Load", "没有找到上一次标定快照文件。请先完成一次 Calibrate。")
+            self._warn("Calib Load", "???????????????????? Calibrate?")
             return
         try:
             snapshot = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
@@ -2550,13 +2606,13 @@ class ControlPanel(QtWidgets.QWidget):
         state = self._state
         system_state = getattr(state, "system_state", None) if state is not None else None
         if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
-            self._warn("Calib Load", "当前正在运行控制，请先停止后再加载标定。")
+            self._warn("Calib Load", "????????????????????")
             return
         reply = QtWidgets.QMessageBox.question(
             self,
             "Calib Load",
-            "确认机械结构、绳长、舵机安装、磁编码器安装都没有改变？\n\n"
-            "点击确认后会把上一次标定结果恢复到下位机。",
+            "???????????????????????????\n\n",
+            "?????????????????????",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
@@ -2680,9 +2736,10 @@ class ControlPanel(QtWidgets.QWidget):
         self._clear_run_states()
         self._updating = True
         try:
-            for item in self.joint_current_items + self.joint_encoder_items:
+            for item in self.joint_current_items + self.joint_encoder_items + self.joint_abs_limit_items:
                 item.setText("-")
-            for item in self.motor_turn_items + self.motor_raw_items + self.motor_abs_items + self.motor_load_items + self.motor_limit_items + self.motor_joint_items:
+                item.setToolTip("")
+            for item in self.motor_turn_items + self.motor_raw_items + self.motor_abs_items + self.motor_load_items + self.motor_joint_items:
                 if item is not None:
                     item.setText("-")
                     item.setToolTip("")
@@ -2888,53 +2945,6 @@ class ControlPanel(QtWidgets.QWidget):
                 return max(0, min(MOTOR_COUNT - 1, int("".join(digits))))
         return None
 
-    def _send_motor_raw_recovery_target(self, idx: int, raw_target: int, trigger: str) -> bool:
-        if idx < 0 or idx >= MOTOR_COUNT:
-            return False
-        unknown_mask = self._active_scope_multiturn_unknown_mask()
-        if unknown_mask != 0:
-            self.context.emit_action(f"Raw recovery allowed with Turn UNKNOWN ({trigger}): unknown=0x{unknown_mask:08X}")
-        if not self.context.is_comm_connected():
-            self._set_status("Raw recovery blocked: serial port is not connected")
-            return False
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        if self._estop_latched and not self.controller.is_started():
-            self._set_status("Raw recovery blocked: press ENABLE after E-STOP")
-            return False
-        if not self.controller.is_started():
-            self._set_status("Raw recovery blocked: waiting for controllable IDLE after ENABLE")
-            return False
-        active_mask = self._active_motor_mask_from_ui()
-        if ((active_mask >> idx) & 0x1) == 0:
-            self._set_status(f"Raw recovery blocked: M{idx:02d} is not in current active scope")
-            return False
-        targets: List[int] = [0] * MOTOR_COUNT
-        missing = []
-        for ch in range(MOTOR_COUNT):
-            if ((active_mask >> ch) & 0x1) == 0:
-                continue
-            raw_feedback = self._motor_raw_single_feedback(ch)
-            if raw_feedback is None:
-                missing.append(f"M{ch:02d}")
-                continue
-            targets[ch] = int(raw_feedback) & 0x0FFF
-        if missing:
-            self._set_status(f"Raw recovery blocked: waiting raw feedback {','.join(missing[:4])}")
-            return False
-
-        targets[idx] = int(raw_target) & 0x0FFF
-        self.controller.set_motor_positions_raw_sweep(targets)
-        self._motor_last_slider[idx] = int(targets[idx])
-        self._motor_abs_pos[idx] = 0
-        self._motor_target_user_set[idx] = False
-        self.context.emit_action(f"Motor raw recovery sent ({trigger}): M{idx:02d} raw={targets[idx]}")
-        if unknown_mask != 0:
-            self._set_status(f"Raw recovery sent while Turn UNKNOWN: M{idx:02d} raw={targets[idx]}")
-        else:
-            self._set_status(f"Raw recovery sent: M{idx:02d} raw={targets[idx]}")
-        return True
-
     def _send_motor_abs_from_ui(self, trigger: str) -> bool:
         if not self._interaction_enabled:
             return False
@@ -2963,9 +2973,6 @@ class ControlPanel(QtWidgets.QWidget):
             if self._motor_abs_pos[idx] is None:
                 self._motor_abs_pos[idx] = 0
         targets = self._build_motor_abs_command_list()
-        targets, limit_hits = self._clamp_motor_targets_to_calibrated_limits(targets)
-        if limit_hits:
-            self._show_motor_abs_limit_warning(limit_hits)
         self.controller.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         self.context.emit_action(f"Motor absolute positions sent ({trigger}): {self._motor_command_debug_summary(trigger, targets)}")
@@ -3002,13 +3009,7 @@ class ControlPanel(QtWidgets.QWidget):
         if self._motor_abs_pos[idx] is None:
             self._motor_abs_pos[idx] = 0
         targets = self._build_motor_abs_command_list()
-        targets, limit_hits = self._clamp_motor_targets_to_calibrated_limits(targets)
-        if limit_hits:
-            self._show_motor_abs_limit_warning(limit_hits)
         target_abs = int(targets[idx])
-        target_abs, limit_hit = self._clamp_single_motor_target_to_calibrated_limit(idx, target_abs)
-        if limit_hit is not None:
-            self._show_motor_abs_limit_warning([limit_hit])
         self.controller.set_single_motor_position_absolute(idx, target_abs)
         if 0 <= idx < len(self._motor_last_sent_abs):
             self._motor_last_sent_abs[idx] = target_abs
@@ -3027,81 +3028,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_last_slider[idx] = 0
         self._motor_target_user_set[idx] = False
         self._set_motor_target_widget(idx, 0)
-
-    def _clamp_single_motor_target_to_calibrated_limit(
-        self, idx: int, target: int
-    ) -> Tuple[int, Optional[Tuple[int, int, int, int]]]:
-        state = self._state
-        if state is None:
-            return int(target), None
-        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap))
-        if ((valid_bitmap >> idx) & 0x01) == 0 or ((locked_bitmap >> idx) & 0x01) == 0:
-            return int(target), None
-        mins = getattr(state, "motor_abs_limit_min", [])
-        maxs = getattr(state, "motor_abs_limit_max", [])
-        if idx >= len(mins) or idx >= len(maxs):
-            return int(target), None
-        lo = int(mins[idx])
-        hi = int(maxs[idx])
-        if lo > hi:
-            lo, hi = hi, lo
-        requested = int(target)
-        limited = max(lo, min(hi, requested))
-        if limited == requested:
-            return limited, None
-        return limited, (idx, requested, lo, hi)
-
-    def _clamp_motor_targets_to_calibrated_limits(
-        self,
-        targets: List[int],
-        active_mask: Optional[int] = None,
-    ) -> Tuple[List[int], List[Tuple[int, int, int, int]]]:
-        state = self._state
-        if state is None:
-            return targets, []
-        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap))
-        active_mask = self._active_motor_mask_from_ui() if active_mask is None else int(active_mask)
-        mins = getattr(state, "motor_abs_limit_min", [])
-        maxs = getattr(state, "motor_abs_limit_max", [])
-        clamped = list(targets)
-        hits: List[Tuple[int, int, int, int]] = []
-        for idx in range(min(MOTOR_COUNT, len(clamped), len(mins), len(maxs))):
-            if ((active_mask >> idx) & 0x01) == 0:
-                continue
-            if ((valid_bitmap >> idx) & 0x01) == 0:
-                continue
-            if ((locked_bitmap >> idx) & 0x01) == 0:
-                continue
-            lo = int(mins[idx])
-            hi = int(maxs[idx])
-            if lo > hi:
-                lo, hi = hi, lo
-            requested = int(clamped[idx])
-            limited = max(lo, min(hi, requested))
-            if limited != requested:
-                clamped[idx] = limited
-                hits.append((idx, requested, lo, hi))
-        return clamped, hits
-
-    def _show_motor_abs_limit_warning(self, hits: List[Tuple[int, int, int, int]]) -> None:
-        now = time.time()
-        if now - self._last_abs_limit_warning_ts < 1.5:
-            return
-        self._last_abs_limit_warning_ts = now
-        preview = ", ".join(
-            f"M{idx:02d}: {requested}->{max(lo, min(hi, requested))} [{lo},{hi}]"
-            for idx, requested, lo, hi in hits[:4]
-        )
-        suffix = "" if len(hits) <= 4 else f" ... +{len(hits) - 4}"
-        self._set_status(f"Motor ABS limited: {preview}{suffix}")
-        QtWidgets.QMessageBox.warning(
-            self,
-            "Motor ABS Limit",
-            "Direct motor target is outside the calibrated ABS window and was clamped.\n"
-            f"{preview}{suffix}",
-        )
 
     def _check_feedback_abs_limit_violation(self) -> None:
         state = self._state
@@ -3220,9 +3146,21 @@ class ControlPanel(QtWidgets.QWidget):
         hi = self._joint_target_max_deg(idx)
         return max(lo, min(hi, value))
 
+    def _joint_angle_feedback_valid(self, idx: int, state=None) -> bool:
+        state = self._state if state is None else state
+        if state is None or not bool(getattr(state, "has_sensor_data", False)):
+            return False
+        angles = getattr(state, "angles", []) or []
+        if idx < 0 or idx >= len(angles):
+            return False
+        encoders = getattr(state, "encoders", []) or []
+        if idx < len(encoders):
+            return not bool(getattr(encoders[idx], "angle_error", getattr(encoders[idx], "error", False)))
+        return True
+
     def _joint_feedback_target(self, idx: int) -> float:
         state = self._state
-        if state is not None and bool(getattr(state, "has_sensor_data", False)) and idx < len(getattr(state, "angles", [])):
+        if self._joint_angle_feedback_valid(idx, state):
             return self._clamp_joint_target_deg(idx, float(state.angles[idx]))
         if idx < len(self.joint_target_spins):
             return self._clamp_joint_target_deg(idx, float(self.joint_target_spins[idx].value()))
@@ -3283,6 +3221,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             for i in range(ENCODER_COUNT):
+                self._refresh_joint_abs_limit_item(i, state)
                 if joint_has_data and i < len(getattr(state, "angles", [])):
                     self.joint_current_items[i].setText(f"{float(state.angles[i]):.2f}")
                     if i < len(getattr(state, "encoders", [])):
@@ -3308,6 +3247,39 @@ class ControlPanel(QtWidgets.QWidget):
                 self._joint_target_initialized = True
         finally:
             self._updating = False
+
+    def _refresh_joint_abs_limit_item(self, joint_idx: int, state: Optional[HandModel]) -> None:
+        if joint_idx < 0 or joint_idx >= len(self.joint_abs_limit_items):
+            return
+        item = self.joint_abs_limit_items[joint_idx]
+        if item is None or state is None:
+            if item is not None:
+                item.setText("-")
+                item.setToolTip("")
+            return
+
+        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
+        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap) or 0)
+        mins = getattr(state, "motor_abs_limit_min", []) or []
+        maxs = getattr(state, "motor_abs_limit_max", []) or []
+        summaries: List[str] = []
+        details: List[str] = []
+        motors = self._motors_by_joint[joint_idx] if joint_idx < len(self._motors_by_joint) else []
+        for motor_idx in motors:
+            if motor_idx >= len(mins) or motor_idx >= len(maxs):
+                continue
+            if ((valid_bitmap >> motor_idx) & 0x01) == 0:
+                continue
+            lo = int(mins[motor_idx])
+            hi = int(maxs[motor_idx])
+            if lo > hi:
+                lo, hi = hi, lo
+            state_text = "LOCK" if ((locked_bitmap >> motor_idx) & 0x01) != 0 else "UNLOCK"
+            summaries.append(f"M{motor_idx:02d} {state_text[0]} [{lo},{hi}]")
+            details.append(f"M{motor_idx:02d}: {state_text}, ABS range [{lo}, {hi}]")
+
+        item.setText(" / ".join(summaries) if summaries else "-")
+        item.setToolTip("\n".join(details))
 
     def _refresh_motor_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
@@ -3353,18 +3325,6 @@ class ControlPanel(QtWidgets.QWidget):
                         if not overload_active:
                             load_text = str(int(loads[i]))
                     item.setText(load_text)
-                if i < len(self.motor_limit_items) and self.motor_limit_items[i] is not None:
-                    limit_text = "-"
-                    valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-                    locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", valid_bitmap))
-                    if ((valid_bitmap >> i) & 0x01) != 0:
-                        mins = getattr(state, "motor_abs_limit_min", [])
-                        maxs = getattr(state, "motor_abs_limit_max", [])
-                        if i < len(mins) and i < len(maxs):
-                            limit_text = f"{int(mins[i])}..{int(maxs[i])}"
-                            if ((locked_bitmap >> i) & 0x01) == 0:
-                                limit_text = f"UNLOCK {limit_text}"
-                    self.motor_limit_items[i].setText(limit_text)
                 joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
                 if 0 <= joint_idx < len(getattr(state, "angles", [])):
                     self.motor_joint_items[i].setText(f"{float(state.angles[joint_idx]):.2f}")
@@ -3918,3 +3878,4 @@ class ControlPanel(QtWidgets.QWidget):
             self.joint_sliders[idx].setValue(int(round(float(value) * 100.0)))
         finally:
             self._updating = False
+

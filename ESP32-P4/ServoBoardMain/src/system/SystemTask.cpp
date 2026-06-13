@@ -51,7 +51,7 @@ void System_Init() {
     sharedData.servoTelemetrySnapshotQueue = xQueueCreate(1, sizeof(ServoTelemetryData_t));
     sharedData.mappedAngleQueue = xQueueCreate(1, sizeof(MappedAngleData_t));
     sharedData.jointDebugQueue = xQueueCreate(8, sizeof(JointDebugData_t));
-    sharedData.tactileQueue = xQueueCreate(1, sizeof(RemoteTactileData_t));
+    sharedData.tactileQueue = xQueueCreate(3, sizeof(RemoteTactileData_t));
 
     if (!sharedData.cmdQueue || !sharedData.statusQueue ||
         !sharedData.stateEventQueue ||
@@ -82,6 +82,15 @@ void System_Init() {
     sharedData.joint_command_token = 0;
     sharedData.motor_direct_command_generation = 0;
     sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData.sine_test_enabled = 0;
+    sharedData.sine_test_request_token = 0;
+    sharedData.sine_test_start_ms = 0;
+    sharedData.sine_test_joint_mask = 0;
+    sharedData.sine_test_hold_ms = 0;
+    memset(sharedData.sine_test_center_deg, 0, sizeof(sharedData.sine_test_center_deg));
+    memset(sharedData.sine_test_amp_deg, 0, sizeof(sharedData.sine_test_amp_deg));
+    memset(sharedData.sine_test_freq_hz, 0, sizeof(sharedData.sine_test_freq_hz));
+    memset(sharedData.sine_test_phase_rad, 0, sizeof(sharedData.sine_test_phase_rad));
     sharedData.control_enabled = 0;
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;

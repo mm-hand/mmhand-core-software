@@ -39,7 +39,7 @@ static const uint32_t kFeedbackSerialDebugIntervalMs = 100;
 static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const int16_t kControlOverloadLoadThreshold = 700;
+static const int16_t kControlOverloadLoadThreshold = 800;
 static const int16_t kJointControlOverloadLoadThreshold = 800;
 static const uint8_t kControlOverloadLatchCycles = 20;
 static const uint8_t kJointControlOverloadLatchCycles = 20;
@@ -48,6 +48,35 @@ static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
+static const float kLocalTestTwoPi = 6.28318530717958647692f;
+static const float kLocalTestMinFreqHz = 0.001f;
+static const float kLocalTestMaxFreqHz = 100.0f;
+static const float kLocalTestMaxAbsAmpDeg = 180.0f;
+
+static float sanitizeLocalTestFreq(float freqHz)
+{
+    if (!isfinite(freqHz) || freqHz < kLocalTestMinFreqHz) {
+        return kLocalTestMinFreqHz;
+    }
+    if (freqHz > kLocalTestMaxFreqHz) {
+        return kLocalTestMaxFreqHz;
+    }
+    return freqHz;
+}
+
+static float sanitizeLocalTestAmp(float ampDeg)
+{
+    if (!isfinite(ampDeg)) {
+        return 0.0f;
+    }
+    if (ampDeg > kLocalTestMaxAbsAmpDeg) {
+        return kLocalTestMaxAbsAmpDeg;
+    }
+    if (ampDeg < -kLocalTestMaxAbsAmpDeg) {
+        return -kLocalTestMaxAbsAmpDeg;
+    }
+    return ampDeg;
+}
 
 // 协议字段使用 int16 传输，保留最大正值 32767 作为异常/占位，正常值限制到 32766。
 
@@ -313,9 +342,7 @@ static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
             return false;
         }
         const int32_t targetAbs =
-            (int32_t)clampServoPosByMotorAbsLimit(sharedData,
-                                                  ch,
-                                                  commandSnapshot.motorTargetRaw[ch]);
+            (int32_t)clampServoPos(commandSnapshot.motorTargetRaw[ch]);
         if (abs32Local(servoData.servoAngles[ch] - targetAbs) > kDirectRunDoneAbsToleranceCounts) {
             return false;
         }
@@ -375,6 +402,15 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
     out->motorDirectCommandSource = sharedData->motor_direct_command_source;
     out->controlMode = sharedData->control_mode;
+    out->sineTestEnabled = sharedData->sine_test_enabled;
+    out->sineTestRequestToken = sharedData->sine_test_request_token;
+    out->sineTestStartMs = sharedData->sine_test_start_ms;
+    out->sineTestJointMask = sharedData->sine_test_joint_mask;
+    out->sineTestHoldMs = sharedData->sine_test_hold_ms;
+    memcpy(out->sineTestCenterDeg, sharedData->sine_test_center_deg, sizeof(out->sineTestCenterDeg));
+    memcpy(out->sineTestAmpDeg, sharedData->sine_test_amp_deg, sizeof(out->sineTestAmpDeg));
+    memcpy(out->sineTestFreqHz, sharedData->sine_test_freq_hz, sizeof(out->sineTestFreqHz));
+    memcpy(out->sineTestPhaseRad, sharedData->sine_test_phase_rad, sizeof(out->sineTestPhaseRad));
     memcpy(out->tendonGuardEnabled, (const void*)sharedData->tendon_guard_enabled, sizeof(out->tendonGuardEnabled));
     memcpy(out->tendonGuardSign, (const void*)sharedData->tendon_guard_sign, sizeof(out->tendonGuardSign));
     memcpy(out->tendonGuardX1Abs, (const void*)sharedData->tendon_guard_x1_abs, sizeof(out->tendonGuardX1Abs));
@@ -446,6 +482,9 @@ void controlTask(void* parameter)
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
+    uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
+    bool sineTestActive = false;
+    uint32_t sineTestStartMs = 0;
     uint32_t lastFeedbackSerialDebugMs = 0;
 
     while (1)
@@ -615,6 +654,46 @@ void controlTask(void* parameter)
         }
 
         memcpy(localTargets, commandSnapshot.targetAngles, sizeof(localTargets));
+        const bool sineTestEnabled =
+            commandSnapshot.sineTestEnabled != 0 &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT;
+        if (sineTestEnabled)
+        {
+            const uint32_t sineTestToken = commandSnapshot.sineTestRequestToken;
+            if (!sineTestActive || sineTestToken != lastSineTestRequestToken)
+            {
+                sineTestStartMs = commandSnapshot.sineTestStartMs != 0
+                                      ? commandSnapshot.sineTestStartMs
+                                      : millis();
+                sineTestActive = true;
+                lastSineTestRequestToken = sineTestToken;
+                feedbackRunDoneStableCount = 0;
+            }
+
+            const float elapsedSec =
+                (float)((uint32_t)(millis() - sineTestStartMs)) * 0.001f;
+            const float waveSec =
+                elapsedSec > ((float)commandSnapshot.sineTestHoldMs * 0.001f)
+                    ? elapsedSec - ((float)commandSnapshot.sineTestHoldMs * 0.001f)
+                    : 0.0f;
+            const uint32_t activeJointMask = commandSnapshot.sineTestJointMask;
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
+            {
+                if ((activeJointMask & (1UL << jointIndex)) != 0)
+                {
+                    const float freqHz = sanitizeLocalTestFreq(commandSnapshot.sineTestFreqHz[jointIndex]);
+                    const float ampDeg = sanitizeLocalTestAmp(commandSnapshot.sineTestAmpDeg[jointIndex]);
+                    const float phaseRad = commandSnapshot.sineTestPhaseRad[jointIndex];
+                    localTargets[jointIndex] =
+                        commandSnapshot.sineTestCenterDeg[jointIndex] +
+                        ampDeg * sinf(kLocalTestTwoPi * freqHz * waveSec + phaseRad);
+                }
+            }
+        }
+        else
+        {
+            sineTestActive = false;
+        }
         const bool hostControlEnabled = (sharedData->control_enabled != 0);
         const uint8_t systemState = sharedData->system_state;
         const uint8_t targetOwner = sharedData->servo_target_owner;
@@ -735,25 +814,18 @@ void controlTask(void* parameter)
                                 sweepExpandedTarget[ch] += wrapServoRawDelta(d);
                                 prevSweepRawTarget[ch] = rawTarget;
                             }
-                            targetPos = clampServoPosByMotorAbsLimit(sharedData,
-                                                                      ch,
-                                                                      sweepExpandedTarget[ch]);
+                            targetPos = clampServoPos(sweepExpandedTarget[ch]);
                             sweepExpandedTarget[ch] = targetPos;
                         } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
                             sweepAnchorValid[ch] = false;
-                            targetPos = clampServoPosByMotorAbsLimit(
-                                sharedData,
-                                ch,
+                            targetPos = clampServoPos(
                                 (int32_t)commandSnapshot.motorTargetRaw[ch]);
                         } else {
                             sweepAnchorValid[ch] = false;
-                            targetPos = clampServoPosByMotorAbsLimit(
-                                sharedData,
-                                ch,
-                                expandSingleTurnTargetNearCurrent(
+                            targetPos = expandSingleTurnTargetNearCurrent(
                                 servoData.servoAngles[ch],
                                 clampServoSingleTurnRaw(commandSnapshot.motorTargetRaw[ch])
-                                ));
+                            );
                         }
                     } else {
                         sweepAnchorValid[ch] = false;
@@ -810,7 +882,10 @@ void controlTask(void* parameter)
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || overloadFaultActive;
                 } else {
-                    emergency = emergency || releaseFaultActive || holdByTendonGuard || overloadFaultActive;
+                    // Tendon boundary hits are advisory; release risk is latched only
+                    // after the joint fails to return during sustained release motion.
+                    (void)holdByTendonGuard;
+                    emergency = emergency || releaseFaultActive || overloadFaultActive;
                 }
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&
@@ -994,6 +1069,7 @@ void controlTask(void* parameter)
 
         if (feedbackRunningState &&
             commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            !sineTestActive &&
             feedbackJointTargetsReached(sharedData, mappedData, localTargets, magAngles)) {
             if (feedbackRunDoneStableCount < 255) {
                 feedbackRunDoneStableCount++;

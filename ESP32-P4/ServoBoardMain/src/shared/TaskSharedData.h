@@ -23,7 +23,13 @@
 #define TACTILE_GROUP_NUM 5
 #define TACTILE_SENSOR_PER_GROUP 3
 #define TACTILE_AXIS_NUM 3
+#define TACTILE_TIP_TAXELS 25
+#define TACTILE_PAD_TAXELS 52
+#define TACTILE_SENSOR0_TAXELS TACTILE_PAD_TAXELS
+#define TACTILE_SENSOR1_TAXELS TACTILE_TIP_TAXELS
+#define TACTILE_SENSOR2_TAXELS TACTILE_TIP_TAXELS
 #define TACTILE_SUMMARY_BYTES (TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_NUM)
+#define TACTILE_FULL_BYTES (TACTILE_GROUP_NUM * (TACTILE_SENSOR0_TAXELS + TACTILE_SENSOR1_TAXELS + TACTILE_SENSOR2_TAXELS) * TACTILE_AXIS_NUM)
 
 // Control output modes.
 #define CONTROL_MODE_JOINT 0
@@ -182,6 +188,15 @@ typedef struct {
     uint32_t motorDirectCommandGeneration;
     uint8_t motorDirectCommandSource;
     uint8_t controlMode;
+    uint8_t sineTestEnabled;
+    uint32_t sineTestRequestToken;
+    uint32_t sineTestStartMs;
+    uint32_t sineTestJointMask;
+    uint32_t sineTestHoldMs;
+    float sineTestCenterDeg[ENCODER_TOTAL_NUM];
+    float sineTestAmpDeg[ENCODER_TOTAL_NUM];
+    float sineTestFreqHz[ENCODER_TOTAL_NUM];
+    float sineTestPhaseRad[ENCODER_TOTAL_NUM];
     uint8_t tendonGuardEnabled[ENCODER_TOTAL_NUM];
     int8_t tendonGuardSign[ENCODER_TOTAL_NUM];
     int16_t tendonGuardX1Abs[ENCODER_TOTAL_NUM];
@@ -227,9 +242,13 @@ typedef struct {
 
 typedef struct {
     uint8_t values[TACTILE_SUMMARY_BYTES];
+    uint8_t fullValues[TACTILE_FULL_BYTES];
     uint8_t seq;
+    uint8_t fullSeq;
     uint32_t timestamp;
+    uint32_t fullTimestamp;
     bool isValid;
+    bool fullValid;
 } RemoteTactileData_t;
 
 typedef struct {
@@ -259,6 +278,15 @@ typedef struct {
     volatile uint32_t joint_command_token;
     volatile uint32_t motor_direct_command_generation;
     volatile uint8_t motor_direct_command_source;
+    volatile uint8_t sine_test_enabled;
+    volatile uint32_t sine_test_request_token;
+    volatile uint32_t sine_test_start_ms;
+    volatile uint32_t sine_test_joint_mask;
+    volatile uint32_t sine_test_hold_ms;
+    float sine_test_center_deg[ENCODER_TOTAL_NUM];
+    float sine_test_amp_deg[ENCODER_TOTAL_NUM];
+    float sine_test_freq_hz[ENCODER_TOTAL_NUM];
+    float sine_test_phase_rad[ENCODER_TOTAL_NUM];
 
     volatile uint8_t control_enabled;
     volatile uint8_t control_mode;

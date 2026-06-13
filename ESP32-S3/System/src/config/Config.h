@@ -13,8 +13,16 @@
 #define ENCODER_TOTAL_NUM 21
 #define TACTILE_GROUP_NUM 5
 
+#ifndef ENABLE_TACTILE_TASK
+#define ENABLE_TACTILE_TASK 1
+#endif
+
+#ifndef ENC_ACTIVE_GROUP_MASK
+#define ENC_ACTIVE_GROUP_MASK 0x1F
+#endif
+
 extern uint16_t g_enc_diag[ENCODER_TOTAL_NUM];
-extern SemaphoreHandle_t g_sensorMuxMutex;
+extern SemaphoreHandle_t g_sensorSelectMutex;
 
 // ===========================================
 // [AS5047P] error bits and latched code ranges
@@ -130,6 +138,9 @@ struct RemoteCommand {
 #define ENC_HW_MODE ENC_HW_MODE_138_CS_DEMUX
 #endif
 
+#define ENC_MUX_BASE_CHANNEL 0
+#define ENC_151_IDLE_CHANNEL 7
+
 // Encoder logical group order follows the assembled finger order:
 // group0/J00-J03=pinky(SPI5), group1/J04-J07=ring(SPI4),
 // group2/J08-J11=middle(SPI3), group3/J12-J15=index(SPI2),
@@ -158,6 +169,22 @@ static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {7, 6, 5, 3, 4};
 #define TACTILE_SENSOR_PER_GROUP 3
 #define TACTILE_AXIS_COUNT 3
 #define TACTILE_SUMMARY_BYTES (TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT)
+#define TACTILE_SUMMARY_NOISE_FLOOR 0
+#define TACTILE_SENSOR0_TAXELS 52
+#define TACTILE_SENSOR1_TAXELS 25
+#define TACTILE_SENSOR2_TAXELS 25
+#define TACTILE_PAD_TAXELS TACTILE_SENSOR0_TAXELS
+#define TACTILE_TIP_TAXELS TACTILE_SENSOR1_TAXELS
+#define TACTILE_FULL_BYTES \
+    (TACTILE_GROUP_NUM * (TACTILE_SENSOR0_TAXELS + TACTILE_SENSOR1_TAXELS + TACTILE_SENSOR2_TAXELS) * TACTILE_AXIS_COUNT)
+
+#ifndef ENABLE_TACTILE_CAN_RELAY
+#define ENABLE_TACTILE_CAN_RELAY 1
+#endif
+
+#ifndef ENABLE_TACTILE_CAN_FULL_DUMP
+#define ENABLE_TACTILE_CAN_FULL_DUMP 0
+#endif
 
 // Tactile logical order follows the assembled finger order:
 // G0=pinky(SPI5), G1=ring(SPI4), G2=middle(SPI3), G3=index(SPI2), G4=thumb(SPI1).
