@@ -418,23 +418,24 @@ class HandGUI(QtWidgets.QMainWindow):
         if ts > 0:
             state.timestamp = ts
 
-    def _start_tactile_port(self, port: str) -> None:
+    def _start_tactile_port(self, port: str) -> bool:
         self._stop_tactile_port()
         if not port:
-            return
+            return False
         comm = TactileSerialComm(port)
         try:
             ok = comm.connect()
         except Exception as exc:
-            self._set_status(f"Tactile serial failed: {exc}")
-            return
+            self._set_status(f"S3 tactile serial failed: {exc}")
+            return False
         if not ok:
-            self._set_status(f"Tactile serial failed: {port}")
-            return
+            self._set_status(f"S3 tactile serial failed: {port}")
+            return False
         self.tactile_port = port
         self.tactile_comm = comm
         self._tactile_state = None
-        self._set_status(f"Tactile serial connected: {port}")
+        self._set_status(f"S3 tactile serial connected: {port}")
+        return True
 
     def _stop_tactile_port(self) -> None:
         if self.tactile_comm is not None:
@@ -444,6 +445,21 @@ class HandGUI(QtWidgets.QMainWindow):
                 pass
             self.tactile_comm = None
         self._tactile_state = None
+
+    def connect_tactile_serial(self, port: str) -> bool:
+        return self._start_tactile_port(port)
+
+    def disconnect_tactile_serial(self) -> None:
+        self._stop_tactile_port()
+        self._set_status("S3 tactile serial disconnected")
+
+    def is_tactile_serial_connected(self) -> bool:
+        comm = self.tactile_comm
+        serial_obj = getattr(comm, "serial", None) if comm is not None else None
+        return bool(comm is not None and serial_obj is not None and getattr(serial_obj, "is_open", False))
+
+    def get_tactile_serial_port(self) -> str:
+        return self.tactile_port or ""
 
     def _update_display(self, state: HandModel) -> None:
         now = time.time()

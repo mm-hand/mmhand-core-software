@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
+from comm_layer import list_ports
 from data_models import (
     HandModel,
     FingerTactile,
@@ -57,6 +58,12 @@ TACTILE_2D_ARROW_MAX_COUNT = 12
 TACTILE_2D_ARROW_RESULTANT_FLOOR = 3.0
 TACTILE_2D_ARROW_RESULTANT_Z_RATIO = 0.35
 TACTILE_2D_SHOW_ARROWS_IN_Z_VIEW = True
+TACTILE_2D_SHOW_HAND_GUIDE = True
+TACTILE_2D_GUIDE_FILL = (248, 250, 252, 255)
+TACTILE_2D_GUIDE_PALM_FILL = (241, 245, 249, 255)
+TACTILE_2D_GUIDE_EDGE = (148, 163, 184, 255)
+TACTILE_2D_GUIDE_SOFT_EDGE = (203, 213, 225, 255)
+TACTILE_2D_IDLE_DOT = (71, 85, 105, 255)
 TACTILE_2D_MANUAL_ORIGIN_AT_ROOT = True
 TACTILE_2D_MANUAL_MIRROR_COLS = False
 TACTILE_2D_REQUIRE_RESULTANT_GATE = False
@@ -73,6 +80,7 @@ URDF_MAX_TRIANGLES_PER_LINK = 0
 _URDF_HAND_MESH_CACHE = None
 _URDF_HAND_LINK_VERTEX_CACHE = None
 _OFFICIAL_TACTILE_PROJECTION_CACHE = {}
+S3_TACTILE_PORT_SETTINGS_KEY = "s3_tactile/last_port"
 
 
 @dataclass
@@ -1242,6 +1250,7 @@ class TactileView(QtWidgets.QWidget):
         self.use_3d = False
         self.raw_visible = False
         self._raw_text_cache = ""
+        self._settings = QtCore.QSettings("mmhand", "desktop")
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1270,6 +1279,36 @@ class TactileView(QtWidgets.QWidget):
         self.fake_check.toggled.connect(self._set_fake)
         self.raw_check.toggled.connect(self._set_raw_visible)
         self.view3d_check.toggled.connect(self._set_view3d)
+
+        s3_row = QtWidgets.QHBoxLayout()
+        s3_row.setSpacing(6)
+        s3_row.addWidget(QtWidgets.QLabel("S3 Tactile Port:"))
+        self.s3_port_combo = QtWidgets.QComboBox()
+        self.s3_port_combo.setMinimumWidth(230)
+        self.s3_port_combo.setToolTip("Only for S3 tactile serial. Do not select the P4 main control port.")
+        s3_row.addWidget(self.s3_port_combo)
+        self.s3_refresh_btn = QtWidgets.QPushButton("Refresh")
+        self.s3_refresh_btn.setToolTip("Refresh available serial ports for the S3 tactile board")
+        s3_row.addWidget(self.s3_refresh_btn)
+        self.s3_connect_btn = QtWidgets.QPushButton("Connect S3")
+        self.s3_connect_btn.setToolTip("Connect the selected port as the S3 tactile serial stream")
+        s3_row.addWidget(self.s3_connect_btn)
+        self.s3_disconnect_btn = QtWidgets.QPushButton("Disconnect")
+        self.s3_disconnect_btn.setToolTip("Disconnect only the S3 tactile serial stream")
+        s3_row.addWidget(self.s3_disconnect_btn)
+        self.s3_status_label = QtWidgets.QLabel("S3 tactile: disconnected")
+        self.s3_status_label.setMinimumWidth(220)
+        self.s3_status_label.setStyleSheet("color:#475569;")
+        s3_row.addWidget(self.s3_status_label, 1)
+        s3_hint = QtWidgets.QLabel("S3 tactile only, not P4 main port")
+        s3_hint.setStyleSheet("color:#64748b;")
+        s3_row.addWidget(s3_hint)
+        layout.addLayout(s3_row)
+        self.s3_refresh_btn.clicked.connect(lambda _checked=False: self._refresh_s3_ports())
+        self.s3_connect_btn.clicked.connect(lambda _checked=False: self._connect_s3_tactile_port())
+        self.s3_disconnect_btn.clicked.connect(lambda _checked=False: self._disconnect_s3_tactile_port())
+        self._refresh_s3_ports()
+        self._refresh_s3_status()
 
         self.plot = pg.GraphicsLayoutWidget()
         self.plot.setBackground("w")
@@ -1349,6 +1388,7 @@ class TactileView(QtWidgets.QWidget):
         if not force and now - self._last_update_ts < interval:
             return False
         self._last_update_ts = now
+        self._refresh_s3_status()
         display_state = self._fake_display_state(state) if use_fake else state
         if self.values_label.isVisible():
             self.values_label.setText(self._format_values(display_state))
@@ -1423,6 +1463,104 @@ class TactileView(QtWidgets.QWidget):
             hbar.setValue(min(old_h, hbar.maximum()))
 
         QtCore.QTimer.singleShot(0, restore_scroll)
+
+    def _selected_s3_port(self) -> str:
+        data = self.s3_port_combo.currentData() if hasattr(self, "s3_port_combo") else None
+        return str(data or "").strip()
+
+    def _preferred_s3_port(self) -> str:
+        try:
+            current = str(self.context.get_tactile_serial_port() or "").strip()
+        except Exception:
+            current = ""
+        if current:
+            return current
+        try:
+            saved = self._settings.value(S3_TACTILE_PORT_SETTINGS_KEY, "", type=str)
+        except TypeError:
+            saved = self._settings.value(S3_TACTILE_PORT_SETTINGS_KEY, "")
+        return str(saved or "").strip()
+
+    def _refresh_s3_ports(self) -> None:
+        preferred = self._preferred_s3_port() or self._selected_s3_port()
+        self.s3_port_combo.blockSignals(True)
+        self.s3_port_combo.clear()
+        self.s3_port_combo.addItem("Select S3 tactile port", "")
+        for device, desc in list_ports():
+            self.s3_port_combo.addItem(f"{device} ({desc})", device)
+        if preferred:
+            idx = self.s3_port_combo.findData(preferred)
+            if idx < 0:
+                self.s3_port_combo.addItem(f"{preferred} (saved, not currently listed)", preferred)
+                idx = self.s3_port_combo.findData(preferred)
+            if idx >= 0:
+                self.s3_port_combo.setCurrentIndex(idx)
+        self.s3_port_combo.blockSignals(False)
+        self._refresh_s3_status()
+
+    def _p4_main_port(self) -> str:
+        return str(getattr(self.context, "current_port", "") or "").strip()
+
+    def _connect_s3_tactile_port(self) -> None:
+        port = self._selected_s3_port()
+        if not port:
+            self.s3_status_label.setText("S3 tactile: select a port first")
+            return
+        p4_port = self._p4_main_port()
+        if p4_port and port.upper() == p4_port.upper():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "S3触觉串口提示",
+                (
+                    f"{port} 当前看起来是 P4 主控串口。\n\n"
+                    "S3触觉串口需要选择另一块 S3 板子的串口，避免和 P4 控制串口混用。"
+                ),
+            )
+            self.s3_status_label.setText("S3 tactile: blocked, selected P4 port")
+            return
+        try:
+            ok = bool(self.context.connect_tactile_serial(port))
+        except Exception as exc:
+            self.s3_status_label.setText(f"S3 tactile: failed ({exc})")
+            return
+        if ok:
+            self._settings.setValue(S3_TACTILE_PORT_SETTINGS_KEY, port)
+            self.s3_status_label.setText(f"S3 tactile connected: {port}")
+            self.context.set_status(f"S3 tactile serial connected: {port}")
+        else:
+            self.s3_status_label.setText(f"S3 tactile connect failed: {port}")
+        self._refresh_s3_status()
+
+    def _disconnect_s3_tactile_port(self) -> None:
+        try:
+            self.context.disconnect_tactile_serial()
+        except Exception as exc:
+            self.s3_status_label.setText(f"S3 tactile disconnect failed: {exc}")
+            return
+        self.s3_status_label.setText("S3 tactile: disconnected")
+        self._refresh_s3_status()
+
+    def _refresh_s3_status(self) -> None:
+        if not hasattr(self, "s3_status_label"):
+            return
+        try:
+            connected = bool(self.context.is_tactile_serial_connected())
+        except Exception:
+            connected = False
+        try:
+            port = str(self.context.get_tactile_serial_port() or "").strip()
+        except Exception:
+            port = ""
+        if connected:
+            text = f"S3 tactile connected: {port or self._selected_s3_port()}"
+            color = "#166534"
+        else:
+            text = "S3 tactile: disconnected"
+            color = "#475569"
+        self.s3_status_label.setText(text)
+        self.s3_status_label.setStyleSheet(f"color:{color};")
+        self.s3_connect_btn.setEnabled(not connected)
+        self.s3_disconnect_btn.setEnabled(connected)
 
     def _set_view3d(self, checked: bool) -> None:
         if not checked:
@@ -1995,12 +2133,116 @@ class TactileView(QtWidgets.QWidget):
                 return band
         return None
 
+    @staticmethod
+    def _fill_rect(
+        image: np.ndarray,
+        row: int,
+        col: int,
+        height: int,
+        width: int,
+        color: Tuple[int, int, int, int],
+    ) -> None:
+        r0 = max(0, int(row))
+        c0 = max(0, int(col))
+        r1 = min(image.shape[0], int(row + height))
+        c1 = min(image.shape[1], int(col + width))
+        if r1 <= r0 or c1 <= c0:
+            return
+        image[r0:r1, c0:c1] = color
+
+    @classmethod
+    def _draw_rect_outline(
+        cls,
+        image: np.ndarray,
+        row: int,
+        col: int,
+        height: int,
+        width: int,
+        color: Tuple[int, int, int, int],
+        *,
+        line_width: int = 1,
+    ) -> None:
+        r0 = int(row)
+        c0 = int(col)
+        r1 = int(row + height - 1)
+        c1 = int(col + width - 1)
+        cls._draw_line(image, r0, c0, r0, c1, color, width=line_width)
+        cls._draw_line(image, r1, c0, r1, c1, color, width=line_width)
+        cls._draw_line(image, r0, c0, r1, c0, color, width=line_width)
+        cls._draw_line(image, r0, c1, r1, c1, color, width=line_width)
+
+    @classmethod
+    def _draw_tactile_hand_guide(cls, image: np.ndarray) -> None:
+        if not TACTILE_2D_SHOW_HAND_GUIDE:
+            return
+        spec = TACTILE_STITCH_SPEC
+        scale = max(1, int(TACTILE_2D_ARRAY_SCALE))
+
+        def rect(units_row: int, units_col: int, units_h: int, units_w: int):
+            return (
+                int(units_row * scale),
+                int(units_col * scale),
+                int(units_h * scale),
+                int(units_w * scale),
+            )
+
+        palm = rect(spec.palm_r, spec.palm_c, spec.palm_h, spec.palm_w)
+        cls._fill_rect(image, *palm, TACTILE_2D_GUIDE_PALM_FILL)
+        cls._draw_rect_outline(image, *palm, TACTILE_2D_GUIDE_EDGE, line_width=1)
+
+        finger_rects: List[Tuple[int, int, int, int]] = [
+            rect(spec.thumb_r, spec.thumb_c, spec.thumb_h, spec.thumb_w)
+        ]
+        step = TACTILE_BAND_WIDTH + TACTILE_FOUR_FINGER_GAP
+        for fi in range(4):
+            finger_rects.append(
+                rect(
+                    spec.four_r,
+                    spec.four_c + fi * step,
+                    TACTILE_FINGER_STRIP_ROWS,
+                    TACTILE_BAND_WIDTH,
+                )
+            )
+
+        for r, c, h, w in finger_rects:
+            cls._fill_rect(image, r, c, h, w, TACTILE_2D_GUIDE_FILL)
+            cls._draw_rect_outline(image, r, c, h, w, TACTILE_2D_GUIDE_EDGE, line_width=1)
+
+        # Soft connection lines make the separate sensor islands read as one hand.
+        palm_top = spec.palm_r * scale
+        palm_center_col = (spec.palm_c + spec.palm_w * 0.5) * scale
+        for r, c, h, w in finger_rects[1:]:
+            finger_root_row = r + h
+            finger_center_col = c + w * 0.5
+            cls._draw_line(
+                image,
+                palm_top,
+                palm_center_col,
+                finger_root_row,
+                finger_center_col,
+                TACTILE_2D_GUIDE_SOFT_EDGE,
+                width=1,
+            )
+
+        thumb_r, thumb_c, thumb_h, thumb_w = finger_rects[0]
+        cls._draw_line(
+            image,
+            spec.palm_r * scale + spec.palm_h * scale * 0.50,
+            spec.palm_c * scale,
+            thumb_r + thumb_h,
+            thumb_c + thumb_w,
+            TACTILE_2D_GUIDE_SOFT_EDGE,
+            width=1,
+        )
+
     def _render_vector_matrix(self, field: np.ndarray, axis: int) -> np.ndarray:
         rows, cols = field.shape[:2]
         image = np.full((rows, cols, 4), 255, dtype=np.uint8)
         finite = np.isfinite(field[:, :, 2])
         if not np.any(finite):
             return image
+
+        self._draw_tactile_hand_guide(image)
 
         vmax_z = TACTILE_2D_Z_VISUAL_LEVEL
         positions = np.argwhere(finite)
@@ -2009,7 +2251,14 @@ class TactileView(QtWidgets.QWidget):
         max_radius = TACTILE_2D_DENSE_MAX_DOT_RADIUS if dense_mode else TACTILE_2D_MAX_DOT_RADIUS
         base_rows = positions[:, 0]
         base_cols = positions[:, 1]
-        image[base_rows, base_cols] = (0, 0, 0, 255)
+        idle_radius = 1 if dense_mode else 2
+        self._draw_many_circles(
+            image,
+            base_rows,
+            base_cols,
+            idle_radius,
+            TACTILE_2D_IDLE_DOT,
+        )
 
         z_values = np.where(finite, np.clip(field[:, :, 2], 0.0, None), 0.0)
         active = finite & (z_values > 0.0)

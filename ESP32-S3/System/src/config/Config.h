@@ -188,7 +188,7 @@ static constexpr uint8_t ENC_151_GROUP_CHANNEL_MAP[5] = {7, 6, 5, 3, 4};
 
 // Tactile logical order follows the assembled finger order:
 // G0=pinky(SPI5), G1=ring(SPI4), G2=middle(SPI3), G3=index(SPI2), G4=thumb(SPI1).
-static constexpr uint8_t TACTILE_GROUP_CHANNEL_MAP[TACTILE_GROUP_NUM] = {7, 6, 5, 4, 3};
+static constexpr uint8_t TACTILE_GROUP_CHANNEL_MAP[TACTILE_GROUP_NUM] = {0, 1, 2, 3, 4};
 
 #define TASK_ENC_PRIO   10
 #define TASK_ENC_CORE   0

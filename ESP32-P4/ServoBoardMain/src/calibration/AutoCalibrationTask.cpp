@@ -10,7 +10,13 @@
 
 static TaskHandle_t g_autoCalibrationTaskHandle = NULL;
 
-const uint8_t kDefaultAutoCalibrationJoints[] = {8,9,10,11};
+const uint8_t kDefaultAutoCalibrationJoints[] = {
+    16, 17, 18, 19, 20,
+    12, 13, 14, 15,
+    8, 9, 10, 11,
+    4, 5, 6, 7,
+    0, 1, 2, 3
+};
 const uint8_t kDefaultAutoCalibrationJointsCount = sizeof(kDefaultAutoCalibrationJoints) / sizeof(kDefaultAutoCalibrationJoints[0]);
 static const uint32_t kAutoFeedbackReadyCanTimeoutMs = 500;
 static const uint32_t kAutoFeedbackReadyServoTimeoutMs = 500;

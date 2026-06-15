@@ -57,3 +57,15 @@ class HandGuiContext:
 
     def refresh_cameras(self) -> None:
         self._app.refresh_cameras()
+
+    def connect_tactile_serial(self, port: str) -> bool:
+        return self._app.connect_tactile_serial(port)
+
+    def disconnect_tactile_serial(self) -> None:
+        self._app.disconnect_tactile_serial()
+
+    def is_tactile_serial_connected(self) -> bool:
+        return self._app.is_tactile_serial_connected()
+
+    def get_tactile_serial_port(self) -> str:
+        return self._app.get_tactile_serial_port()

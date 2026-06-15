@@ -79,7 +79,13 @@ _ANGLE_MAP = [[3, 0, 1, 2], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15], [16,
 
 
 def _load_default_auto_calibration_joint_indices() -> List[int]:
-    fallback = [11]
+    fallback = [
+        16, 17, 18, 19, 20,
+        12, 13, 14, 15,
+        8, 9, 10, 11,
+        4, 5, 6, 7,
+        0, 1, 2, 3,
+    ]
     try:
         repo_root = Path(__file__).resolve().parents[2]
         source_path = repo_root / "ESP32-P4" / "ServoBoardMain" / "src" / "calibration" / "AutoCalibrationTask.cpp"

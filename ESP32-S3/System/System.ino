@@ -12,12 +12,16 @@ extern TaskHandle_t xEncTask;
 extern TaskHandle_t xTacTask;
 extern TaskHandle_t xCanTask;
 
+namespace {
+constexpr uint32_t kBootSettleDelayMs = 10000;
+}
+
 void setup() {
     Serial.begin(921600);
 #if ENABLE_TACTILE_TASK
     tactile.prepareBootSelectPins();
 #endif
-    delay(20000);
+    delay(kBootSettleDelayMs);
     Serial.println("\n\n--- System Boot (XSimple AI) ---");
 
 #if ESP_IDF_VERSION_MAJOR >= 5
