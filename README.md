@@ -1,30 +1,25 @@
-本版主要改动 README
-本文简述当前 cl 分支这一版的主要修改点，方便后续审查、测试和继续开发。
-注：本版pid参数适用于我的灵巧手，若参数不符需要自行调整，触觉有问题尚未调通
-1. 电机直控与姿态按钮
-Joint Channels 中的 Open Pose / Fist Pose / Zero Pose 仍然走关节负反馈目标。
-Motor Channels / 直控模式中的全局按钮和关节模式区分语义，直控侧用于电机原始控制。
-直控模式的 Release Half Turn 会让当前 active/选中的电机松半圈绳，未选中的电机不动作。
-直控模式每个 Send 只控制对应舵机，发送后清空 UI 输入，避免影响下一次指令。
-已清理或调整重复/无效按钮逻辑，例如 Home、Save PID ABS 等。
-2. Calibration Save / Load
-标定完成后，标定结果会自动保存到上位机本地 JSON。
-新增 Calib Load，用于机械状态未改变时手动恢复上次标定，避免重复标定。
-适用场景包括上位机重启、下位机未断电、或排障后确认机械状态未变化。
-故障清除流程会显示故障类型，并提示用户是否需要恢复之前的 calibration。
-3. 日志与故障显示
-默认降低/取消高频 [RX diag] / [TX diag] 传输速率刷屏。
-上位机关闭时保存最近终端环形日志到： desktop/logs/session_YYYYMMDD_HHMMSS.log
-日志目录不加入 Git。
-overload 故障会在上位机显示具体超载电机和当时 load。
-出现运行故障时会进入 STOP/故障处理流程，Clear Fault 提供中文确认提示。
-4. 遥操窗口 UI
-遥操关节选择区改为更紧凑的按手指分列布局。
-支持单指全选、全手选择，也支持选择特定几个关节。
-未选中的关节在 MANUS 遥操发送时保持当前反馈角，不被手套数据覆盖。
-5. MANUS 手套遥操整合
-保留旧版 TCP Bridge 链路： MANUS 手套 -> MANUS Core -> manus_bridge_test -> TCP -> mmhand desktop
-新增 Direct SDK 链路： MANUS 手套 -> MANUS Core -> MANUS C++ SDK -> mmhand_manus_sdk.dll -> mmhand desktop
-两种输入源共用 Open/Close 校准、归一化、J00-J20 关节映射和 Enable Joint Send 门控。
-Direct SDK 包装层源码已接入；真实运行需要 MANUS Core 启动并连接手套。
-更详细说明见 docs/manus_teleop_chain.md。
+注：本版pid参数适用于我的灵巧手，若参数不符需要自行调整
+本次提交改进说明
+本文简要记录当前 cl 分支相对上一版提交的主要改进点，便于回看、测试和后续继续开发。
+
+主要改进
+自动标定顺序调整：全手标定改为从大拇指到小拇指，单个手指内部仍保持关节编号从小到大的顺序。
+S3 启动等待时间优化：上电等待从 20 秒缩短到 10 秒，减少烧录和调试等待。
+触觉映射调整：触觉逻辑组映射与当前装配和上位机显示链路重新对齐。
+上位机触觉窗口增强：加入 S3 触觉串口选择、连接、断开和状态提示，不再必须通过命令行指定触觉串口。
+触觉显示优化：补充手掌/手指轮廓辅助绘制，使触觉点阵更容易看出手型结构。
+触觉串口链路增强：上位机独立触觉串口解析、状态合并和 UI 更新链路更完整。
+通信文档更新：补充通信帧、校验和调试说明，方便后续排查 CAN、串口和上位机协议问题。
+未提交内容
+以下内容属于本机状态或运行数据，本次不作为代码更新提交：
+
+run_data/
+desktop/logs/
+desktop/multiturn_cache.json
+.vscode/ 本机 IDE 配置
+desktop/config/calib_load_snapshot.json 实机标定快照
+嵌套旧副本 mmhand-main/
+测试提示
+烧录 S3 后建议确认磁编和触觉数据均能稳定上报。
+打开上位机后，在触觉窗口选择 S3 串口并连接，确认触觉点阵不再间歇性显示 No tactile data。
+全手自动标定时，确认执行顺序为大拇指到小拇指。
