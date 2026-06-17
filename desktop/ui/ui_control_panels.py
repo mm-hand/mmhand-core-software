@@ -119,17 +119,22 @@ FINGER_JOINT_RANGES = [
     ("Thumb J16-J20", 16, 20),
 ]
 
-FINGER_JOINT_ORDER = {
-    # Thumb rows follow the physical chain order J16 -> J20.
-    "Thumb J16-J20": [16, 17, 18, 19, 20],
+FINGER_WORKFLOW_JOINT_ORDER = {
+    # Thumb workflow order follows the physical chain from fingertip to root.
+    # UI tables still display joints by numeric Jxx order.
+    "Thumb J16-J20": [19, 18, 17, 16, 20],
 }
 
 
 def _joint_indices_for_group(group_label: str, joint_start: int, joint_end: int) -> List[int]:
-    custom = FINGER_JOINT_ORDER.get(group_label)
+    return list(range(joint_start, joint_end + 1))
+
+
+def _workflow_joint_indices_for_group(group_label: str, joint_start: int, joint_end: int) -> List[int]:
+    custom = FINGER_WORKFLOW_JOINT_ORDER.get(group_label)
     if custom:
         return [idx for idx in custom if joint_start <= idx <= joint_end]
-    return list(range(joint_start, joint_end + 1))
+    return _joint_indices_for_group(group_label, joint_start, joint_end)
 
 
 def _joint_group_mask(group_label: str, joint_start: int, joint_end: int) -> int:
@@ -137,6 +142,20 @@ def _joint_group_mask(group_label: str, joint_start: int, joint_end: int) -> int
     for joint_idx in _joint_indices_for_group(group_label, joint_start, joint_end):
         mask |= (1 << joint_idx)
     return mask
+
+
+def _ordered_joint_indices_from_mask(joint_mask: int) -> List[int]:
+    ordered: List[int] = []
+    seen = set()
+    for group_label, joint_start, joint_end in FINGER_JOINT_RANGES:
+        for joint_idx in _workflow_joint_indices_for_group(group_label, joint_start, joint_end):
+            if (int(joint_mask) & (1 << joint_idx)) != 0:
+                ordered.append(joint_idx)
+                seen.add(joint_idx)
+    for joint_idx in range(ENCODER_COUNT):
+        if joint_idx not in seen and (int(joint_mask) & (1 << joint_idx)) != 0:
+            ordered.append(joint_idx)
+    return ordered
 
 
 def _joint_rows_by_finger_group() -> Tuple[List[int], List[Tuple[int, int, str]]]:
@@ -584,6 +603,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.calib_load_btn = None
         self.open_btn = None
         self.release_half_turn_btn = None
+        self.tighten_half_turn_btn = None
         self.fist_btn = None
         self.zero_btn = None
         self.tabs = None
@@ -673,11 +693,20 @@ class ControlPanel(QtWidgets.QWidget):
         self.calib_load_btn.setToolTip("Load the last saved calibration snapshot when mechanics have not changed")
         self.open_btn = QtWidgets.QPushButton("Open Pose")
         self.release_half_turn_btn = QtWidgets.QPushButton("Release Half Turn")
+        self.tighten_half_turn_btn = QtWidgets.QPushButton("Tighten Half Turn")
         self.fist_btn = QtWidgets.QPushButton("Fist Pose")
         self.zero_btn = QtWidgets.QPushButton("Zero Pose")
         wf_layout.addWidget(self.manual_check)
         wf_layout.addStretch(1)
-        for btn in [self.calib_load_btn, self.open_btn, self.release_half_turn_btn, self.fist_btn, self.zero_btn, self.send_all_btn]:
+        for btn in [
+            self.calib_load_btn,
+            self.open_btn,
+            self.release_half_turn_btn,
+            self.tighten_half_turn_btn,
+            self.fist_btn,
+            self.zero_btn,
+            self.send_all_btn,
+        ]:
             wf_layout.addWidget(btn)
         layout.addWidget(workflow)
 
@@ -686,6 +715,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.calib_load_btn.clicked.connect(lambda _checked=False: self.load_calibration_snapshot())
         self.open_btn.clicked.connect(lambda _checked=False: self.apply_preset(_preset_20rad_to_21deg(_OPEN_20_RAD)))
         self.release_half_turn_btn.clicked.connect(lambda _checked=False: self.release_all_motors_half_turn())
+        self.tighten_half_turn_btn.clicked.connect(lambda _checked=False: self.tighten_all_motors_half_turn())
         self.fist_btn.clicked.connect(lambda _checked=False: self.apply_preset(_preset_20rad_to_21deg(_FIST_20_RAD)))
         self.zero_btn.clicked.connect(lambda _checked=False: self.apply_preset([0.0] * ENCODER_COUNT))
 
@@ -1380,6 +1410,9 @@ class ControlPanel(QtWidgets.QWidget):
         if getattr(self, "release_half_turn_btn", None) is not None:
             self.release_half_turn_btn.setVisible(mode == "motor")
             self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
+        if getattr(self, "tighten_half_turn_btn", None) is not None:
+            self.tighten_half_turn_btn.setVisible(mode == "motor")
+            self.tighten_half_turn_btn.setEnabled(interaction and mode == "motor")
         if getattr(self, "calib_load_btn", None) is not None:
             can_load = (
                 bool(self.context.is_comm_connected()) and
@@ -1607,6 +1640,85 @@ class ControlPanel(QtWidgets.QWidget):
         except Exception as exc:
             self._error("Release Failed", f"{type(exc).__name__}: {exc}")
 
+    def tighten_all_motors_half_turn(self) -> None:
+        if not self._interaction_enabled:
+            return
+        if self._manual_submode() != "motor":
+            self._set_status("Tighten Half Turn is only available in Motor Channels")
+            return
+        try:
+            if not self.context.is_comm_connected():
+                raise RuntimeError("Serial port is not connected")
+            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.controller.set_pid_control(False)
+            if self._estop_latched and not self.controller.is_started():
+                self._set_status("Tighten blocked: press ENABLE after E-STOP")
+                return
+            if not self.controller.is_started():
+                self._set_status("Tighten blocked: waiting for controllable IDLE after ENABLE")
+                return
+            unknown_mask = self._active_scope_multiturn_unknown_mask()
+            if unknown_mask != 0:
+                self._set_status(f"Tighten blocked: Turn UNKNOWN 0x{unknown_mask:08X}; recover multi-turn first")
+                return
+            state = self._state
+            if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
+                self._set_status("Tighten blocked: waiting for motor ABS feedback")
+                return
+
+            active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)
+            if active_mask == 0:
+                self._set_status("Tighten blocked: no active motor selected")
+                return
+            targets = self._current_motor_hold_targets_from_feedback()
+            current_abs: List[Optional[int]] = [None] * MOTOR_COUNT
+            missing: List[str] = []
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                if (
+                    idx >= len(getattr(state, "servo_online", [])) or
+                    not state.servo_online[idx] or
+                    idx >= len(getattr(state, "servo_angles", []))
+                ):
+                    missing.append(f"M{idx:02d}")
+                    continue
+                current = clamp_motor_abs(int(state.servo_angles[idx]))
+                current_abs[idx] = current
+                targets[idx] = motor_abs_after_tendon_action(current, idx, MOTOR_RELEASE_HALF_TURN_COUNTS)
+
+            if missing:
+                self._set_status(f"Tighten blocked: waiting ABS feedback {','.join(missing[:4])}")
+                return
+
+            self.controller.set_motor_positions_absolute(targets)
+            self._motor_last_sent_abs = list(targets)
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                self._motor_session_origin_abs[idx] = int(targets[idx])
+                self._motor_abs_pos[idx] = 0
+                self._motor_last_slider[idx] = 0
+                self._motor_target_user_set[idx] = False
+                if idx < len(self.motor_target_spins) and idx < len(self.motor_sliders):
+                    self._set_motor_target_widget(idx, 0)
+
+            preview_items = []
+            for idx in range(MOTOR_COUNT):
+                if ((active_mask >> idx) & 0x01) == 0:
+                    continue
+                if current_abs[idx] is not None:
+                    preview_items.append(f"M{idx:02d}:{current_abs[idx]}->{targets[idx]}")
+                if len(preview_items) >= 4:
+                    break
+            active_count = bin(active_mask).count("1")
+            suffix = "" if active_count <= 4 else f" ... +{active_count - 4}"
+            preview = ", ".join(preview_items)
+            self.context.emit_action(f"Tighten Half Turn sent: {preview}{suffix}")
+            self._set_status(f"Tightened {active_count} active motor(s) by 1/2 turn ({MOTOR_RELEASE_HALF_TURN_COUNTS} counts)")
+        except Exception as exc:
+            self._error("Tighten Failed", f"{type(exc).__name__}: {exc}")
+
     def apply_preset(self, angles: List[float]) -> None:
         if not self._interaction_enabled:
             return
@@ -1751,10 +1863,7 @@ class ControlPanel(QtWidgets.QWidget):
         data = self._current_active_scope_tuple()
         if data is not None:
             _motor_mask, joint_mask, _require_can = data
-            return [
-                idx for idx in range(ENCODER_COUNT)
-                if (int(joint_mask) & (1 << idx)) != 0
-            ]
+            return _ordered_joint_indices_from_mask(int(joint_mask))
         return list(AUTO_CALIBRATION_JOINT_INDICES)
 
     def _dual_rope_init_motors_for_joint(self, joint_idx: int) -> Optional[Tuple[int, int]]:

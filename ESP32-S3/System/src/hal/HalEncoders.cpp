@@ -136,7 +136,11 @@ uint8_t HalEncoders::remapGroupIndex(uint8_t groupCount, uint8_t transferIndex) 
     }
 
     if (groupCount == 5) {
-        static constexpr uint8_t kOldToNew[5] = {0, 1, 2, 4, 3};
+        // Thumb physical encoder chain order is fingertip to root:
+        // J19, J18, J17, J16, J20. Keep uploaded indices in logical J16..J20 slots.
+        // Verified on hardware: the J18/J19 encoder slots are crossed relative to
+        // the first-pass thumb remap, so only those two logical slots are swapped.
+        static constexpr uint8_t kOldToNew[5] = {4, 0, 1, 3, 2};
         return kOldToNew[originalIndex];
     }
 
