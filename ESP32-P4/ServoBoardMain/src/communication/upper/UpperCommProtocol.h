@@ -1,4 +1,4 @@
-﻿#ifndef UPPER_COMM_PROTOCOL_H
+#ifndef UPPER_COMM_PROTOCOL_H
 #define UPPER_COMM_PROTOCOL_H
 
 #include <Arduino.h>
@@ -43,7 +43,7 @@
 #define CMD_PAUSE 0xD9
 #define CMD_RESTORE_MULTITURN 0xDA
 #define CMD_MOTOR_ABS_LIMIT_LOCK 0xDB
-// 涓婁綅鏈哄湪绾垮績璺筹紱鑸垫満浠诲姟閫氳繃涓㈠け heartbeat 鍒ゆ柇鏄惁瑙﹀彂 NVS 澶囦唤銆?#define CMD_HOST_HEARTBEAT 0xDC
+// Host heartbeat; servo tasks use missed heartbeats to decide whether to trigger NVS backup.
 #define CMD_MULTITURN_NVS_CONTROL 0xDD
 #define CMD_HOST_HEARTBEAT 0xDC
 #define CMD_CALIB_LOAD_JOINT 0xDF

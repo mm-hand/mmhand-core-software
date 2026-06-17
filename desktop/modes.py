@@ -4,7 +4,7 @@ import threading
 from enum import Enum
 from typing import Optional
 
-from core_logic import HandController
+from hand_backend import HandBackend
 
 # Keep this as a fallback only; runtime pose source is decided in ui_main.py.
 POSE_DISPLAY_FROM_TEXT = False
@@ -17,15 +17,15 @@ class Mode(Enum):
 
 
 def _run_monitor_gui(
-    controller: HandController,
+    backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
 ) -> None:
-    controller.reset()
+    backend.reset()
     # 涓嬩綅鏈?start 涓庢樉绀虹敱涓荤晫闈?[Start]/[Stop] 鎺у埗
     from ui_main import HandGUI
     gui_win = HandGUI(
-        controller,
+        backend,
         title_suffix="Monitor",
         current_port=port,
         current_mode="Monitor",
@@ -37,52 +37,52 @@ def _run_monitor_gui(
 
 
 def _run_teleop_gui(
-    controller: HandController,
+    backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
 ) -> None:
-    controller.reset()
+    backend.reset()
     try:
         from teleop.example_teleop import run as teleop_run
     except ImportError:
-        print("teleop.example_teleop module not found. Please implement run(controller, port=None).")
+        print("teleop.example_teleop module not found. Please implement run(backend, port=None).")
         return
     if not callable(teleop_run):
-        print("example_teleop.run must be callable: run(controller, port).")
+        print("example_teleop.run must be callable: run(backend, port).")
         return
     try:
-        teleop_run(controller, port, tactile_port=tactile_port)
+        teleop_run(backend, port, tactile_port=tactile_port)
     except TypeError as exc:
         if "tactile_port" not in str(exc):
             raise
-        teleop_run(controller, port)
+        teleop_run(backend, port)
 
 
 def _run_algorithm_gui(
-    controller: HandController,
+    backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
 ) -> None:
-    controller.reset()
+    backend.reset()
     try:
         from algorithm.example_algorithm import run as algorithm_run
     except ImportError:
-        print("algorithm.example_algorithm module not found. Please implement run(controller, stop_event=None).")
+        print("algorithm.example_algorithm module not found. Please implement run(backend, stop_event=None).")
         return
     if not callable(algorithm_run):
-        print("example_algorithm.run must be callable: run(controller, stop_event=None).")
+        print("example_algorithm.run must be callable: run(backend, stop_event=None).")
         return
 
     stop_event = threading.Event()
 
     def run_alg():
-        algorithm_run(controller, stop_event=stop_event)
+        algorithm_run(backend, stop_event=stop_event)
 
     alg_thread = threading.Thread(target=run_alg, daemon=False)
     alg_thread.start()
     from ui_main import HandGUI
     gui_win = HandGUI(
-        controller,
+        backend,
         title_suffix="Algorithm",
         current_port=port,
         current_mode="Algorithm",
@@ -97,7 +97,7 @@ def _run_algorithm_gui(
 
 def run(
     mode: Mode,
-    controller: HandController,
+    backend: HandBackend,
     *,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
@@ -107,16 +107,19 @@ def run(
     Unified GUI entrypoint for all modes.
     The `gui` argument is kept only for backward compatibility.
     """
+    if not isinstance(backend, HandBackend):
+        backend = HandBackend(backend)
+
     if mode == Mode.MONITOR:
-        _run_monitor_gui(controller, port, tactile_port)
+        _run_monitor_gui(backend, port, tactile_port)
         return
 
     if mode == Mode.TELEOP:
-        _run_teleop_gui(controller, port, tactile_port)
+        _run_teleop_gui(backend, port, tactile_port)
         return
 
     if mode == Mode.ALGORITHM:
-        _run_algorithm_gui(controller, port, tactile_port)
+        _run_algorithm_gui(backend, port, tactile_port)
         return
 
     raise ValueError(f"Unknown mode: {mode}")

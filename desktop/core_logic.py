@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from calibration import run_calibration
 from comm_layer import LowerComputerComm, list_ports
 from data_models import HandModel
 from hand_geometry import load_calib_zero_raw
@@ -589,25 +588,6 @@ class HandController:
                 v = 0.0
             out.append(v)
         return out
-
-    def calibrate(self, progress_cb=None, done_cb=None):
-        """
-        上位机主导的校准：逐关节寻零，保存至 calib_deg.json 并下发下位机。
-        progress_cb(current, total, msg)、done_cb(success, zero_raw_or_none)。
-        """
-        if self._paused:
-            return
-        if not self.comm:
-            if done_cb:
-                done_cb(False, None)
-            return
-
-        def _run():
-            result = run_calibration(self, progress_cb=progress_cb)
-            if done_cb:
-                done_cb(result is not None, result)
-
-        threading.Thread(target=_run, daemon=True).start()
 
     def request_firmware_calibration(self) -> bool:
         if not self.comm:

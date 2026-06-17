@@ -250,7 +250,7 @@ class ControlPanel(QtWidgets.QWidget):
     def __init__(self, context, parent=None):
         super().__init__(parent)
         self.context = context
-        self.controller = context.controller
+        self.backend = context.backend
         self._updating = False
         self._interaction_enabled = False
         self._control_widgets: List[QtWidgets.QWidget] = []
@@ -1360,11 +1360,11 @@ class ControlPanel(QtWidgets.QWidget):
     def _apply_control_mode_policy(self) -> None:
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         if mode == "motor":
-            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.controller.set_pid_control(False)
+            self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.backend.set_pid_control(False)
         else:
-            self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.controller.set_pid_control(bool(self._interaction_enabled))
+            self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.backend.set_pid_control(bool(self._interaction_enabled))
 
     def _update_manual_action_buttons(self) -> None:
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
@@ -1413,16 +1413,16 @@ class ControlPanel(QtWidgets.QWidget):
         mode = str(mode_name or "").lower()
         if "teleop" in mode:
             self._build_teleop_body()
-            self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.controller.set_pid_control(True)
+            self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.backend.set_pid_control(True)
         elif "algorithm" in mode:
             self._clear_body()
             self._app_mode = "algorithm"
             self._algorithm_view = AlgorithmView(self.context)
             self._body_widget = self._algorithm_view
             self.body_layout.addWidget(self._body_widget)
-            self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.controller.set_pid_control(True)
+            self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.backend.set_pid_control(True)
         else:
             self._build_manual_body()
             if self._state is not None:
@@ -1537,12 +1537,12 @@ class ControlPanel(QtWidgets.QWidget):
         try:
             if not self.context.is_comm_connected():
                 raise RuntimeError("Serial port is not connected")
-            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.controller.set_pid_control(False)
-            if self._estop_latched and not self.controller.is_started():
+            self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.backend.set_pid_control(False)
+            if self._estop_latched and not self.backend.is_started():
                 self._set_status("Release blocked: press ENABLE after E-STOP")
                 return
-            if not self.controller.is_started():
+            if not self.backend.is_started():
                 self._set_status("Release blocked: waiting for controllable IDLE after ENABLE")
                 return
             unknown_mask = self._active_scope_multiturn_unknown_mask()
@@ -1579,7 +1579,7 @@ class ControlPanel(QtWidgets.QWidget):
                 self._set_status(f"Release blocked: waiting ABS feedback {','.join(missing[:4])}")
                 return
 
-            self.controller.set_motor_positions_absolute(targets)
+            self.backend.set_motor_positions_absolute(targets)
             self._motor_last_sent_abs = list(targets)
             for idx in range(MOTOR_COUNT):
                 if ((active_mask >> idx) & 0x01) == 0:
@@ -1633,16 +1633,16 @@ class ControlPanel(QtWidgets.QWidget):
         state = self._state
         if state is not None and getattr(state, "system_state", None) == SYSTEM_STATE_PAUSED:
             self._estop_latched = False
-            self.controller.start()
+            self.backend.start()
             self.context.emit_action("Resume")
             self._set_status("Resume requested: continuing paused target")
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
-            self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.controller.set_pid_control(False)
+            self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.backend.set_pid_control(False)
             self._estop_latched = False
-            self.controller.start()
+            self.backend.start()
             self.context.emit_action(f"Enable recovery without motor target sync: unknown=0x{unknown_mask:08X}")
             self._set_status(f"Enable recovery: Turn UNKNOWN 0x{unknown_mask:08X}, direct motor commands allowed")
             return
@@ -1650,12 +1650,12 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status("Enable waits for fresh motor feedback")
             return
         targets = self._build_motor_abs_command_list()
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        self.controller.set_motor_positions_absolute(targets)
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
+        self.backend.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         self._estop_latched = False
-        self.controller.start()
+        self.backend.start()
         self.context.emit_action("Start with current motor feedback synced as target zero")
         self._set_status("Enable requested: waiting for IDLE controllable")
 
@@ -1664,7 +1664,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._estop_latched = True
         self.stop_all_tests("stopped by E-STOP", update_status=False)
         try:
-            self.controller.stop()
+            self.backend.stop()
         except Exception:
             pass
         self._clear_run_states()
@@ -1672,7 +1672,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def pause_controller(self) -> None:
         try:
-            self.controller.pause()
+            self.backend.pause()
         except Exception:
             pass
         self.context.emit_action("Pause")
@@ -1681,7 +1681,7 @@ class ControlPanel(QtWidgets.QWidget):
     def safe_close_controller(self) -> None:
         self.stop_all_tests("safe close", update_status=False)
         try:
-            self.controller.hold_current_motor_positions(delay_s=0.25)
+            self.backend.hold_current_motor_positions(delay_s=0.25)
         except Exception:
             pass
         self.context.disconnect_current_port("Safe closed: holding current motor targets, then STOP", stop_lower=True)
@@ -1743,7 +1743,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def reset_controller(self) -> None:
         self._estop_latched = True
-        self.controller.reset()
+        self.backend.reset()
         self._clear_run_states()
         self.context.emit_action("Clear Fault")
 
@@ -1857,7 +1857,7 @@ class ControlPanel(QtWidgets.QWidget):
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
                 return
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._set_status("Rope Init blocked: press ENABLE to enter IDLE first")
             return
         state = self._state
@@ -1876,8 +1876,8 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status(f"Rope Init no action: {detail or 'all selected joints are inside workspace'}")
             return
 
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
         self._rope_init_tasks = list(tasks)
         self._rope_init_started_at = time.monotonic()
         self.context.emit_action(
@@ -2005,9 +2005,9 @@ class ControlPanel(QtWidgets.QWidget):
             self._stop_rope_init(f"Rope Init complete{done_text}")
             return
 
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        self.controller.set_motor_positions_absolute(targets)
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
+        self.backend.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         for motor_idx in sorted(moved_motors):
             self._apply_rope_init_motor_target_to_ui(motor_idx, int(targets[motor_idx]))
@@ -2087,7 +2087,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status("ABS limit lock blocked: no calibrated ABS limit in current control set")
             return
         try:
-            ok = self.controller.set_motor_abs_limit_lock(mask, bool(locked))
+            ok = self.backend.set_motor_abs_limit_lock(mask, bool(locked))
         except Exception as exc:
             self._set_status(f"ABS limit lock failed: {exc}")
             return
@@ -2099,11 +2099,11 @@ class ControlPanel(QtWidgets.QWidget):
         if not self.context.is_comm_connected():
             self._set_status("Flash control blocked: serial port is not connected")
             return
-        state = self._state or self.controller.current_state
+        state = self._state or self.backend.get_current_state()
         current = bool(getattr(state, "multiturn_nvs_enabled", True))
         target = not current
         try:
-            ok = self.controller.set_multiturn_nvs_enabled(target)
+            ok = self.backend.set_multiturn_nvs_enabled(target)
         except Exception as exc:
             self._set_status(f"Flash control failed: {exc}")
             return
@@ -2625,7 +2625,7 @@ class ControlPanel(QtWidgets.QWidget):
         if reply != QtWidgets.QMessageBox.Yes:
             return
         self._set_status("Calib Load sending snapshot...")
-        ok, message = self.controller.load_calibration_snapshot(snapshot)
+        ok, message = self.backend.load_calibration_snapshot(snapshot)
         if ok:
             self._joint_target_initialized = False
             self._motor_target_initialized = False
@@ -2647,7 +2647,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status("Active scope will apply after connect")
             return False
         try:
-            ok = self.controller.set_active_scope(int(motor_mask), int(joint_mask), bool(require_can))
+            ok = self.backend.set_active_scope(int(motor_mask), int(joint_mask), bool(require_can))
         except Exception as exc:
             self._set_status(f"Active scope failed: {exc}")
             return False
@@ -2764,7 +2764,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._on_stop_local_test(reason=reason, update_status=update_status)
 
     def _guard_joint_command_started(self) -> bool:
-        self.controller.set_control_mode(ControlMode.JOINT_ANGLE)
+        self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
         if system_state not in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK):
             if self._estop_latched:
@@ -2776,11 +2776,11 @@ class ControlPanel(QtWidgets.QWidget):
             return False
         if system_state == SYSTEM_STATE_READY and not self._apply_active_scope_for_current_mode():
             return False
-        self.controller.set_pid_control(True)
+        self.backend.set_pid_control(True)
         if not self.feedback_command_allowed(show_status=True):
-            self.controller.set_pid_control(False)
+            self.backend.set_pid_control(False)
             return False
-        if self.controller.is_started():
+        if self.backend.is_started():
             return True
         if self._estop_latched:
             self._set_status("Command blocked: press ENABLE after E-STOP")
@@ -2956,12 +2956,12 @@ class ControlPanel(QtWidgets.QWidget):
             return False
         if not self.context.is_comm_connected():
             raise RuntimeError("Serial port is not connected")
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        if self._estop_latched and not self.controller.is_started():
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
+        if self._estop_latched and not self.backend.is_started():
             self._set_status("Motor command blocked: press ENABLE after E-STOP")
             return False
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._set_status("Motor command blocked: waiting for controllable IDLE after ENABLE")
             return False
         state = self._state
@@ -2979,7 +2979,7 @@ class ControlPanel(QtWidgets.QWidget):
             if self._motor_abs_pos[idx] is None:
                 self._motor_abs_pos[idx] = 0
         targets = self._build_motor_abs_command_list()
-        self.controller.set_motor_positions_absolute(targets)
+        self.backend.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         self.context.emit_action(f"Motor absolute positions sent ({trigger}): {self._motor_command_debug_summary(trigger, targets)}")
         if unknown_mask != 0:
@@ -2993,12 +2993,12 @@ class ControlPanel(QtWidgets.QWidget):
             return None
         if not self.context.is_comm_connected():
             raise RuntimeError("Serial port is not connected")
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        if self._estop_latched and not self.controller.is_started():
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
+        if self._estop_latched and not self.backend.is_started():
             self._set_status("Motor command blocked: press ENABLE after E-STOP")
             return None
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._set_status("Motor command blocked: waiting for controllable IDLE after ENABLE")
             return None
         state = self._state
@@ -3016,7 +3016,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._motor_abs_pos[idx] = 0
         targets = self._build_motor_abs_command_list()
         target_abs = int(targets[idx])
-        self.controller.set_single_motor_position_absolute(idx, target_abs)
+        self.backend.set_single_motor_position_absolute(idx, target_abs)
         if 0 <= idx < len(self._motor_last_sent_abs):
             self._motor_last_sent_abs[idx] = target_abs
         self.context.emit_action(
@@ -3088,12 +3088,12 @@ class ControlPanel(QtWidgets.QWidget):
             return
         if not self.context.is_comm_connected():
             raise RuntimeError("Serial port is not connected")
-        self.controller.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.controller.set_pid_control(False)
-        if self._estop_latched and not self.controller.is_started():
+        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
+        self.backend.set_pid_control(False)
+        if self._estop_latched and not self.backend.is_started():
             self._set_status("Motor command blocked: press ENABLE after E-STOP")
             return
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._set_status("Motor command blocked: waiting for controllable IDLE after ENABLE")
             return
         state = self._state
@@ -3103,7 +3103,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status("Motor command blocked: waiting for motor feedback")
             return
         targets = self.motor_sweep_targets()
-        self.controller.set_motor_positions_raw_sweep(targets)
+        self.backend.set_motor_positions_raw_sweep(targets)
         self.context.emit_action(f"Motor sweep positions sent ({trigger})")
 
     def _sync_motor_abs_from_slider_before_send(self, idx: int) -> None:
@@ -3199,7 +3199,7 @@ class ControlPanel(QtWidgets.QWidget):
         x1 = clamp_motor_abs(x1)
         self.joint_tie_x1_edits[joint_idx].setText(str(x1))
         saved = self.context.tendon_guard.set_joint(joint_idx, sign != 0, 1 if sign >= 0 else -1, x1)
-        self.context.tendon_guard.sync_to_controller(self.controller, force=True)
+        self.backend.sync_tendon_guard(force=True)
         if saved:
             if sign == 0:
                 self._set_status(f"tie saved: J{joint_idx} disabled, x1={x1}")
@@ -3219,7 +3219,7 @@ class ControlPanel(QtWidgets.QWidget):
             config.append({"enabled": sign != 0, "pull_sign": 1 if sign >= 0 else -1, "x1_abs": clamp_motor_abs(x1)})
         if len(config) == ENCODER_COUNT:
             self.context.tendon_guard.config = config
-        self.context.tendon_guard.sync_to_controller(self.controller, force=False)
+        self.backend.sync_tendon_guard(force=False)
 
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
@@ -3763,8 +3763,8 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._start_test_recording("local test"):
             return
         try:
-            self.controller.set_local_test_params(float(self.local_freq.value()), float(self.local_amp.value()))
-            self.controller.start_local_test()
+            self.backend.set_local_test_params(float(self.local_freq.value()), float(self.local_amp.value()))
+            self.backend.start_local_test()
         except Exception as exc:
             self.context.stop_recording_for_test("local test failed")
             self._error("Start Local Test Failed", f"{type(exc).__name__}: {exc}")
@@ -3780,7 +3780,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._local_test_running = False
         if was_running:
             try:
-                self.controller.stop_local_test()
+                self.backend.stop_local_test()
             except Exception:
                 pass
             self.context.stop_recording_for_test(reason)
@@ -3797,7 +3797,7 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._interaction_enabled:
             self._on_stop_test("stopped: Hand Manual OFF")
             return
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._on_stop_test("stopped: press Enable to start controller")
             return
         elapsed = max(0.0, time.time() - self._test_t0)
@@ -3827,7 +3827,7 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._interaction_enabled:
             self._on_stop_ff_test("stopped: Hand Manual OFF")
             return
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._on_stop_ff_test("stopped: press Enable to start controller")
             return
         if not self._ff_test_targets:
@@ -3859,7 +3859,7 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._interaction_enabled:
             self._on_stop_tri_test("stopped: Hand Manual OFF")
             return
-        if not self.controller.is_started():
+        if not self.backend.is_started():
             self._on_stop_tri_test("stopped: press Enable to start controller")
             return
         elapsed = max(0.0, time.time() - self._tri_test_t0)
@@ -3884,4 +3884,3 @@ class ControlPanel(QtWidgets.QWidget):
             self.joint_sliders[idx].setValue(int(round(float(value) * 100.0)))
         finally:
             self._updating = False
-

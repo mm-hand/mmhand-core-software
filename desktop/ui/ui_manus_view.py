@@ -411,8 +411,8 @@ class ManusUdpView(QtWidgets.QWidget):
                 self._set_status("MANUS joint send blocked: record/load Open and Close first")
                 return
             try:
-                self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-                self.context.controller.set_pid_control(True)
+                self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+                self.context.backend.set_pid_control(True)
             except Exception as exc:
                 self._set_joint_send_enabled(False)
                 self._set_status(f"MANUS joint send failed to arm: {exc}")
@@ -423,7 +423,7 @@ class ManusUdpView(QtWidgets.QWidget):
         else:
             self._set_joint_send_enabled(False)
             try:
-                self.context.controller.invalidate_joint_commands()
+                self.context.backend.invalidate_joint_commands()
             except Exception:
                 pass
             self.calib_status_label.setText("MANUS joint send stopped; preview only until Send is pressed")
@@ -464,8 +464,8 @@ class ManusUdpView(QtWidgets.QWidget):
                 self._set_status("MANUS joint send blocked: no teleop joint selected")
             return
         try:
-            self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.context.controller.set_pid_control(True)
+            self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.context.backend.set_pid_control(True)
             self.context.send_joint_targets(selected_targets, source="MANUS left glove joint send", live=True)
             self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
@@ -614,7 +614,7 @@ class ManusUdpView(QtWidgets.QWidget):
     def closeEvent(self, event):  # noqa: N802 - Qt override
         self._timer.stop()
         try:
-            self.context.controller.invalidate_joint_commands()
+            self.context.backend.invalidate_joint_commands()
         except Exception:
             pass
         self._set_joint_send_enabled(False)

@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-from comm_layer import list_ports
+from hand_backend import list_ports
 from data_models import (
     HandModel,
     FingerTactile,

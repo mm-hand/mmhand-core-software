@@ -2,7 +2,7 @@
 
 import argparse
 
-from core_logic import HandController
+from hand_backend import HandBackend
 from modes import Mode, run
 
 
@@ -49,19 +49,19 @@ def main():
         port = args.port
         tactile_port = args.tactile_port
 
-        controller = HandController()
+        backend = HandBackend()
         if port:
-            if controller.initialize(port):
+            if backend.connect(port):
                 print(f"已连接 {port}")
             else:
                 print("连接失败，将以未连接状态启动 GUI")
 
         # 根据启动模式配置 PID 初值；后续可在 GUI 中继续切换模式
         if run_mode == Mode.MONITOR:
-            controller.set_pid_control(False)
+            backend.set_pid_control(False)
         else:
-            controller.set_pid_control(True)
-        run(run_mode, controller, port=port, tactile_port=tactile_port, gui=show_gui)
+            backend.set_pid_control(True)
+        run(run_mode, backend, port=port, tactile_port=tactile_port, gui=show_gui)
 
     else:
         print("无效的应用模式，退出")

@@ -3,9 +3,8 @@ import time
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from comm_layer import TactileSerialComm, list_ports
-from core_logic import HandController
 from data_models import HandModel
+from hand_backend import HandBackend, list_ports
 from protocol import (
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -27,7 +26,7 @@ from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
 from .ui_services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
-from .ui_tendon_guard import TendonGuard, MOTOR_TO_JOINT_INDEX
+from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
 from .ui_windows import DisplayWindowManager
 
 
@@ -40,7 +39,7 @@ CAMERA_UI_POLL_MS = 50
 class HandGUI(QtWidgets.QMainWindow):
     def __init__(
         self,
-        controller: HandController,
+        backend: HandBackend,
         title_suffix: str = "",
         current_port: Optional[str] = None,
         current_mode: Optional[str] = None,
@@ -53,7 +52,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
         super().__init__()
-        self.controller = controller
+        self.backend = backend if isinstance(backend, HandBackend) else HandBackend(backend)
         self.current_port = current_port or ""
         self.current_mode = self._normalize_mode(current_mode or "Monitor")
         self._on_close_extra = on_close_extra
@@ -61,7 +60,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._pose_generate = bool(pose_generate)
         self._pose_generate_path = pose_generate_path or os.path.join(DESKTOP_DIR, "pose_fist_21deg.txt")
         self.tactile_port = tactile_port or ""
-        self.tactile_comm: Optional[TactileSerialComm] = None
         self._tactile_state: Optional[HandModel] = None
         self._state: Optional[HandModel] = None
         self._state_buffer = LatestStateBuffer()
@@ -80,9 +78,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
         self.context = HandGuiContext(self)
-        self.tendon_guard = TendonGuard(os.path.join(DESKTOP_DIR, "config", "tendon_manual_calib.json"))
+        self.tendon_guard = self.backend.tendon_guard
 
-        self.controller.register_update_callback(self._on_state_update)
+        self.backend.register_update_callback(self._on_state_update)
         self.setWindowTitle(f"{ENCODER_COUNT}-DOF Dexterous Hand Control System" + (f" - {title_suffix}" if title_suffix else ""))
         apply_main_window_defaults(self)
         self._build_ui()
@@ -290,11 +288,7 @@ class HandGUI(QtWidgets.QMainWindow):
         return self._connect_selected_port()
 
     def _ensure_state_callback_registered(self) -> None:
-        try:
-            if self._on_state_update not in self.controller.update_callbacks:
-                self.controller.register_update_callback(self._on_state_update)
-        except Exception:
-            pass
+        self.backend.register_update_callback(self._on_state_update)
 
     def _on_port_selection_changed(self) -> None:
         port = self.port_combo.currentData()
@@ -316,7 +310,7 @@ class HandGUI(QtWidgets.QMainWindow):
     def _disconnect_current_port(self, status: str = "Disconnected", clear_selection: bool = True, stop_lower: bool = False) -> None:
         self._stop_data_recording("disconnected")
         self.control_panel.stop_all_tests("disconnected", update_status=False)
-        self.controller.shutdown(stop_lower=stop_lower)
+        self.backend.shutdown(stop_lower=stop_lower)
         self.current_port = ""
         self._state = None
         self._state_buffer_version = 0
@@ -346,9 +340,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state_buffer = LatestStateBuffer()
         self._clear_live_displays()
         self._set_status("Connecting: waiting for lower status and servo feedback")
-        if self.controller.initialize(port):
+        if self.backend.connect(port):
             self.current_port = str(port)
-            sync_status = getattr(self.controller, "last_sync_status", "")
+            sync_status = self.backend.last_sync_status
             self._set_status(f"Connected: {self.current_port}" + (f" | {sync_status}" if sync_status else ""))
             self._on_comm_ready()
             return True
@@ -358,7 +352,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _switch_mode(self, mode_name: str) -> None:
         self.current_mode = self._normalize_mode(mode_name)
-        self.controller.set_pid_control(self.current_mode != "Monitor")
+        self.backend.set_pid_control(self.current_mode != "Monitor")
         self.control_panel.sync_app_mode(self.current_mode)
         self._sync_mode_actions()
         self._set_status(f"Mode: {self._mode_display_name(self.current_mode)}")
@@ -369,7 +363,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self.control_panel._on_active_scope_changed()
         except Exception:
             pass
-        self.tendon_guard.sync_to_controller(self.controller, force=True)
+        self.backend.sync_tendon_guard(force=True)
         if self.save_data_check.isChecked() and not self._data_logger.is_running():
             self._start_data_recording()
 
@@ -392,39 +386,17 @@ class HandGUI(QtWidgets.QMainWindow):
             self._write_run_data_row(state)
 
     def _consume_tactile_state(self) -> bool:
-        comm = self.tactile_comm
-        if comm is None:
-            return False
-        latest = comm.get_latest_model()
-        if latest is None:
-            return False
-        self._tactile_state = latest
-        if self._state is None:
-            self._state = HandModel()
-        self._merge_tactile_state(self._state, latest)
-        return True
-
-    @staticmethod
-    def _merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
-        state.tactile_data = list(getattr(tactile_state, "tactile_data", []) or [])
-        state.tactile_summary_seq = getattr(tactile_state, "tactile_summary_seq", None)
-        state.tactile_full_seq = getattr(tactile_state, "tactile_full_seq", None)
-        state.tactile_full_summary_seq = getattr(tactile_state, "tactile_full_summary_seq", None)
-        state.tactile_full_crc = getattr(tactile_state, "tactile_full_crc", None)
-        state.tactile_full_crc_errors = int(getattr(tactile_state, "tactile_full_crc_errors", 0))
-        state.tactile_full_seq_mismatches = int(getattr(tactile_state, "tactile_full_seq_mismatches", 0))
-        state.tactile_full_dropped = int(getattr(tactile_state, "tactile_full_dropped", 0))
-        ts = float(getattr(tactile_state, "timestamp", 0.0) or 0.0)
-        if ts > 0:
-            state.timestamp = ts
+        has_new, state = self.backend.consume_tactile_state_into(self._state)
+        if has_new:
+            self._state = state or HandModel()
+            self._tactile_state = self._state
+        return bool(has_new)
 
     def _start_tactile_port(self, port: str) -> bool:
-        self._stop_tactile_port()
         if not port:
             return False
-        comm = TactileSerialComm(port)
         try:
-            ok = comm.connect()
+            ok = self.backend.connect_tactile_serial(port)
         except Exception as exc:
             self._set_status(f"S3 tactile serial failed: {exc}")
             return False
@@ -432,18 +404,12 @@ class HandGUI(QtWidgets.QMainWindow):
             self._set_status(f"S3 tactile serial failed: {port}")
             return False
         self.tactile_port = port
-        self.tactile_comm = comm
         self._tactile_state = None
         self._set_status(f"S3 tactile serial connected: {port}")
         return True
 
     def _stop_tactile_port(self) -> None:
-        if self.tactile_comm is not None:
-            try:
-                self.tactile_comm.disconnect()
-            except Exception:
-                pass
-            self.tactile_comm = None
+        self.backend.disconnect_tactile_serial()
         self._tactile_state = None
 
     def connect_tactile_serial(self, port: str) -> bool:
@@ -454,12 +420,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self._set_status("S3 tactile serial disconnected")
 
     def is_tactile_serial_connected(self) -> bool:
-        comm = self.tactile_comm
-        serial_obj = getattr(comm, "serial", None) if comm is not None else None
-        return bool(comm is not None and serial_obj is not None and getattr(serial_obj, "is_open", False))
+        return self.backend.is_tactile_serial_connected()
 
     def get_tactile_serial_port(self) -> str:
-        return self.tactile_port or ""
+        return self.backend.get_tactile_serial_port() or self.tactile_port or ""
 
     def _update_display(self, state: HandModel) -> None:
         now = time.time()
@@ -728,7 +692,7 @@ class HandGUI(QtWidgets.QMainWindow):
             except Exception:
                 pass
             try:
-                self.controller.stop()
+                self.backend.stop()
             except Exception:
                 pass
             log_session("FAULT", f"stop requested: {summary.get('key')} {summary.get('title')}")
@@ -871,17 +835,10 @@ class HandGUI(QtWidgets.QMainWindow):
             self.control_panel._refresh_tendon_guard_from_ui()
         except Exception:
             pass
-        self.tendon_guard.sync_to_controller(self.controller, force=False)
-        guarded, blocked, msg = self.tendon_guard.apply(self._state or self.controller.current_state, angles, source=source)
-        if msg:
-            self._set_status(msg)
-        if live:
-            self.controller.set_target_angles_live(guarded)
-        else:
-            self.controller.set_target_angles(guarded)
-        if source and not blocked and not str(source).startswith("Hold"):
-            self.controller.request_run_feedback()
-        if source and not blocked:
+        result = self.backend.send_joint_targets(angles, source=source, live=live)
+        if result.message:
+            self._set_status(result.message)
+        if source and not result.blocked:
             self.emit_action(source)
 
     def draw_pose_angles(self, angles: List[float]) -> None:
@@ -894,7 +851,7 @@ class HandGUI(QtWidgets.QMainWindow):
         if not self.is_comm_connected():
             if not self._connect_selected_port():
                 return
-        if self.controller.request_firmware_calibration():
+        if self.backend.request_firmware_calibration():
             self._set_status("Calibration command sent")
             self.emit_action("Calibrate")
         else:
@@ -954,7 +911,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "host_time": time.time(),
             "device_timestamp": getattr(state, "timestamp", 0.0),
             "mode": self.current_mode,
-            "controller_started": 1 if self.controller.is_started() else 0,
+            "controller_started": 1 if self.backend.is_started() else 0,
             "calib_status": getattr(state, "calib_status", ""),
             "active_scope_label": scope_label,
             "active_motor_mask_hex": active_motor_mask,
@@ -1072,26 +1029,18 @@ class HandGUI(QtWidgets.QMainWindow):
         return 0
 
     def _start_joint_debug_packet_log(self, csv_path: str) -> None:
-        comm = getattr(self.controller, "comm", None)
-        starter = getattr(comm, "start_joint_debug_packet_log", None)
-        if starter is None:
-            self._joint_debug_csv_path = ""
-            return
         path = self._build_joint_debug_packet_csv_path(csv_path)
         try:
-            starter(path)
+            if not self.backend.start_joint_debug_packet_log(path):
+                self._joint_debug_csv_path = ""
+                return
             self._joint_debug_csv_path = path
         except Exception:
             self._joint_debug_csv_path = ""
 
     def _stop_joint_debug_packet_log(self) -> None:
-        comm = getattr(self.controller, "comm", None)
-        stopper = getattr(comm, "stop_joint_debug_packet_log", None)
-        if stopper is None:
-            self._joint_debug_csv_path = ""
-            return
         try:
-            stopper()
+            self.backend.stop_joint_debug_packet_log()
         finally:
             pass
 
@@ -1126,7 +1075,7 @@ class HandGUI(QtWidgets.QMainWindow):
         return max(vals) if vals else 0.0
 
     def show_servo_status_dialog(self) -> None:
-        state = self._state or self.controller.current_state
+        state = self._state or self.backend.get_current_state()
         rows = []
         for idx in range(MOTOR_COUNT):
             joint_idx = MOTOR_TO_JOINT_INDEX[idx] if idx < len(MOTOR_TO_JOINT_INDEX) else -1
@@ -1140,25 +1089,19 @@ class HandGUI(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Servo Status", "\n".join(rows))
 
     def show_protocol_status_dialog(self) -> None:
-        comm = getattr(self.controller, "comm", None)
         lines = [
             f"Port: {self.current_port or '-'}",
             f"Connected: {self.is_comm_connected()}",
-            f"Started: {self.controller.is_started()}",
+            f"Started: {self.backend.is_started()}",
             f"Mode: {self.current_mode}",
             f"Recording: {self._data_logger.is_running()}",
         ]
-        if comm is not None:
-            for name in [
-                "_rx_diag_total_packets", "_rx_diag_sensor_packets", "_rx_diag_joint_debug_packets",
-                "_rx_diag_bytes", "_tx_diag_total_cmds", "_tx_diag_angle_live_cmds", "_tx_diag_bytes",
-            ]:
-                lines.append(f"{name}: {getattr(comm, name, '-')}")
+        for name, value in self.backend.protocol_diag_items():
+            lines.append(f"{name}: {value}")
         QtWidgets.QMessageBox.information(self, "Protocol / Comm Status", "\n".join(lines))
 
     def is_comm_connected(self) -> bool:
-        comm = getattr(self.controller, "comm", None)
-        return bool(comm and getattr(comm, "serial", None) and getattr(comm.serial, "is_open", False))
+        return self.backend.is_comm_connected()
 
     def request_redraw(self) -> None:
         self._update_display(self._state or HandModel())
@@ -1187,7 +1130,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.control_panel.stop_controller()
 
     def _refresh_start_indicator(self) -> None:
-        started = bool(self.controller.is_started())
+        started = bool(self.backend.is_started())
         self.start_indicator.setText("RUN" if started else "STOP")
         self.start_indicator.setStyleSheet(
             "background:#1e8e3e;color:white;padding:4px;" if started else "background:#c62828;color:white;padding:4px;"
@@ -1244,10 +1187,11 @@ class HandGUI(QtWidgets.QMainWindow):
             self._stop_data_recording("closed")
             self._stop_tactile_port()
             try:
-                self.controller.hold_current_motor_positions(delay_s=0.15)
+                self.backend.hold_current_motor_positions(delay_s=0.15)
             except Exception:
                 pass
-            self.controller.shutdown(stop_lower=True)
+            self.backend.shutdown(stop_lower=True)
+            self.backend.unregister_update_callback(self._on_state_update)
             if self._on_close_extra:
                 self._on_close_extra()
         finally:
