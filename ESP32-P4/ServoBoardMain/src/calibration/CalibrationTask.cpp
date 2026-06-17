@@ -21,11 +21,11 @@ JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 
 extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1,  1, -1, -1, 1
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1, -1
 };
 
 // Runtime encoder direction. It starts from the default installation table, and
@@ -33,11 +33,11 @@ extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
 // learning direction from noisy travel samples. Angle display, manual
 // calibration, and PID all read this table.
 int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1, -1, -1,  1,
-    1,  1, -1, -1, 1
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1,
+    -1, -1, -1,  1, -1
 };
 
 void resetEncoderDirectionsToDefault(void)
