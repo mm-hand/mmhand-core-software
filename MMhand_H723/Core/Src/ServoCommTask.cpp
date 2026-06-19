@@ -31,6 +31,8 @@ static constexpr uint32_t SERVO_MULTI_TURN_CONFIG_DELAY_MS = 5U;
 static constexpr uint32_t SERVO_TASK_PERIOD_MS = 10U;
 static constexpr uint32_t SERVO_ACK_TIMEOUT_MS = 8U;
 static constexpr uint32_t SERVO_READ_TIMEOUT_MS = 8U;
+static constexpr uint16_t SERVO_DMA_RX_BUFFER_SIZE = 256U;
+static constexpr uint16_t SERVO_DMA_TX_BUFFER_SIZE = 128U;
 static constexpr uint32_t kBootRecoverLimitToRawWindowMs = 8000U;
 static constexpr int32_t kServoAbsLimit = 30719;
 static constexpr int32_t kServoAbsLimitRecoverMargin = 16;
@@ -164,7 +166,9 @@ public:
           rxCount(0U),
           timeoutCount(0U),
           checksumErrorCount(0U),
-          invalidFrameCount(0U)
+          invalidFrameCount(0U),
+          rxReadIndex(0U),
+          rxDmaStarted(false)
     {
         std::memset(feedback, 0, sizeof(feedback));
         std::memset(torqueDisabled, 0, sizeof(torqueDisabled));
@@ -172,12 +176,15 @@ public:
         std::memset(writePos, 0, sizeof(writePos));
         std::memset(writeSpd, 0, sizeof(writeSpd));
         std::memset(writeAcc, 0, sizeof(writeAcc));
+        std::memset(rxDmaBuffer, 0, sizeof(rxDmaBuffer));
+        std::memset(txDmaBuffer, 0, sizeof(txDmaBuffer));
     }
 
     void begin(uint8_t index, UART_HandleTypeDef *handle)
     {
         busIndex = index;
         uart = handle;
+        startRxDma();
     }
 
     bool configureMultiTurnMode(uint8_t id)
@@ -251,7 +258,7 @@ public:
         frame[idx++] = checksum(&frame[2], sumLen);
 
         clearRx();
-        if (HAL_UART_Transmit(uart, frame, idx, SERVO_ACK_TIMEOUT_MS) == HAL_OK) {
+        if (transmitFrame(frame, idx, SERVO_ACK_TIMEOUT_MS)) {
             txCount++;
             servoComm.txFrameCount++;
             servoComm.recordTx(frame, idx);
@@ -285,7 +292,7 @@ public:
         frame[idx++] = checksum(&frame[2], sumLen);
 
         clearRx();
-        if (HAL_UART_Transmit(uart, frame, idx, SERVO_ACK_TIMEOUT_MS) != HAL_OK) {
+        if (!transmitFrame(frame, idx, SERVO_ACK_TIMEOUT_MS)) {
             timeoutCount++;
             servoComm.timeoutCount++;
             return 0;
@@ -478,15 +485,116 @@ private:
         return static_cast<int16_t>(value & 0x03FFU);
     }
 
+    bool startRxDma()
+    {
+        if ((uart == nullptr) || (uart->hdmarx == nullptr)) {
+            rxDmaStarted = false;
+            return false;
+        }
+
+        if (uart->RxState == HAL_UART_STATE_BUSY_RX) {
+            if (!rxDmaStarted) {
+                rxReadIndex = dmaWriteIndex();
+            }
+            rxDmaStarted = true;
+            return true;
+        }
+
+        if (HAL_UART_Receive_DMA(uart, rxDmaBuffer, sizeof(rxDmaBuffer)) != HAL_OK) {
+            rxDmaStarted = false;
+            return false;
+        }
+
+        __HAL_DMA_DISABLE_IT(uart->hdmarx, DMA_IT_HT);
+        rxReadIndex = dmaWriteIndex();
+        rxDmaStarted = true;
+        return true;
+    }
+
+    uint16_t dmaWriteIndex() const
+    {
+        if ((uart == nullptr) || (uart->hdmarx == nullptr)) {
+            return 0U;
+        }
+
+        const uint16_t size = static_cast<uint16_t>(sizeof(rxDmaBuffer));
+        const uint16_t remaining = static_cast<uint16_t>(__HAL_DMA_GET_COUNTER(uart->hdmarx));
+        if (remaining >= size) {
+            return 0U;
+        }
+        const uint16_t writeIndex = static_cast<uint16_t>(size - remaining);
+        if (writeIndex >= size) {
+            return 0U;
+        }
+        return writeIndex;
+    }
+
+    bool waitForTxReady(uint32_t timeoutMs)
+    {
+        const uint32_t start = HAL_GetTick();
+        while (uart->gState != HAL_UART_STATE_READY) {
+            if ((HAL_GetTick() - start) > timeoutMs) {
+                return false;
+            }
+            taskYIELD();
+        }
+        return true;
+    }
+
+    bool transmitFrame(const uint8_t *frame, uint16_t len, uint32_t timeoutMs)
+    {
+        if ((uart == nullptr) || (frame == nullptr) || (len == 0U)) {
+            return false;
+        }
+
+        if ((uart->hdmatx == nullptr) || (len > sizeof(txDmaBuffer))) {
+            return HAL_UART_Transmit(uart, const_cast<uint8_t *>(frame), len, timeoutMs) == HAL_OK;
+        }
+
+        if (!waitForTxReady(timeoutMs)) {
+            HAL_UART_AbortTransmit(uart);
+            return false;
+        }
+
+        std::memcpy(txDmaBuffer, frame, len);
+        if (HAL_UART_Transmit_DMA(uart, txDmaBuffer, len) != HAL_OK) {
+            return false;
+        }
+
+        if (!waitForTxReady(timeoutMs)) {
+            HAL_UART_AbortTransmit(uart);
+            return false;
+        }
+        return true;
+    }
+
     void clearRx()
     {
         if (uart == nullptr) {
             return;
         }
-        uint8_t drop = 0U;
-        while (HAL_UART_Receive(uart, &drop, 1U, 0U) == HAL_OK) {
+
+        if (startRxDma()) {
+            rxReadIndex = dmaWriteIndex();
+        } else {
+            uint8_t drop = 0U;
+            while (HAL_UART_Receive(uart, &drop, 1U, 0U) == HAL_OK) {
+            }
         }
+
         __HAL_UART_CLEAR_OREFLAG(uart);
+    }
+
+    uint16_t receiveBufferPolling(uint8_t *buffer, uint16_t maxLen, uint32_t timeoutMs)
+    {
+        uint16_t len = 0U;
+        const uint32_t start = HAL_GetTick();
+        while (((HAL_GetTick() - start) <= timeoutMs) && (len < maxLen)) {
+            if (HAL_UART_Receive(uart, &buffer[len], 1U, 1U) == HAL_OK) {
+                len++;
+            }
+        }
+        return len;
     }
 
     uint16_t receiveBuffer(uint8_t *buffer, uint16_t maxLen, uint32_t timeoutMs)
@@ -495,11 +603,29 @@ private:
             return 0U;
         }
 
+        if (!startRxDma()) {
+            return receiveBufferPolling(buffer, maxLen, timeoutMs);
+        }
+
         uint16_t len = 0U;
         const uint32_t start = HAL_GetTick();
+        const uint16_t dmaSize = static_cast<uint16_t>(sizeof(rxDmaBuffer));
         while (((HAL_GetTick() - start) <= timeoutMs) && (len < maxLen)) {
-            if (HAL_UART_Receive(uart, &buffer[len], 1U, 1U) == HAL_OK) {
-                len++;
+            const uint16_t writeIndex = dmaWriteIndex();
+            bool copied = false;
+            __DMB();
+
+            while ((rxReadIndex != writeIndex) && (len < maxLen)) {
+                buffer[len++] = rxDmaBuffer[rxReadIndex];
+                rxReadIndex = static_cast<uint16_t>(rxReadIndex + 1U);
+                if (rxReadIndex >= dmaSize) {
+                    rxReadIndex = 0U;
+                }
+                copied = true;
+            }
+
+            if (!copied) {
+                taskYIELD();
             }
         }
         return len;
@@ -526,7 +652,7 @@ private:
         frame[idx++] = checksum(&frame[2], sumLen);
 
         clearRx();
-        if (HAL_UART_Transmit(uart, frame, idx, SERVO_ACK_TIMEOUT_MS) != HAL_OK) {
+        if (!transmitFrame(frame, idx, SERVO_ACK_TIMEOUT_MS)) {
             timeoutCount++;
             servoComm.timeoutCount++;
             return false;
@@ -652,6 +778,10 @@ private:
     uint32_t timeoutCount;
     uint32_t checksumErrorCount;
     uint32_t invalidFrameCount;
+    alignas(32) uint8_t rxDmaBuffer[SERVO_DMA_RX_BUFFER_SIZE];
+    alignas(32) uint8_t txDmaBuffer[SERVO_DMA_TX_BUFFER_SIZE];
+    uint16_t rxReadIndex;
+    bool rxDmaStarted;
 };
 
 static ServoBusDriver g_servoBuses[NUM_BUSES];
