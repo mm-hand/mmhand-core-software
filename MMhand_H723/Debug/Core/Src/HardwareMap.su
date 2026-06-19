@@ -1,0 +1,8 @@
+../Core/Src/HardwareMap.cpp:47:6:bool isMotorMapItemValid(const MotorMapItem*)	16	static
+../Core/Src/HardwareMap.cpp:55:6:bool isMotorChannelValid(uint8_t)	16	static
+../Core/Src/HardwareMap.cpp:60:10:uint32_t validMotorChannelMask()	16	static
+../Core/Src/HardwareMap.cpp:71:9:uint8_t getJointActuatorCount(uint8_t)	24	static
+../Core/Src/HardwareMap.cpp:83:6:bool getJointActuator(uint8_t, uint8_t, JointActuatorItem*)	40	static
+../Core/Src/HardwareMap.cpp:99:6:bool getJointActuatorGroup(uint8_t, JointActuatorGroup*)	32	static
+../Core/Src/HardwareMap.cpp:123:5:int findPrimaryMotorChannelForJoint(uint8_t)	32	static
+../Core/Src/HardwareMap.cpp:132:5:int findMotorChannelByBusId(uint8_t, uint8_t)	24	static

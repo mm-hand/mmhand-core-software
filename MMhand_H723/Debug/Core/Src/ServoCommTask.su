@@ -1,0 +1,53 @@
+/opt/st/stm32cubeide_2.1.1/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/arm-none-eabi/include/c++/14.3.1/bits/std_abs.h:56:3:long int std::abs(long int)	16	static
+../Core/Src/ServoCommTask.cpp:41:22:ServoDebugId* getServoDebugId(uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:53:13:void initServoDebugTable()	16	static
+../Core/Src/ServoCommTask.cpp:93:13:void markServoDebugOffline(uint8_t, uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:120:13:bool isServoAbsAtLimit(int32_t)	16	static
+../Core/Src/ServoCommTask.cpp:126:16:int16_t clampServoAbsLocal(int32_t)	16	static
+../Core/Src/ServoCommTask.cpp:137:16:int16_t normalizeServoRawSingleTurn(int32_t)	24	static
+../Core/Src/ServoCommTask.cpp:146:17:uint16_t singleTurnDistanceCounts(int16_t, int16_t)	32	static
+../Core/Src/ServoCommTask.cpp:158:5:ServoBusDriver::ServoBusDriver()	16	static
+../Core/Src/ServoCommTask.cpp:177:10:void ServoBusDriver::begin(uint8_t, UART_HandleTypeDef*)	24	static
+../Core/Src/ServoCommTask.cpp:183:10:bool ServoBusDriver::configureMultiTurnMode(uint8_t)	32	static
+../Core/Src/ServoCommTask.cpp:200:10:void ServoBusDriver::setTarget(uint8_t, int16_t, uint16_t, uint8_t)	32	static
+../Core/Src/ServoCommTask.cpp:216:10:void ServoBusDriver::syncWriteAll()	192	static
+../Core/Src/ServoCommTask.cpp:262:9:int ServoBusDriver::syncReadPositions(const uint8_t*, uint8_t)	240	static
+../Core/Src/ServoCommTask.cpp:358:13:int16_t ServoBusDriver::getRawPosition(uint8_t) const	16	static
+../Core/Src/ServoCommTask.cpp:366:13:int32_t ServoBusDriver::getAbsolutePosition(uint8_t) const	16	static
+../Core/Src/ServoCommTask.cpp:374:34:const ServoFeedbackInternal& ServoBusDriver::getFeedback(uint8_t) const	16	static
+../Core/Src/ServoCommTask.cpp:383:10:bool ServoBusDriver::isOnline(uint8_t) const	16	static
+../Core/Src/ServoCommTask.cpp:388:10:bool ServoBusDriver::setTorqueEnabled(uint8_t, bool)	24	static
+../Core/Src/ServoCommTask.cpp:400:10:bool ServoBusDriver::restoreAbsolutePosition(uint8_t, int32_t, uint16_t)	40	static
+../Core/Src/ServoCommTask.cpp:427:13:uint8_t ServoBusDriver::onlineCountForMappedChannels() const	24	static
+../Core/Src/ServoCommTask.cpp:441:10:bool ServoBusDriver::isUsableId(uint8_t) const	16	static
+../Core/Src/ServoCommTask.cpp:446:20:static uint8_t ServoBusDriver::checksum(const uint8_t*, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:455:21:static uint16_t ServoBusDriver::encodeSigned15(int16_t)	16	static
+../Core/Src/ServoCommTask.cpp:463:20:static int16_t ServoBusDriver::decodeSigned15(uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:472:20:static int16_t ServoBusDriver::decodeLoad(uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:481:10:void ServoBusDriver::clearRx()	24	static
+../Core/Src/ServoCommTask.cpp:492:14:uint16_t ServoBusDriver::receiveBuffer(uint8_t*, uint16_t, uint32_t)	32	static
+../Core/Src/ServoCommTask.cpp:508:10:bool ServoBusDriver::writeRegister(uint8_t, uint8_t, const uint8_t*, uint8_t)	88	static
+../Core/Src/ServoCommTask.cpp:540:10:bool ServoBusDriver::writeByte(uint8_t, uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:545:10:bool ServoBusDriver::readAck(uint8_t)	56	static
+../Core/Src/ServoCommTask.cpp:566:10:bool ServoBusDriver::parseStatusFrame(const uint8_t*, uint16_t, uint8_t, uint8_t, uint8_t*, uint8_t*)	32	static
+../Core/Src/ServoCommTask.cpp:606:20:static int32_t ServoBusDriver::expandSingleTurnRawNearAnchor(int16_t, int32_t)	24	static
+../Core/Src/ServoCommTask.cpp:618:10:void ServoBusDriver::updateMultiTurnPosition(uint8_t, int16_t)	32	static
+../Core/Src/ServoCommTask.cpp:659:24:ServoBusDriver* getBusByIndex(uint8_t)	16	static
+../Core/Src/ServoCommTask.cpp:667:13:bool addReadTarget(uint8_t (*)[9], uint8_t*, uint8_t, uint8_t)	32	static
+../Core/Src/ServoCommTask.cpp:687:13:bool restoreServoMultiTurnFromHost(TaskSharedData_t*, uint32_t, const int32_t*, uint16_t, uint32_t*, uint32_t*)	56	static
+../Core/Src/ServoCommTask.cpp:739:13:void beginServoBuses()	8	static
+../Core/Src/ServoCommTask.cpp:753:13:void configureMappedServosForMultiTurn()	56	static
+../Core/Src/ServoCommTask.cpp:791:13:void applyServoTargetBatch(const ServoTargetBatch_t&)	40	static
+../Core/Src/ServoCommTask.cpp:813:13:void processDebugServoCommands()	48	static
+../Core/Src/ServoCommTask.cpp:847:13:void emergencyHoldMappedServosAtFeedback(TaskSharedData_t*)	88	static
+../Core/Src/ServoCommTask.cpp:905:13:void bootRecoverLimitServosToRaw(uint32_t)	16	static
+../Core/Src/ServoCommTask.cpp:969:13:void publishServoFeedback(TaskSharedData_t*)	632	static
+../Core/Src/ServoCommTask.cpp:1030:13:void processHostMultiTurnRestore(TaskSharedData_t*, uint32_t*)	160	static
+../Core/Src/ServoCommTask.cpp:1066:1:ServoComm::ServoComm()	16	static
+../Core/Src/ServoCommTask.cpp:1099:6:void ServoComm::recordTx(const uint8_t*, uint16_t)	32	static
+../Core/Src/ServoCommTask.cpp:1108:6:void ServoComm::recordRx(const uint8_t*, uint16_t)	32	static
+../Core/Src/ServoCommTask.cpp:1117:6:void ServoComm::recordFeedback(uint8_t, uint8_t, int16_t, int32_t, int16_t, int16_t, uint8_t, uint8_t)	24	static
+../Core/Src/ServoCommTask.cpp:1155:6:void ServoComm::run(void*)	312	static
+../Core/Src/ServoCommTask.cpp:1220:17:void ServoCommTask_Run(void*)	16	static
+../Core/Src/ServoCommTask.cpp:1223:1:void __static_initialization_and_destruction_0()	16	static
+../Core/Src/ServoCommTask.cpp:1223:1:cpp)	8	static

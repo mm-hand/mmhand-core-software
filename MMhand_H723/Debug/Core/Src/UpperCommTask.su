@@ -1,0 +1,25 @@
+../Core/Src/UpperCommTask.cpp:16:17:void UpperCommTask_Run(void*)	16	static
+../Core/Src/UpperCommTask.cpp:22:10:uint32_t UpperComm::millis() const	16	static
+../Core/Src/UpperCommTask.cpp:28:13:void appendFloatBigEndian(uint8_t*, size_t*, float)	32	static
+../Core/Src/UpperCommTask.cpp:39:17:uint16_t encodeRawEncoderForWire(uint16_t, bool)	16	static
+../Core/Src/UpperCommTask.cpp:54:17:uint32_t readU32BigEndian(const uint8_t*)	16	static
+../Core/Src/UpperCommTask.cpp:63:14:float decodeFloatLittleEndian(const uint8_t*)	24	static
+../Core/Src/UpperCommTask.cpp:76:13:bool parseFloatArrayLittleEndian(const uint8_t*, size_t, float*, uint8_t)	40	static
+../Core/Src/UpperCommTask.cpp:95:13:bool parseInt16ArrayBigEndian(const uint8_t*, size_t, int32_t*, uint8_t)	40	static
+../Core/Src/UpperCommTask.cpp:116:13:bool parseTendonGuardPayload(const uint8_t*, size_t, uint8_t*, int8_t*, int16_t*)	48	static
+../Core/Src/UpperCommTask.cpp:139:15:size_t getCommandPayloadLength(uint8_t)	16	static
+../Core/Src/UpperCommTask.cpp:172:6:bool UpperComm::sendPacket(const uint8_t*, uint16_t, uint8_t)	560	static
+../Core/Src/UpperCommTask.cpp:211:13:void sendProtoAckPacket(uint8_t, uint8_t, uint8_t)	32	static
+../Core/Src/UpperCommTask.cpp:228:13:void sendSystemStatusPacket(TaskSharedData_t*)	56	static
+../Core/Src/UpperCommTask.cpp:266:13:void sendFaultStatusPacket(uint32_t)	32	static
+../Core/Src/UpperCommTask.cpp:284:13:void sendReleaseFaultPacket(uint32_t)	32	static
+../Core/Src/UpperCommTask.cpp:302:13:void sendMotorAbsLimitPacket(TaskSharedData_t*)	296	static
+../Core/Src/UpperCommTask.cpp:340:13:void sendEncoderRawPacket(const RemoteSensorData_t&)	96	static
+../Core/Src/UpperCommTask.cpp:363:13:void sendDataPacket(RemoteSensorData_t*, MappedAngleData_t*, ServoAngleData_t*, ServoAngleData_t*, ServoTelemetryData_t*, RemoteTactileData_t*, JointDebugData_t*)	352	static
+../Core/Src/UpperCommTask.cpp:478:6:void UpperComm::resetDebugState()	16	static
+../Core/Src/UpperCommTask.cpp:527:6:void UpperComm::handleUsbPacket(const UsbPacket_t&)	24	static
+../Core/Src/UpperCommTask.cpp:547:6:void UpperComm::parseRxBuffer()	48	static
+../Core/Src/UpperCommTask.cpp:610:6:void UpperComm::handleLegacySingleByteCommand(uint8_t)	16	static
+../Core/Src/UpperCommTask.cpp:627:6:void UpperComm::handleParsedCommand(const uint8_t*, uint16_t)	240	static
+../Core/Src/UpperCommTask.cpp:810:6:void UpperComm::publishPeriodicData()	984	static
+../Core/Src/UpperCommTask.cpp:945:6:void UpperComm::run(void*)	280	static

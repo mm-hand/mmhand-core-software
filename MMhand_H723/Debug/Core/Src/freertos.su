@@ -1,0 +1,6 @@
+../Core/Src/freertos.c:125:6:MX_FREERTOS_Init	8	static
+../Core/Src/freertos.c:236:6:StartDefaultTask	16	static
+../Core/Src/freertos.c:256:6:canCommunicationTask	16	static
+../Core/Src/freertos.c:270:6:servoCommunicationTask	16	static
+../Core/Src/freertos.c:284:6:usbCommunicationTask	16	static
+../Core/Src/freertos.c:298:6:upperCommunicationTask	16	static

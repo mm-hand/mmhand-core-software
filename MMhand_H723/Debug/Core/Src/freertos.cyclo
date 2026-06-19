@@ -1,0 +1,6 @@
+../Core/Src/freertos.c:125:6:MX_FREERTOS_Init	22
+../Core/Src/freertos.c:236:6:StartDefaultTask	1
+../Core/Src/freertos.c:256:6:canCommunicationTask	1
+../Core/Src/freertos.c:270:6:servoCommunicationTask	1
+../Core/Src/freertos.c:284:6:usbCommunicationTask	1
+../Core/Src/freertos.c:298:6:upperCommunicationTask	1

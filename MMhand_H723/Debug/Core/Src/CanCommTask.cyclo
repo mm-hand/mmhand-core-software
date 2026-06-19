@@ -1,0 +1,27 @@
+../Core/Src/CanCommTask.cpp:40:17:void CanCommTask_Run(void*)	1
+../Core/Src/CanCommTask.cpp:46:17:void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef*, uint32_t)	4
+../Core/Src/CanCommTask.cpp:57:17:void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef*)	3
+../Core/Src/CanCommTask.cpp:65:17:void HAL_FDCAN_TxEventFifoCallback(FDCAN_HandleTypeDef*, uint32_t)	4
+../Core/Src/CanCommTask.cpp:76:17:void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef*, uint32_t)	3
+../Core/Src/CanCommTask.cpp:85:17:void HAL_FDCAN_ErrorCallback(FDCAN_HandleTypeDef*)	3
+../Core/Src/CanCommTask.cpp:93:10:uint32_t CanComm::millis() const	1
+../Core/Src/CanCommTask.cpp:99:9:uint8_t CanComm::fdcanDlcToLen(uint32_t) const	9
+../Core/Src/CanCommTask.cpp:126:10:uint32_t CanComm::lenToFdcanDlc(uint8_t) const	16
+../Core/Src/CanCommTask.cpp:164:6:void CanComm::resetErrorDetailReassembly()	1
+../Core/Src/CanCommTask.cpp:174:6:void CanComm::resetTactileReassembly()	1
+../Core/Src/CanCommTask.cpp:184:10:uint32_t CanComm::buildErrorBitmap(const uint8_t*) const	4
+../Core/Src/CanCommTask.cpp:201:6:void CanComm::rememberRxFrame(const FDCAN_RxHeaderTypeDef&, const uint8_t*, uint8_t, uint32_t)	3
+../Core/Src/CanCommTask.cpp:222:6:void CanComm::rememberTxFrame(const FDCAN_TxHeaderTypeDef&, const uint8_t*, uint8_t, uint32_t)	3
+../Core/Src/CanCommTask.cpp:242:6:void CanComm::notifyTaskFromIsr(volatile uint32_t*)	4
+../Core/Src/CanCommTask.cpp:256:6:void CanComm::notifyRxFromIsr()	1
+../Core/Src/CanCommTask.cpp:262:6:void CanComm::notifyTxFromIsr()	1
+../Core/Src/CanCommTask.cpp:268:6:void CanComm::notifyErrorFromIsr()	1
+../Core/Src/CanCommTask.cpp:274:6:bool CanComm::setupFdcan()	6
+../Core/Src/CanCommTask.cpp:328:6:void CanComm::handleEncoderFrame(uint32_t, const uint8_t*, uint8_t, uint32_t)	7
+../Core/Src/CanCommTask.cpp:363:6:void CanComm::handleErrorDetailFrame(uint32_t, const uint8_t*, uint8_t, uint32_t)	9
+../Core/Src/CanCommTask.cpp:415:6:void CanComm::handleTactileFrame(uint32_t, const uint8_t*, uint8_t, uint32_t)	11
+../Core/Src/CanCommTask.cpp:474:6:void CanComm::handleRxFrame(uint32_t, const uint8_t*, uint8_t, uint32_t)	7
+../Core/Src/CanCommTask.cpp:491:6:void CanComm::drainRxFifo()	5
+../Core/Src/CanCommTask.cpp:519:6:void CanComm::processTxQueue()	6
+../Core/Src/CanCommTask.cpp:566:6:void CanComm::handleReassemblyTimeouts(uint32_t)	7
+../Core/Src/CanCommTask.cpp:586:6:void CanComm::run(void*)	3

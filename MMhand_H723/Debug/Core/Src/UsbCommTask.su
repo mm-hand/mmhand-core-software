@@ -1,0 +1,21 @@
+../Core/Src/UsbCommTask.cpp:12:17:void UsbCommTask_Run(void*)	16	static
+../Core/Src/UsbCommTask.cpp:18:17:void UsbComm_OnCdcInit()	8	static
+../Core/Src/UsbCommTask.cpp:24:17:void UsbComm_OnCdcDeInit()	8	static
+../Core/Src/UsbCommTask.cpp:30:17:void UsbComm_OnCdcControl(uint8_t, uint8_t*, uint16_t)	16	static
+../Core/Src/UsbCommTask.cpp:36:17:void UsbComm_FillLineCoding(uint8_t*, uint16_t)	16	static
+../Core/Src/UsbCommTask.cpp:42:17:void UsbComm_OnCdcRx(uint8_t*, uint32_t)	16	static
+../Core/Src/UsbCommTask.cpp:48:17:void UsbComm_OnCdcTxComplete(uint8_t*, uint32_t*, uint8_t)	24	static
+../Core/Src/UsbCommTask.cpp:54:20:uint8_t UsbComm_Send(const uint8_t*, uint16_t)	16	static
+../Core/Src/UsbCommTask.cpp:60:10:uint32_t UsbComm::millis() const	16	static
+../Core/Src/UsbCommTask.cpp:66:10:uint16_t UsbComm::clampLen(uint32_t) const	16	static
+../Core/Src/UsbCommTask.cpp:76:9:uint8_t UsbComm::isInInterrupt() const	24	static,ignoring_inline_asm
+../Core/Src/UsbCommTask.cpp:82:6:void UsbComm::onInit()	16	static
+../Core/Src/UsbCommTask.cpp:98:6:void UsbComm::onDeInit()	16	static
+../Core/Src/UsbCommTask.cpp:107:6:void UsbComm::onControl(uint8_t, uint8_t*, uint16_t)	32	static
+../Core/Src/UsbCommTask.cpp:132:6:void UsbComm::fillLineCoding(uint8_t*, uint16_t) const	24	static
+../Core/Src/UsbCommTask.cpp:148:6:void UsbComm::onRx(uint8_t*, uint32_t)	568	static,ignoring_inline_asm
+../Core/Src/UsbCommTask.cpp:200:6:void UsbComm::onTxComplete(uint8_t*, uint32_t*, uint8_t)	24	static
+../Core/Src/UsbCommTask.cpp:213:9:uint8_t UsbComm::send(const uint8_t*, uint16_t)	32	static
+../Core/Src/UsbCommTask.cpp:246:6:void UsbComm::processEcho()	280	static
+../Core/Src/UsbCommTask.cpp:275:6:void UsbComm::processTxQueue()	280	static
+../Core/Src/UsbCommTask.cpp:299:6:void UsbComm::run(void*)	16	static
