@@ -15,6 +15,7 @@ desktop/multiturn_cache.json
 
 # Local SDK/build artifacts
 MMhand_H723/build/
+MMhand_H723/Core/**/Backup/*.bak
 manus/**/build/
 manus/**/build_codex/
 manus/**/Temp/
