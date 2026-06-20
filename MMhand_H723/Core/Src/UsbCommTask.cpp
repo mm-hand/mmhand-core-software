@@ -8,6 +8,11 @@
 
 UsbComm usb1;
 
+static bool timeReached(uint32_t nowMs, uint32_t deadlineMs)
+{
+    return static_cast<int32_t>(nowMs - deadlineMs) >= 0;
+}
+
 // 保持 freertos.c 里的 C 任务入口不变，把实际 USB 通信逻辑转交给 usb1 对象。
 extern "C" void UsbCommTask_Run(void *parameter)
 {
@@ -56,6 +61,26 @@ extern "C" uint8_t UsbComm_Send(const uint8_t *data, uint16_t length)
     return usb1.send(data, length);
 }
 
+extern "C" uint8_t UsbComm_EnqueueTx(const uint8_t *data, uint16_t length)
+{
+    return usb1.enqueueTx(data, length);
+}
+
+extern "C" void UsbComm_SetStreamProvider(UsbCommStreamProvider_t provider)
+{
+    usb1.setStreamProvider(provider);
+}
+
+extern "C" uint8_t UsbComm_StartTxBenchmark(uint32_t durationMs)
+{
+    return usb1.startTxBenchmark(durationMs);
+}
+
+extern "C" uint8_t UsbComm_IsTxBenchmarkRunning(void)
+{
+    return usb1.isTxBenchmarkRunning();
+}
+
 // 返回当前系统毫秒计时，保持与 CAN 层 millis() 风格一致。
 uint32_t UsbComm::millis(void) const
 {
@@ -78,6 +103,21 @@ uint8_t UsbComm::isInInterrupt(void) const
     return (__get_IPSR() != 0U) ? 1U : 0U;
 }
 
+void UsbComm::notifyTask(void)
+{
+    if (taskHandle == nullptr) {
+        return;
+    }
+
+    if (isInInterrupt() != 0U) {
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(taskHandle, &higherPriorityTaskWoken);
+        portYIELD_FROM_ISR(higherPriorityTaskWoken);
+    } else {
+        xTaskNotifyGive(taskHandle);
+    }
+}
+
 // 标记 USB CDC 已初始化，同时设置默认虚拟串口参数。
 void UsbComm::onInit(void)
 {
@@ -85,6 +125,7 @@ void UsbComm::onInit(void)
     hostConnected = 0;
     txBusy = 0;
     initCount++;
+    notifyTask();
 
     if (lineDTERate == 0U) {
         lineDTERate = 115200U;
@@ -100,7 +141,10 @@ void UsbComm::onDeInit(void)
     cdcInitialized = 0;
     hostConnected = 0;
     txBusy = 0;
+    benchmarkPending = 0;
+    benchmarkActive = 0;
     deinitCount++;
+    notifyTask();
 }
 
 // 记录主机发来的 CDC 控制命令，并解析 SET_LINE_CODING 的串口参数。
@@ -124,7 +168,10 @@ void UsbComm::onControl(uint8_t cmd, uint8_t *pbuf, uint16_t length)
         hostConnected = ((controlLineState & 0x0001U) != 0U) ? 1U : 0U;
         if (hostConnected == 0U) {
             txBusy = 0;
+            benchmarkPending = 0;
+            benchmarkActive = 0;
         }
+        notifyTask();
     }
 }
 
@@ -194,6 +241,7 @@ void UsbComm::onRx(uint8_t *data, uint32_t length)
     }
     echoLen = copyLen;
     echoPending = (copyLen > 0U) ? 1U : 0U;
+    notifyTask();
 }
 
 // 记录 USB IN 端点发送完成事件，释放下一次发送。
@@ -207,6 +255,7 @@ void UsbComm::onTxComplete(uint8_t *data, uint32_t *length, uint8_t epnum)
     if (length != nullptr) {
         TXbyteCount += *length;
     }
+    notifyTask();
 }
 
 // 通过 CDC 虚拟串口发送一段数据，同时保存到 usb1.TX* 字段供调试器查看。
@@ -240,6 +289,159 @@ uint8_t UsbComm::send(const uint8_t *data, uint16_t length)
     }
 
     return result;
+}
+
+uint8_t UsbComm::sendDirect(uint8_t *data, uint16_t length)
+{
+    if ((cdcInitialized == 0U) || (hostConnected == 0U) || (data == nullptr) || (length == 0U)) {
+        TXfailCount++;
+        return USBD_FAIL;
+    }
+
+    if (txBusy != 0U) {
+        TXbusyCount++;
+        return USBD_BUSY;
+    }
+
+    TXlen = length;
+    TXtimestamp = millis();
+    const uint16_t debugLen = clampLen(length);
+    std::memset(TXdata, 0, sizeof(TXdata));
+    std::memcpy(TXdata, data, debugLen);
+
+    const uint8_t result = CDC_Transmit_HS(data, length);
+    if (result == USBD_OK) {
+        txBusy = 1;
+        TXpacketCount++;
+    } else if (result == USBD_BUSY) {
+        TXbusyCount++;
+    } else {
+        TXfailCount++;
+    }
+
+    return result;
+}
+
+uint8_t UsbComm::enqueueTx(const uint8_t *data, uint16_t length)
+{
+    if ((shared == nullptr) ||
+        (shared->usbTxQueue == nullptr) ||
+        (data == nullptr) ||
+        (length == 0U) ||
+        (length > USB_COMM_MAX_DATA_SIZE)) {
+        TXqueueDropCount++;
+        return 0U;
+    }
+
+    UsbPacket_t packet = {};
+    packet.len = length;
+    packet.timestamp = millis();
+    std::memcpy(packet.payload, data, length);
+
+    if (xQueueSendToBack(shared->usbTxQueue, &packet, 0) != pdTRUE) {
+        TXqueueFullCount++;
+        UsbPacket_t droppedPacket = {};
+        (void)xQueueReceive(shared->usbTxQueue, &droppedPacket, 0);
+        if (xQueueSendToBack(shared->usbTxQueue, &packet, 0) != pdTRUE) {
+            TXqueueDropCount++;
+            return 0U;
+        }
+    }
+
+    notifyTask();
+    return 1U;
+}
+
+void UsbComm::setStreamProvider(UsbCommStreamProvider_t provider)
+{
+    streamProvider = provider;
+    notifyTask();
+}
+
+uint8_t UsbComm::startTxBenchmark(uint32_t durationMs)
+{
+    benchmarkPending = 0;
+    benchmarkActive = 0;
+    benchmarkDurationMs = durationMs;
+    benchmarkPayloadBytes = 0;
+    benchmarkPacketCount = 0;
+    benchmarkSeq = 0;
+    benchmarkStartMs = 0;
+    benchmarkStopMs = millis();
+
+    if (durationMs != 0U) {
+        benchmarkStartAtMs = millis() + USB_COMM_TX_BENCHMARK_ACK_DELAY_MS;
+        benchmarkPending = 1;
+    }
+
+    notifyTask();
+    return 1U;
+}
+
+uint8_t UsbComm::isTxBenchmarkRunning(void) const
+{
+    return ((benchmarkPending != 0U) || (benchmarkActive != 0U)) ? 1U : 0U;
+}
+
+void UsbComm::updateBenchmarkState(void)
+{
+    const uint32_t nowMs = millis();
+
+    if ((benchmarkPending != 0U) && timeReached(nowMs, benchmarkStartAtMs)) {
+        benchmarkPending = 0;
+        benchmarkActive = 1;
+        benchmarkStartMs = nowMs;
+        benchmarkStopMs = nowMs;
+    }
+
+    if ((benchmarkActive != 0U) && ((nowMs - benchmarkStartMs) >= benchmarkDurationMs)) {
+        benchmarkActive = 0;
+        benchmarkStopMs = nowMs;
+    }
+}
+
+uint16_t UsbComm::fillBenchmarkData(uint8_t *buffer, uint16_t maxLen)
+{
+    if ((buffer == nullptr) || (maxLen == 0U)) {
+        return 0U;
+    }
+
+    const uint32_t seq = benchmarkSeq++;
+    buffer[0] = static_cast<uint8_t>(seq & 0xFFU);
+    buffer[1] = static_cast<uint8_t>((seq >> 8) & 0xFFU);
+    buffer[2] = static_cast<uint8_t>((seq >> 16) & 0xFFU);
+    buffer[3] = static_cast<uint8_t>((seq >> 24) & 0xFFU);
+
+    for (uint16_t i = 4U; i < maxLen; i++) {
+        buffer[i] = static_cast<uint8_t>((seq + i) & 0xFFU);
+    }
+
+    return maxLen;
+}
+
+void UsbComm::processStreamProvider(void)
+{
+    if ((cdcInitialized == 0U) || (hostConnected == 0U) || (txBusy != 0U)) {
+        return;
+    }
+
+    uint16_t streamLen = 0U;
+    if (benchmarkActive != 0U) {
+        streamLen = fillBenchmarkData(streamData, sizeof(streamData));
+    } else if (streamProvider != nullptr) {
+        streamLen = streamProvider(streamData, sizeof(streamData));
+    }
+
+    if (streamLen == 0U) {
+        return;
+    }
+
+    if (sendDirect(streamData, streamLen) == USBD_OK) {
+        if (benchmarkActive != 0U) {
+            benchmarkPayloadBytes += streamLen;
+            benchmarkPacketCount++;
+        }
+    }
 }
 
 // 如果开启 echo 测试，把最近一次 USB RX 数据原样发回主机。
@@ -305,6 +507,7 @@ void UsbComm::run(void *parameter)
         return;
     }
 
+    taskHandle = xTaskGetCurrentTaskHandle();
     taskRunning = 1;
     cdcInitialized = 0;
     hostConnected = 0;
@@ -324,6 +527,8 @@ void UsbComm::run(void *parameter)
     TXcompleteCount = 0;
     TXbusyCount = 0;
     TXfailCount = 0;
+    TXqueueFullCount = 0;
+    TXqueueDropCount = 0;
     lastControlCmd = 0;
     lastControlLength = 0;
     controlCount = 0;
@@ -335,13 +540,38 @@ void UsbComm::run(void *parameter)
     initCount = 0;
     deinitCount = 0;
     echoLen = 0;
+    streamProvider = nullptr;
+    benchmarkPending = 0;
+    benchmarkActive = 0;
+    benchmarkStartAtMs = 0;
+    benchmarkStartMs = 0;
+    benchmarkStopMs = 0;
+    benchmarkDurationMs = 0;
+    benchmarkPayloadBytes = 0;
+    benchmarkPacketCount = 0;
+    benchmarkSeq = 0;
     std::memset(RXdata, 0, sizeof(RXdata));
     std::memset(TXdata, 0, sizeof(TXdata));
     std::memset(echoData, 0, sizeof(echoData));
+    std::memset(streamData, 0, sizeof(streamData));
 
     for (;;) {
-        processEcho();
-        processTxQueue();
-        vTaskDelay(pdMS_TO_TICKS(2));
+        updateBenchmarkState();
+
+        if (benchmarkActive == 0U) {
+            processEcho();
+        }
+
+        if (txBusy == 0U) {
+            if ((benchmarkActive != 0U) || (streamProvider != nullptr)) {
+                processStreamProvider();
+            }
+
+            if ((txBusy == 0U) && (benchmarkActive == 0U)) {
+                processTxQueue();
+            }
+        }
+
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
     }
 }

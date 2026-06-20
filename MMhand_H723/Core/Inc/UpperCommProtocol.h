@@ -42,6 +42,7 @@
 #define CMD_PAUSE 0xD9
 #define CMD_RESTORE_MULTITURN 0xDA
 #define CMD_MOTOR_ABS_LIMIT_LOCK 0xDB
+#define CMD_USB_TX_BENCHMARK 0xE2
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -55,6 +56,7 @@ static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4U;
 static const size_t kActiveScopePayloadBytes = 9U;
 static const size_t kRestoreMultiTurnPayloadBytes = 4U + SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5U;
+static const size_t kUsbTxBenchmarkPayloadBytes = 4U;
 static const size_t kSerialRxBufferSize = UPPER_COMM_RX_BUFFER_SIZE;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200U;

@@ -2,10 +2,16 @@
 #define USB_COMM_TASK_H
 
 #include "TaskSharedData.h"
+#include "task.h"
+
+#define USB_COMM_STREAM_CHUNK_SIZE 2048U
+#define USB_COMM_TX_BENCHMARK_ACK_DELAY_MS 100U
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef uint16_t (*UsbCommStreamProvider_t)(uint8_t *buffer, uint16_t maxLen);
 
 void usbCommunicationTask(void *parameter);
 void UsbCommTask_Run(void *parameter);
@@ -16,6 +22,10 @@ void UsbComm_FillLineCoding(uint8_t *pbuf, uint16_t length);
 void UsbComm_OnCdcRx(uint8_t *data, uint32_t length);
 void UsbComm_OnCdcTxComplete(uint8_t *data, uint32_t *length, uint8_t epnum);
 uint8_t UsbComm_Send(const uint8_t *data, uint16_t length);
+uint8_t UsbComm_EnqueueTx(const uint8_t *data, uint16_t length);
+void UsbComm_SetStreamProvider(UsbCommStreamProvider_t provider);
+uint8_t UsbComm_StartTxBenchmark(uint32_t durationMs);
+uint8_t UsbComm_IsTxBenchmarkRunning(void);
 
 #ifdef __cplusplus
 }
@@ -26,6 +36,7 @@ uint8_t UsbComm_Send(const uint8_t *data, uint16_t length);
 class UsbComm {
 public:
     TaskSharedData_t *shared;
+    TaskHandle_t taskHandle;
     uint8_t taskRunning;
 
     uint8_t cdcInitialized;
@@ -50,6 +61,8 @@ public:
     uint32_t TXcompleteCount;
     uint32_t TXbusyCount;
     uint32_t TXfailCount;
+    uint32_t TXqueueFullCount;
+    uint32_t TXqueueDropCount;
 
     uint8_t lastControlCmd;
     uint16_t lastControlLength;
@@ -63,6 +76,16 @@ public:
     uint32_t initCount;
     uint32_t deinitCount;
 
+    volatile uint8_t benchmarkPending;
+    volatile uint8_t benchmarkActive;
+    uint32_t benchmarkStartAtMs;
+    uint32_t benchmarkStartMs;
+    uint32_t benchmarkStopMs;
+    uint32_t benchmarkDurationMs;
+    uint32_t benchmarkPayloadBytes;
+    uint32_t benchmarkPacketCount;
+    uint32_t benchmarkSeq;
+
     void run(void *parameter);
     void onInit(void);
     void onDeInit(void);
@@ -71,16 +94,27 @@ public:
     void onRx(uint8_t *data, uint32_t length);
     void onTxComplete(uint8_t *data, uint32_t *length, uint8_t epnum);
     uint8_t send(const uint8_t *data, uint16_t length);
+    uint8_t enqueueTx(const uint8_t *data, uint16_t length);
+    void setStreamProvider(UsbCommStreamProvider_t provider);
+    uint8_t startTxBenchmark(uint32_t durationMs);
+    uint8_t isTxBenchmarkRunning(void) const;
     void processEcho(void);
     void processTxQueue(void);
+    void processStreamProvider(void);
 
 private:
     uint8_t echoData[USB_COMM_MAX_DATA_SIZE];
     uint16_t echoLen;
+    uint8_t streamData[USB_COMM_STREAM_CHUNK_SIZE];
+    UsbCommStreamProvider_t streamProvider;
 
     uint32_t millis(void) const;
     uint16_t clampLen(uint32_t length) const;
     uint8_t isInInterrupt(void) const;
+    void notifyTask(void);
+    void updateBenchmarkState(void);
+    uint8_t sendDirect(uint8_t *data, uint16_t length);
+    uint16_t fillBenchmarkData(uint8_t *buffer, uint16_t maxLen);
 };
 
 extern UsbComm usb1;

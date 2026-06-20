@@ -11,6 +11,7 @@ UpperComm upper1;
 volatile uint8_t g_calibrationUIStatus = 0;
 
 static const uint16_t kEncoderDisconnectRaw = 0xFFFFU;
+static const uint32_t kUsbTxBenchmarkMaxMs = 60000U;
 
 // 保持 freertos.c 里的 C 任务入口不变，把实际上位机通信逻辑转交给 upper1 对象。
 extern "C" void UpperCommTask_Run(void *parameter)
@@ -161,6 +162,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         return kRestoreMultiTurnPayloadBytes;
     case CMD_MOTOR_ABS_LIMIT_LOCK:
         return kMotorAbsLimitLockPayloadBytes;
+    case CMD_USB_TX_BENCHMARK:
+        return kUsbTxBenchmarkPayloadBytes;
     case CMD_SENSOR_STREAM_MODE:
         return 1;
     default:
@@ -182,24 +185,9 @@ bool UpperComm::sendPacket(const uint8_t *data, uint16_t len, uint8_t packetType
     std::memset(TXdata, 0, sizeof(TXdata));
     std::memcpy(TXdata, data, len);
 
-    UsbPacket_t packet = {};
-    packet.len = len;
-    packet.timestamp = lastTxTimestamp;
-    std::memcpy(packet.payload, data, len);
-
-    if ((shared == nullptr) || (shared->usbTxQueue == nullptr)) {
+    if (UsbComm_EnqueueTx(data, len) == 0U) {
         TXdropCount++;
         return false;
-    }
-
-    if (xQueueSendToBack(shared->usbTxQueue, &packet, 0) != pdTRUE) {
-        TXqueueFullCount++;
-        UsbPacket_t droppedPacket = {};
-        (void)xQueueReceive(shared->usbTxQueue, &droppedPacket, 0);
-        if (xQueueSendToBack(shared->usbTxQueue, &packet, 0) != pdTRUE) {
-            TXdropCount++;
-            return false;
-        }
     }
 
     TXpacketCount++;
@@ -789,6 +777,27 @@ void UpperComm::handleParsedCommand(const uint8_t *frame, uint16_t frameLen)
         return;
     }
 
+    if (cmd == CMD_USB_TX_BENCHMARK) {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        uint32_t durationMs = 0U;
+        if (frameLen < (1U + kUsbTxBenchmarkPayloadBytes)) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            durationMs = readU32BigEndian(frame + 1);
+            if (durationMs > kUsbTxBenchmarkMaxMs) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            }
+        }
+
+        sendProtoAckPacket(CMD_USB_TX_BENCHMARK,
+                           (durationMs != 0U) ? 1U : 0U,
+                           status);
+        if (status == PROTO_ACK_STATUS_OK) {
+            (void)UsbComm_StartTxBenchmark(durationMs);
+        }
+        return;
+    }
+
     if (cmd == CMD_SENSOR_STREAM_MODE) {
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (frameLen < 2U) {
@@ -810,6 +819,10 @@ void UpperComm::handleParsedCommand(const uint8_t *frame, uint16_t frameLen)
 void UpperComm::publishPeriodicData(void)
 {
     if (shared == nullptr) {
+        return;
+    }
+
+    if (UsbComm_IsTxBenchmarkRunning() != 0U) {
         return;
     }
 
