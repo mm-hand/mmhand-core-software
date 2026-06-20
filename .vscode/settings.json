@@ -1,3 +1,36 @@
 {
-    "cmake.ignoreCMakeListsMissing": true
+    "cmake.ignoreCMakeListsMissing": true,
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/MMhand_H723/build/Debug/compile_commands.json",
+    "C_Cpp.default.compilerPath": "C:/Users/wp/AppData/Local/stm32cube/bundles/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gcc.exe",
+    "C_Cpp.default.intelliSenseMode": "windows-gcc-arm",
+    "C_Cpp.default.cStandard": "gnu11",
+    "C_Cpp.default.cppStandard": "gnu++14",
+    "C_Cpp.default.defines": [
+        "DEBUG",
+        "STM32H723xx",
+        "USE_HAL_DRIVER",
+        "USE_PWR_LDO_SUPPLY"
+    ],
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/MMhand_H723/Core/Inc",
+        "${workspaceFolder}/MMhand_H723/USB_DEVICE/App",
+        "${workspaceFolder}/MMhand_H723/USB_DEVICE/Target",
+        "${workspaceFolder}/MMhand_H723/Drivers/STM32H7xx_HAL_Driver/Inc",
+        "${workspaceFolder}/MMhand_H723/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy",
+        "${workspaceFolder}/MMhand_H723/Middlewares/Third_Party/FreeRTOS/Source/include",
+        "${workspaceFolder}/MMhand_H723/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
+        "${workspaceFolder}/MMhand_H723/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F",
+        "${workspaceFolder}/MMhand_H723/Middlewares/ST/STM32_USB_Device_Library/Core/Inc",
+        "${workspaceFolder}/MMhand_H723/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc",
+        "${workspaceFolder}/MMhand_H723/Drivers/CMSIS/Device/ST/STM32H7xx/Include",
+        "${workspaceFolder}/MMhand_H723/Drivers/CMSIS/Include"
+    ],
+    "C_Cpp.default.browse.path": [
+        "${workspaceFolder}/MMhand_H723/Core/Inc",
+        "${workspaceFolder}/MMhand_H723/Core/Src",
+        "${workspaceFolder}/MMhand_H723/USB_DEVICE",
+        "${workspaceFolder}/MMhand_H723/Drivers",
+        "${workspaceFolder}/MMhand_H723/Middlewares"
+    ]
 }
