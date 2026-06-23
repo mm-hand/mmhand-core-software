@@ -23,9 +23,6 @@ for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
 MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
-for _motor_idx in (15, 16, 17, 18, 19):
-    if 0 <= _motor_idx < MOTOR_COUNT:
-        MOTOR_TENDON_SHORTEN_ABS_SIGN[_motor_idx] = -1
 
 
 def clamp_motor_abs(value: int) -> int:

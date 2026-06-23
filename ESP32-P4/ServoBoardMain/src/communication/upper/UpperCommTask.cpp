@@ -133,7 +133,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[28];
+    uint8_t buffer[40];
     size_t idx = 0;
     const uint32_t faultBitmap = sharedData->system_fault_bitmap;
     const uint32_t transitionCount = sharedData->state_transition_count;
@@ -161,6 +161,17 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
     buffer[idx++] = sharedData->multiturn_nvs_enabled ? 1 : 0;
     buffer[idx++] = sharedData->multiturn_nvs_snapshot_valid ? 1 : 0;
+    const uint32_t activeMotorMask = sharedData->active_motor_mask;
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(activeMotorMask & 0xFF);
+    const uint32_t activeJointMask = sharedData->active_joint_mask;
+    buffer[idx++] = (uint8_t)((activeJointMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeJointMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeJointMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(activeJointMask & 0xFF);
+    buffer[idx++] = sharedData->require_can_feedback ? 1 : 0;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -273,6 +284,34 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
     buffer[idx++] = result.scaled ? 1 : 0;
     buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
+static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
+{
+    uint8_t buffer[40];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_CALIB_DIAG;
+    buffer[idx++] = diag.valid ? 1 : 0;
+    buffer[idx++] = diag.reason;
+    buffer[idx++] = diag.phase;
+    buffer[idx++] = diag.joint;
+    buffer[idx++] = diag.motor;
+    appendI32BigEndian(buffer, &idx, diag.valueA);
+    appendI32BigEndian(buffer, &idx, diag.valueB);
+    appendI32BigEndian(buffer, &idx, diag.valueC);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(diag.bitmap & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(diag.timestamp & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -417,6 +456,14 @@ static void sendDataPacket(ServoStatus_t* pServo,
             const uint16_t raw = (uint16_t)pServoRaw->servoRawPositions[i];
             buffer[idx++] = (uint8_t)((raw >> 8) & 0xFF);
             buffer[idx++] = (uint8_t)(raw & 0xFF);
+        }
+        for (int i = 0; i < SERVO_TOTAL_NUM; i++)
+        {
+            const int32_t hw = pServoRaw->servoHardwarePositions[i];
+            buffer[idx++] = (uint8_t)((hw >> 24) & 0xFF);
+            buffer[idx++] = (uint8_t)((hw >> 16) & 0xFF);
+            buffer[idx++] = (uint8_t)((hw >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)(hw & 0xFF);
         }
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
@@ -588,6 +635,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_RUN_FEEDBACK:
         case CMD_PAUSE:
         case CMD_HOST_HEARTBEAT:
+        case CMD_SIDE_SWAY_ADJUST:
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
@@ -659,6 +707,13 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
         sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        return;
+    }
+
+    if (cmd == CMD_SIDE_SWAY_ADJUST)
+    {
+        postSystemEvent(sharedData, SYSTEM_EVENT_SIDE_SWAY_ADJUST);
+        sendProtoAckPacket(CMD_SIDE_SWAY_ADJUST, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
@@ -1122,6 +1177,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
     uint32_t lastJointCalibSnapshotSentMs = 0;
     uint8_t nextJointCalibSnapshotIndex = 0;
+    uint32_t lastCalibrationDiagSequenceSent = 0;
+    uint32_t lastCalibrationDiagSentMs = 0;
 
     Serial.println("<<<SYS_READY>>>");
 
@@ -1336,6 +1393,15 @@ void upperCommunicationTask(void* parameter)
             }
             nextJointCalibSnapshotIndex = 0;
             lastJointCalibSnapshotSentMs = nowMs;
+        }
+
+        const CalibrationDiagData_t calibDiag = sharedData->calibration_diag;
+        if (calibDiag.sequence != lastCalibrationDiagSequenceSent ||
+            (calibDiag.valid &&
+             (uint32_t)(nowMs - lastCalibrationDiagSentMs) >= kSystemStatusHeartbeatMs)) {
+            sendCalibrationDiagPacket(calibDiag);
+            lastCalibrationDiagSequenceSent = calibDiag.sequence;
+            lastCalibrationDiagSentMs = nowMs;
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));

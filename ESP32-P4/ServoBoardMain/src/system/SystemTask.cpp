@@ -124,6 +124,7 @@ void System_Init() {
     sharedData.require_can_feedback = 1;
     sharedData.calibration_fault_latched = 0;
     sharedData.joint16_dual_feedback_fault = 0;
+    memset(&sharedData.calibration_diag, 0, sizeof(sharedData.calibration_diag));
     sharedData.overload_fault_bitmap = 0;
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
         sharedData.overload_fault_load[i] = 0;

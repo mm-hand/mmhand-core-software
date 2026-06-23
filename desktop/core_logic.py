@@ -20,6 +20,7 @@ from protocol import (
     CMD_MULTITURN_NVS_CONTROL,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
+    CMD_SIDE_SWAY_ADJUST,
     ENCODER_COUNT,
     MOTOR_COUNT,
     ControlMode,
@@ -39,11 +40,13 @@ LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
+MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
 MULTITURN_CACHE_PATH = Path(__file__).resolve().parent / "multiturn_cache.json"
 MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
+HOST_MULTITURN_CACHE_ENABLE = False
 
 
 class HandController:
@@ -81,7 +84,9 @@ class HandController:
         self._trusted_servo_online: List[bool] = [False] * MOTOR_COUNT
         self._last_multiturn_restore_attempt_s = 0.0
         self._last_multiturn_cache_save_s = 0.0
-        self._load_trusted_multiturn_cache()
+        # Host-side multi-turn persistence is intentionally disabled.
+        # P4 NVS is the only trusted cross-power-cycle multi-turn source.
+        self._clear_trusted_multiturn_cache()
 
     @staticmethod
     def _clamp_motor_abs(value: int) -> int:
@@ -103,6 +108,8 @@ class HandController:
         return min(diff, 4096 - diff)
 
     def _load_trusted_multiturn_cache(self) -> None:
+        if not HOST_MULTITURN_CACHE_ENABLE:
+            return
         try:
             with MULTITURN_CACHE_PATH.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -143,6 +150,8 @@ class HandController:
         print("[MULTITURN CACHE] cleared")
 
     def _save_trusted_multiturn_cache(self, force: bool = False) -> None:
+        if not HOST_MULTITURN_CACHE_ENABLE:
+            return
         now = time.time()
         if not force and now - self._last_multiturn_cache_save_s < MULTITURN_CACHE_SAVE_INTERVAL_S:
             return
@@ -163,6 +172,8 @@ class HandController:
             print(f"[MULTITURN CACHE] save failed: {exc}")
 
     def _update_trusted_multiturn_cache(self, state: HandModel) -> None:
+        if not HOST_MULTITURN_CACHE_ENABLE:
+            return
         if not bool(getattr(state, "multiturn_nvs_enabled", True)):
             if any(self._trusted_servo_online) or MULTITURN_CACHE_PATH.exists() or MULTITURN_CACHE_PATH.with_suffix(".tmp").exists():
                 self._clear_trusted_multiturn_cache()
@@ -190,6 +201,8 @@ class HandController:
             self._save_trusted_multiturn_cache()
 
     def _maybe_restore_multiturn_from_cache(self, state: HandModel) -> None:
+        if not HOST_MULTITURN_CACHE_ENABLE:
+            return
         if not self.comm:
             return
         if not bool(getattr(state, "multiturn_nvs_enabled", True)):
@@ -412,7 +425,6 @@ class HandController:
         """
         import time
         log_session("CTRL", f"shutdown requested stop_lower={int(bool(stop_lower))}")
-        self._save_trusted_multiturn_cache(force=True)
 
         # Step 1: 停止下位机上的运动（即使暂停也要发送 STOP）
         if self.comm:
@@ -463,12 +475,12 @@ class HandController:
                     break
                 new_model = self.comm.rx_queue.get(timeout=0.1)
                 with self.state_lock:
-                    self._maybe_restore_multiturn_from_cache(new_model)
+                    # Host-side multi-turn cache restore is disabled.
+                    # P4 NVS is the only trusted persistence/restore source.
                     self.current_state.copy_state_from(new_model)
                     self.current_state.calib_status = new_model.calib_status
                     self.current_state.tactile_data = new_model.tactile_data
                     self.current_state.timestamp = new_model.timestamp
-                    self._update_trusted_multiturn_cache(new_model)
                     if getattr(new_model, "has_system_status_data", False):
                         self._started = int(new_model.system_state) in (
                             SYSTEM_STATE_IDLE,
@@ -596,6 +608,13 @@ class HandController:
         self._started = False
         return True
 
+    def request_side_sway_adjust(self) -> bool:
+        if not self.comm:
+            return False
+        self.comm.send_command("side_sway_adjust")
+        self._started = False
+        return True
+
     def request_run_feedback(self) -> bool:
         if self._paused or not self.comm:
             return False
@@ -640,6 +659,79 @@ class HandController:
         if ok and not enabled:
             self._clear_trusted_multiturn_cache()
         return ok
+
+    def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
+        if not self.comm:
+            return False, "serial not connected"
+        with self.state_lock:
+            state = self.current_state
+            has_raw = bool(getattr(state, "has_servo_raw_data", False))
+            raw_positions = list(getattr(state, "servo_raw_positions", []) or [])
+            raw_online = list(getattr(state, "servo_raw_online", []) or [])
+            flash_was_enabled = bool(getattr(state, "multiturn_nvs_enabled", True))
+
+        if not has_raw:
+            return False, "waiting for servo raw feedback"
+
+        restore_abs = [0] * MOTOR_COUNT
+        restore_mask = 0
+        for i in range(MOTOR_COUNT):
+            if i >= len(raw_positions) or i >= len(raw_online) or not bool(raw_online[i]):
+                continue
+            restore_abs[i] = self._raw_single_turn(int(raw_positions[i]))
+            restore_mask |= (1 << i)
+
+        if restore_mask == 0:
+            return False, "no online motor raw feedback"
+
+        self.stop()
+        time.sleep(0.05)
+
+        if not self.set_multiturn_nvs_enabled(False):
+            return False, "failed to clear lower Flash snapshots"
+
+        flash_restore_warning = ""
+        if flash_was_enabled and not self.set_multiturn_nvs_enabled(True):
+            flash_restore_warning = "; Flash re-enable failed"
+
+        self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
+        ack = self.comm.wait_for_ack(CMD_RESTORE_MULTITURN, MULTITURN_RESTORE_ACK_TIMEOUT_S)
+        if ack is None or int(ack[2]) != 0:
+            return False, "restore turn0 request ACK timeout/reject" + flash_restore_warning
+
+        verified = False
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+                has_abs = bool(getattr(state, "has_servo_angle_data", False))
+                servo_abs = list(getattr(state, "servo_angles", []) or [])
+                servo_online = list(getattr(state, "servo_online", []) or [])
+            if (unknown & restore_mask) == 0 and has_abs:
+                all_match = True
+                for i in range(MOTOR_COUNT):
+                    if ((restore_mask >> i) & 0x01) == 0:
+                        continue
+                    if i >= len(servo_abs) or i >= len(servo_online) or not bool(servo_online[i]):
+                        all_match = False
+                        break
+                    if int(servo_abs[i]) != int(restore_abs[i]):
+                        all_match = False
+                        break
+                if all_match:
+                    verified = True
+                    break
+            time.sleep(0.02)
+        if not verified:
+            self._clear_trusted_multiturn_cache()
+            return False, "restore turn0 request accepted, but feedback did not confirm the new baseline"
+
+        self._clear_trusted_multiturn_cache()
+
+        count = bin(restore_mask).count("1")
+        flash_text = "Flash ON" if flash_was_enabled and not flash_restore_warning else "Flash OFF"
+        return True, f"reset {count} motor(s) to current raw as turn0; {flash_text}{flash_restore_warning}"
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         if not self.comm:

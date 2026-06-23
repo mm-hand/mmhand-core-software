@@ -156,7 +156,7 @@ static void resetServoTargetQueue(TaskSharedData_t* sharedData)
     }
 }
 
-static void requestServoEmergencyHold(TaskSharedData_t* sharedData)
+static void requestServoEmergencyTorqueOff(TaskSharedData_t* sharedData)
 {
     if (sharedData) {
         sharedData->servo_emergency_stop_token++;
@@ -186,6 +186,15 @@ static bool canAcceptCalibrate(uint8_t state)
 {
     return state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY;
+}
+
+static bool canAcceptSideSwayAdjust(uint8_t state)
+{
+    return state == SYSTEM_STATE_IDLE ||
+           state == SYSTEM_STATE_READY ||
+           state == SYSTEM_STATE_RUN_DIRECT ||
+           state == SYSTEM_STATE_RUN_FEEDBACK ||
+           state == SYSTEM_STATE_PAUSED;
 }
 
 static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
@@ -227,6 +236,80 @@ static bool activeMotorsAbsLimitsCalibrated(TaskSharedData_t* sharedData)
     return false;
 }
 
+static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
+                                   uint8_t reason,
+                                   uint32_t a,
+                                   uint32_t b,
+                                   int32_t c,
+                                   int32_t d)
+{
+    static uint32_t s_lastLogMs = 0;
+    static uint8_t s_lastReason = 0;
+    static uint32_t s_lastA = 0;
+    static uint32_t s_lastB = 0;
+    static int32_t s_lastC = 0;
+    static int32_t s_lastD = 0;
+    const uint32_t nowMs = millis();
+    if (reason == s_lastReason &&
+        a == s_lastA &&
+        b == s_lastB &&
+        c == s_lastC &&
+        d == s_lastD &&
+        (uint32_t)(nowMs - s_lastLogMs) <= 1000) {
+        return;
+    }
+    s_lastReason = reason;
+    s_lastA = a;
+    s_lastB = b;
+    s_lastC = c;
+    s_lastD = d;
+    s_lastLogMs = nowMs;
+
+    switch (reason) {
+        case 1:
+            Serial.printf("[STATE] feedback ready rejected: joint mode/CAN gate inactive motor=0x%08lX joint=0x%08lX mode=%ld require_can=%ld\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b,
+                          (long)c,
+                          (long)d);
+            break;
+        case 2:
+            Serial.printf("[STATE] feedback ready rejected: multi-turn unknown active=0x%08lX unknown=0x%08lX\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b);
+            break;
+        case 3:
+            Serial.printf("[STATE] feedback ready rejected: active joint mask is zero motor=0x%08lX\r\n",
+                          (unsigned long)a);
+            break;
+        case 4:
+            Serial.printf("[STATE] feedback ready rejected: mapped angle unavailable code=%lu age_ms=%ld\r\n",
+                          (unsigned long)a,
+                          (long)c);
+            break;
+        case 5:
+            Serial.printf("[STATE] feedback ready rejected: joint calibration missing J%02lu active=0x%08lX\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b);
+            break;
+        case 6:
+            Serial.printf("[STATE] feedback ready rejected: mapped angle invalid J%02lu valid_flags=0x%08lX\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b);
+            break;
+        case 7:
+            Serial.printf("[STATE] feedback ready rejected: joint outside workspace J%02lu angle=%ld min=%ld max=%ld\r\n",
+                          (unsigned long)a,
+                          (long)((int32_t)b),
+                          (long)c,
+                          (long)d);
+            break;
+        default:
+            Serial.println("[STATE] feedback ready rejected: unknown reason");
+            break;
+    }
+}
+
 static void logMultiTurnUnknownReject(TaskSharedData_t* sharedData, const char* eventName)
 {
     if (!sharedData) {
@@ -248,7 +331,7 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     sharedData->system_fault_bitmap |= sharedData->system_fault_latched_bitmap;
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
-    requestServoEmergencyHold(sharedData);
+    requestServoEmergencyTorqueOff(sharedData);
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
 }
 
@@ -276,7 +359,13 @@ static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData)
 
 static bool readyRequiresCan(TaskSharedData_t* sharedData)
 {
-    return sharedData && sharedData->require_can_feedback != 0;
+    if (!sharedData) {
+        return false;
+    }
+    if (sharedData->control_mode == CONTROL_MODE_DIRECT_MOTOR) {
+        return false;
+    }
+    return sharedData->require_can_feedback != 0;
 }
 
 static bool requiredServosOnline(TaskSharedData_t* sharedData, const ServoAngleData_t& servoSnapshot)
@@ -362,10 +451,25 @@ static bool isControllableEntryReady(TaskSharedData_t* sharedData)
 // ============================================================================
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
 {
-    if (!sharedData || !readyRequiresCan(sharedData)) {
+    if (!sharedData) {
+        return false;
+    }
+    if (!readyRequiresCan(sharedData)) {
+        logFeedbackReadyReject(sharedData,
+                               1,
+                               sharedData->active_motor_mask,
+                               sharedData->active_joint_mask,
+                               sharedData->control_mode,
+                               sharedData->require_can_feedback);
         return false;
     }
     if (!activeMotorsMultiTurnKnown(sharedData)) {
+        logFeedbackReadyReject(sharedData,
+                               2,
+                               readyServoRequiredMask(sharedData),
+                               sharedData->multi_turn_unknown_bitmap,
+                               0,
+                               0);
         return false;
     }
     if (!activeMotorsAbsLimitsCalibrated(sharedData)) {
@@ -374,14 +478,27 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
 
     const uint32_t activeMask = sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     if (activeMask == 0) {
+        logFeedbackReadyReject(sharedData, 3, sharedData->active_motor_mask, 0, 0, 0);
         return false;
     }
 
     MappedAngleData_t mappedData;
-    if (!sharedData->mappedAngleQueue ||
-        xQueuePeek(sharedData->mappedAngleQueue, &mappedData, 0) != pdTRUE ||
-        !mappedData.isValid ||
-        (uint32_t)(millis() - mappedData.timestamp) > kStateCanOfflineTimeoutMs) {
+    const uint32_t nowMs = millis();
+    if (!sharedData->mappedAngleQueue) {
+        logFeedbackReadyReject(sharedData, 4, 0, 0, 0, 0);
+        return false;
+    }
+    if (xQueuePeek(sharedData->mappedAngleQueue, &mappedData, 0) != pdTRUE) {
+        logFeedbackReadyReject(sharedData, 4, 1, 0, 0, 0);
+        return false;
+    }
+    const uint32_t mappedAgeMs = nowMs - mappedData.timestamp;
+    if (!mappedData.isValid) {
+        logFeedbackReadyReject(sharedData, 4, 2, 0, (int32_t)mappedAgeMs, 0);
+        return false;
+    }
+    if (mappedAgeMs > kStateCanOfflineTimeoutMs) {
+        logFeedbackReadyReject(sharedData, 4, 3, 0, (int32_t)mappedAgeMs, 0);
         return false;
     }
 
@@ -390,7 +507,18 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
             continue;
         }
         const JointCalibrationResult& calib = g_jointCalibResult[calibJoint];
-        if (!calib.success || mappedData.validFlags[calibJoint] == 0) {
+        if (!calib.success) {
+            logFeedbackReadyReject(sharedData, 5, calibJoint, activeMask, 0, 0);
+            return false;
+        }
+        if (mappedData.validFlags[calibJoint] == 0) {
+            uint32_t validMask = 0;
+            for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+                if (mappedData.validFlags[i] != 0) {
+                    validMask |= (1UL << i);
+                }
+            }
+            logFeedbackReadyReject(sharedData, 6, calibJoint, validMask, 0, 0);
             return false;
         }
         const int32_t angleCount = mappedData.angleValues[calibJoint];
@@ -400,6 +528,12 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
         const int32_t maxCount = calibrationDegToEncoderCount(maxDeg);
         const int32_t toleranceCount = calibrationDegToEncoderCount(kWorkspaceToleranceDeg);
         if (angleCount < -toleranceCount || angleCount > maxCount + toleranceCount) {
+            logFeedbackReadyReject(sharedData,
+                                   7,
+                                   calibJoint,
+                                   (uint32_t)angleCount,
+                                   -toleranceCount,
+                                   maxCount + toleranceCount);
             return false;
         }
     }
@@ -481,7 +615,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
                 setCalibrationStatus(CALIB_STATUS_IDLE, false);
             }
-            requestServoEmergencyHold(sharedData);
+            requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
 
@@ -490,7 +624,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             resetServoTargetQueue(sharedData);
-            requestServoEmergencyHold(sharedData);
+            requestServoEmergencyTorqueOff(sharedData);
             resetControlProtectionFaults(sharedData);
             sharedData->calibration_fault_latched = 0;
             sharedData->system_fault_latched_bitmap = 0;
@@ -506,9 +640,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 break;
             }
             if (!activeMotorsMultiTurnKnown(sharedData)) {
-                Serial.printf("[STATE] allow RUN_DIRECT recovery with multi-turn unknown active=0x%08lX unknown=0x%08lX\r\n",
-                              (unsigned long)readyServoRequiredMask(sharedData),
-                              (unsigned long)sharedData->multi_turn_unknown_bitmap);
+                logMultiTurnUnknownReject(sharedData, "RUN_DIRECT");
+                break;
             }
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
@@ -574,7 +707,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->paused_resume_state = sharedData->system_state;
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            requestServoEmergencyHold(sharedData);
+            requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;
 
@@ -593,9 +726,52 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             setCalibrationStatus(CALIB_STATUS_RUNNING, true);
             setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
             if (!startAutoCalibrationTask(sharedData)) {
+                CalibrationDiagData_t diag;
+                memset(&diag, 0, sizeof(diag));
+                diag.valid = 1;
+                diag.reason = CALIB_DIAG_REASON_TASK_START_FAILED;
+                diag.phase = CALIB_DIAG_PHASE_SEQUENCE;
+                diag.joint = 0xFF;
+                diag.motor = 0xFF;
+                diag.timestamp = millis();
+                diag.sequence = sharedData->calibration_diag.sequence + 1;
+                sharedData->calibration_diag = diag;
                 setCalibrationStatus(CALIB_STATUS_FAILED, true);
                 sharedData->calibration_fault_latched = 1;
-                requestServoEmergencyHold(sharedData);
+                requestServoEmergencyTorqueOff(sharedData);
+                setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
+            }
+            break;
+        }
+
+        case SYSTEM_EVENT_SIDE_SWAY_ADJUST:
+        {
+            if (!canAcceptSideSwayAdjust(sharedData->system_state)) {
+                Serial.printf("[STATE] reject SIDE_SWAY_ADJUST in state=%u\r\n",
+                              (unsigned)sharedData->system_state);
+                break;
+            }
+            resetServoTargetQueue(sharedData);
+            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
+            sharedData->control_enabled = 0;
+            sharedData->calibration_fault_latched = 0;
+            setCommandModeJoint(sharedData);
+            setCalibrationStatus(CALIB_STATUS_RUNNING, true);
+            setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
+            if (!startSideSwayAdjustTask(sharedData)) {
+                CalibrationDiagData_t diag;
+                memset(&diag, 0, sizeof(diag));
+                diag.valid = 1;
+                diag.reason = CALIB_DIAG_REASON_TASK_START_FAILED;
+                diag.phase = CALIB_DIAG_PHASE_DUAL_PRELOAD;
+                diag.joint = 0xFF;
+                diag.motor = 0xFF;
+                diag.timestamp = millis();
+                diag.sequence = sharedData->calibration_diag.sequence + 1;
+                sharedData->calibration_diag = diag;
+                setCalibrationStatus(CALIB_STATUS_FAILED, true);
+                sharedData->calibration_fault_latched = 1;
+                requestServoEmergencyTorqueOff(sharedData);
                 setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             }
             break;
@@ -616,6 +792,20 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
             break;
 
+        case SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE:
+            if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
+                Serial.printf("[STATE] ignore SIDE_SWAY_DONE in state=%u\r\n",
+                              (unsigned)sharedData->system_state);
+                break;
+            }
+            sharedData->control_enabled = 0;
+            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            sharedData->calibration_fault_latched = 0;
+            setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
+            setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            break;
+
         case SYSTEM_EVENT_CALIBRATION_FAILED:
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 Serial.printf("[STATE] ignore CALIB_FAILED in state=%u\r\n",
@@ -626,7 +816,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->calibration_fault_latched = 1;
             setCalibrationStatus(CALIB_STATUS_FAILED, true);
-            requestServoEmergencyHold(sharedData);
+            requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
 
@@ -677,6 +867,9 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     }
     if (sharedData->calibration_fault_latched != 0) {
         faults |= SYSTEM_FAULT_CALIBRATION;
+    }
+    if ((sharedData->multi_turn_unknown_bitmap & readyServoRequiredMask(sharedData)) != 0) {
+        faults |= SYSTEM_FAULT_MULTITURN_UNKNOWN;
     }
     faults |= sharedData->system_fault_latched_bitmap;
 

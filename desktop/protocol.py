@@ -27,6 +27,7 @@ PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
 PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
 PACKET_TYPE_TACTILE_FULL = 0x0F
+PACKET_TYPE_CALIB_DIAG = 0x10
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -55,6 +56,7 @@ CMD_CALIB_LOAD_LIMITS = 0xE0
 CMD_LOCAL_TEST_PARAMS = 0xE1
 CMD_LOCAL_TEST_START = 0xE2
 CMD_LOCAL_TEST_STOP = 0xE3
+CMD_SIDE_SWAY_ADJUST = 0xE4
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -77,6 +79,37 @@ SYSTEM_FAULT_OVERLOAD = 1 << 2
 SYSTEM_FAULT_RELEASE_GUARD = 1 << 3
 SYSTEM_FAULT_SERVO_OFFLINE = 1 << 4
 SYSTEM_FAULT_CALIBRATION = 1 << 5
+SYSTEM_FAULT_MULTITURN_UNKNOWN = 1 << 6
+
+CALIB_DIAG_REASON_NONE = 0
+CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY = 1
+CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT = 2
+CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT = 3
+CALIB_DIAG_REASON_TELEMETRY_TIMEOUT = 4
+CALIB_DIAG_REASON_ENCODER_ERROR = 5
+CALIB_DIAG_REASON_SERVO_OFFLINE = 6
+CALIB_DIAG_REASON_TURN_UNKNOWN = 7
+CALIB_DIAG_REASON_OVERLOAD = 8
+CALIB_DIAG_REASON_LOAD_NOT_REACHED = 9
+CALIB_DIAG_REASON_ANGLE_NOT_MOVING = 10
+CALIB_DIAG_REASON_WRONG_DIRECTION = 11
+CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT = 12
+CALIB_DIAG_REASON_ZERO_CROSS_INVALID = 13
+CALIB_DIAG_REASON_WRAP_TOO_LARGE = 14
+CALIB_DIAG_REASON_ABS_LIMIT_INVALID = 15
+CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED = 16
+CALIB_DIAG_REASON_FEEDBACK_LOST = 17
+CALIB_DIAG_REASON_TASK_START_FAILED = 18
+CALIB_DIAG_REASON_INTERNAL_ERROR = 19
+
+CALIB_DIAG_PHASE_NONE = 0
+CALIB_DIAG_PHASE_INIT = 1
+CALIB_DIAG_PHASE_FIND_MAX = 2
+CALIB_DIAG_PHASE_RELEASE = 3
+CALIB_DIAG_PHASE_RETURN_ZERO = 4
+CALIB_DIAG_PHASE_DUAL_PRELOAD = 5
+CALIB_DIAG_PHASE_DUAL_EXCHANGE = 6
+CALIB_DIAG_PHASE_SEQUENCE = 7
 
 SERVO_TARGET_OWNER_NONE = 0
 SERVO_TARGET_OWNER_CONTROL = 1
@@ -145,7 +178,7 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
     return payload[0], payload[1], payload[2]
 
 
-def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int]]:
+def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int, int, int, int, bool]]:
     if len(payload) < 13:
         return None
     system_state = payload[0]
@@ -158,6 +191,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
     multi_turn_unknown_bitmap = struct.unpack(">I", payload[13:17])[0] if len(payload) >= 17 else 0
     multiturn_nvs_enabled = payload[17] if len(payload) >= 18 else 1
     multiturn_nvs_snapshot_valid = payload[18] if len(payload) >= 19 else 0
+    has_active_scope_status = len(payload) >= 28
+    active_motor_mask = struct.unpack(">I", payload[19:23])[0] if has_active_scope_status else 0
+    active_joint_mask = struct.unpack(">I", payload[23:27])[0] if has_active_scope_status else 0
+    require_can_feedback = payload[27] if has_active_scope_status else 0
     return (
         system_state,
         control_enabled,
@@ -169,6 +206,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
         multi_turn_unknown_bitmap,
         multiturn_nvs_enabled,
         multiturn_nvs_snapshot_valid,
+        active_motor_mask,
+        active_joint_mask,
+        require_can_feedback,
+        has_active_scope_status,
     )
 
 
@@ -232,6 +273,30 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     return result
 
 
+def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) < 25:
+        return None
+    idx = 0
+    result = {
+        "valid": bool(payload[idx]),
+        "reason": int(payload[idx + 1]),
+        "phase": int(payload[idx + 2]),
+        "joint": int(payload[idx + 3]),
+        "motor": int(payload[idx + 4]),
+    }
+    idx = 5
+    result["valueA"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["valueB"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["valueC"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["bitmap"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["timestamp_ms"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    return result
+
+
 def parse_calib_ack(payload: bytes) -> Optional[int]:
     if len(payload) < 1:
         return None
@@ -286,11 +351,18 @@ def parse_servo_telem_packet(
     return speeds, loads, volts, temps, online
 
 
-def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
-    if not payload or (len(payload) % 3) != 0:
+def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool], bool]]:
+    if not payload:
         return None
 
-    channel_count = len(payload) // 3
+    if (len(payload) % 7) == 0:
+        channel_count = len(payload) // 7
+        has_hardware_positions = True
+    elif (len(payload) % 3) == 0:
+        channel_count = len(payload) // 3
+        has_hardware_positions = False
+    else:
+        return None
     if channel_count <= 0:
         return None
 
@@ -299,11 +371,18 @@ def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[boo
         start = i * 2
         raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
 
+    hardware_positions: List[int] = []
+    hw_base = channel_count * 2
+    online_base = channel_count * 6 if has_hardware_positions else channel_count * 2
+    if has_hardware_positions:
+        for i in range(channel_count):
+            start = hw_base + i * 4
+            hardware_positions.append(struct.unpack(">i", payload[start:start + 4])[0])
+
     online_flags: List[bool] = []
-    base = channel_count * 2
     for i in range(channel_count):
-        online_flags.append(payload[base + i] == 1)
-    return raw_positions, online_flags
+        online_flags.append(payload[online_base + i] == 1)
+    return raw_positions, hardware_positions, online_flags, has_hardware_positions
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
@@ -468,6 +547,10 @@ def parse_frame(data: bytes) -> Tuple[List[Tuple[int, bytes]], bytearray]:
 
 def build_calibrate_cmd() -> bytes:
     return _build_command_frame(CMD_CALIBRATE)
+
+
+def build_side_sway_adjust_cmd() -> bytes:
+    return _build_command_frame(CMD_SIDE_SWAY_ADJUST)
 
 
 def build_start_cmd() -> bytes:

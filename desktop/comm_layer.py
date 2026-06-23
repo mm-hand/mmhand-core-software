@@ -13,6 +13,7 @@ from protocol import (
     BAUDRATE,
     ENCODER_COUNT,
     MOTOR_COUNT,
+    PACKET_TYPE_CALIB_DIAG,
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_RELEASE_FAULT,
@@ -49,6 +50,7 @@ from protocol import (
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
+    build_side_sway_adjust_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -63,6 +65,7 @@ from protocol import (
     CMD_STOP,
     CMD_RESET,
     CMD_RUN_FEEDBACK,
+    CMD_SIDE_SWAY_ADJUST,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     CMD_MOTOR_ABS_LIMIT_LOCK,
@@ -75,6 +78,7 @@ from protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_PAUSED,
     SYSTEM_FAULT_CALIBRATION,
+    parse_calib_diag_packet,
     parse_calib_ack,
     parse_fault_status_packet,
     parse_release_fault_packet,
@@ -1151,11 +1155,14 @@ class LowerComputerComm:
             elif pkt_type == PACKET_TYPE_SERVO_RAW:
                 parsed = parse_servo_raw_packet(payload)
                 if parsed is not None:
-                    raw_positions, online_flags = parsed
+                    raw_positions, hardware_positions, online_flags, has_hardware_positions = parsed
                     for i in range(min(MOTOR_COUNT, len(raw_positions))):
                         model.servo_raw_positions[i] = int(raw_positions[i])
+                        if has_hardware_positions and i < len(hardware_positions):
+                            model.servo_hardware_positions[i] = int(hardware_positions[i])
                         model.servo_raw_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
                     model.has_servo_raw_data = True
+                    model.has_servo_hardware_data = bool(has_hardware_positions)
                     emitted = True
 
             elif pkt_type == 0x05:
@@ -1242,6 +1249,10 @@ class LowerComputerComm:
                         multi_turn_unknown_bitmap,
                         multiturn_nvs_enabled,
                         multiturn_nvs_snapshot_valid,
+                        active_motor_mask,
+                        active_joint_mask,
+                        require_can_feedback,
+                        has_active_scope_status,
                     ) = parsed
                     model.system_state = int(system_state)
                     model.control_enabled = bool(control_enabled)
@@ -1252,6 +1263,10 @@ class LowerComputerComm:
                     model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
                     model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
                     model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
+                    model.active_motor_mask = int(active_motor_mask)
+                    model.active_joint_mask = int(active_joint_mask)
+                    model.require_can_feedback = bool(require_can_feedback)
+                    model.has_active_scope_status = bool(has_active_scope_status)
                     model.has_system_status_data = True
                     if calib_status == 0:
                         if (
@@ -1292,6 +1307,21 @@ class LowerComputerComm:
                     if 0 <= joint_idx < ENCODER_COUNT:
                         model.joint_calib_results[joint_idx] = dict(parsed)
                         emitted = True
+
+            elif pkt_type == PACKET_TYPE_CALIB_DIAG:
+                parsed = parse_calib_diag_packet(payload)
+                if parsed is not None:
+                    model.calib_diag_valid = bool(parsed.get("valid", False))
+                    model.calib_diag_reason = int(parsed.get("reason", 0) or 0)
+                    model.calib_diag_phase = int(parsed.get("phase", 0) or 0)
+                    model.calib_diag_joint = int(parsed.get("joint", 0xFF) or 0)
+                    model.calib_diag_motor = int(parsed.get("motor", 0xFF) or 0)
+                    model.calib_diag_value_a = int(parsed.get("valueA", 0) or 0)
+                    model.calib_diag_value_b = int(parsed.get("valueB", 0) or 0)
+                    model.calib_diag_value_c = int(parsed.get("valueC", 0) or 0)
+                    model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
+                    model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
+                    emitted = True
 
             elif pkt_type == PACKET_TYPE_TACTILE:
                 parsed = parse_tactile_packet(payload)
@@ -1556,6 +1586,8 @@ class LowerComputerComm:
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":
             return build_calibrate_cmd()
+        if cmd == "side_sway_adjust":
+            return build_side_sway_adjust_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_data":
             return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":

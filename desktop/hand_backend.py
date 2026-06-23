@@ -311,6 +311,9 @@ class HandBackend:
     def request_firmware_calibration(self) -> bool:
         return self._controller.request_firmware_calibration()
 
+    def request_side_sway_adjust(self) -> bool:
+        return self._controller.request_side_sway_adjust()
+
     def request_run_feedback(self) -> bool:
         return self._controller.request_run_feedback()
 
@@ -322,6 +325,9 @@ class HandBackend:
 
     def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
         return self._controller.set_multiturn_nvs_enabled(enabled)
+
+    def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
+        return self._controller.reset_multiturn_baseline_for_new_device()
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         return self._controller.load_calibration_snapshot(snapshot)

@@ -13,6 +13,7 @@ struct MultiTurnNvsSnapshot {
     uint16_t motorCount;
     uint32_t sequence;
     uint32_t validMask;
+    uint32_t mappingSignature;
     int16_t turns[SERVO_TOTAL_NUM];
     int16_t raw[SERVO_TOTAL_NUM];
     uint32_t crc32;

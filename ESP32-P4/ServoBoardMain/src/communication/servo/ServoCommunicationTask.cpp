@@ -24,6 +24,7 @@
 
 #define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
 static const uint32_t kBootRecoverLimitToRawWindowMs = 8000;
+static const uint8_t kServoOfflineInvalidateMisses = 3;
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 // NVS 恢复会先短暂等待舵机上线，只恢复当前 raw 与快照 raw 足够接近的通道。
 static const uint32_t kNvsRestoreWaitWindowMs = 3000;
@@ -73,6 +74,7 @@ static uint16_t singleTurnDistanceCounts(int16_t a, int16_t b)
 
 // Per-servo feedback cache used inside the servo communication layer.
 struct ServoFeedbackInternal {
+    int16_t presentPosition;
     int16_t rawPosition;
     int16_t speed;
     int16_t load;
@@ -89,6 +91,7 @@ struct ServoFeedbackInternal {
     bool initialized;
     bool absoluteReliable;
     bool online;
+    uint8_t missedReadCount;
     uint32_t lastUpdate;
 };
 
@@ -188,7 +191,7 @@ public:
         if (txResult <= 0) {
             for (uint8_t i = 0; i < count; i++) {
                 if (ids[i] <= MAX_SERVO_ID) {
-                    _feedback[ids[i]].online = false;
+                    markReadFailure(ids[i]);
                 }
             }
             _sms.syncReadEnd();
@@ -210,10 +213,11 @@ public:
                 _feedback[id].voltage = rxBuf[6];
                 _feedback[id].temperature = rxBuf[7];
                 _feedback[id].online = true;
+                _feedback[id].missedReadCount = 0;
                 _feedback[id].lastUpdate = millis();
                 successCount++;
             } else {
-                _feedback[id].online = false;
+                markReadFailure(id);
             }
         }
 
@@ -234,6 +238,12 @@ public:
         return fb.absolutePosition + fb.logicalOffset;
     }
 
+    int16_t getPresentPosition(uint8_t id) const
+    {
+        if (id > MAX_SERVO_ID) return 0;
+        return _feedback[id].presentPosition;
+    }
+
     const ServoFeedbackInternal& getFeedback(uint8_t id) const
     {
         static ServoFeedbackInternal dummy;
@@ -249,6 +259,22 @@ public:
     bool isAbsoluteReliable(uint8_t id) const
     {
         return id <= MAX_SERVO_ID && _feedback[id].absoluteReliable;
+    }
+
+    bool hadMultiTurnTrust(uint8_t id) const
+    {
+        if (id > MAX_SERVO_ID) {
+            return false;
+        }
+        const ServoFeedbackInternal& fb = _feedback[id];
+        return fb.initialized || fb.absoluteReliable || fb.logicalOffset != 0;
+    }
+
+    bool isOfflineInvalidated(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID &&
+               !_feedback[id].online &&
+               _feedback[id].missedReadCount >= kServoOfflineInvalidateMisses;
     }
 
     bool setTorqueEnabled(uint8_t id, bool enabled)
@@ -280,9 +306,14 @@ public:
         }
 
         const int32_t restoredLogicalAbs = clampServoAbsLocal(absPosition);
-        const int32_t hardwareAbs = fb.initialized
-            ? fb.absolutePosition
-            : (int32_t)currentRaw;
+        // New-device reset sends the current single-turn raw as turn0. If the
+        // servo power was cycled while P4 stayed on, the previous software
+        // multi-turn anchor is stale and must not be reused here.
+        const bool restoreToCurrentSingleTurn =
+            (restoredLogicalAbs >= 0 && restoredLogicalAbs < 4096);
+        const int32_t hardwareAbs = restoreToCurrentSingleTurn
+            ? (int32_t)currentRaw
+            : (fb.initialized ? fb.absolutePosition : (int32_t)currentRaw);
         fb.rawPosition = currentRaw;
         fb.lastRawPosition = currentRaw;
         fb.absolutePosition = hardwareAbs;
@@ -301,6 +332,39 @@ public:
     }
 
 private:
+    void markReadFailure(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID) {
+            return;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        fb.online = false;
+        if (fb.missedReadCount < 0xFF) {
+            fb.missedReadCount++;
+        }
+        if (fb.missedReadCount >= kServoOfflineInvalidateMisses) {
+            invalidateMultiTurnTrust(id);
+        }
+    }
+
+    void invalidateMultiTurnTrust(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID) {
+            return;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        const bool hadTrust = fb.initialized || fb.absoluteReliable || fb.logicalOffset != 0;
+        fb.initialized = false;
+        fb.absoluteReliable = false;
+        fb.logicalOffset = 0;
+        fb.turnCount = 0;
+        if (hadTrust) {
+            Serial.printf("[SERVO OFFLINE] id=%u multi-turn trust invalidated after %u missed reads\r\n",
+                          (unsigned)id,
+                          (unsigned)fb.missedReadCount);
+        }
+    }
+
     int16_t logicalToHardwareTarget(uint8_t id, int32_t logicalPosition) const
     {
         if (id > MAX_SERVO_ID) {
@@ -341,6 +405,7 @@ private:
         int32_t absPos = 0;
         int16_t rawSingleTurn = 0;
 
+        fb.presentPosition = newRawPos;
         const bool servoProvidedMultiTurnAbs = (newRawPos < 0 || newRawPos >= 4096);
         if (servoProvidedMultiTurnAbs) {
             absPos = clampServoAbsLocal((int32_t)newRawPos);
@@ -524,18 +589,17 @@ static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
     }
 }
 
-static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
+static void emergencyTorqueOffMappedServos(TaskSharedData_t* sharedData)
 {
     if (sharedData && sharedData->servoTargetQueue) {
         xQueueReset(sharedData->servoTargetQueue);
     }
 
-    uint8_t heldIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
-    uint8_t heldCounts[NUM_BUSES] = {0};
-    bool busWritePending[NUM_BUSES] = {false};
-    uint32_t skippedUnknownMask = 0;
+    uint8_t disabledIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
+    uint8_t disabledCounts[NUM_BUSES] = {0};
+    uint32_t requestedMask = 0;
     uint32_t torqueDisabledMask = 0;
-    const uint32_t unknownMask = sharedData ? sharedData->multi_turn_unknown_bitmap : 0;
+    uint32_t torqueDisableFailedMask = 0;
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint32_t bit = (1UL << ch);
@@ -545,55 +609,41 @@ static void emergencyHoldMappedServosAtFeedback(TaskSharedData_t* sharedData)
             continue;
         }
 
-        bool alreadyHeld = false;
-        for (uint8_t i = 0; i < heldCounts[busIndex]; i++) {
-            if (heldIds[busIndex][i] == id) {
-                alreadyHeld = true;
+        requestedMask |= bit;
+        bool alreadyDisabled = false;
+        for (uint8_t i = 0; i < disabledCounts[busIndex]; i++) {
+            if (disabledIds[busIndex][i] == id) {
+                alreadyDisabled = true;
                 break;
             }
         }
-        if (alreadyHeld || heldCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
+        if (alreadyDisabled) {
+            torqueDisabledMask |= bit;
+            continue;
+        }
+        if (disabledCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
+            torqueDisableFailedMask |= bit;
             continue;
         }
 
         ServoBusDriver* bus = getBusByIndex(busIndex);
-        if (!bus || !bus->isOnline(id)) {
+        if (!bus) {
+            torqueDisableFailedMask |= bit;
             continue;
         }
 
-        if ((unknownMask & bit) != 0) {
-            skippedUnknownMask |= bit;
-            if (bus->setTorqueEnabled(id, false)) {
-                torqueDisabledMask |= bit;
-            }
-            continue;
-        }
-
-        const int32_t holdPos32 = bus->getAbsolutePosition(id);
-        const int16_t rawSingleTurn = normalizeServoRawSingleTurn(bus->getRawPosition(id));
-        const int16_t holdPos = isServoAbsAtLimit(holdPos32)
-            ? rawSingleTurn
-            : clampServoAbsLocal(holdPos32);
-        if (isServoAbsAtLimit(holdPos32)) {
-            bus->setHardwareTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+        if (bus->setTorqueEnabled(id, false)) {
+            torqueDisabledMask |= bit;
+            disabledIds[busIndex][disabledCounts[busIndex]++] = id;
         } else {
-            bus->setTarget(id, holdPos, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-        }
-        heldIds[busIndex][heldCounts[busIndex]++] = id;
-        busWritePending[busIndex] = true;
-    }
-
-    if (skippedUnknownMask != 0) {
-        Serial.printf("[SERVO HOLD] unknown motors torque-off skip-position mask=0x%08lX disabled=0x%08lX\r\n",
-                      (unsigned long)skippedUnknownMask,
-                      (unsigned long)torqueDisabledMask);
-    }
-
-    for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
-        if (busWritePending[busIndex]) {
-            g_servoBuses[busIndex].syncWriteAll();
+            torqueDisableFailedMask |= bit;
         }
     }
+
+    Serial.printf("[SERVO E-STOP] torque-off request=0x%08lX disabled=0x%08lX failed=0x%08lX\r\n",
+                  (unsigned long)requestedMask,
+                  (unsigned long)torqueDisabledMask,
+                  (unsigned long)torqueDisableFailedMask);
 }
 
 static void bootRecoverLimitServosToRaw(uint32_t bootRecoverDeadlineMs)
@@ -689,7 +739,9 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             const ServoFeedbackInternal& fb = bus->getFeedback(id);
             servoData.servoAngles[ch] = bus->getAbsolutePosition(id);
             servoData.servoRawPositions[ch] = bus->getRawPosition(id);
+            servoData.servoHardwarePositions[ch] = bus->getPresentPosition(id);
             servoRawData.servoRawPositions[ch] = bus->getRawPosition(id);
+            servoRawData.servoHardwarePositions[ch] = bus->getPresentPosition(id);
             servoData.onlineStatus[ch] = 1;
             servoRawData.onlineStatus[ch] = 1;
             telemetryData.speed[ch] = fb.speed;
@@ -697,18 +749,6 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             telemetryData.voltage[ch] = fb.voltage;
             telemetryData.temperature[ch] = fb.temperature;
             telemetryData.onlineStatus[ch] = 1;
-            if (!sharedData->multiturn_nvs_enabled) {
-                const uint32_t bit = (1UL << ch);
-                if ((sharedData->multi_turn_unknown_bitmap & bit) != 0) {
-                    sharedData->multi_turn_unknown_bitmap &= ~bit;
-                    Serial.printf("[SERVO RESTORE] M%02u NVS off, using current raw as turn0 abs=%ld raw=%d unknown=0x%08lX\r\n",
-                                  (unsigned)ch,
-                                  (long)servoData.servoAngles[ch],
-                                  (int)servoData.servoRawPositions[ch],
-                                  (unsigned long)sharedData->multi_turn_unknown_bitmap);
-                }
-                continue;
-            }
             if (bus->isAbsoluteReliable(id)) {
                 const uint32_t bit = (1UL << ch);
                 if ((sharedData->multi_turn_unknown_bitmap & bit) != 0) {
@@ -719,6 +759,16 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
                                   (int)servoData.servoRawPositions[ch],
                                   (unsigned long)sharedData->multi_turn_unknown_bitmap);
                 }
+            }
+        } else if (!bus || bus->isOfflineInvalidated(id)) {
+            const uint32_t bit = (1UL << ch);
+            if ((sharedData->multi_turn_unknown_bitmap & bit) == 0) {
+                sharedData->multi_turn_unknown_bitmap |= bit;
+                Serial.printf("[SERVO OFFLINE] M%02u bus=%u id=%u marked Turn UNKNOWN unknown=0x%08lX\r\n",
+                              (unsigned)ch,
+                              (unsigned)busIndex,
+                              (unsigned)id,
+                              (unsigned long)sharedData->multi_turn_unknown_bitmap);
             }
         }
     }
@@ -1146,7 +1196,7 @@ void servoCommunicationTask(void* parameter)
         const uint32_t emergencyStopToken = sharedData->servo_emergency_stop_token;
         if (emergencyStopToken != lastEmergencyStopToken) {
             lastEmergencyStopToken = emergencyStopToken;
-            emergencyHoldMappedServosAtFeedback(sharedData);
+            emergencyTorqueOffMappedServos(sharedData);
         }
 
         processHostMultiTurnRestore(sharedData, &lastRestoreToken);
