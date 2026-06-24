@@ -48,7 +48,7 @@ class ManusSdkReceiver:
             return
         self._load_dll()
         self._stop_event.clear()
-        if not self._dll.mmhand_manus_start(1, 1, 5):
+        if not self._dll.mmhand_manus_start(1, 1, 64):
             self._set_error(self._dll_error() or "MANUS SDK start failed")
             return
         with self._lock:
@@ -188,6 +188,12 @@ class ManusSdkReceiver:
         values = packet.get("ergonomics_values") or []
         if not isinstance(names, list) or not isinstance(values, list):
             raise ValueError("ergonomics_names and ergonomics_values must be lists")
+        raw_skeleton_nodes = packet.get("raw_skeleton_nodes") or []
+        skeleton = packet.get("skeleton") or {}
+        if not isinstance(raw_skeleton_nodes, list):
+            raise ValueError("raw_skeleton_nodes must be a list")
+        if not isinstance(skeleton, dict):
+            raise ValueError("skeleton must be an object")
         return ManusFrame(
             seq=int(packet.get("seq", 0)),
             timestamp=float(packet.get("timestamp", 0.0)),
@@ -197,6 +203,8 @@ class ManusSdkReceiver:
             side=str(packet.get("side", "unknown")),
             ergonomics_names=[str(name) for name in names],
             ergonomics_values=[float(value) for value in values],
+            raw_skeleton_nodes=[node for node in raw_skeleton_nodes if isinstance(node, dict)],
+            skeleton=skeleton,
             source_addr="direct-sdk",
             valid=True,
         )

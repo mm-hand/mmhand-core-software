@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <iomanip>
 
 namespace
 {
@@ -53,13 +54,94 @@ std::string escapeJson(const std::string& text)
     return out.str();
 }
 
+std::string semanticKey(const std::string& value)
+{
+    if (value == "Hand") return "hand";
+    if (value == "Thumb") return "thumb";
+    if (value == "Index") return "index";
+    if (value == "Middle") return "middle";
+    if (value == "Ring") return "ring";
+    if (value == "Pinky") return "pinky";
+    if (value == "Metacarpal") return "metacarpal";
+    if (value == "Proximal") return "proximal";
+    if (value == "Intermediate") return "intermediate";
+    if (value == "Distal") return "distal";
+    if (value == "Tip") return "tip";
+    return "unknown";
+}
+
+void writeNodeJson(std::ostringstream& out, const RawSkeletonNodeSample& node)
+{
+    out << "{";
+    out << "\"node_id\":" << node.node_id << ",";
+    out << "\"parent_id\":" << node.parent_id << ",";
+    out << "\"side\":\"" << escapeJson(node.side) << "\",";
+    out << "\"chain_type\":\"" << escapeJson(node.chain_type) << "\",";
+    out << "\"finger_joint_type\":\"" << escapeJson(node.finger_joint_type) << "\",";
+    out << "\"has_node_info\":" << (node.has_node_info ? "true" : "false") << ",";
+    out << "\"pos\":[" << node.position.x << "," << node.position.y << "," << node.position.z << "],";
+    out << "\"rot\":[" << node.rotation.w << "," << node.rotation.x << ","
+        << node.rotation.y << "," << node.rotation.z << "]";
+    out << "}";
+}
+
+void writeSemanticSkeletonJson(std::ostringstream& out, const ManusFrame& frame)
+{
+    out << "\"skeleton\":{";
+    bool wrote_any = false;
+
+    for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+    {
+        if (node.chain_type != "Hand")
+        {
+            continue;
+        }
+        out << "\"hand\":";
+        writeNodeJson(out, node);
+        wrote_any = true;
+        break;
+    }
+
+    const char* fingers[] = {"Thumb", "Index", "Middle", "Ring", "Pinky"};
+    for (const char* finger : fingers)
+    {
+        bool wrote_finger_header = false;
+        for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+        {
+            if (node.chain_type != finger)
+            {
+                continue;
+            }
+            if (!wrote_finger_header)
+            {
+                if (wrote_any) out << ",";
+                out << "\"" << semanticKey(finger) << "\":{";
+                wrote_finger_header = true;
+                wrote_any = true;
+            }
+            else
+            {
+                out << ",";
+            }
+            out << "\"" << semanticKey(node.finger_joint_type) << "\":";
+            writeNodeJson(out, node);
+        }
+        if (wrote_finger_header)
+        {
+            out << "}";
+        }
+    }
+
+    out << "}";
+}
+
 std::string frameToJson(const ManusFrame& frame)
 {
     std::ostringstream out;
-    out.precision(10);
+    out << std::fixed << std::setprecision(6);
     out << "{";
     out << "\"type\":\"manus_frame\",";
-    out << "\"version\":1,";
+    out << "\"version\":3,";
     out << "\"seq\":" << frame.seq << ",";
     out << "\"timestamp\":" << frame.timestamp << ",";
     out << "\"dt\":" << frame.dt << ",";
@@ -80,7 +162,8 @@ std::string frameToJson(const ManusFrame& frame)
         if (i) out << ",";
         out << frame.ergonomics_values[i];
     }
-    out << "]";
+    out << "],";
+    writeSemanticSkeletonJson(out, frame);
     out << "}";
     return out.str();
 }
@@ -102,7 +185,7 @@ int mmhand_manus_start(
     ManusClientConfig config;
     config.connect_locally = connect_locally != 0;
     config.host_search_seconds = host_search_seconds ? host_search_seconds : 1;
-    config.max_raw_skeleton_nodes = max_raw_skeleton_nodes ? max_raw_skeleton_nodes : 5;
+    config.max_raw_skeleton_nodes = max_raw_skeleton_nodes ? max_raw_skeleton_nodes : 64;
 
     std::string error;
     if (!next->initialize(config, error))

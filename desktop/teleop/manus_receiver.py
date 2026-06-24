@@ -4,7 +4,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 MANUS_CONTROL_ENABLED = False
@@ -21,6 +21,8 @@ class ManusFrame:
     side: str
     ergonomics_names: List[str] = field(default_factory=list)
     ergonomics_values: List[float] = field(default_factory=list)
+    raw_skeleton_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    skeleton: Dict[str, Any] = field(default_factory=dict)
     source_addr: str = ""
     valid: bool = True
 
@@ -252,6 +254,12 @@ class ManusReceiver:
         values = packet.get("ergonomics_values") or []
         if not isinstance(names, list) or not isinstance(values, list):
             raise ValueError("ergonomics_names and ergonomics_values must be lists")
+        raw_skeleton_nodes = packet.get("raw_skeleton_nodes") or []
+        skeleton = packet.get("skeleton") or {}
+        if not isinstance(raw_skeleton_nodes, list):
+            raise ValueError("raw_skeleton_nodes must be a list")
+        if not isinstance(skeleton, dict):
+            raise ValueError("skeleton must be an object")
         return ManusFrame(
             seq=int(packet.get("seq", 0)),
             timestamp=float(packet.get("timestamp", 0.0)),
@@ -261,6 +269,8 @@ class ManusReceiver:
             side=str(packet.get("side", "unknown")),
             ergonomics_names=[str(name) for name in names],
             ergonomics_values=[float(value) for value in values],
+            raw_skeleton_nodes=[node for node in raw_skeleton_nodes if isinstance(node, dict)],
+            skeleton=skeleton,
             source_addr=source_addr,
             valid=True,
         )

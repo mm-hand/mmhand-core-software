@@ -33,6 +33,80 @@ std::string sideToString(Side side)
     }
 }
 
+std::string chainTypeToString(ChainType chain_type)
+{
+    switch (chain_type)
+    {
+    case ChainType_Arm:
+        return "Arm";
+    case ChainType_Leg:
+        return "Leg";
+    case ChainType_Neck:
+        return "Neck";
+    case ChainType_Spine:
+        return "Spine";
+    case ChainType_FingerThumb:
+        return "Thumb";
+    case ChainType_FingerIndex:
+        return "Index";
+    case ChainType_FingerMiddle:
+        return "Middle";
+    case ChainType_FingerRing:
+        return "Ring";
+    case ChainType_FingerPinky:
+        return "Pinky";
+    case ChainType_Pelvis:
+        return "Pelvis";
+    case ChainType_Head:
+        return "Head";
+    case ChainType_Shoulder:
+        return "Shoulder";
+    case ChainType_Hand:
+        return "Hand";
+    case ChainType_Foot:
+        return "Foot";
+    case ChainType_Toe:
+        return "Toe";
+    default:
+        return "unknown";
+    }
+}
+
+std::string fingerJointTypeToString(FingerJointType joint_type)
+{
+    switch (joint_type)
+    {
+    case FingerJointType_Metacarpal:
+        return "Metacarpal";
+    case FingerJointType_Proximal:
+        return "Proximal";
+    case FingerJointType_Intermediate:
+        return "Intermediate";
+    case FingerJointType_Distal:
+        return "Distal";
+    case FingerJointType_Tip:
+        return "Tip";
+    default:
+        return "unknown";
+    }
+}
+
+const NodeInfo* findNodeInfo(const std::vector<NodeInfo>& node_infos, uint32_t node_id)
+{
+    if (node_id < node_infos.size() && node_infos[node_id].nodeId == node_id)
+    {
+        return &node_infos[node_id];
+    }
+    for (const NodeInfo& node_info : node_infos)
+    {
+        if (node_info.nodeId == node_id)
+        {
+            return &node_info;
+        }
+    }
+    return nullptr;
+}
+
 Vec3 toVec3(const ManusVec3& value)
 {
     return Vec3{value.x, value.y, value.z};
@@ -422,6 +496,13 @@ void ManusClient::handleRawSkeleton(const SkeletonStreamInfo* raw_skeleton_info)
             continue;
         }
 
+        std::vector<NodeInfo> node_infos(info.nodesCount);
+        result = CoreSdk_GetRawSkeletonNodeInfoArray(info.gloveId, node_infos.data(), info.nodesCount);
+        if (result != SDKReturnCode_Success)
+        {
+            node_infos.clear();
+        }
+
         RawSkeletonSnapshot snapshot;
         const uint32_t sample_count = std::min(info.nodesCount, config_.max_raw_skeleton_nodes);
         snapshot.nodes.reserve(sample_count);
@@ -432,6 +513,18 @@ void ManusClient::handleRawSkeleton(const SkeletonStreamInfo* raw_skeleton_info)
             sample.node_id = node.id;
             sample.position = toVec3(node.transform.position);
             sample.rotation = toQuat(node.transform.rotation);
+            if (!node_infos.empty())
+            {
+                const NodeInfo* node_info = findNodeInfo(node_infos, node.id);
+                if (node_info)
+                {
+                    sample.parent_id = node_info->parentId;
+                    sample.side = sideToString(node_info->side);
+                    sample.chain_type = chainTypeToString(node_info->chainType);
+                    sample.finger_joint_type = fingerJointTypeToString(node_info->fingerJointType);
+                    sample.has_node_info = true;
+                }
+            }
             snapshot.nodes.push_back(sample);
         }
         raw_skeleton_by_glove_[info.gloveId] = std::move(snapshot);

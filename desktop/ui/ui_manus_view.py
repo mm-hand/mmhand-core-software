@@ -1,5 +1,10 @@
+﻿import json
+import os
+import subprocess
+import sys
 import time
 from datetime import datetime
+import math
 from typing import Callable, Optional
 
 from teleop.manus_calibration import (
@@ -7,6 +12,7 @@ from teleop.manus_calibration import (
     DEFAULT_MANUS_SIDE,
     ManusCalibrationManager,
 )
+from teleop.manus_raw_skeleton_retarget import FullRawSkeletonRetargeter
 from teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
 try:
     from teleop.manus_sdk_receiver import ManusSdkReceiver
@@ -25,6 +31,7 @@ class ManusUdpView(QtWidgets.QWidget):
         self._source_mode = "tcp"
         self.receiver = self._make_receiver(self._source_mode)
         self.calibration = ManusCalibrationManager()
+        self.raw_skeleton_retargeter = FullRawSkeletonRetargeter(calibration_manager=self.calibration)
         self._last_status = ""
         self._last_displayed_seq: Optional[int] = None
         self._last_sent_seq: Optional[int] = None
@@ -32,6 +39,12 @@ class ManusUdpView(QtWidgets.QWidget):
         self._recording_pose: Optional[str] = None
         self._feedback_angles: list[Optional[float]] = [None] * ENCODER_COUNT
         self._last_sent_targets: list[Optional[float]] = [None] * ENCODER_COUNT
+        self._last_raw_skeleton_preview = []
+        self._last_urdf_preview_t = 0.0
+        self._urdf_viewer_process: Optional[subprocess.Popen] = None
+        self.raw_q_target_line: Optional[QtWidgets.QLineEdit] = None
+        self.raw_q_urdf_line: Optional[QtWidgets.QLineEdit] = None
+        self.urdf_viewer_status_label: Optional[QtWidgets.QLabel] = None
         self._build()
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(50)
@@ -53,6 +66,15 @@ class ManusUdpView(QtWidgets.QWidget):
         source_row.addWidget(QtWidgets.QLabel("Source:"))
         source_row.addWidget(self.source_combo, 1)
         layout.addLayout(source_row)
+
+        retarget_row = QtWidgets.QHBoxLayout()
+        self.retarget_combo = QtWidgets.QComboBox()
+        self.retarget_combo.addItem("Ergonomics angle mapping", "ergonomics")
+        self.retarget_combo.addItem("Full raw skeleton IK", "raw_pinky")
+        self.retarget_combo.currentIndexChanged.connect(lambda _idx: self._on_retarget_changed())
+        retarget_row.addWidget(QtWidgets.QLabel("Retarget:"))
+        retarget_row.addWidget(self.retarget_combo, 1)
+        layout.addLayout(retarget_row)
 
         status_row = QtWidgets.QHBoxLayout()
         self.status_label = QtWidgets.QLabel("Stopped")
@@ -100,21 +122,20 @@ class ManusUdpView(QtWidgets.QWidget):
         info.addRow("Frames:", self.packet_label)
         info.addRow("Seq Drops:", self.drop_label)
         info.addRow("Safety:", self.safety_label)
-        layout.addLayout(info)
-
+        # 璋冭瘯淇℃伅琛ㄥ崟鍏堜笉鏄剧ず锛岄伩鍏嶆尋鍘?Raw IK / URDF 棰勮鍖哄煙銆?        # label 浠嶄繚鐣欑粰鐘舵€佹洿鏂伴€昏緫浣跨敤銆?
         calib = QtWidgets.QGroupBox("MANUS Calibration / Joint Send")
         calib_layout = QtWidgets.QVBoxLayout(calib)
         button_row = QtWidgets.QHBoxLayout()
-        self.record_open_btn = QtWidgets.QPushButton("Record Open")
-        self.record_close_btn = QtWidgets.QPushButton("Record Close")
-        self.record_pinch_btn = QtWidgets.QPushButton("Record Pinch")
-        self.record_opposition_btn = QtWidgets.QPushButton("Record Opposition")
+        self.record_align_btn = QtWidgets.QPushButton("Record Align")
+        self.record_open_aa_btn = QtWidgets.QPushButton("Record Open AA")
+        self.record_fist_flex_btn = QtWidgets.QPushButton("Record Fist Flex")
+        self.record_thumb_pinky_root_btn = QtWidgets.QPushButton("Record Thumb->PinkyRoot")
         self.load_calib_btn = QtWidgets.QPushButton("Load Calibration")
         for btn in (
-            self.record_open_btn,
-            self.record_close_btn,
-            self.record_pinch_btn,
-            self.record_opposition_btn,
+            self.record_align_btn,
+            self.record_open_aa_btn,
+            self.record_fist_flex_btn,
+            self.record_thumb_pinky_root_btn,
             self.load_calib_btn,
         ):
             button_row.addWidget(btn)
@@ -138,11 +159,27 @@ class ManusUdpView(QtWidgets.QWidget):
         self._apply_source_safety()
         self._update_endpoint_label()
 
-        self.record_open_btn.clicked.connect(lambda _checked=False: self._record_calibration("open"))
-        self.record_close_btn.clicked.connect(lambda _checked=False: self._record_calibration("close"))
-        self.record_pinch_btn.clicked.connect(lambda _checked=False: self._record_calibration("pinch"))
-        self.record_opposition_btn.clicked.connect(lambda _checked=False: self._record_calibration("opposition"))
+        self.record_align_btn.clicked.connect(lambda _checked=False: self._record_calibration("align"))
+        self.record_open_aa_btn.clicked.connect(lambda _checked=False: self._record_calibration("open_aa"))
+        self.record_fist_flex_btn.clicked.connect(lambda _checked=False: self._record_calibration("fist_flex"))
+        self.record_thumb_pinky_root_btn.clicked.connect(lambda _checked=False: self._record_calibration("thumb_pinky_root"))
         self.load_calib_btn.clicked.connect(lambda _checked=False: self._load_calibration())
+
+        raw_q_row = QtWidgets.QHBoxLayout()
+        raw_q_row.addWidget(QtWidgets.QLabel("Raw IK q_target J00-J20:"))
+        self.raw_q_target_line = QtWidgets.QLineEdit()
+        self.raw_q_target_line.setReadOnly(True)
+        self.raw_q_target_line.setPlaceholderText("waiting for Raw IK q_target")
+        raw_q_row.addWidget(self.raw_q_target_line, 1)
+        layout.addLayout(raw_q_row)
+
+        raw_urdf_row = QtWidgets.QHBoxLayout()
+        raw_urdf_row.addWidget(QtWidgets.QLabel("Raw IK q_urdf J00-J20:"))
+        self.raw_q_urdf_line = QtWidgets.QLineEdit()
+        self.raw_q_urdf_line.setReadOnly(True)
+        self.raw_q_urdf_line.setPlaceholderText("waiting for IK internal URDF q")
+        raw_urdf_row.addWidget(self.raw_q_urdf_line, 1)
+        layout.addLayout(raw_urdf_row)
 
         preview_tabs = QtWidgets.QTabWidget()
         self.table = QtWidgets.QTableWidget(0, 3)
@@ -151,21 +188,45 @@ class ManusUdpView(QtWidgets.QWidget):
         self._fit_table_header(self.table)
         preview_tabs.addTab(self.table, "Typed Ergonomics")
 
-        self.feature_table = QtWidgets.QTableWidget(0, 6)
-        self.feature_table.setHorizontalHeaderLabels([
-            "Type", "Human Angle", "Open", "Close", "Normalized", "Valid",
-        ])
-        self.feature_table.verticalHeader().setVisible(False)
-        self._fit_table_header(self.feature_table)
-        preview_tabs.addTab(self.feature_table, "Normalized Features")
-
         self.preview_table = QtWidgets.QTableWidget(0, 8)
         self.preview_table.setHorizontalHeaderLabels([
-            "Robot Joint", "Human -> Robot Mapping", "Human Angle", "Normalized", "Joint Limit", "Limit Source", "robot_q_target_preview", "Over Limit",
+            "Robot Joint", "Human -> Robot Mapping", "Human 螖", "Gain deg/deg", "Joint Limit", "Limit Source", "robot_q_target_preview", "Over Limit",
         ])
         self.preview_table.verticalHeader().setVisible(False)
         self._fit_table_header(self.preview_table)
-        preview_tabs.addTab(self.preview_table, "Robot Preview")
+        preview_tabs.addTab(self.preview_table, "Ergonomics Angle Mapping")
+
+        self.raw_skeleton_table = QtWidgets.QTableWidget(0, 13)
+        self.raw_skeleton_table.setHorizontalHeaderLabels([
+            "Source", "Node", "ID", "Parent", "X", "Y", "Z", "Norm", "Qw", "Qx", "Qy", "Qz", "Rot",
+        ])
+        self.raw_skeleton_table.verticalHeader().setVisible(False)
+        self._fit_table_header(self.raw_skeleton_table)
+        preview_tabs.addTab(self.raw_skeleton_table, "Raw Skeleton")
+
+        self.raw_skeleton_preview_table = QtWidgets.QTableWidget(0, 10)
+        self.raw_skeleton_preview_table.setHorizontalHeaderLabels([
+            "Robot Joint", "IK Mapping", "Target Debug", "Robot Target XYZ", "IK Error mm", "Joint Limit", "q_urdf", "q_target", "Valid", "Send",
+        ])
+        self.raw_skeleton_preview_table.verticalHeader().setVisible(False)
+        self._fit_table_header(self.raw_skeleton_preview_table)
+        preview_tabs.addTab(self.raw_skeleton_preview_table, "Raw IK")
+
+        urdf_viewer_panel = QtWidgets.QWidget()
+        urdf_viewer_layout = QtWidgets.QVBoxLayout(urdf_viewer_panel)
+        urdf_viewer_row = QtWidgets.QHBoxLayout()
+        launch_viewer_btn = QtWidgets.QPushButton("Launch URDF Viewer")
+        launch_viewer_btn.clicked.connect(lambda _checked=False: self._launch_urdf_viewer())
+        urdf_viewer_row.addWidget(launch_viewer_btn)
+        urdf_viewer_row.addStretch(1)
+        urdf_viewer_layout.addLayout(urdf_viewer_row)
+        self.urdf_viewer_status_label = QtWidgets.QLabel(
+            f"q_target stream: {self._urdf_preview_stream_path()}"
+        )
+        self.urdf_viewer_status_label.setWordWrap(True)
+        urdf_viewer_layout.addWidget(self.urdf_viewer_status_label)
+        urdf_viewer_layout.addStretch(1)
+        preview_tabs.addTab(urdf_viewer_panel, "URDF Viewer")
 
         layout.addWidget(preview_tabs, 1)
 
@@ -242,6 +303,20 @@ class ManusUdpView(QtWidgets.QWidget):
             return "MANUS Direct SDK waiting for frames"
         return "MANUS waiting for TCP frames"
 
+    def _on_retarget_changed(self) -> None:
+        mode = self._retarget_mode()
+        if mode == "raw_pinky":
+            self.calib_status_label.setText("Full raw skeleton IK selected; Enable Joint Send drives selected J00-J20")
+        else:
+            self.calib_status_label.setText("Ergonomics angle mapping selected; Enable Joint Send uses Open/Close calibration")
+        self._apply_source_safety()
+        self._set_status(f"MANUS retarget selected: {self.retarget_combo.currentText()}")
+
+    def _retarget_mode(self) -> str:
+        if hasattr(self, "retarget_combo"):
+            return str(self.retarget_combo.currentData() or "ergonomics")
+        return "ergonomics"
+
     def _refresh(self) -> None:
         error = self.receiver.last_error()
         frame = self.receiver.get_latest_frame()
@@ -265,6 +340,8 @@ class ManusUdpView(QtWidgets.QWidget):
         if frame.seq != self._last_displayed_seq:
             self._update_frame(frame)
             preview = self._update_preview(frame)
+            self._update_raw_skeleton(frame)
+            raw_skeleton_preview = self._update_raw_skeleton_preview(frame)
             self._maybe_send_joint_targets(frame, preview)
             self._last_displayed_seq = frame.seq
 
@@ -326,32 +403,223 @@ class ManusUdpView(QtWidgets.QWidget):
                 item.setForeground(value_brush)
 
     def _update_preview(self, frame: ManusFrame):
-        features = self.calibration.normalized_features(frame)
-        self._set_table_rows(self.feature_table, len(features))
-        for row, feature in enumerate(features):
-            self._set_item(self.feature_table, row, 0, feature.type_name)
-            self._set_item(self.feature_table, row, 1, f"{feature.human_joint_angle:.3f}")
-            self._set_item(self.feature_table, row, 2, f"{feature.open_value:.3f}")
-            self._set_item(self.feature_table, row, 3, f"{feature.close_value:.3f}")
-            self._set_item(self.feature_table, row, 4, f"{feature.normalized_feature:.3f}")
-            self._set_item(self.feature_table, row, 5, "yes" if feature.valid else "no")
-
         preview = self.calibration.robot_q_target_preview(frame, side=DEFAULT_MANUS_SIDE)
         self._set_table_rows(self.preview_table, len(preview))
         for row, item in enumerate(preview):
             self._set_item(self.preview_table, row, 0, item.joint_name)
             self._set_item(self.preview_table, row, 1, item.human_joint_mapping)
-            self._set_item(self.preview_table, row, 2, f"{item.human_joint_angle:.3f}")
-            self._set_item(self.preview_table, row, 3, f"{item.normalized_feature:.3f}")
+            self._set_item(self.preview_table, row, 2, f"{item.human_delta_deg:.3f}")
+            self._set_item(self.preview_table, row, 3, f"{item.gain_deg_per_human_deg:.3f}")
             self._set_item(self.preview_table, row, 4, item.joint_limit_deg)
             self._set_item(self.preview_table, row, 5, item.joint_limit_source)
             self._set_item(self.preview_table, row, 6, f"{item.robot_q_target_preview:.3f}")
             self._set_item(self.preview_table, row, 7, "yes" if item.over_limit else "no")
+        if self._retarget_mode() != "raw_pinky":
+            angles = [0.0] * ENCODER_COUNT
+            for item in preview:
+                if 0 <= item.joint_index < ENCODER_COUNT:
+                    angles[item.joint_index] = float(item.robot_q_target_preview)
+            self._update_urdf_preview_angles(angles)
         return preview
+
+    def _update_raw_skeleton_preview(self, frame: ManusFrame):
+        preview = self.raw_skeleton_retargeter.preview(frame)
+        self._last_raw_skeleton_preview = preview
+        self._set_table_rows(self.raw_skeleton_preview_table, len(preview))
+        send_mode = self._retarget_mode() == "raw_pinky"
+        for row, item in enumerate(preview):
+            self._set_item(self.raw_skeleton_preview_table, row, 0, item.joint_name)
+            self._set_item(self.raw_skeleton_preview_table, row, 1, item.skeleton_mapping)
+            self._set_item(self.raw_skeleton_preview_table, row, 2, item.target_debug)
+            self._set_item(self.raw_skeleton_preview_table, row, 3, item.target_xyz)
+            self._set_item(self.raw_skeleton_preview_table, row, 4, f"{item.ik_error_mm:.2f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 5, item.joint_limit_deg)
+            self._set_item(self.raw_skeleton_preview_table, row, 6, f"{item.robot_q_urdf_preview:.3f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 7, f"{item.robot_q_target_preview:.3f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 8, "yes" if item.valid else "no")
+            self._set_item(self.raw_skeleton_preview_table, row, 9, "armed" if send_mode else "preview")
+        if self.raw_q_target_line is not None:
+            raw_angles = self.raw_skeleton_retargeter.target_angles(preview)
+            self.raw_q_target_line.setText(
+                " ".join(f"J{idx:02d}={float(value):.2f}" for idx, value in enumerate(raw_angles))
+            )
+            if self._retarget_mode() == "raw_pinky":
+                self._update_urdf_preview_angles(raw_angles)
+        if self.raw_q_urdf_line is not None:
+            urdf_angles = [0.0] * ENCODER_COUNT
+            for item in preview:
+                if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
+                    urdf_angles[item.joint_index] = float(item.robot_q_urdf_preview)
+            self.raw_q_urdf_line.setText(
+                " ".join(f"J{idx:02d}={float(value):+.2f}" for idx, value in enumerate(urdf_angles))
+            )
+        return preview
+
+    def _update_urdf_preview_angles(self, angles: list[float]) -> None:
+        # 只把当前 q_target 写给独立 URDF viewer；不在主 UI 线程里渲染。
+        now = time.monotonic()
+        if now - self._last_urdf_preview_t < 0.030:
+            return
+        self._last_urdf_preview_t = now
+        try:
+            self._write_urdf_preview_stream(list(angles))
+        except Exception as exc:
+            self._set_status(f"URDF viewer stream write failed: {exc}")
+
+    @staticmethod
+    def _urdf_preview_stream_path() -> str:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(root, "config", "raw_ik_q_target.json")
+
+    def _write_urdf_preview_stream(self, angles: list[float]) -> None:
+        path = self._urdf_preview_stream_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        values = [0.0] * ENCODER_COUNT
+        for idx, value in enumerate(list(angles)[:ENCODER_COUNT]):
+            values[idx] = float(value)
+        payload = {
+            "timestamp": time.time(),
+            "angles_deg": values,
+            "source": "raw_ik_q_target",
+        }
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(tmp_path, path)
+
+    def _launch_urdf_viewer(self) -> None:
+        if self._urdf_viewer_process is not None and self._urdf_viewer_process.poll() is None:
+            self._set_status("URDF viewer already running")
+            return
+        desktop_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        viewer_script = os.path.join(desktop_root, "tools", "raw_ik_urdf_viewer.py")
+        try:
+            self._urdf_viewer_process = subprocess.Popen(
+                [sys.executable, viewer_script, "--stream", self._urdf_preview_stream_path()],
+                cwd=desktop_root,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            self._set_status("URDF viewer launched")
+            if self.urdf_viewer_status_label is not None:
+                self.urdf_viewer_status_label.setText(
+                    f"URDF viewer running. q_target stream: {self._urdf_preview_stream_path()}"
+                )
+        except Exception as exc:
+            self._set_status(f"URDF viewer launch failed: {exc}")
+
+    @staticmethod
+    def _node_pos(node) -> Optional[list[float]]:
+        if not isinstance(node, dict):
+            return None
+        pos = node.get("pos")
+        if not isinstance(pos, list) or len(pos) < 3:
+            return None
+        try:
+            return [float(pos[0]), float(pos[1]), float(pos[2])]
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _sub_pos(a: list[float], b: list[float]) -> list[float]:
+        return [float(a[i]) - float(b[i]) for i in range(3)]
+
+    @staticmethod
+    def _norm_pos(pos: list[float]) -> float:
+        return math.sqrt(sum(float(v) * float(v) for v in pos[:3]))
+
+    @staticmethod
+    def _node_rot(node) -> Optional[list[float]]:
+        if not isinstance(node, dict):
+            return None
+        rot = node.get("rot")
+        if not isinstance(rot, list) or len(rot) < 4:
+            return None
+        try:
+            return [float(rot[0]), float(rot[1]), float(rot[2]), float(rot[3])]
+        except (TypeError, ValueError):
+            return None
+
+    def _set_skeleton_row(
+        self,
+        row: int,
+        source: str,
+        node_name: str,
+        node_id: str,
+        parent_id: str,
+        pos: Optional[list[float]],
+        rot: Optional[list[float]] = None,
+    ) -> None:
+        if pos is None:
+            values = [source, node_name, node_id, parent_id, "-", "-", "-", "-"]
+        else:
+            values = [
+                source,
+                node_name,
+                node_id,
+                parent_id,
+                f"{pos[0]:.4f}",
+                f"{pos[1]:.4f}",
+                f"{pos[2]:.4f}",
+                f"{self._norm_pos(pos):.4f}",
+            ]
+        if rot is None:
+            values.extend(["-", "-", "-", "-", "-"])
+        else:
+            values.extend([
+                f"{rot[0]:.4f}",
+                f"{rot[1]:.4f}",
+                f"{rot[2]:.4f}",
+                f"{rot[3]:.4f}",
+                f"{math.sqrt(sum(float(v) * float(v) for v in rot[:4])):.4f}",
+            ])
+        for col, text in enumerate(values):
+            self._set_item(self.raw_skeleton_table, row, col, text)
+
+    def _update_raw_skeleton(self, frame: ManusFrame) -> None:
+        skeleton = getattr(frame, "skeleton", {}) or {}
+        if not isinstance(skeleton, dict):
+            skeleton = {}
+        rows: list[tuple[str, str, str, str, Optional[list[float]], Optional[list[float]]]] = []
+        hand = skeleton.get("hand") if isinstance(skeleton.get("hand"), dict) else None
+        node_order = [("hand", hand)]
+        for finger_name in ("thumb", "index", "middle", "ring", "pinky"):
+            finger = skeleton.get(finger_name) if isinstance(skeleton.get(finger_name), dict) else {}
+            if not isinstance(finger, dict):
+                finger = {}
+            for joint_name in ("metacarpal", "proximal", "intermediate", "distal", "tip"):
+                node_order.append((f"{finger_name}.{joint_name}", finger.get(joint_name)))
+
+        for name, node in node_order:
+            node_id = "-"
+            parent_id = "-"
+            if isinstance(node, dict):
+                node_id = str(node.get("node_id", "-"))
+                parent_id = str(node.get("parent_id", "-"))
+            rows.append(("raw skeleton", name, node_id, parent_id, self._node_pos(node), self._node_rot(node)))
+
+        hand_pos = self._node_pos(hand)
+        for finger_name in ("thumb", "index", "middle", "ring", "pinky"):
+            finger = skeleton.get(finger_name) if isinstance(skeleton.get(finger_name), dict) else {}
+            if not isinstance(finger, dict):
+                finger = {}
+            meta_pos = self._node_pos(finger.get("metacarpal"))
+            tip_pos = self._node_pos(finger.get("tip"))
+            if hand_pos is not None and tip_pos is not None:
+                rows.append(("derived", f"hand -> {finger_name}.tip", "-", "-", self._sub_pos(tip_pos, hand_pos), None))
+            else:
+                rows.append(("derived", f"hand -> {finger_name}.tip", "-", "-", None, None))
+            if meta_pos is not None and tip_pos is not None:
+                rows.append(("derived", f"{finger_name}.metacarpal -> tip", "-", "-", self._sub_pos(tip_pos, meta_pos), None))
+            else:
+                rows.append(("derived", f"{finger_name}.metacarpal -> tip", "-", "-", None, None))
+
+        self._set_table_rows(self.raw_skeleton_table, len(rows))
+        for row, (source, name, node_id, parent_id, pos, rot) in enumerate(rows):
+            self._set_skeleton_row(row, source, name, node_id, parent_id, pos, rot)
 
     def _on_send_enabled(self, checked: bool) -> None:
         if checked:
-            if not self.calibration.has_open_close():
+            if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
                 self.send_enable_check.setChecked(False)
                 self._set_status("MANUS joint send blocked: record/load Open and Close first")
                 return
@@ -362,7 +630,10 @@ class ManusUdpView(QtWidgets.QWidget):
                 self.send_enable_check.setChecked(False)
                 self._set_status(f"MANUS joint send failed to arm: {exc}")
                 return
-            self.calib_status_label.setText("MANUS joint send armed: left glove -> left robot joints")
+            if self._retarget_mode() == "raw_pinky":
+                self.calib_status_label.setText("MANUS joint send armed: full raw skeleton IK -> selected J00-J20")
+            else:
+                self.calib_status_label.setText("MANUS joint send armed: left glove -> left robot joints")
             self._set_status("MANUS joint send armed")
         else:
             try:
@@ -378,16 +649,34 @@ class ManusUdpView(QtWidgets.QWidget):
         if not self.receiver.is_alive():
             self._set_status("MANUS joint send paused: source stale")
             return
-        if not self.calibration.has_open_close():
+        if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
             self.send_enable_check.setChecked(False)
             self._set_status("MANUS joint send disabled: missing Open/Close calibration")
             return
         if frame.seq == self._last_sent_seq:
             return
-        angles = [0.0] * ENCODER_COUNT
-        for item in preview:
-            if 0 <= item.joint_index < len(angles):
-                angles[item.joint_index] = float(item.robot_q_target_preview)
+        if self._retarget_mode() == "raw_pinky":
+            raw_preview = self._last_raw_skeleton_preview or self.raw_skeleton_retargeter.preview(frame)
+            mask = self._selected_joint_mask()
+            invalid_selected = [
+                item.joint_index
+                for item in raw_preview
+                if 0 <= item.joint_index < ENCODER_COUNT
+                and (mask & (1 << item.joint_index)) != 0
+                and not item.valid
+            ]
+            if invalid_selected:
+                missing = ",".join(f"J{idx:02d}" for idx in invalid_selected[:6])
+                self._set_status(f"Full raw skeleton send blocked: invalid {missing}")
+                return
+            angles = self.raw_skeleton_retargeter.target_angles(raw_preview)
+            source_name = "MANUS full raw skeleton IK"
+        else:
+            angles = [0.0] * ENCODER_COUNT
+            for item in preview:
+                if 0 <= item.joint_index < len(angles):
+                    angles[item.joint_index] = float(item.robot_q_target_preview)
+            source_name = "MANUS ergonomics joint send"
         selected_targets, missing_feedback = self._targets_for_selected_joints(angles)
         if selected_targets is None:
             if missing_feedback:
@@ -399,7 +688,7 @@ class ManusUdpView(QtWidgets.QWidget):
         try:
             self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
             self.context.controller.set_pid_control(True)
-            self.context.send_joint_targets(selected_targets, source="MANUS left glove joint send", live=True)
+            self.context.send_joint_targets(selected_targets, source=source_name, live=True)
             self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
             self._sent_count += 1
@@ -418,17 +707,19 @@ class ManusUdpView(QtWidgets.QWidget):
             return
         self._recording_pose = pose
         self._set_calib_buttons_enabled(False)
-        self.calib_status_label.setText(f"Recording {pose} for 1.0s...")
+        display_pose = self._calibration_pose_label(pose)
+        self.calib_status_label.setText(f"Recording {display_pose} for 1.0s...")
         QtWidgets.QApplication.processEvents()
         QtCore.QTimer.singleShot(0, lambda p=pose: self._finish_record_calibration(p))
 
     def _finish_record_calibration(self, pose: str) -> None:
+        display_pose = self._calibration_pose_label(pose)
         try:
             count = self.calibration.record_pose(pose, self.receiver, duration_s=1.0)
-            self.calib_status_label.setText(f"Recorded {pose}: {count} typed ergonomics")
-            self._set_status(f"MANUS calibration saved {pose}: {count} values")
+            self.calib_status_label.setText(f"Recorded {display_pose}: {count} calibration values")
+            self._set_status(f"MANUS calibration saved {display_pose}: {count} values")
         except Exception as exc:
-            self.calib_status_label.setText(f"Record {pose} failed: {exc}")
+            self.calib_status_label.setText(f"Record {display_pose} failed: {exc}")
             self._set_status(f"MANUS calibration failed: {exc}")
         finally:
             self._recording_pose = None
@@ -446,13 +737,24 @@ class ManusUdpView(QtWidgets.QWidget):
 
     def _set_calib_buttons_enabled(self, enabled: bool) -> None:
         for btn in (
-            self.record_open_btn,
-            self.record_close_btn,
-            self.record_pinch_btn,
-            self.record_opposition_btn,
+            self.record_align_btn,
+            self.record_open_aa_btn,
+            self.record_fist_flex_btn,
+            self.record_thumb_pinky_root_btn,
             self.load_calib_btn,
         ):
             btn.setEnabled(bool(enabled))
+
+    @staticmethod
+    def _calibration_pose_label(pose: str) -> str:
+        labels = {
+            "align": "four-finger align",
+            "open_aa": "open AA",
+            "fist_flex": "fist flex",
+            "thumb_pinky_root": "thumb to pinky root",
+            "open": "legacy open",
+        }
+        return labels.get(str(pose), str(pose))
 
     def _set_table_rows(self, table: QtWidgets.QTableWidget, rows: int) -> None:
         if table.rowCount() != rows:

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <string>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -35,13 +36,106 @@ std::string escapeJson(const std::string& value)
     return out.str();
 }
 
+std::string semanticKey(const std::string& value)
+{
+    if (value == "Hand") return "hand";
+    if (value == "Thumb") return "thumb";
+    if (value == "Index") return "index";
+    if (value == "Middle") return "middle";
+    if (value == "Ring") return "ring";
+    if (value == "Pinky") return "pinky";
+    if (value == "Metacarpal") return "metacarpal";
+    if (value == "Proximal") return "proximal";
+    if (value == "Intermediate") return "intermediate";
+    if (value == "Distal") return "distal";
+    if (value == "Tip") return "tip";
+    return "unknown";
+}
+
+void writeNodeJson(std::ostringstream& json, const RawSkeletonNodeSample& node)
+{
+    json << "{";
+    json << "\"node_id\":" << node.node_id << ",";
+    json << "\"parent_id\":" << node.parent_id << ",";
+    json << "\"side\":\"" << escapeJson(node.side) << "\",";
+    json << "\"chain_type\":\"" << escapeJson(node.chain_type) << "\",";
+    json << "\"finger_joint_type\":\"" << escapeJson(node.finger_joint_type) << "\",";
+    json << "\"has_node_info\":" << (node.has_node_info ? "true" : "false") << ",";
+    json << "\"pos\":[" << node.position.x << "," << node.position.y << "," << node.position.z << "],";
+    json << "\"rot\":[" << node.rotation.w << "," << node.rotation.x << ","
+         << node.rotation.y << "," << node.rotation.z << "]";
+    json << "}";
+}
+
+void writeRawSkeletonNodesJson(std::ostringstream& json, const ManusFrame& frame)
+{
+    json << "\"raw_skeleton_nodes\":[";
+    for (size_t i = 0; i < frame.raw_skeleton_nodes.size(); ++i)
+    {
+        if (i > 0) json << ",";
+        writeNodeJson(json, frame.raw_skeleton_nodes[i]);
+    }
+    json << "]";
+}
+
+void writeSemanticSkeletonJson(std::ostringstream& json, const ManusFrame& frame)
+{
+    json << "\"skeleton\":{";
+    bool wrote_any = false;
+
+    for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+    {
+        if (node.chain_type != "Hand")
+        {
+            continue;
+        }
+        if (wrote_any) json << ",";
+        json << "\"hand\":";
+        writeNodeJson(json, node);
+        wrote_any = true;
+        break;
+    }
+
+    const char* fingers[] = {"Thumb", "Index", "Middle", "Ring", "Pinky"};
+    for (const char* finger : fingers)
+    {
+        bool wrote_finger_header = false;
+        for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+        {
+            if (node.chain_type != finger)
+            {
+                continue;
+            }
+            if (!wrote_finger_header)
+            {
+                if (wrote_any) json << ",";
+                json << "\"" << semanticKey(finger) << "\":{";
+                wrote_finger_header = true;
+                wrote_any = true;
+            }
+            else
+            {
+                json << ",";
+            }
+            json << "\"" << semanticKey(node.finger_joint_type) << "\":";
+            writeNodeJson(json, node);
+        }
+        if (wrote_finger_header)
+        {
+            json << "}";
+        }
+    }
+
+    json << "}";
+}
+
 std::string frameToJsonLine(const ManusFrame& frame)
 {
     std::ostringstream json;
     json << std::fixed << std::setprecision(6);
     json << "{";
     json << "\"type\":\"manus_frame\",";
-    json << "\"version\":1,";
+    json << "\"version\":3,";
     json << "\"seq\":" << frame.seq << ",";
     json << "\"timestamp\":" << frame.timestamp << ",";
     json << "\"dt\":" << frame.dt << ",";
@@ -59,7 +153,9 @@ std::string frameToJsonLine(const ManusFrame& frame)
         if (i > 0) json << ",";
         json << frame.ergonomics_values[i];
     }
-    json << "]}\n";
+    json << "],";
+    writeSemanticSkeletonJson(json, frame);
+    json << "}\n";
     return json.str();
 }
 }
@@ -173,13 +269,19 @@ bool TcpSender::sendFrame(const ManusFrame& frame, std::string& error)
 
     const std::string payload = frameToJsonLine(frame);
     SOCKET sock = reinterpret_cast<SOCKET>(socket_);
-    int sent = send(sock, payload.c_str(), static_cast<int>(payload.size()), 0);
-    if (sent == SOCKET_ERROR)
+    size_t total_sent = 0;
+    while (total_sent < payload.size())
     {
-        closesocket(sock);
-        socket_ = nullptr;
-        error = "TCP send failed; will reconnect";
-        return false;
+        const int chunk_size = static_cast<int>(payload.size() - total_sent);
+        const int sent = send(sock, payload.c_str() + total_sent, chunk_size, 0);
+        if (sent == SOCKET_ERROR || sent <= 0)
+        {
+            closesocket(sock);
+            socket_ = nullptr;
+            error = "TCP send failed; will reconnect";
+            return false;
+        }
+        total_sent += static_cast<size_t>(sent);
     }
     return true;
 }

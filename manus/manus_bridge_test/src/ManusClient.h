@@ -27,6 +27,11 @@ struct Quat
 struct RawSkeletonNodeSample
 {
     uint32_t node_id = 0;
+    uint32_t parent_id = 0;
+    std::string side = "unknown";
+    std::string chain_type = "unknown";
+    std::string finger_joint_type = "unknown";
+    bool has_node_info = false;
     Vec3 position;
     Quat rotation;
 };
@@ -53,7 +58,7 @@ struct ManusClientConfig
 {
     bool connect_locally = true;
     uint32_t host_search_seconds = 1;
-    uint32_t max_raw_skeleton_nodes = 5;
+    uint32_t max_raw_skeleton_nodes = 64;
 };
 
 class ManusClient
