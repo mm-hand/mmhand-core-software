@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,11 +47,13 @@ class URDFRobotHandModel:
         finger_chains: dict[str, FingerChain],
         revolute_joint_order: list[str],
         link_inertial_origins: dict[str, np.ndarray] | None = None,
+        visual_contact_tip_offsets: dict[str, np.ndarray] | None = None,
     ) -> None:
         self.joint_specs = joint_specs
         self.finger_chains = finger_chains
         self.revolute_joint_order = revolute_joint_order
         self.link_inertial_origins = dict(link_inertial_origins or {})
+        self.visual_contact_tip_offsets = dict(visual_contact_tip_offsets or {})
 
     @classmethod
     def from_urdf(cls, urdf_path: Path) -> "URDFRobotHandModel":
@@ -60,6 +63,7 @@ class URDFRobotHandModel:
         root = ET.parse(urdf_path).getroot()
         joint_specs: dict[str, JointSpec] = {}
         link_inertial_origins: dict[str, np.ndarray] = {}
+        visual_contact_tip_offsets = cls._visual_contact_tip_offsets_from_urdf(root, urdf_path)
 
         for link_elem in root.findall("link"):
             link_name = link_elem.attrib.get("name", "")
@@ -153,6 +157,7 @@ class URDFRobotHandModel:
             finger_chains, revolute_joint_order = cls._build_semantic_mmhand_chains(
                 joint_specs,
                 link_inertial_origins,
+                visual_contact_tip_offsets,
             )
         else:
             revolute_joint_order.sort(
@@ -164,13 +169,66 @@ class URDFRobotHandModel:
             finger_chains=finger_chains,
             revolute_joint_order=revolute_joint_order,
             link_inertial_origins=link_inertial_origins,
+            visual_contact_tip_offsets=visual_contact_tip_offsets,
         )
+
+    @staticmethod
+    def _visual_contact_tip_offsets_from_urdf(root: ET.Element, urdf_path: Path) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        mesh_root = urdf_path.parent
+        for link_elem in root.findall("link"):
+            link_name = link_elem.attrib.get("name", "")
+            if "fingertip" not in link_name:
+                continue
+            visual = link_elem.find("visual")
+            if visual is None:
+                continue
+            origin_elem = visual.find("origin")
+            mesh_elem = visual.find("geometry/mesh")
+            if mesh_elem is None:
+                continue
+            origin = (
+                parse_xyz(origin_elem.attrib.get("xyz", "0 0 0"))
+                if origin_elem is not None
+                else np.zeros(3, dtype=float)
+            )
+            scale = parse_xyz(mesh_elem.attrib.get("scale", "1 1 1"))
+            mesh_file = mesh_elem.attrib.get("filename", "")
+            mesh_path = (mesh_root / mesh_file).resolve()
+            if not mesh_path.exists():
+                continue
+            vertices = URDFRobotHandModel._read_binary_stl_vertices(mesh_path)
+            if vertices.size == 0:
+                continue
+            local_vertices = origin + vertices * scale
+            axis = 2 if "thumb" in link_name else 0
+            index = int(np.argmin(local_vertices[:, axis]) if axis == 2 else np.argmax(local_vertices[:, axis]))
+            out[link_name] = local_vertices[index].astype(float)
+        return out
+
+    @staticmethod
+    def _read_binary_stl_vertices(path: Path) -> np.ndarray:
+        data = path.read_bytes()
+        if len(data) < 84:
+            return np.zeros((0, 3), dtype=float)
+        tri_count = struct.unpack("<I", data[80:84])[0]
+        expected = 84 + tri_count * 50
+        if expected > len(data):
+            return np.zeros((0, 3), dtype=float)
+        vertices: list[tuple[float, float, float]] = []
+        offset = 84
+        for _ in range(tri_count):
+            values = struct.unpack("<12fH", data[offset : offset + 50])
+            vertices.extend((values[3:6], values[6:9], values[9:12]))
+            offset += 50
+        return np.asarray(vertices, dtype=float)
 
     @classmethod
     def _build_semantic_mmhand_chains(
         cls,
         joint_specs: dict[str, JointSpec],
         link_inertial_origins: dict[str, np.ndarray],
+        visual_contact_tip_offsets: dict[str, np.ndarray],
     ) -> tuple[dict[str, FingerChain], list[str]]:
         # 新版 mmhand URDF 使用语义 joint 名，不再使用旧版 "1-1" 这种命名。
         # 四指链路都先经过 base_link -> finger_base 的 fixed transform，
@@ -181,6 +239,7 @@ class URDFRobotHandModel:
                 (
                     ("base_link_1_finger_base_1_fixed_joint",),
                     ("palm_1_fixed_joint", "palm_1_finger_base_1_fixed_joint"),
+                    ("palm_fix_joint", "palm_1_finger_base_1_fixed_joint"),
                 ),
                 [
                     "index_aa_joint",
@@ -194,6 +253,7 @@ class URDFRobotHandModel:
                 (
                     ("base_link_1_finger_base_2_fixed_joint",),
                     ("palm_1_fixed_joint", "palm_1_finger_base_2_fixed_joint"),
+                    ("palm_fix_joint", "palm_1_finger_base_2_fixed_joint"),
                 ),
                 [
                     "middle_aa_joint",
@@ -207,6 +267,7 @@ class URDFRobotHandModel:
                 (
                     ("base_link_1_finger_base_3_fixed_joint",),
                     ("palm_1_fixed_joint", "palm_1_finger_base_3_fixed_joint"),
+                    ("palm_fix_joint", "palm_1_finger_base_3_fixed_joint"),
                 ),
                 [
                     "ring_aa_joint",
@@ -220,6 +281,7 @@ class URDFRobotHandModel:
                 (
                     ("base_link_1_finger_base_4_fixed_joint",),
                     ("palm_1_fixed_joint", "palm_1_finger_base_4_fixed_joint"),
+                    ("palm_fix_joint", "palm_1_finger_base_4_fixed_joint"),
                 ),
                 [
                     "little_aa_joint",
@@ -232,6 +294,7 @@ class URDFRobotHandModel:
                 "5",
                 (
                     ("palm_1_fixed_joint",),
+                    ("palm_fix_joint",),
                     (),
                 ),
                 [
@@ -267,7 +330,14 @@ class URDFRobotHandModel:
             for joint_name in revolute_joints[1:]:
                 max_reach += float(np.linalg.norm(joint_specs[joint_name].origin_xyz))
             tip_link_name = joint_specs[revolute_joints[-1]].child
-            max_reach += float(np.linalg.norm(2.0 * link_inertial_origins.get(tip_link_name, np.zeros(3, dtype=float))))
+            max_reach += float(
+                np.linalg.norm(
+                    visual_contact_tip_offsets.get(
+                        tip_link_name,
+                        2.0 * link_inertial_origins.get(tip_link_name, np.zeros(3, dtype=float)),
+                    )
+                )
+            )
 
             finger_chains[finger_name] = FingerChain(
                 name=finger_name,
@@ -299,6 +369,9 @@ class URDFRobotHandModel:
     def _virtual_tip_offset(self, chain: FingerChain) -> np.ndarray:
         if chain.tip_joint_name is not None or not chain.tip_link_name:
             return np.zeros(3, dtype=float)
+        contact_offset = self.visual_contact_tip_offsets.get(chain.tip_link_name)
+        if contact_offset is not None:
+            return contact_offset.copy()
         return 2.0 * self.link_inertial_origins.get(chain.tip_link_name, np.zeros(3, dtype=float))
 
     def clamp_joint_value(self, joint_name: str, value: float) -> float:

@@ -20,6 +20,7 @@ class ManusSdkReceiver:
         self._latest_frame: Optional[ManusFrame] = None
         self._last_recv_time = 0.0
         self._last_recv_dt = 0.0
+        self._last_consumed_seq: Optional[int] = None
         self._packet_count = 0
         self._raw_packet_count = 0
         self._dropped_frames = 0
@@ -80,7 +81,20 @@ class ManusSdkReceiver:
 
     def get_latest_frame(self) -> Optional[ManusFrame]:
         with self._lock:
-            return self._latest_frame
+            frame = self._latest_frame
+            if frame is None:
+                return None
+            if frame.seq > 0:
+                pending = 1 if self._last_consumed_seq != frame.seq else 0
+                dropped_old = 0
+                if self._last_consumed_seq is not None and frame.seq > self._last_consumed_seq + 1:
+                    dropped_old = frame.seq - self._last_consumed_seq - 1
+                self._last_consumed_seq = frame.seq
+                frame.pending_packets_count = pending
+                frame.dropped_old_packets_count = dropped_old
+                frame.latest_frame_id = frame.seq
+                frame.processed_frame_id = frame.seq
+            return frame
 
     def is_alive(self) -> bool:
         with self._lock:
@@ -198,6 +212,7 @@ class ManusSdkReceiver:
             seq=int(packet.get("seq", 0)),
             timestamp=float(packet.get("timestamp", 0.0)),
             recv_time=time.time(),
+            recv_perf_time=time.perf_counter(),
             dt=float(packet.get("dt", 0.0)),
             glove_id=int(packet.get("glove_id", 0)),
             side=str(packet.get("side", "unknown")),

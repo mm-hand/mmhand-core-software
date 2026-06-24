@@ -2,8 +2,10 @@ import argparse
 import json
 import math
 import os
+import struct
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +18,7 @@ if DESKTOP_ROOT not in sys.path:
 
 from protocol import ENCODER_COUNT  # noqa: E402
 from teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH  # noqa: E402
+from teleop.Posture.hand_retargeting.math_utils import make_transform, parse_xyz, rpy_to_rotation  # noqa: E402
 from teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel  # noqa: E402
 from ui.ui_qt_compat import QtCore, QtGui, QtWidgets  # noqa: E402
 
@@ -307,8 +310,12 @@ class FastHandCanvas(QtWidgets.QWidget):
 class FastHandGlView(QtWidgets.QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.urdf_path = Path(DEFAULT_URDF_PATH)
         self.model = URDFRobotHandModel.from_urdf(Path(DEFAULT_URDF_PATH))
         self._cached_points: dict[str, list[np.ndarray]] = {}
+        self._link_poses: dict[str, np.ndarray] = {}
+        self._visual_meshes = self._load_urdf_visual_meshes(self.urdf_path)
+        self._mesh_items = {}
         self._segment_items = {}
         self._joint_item = None
         self._pinch_item = None
@@ -339,59 +346,13 @@ class FastHandGlView(QtWidgets.QWidget):
         for idx, value in enumerate(list(angles_deg)[:ENCODER_COUNT]):
             values[idx] = float(value)
         self._cached_points = _compute_finger_points(self.model, values)
+        self._link_poses = self._compute_link_poses(_joint_angle_map(self.model, values))
         self._draw()
 
     def _draw(self) -> None:
-        all_points = []
-        used = set()
-        for finger_name, points in self._cached_points.items():
-            arr = np.asarray(points, dtype=float)
-            if arr.ndim != 2 or arr.shape[0] < 2:
-                continue
-            all_points.append(arr)
-            color = FINGER_GL_COLORS.get(finger_name, (0.8, 0.85, 0.9, 1.0))
-            for idx in range(arr.shape[0] - 1):
-                key = (finger_name, idx)
-                p0 = arr[idx]
-                p1 = arr[idx + 1]
-                length = float(np.linalg.norm(p1 - p0))
-                if length < 1e-6:
-                    continue
-                used.add(key)
-                width = 0.010 if idx > 0 else 0.008
-                if finger_name == "thumb":
-                    width *= 0.90
-                vertices, faces = self._cuboid_between(p0, p1, width)
-                item = self._segment_items.get(key)
-                if item is None:
-                    item = self.gl.GLMeshItem(
-                        vertexes=vertices,
-                        faces=faces,
-                        smooth=False,
-                        drawEdges=True,
-                        edgeColor=(0.10, 0.15, 0.22, 0.45),
-                        color=color,
-                    )
-                    try:
-                        item.setGLOptions("translucent")
-                    except Exception:
-                        pass
-                    self._segment_items[key] = item
-                    self.view.addItem(item)
-                else:
-                    item.setMeshData(vertexes=vertices, faces=faces)
-                    try:
-                        item.setColor(color)
-                    except Exception:
-                        pass
-
-        for key in list(self._segment_items.keys()):
-            if key not in used:
-                self.view.removeItem(self._segment_items.pop(key))
-
+        all_points = self._draw_visual_meshes()
         if all_points:
             pts = np.vstack(all_points)
-            self._draw_palm()
             colors = np.tile(np.array([[0.95, 0.10, 0.08, 1.0]], dtype=float), (pts.shape[0], 1))
             if self._joint_item is None:
                 self._joint_item = self.gl.GLScatterPlotItem(pos=pts, color=colors, size=7.0, pxMode=True)
@@ -400,6 +361,159 @@ class FastHandGlView(QtWidgets.QWidget):
                 self._joint_item.setData(pos=pts, color=colors, size=7.0)
             self._fit_camera(pts)
         self._draw_pinch_line()
+
+    def _draw_visual_meshes(self) -> list[np.ndarray]:
+        used = set()
+        all_points = [np.asarray(points, dtype=float) for points in self._cached_points.values() if points]
+        for spec in self._visual_meshes:
+            link_name = spec["link"]
+            pose = self._link_poses.get(link_name)
+            if pose is None:
+                continue
+            vertices = spec["vertices"]
+            world = vertices @ pose[:3, :3].T + pose[:3, 3]
+            key = link_name
+            used.add(key)
+            item = self._mesh_items.get(key)
+            color = spec["color"]
+            if item is None:
+                item = self.gl.GLMeshItem(
+                    vertexes=world,
+                    faces=spec["faces"],
+                    smooth=False,
+                    drawEdges=True,
+                    edgeColor=(0.08, 0.12, 0.18, 0.32),
+                    color=color,
+                )
+                try:
+                    item.setGLOptions("translucent")
+                except Exception:
+                    pass
+                self._mesh_items[key] = item
+                self.view.addItem(item)
+            else:
+                item.setMeshData(vertexes=world, faces=spec["faces"])
+                try:
+                    item.setColor(color)
+                except Exception:
+                    pass
+            all_points.append(world[:: max(1, len(world) // 20)])
+
+        for key in list(self._mesh_items.keys()):
+            if key not in used:
+                self.view.removeItem(self._mesh_items.pop(key))
+        return all_points
+
+    def _compute_link_poses(self, joint_angles: dict[str, float]) -> dict[str, np.ndarray]:
+        children: dict[str, list[str]] = {}
+        all_links: set[str] = set()
+        child_links: set[str] = set()
+        for joint_name, spec in self.model.joint_specs.items():
+            children.setdefault(spec.parent, []).append(joint_name)
+            all_links.add(spec.parent)
+            all_links.add(spec.child)
+            child_links.add(spec.child)
+
+        roots = ["base_link"] if "base_link" in all_links else sorted(all_links - child_links)
+        poses: dict[str, np.ndarray] = {root: np.eye(4, dtype=float) for root in roots}
+        queue = list(roots)
+        while queue:
+            parent = queue.pop(0)
+            parent_pose = poses[parent]
+            for joint_name in children.get(parent, []):
+                spec = self.model.joint_specs[joint_name]
+                angle = float(joint_angles.get(joint_name, 0.0))
+                child_pose = parent_pose @ self.model.joint_local_transform(spec, angle)
+                poses[spec.child] = child_pose
+                queue.append(spec.child)
+        return poses
+
+    def _load_urdf_visual_meshes(self, urdf_path: Path) -> list[dict]:
+        root = ET.parse(urdf_path).getroot()
+        meshes: list[dict] = []
+        for link in root.findall("link"):
+            link_name = link.attrib.get("name", "")
+            visual = link.find("visual")
+            if not link_name or visual is None:
+                continue
+            mesh_elem = visual.find("geometry/mesh")
+            if mesh_elem is None:
+                continue
+            filename = mesh_elem.attrib.get("filename", "")
+            mesh_path = (urdf_path.parent / filename).resolve()
+            if not mesh_path.exists():
+                continue
+            vertices, faces = self._load_stl(mesh_path)
+            if vertices.size == 0 or faces.size == 0:
+                continue
+            scale = parse_xyz(mesh_elem.attrib.get("scale", "1 1 1"))
+            origin = self._visual_origin_transform(visual)
+            vertices = vertices * scale
+            vertices = vertices @ origin[:3, :3].T + origin[:3, 3]
+            vertices, faces = self._decimate_mesh(vertices, faces, max_triangles=4500)
+            meshes.append(
+                {
+                    "link": link_name,
+                    "vertices": vertices.astype(float),
+                    "faces": faces.astype(int),
+                    "color": self._mesh_color_for_link(link_name),
+                }
+            )
+        return meshes
+
+    @staticmethod
+    def _visual_origin_transform(visual_elem) -> np.ndarray:
+        origin_elem = visual_elem.find("origin")
+        if origin_elem is None:
+            return np.eye(4, dtype=float)
+        xyz = parse_xyz(origin_elem.attrib.get("xyz", "0 0 0"))
+        rpy = parse_xyz(origin_elem.attrib.get("rpy", "0 0 0"))
+        return make_transform(rpy_to_rotation(*rpy), xyz)
+
+    @staticmethod
+    def _load_stl(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        data = path.read_bytes()
+        if len(data) < 84:
+            return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int)
+        tri_count = struct.unpack("<I", data[80:84])[0]
+        expected = 84 + tri_count * 50
+        if expected > len(data):
+            return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int)
+        vertices = []
+        faces = []
+        offset = 84
+        for tri_idx in range(tri_count):
+            values = struct.unpack("<12fH", data[offset : offset + 50])
+            base = len(vertices)
+            vertices.extend((values[3:6], values[6:9], values[9:12]))
+            faces.append((base, base + 1, base + 2))
+            offset += 50
+        return np.asarray(vertices, dtype=float), np.asarray(faces, dtype=int)
+
+    @staticmethod
+    def _decimate_mesh(vertices: np.ndarray, faces: np.ndarray, max_triangles: int) -> tuple[np.ndarray, np.ndarray]:
+        if len(faces) <= max_triangles:
+            return vertices, faces
+        step = max(1, int(math.ceil(len(faces) / float(max_triangles))))
+        sampled_faces = faces[::step]
+        used = np.unique(sampled_faces.reshape(-1))
+        remap = {int(old): idx for idx, old in enumerate(used)}
+        remapped = np.vectorize(lambda value: remap[int(value)])(sampled_faces)
+        return vertices[used], remapped.astype(int)
+
+    @staticmethod
+    def _mesh_color_for_link(link_name: str) -> tuple[float, float, float, float]:
+        if "thumb" in link_name:
+            return (0.15, 0.50, 0.86, 0.58)
+        if "palm" in link_name or link_name == "base_link":
+            return (0.18, 0.42, 0.72, 0.35)
+        if "finger_4" in link_name:
+            return (0.19, 0.52, 0.86, 0.62)
+        if "finger_3" in link_name:
+            return (0.66, 0.74, 0.84, 0.70)
+        if "finger_2" in link_name:
+            return (0.74, 0.81, 0.90, 0.72)
+        return (0.84, 0.89, 0.95, 0.74)
 
     def _draw_palm(self) -> None:
         roots = []

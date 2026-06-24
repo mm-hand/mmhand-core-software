@@ -319,7 +319,11 @@ class ManusUdpView(QtWidgets.QWidget):
 
     def _refresh(self) -> None:
         error = self.receiver.last_error()
+        recv_call_start = time.perf_counter()
         frame = self.receiver.get_latest_frame()
+        recv_call_end = time.perf_counter()
+        if frame is not None:
+            frame.timing_recv_call_ms = (recv_call_end - recv_call_start) * 1000.0
         alive = self.receiver.is_alive()
         self._update_live_badge(alive)
         self._update_table_live_style(alive)

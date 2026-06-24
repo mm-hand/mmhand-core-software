@@ -1,4 +1,5 @@
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,7 @@ from .manus_calibration import (
 from .manus_receiver import ManusFrame
 
 RAW_IK_JOINT_INDICES = list(range(ENCODER_COUNT))
+DEBUG_TIMING = True
 FINGER_ORDER = ("pinky", "ring", "middle", "index", "thumb")
 FINGER_NAME_FOR_CALIBRATION = {
     "pinky": "Pinky",
@@ -81,23 +83,37 @@ RAW_IK_REGULARIZATION = 5e-3
 RAW_IK_FOUR_FINGER_REFERENCE_SCALE = 120.0
 RAW_IK_MAX_ITERS = 20
 RAW_IK_MAX_STEP_RAD = 0.18
+RAW_IK_ABS_RESIDUAL_TOL = 1e-4
+RAW_IK_IMPROVEMENT_TOL = 1e-9
+RAW_IK_SMALL_STEP_TOL_RAD = 1e-5
+RAW_IK_NO_IMPROVEMENT_PATIENCE = 3
 RAW_IK_THUMB_TIP_WEIGHT = 1.5
 RAW_IK_THUMB_FINGER_WEIGHTS = {
     "index": 1.0,
-    "middle": 0.0,
-    "ring": 0.0,
-    "pinky": 0.0,
+    "middle": 1.0,
+    "ring": 1.0,
+    "pinky": 1.0,
 }
-RAW_IK_THUMB_INDEX_PINCH_ENTER_M = 0.025
-RAW_IK_THUMB_INDEX_PINCH_EXIT_M = 0.045
+RAW_IK_THUMB_PINCH_ENABLED = True
+RAW_IK_THUMB_INDEX_PINCH_ENTER_M = 0.010
+RAW_IK_THUMB_INDEX_PINCH_EXIT_M = 0.015
 RAW_IK_THUMB_PINCH_DIR_EPS_M = 0.012
 RAW_IK_THUMB_PINCH_CLOSE_DISTANCE_M = 0.006
 RAW_IK_THUMB_PINCH_FAR_WEIGHT = 1.0
-RAW_IK_THUMB_PINCH_CLOSE_WEIGHT = 200.0
+RAW_IK_THUMB_PINCH_CLOSE_WEIGHT = 50.0
 RAW_IK_HAND_TIP_WEIGHT = 2.0
 RAW_IK_THUMB_DIP_TIP_WEIGHT = 2.5
 RAW_IK_THUMB_WEAK_REFERENCE_SCALE = 10.0
 RAW_IK_ERGONOMICS_REFERENCE_WEIGHT = 0.0
+RAW_IK_THUMB_ALIGN_Q_TARGET_DEG = {
+    # MANUS 回到 Record Align 时，大拇指应该回到这组 robot 姿态。
+    # 注意：J16 当前 URDF 限位是 [-29, 30]deg，所以这里不能再使用旧的 52deg。
+    16: -29.0,
+    17: 0.0,
+    18: 0.0,
+    19: 0.0,
+    20: 1.0,
+}
 
 
 @dataclass
@@ -325,6 +341,17 @@ class FullRawSkeletonRetargeter:
         self._last_thumb_cmc_aa_mode = "analytic CMC/AA"
         self._thumb_index_pinch_active = False
         self._thumb_index_prev_direction_palm: Optional[np.ndarray] = None
+        self._thumb_pinch_active_by_finger = {
+            "index": False,
+            "middle": False,
+            "ring": False,
+            "pinky": False,
+        }
+        self._thumb_prev_direction_palm_by_finger: dict[str, np.ndarray] = {}
+        self._last_ik_output_perf: Optional[float] = None
+        self.last_timing_debug: dict[str, float] = {}
+        self._thumb_ik_debug_parts: list[str] = []
+        self._last_thumb_ik_debug_summary = "-"
 
     @staticmethod
     def _raw_skeleton_palm_frame(frame: ManusFrame) -> Optional[tuple[np.ndarray, np.ndarray]]:
@@ -446,15 +473,27 @@ class FullRawSkeletonRetargeter:
     def _raw_targets(
         self,
         frame: ManusFrame,
+        timing: Optional[dict[str, float]] = None,
     ) -> tuple[dict[str, RawFingerVectorTarget], Optional[dict[str, Any]], set[str], str]:
+        parse_start = time.perf_counter()
         local = self._raw_skeleton_to_palm_local_nodes(frame)
+        parse_end = time.perf_counter()
+        if timing is not None:
+            timing["dt_parse_landmarks_ms"] = (parse_end - parse_start) * 1000.0
         if local is None:
+            if timing is not None:
+                timing["dt_build_targets_ms"] = 0.0
             return {}, None, set(), "missing required hand/index/pinky metacarpal nodes for palm frame"
         local_nodes, valid_fingers = local
+        target_start = time.perf_counter()
         try:
             targets = self._retarget_available_tip_targets(local_nodes, valid_fingers)
         except Exception as exc:
+            if timing is not None:
+                timing["dt_build_targets_ms"] = (time.perf_counter() - target_start) * 1000.0
             return {}, None, valid_fingers, f"full raw skeleton retarget failed: {exc}"
+        if timing is not None:
+            timing["dt_build_targets_ms"] = (time.perf_counter() - target_start) * 1000.0
         return targets, local_nodes, valid_fingers, "MANUS palm-local vectors -> robot palm-local vector targets -> IK"
 
     def _robot_base_to_palm_local(self, point_base: np.ndarray) -> np.ndarray:
@@ -465,13 +504,33 @@ class FullRawSkeletonRetargeter:
         # p_r_base = O_r + R_r p_r_local。
         return self.robot_palm_origin + self.robot_palm_rotation @ np.asarray(point_local, dtype=float)
 
+    def _thumb_align_joint_angles(self) -> dict[str, float]:
+        chain = self.robot.finger_chains.get("thumb")
+        if chain is None:
+            return {}
+        reference: dict[str, float] = {}
+        for joint_name in chain.revolute_joint_names:
+            idx = _encoder_index_for_joint(joint_name)
+            value_deg = RAW_IK_THUMB_ALIGN_Q_TARGET_DEG.get(idx, 0.0) if idx is not None else 0.0
+            value_rad = _encoder_degrees_to_urdf_angle(idx, float(value_deg)) if idx is not None else 0.0
+            spec = self.robot.joint_specs[joint_name]
+            reference[joint_name] = max(spec.lower, min(spec.upper, value_rad))
+        return reference
+
     def _robot_thumb_base_mcp_align_vector_palm(self) -> Optional[np.ndarray]:
         chain = self.robot.finger_chains.get("thumb")
         if chain is None:
             return None
-        # 用户确认的 thumb align：CMC=0deg, AA=52deg, MCP/PIP/DIP=0deg。
-        # 这里取 robot base->MCP 向量，作为 MANUS thumb 第一段相对变化的 robot 起点。
-        vector_base = self._thumb_base_to_mcp_vector(0.0, math.radians(52.0))
+        # 这里取 robot align 姿态下 base->MCP 向量，作为 MANUS thumb 第一段相对变化的 robot 起点。
+        align = self._thumb_align_joint_angles()
+        if not align or len(chain.revolute_joint_names) < 3:
+            return None
+        positions = self.robot.forward_joint_positions("thumb", align)
+        mcp_joint = chain.revolute_joint_names[2]
+        mcp_base = positions.get(mcp_joint)
+        if mcp_base is None:
+            return None
+        vector_base = mcp_base - chain.base_origin
         if float(np.linalg.norm(vector_base)) < 1e-8:
             return None
         root_palm = self._robot_base_to_palm_local(chain.base_origin)
@@ -560,15 +619,36 @@ class FullRawSkeletonRetargeter:
             thumb_root_palm = self._robot_base_to_palm_local(self.robot.finger_chains["thumb"].base_origin)
             thumb_display_palm = thumb_root_palm + thumb_vector
 
-        d_human_thumb_index: Optional[float] = None
-        if thumb_tip is not None and "index" in human_tips:
-            d_human_thumb_index = float(np.linalg.norm(human_tips["index"] - thumb_tip))
-            if self._thumb_index_pinch_active:
-                if d_human_thumb_index > RAW_IK_THUMB_INDEX_PINCH_EXIT_M:
-                    self._thumb_index_pinch_active = False
-                    self._thumb_index_prev_direction_palm = None
-            elif d_human_thumb_index < RAW_IK_THUMB_INDEX_PINCH_ENTER_M:
-                self._thumb_index_pinch_active = True
+        d_human_thumb_finger: dict[str, float] = {}
+        if thumb_tip is not None:
+            for candidate_name in ("index", "middle", "ring", "pinky"):
+                if (
+                    candidate_name not in human_tips
+                    or RAW_IK_THUMB_FINGER_WEIGHTS.get(candidate_name, 0.0) <= 0.0
+                ):
+                    continue
+                human_distance = float(np.linalg.norm(human_tips[candidate_name] - thumb_tip))
+                d_human_thumb_finger[candidate_name] = human_distance
+                if RAW_IK_THUMB_PINCH_ENABLED:
+                    if self._thumb_pinch_active_by_finger.get(candidate_name, False):
+                        if human_distance > RAW_IK_THUMB_INDEX_PINCH_EXIT_M:
+                            self._thumb_pinch_active_by_finger[candidate_name] = False
+                            self._thumb_prev_direction_palm_by_finger.pop(candidate_name, None)
+                    elif human_distance < RAW_IK_THUMB_INDEX_PINCH_ENTER_M:
+                        self._thumb_pinch_active_by_finger[candidate_name] = True
+                else:
+                    self._thumb_pinch_active_by_finger[candidate_name] = False
+                    self._thumb_prev_direction_palm_by_finger.pop(candidate_name, None)
+            nearest_pinch_name = (
+                min(d_human_thumb_finger, key=d_human_thumb_finger.get)
+                if d_human_thumb_finger
+                else None
+            )
+            for candidate_name in ("index", "middle", "ring", "pinky"):
+                if candidate_name != nearest_pinch_name:
+                    self._thumb_pinch_active_by_finger[candidate_name] = False
+                    self._thumb_prev_direction_palm_by_finger.pop(candidate_name, None)
+        self._thumb_index_pinch_active = self._thumb_pinch_active_by_finger.get("index", False)
 
         for finger_name, anchor_tip_palm in anchor_vectors_palm.items():
             thumb_tip_palm: Optional[np.ndarray] = None
@@ -590,48 +670,45 @@ class FullRawSkeletonRetargeter:
             if thumb_tip_palm is not None:
                 distance = float(np.linalg.norm(thumb_tip_palm))
                 current_direction = _normalize(thumb_tip_palm)
-                is_index_pair = finger_name == "index"
+                is_thumb_finger_pair = finger_name in ("index", "middle", "ring", "pinky")
                 thumb_pinch_active = (
-                    is_index_pair
-                    and self._thumb_index_pinch_active
+                    RAW_IK_THUMB_PINCH_ENABLED
+                    and
+                    is_thumb_finger_pair
+                    and self._thumb_pinch_active_by_finger.get(finger_name, False)
                     and distance > 1e-8
                     and RAW_IK_THUMB_FINGER_WEIGHTS.get(finger_name, 0.0) > 0.0
                 )
                 if thumb_pinch_active:
                     if (
                         distance < RAW_IK_THUMB_PINCH_DIR_EPS_M
-                        and self._thumb_index_prev_direction_palm is not None
+                        and finger_name in self._thumb_prev_direction_palm_by_finger
                     ):
-                        current_direction = self._thumb_index_prev_direction_palm
+                        current_direction = self._thumb_prev_direction_palm_by_finger[finger_name]
                     else:
-                        self._thumb_index_prev_direction_palm = current_direction
+                        self._thumb_prev_direction_palm_by_finger[finger_name] = current_direction
                     thumb_tip_palm = current_direction * RAW_IK_THUMB_PINCH_CLOSE_DISTANCE_M
-                elif is_index_pair:
-                    self._thumb_index_prev_direction_palm = None
-                active_pairs = "thumb-index" if self._thumb_index_pinch_active else "none"
-                if is_index_pair:
-                    d_human_text = (
-                        f"{d_human_thumb_index * 1000.0:.1f}mm"
-                        if d_human_thumb_index is not None
-                        else "-"
-                    )
-                    thumb_tip_debug = (
-                        f"pair=thumb-index "
-                        f"d_human_ti={d_human_text} "
-                        f"is_index_pinch={'yes' if self._thumb_index_pinch_active else 'no'} "
-                        f"target_thumb_index_norm={float(np.linalg.norm(thumb_tip_palm)) * 1000.0:.1f}mm "
-                        f"shape_weight={RAW_IK_THUMB_TIP_WEIGHT:.2f} "
-                        f"skip_thumb_index_collision={'yes' if thumb_pinch_active else 'no'} "
-                        f"active_s1_pairs={active_pairs}"
-                    )
-                else:
-                    thumb_tip_debug = (
-                        f"pair=thumb-{finger_name} "
-                        f"d_human={human_distance * 1000.0:.1f}mm "
-                        f"is_index_pinch={'yes' if self._thumb_index_pinch_active else 'no'} "
-                        f"target_norm={float(np.linalg.norm(thumb_tip_palm)) * 1000.0:.1f}mm "
-                        f"active_s1_pairs={active_pairs}"
-                    )
+                elif is_thumb_finger_pair:
+                    self._thumb_prev_direction_palm_by_finger.pop(finger_name, None)
+                active_pairs = ",".join(
+                    f"thumb-{name}"
+                    for name in ("index", "middle", "ring", "pinky")
+                    if self._thumb_pinch_active_by_finger.get(name, False)
+                ) or "none"
+                d_human_text = (
+                    f"{d_human_thumb_finger[finger_name] * 1000.0:.1f}mm"
+                    if finger_name in d_human_thumb_finger
+                    else f"{human_distance * 1000.0:.1f}mm"
+                )
+                thumb_tip_debug = (
+                    f"pair=thumb-{finger_name} "
+                    f"d_human_thumb_{finger_name}={d_human_text} "
+                    f"is_{finger_name}_pinch={'yes' if self._thumb_pinch_active_by_finger.get(finger_name, False) else 'no'} "
+                    f"target_thumb_{finger_name}_norm={float(np.linalg.norm(thumb_tip_palm)) * 1000.0:.1f}mm "
+                    f"shape_weight={RAW_IK_THUMB_TIP_WEIGHT:.2f} "
+                    f"skip_thumb_{finger_name}_collision={'yes' if thumb_pinch_active else 'no'} "
+                    f"active_s1_pairs={active_pairs}"
+                )
 
             root_palm = self._robot_base_to_palm_local(self.robot.finger_chains[finger_name].base_origin)
             display_tip_palm = root_palm + anchor_tip_palm
@@ -756,10 +833,13 @@ class FullRawSkeletonRetargeter:
         chain = self.robot.finger_chains.get(finger_name)
         if chain is None:
             return None
-        reference = {}
-        for joint_name in chain.revolute_joint_names:
-            idx = _encoder_index_for_joint(joint_name)
-            reference[joint_name] = _encoder_degrees_to_urdf_angle(idx, 0.0) if idx is not None else 0.0
+        if finger_name == "thumb":
+            reference = self._thumb_align_joint_angles()
+        else:
+            reference = {}
+            for joint_name in chain.revolute_joint_names:
+                idx = _encoder_index_for_joint(joint_name)
+                reference[joint_name] = _encoder_degrees_to_urdf_angle(idx, 0.0) if idx is not None else 0.0
         tip_base = self.robot.forward_tip_position(finger_name, reference)
         root_base = chain.base_origin
         return self._robot_base_to_palm_local(tip_base) - self._robot_base_to_palm_local(root_base)
@@ -851,9 +931,85 @@ class FullRawSkeletonRetargeter:
     def _encoder_index_for_urdf_joint(joint_name: str) -> Optional[int]:
         return _encoder_index_for_joint(joint_name)
 
+    @staticmethod
+    def _frame_age_ms(frame: ManusFrame) -> float:
+        now_wall = time.time()
+        timestamp = float(getattr(frame, "timestamp", 0.0) or 0.0)
+        if timestamp > 0.0:
+            # MANUS/bridge timestamp 可能是 epoch 秒，也可能是 epoch 毫秒。
+            if timestamp > 1.0e12:
+                return max(0.0, now_wall * 1000.0 - timestamp)
+            if timestamp > 1.0e9:
+                return max(0.0, (now_wall - timestamp) * 1000.0)
+        recv_time = float(getattr(frame, "recv_time", 0.0) or 0.0)
+        if recv_time > 0.0:
+            return max(0.0, (now_wall - recv_time) * 1000.0)
+        return 0.0
+
+    def _emit_timing_debug(self, frame: ManusFrame, timing: dict[str, float]) -> None:
+        if not DEBUG_TIMING:
+            return
+        t_end = float(timing.get("t_end", time.perf_counter()))
+        fps = 0.0
+        if self._last_ik_output_perf is not None:
+            dt = t_end - self._last_ik_output_perf
+            fps = 1.0 / dt if dt > 1e-9 else 0.0
+        self._last_ik_output_perf = t_end
+
+        finger_ms = timing.get("ik_finger_ms", {})
+        if isinstance(finger_ms, dict):
+            finger_text = " ".join(
+                f"ik_{name}={float(finger_ms.get(name, 0.0)):.2f}ms"
+                for name in ("index", "middle", "ring", "pinky", "thumb")
+            )
+        else:
+            finger_text = ""
+        active_pairs = timing.get("active_s1_pairs", "none")
+        selected_post_pinch = timing.get("selected_post_pinch_pair", "none")
+        thumb_debug = str(timing.get("thumb_ik_debug", "-"))
+        limit_debug = str(timing.get("limit_debug", "-"))
+        age_ms = self._frame_age_ms(frame)
+        t_recv = float(getattr(frame, "recv_perf_time", 0.0) or 0.0)
+        pending = int(getattr(frame, "pending_packets_count", 0) or 0)
+        dropped_old = int(getattr(frame, "dropped_old_packets_count", 0) or 0)
+        latest_frame_id = int(getattr(frame, "latest_frame_id", getattr(frame, "seq", 0)) or 0)
+        processed_frame_id = int(getattr(frame, "processed_frame_id", getattr(frame, "seq", 0)) or 0)
+        self.last_timing_debug = dict(timing)
+        print(
+            "[TIMING] "
+            f"frame={int(getattr(frame, 'seq', 0) or 0)} "
+            f"total={timing.get('dt_total_loop_ms', 0.0):.2f}ms "
+            f"recv={float(getattr(frame, 'timing_recv_call_ms', 0.0) or 0.0):.2f}ms "
+            f"parse={timing.get('dt_parse_landmarks_ms', 0.0):.2f}ms "
+            f"target={timing.get('dt_build_targets_ms', 0.0):.2f}ms "
+            f"ik={timing.get('dt_ik_solve_ms', 0.0):.2f}ms "
+            f"{finger_text} "
+            f"ik_post_pinch={timing.get('dt_post_pinch_ms', 0.0):.2f}ms "
+            f"active_s1_pairs={active_pairs} "
+            f"selected_post_pinch={selected_post_pinch} "
+            f"thumb_ik_debug={thumb_debug} "
+            f"limit_debug={limit_debug} "
+            f"after_ik={timing.get('dt_after_ik_ms', 0.0):.2f}ms "
+            f"age={age_ms:.2f}ms "
+            f"fps={fps:.1f} "
+            f"pending={pending} dropped_old={dropped_old} "
+            f"latest={latest_frame_id} processed={processed_frame_id} "
+            f"t_recv={t_recv:.6f} "
+            f"t_ik_start={timing.get('t_ik_start', 0.0):.6f} "
+            f"t_ik_end={timing.get('t_ik_end', 0.0):.6f}"
+        )
+
     def preview(self, frame: ManusFrame) -> List[RawSkeletonIkPreviewJoint]:
-        targets, local_nodes, valid_input_fingers, mapping = self._raw_targets(frame)
+        timing: dict[str, float] = {"t_loop_start": time.perf_counter()}
+        targets, local_nodes, valid_input_fingers, mapping = self._raw_targets(frame, timing=timing)
         if not targets or local_nodes is None:
+            timing["t_ik_start"] = time.perf_counter()
+            timing["t_ik_end"] = timing["t_ik_start"]
+            timing["dt_ik_solve_ms"] = 0.0
+            timing["dt_after_ik_ms"] = 0.0
+            timing["t_end"] = time.perf_counter()
+            timing["dt_total_loop_ms"] = (timing["t_end"] - timing["t_loop_start"]) * 1000.0
+            self._emit_timing_debug(frame, timing)
             return [
                 RawSkeletonIkPreviewJoint(
                     joint_index=idx,
@@ -879,13 +1035,18 @@ class FullRawSkeletonRetargeter:
         thumb_tip_base: Optional[np.ndarray] = None
         solved_tip_by_finger: dict[str, np.ndarray] = {}
         solve_order = ("index", "middle", "ring", "pinky", "thumb")
+        finger_timing_ms: dict[str, float] = {}
+        timing["t_ik_start"] = time.perf_counter()
         for finger_name in solve_order:
             # 先解拇指，后面的四指才能使用 thumb->tip 向量目标。
+            finger_solve_start = time.perf_counter()
             target = targets.get(finger_name)
             if target is None or finger_name not in self.robot.finger_chains:
+                finger_timing_ms[finger_name] = 0.0
                 continue
             reference = self._build_raw_reference_joint_angles(finger_name, frame)
             if finger_name == "thumb":
+                self._thumb_ik_debug_parts = []
                 thumb_finger_constraints = {
                     other_name: (
                         tip_base,
@@ -894,7 +1055,6 @@ class FullRawSkeletonRetargeter:
                     )
                     for other_name, tip_base in solved_tip_by_finger.items()
                     for other_target in [targets.get(other_name)]
-                    if other_name == "index"
                     if other_target is not None and other_target.thumb_tip_base is not None
                 }
                 solution = self._solve_thumb_hybrid_ik(
@@ -902,6 +1062,7 @@ class FullRawSkeletonRetargeter:
                     reference,
                     thumb_finger_constraints=thumb_finger_constraints,
                 )
+                self._last_thumb_ik_debug_summary = " | ".join(self._thumb_ik_debug_parts) or "-"
             else:
                 solution = self._solve_finger_vector_ik(
                     finger_name,
@@ -911,6 +1072,7 @@ class FullRawSkeletonRetargeter:
                     max_iters=RAW_IK_MAX_ITERS,
                     regularization_scale=RAW_IK_FOUR_FINGER_REFERENCE_SCALE,
                 )
+            finger_timing_ms[finger_name] = (time.perf_counter() - finger_solve_start) * 1000.0
             solved_angles.update(solution)
 
             solved_tip = self.robot.forward_tip_position(finger_name, solution)
@@ -944,6 +1106,14 @@ class FullRawSkeletonRetargeter:
                 )
             else:
                 finger_target_text[finger_name] = f"a2tip={_xyz_text(target.anchor_tip_base)}"
+            if finger_name == "thumb":
+                align_text = ",".join(
+                    f"J{idx:02d}={value:.1f}"
+                    for idx, value in sorted(RAW_IK_THUMB_ALIGN_Q_TARGET_DEG.items())
+                )
+                finger_target_text[finger_name] = (
+                    f"{finger_target_text[finger_name]} align_ref=({align_text})"
+                )
             if finger_name == "thumb" and target.dip_tip_base is not None:
                 finger_target_text[finger_name] = (
                     f"{finger_target_text[finger_name]} "
@@ -955,6 +1125,7 @@ class FullRawSkeletonRetargeter:
             if finger_name == "thumb" and target.dip_tip_base is not None:
                 debug_text = f"dip-tip weight={RAW_IK_THUMB_DIP_TIP_WEIGHT:.1f}; {debug_text}"
             if finger_name == "thumb":
+                debug_text = f"thumb_ik_debug={self._last_thumb_ik_debug_summary}; {debug_text}"
                 pinch_debug_parts: list[str] = []
                 current_thumb_constraints = {
                     other_name: (
@@ -964,7 +1135,6 @@ class FullRawSkeletonRetargeter:
                     )
                     for other_name, tip_base in solved_tip_by_finger.items()
                     for other_target in [targets.get(other_name)]
-                    if other_name == "index"
                     if other_target is not None and other_target.thumb_tip_base is not None
                 }
                 dynamic_pinch_weights = self._thumb_dynamic_pinch_weights(current_thumb_constraints)
@@ -1002,15 +1172,21 @@ class FullRawSkeletonRetargeter:
             solved_tip_by_finger[finger_name] = solved_tip
             valid_fingers.add(finger_name)
 
+        timing["ik_finger_ms"] = dict(finger_timing_ms)
+        post_pinch_start = time.perf_counter()
         final_thumb_tip = solved_tip_by_finger.get("thumb")
-        if final_thumb_tip is not None:
+        active_s1_pairs: list[str] = []
+        selected_post_pinch_pair = "none"
+        if RAW_IK_THUMB_PINCH_ENABLED and final_thumb_tip is not None:
             best_pair_name: Optional[str] = None
             best_pair_distance = float("inf")
-            for candidate_name in ("index",):
+            for candidate_name in ("index", "middle", "ring", "pinky"):
                 candidate_target = targets.get(candidate_name)
                 candidate_tip = solved_tip_by_finger.get(candidate_name)
                 if candidate_target is None or candidate_tip is None or candidate_target.thumb_tip_base is None:
                     continue
+                if candidate_target.thumb_pinch_active:
+                    active_s1_pairs.append(f"thumb-{candidate_name}")
                 target_distance = float(np.linalg.norm(candidate_target.thumb_tip_base))
                 if (
                     candidate_target.thumb_pinch_active
@@ -1020,6 +1196,7 @@ class FullRawSkeletonRetargeter:
                     best_pair_distance = target_distance
 
             if best_pair_name is not None:
+                selected_post_pinch_pair = f"thumb-{best_pair_name}"
                 pair_target = targets[best_pair_name]
                 reference = self._build_raw_reference_joint_angles(best_pair_name, frame)
                 for joint_name in self.robot.finger_chains[best_pair_name].revolute_joint_names:
@@ -1050,6 +1227,26 @@ class FullRawSkeletonRetargeter:
                     f"two-sided pinch to thumb d_robot={post_gap * 1000.0:.1f}mm; "
                     f"{finger_target_debug.get(best_pair_name, '-')}"
                 )
+        timing["dt_post_pinch_ms"] = (time.perf_counter() - post_pinch_start) * 1000.0
+        if not active_s1_pairs:
+            active_s1_pairs = [
+                f"thumb-{name}"
+                for name in ("index", "middle", "ring", "pinky")
+                if targets.get(name) is not None and bool(targets[name].thumb_pinch_active)
+            ]
+        timing["active_s1_pairs"] = ",".join(active_s1_pairs) if active_s1_pairs else "none"
+        timing["selected_post_pinch_pair"] = selected_post_pinch_pair
+        timing["thumb_ik_debug"] = self._last_thumb_ik_debug_summary
+        limit_fingers = ["thumb"]
+        if selected_post_pinch_pair.startswith("thumb-"):
+            limit_fingers.append(selected_post_pinch_pair.split("-", 1)[1])
+        timing["limit_debug"] = ";".join(
+            self._finger_limit_detail(finger_name, solved_angles)
+            for finger_name in limit_fingers
+            if finger_name in self.robot.finger_chains
+        ) or "-"
+        timing["t_ik_end"] = time.perf_counter()
+        timing["dt_ik_solve_ms"] = (timing["t_ik_end"] - timing["t_ik_start"]) * 1000.0
 
         self.ik.last_joint_angles.update(solved_angles)
         degrees = _solution_to_encoder_degrees(solved_angles)
@@ -1086,6 +1283,10 @@ class FullRawSkeletonRetargeter:
                         target_xyz=finger_target_text.get(finger_name, "-"),
                     )
                 )
+        timing["t_end"] = time.perf_counter()
+        timing["dt_after_ik_ms"] = (timing["t_end"] - timing["t_ik_end"]) * 1000.0
+        timing["dt_total_loop_ms"] = (timing["t_end"] - timing["t_loop_start"]) * 1000.0
+        self._emit_timing_debug(frame, timing)
         return out
 
     def _target_vs_calibration_basis_debug(self, finger_name: str, target: RawFingerVectorTarget) -> str:
@@ -1140,7 +1341,20 @@ class FullRawSkeletonRetargeter:
         eps = 1e-4
         thumb_weight = RAW_IK_THUMB_TIP_WEIGHT * float(thumb_pinch_weight_scale)
         thumb_finger_constraints = dict(thumb_finger_constraints or {})
+        residual_eval_count = 0
+        iterations = 0
+        residual_start_norm: Optional[float] = None
+        residual_end_norm = 0.0
+        last_step_norm = 0.0
+        max_step_norm = 0.0
+        limit_hits = 0
+        stop_reason = "max_iters"
+        no_improvement_count = 0
+        best_error_norm = float("inf")
+        best_q = q.copy()
         def residual(q_values: np.ndarray) -> np.ndarray:
+            nonlocal residual_eval_count
+            residual_eval_count += 1
             joint_map = dict(fixed_joint_angles)
             joint_map.update({name: float(value) for name, value in zip(joint_names, q_values)})
             tip = self.robot.forward_tip_position(finger_name, joint_map)
@@ -1182,10 +1396,9 @@ class FullRawSkeletonRetargeter:
                 and target.thumb_tip_base is not None
                 and thumb_weight > 0.0
             ):
-                distance_m = float(np.linalg.norm(target.thumb_tip_base))
                 objective_weight = (
                     RAW_IK_THUMB_PINCH_CLOSE_WEIGHT
-                    if distance_m <= RAW_IK_THUMB_PINCH_CLOSE_DISTANCE_M * 1.5
+                    if target.thumb_pinch_active
                     else RAW_IK_THUMB_PINCH_FAR_WEIGHT
                 )
                 terms.append(
@@ -1197,7 +1410,14 @@ class FullRawSkeletonRetargeter:
 
         for _ in range(max_iters):
             error = residual(q)
-            if float(np.linalg.norm(error)) < 1e-4:
+            error_norm = float(np.linalg.norm(error))
+            if residual_start_norm is None:
+                residual_start_norm = error_norm
+                best_error_norm = error_norm
+                best_q = q.copy()
+            residual_end_norm = error_norm
+            if error_norm < RAW_IK_ABS_RESIDUAL_TOL:
+                stop_reason = "abs_residual"
                 break
 
             jacobian = np.zeros((len(error), len(joint_names)), dtype=float)
@@ -1209,11 +1429,56 @@ class FullRawSkeletonRetargeter:
             lhs = jacobian.T @ jacobian + (damping + regularization) * np.eye(len(joint_names))
             rhs = jacobian.T @ error + regularization * (q - q_ref)
             delta_q = -np.linalg.solve(lhs, rhs)
-            q = q + np.clip(delta_q, -RAW_IK_MAX_STEP_RAD, RAW_IK_MAX_STEP_RAD)
+            clipped_delta_q = np.clip(delta_q, -RAW_IK_MAX_STEP_RAD, RAW_IK_MAX_STEP_RAD)
+            q_before = q.copy()
+            q = q + clipped_delta_q
 
             for i, joint_name in enumerate(joint_names):
                 spec = self.robot.joint_specs[joint_name]
-                q[i] = max(spec.lower, min(spec.upper, float(q[i])))
+                unclamped = float(q[i])
+                clamped = max(spec.lower, min(spec.upper, unclamped))
+                if abs(clamped - unclamped) > 1e-10:
+                    limit_hits += 1
+                q[i] = clamped
+            effective_step = q - q_before
+            last_step_norm = float(np.linalg.norm(effective_step))
+            max_step_norm = max(max_step_norm, last_step_norm)
+            iterations += 1
+
+            if last_step_norm < RAW_IK_SMALL_STEP_TOL_RAD:
+                stop_reason = "small_effective_step"
+                break
+            next_error_norm = float(np.linalg.norm(residual(q)))
+            residual_end_norm = next_error_norm
+            if next_error_norm < best_error_norm - RAW_IK_IMPROVEMENT_TOL:
+                best_error_norm = next_error_norm
+                best_q = q.copy()
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
+            if no_improvement_count >= RAW_IK_NO_IMPROVEMENT_PATIENCE:
+                q = best_q.copy()
+                residual_end_norm = best_error_norm
+                stop_reason = "no_improvement"
+                break
+
+        if finger_name == "thumb":
+            final_error = residual(q)
+            residual_end_norm = float(np.linalg.norm(final_error))
+            active_pairs = ",".join(
+                f"thumb-{name}"
+                for name, pair in thumb_finger_constraints.items()
+                if bool(pair[2])
+            ) or "none"
+            self._thumb_ik_debug_parts.append(
+                f"call{len(self._thumb_ik_debug_parts) + 1}:"
+                f"iters={iterations}/{max_iters} "
+                f"res={float(residual_start_norm or 0.0):.4f}->{residual_end_norm:.4f} "
+                f"step={last_step_norm:.4f} max_step={max_step_norm:.4f} "
+                f"limit_hits={limit_hits} evals={residual_eval_count} "
+                f"reg={regularization:.4f} active={active_pairs} "
+                f"stop={stop_reason}"
+            )
 
         out = dict(fixed_joint_angles)
         out.update({name: float(value) for name, value in zip(joint_names, q)})
@@ -1279,6 +1544,32 @@ class FullRawSkeletonRetargeter:
                 near.append(_robot_joint_label(idx) if idx is not None else joint_name)
         return "limit=" + ("yes:" + ",".join(near) if near else "no")
 
+    def _finger_limit_detail(self, finger_name: str, solution: dict[str, float]) -> str:
+        chain = self.robot.finger_chains.get(finger_name)
+        if chain is None:
+            return f"{finger_name}:limit=unknown"
+        details: list[str] = []
+        margin = math.radians(2.0)
+        for joint_name in chain.revolute_joint_names:
+            if joint_name not in solution:
+                continue
+            spec = self.robot.joint_specs[joint_name]
+            value = float(solution[joint_name])
+            lower_margin = abs(value - spec.lower)
+            upper_margin = abs(spec.upper - value)
+            nearest_margin = min(lower_margin, upper_margin)
+            if nearest_margin > margin:
+                continue
+            idx = _encoder_index_for_joint(joint_name)
+            label = _robot_joint_label(idx) if idx is not None else joint_name
+            side = "lower" if lower_margin <= upper_margin else "upper"
+            details.append(
+                f"{label}:{math.degrees(value):+.1f}deg/"
+                f"[{math.degrees(spec.lower):+.1f},{math.degrees(spec.upper):+.1f}]"
+                f"@{side},margin={math.degrees(nearest_margin):.1f}deg"
+            )
+        return f"{finger_name}:limit=" + ("yes:" + ",".join(details) if details else "no")
+
     def _thumb_pinch_dominant_target(
         self,
         target: RawFingerVectorTarget,
@@ -1340,6 +1631,25 @@ class FullRawSkeletonRetargeter:
         cmc_aa_reference = dict(reference)
         cmc_aa_reference[cmc_joint] = cmc_aa[0]
         cmc_aa_reference[aa_joint] = cmc_aa[1]
+        if self._thumb_close_pinch_active(thumb_finger_constraints):
+            dominant_target = self._thumb_pinch_dominant_target(target, thumb_finger_constraints)
+            if dominant_target is not None:
+                dominant_solution = self._solve_finger_vector_ik(
+                    "thumb",
+                    dominant_target,
+                    cmc_aa_reference,
+                    max_iters=RAW_IK_MAX_ITERS * 2,
+                    thumb_finger_constraints=thumb_finger_constraints,
+                    regularization_scale=RAW_IK_THUMB_WEAK_REFERENCE_SCALE,
+                    anchor_weight=0.15,
+                    hand_tip_weight=0.25,
+                    dip_tip_weight=0.35,
+                    thumb_pinch_weight_scale=2.0,
+                )
+                dominant_error = self._thumb_pinch_error(dominant_solution, thumb_finger_constraints)
+                self._last_thumb_cmc_aa_mode = f"pinch dominant only err={dominant_error * 1000.0:.1f}mm"
+                return dominant_solution
+
         fixed_solution = self._solve_finger_vector_ik(
             "thumb",
             target,
@@ -1349,59 +1659,6 @@ class FullRawSkeletonRetargeter:
             regularization_scale=RAW_IK_THUMB_WEAK_REFERENCE_SCALE,
         )
         self._last_thumb_cmc_aa_mode = "CMC/AA IK-init"
-        if self._thumb_close_pinch_active(thumb_finger_constraints):
-            pinch_reference = dict(reference)
-            pinch_reference[cmc_joint] = cmc_aa[0]
-            pinch_reference[aa_joint] = cmc_aa[1]
-            free_solution = self._solve_finger_vector_ik(
-                "thumb",
-                target,
-                pinch_reference,
-                max_iters=RAW_IK_MAX_ITERS,
-                thumb_finger_constraints=thumb_finger_constraints,
-                regularization_scale=RAW_IK_THUMB_WEAK_REFERENCE_SCALE,
-            )
-            fixed_error = self._thumb_pinch_error(fixed_solution, thumb_finger_constraints)
-            free_error = self._thumb_pinch_error(free_solution, thumb_finger_constraints)
-            best_solution = fixed_solution
-            best_error = fixed_error
-            best_mode = f"pinch CMC/AA fixed fallback err={fixed_error * 1000.0:.1f}mm"
-            if free_error < best_error:
-                best_solution = free_solution
-                best_error = free_error
-                best_mode = (
-                    f"pinch CMC/AA free err={free_error * 1000.0:.1f}<{fixed_error * 1000.0:.1f}mm"
-                )
-
-            dominant_target = self._thumb_pinch_dominant_target(target, thumb_finger_constraints)
-            if dominant_target is not None:
-                dominant_solution = self._solve_finger_vector_ik(
-                    "thumb",
-                    dominant_target,
-                    pinch_reference,
-                    max_iters=RAW_IK_MAX_ITERS * 2,
-                    thumb_finger_constraints=thumb_finger_constraints,
-                    regularization_scale=RAW_IK_THUMB_WEAK_REFERENCE_SCALE * 0.2,
-                    anchor_weight=0.15,
-                    hand_tip_weight=0.25,
-                    dip_tip_weight=0.35,
-                    thumb_pinch_weight_scale=2.0,
-                )
-                dominant_error = self._thumb_pinch_error(dominant_solution, thumb_finger_constraints)
-                if dominant_error < best_error:
-                    best_solution = dominant_solution
-                    best_error = dominant_error
-                    best_mode = (
-                        f"pinch dominant err={dominant_error * 1000.0:.1f}"
-                        f"<{fixed_error * 1000.0:.1f}mm"
-                    )
-
-            self._last_thumb_cmc_aa_mode = best_mode
-            if best_solution is free_solution:
-                self._last_thumb_cmc_aa_mode = (
-                    f"pinch CMC/AA free err={free_error * 1000.0:.1f}<{fixed_error * 1000.0:.1f}mm"
-                )
-            return best_solution
         return fixed_solution
 
     def _solve_thumb_cmc_aa_analytic(
