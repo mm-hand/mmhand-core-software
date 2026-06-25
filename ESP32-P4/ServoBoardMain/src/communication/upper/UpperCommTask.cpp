@@ -133,7 +133,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[40];
+    uint8_t buffer[56];
     size_t idx = 0;
     const uint32_t faultBitmap = sharedData->system_fault_bitmap;
     const uint32_t transitionCount = sharedData->state_transition_count;
@@ -172,6 +172,27 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((activeJointMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(activeJointMask & 0xFF);
     buffer[idx++] = sharedData->require_can_feedback ? 1 : 0;
+    const uint32_t servoOnlineMask = sharedData->servo_online_bitmap;
+    buffer[idx++] = (uint8_t)((servoOnlineMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((servoOnlineMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((servoOnlineMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(servoOnlineMask & 0xFF);
+    const uint32_t encoderOnlineMask = sharedData->encoder_online_bitmap;
+    buffer[idx++] = (uint8_t)((encoderOnlineMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderOnlineMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderOnlineMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(encoderOnlineMask & 0xFF);
+    buffer[idx++] = sharedData->can_link_online ? 1 : 0;
+    const uint32_t encoderWarnMask = sharedData->encoder_warn_bitmap;
+    buffer[idx++] = (uint8_t)((encoderWarnMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderWarnMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderWarnMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(encoderWarnMask & 0xFF);
+    const uint32_t encoderFaultMask = sharedData->encoder_fault_bitmap;
+    buffer[idx++] = (uint8_t)((encoderFaultMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderFaultMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((encoderFaultMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(encoderFaultMask & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -636,6 +657,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_PAUSE:
         case CMD_HOST_HEARTBEAT:
         case CMD_SIDE_SWAY_ADJUST:
+        case CMD_CLEAR_CALIBRATION:
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
@@ -932,6 +954,9 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 }
             }
         }
+        if (status == PROTO_ACK_STATUS_OK) {
+            postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+        }
         sendProtoAckPacket(CMD_ACTIVE_SCOPE, sharedData->system_state, status);
         return;
     }
@@ -1087,6 +1112,31 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             }
         }
         sendProtoAckPacket(CMD_CALIB_LOAD_JOINT, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_CLEAR_CALIBRATION)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            sharedData->motor_abs_limit_valid_bitmap = 0;
+            sharedData->motor_abs_limit_locked_bitmap = 0;
+            memset((void*)sharedData->motor_abs_limit_min, 0, sizeof(sharedData->motor_abs_limit_min));
+            memset((void*)sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
+            memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
+            memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
+            g_calibrationStatus = CALIB_STATUS_IDLE;
+            g_calibrationAckStatus = CALIB_STATUS_IDLE;
+            g_calibrationAckRepeatRemaining = 0;
+            sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CALIBRATION;
+            postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+            Serial.println("[UPPER] CLEAR_CALIBRATION: joint calibration and ABS limits cleared");
+        }
+        sendProtoAckPacket(CMD_CLEAR_CALIBRATION, sharedData->system_state, status);
         return;
     }
 

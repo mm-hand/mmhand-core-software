@@ -37,6 +37,7 @@ from protocol import (
     build_calib_load_joint_cmd,
     build_calib_load_limits_cmd,
     build_calibrate_cmd,
+    build_clear_calibration_cmd,
     build_local_test_params_cmd,
     build_local_test_start_cmd,
     build_local_test_stop_cmd,
@@ -57,6 +58,7 @@ from protocol import (
     build_stop_cmd,
     build_tendon_guard_cmd,
     CMD_CALIBRATE,
+    CMD_CLEAR_CALIBRATION,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
@@ -1253,6 +1255,13 @@ class LowerComputerComm:
                         active_joint_mask,
                         require_can_feedback,
                         has_active_scope_status,
+                        servo_online_bitmap,
+                        encoder_online_bitmap,
+                        can_link_online,
+                        has_connectivity_status,
+                        encoder_warn_bitmap,
+                        encoder_fault_bitmap,
+                        has_encoder_health_status,
                     ) = parsed
                     model.system_state = int(system_state)
                     model.control_enabled = bool(control_enabled)
@@ -1267,6 +1276,13 @@ class LowerComputerComm:
                     model.active_joint_mask = int(active_joint_mask)
                     model.require_can_feedback = bool(require_can_feedback)
                     model.has_active_scope_status = bool(has_active_scope_status)
+                    model.servo_online_bitmap = int(servo_online_bitmap)
+                    model.encoder_online_bitmap = int(encoder_online_bitmap)
+                    model.encoder_warn_bitmap = int(encoder_warn_bitmap)
+                    model.encoder_fault_bitmap = int(encoder_fault_bitmap)
+                    model.can_link_online = bool(can_link_online)
+                    model.has_connectivity_status = bool(has_connectivity_status)
+                    model.has_encoder_health_status = bool(has_encoder_health_status)
                     model.has_system_status_data = True
                     if calib_status == 0:
                         if (
@@ -1424,6 +1440,7 @@ class LowerComputerComm:
                         CMD_RESTORE_MULTITURN,
                         CMD_MOTOR_ABS_LIMIT_LOCK,
                         CMD_MULTITURN_NVS_CONTROL,
+                        CMD_CLEAR_CALIBRATION,
                     ) and status == PROTO_ACK_STATUS_OK:
                         model.system_state = int(applied_mode)
                         model.has_system_status_data = True
@@ -1457,10 +1474,39 @@ class LowerComputerComm:
                             pass
                         elif ack_cmd == CMD_MULTITURN_NVS_CONTROL:
                             pass
+                        elif ack_cmd == CMD_CLEAR_CALIBRATION:
+                            model.calib_status = "IDLE"
+                            model.motor_abs_limit_valid_bitmap = 0
+                            model.motor_abs_limit_locked_bitmap = 0
+                            model.joint_calib_results = [None] * ENCODER_COUNT
                     emitted = True
 
+        self._apply_connectivity_visibility(model)
         self._last_model = model
         return model if emitted else None
+
+    @staticmethod
+    def _apply_connectivity_visibility(model: HandModel) -> None:
+        if bool(getattr(model, "has_connectivity_status", False)):
+            servo_mask = int(getattr(model, "servo_online_bitmap", 0) or 0)
+            for i in range(MOTOR_COUNT):
+                online = (servo_mask & (1 << i)) != 0
+                if i < len(model.servo_online):
+                    model.servo_online[i] = online
+                if i < len(model.servo_raw_online):
+                    model.servo_raw_online[i] = online
+                if i < len(model.servo_telem_online):
+                    model.servo_telem_online[i] = online
+                if i < len(model.motors):
+                    model.motors[i].error = not online
+                    model.motors[i].state = MotorState.RUNNING if online else MotorState.ERROR
+
+        if bool(getattr(model, "has_encoder_health_status", False)):
+            online_mask = int(getattr(model, "encoder_online_bitmap", 0) or 0)
+            fault_mask = int(getattr(model, "encoder_fault_bitmap", 0) or 0)
+            for i in range(min(ENCODER_COUNT, len(model.encoders))):
+                usable = ((online_mask & (1 << i)) != 0) and ((fault_mask & (1 << i)) == 0)
+                model.encoders[i].error = not usable
 
     def send_command(self, cmd: SendCmd):
         if cmd == "stop":
@@ -1600,6 +1646,8 @@ class LowerComputerComm:
             return build_calib_load_limits_cmd(cmd[1], cmd[2], cmd[3], cmd[4])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
             return build_calib_load_joint_cmd(cmd[1])
+        if cmd == "clear_calibration":
+            return build_clear_calibration_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":

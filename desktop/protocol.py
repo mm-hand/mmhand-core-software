@@ -57,6 +57,7 @@ CMD_LOCAL_TEST_PARAMS = 0xE1
 CMD_LOCAL_TEST_START = 0xE2
 CMD_LOCAL_TEST_STOP = 0xE3
 CMD_SIDE_SWAY_ADJUST = 0xE4
+CMD_CLEAR_CALIBRATION = 0xE5
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -178,7 +179,7 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
     return payload[0], payload[1], payload[2]
 
 
-def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int, int, int, int, bool]]:
+def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     if len(payload) < 13:
         return None
     system_state = payload[0]
@@ -195,6 +196,13 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
     active_motor_mask = struct.unpack(">I", payload[19:23])[0] if has_active_scope_status else 0
     active_joint_mask = struct.unpack(">I", payload[23:27])[0] if has_active_scope_status else 0
     require_can_feedback = payload[27] if has_active_scope_status else 0
+    has_connectivity_status = len(payload) >= 37
+    servo_online_bitmap = struct.unpack(">I", payload[28:32])[0] if has_connectivity_status else 0
+    encoder_online_bitmap = struct.unpack(">I", payload[32:36])[0] if has_connectivity_status else 0
+    can_link_online = payload[36] if has_connectivity_status else 0
+    has_encoder_health_status = len(payload) >= 45
+    encoder_warn_bitmap = struct.unpack(">I", payload[37:41])[0] if has_encoder_health_status else 0
+    encoder_fault_bitmap = struct.unpack(">I", payload[41:45])[0] if has_encoder_health_status else 0
     return (
         system_state,
         control_enabled,
@@ -210,6 +218,13 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
         active_joint_mask,
         require_can_feedback,
         has_active_scope_status,
+        servo_online_bitmap,
+        encoder_online_bitmap,
+        can_link_online,
+        has_connectivity_status,
+        encoder_warn_bitmap,
+        encoder_fault_bitmap,
+        has_encoder_health_status,
     )
 
 
@@ -676,6 +691,10 @@ def build_host_heartbeat_cmd() -> bytes:
 def build_multiturn_nvs_control_cmd(enabled: bool) -> bytes:
     # False means disable and clear old snapshots; True only enables future saves.
     return _build_command_frame(CMD_MULTITURN_NVS_CONTROL, bytes([1 if enabled else 0]))
+
+
+def build_clear_calibration_cmd() -> bytes:
+    return _build_command_frame(CMD_CLEAR_CALIBRATION, b"")
 
 
 def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:

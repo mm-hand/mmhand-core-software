@@ -14,6 +14,7 @@ from hand_geometry import load_calib_zero_raw
 from protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_DATA,
+    CMD_CLEAR_CALIBRATION,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MOTOR_ABS_LIMIT_LOCK,
@@ -41,6 +42,7 @@ ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
+CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
@@ -727,18 +729,23 @@ class HandController:
             self._clear_trusted_multiturn_cache()
             return False, "restore turn0 request accepted, but feedback did not confirm the new baseline"
 
+        self.comm.send_command("clear_calibration")
+        ack = self.comm.wait_for_ack(CMD_CLEAR_CALIBRATION, CLEAR_CALIBRATION_ACK_TIMEOUT_S)
+        if ack is None or int(ack[2]) != 0:
+            self._clear_trusted_multiturn_cache()
+            return False, "turn0 reset confirmed, but calibration/ABS limit clear ACK timeout/reject"
+
         self._clear_trusted_multiturn_cache()
 
         count = bin(restore_mask).count("1")
         flash_text = "Flash ON" if flash_was_enabled and not flash_restore_warning else "Flash OFF"
-        return True, f"reset {count} motor(s) to current raw as turn0; {flash_text}{flash_restore_warning}"
+        return True, f"reset {count} motor(s) to current raw as turn0; cleared calibration/ABS limits; {flash_text}{flash_restore_warning}"
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         if not self.comm:
             return False, "serial not connected"
         try:
             valid_bitmap = int(str(snapshot.get("motor_abs_limit_valid_bitmap", "0")), 0)
-            locked_bitmap = int(str(snapshot.get("motor_abs_limit_locked_bitmap", "0")), 0)
             mins = [int(v) for v in snapshot.get("motor_abs_limit_min", [])]
             maxs = [int(v) for v in snapshot.get("motor_abs_limit_max", [])]
         except (TypeError, ValueError) as exc:
@@ -746,6 +753,7 @@ class HandController:
         if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
             return False, f"invalid motor ABS limit count: {len(mins)}/{len(maxs)}"
 
+        locked_bitmap = valid_bitmap
         self.comm.send_command(("calib_load_limits", valid_bitmap, locked_bitmap, mins, maxs))
         ack = self.comm.wait_for_ack(CMD_CALIB_LOAD_LIMITS, CALIB_LOAD_ACK_TIMEOUT_S)
         if not ack or int(ack[2]) != 0:

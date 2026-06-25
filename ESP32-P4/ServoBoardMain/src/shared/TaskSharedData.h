@@ -54,6 +54,7 @@
 #define SYSTEM_EVENT_PAUSE 11
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST 12
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE 13
+#define SYSTEM_EVENT_REEVALUATE_READY 14
 
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 #define MULTITURN_NVS_SAVE_REASON_RUN_START 1
@@ -350,6 +351,11 @@ typedef struct {
     volatile uint32_t active_motor_mask;
     volatile uint32_t active_joint_mask;
     volatile uint32_t multi_turn_unknown_bitmap;
+    volatile uint32_t servo_online_bitmap;
+    volatile uint32_t encoder_online_bitmap;
+    volatile uint32_t encoder_warn_bitmap;
+    volatile uint32_t encoder_fault_bitmap;
+    volatile uint8_t can_link_online;
     int32_t restore_multi_turn_abs[SERVO_TOTAL_NUM];
     volatile uint32_t restore_multi_turn_mask;
     volatile uint32_t restore_multi_turn_request_token;

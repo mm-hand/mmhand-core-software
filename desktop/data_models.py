@@ -447,6 +447,13 @@ class HandModel:
     active_motor_mask: int = 0
     active_joint_mask: int = 0
     require_can_feedback: bool = False
+    has_connectivity_status: bool = False
+    servo_online_bitmap: int = 0
+    encoder_online_bitmap: int = 0
+    encoder_warn_bitmap: int = 0
+    encoder_fault_bitmap: int = 0
+    has_encoder_health_status: bool = False
+    can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -575,6 +582,13 @@ class HandModel:
         self.active_motor_mask = int(getattr(other, "active_motor_mask", 0) or 0)
         self.active_joint_mask = int(getattr(other, "active_joint_mask", 0) or 0)
         self.require_can_feedback = bool(getattr(other, "require_can_feedback", False))
+        self.has_connectivity_status = bool(getattr(other, "has_connectivity_status", False))
+        self.servo_online_bitmap = int(getattr(other, "servo_online_bitmap", 0) or 0)
+        self.encoder_online_bitmap = int(getattr(other, "encoder_online_bitmap", 0) or 0)
+        self.encoder_warn_bitmap = int(getattr(other, "encoder_warn_bitmap", 0) or 0)
+        self.encoder_fault_bitmap = int(getattr(other, "encoder_fault_bitmap", 0) or 0)
+        self.has_encoder_health_status = bool(getattr(other, "has_encoder_health_status", False))
+        self.can_link_online = bool(getattr(other, "can_link_online", False))
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))

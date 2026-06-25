@@ -418,7 +418,17 @@ static bool isControllableEntryReady(TaskSharedData_t* sharedData)
         sharedData->canRxQueue &&
         xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE &&
         sensorData.isValid &&
-        (uint32_t)(nowMs - sensorData.timestamp) <= kStateCanOfflineTimeoutMs;
+        (uint32_t)(nowMs - sensorData.timestamp) <= kStateCanOfflineTimeoutMs &&
+        sharedData->can_link_online != 0;
+    if (canReady && readyRequiresCan(sharedData)) {
+        const uint32_t activeJointMask =
+            sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+        const uint32_t offlineMask = activeJointMask & ~sharedData->encoder_online_bitmap;
+        const uint32_t faultMask = activeJointMask & sharedData->encoder_fault_bitmap;
+        if (offlineMask != 0 || faultMask != 0) {
+            canReady = false;
+        }
+    }
     if (!readyRequiresCan(sharedData)) {
         canReady = true;
     }
@@ -806,6 +816,23 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
+        case SYSTEM_EVENT_REEVALUATE_READY:
+            if (sharedData->control_enabled == 0 &&
+                sharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE &&
+                (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
+                 sharedData->system_state == SYSTEM_STATE_IDLE ||
+                 sharedData->system_state == SYSTEM_STATE_READY)) {
+                const uint8_t previousState = sharedData->system_state;
+                const uint8_t nextState = idleOrReadyState(sharedData);
+                setSystemState(sharedData, nextState);
+                Serial.printf("[STATE] READY reevaluate previous=%u next=%u motor=0x%08lX joint=0x%08lX\r\n",
+                              (unsigned)previousState,
+                              (unsigned)nextState,
+                              (unsigned long)sharedData->active_motor_mask,
+                              (unsigned long)sharedData->active_joint_mask);
+            }
+            break;
+
         case SYSTEM_EVENT_CALIBRATION_FAILED:
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 Serial.printf("[STATE] ignore CALIB_FAILED in state=%u\r\n",
@@ -835,10 +862,15 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     uint32_t faults = 0;
 
     RemoteSensorData_t sensorData;
+    const uint32_t activeJointMask =
+        sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     if (readyRequiresCan(sharedData) &&
         (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE ||
         !sensorData.isValid ||
-        (uint32_t)(nowMs - sensorData.timestamp) > kStateCanOfflineTimeoutMs)) {
+        (uint32_t)(nowMs - sensorData.timestamp) > kStateCanOfflineTimeoutMs ||
+        sharedData->can_link_online == 0 ||
+        ((activeJointMask & ~sharedData->encoder_online_bitmap) != 0) ||
+        ((activeJointMask & sharedData->encoder_fault_bitmap) != 0))) {
         faults |= SYSTEM_FAULT_CAN_OFFLINE;
     }
 

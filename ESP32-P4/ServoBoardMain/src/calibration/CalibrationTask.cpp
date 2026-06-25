@@ -196,7 +196,9 @@ static bool readLatestEncoderRaw(TaskSharedData_t* sharedData, uint8_t jointInde
     RemoteSensorData_t sensorData;
     if (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE) return false;
     if (!sensorData.isValid) return false;
-    if (sensorData.errorFlags[jointIndex]) return false;
+    const uint32_t bit = (1UL << jointIndex);
+    if ((sharedData->encoder_online_bitmap & bit) == 0) return false;
+    if ((sharedData->encoder_fault_bitmap & bit) != 0) return false;
 
     *outEncoder = orientEncoderRaw(sensorData.encoderValues[jointIndex], g_encoderDirection[jointIndex]);
     return true;

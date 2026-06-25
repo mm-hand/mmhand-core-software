@@ -42,7 +42,8 @@ typedef struct
 bool shouldEmergencyStop(bool canBusOnline,
                          const RemoteSensorData_t& sensorData,
                          const MappedAngleData_t& mappedData,
-                         uint8_t jointIndex);
+                         uint8_t jointIndex,
+                         bool encoderFeedbackFault);
 // 清空全部反绕保护状态，通常由 START/RESET 令牌触发。
 void resetAllReleaseGuardStates(ReleaseGuardState guards[ENCODER_TOTAL_NUM]);
 // 更新单关节反绕保护状态，返回当前是否需要保持/阻断该关节。

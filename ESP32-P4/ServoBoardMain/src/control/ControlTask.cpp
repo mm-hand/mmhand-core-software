@@ -624,9 +624,14 @@ void controlTask(void* parameter)
 
         if (canBusOnline)
         {
+            const uint32_t encoderOnlineMask = sharedData->encoder_online_bitmap;
+            const uint32_t encoderFaultMask = sharedData->encoder_fault_bitmap;
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
             {
-                if (sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
+                const uint32_t bit = (1UL << i);
+                if (((encoderOnlineMask & bit) == 0) ||
+                    ((encoderFaultMask & bit) != 0) ||
+                    sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
                     continue;
@@ -878,7 +883,11 @@ void controlTask(void* parameter)
 
                 bool emergency =
                     (!normalOutputAllowed) ||
-                    shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
+                    shouldEmergencyStop(canBusOnline,
+                                        sensorData,
+                                        mappedData,
+                                        jointIndex,
+                                        ((sharedData->encoder_fault_bitmap & (1UL << jointIndex)) != 0));
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || overloadFaultActive;
                 } else {

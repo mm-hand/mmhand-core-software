@@ -104,6 +104,11 @@ void System_Init() {
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
+    sharedData.servo_online_bitmap = 0;
+    sharedData.encoder_online_bitmap = 0;
+    sharedData.encoder_warn_bitmap = 0;
+    sharedData.encoder_fault_bitmap = 0;
+    sharedData.can_link_online = 0;
     sharedData.restore_multi_turn_mask = 0;
     sharedData.restore_multi_turn_request_token = 0;
     sharedData.restore_multi_turn_result_token = 0;

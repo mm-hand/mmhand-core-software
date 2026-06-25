@@ -69,7 +69,21 @@ typedef struct {
     uint32_t firstFrameTimeMs;
 } TactileFullReassemblyState;
 
+typedef struct {
+    uint8_t goodCount;
+    uint8_t badCount;
+    uint8_t online;
+    uint8_t fault;
+    uint32_t lastGoodMs;
+    uint32_t warnUntilMs;
+} EncoderHealthState;
+
 static esp_ldo_channel_handle_t s_canVo4Ldo = NULL;
+
+static const uint8_t kEncoderOnlineGoodFrames = 3;
+static const uint8_t kEncoderFaultBadFrames = 5;
+static const uint32_t kEncoderFaultTimeoutMs = 300;
+static const uint32_t kEncoderWarnHoldMs = 800;
 
 static bool twaiUsesVo4Domain(void) {
     return TWAI_TX_PIN == 47 || TWAI_TX_PIN == 48 ||
@@ -198,6 +212,137 @@ static uint32_t buildErrorBitmap(const uint8_t* codes) {
     return bitmap;
 }
 
+static uint32_t encoderChannelMask() {
+    return (ENCODER_TOTAL_NUM >= 32) ? 0xFFFFFFFFUL : ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+}
+
+static void publishEncoderHealth(TaskSharedData_t* sharedData,
+                                 const EncoderHealthState* health,
+                                 uint32_t nowMs) {
+    if (!sharedData || !health) {
+        return;
+    }
+
+    uint32_t onlineMask = 0;
+    uint32_t warnMask = 0;
+    uint32_t faultMask = 0;
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        const uint32_t bit = (1UL << i);
+        if (health[i].online) {
+            onlineMask |= bit;
+        }
+        if (health[i].fault) {
+            faultMask |= bit;
+        } else if (health[i].warnUntilMs != 0 &&
+                   (int32_t)(health[i].warnUntilMs - nowMs) > 0) {
+            warnMask |= bit;
+        }
+    }
+
+    sharedData->encoder_online_bitmap = onlineMask;
+    sharedData->encoder_warn_bitmap = warnMask;
+    sharedData->encoder_fault_bitmap = faultMask;
+    sharedData->can_link_online = (onlineMask != 0 || warnMask != 0) ? 1 : 0;
+}
+
+static void updateEncoderHealthGood(EncoderHealthState* health,
+                                    uint8_t index,
+                                    uint32_t nowMs) {
+    EncoderHealthState& h = health[index];
+    if (h.goodCount < kEncoderOnlineGoodFrames) {
+        h.goodCount++;
+    }
+    h.badCount = 0;
+    h.lastGoodMs = nowMs;
+    if (h.goodCount >= kEncoderOnlineGoodFrames) {
+        h.online = 1;
+        h.fault = 0;
+    }
+}
+
+static void updateEncoderHealthBad(EncoderHealthState* health,
+                                   uint8_t index,
+                                   uint32_t nowMs,
+                                   bool countTowardFault) {
+    EncoderHealthState& h = health[index];
+    h.goodCount = 0;
+    h.warnUntilMs = nowMs + kEncoderWarnHoldMs;
+    if (countTowardFault && h.badCount < kEncoderFaultBadFrames) {
+        h.badCount++;
+    }
+    if (h.badCount >= kEncoderFaultBadFrames) {
+        h.online = 0;
+        h.fault = 1;
+    }
+}
+
+static void updateEncoderHealthFromSnapshot(TaskSharedData_t* sharedData,
+                                            EncoderHealthState* health,
+                                            uint32_t validMask,
+                                            uint32_t nowMs) {
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        const bool valid = ((validMask >> i) & 0x1UL) != 0;
+        if (valid) {
+            updateEncoderHealthGood(health, i, nowMs);
+        } else {
+            updateEncoderHealthBad(health, i, nowMs, true);
+        }
+    }
+    publishEncoderHealth(sharedData, health, nowMs);
+}
+
+static void markEncoderSnapshotBad(TaskSharedData_t* sharedData,
+                                   EncoderHealthState* health,
+                                   uint32_t nowMs) {
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        updateEncoderHealthBad(health, i, nowMs, true);
+    }
+    publishEncoderHealth(sharedData, health, nowMs);
+}
+
+static bool applyEncoderHealthTimeout(TaskSharedData_t* sharedData,
+                                      EncoderHealthState* health,
+                                      uint32_t nowMs) {
+    bool changed = false;
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+        EncoderHealthState& h = health[i];
+        if (h.lastGoodMs == 0 ||
+            (uint32_t)(nowMs - h.lastGoodMs) <= kEncoderFaultTimeoutMs) {
+            continue;
+        }
+        if (h.online || !h.fault) {
+            h.online = 0;
+            h.fault = 1;
+            h.goodCount = 0;
+            h.badCount = kEncoderFaultBadFrames;
+            h.warnUntilMs = nowMs + kEncoderWarnHoldMs;
+            changed = true;
+        }
+    }
+    if (changed) {
+        publishEncoderHealth(sharedData, health, nowMs);
+    }
+    return changed;
+}
+
+static void clearEncoderHealth(TaskSharedData_t* sharedData,
+                               EncoderHealthState* health) {
+    if (health) {
+        memset(health, 0, sizeof(EncoderHealthState) * ENCODER_TOTAL_NUM);
+    }
+    if (sharedData) {
+        const uint32_t allEncoderMask = encoderChannelMask();
+        uint32_t faultMask = sharedData->active_joint_mask & allEncoderMask;
+        if (faultMask == 0) {
+            faultMask = allEncoderMask;
+        }
+        sharedData->encoder_online_bitmap = 0;
+        sharedData->encoder_warn_bitmap = 0;
+        sharedData->encoder_fault_bitmap = faultMask;
+        sharedData->can_link_online = 0;
+    }
+}
+
 static void setupTwai() {
     static bool installed = false;
     if (installed) {
@@ -237,6 +382,9 @@ void canCommunicationTask(void* parameter) {
     RemoteSensorData_t rxBuffer;
     memset(&rxBuffer, 0, sizeof(rxBuffer));
 
+    EncoderHealthState encoderHealth[ENCODER_TOTAL_NUM];
+    clearEncoderHealth(sharedData, encoderHealth);
+
     EncoderReassemblyState encoderState;
     resetEncoderReassembly(&encoderState);
 
@@ -258,7 +406,6 @@ void canCommunicationTask(void* parameter) {
     memset(pendingFullBytes, 0, sizeof(pendingFullBytes));
 
     twai_message_t rxMsg;
-    uint32_t lastRxTime = 0;
     uint32_t lastCompleteErrorBatchTime = millis();
     uint32_t lastCanDiagPrintMs = millis();
     uint32_t encFrameCount = 0;
@@ -269,6 +416,8 @@ void canCommunicationTask(void* parameter) {
     uint32_t tactileCrcErrorCount = 0;
     uint32_t otherFrameCount = 0;
     uint32_t lastCanId = 0;
+    uint32_t lastTwaiHealthCheckMs = 0;
+    bool twaiRecoveryRequested = false;
     RemoteCommand_t txCmd;
 
     const uint8_t kAllEncoderFramesMask = (uint8_t)((1U << CAN_ENC_FRAME_COUNT) - 1U);
@@ -278,13 +427,13 @@ void canCommunicationTask(void* parameter) {
     for (;;) {
         while (twai_receive(&rxMsg, 0) == ESP_OK) {
             const uint32_t nowMs = millis();
-            lastRxTime = nowMs;
             lastCanId = rxMsg.identifier;
 
             if (rxMsg.identifier >= CAN_ID_ENC_BASE && rxMsg.identifier <= CAN_ID_ENC_LAST) {
                 encFrameCount++;
                 if (rxMsg.data_length_code != 8) {
                     encoderCrcErrorCount++;
+                    markEncoderSnapshotBad(sharedData, encoderHealth, nowMs);
                     continue;
                 }
 
@@ -311,11 +460,13 @@ void canCommunicationTask(void* parameter) {
             } else if (rxMsg.identifier == CAN_ID_ENC_CRC) {
                 if (rxMsg.data_length_code != CAN_ENC_CRC_DLC) {
                     encoderCrcErrorCount++;
+                    markEncoderSnapshotBad(sharedData, encoderHealth, nowMs);
                     resetEncoderReassembly(&encoderState);
                     continue;
                 }
                 if (!encoderState.active || encoderState.frameMask != kAllEncoderFramesMask) {
                     encoderCrcErrorCount++;
+                    markEncoderSnapshotBad(sharedData, encoderHealth, nowMs);
                     resetEncoderReassembly(&encoderState);
                     continue;
                 }
@@ -328,17 +479,29 @@ void canCommunicationTask(void* parameter) {
                     rxMsg.data[3] == CAN_ENC_FRAME_COUNT &&
                     rxMsg.data[4] == CAN_ENC_PAYLOAD_BYTES;
                 if (metadataOk && actualCrc == expectedCrc) {
+                    uint32_t encoderValidMask = 0;
                     for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-                        rxBuffer.encoderValues[i] =
+                        const uint16_t rawValue =
                             ((uint16_t)encoderState.bytes[i * 2] << 8) |
                             encoderState.bytes[i * 2 + 1];
+                        if (rawValue != 0xFFFFU && rxBuffer.errorFlags[i] == 0) {
+                            rxBuffer.encoderValues[i] = rawValue;
+                            encoderValidMask |= (1UL << i);
+                        } else {
+                            rxBuffer.encoderValues[i] = 0xFFFFU;
+                        }
                     }
                     rxBuffer.timestamp = nowMs;
                     rxBuffer.isValid = true;
+                    updateEncoderHealthFromSnapshot(sharedData,
+                                                    encoderHealth,
+                                                    encoderValidMask,
+                                                    nowMs);
                     xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
                     encSnapshotCount++;
                 } else {
                     encoderCrcErrorCount++;
+                    markEncoderSnapshotBad(sharedData, encoderHealth, nowMs);
                 }
                 resetEncoderReassembly(&encoderState);
             } else if (rxMsg.identifier >= CAN_ID_ERROR_DETAIL_BASE &&
@@ -549,7 +712,7 @@ void canCommunicationTask(void* parameter) {
         }
 
         const uint32_t nowMs = millis();
-    if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
+        if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
             twai_status_info_t statusInfo;
             const bool hasStatus = (twai_get_status_info(&statusInfo) == ESP_OK);
             Serial.printf("[CAN RX DBG] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u twai=%d rxQ=%lu rxMiss=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
@@ -605,8 +768,36 @@ void canCommunicationTask(void* parameter) {
             rxBuffer.errorBitmap = 0;
         }
 
-        if (millis() - lastRxTime > 500 && rxBuffer.isValid) {
-            // Keep compatibility with existing behavior: no immediate invalidation.
+        applyEncoderHealthTimeout(sharedData, encoderHealth, nowMs);
+
+        if (rxBuffer.isValid && (uint32_t)(nowMs - rxBuffer.timestamp) > 500) {
+            rxBuffer.isValid = false;
+            clearEncoderHealth(sharedData, encoderHealth);
+            xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
+            resetEncoderReassembly(&encoderState);
+            Serial.println("[CAN HOTPLUG] encoder stream offline");
+        }
+
+        if ((uint32_t)(nowMs - lastTwaiHealthCheckMs) >= 100) {
+            lastTwaiHealthCheckMs = nowMs;
+            twai_status_info_t statusInfo;
+            if (twai_get_status_info(&statusInfo) == ESP_OK) {
+                if (statusInfo.state == TWAI_STATE_BUS_OFF && !twaiRecoveryRequested) {
+                    clearEncoderHealth(sharedData, encoderHealth);
+                    rxBuffer.isValid = false;
+                    xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
+                    if (twai_initiate_recovery() == ESP_OK) {
+                        twaiRecoveryRequested = true;
+                        Serial.println("[CAN HOTPLUG] bus-off recovery started");
+                    }
+                } else if (twaiRecoveryRequested && statusInfo.state == TWAI_STATE_STOPPED) {
+                    if (twai_start() == ESP_OK) {
+                        twaiRecoveryRequested = false;
+                        resetEncoderReassembly(&encoderState);
+                        Serial.println("[CAN HOTPLUG] controller restarted after recovery");
+                    }
+                }
+            }
         }
 
         if (xQueueReceive(sharedData->canTxQueue, &txCmd, 0) == pdTRUE) {

@@ -25,6 +25,8 @@
 #define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
 static const uint32_t kBootRecoverLimitToRawWindowMs = 8000;
 static const uint8_t kServoOfflineInvalidateMisses = 3;
+static const uint8_t kServoOnlineConfirmReads = 2;
+static const uint32_t kServoOfflineProbeIntervalMs = 50;
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 // NVS 恢复会先短暂等待舵机上线，只恢复当前 raw 与快照 raw 足够接近的通道。
 static const uint32_t kNvsRestoreWaitWindowMs = 3000;
@@ -92,6 +94,8 @@ struct ServoFeedbackInternal {
     bool absoluteReliable;
     bool online;
     uint8_t missedReadCount;
+    uint8_t successfulReadCount;
+    bool onlineTransitionPending;
     uint32_t lastUpdate;
 };
 
@@ -102,6 +106,7 @@ public:
     {
         memset(_feedback, 0, sizeof(_feedback));
         memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
+        memset(_multiTurnConfigured, 0, sizeof(_multiTurnConfigured));
     }
 
     void begin(uint8_t busIndex, int rxPin, int txPin, uint32_t baud)
@@ -134,6 +139,9 @@ public:
         delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
         ok = (_sms.LockEprom(id) >= 0) && ok;
         delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        if (ok) {
+            _multiTurnConfigured[id] = true;
+        }
         return ok;
     }
 
@@ -206,15 +214,12 @@ public:
                 continue;
             }
             if (rxLen == feedbackLen) {
-                const int16_t rawPos = decodeSigned(rxBuf[0], rxBuf[1]);
-                _updateMultiTurnPosition(id, rawPos);
-                _feedback[id].speed = decodeSigned(rxBuf[2], rxBuf[3]);
-                _feedback[id].load = decodeServoLoad(rxBuf[4], rxBuf[5]);
-                _feedback[id].voltage = rxBuf[6];
-                _feedback[id].temperature = rxBuf[7];
-                _feedback[id].online = true;
-                _feedback[id].missedReadCount = 0;
-                _feedback[id].lastUpdate = millis();
+                recordFeedbackSuccess(id,
+                                      decodeSigned(rxBuf[0], rxBuf[1]),
+                                      decodeSigned(rxBuf[2], rxBuf[3]),
+                                      decodeServoLoad(rxBuf[4], rxBuf[5]),
+                                      rxBuf[6],
+                                      rxBuf[7]);
                 successCount++;
             } else {
                 markReadFailure(id);
@@ -223,6 +228,24 @@ public:
 
         _sms.syncReadEnd();
         return successCount;
+    }
+
+    bool probeFeedback(uint8_t id)
+    {
+        if (!_serial || id > MAX_SERVO_ID) {
+            return false;
+        }
+        if (_sms.FeedBack(id) < 0) {
+            markReadFailure(id);
+            return false;
+        }
+        recordFeedbackSuccess(id,
+                              (int16_t)_sms.ReadPos(-1),
+                              (int16_t)_sms.ReadSpeed(-1),
+                              (int16_t)_sms.ReadLoad(-1),
+                              (uint8_t)_sms.ReadVoltage(-1),
+                              (uint8_t)_sms.ReadTemper(-1));
+        return true;
     }
 
     int16_t getRawPosition(uint8_t id) const
@@ -275,6 +298,20 @@ public:
         return id <= MAX_SERVO_ID &&
                !_feedback[id].online &&
                _feedback[id].missedReadCount >= kServoOfflineInvalidateMisses;
+    }
+
+    bool consumeOnlineTransition(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID || !_feedback[id].onlineTransitionPending) {
+            return false;
+        }
+        _feedback[id].onlineTransitionPending = false;
+        return true;
+    }
+
+    bool isMultiTurnConfigured(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID && _multiTurnConfigured[id];
     }
 
     bool setTorqueEnabled(uint8_t id, bool enabled)
@@ -332,17 +369,46 @@ public:
     }
 
 private:
+    void recordFeedbackSuccess(uint8_t id,
+                               int16_t rawPos,
+                               int16_t speed,
+                               int16_t load,
+                               uint8_t voltage,
+                               uint8_t temperature)
+    {
+        ServoFeedbackInternal& fb = _feedback[id];
+        const bool wasOnline = fb.online;
+        _updateMultiTurnPosition(id, rawPos);
+        fb.speed = speed;
+        fb.load = load;
+        fb.voltage = voltage;
+        fb.temperature = temperature;
+        fb.missedReadCount = 0;
+        if (fb.successfulReadCount < kServoOnlineConfirmReads) {
+            fb.successfulReadCount++;
+        }
+        if (!wasOnline && fb.successfulReadCount >= kServoOnlineConfirmReads) {
+            fb.online = true;
+            fb.onlineTransitionPending = true;
+            Serial.printf("[SERVO HOTPLUG] id=%u communication restored\r\n", (unsigned)id);
+        }
+        fb.lastUpdate = millis();
+    }
+
     void markReadFailure(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {
             return;
         }
         ServoFeedbackInternal& fb = _feedback[id];
-        fb.online = false;
+        fb.successfulReadCount = 0;
         if (fb.missedReadCount < 0xFF) {
             fb.missedReadCount++;
         }
-        if (fb.missedReadCount >= kServoOfflineInvalidateMisses) {
+        if (fb.missedReadCount >= kServoOfflineInvalidateMisses && fb.online) {
+            fb.online = false;
+            fb.onlineTransitionPending = false;
+            _multiTurnConfigured[id] = false;
             invalidateMultiTurnTrust(id);
         }
     }
@@ -435,6 +501,7 @@ private:
     uint8_t _writeCount;
     ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1];
     bool _torqueDisabled[MAX_SERVO_ID + 1];
+    bool _multiTurnConfigured[MAX_SERVO_ID + 1];
     uint16_t _syncReadTimeoutMs;
 };
 
@@ -446,6 +513,29 @@ static ServoBusDriver* getBusByIndex(uint8_t busIndex)
         return NULL;
     }
     return &g_servoBuses[busIndex];
+}
+
+static void probeOneOfflineMappedServo(uint32_t nowMs)
+{
+    static uint32_t lastProbeMs = 0;
+    static uint8_t nextChannel = 0;
+    if ((uint32_t)(nowMs - lastProbeMs) < kServoOfflineProbeIntervalMs) {
+        return;
+    }
+    lastProbeMs = nowMs;
+
+    for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; offset++) {
+        const uint8_t ch = (uint8_t)((nextChannel + offset) % SERVO_TOTAL_NUM);
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || id > MAX_SERVO_ID || bus->isOnline(id)) {
+            continue;
+        }
+        nextChannel = (uint8_t)((ch + 1) % SERVO_TOTAL_NUM);
+        bus->probeFeedback(id);
+        return;
+    }
 }
 
 static bool addReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
@@ -494,6 +584,7 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
         const uint8_t id = motorMap[ch].servoID;
         ServoBusDriver* bus = getBusByIndex(busIndex);
         if (!bus || id > MAX_SERVO_ID ||
+            !bus->isMultiTurnConfigured(id) ||
             !bus->restoreAbsolutePosition(id, motorAbs[ch], rawToleranceCounts)) {
             rejected |= bit;
             continue;
@@ -730,6 +821,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     servoData.timestamp = millis();
     servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
+    uint32_t onlineMask = 0;
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         const uint8_t busIndex = motorMap[ch].busIndex;
@@ -744,6 +836,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             servoRawData.servoHardwarePositions[ch] = bus->getPresentPosition(id);
             servoData.onlineStatus[ch] = 1;
             servoRawData.onlineStatus[ch] = 1;
+            onlineMask |= (1UL << ch);
             telemetryData.speed[ch] = fb.speed;
             telemetryData.load[ch] = fb.load;
             telemetryData.voltage[ch] = fb.voltage;
@@ -772,6 +865,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             }
         }
     }
+    sharedData->servo_online_bitmap = onlineMask & validMotorChannelMask();
 
     if (sharedData->servoFeedbackQueue) {
         xQueueOverwrite(sharedData->servoFeedbackQueue, &servoData);
@@ -901,7 +995,7 @@ static bool collectTrustedMultiTurnSnapshot(TaskSharedData_t* sharedData,
 }
 
 static void seedNvsRuntimeStateFromSnapshot(MultiTurnNvsRuntimeState* state,
-                                            const MultiTurnNvsSnapshot& snapshot)
+                                             const MultiTurnNvsSnapshot& snapshot)
 {
     if (!state) {
         return;
@@ -914,6 +1008,55 @@ static void seedNvsRuntimeStateFromSnapshot(MultiTurnNvsRuntimeState* state,
         state->lastRaw[ch] = snapshot.raw[ch];
         state->lastTurn[ch] = snapshot.turns[ch];
         state->lastAbs[ch] = multiTurnSnapshotAbsForChannel(snapshot, ch);
+    }
+}
+
+static void processServoOnlineTransitions(TaskSharedData_t* sharedData,
+                                          const MultiTurnNvsRuntimeState* nvsState,
+                                          bool nvsEnabled)
+{
+    if (!sharedData) {
+        return;
+    }
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = (1UL << ch);
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || !bus->consumeOnlineTransition(id)) {
+            continue;
+        }
+
+        const bool torqueOffOk = bus->setTorqueEnabled(id, false);
+        bool configured = bus->isMultiTurnConfigured(id);
+        if (!configured) {
+            configured = bus->configureMultiTurnMode(id);
+        }
+
+        bool trusted = bus->isAbsoluteReliable(id);
+        const bool hasAnchor = nvsEnabled && nvsState && nvsState->initialized &&
+            ((nvsState->lastValidMask & bit) != 0);
+        if (!trusted && torqueOffOk && configured && hasAnchor) {
+            trusted = bus->restoreAbsolutePosition(id,
+                                                   nvsState->lastAbs[ch],
+                                                   kNvsRestoreRawToleranceCounts);
+        }
+
+        if (trusted) {
+            sharedData->multi_turn_unknown_bitmap &= ~bit;
+        } else {
+            sharedData->multi_turn_unknown_bitmap |= bit;
+        }
+        Serial.printf("[SERVO HOTPLUG] M%02u bus=%u id=%u torque_off=%u configured=%u anchor=%u trusted=%u raw=%d unknown=0x%08lX\r\n",
+                      (unsigned)ch,
+                      (unsigned)busIndex,
+                      (unsigned)id,
+                      torqueOffOk ? 1U : 0U,
+                      configured ? 1U : 0U,
+                      hasAnchor ? 1U : 0U,
+                      trusted ? 1U : 0U,
+                      (int)bus->getRawPosition(id),
+                      (unsigned long)sharedData->multi_turn_unknown_bitmap);
     }
 }
 
@@ -1225,12 +1368,14 @@ void servoCommunicationTask(void* parameter)
             g_servoBuses[busIndex].syncReadPositions(readIds[busIndex], readCounts[busIndex]);
         }
         readBusPhase ^= 1;
+        probeOneOfflineMappedServo(millis());
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         processBootNvsRestore(sharedData,
                               hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
                               &bootNvsRestoreDone,
                               nvsRestoreDeadlineMs);
+        processServoOnlineTransitions(sharedData, &nvsSaveState, nvsEnabled);
 #endif
         bootRecoverLimitServosToRaw(bootRecoverDeadlineMs);
         publishServoFeedback(sharedData);
