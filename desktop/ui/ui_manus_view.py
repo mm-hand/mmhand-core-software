@@ -122,7 +122,6 @@ class ManusUdpView(QtWidgets.QWidget):
         info.addRow("Frames:", self.packet_label)
         info.addRow("Seq Drops:", self.drop_label)
         info.addRow("Safety:", self.safety_label)
-        # 璋冭瘯淇℃伅琛ㄥ崟鍏堜笉鏄剧ず锛岄伩鍏嶆尋鍘?Raw IK / URDF 棰勮鍖哄煙銆?        # label 浠嶄繚鐣欑粰鐘舵€佹洿鏂伴€昏緫浣跨敤銆?
         calib = QtWidgets.QGroupBox("MANUS Calibration / Joint Send")
         calib_layout = QtWidgets.QVBoxLayout(calib)
         button_row = QtWidgets.QHBoxLayout()
@@ -190,7 +189,7 @@ class ManusUdpView(QtWidgets.QWidget):
 
         self.preview_table = QtWidgets.QTableWidget(0, 8)
         self.preview_table.setHorizontalHeaderLabels([
-            "Robot Joint", "Human -> Robot Mapping", "Human 螖", "Gain deg/deg", "Joint Limit", "Limit Source", "robot_q_target_preview", "Over Limit",
+            "Robot Joint", "Human -> Robot Mapping", "Human Delta", "Gain", "Joint Limit", "Limit Source", "robot_q_target_preview", "Over Limit",
         ])
         self.preview_table.verticalHeader().setVisible(False)
         self._fit_table_header(self.preview_table)
@@ -418,12 +417,6 @@ class ManusUdpView(QtWidgets.QWidget):
             self._set_item(self.preview_table, row, 5, item.joint_limit_source)
             self._set_item(self.preview_table, row, 6, f"{item.robot_q_target_preview:.3f}")
             self._set_item(self.preview_table, row, 7, "yes" if item.over_limit else "no")
-        if self._retarget_mode() != "raw_pinky":
-            angles = [0.0] * ENCODER_COUNT
-            for item in preview:
-                if 0 <= item.joint_index < ENCODER_COUNT:
-                    angles[item.joint_index] = float(item.robot_q_target_preview)
-            self._update_urdf_preview_angles(angles)
         return preview
 
     def _update_raw_skeleton_preview(self, frame: ManusFrame):
@@ -442,25 +435,33 @@ class ManusUdpView(QtWidgets.QWidget):
             self._set_item(self.raw_skeleton_preview_table, row, 7, f"{item.robot_q_target_preview:.3f}")
             self._set_item(self.raw_skeleton_preview_table, row, 8, "yes" if item.valid else "no")
             self._set_item(self.raw_skeleton_preview_table, row, 9, "armed" if send_mode else "preview")
+        raw_angles = [0.0] * ENCODER_COUNT
+        for item in preview:
+            if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
+                raw_angles[item.joint_index] = float(item.robot_q_target_preview)
         if self.raw_q_target_line is not None:
-            raw_angles = self.raw_skeleton_retargeter.target_angles(preview)
             self.raw_q_target_line.setText(
                 " ".join(f"J{idx:02d}={float(value):.2f}" for idx, value in enumerate(raw_angles))
             )
-            if self._retarget_mode() == "raw_pinky":
-                self._update_urdf_preview_angles(raw_angles)
+        urdf_angles = [0.0] * ENCODER_COUNT
         if self.raw_q_urdf_line is not None:
-            urdf_angles = [0.0] * ENCODER_COUNT
             for item in preview:
                 if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
                     urdf_angles[item.joint_index] = float(item.robot_q_urdf_preview)
             self.raw_q_urdf_line.setText(
                 " ".join(f"J{idx:02d}={float(value):+.2f}" for idx, value in enumerate(urdf_angles))
             )
+        else:
+            for item in preview:
+                if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
+                    urdf_angles[item.joint_index] = float(item.robot_q_urdf_preview)
+        if self._retarget_mode() == "raw_pinky":
+            self._update_urdf_preview_angles(raw_angles)
         return preview
 
     def _update_urdf_preview_angles(self, angles: list[float]) -> None:
-        # 只把当前 q_target 写给独立 URDF viewer；不在主 UI 线程里渲染。
+        # Match the legacy new/mmhand viewer path: stream q_target and let the
+        # standalone URDF viewer convert q_target back to URDF angles.
         now = time.monotonic()
         if now - self._last_urdf_preview_t < 0.030:
             return
@@ -628,8 +629,8 @@ class ManusUdpView(QtWidgets.QWidget):
                 self._set_status("MANUS joint send blocked: record/load Open and Close first")
                 return
             try:
-                self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-                self.context.controller.set_pid_control(True)
+                self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+                self.context.backend.set_pid_control(True)
             except Exception as exc:
                 self.send_enable_check.setChecked(False)
                 self._set_status(f"MANUS joint send failed to arm: {exc}")
@@ -641,7 +642,7 @@ class ManusUdpView(QtWidgets.QWidget):
             self._set_status("MANUS joint send armed")
         else:
             try:
-                self.context.controller.invalidate_joint_commands()
+                self.context.backend.invalidate_joint_commands()
             except Exception:
                 pass
             self.calib_status_label.setText("Preview only until Enable Joint Send is checked")
@@ -690,8 +691,8 @@ class ManusUdpView(QtWidgets.QWidget):
                 self._set_status("MANUS joint send blocked: no teleop joint selected")
             return
         try:
-            self.context.controller.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.context.controller.set_pid_control(True)
+            self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.context.backend.set_pid_control(True)
             self.context.send_joint_targets(selected_targets, source=source_name, live=True)
             self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
@@ -832,6 +833,12 @@ class ManusUdpView(QtWidgets.QWidget):
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
         self._timer.stop()
+        try:
+            self.context.backend.invalidate_joint_commands()
+        except Exception:
+            pass
+        if hasattr(self, "send_enable_check"):
+            self.send_enable_check.setChecked(False)
         self.receiver.stop()
         super().closeEvent(event)
 

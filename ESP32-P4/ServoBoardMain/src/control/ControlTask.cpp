@@ -49,6 +49,34 @@ static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
 static const float kLocalTestTwoPi = 6.28318530717958647692f;
+static const float kLocalTestMinFreqHz = 0.001f;
+static const float kLocalTestMaxFreqHz = 100.0f;
+static const float kLocalTestMaxAbsAmpDeg = 180.0f;
+
+static float sanitizeLocalTestFreq(float freqHz)
+{
+    if (!isfinite(freqHz) || freqHz < kLocalTestMinFreqHz) {
+        return kLocalTestMinFreqHz;
+    }
+    if (freqHz > kLocalTestMaxFreqHz) {
+        return kLocalTestMaxFreqHz;
+    }
+    return freqHz;
+}
+
+static float sanitizeLocalTestAmp(float ampDeg)
+{
+    if (!isfinite(ampDeg)) {
+        return 0.0f;
+    }
+    if (ampDeg > kLocalTestMaxAbsAmpDeg) {
+        return kLocalTestMaxAbsAmpDeg;
+    }
+    if (ampDeg < -kLocalTestMaxAbsAmpDeg) {
+        return -kLocalTestMaxAbsAmpDeg;
+    }
+    return ampDeg;
+}
 
 // 协议字段使用 int16 传输，保留最大正值 32767 作为异常/占位，正常值限制到 32766。
 
@@ -91,31 +119,6 @@ static int32_t degToEncoderCount(float deg)
 {
     const float scaled = deg * (float)kEncoderModulo / 360.0f;
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
-}
-
-static float sanitizeLocalTestFreq(float freqHz)
-{
-    if (!isfinite(freqHz) || freqHz < 0.001f) {
-        return 0.001f;
-    }
-    if (freqHz > 100.0f) {
-        return 100.0f;
-    }
-    return freqHz;
-}
-
-static float sanitizeLocalTestAmp(float ampDeg)
-{
-    if (!isfinite(ampDeg)) {
-        return 0.0f;
-    }
-    if (ampDeg > 180.0f) {
-        return 180.0f;
-    }
-    if (ampDeg < -180.0f) {
-        return -180.0f;
-    }
-    return ampDeg;
 }
 
 static float mapCalibratedEncoderToDeg(const JointCalibrationResult& calib, int32_t orientedRaw)
@@ -339,9 +342,7 @@ static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
             return false;
         }
         const int32_t targetAbs =
-            (int32_t)clampServoPosByMotorAbsLimit(sharedData,
-                                                  ch,
-                                                  commandSnapshot.motorTargetRaw[ch]);
+            (int32_t)clampServoPos(commandSnapshot.motorTargetRaw[ch]);
         if (abs32Local(servoData.servoAngles[ch] - targetAbs) > kDirectRunDoneAbsToleranceCounts) {
             return false;
         }
@@ -662,8 +663,8 @@ void controlTask(void* parameter)
             if (!sineTestActive || sineTestToken != lastSineTestRequestToken)
             {
                 sineTestStartMs = commandSnapshot.sineTestStartMs != 0
-                                       ? commandSnapshot.sineTestStartMs
-                                       : millis();
+                                      ? commandSnapshot.sineTestStartMs
+                                      : millis();
                 sineTestActive = true;
                 lastSineTestRequestToken = sineTestToken;
                 feedbackRunDoneStableCount = 0;
@@ -813,25 +814,18 @@ void controlTask(void* parameter)
                                 sweepExpandedTarget[ch] += wrapServoRawDelta(d);
                                 prevSweepRawTarget[ch] = rawTarget;
                             }
-                            targetPos = clampServoPosByMotorAbsLimit(sharedData,
-                                                                      ch,
-                                                                      sweepExpandedTarget[ch]);
+                            targetPos = clampServoPos(sweepExpandedTarget[ch]);
                             sweepExpandedTarget[ch] = targetPos;
                         } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
                             sweepAnchorValid[ch] = false;
-                            targetPos = clampServoPosByMotorAbsLimit(
-                                sharedData,
-                                ch,
+                            targetPos = clampServoPos(
                                 (int32_t)commandSnapshot.motorTargetRaw[ch]);
                         } else {
                             sweepAnchorValid[ch] = false;
-                            targetPos = clampServoPosByMotorAbsLimit(
-                                sharedData,
-                                ch,
-                                expandSingleTurnTargetNearCurrent(
+                            targetPos = expandSingleTurnTargetNearCurrent(
                                 servoData.servoAngles[ch],
                                 clampServoSingleTurnRaw(commandSnapshot.motorTargetRaw[ch])
-                                ));
+                            );
                         }
                     } else {
                         sweepAnchorValid[ch] = false;
@@ -885,13 +879,12 @@ void controlTask(void* parameter)
                 bool emergency =
                     (!normalOutputAllowed) ||
                     shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
-                (void)holdByTendonGuard;
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || overloadFaultActive;
                 } else {
-                    // Tendon boundary hits are advisory; release risk is latched only
-                    // after the joint fails to return during sustained release motion.
-                    emergency = emergency || releaseFaultActive || overloadFaultActive;
+                    // Tendon guard is a hard release boundary from the host: once the
+                    // configured x1 ABS is reached, hold this joint instead of releasing.
+                    emergency = emergency || releaseFaultActive || holdByTendonGuard || overloadFaultActive;
                 }
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&

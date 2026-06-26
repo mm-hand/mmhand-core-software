@@ -6,8 +6,10 @@
 
 #include <chrono>
 #include <iomanip>
+#include <map>
+#include <set>
 #include <sstream>
-#include <string>
+#include <vector>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -36,97 +38,126 @@ std::string escapeJson(const std::string& value)
     return out.str();
 }
 
-std::string semanticKey(const std::string& value)
+std::string chainTypeName(int chain_type)
 {
-    if (value == "Hand") return "hand";
-    if (value == "Thumb") return "thumb";
-    if (value == "Index") return "index";
-    if (value == "Middle") return "middle";
-    if (value == "Ring") return "ring";
-    if (value == "Pinky") return "pinky";
-    if (value == "Metacarpal") return "metacarpal";
-    if (value == "Proximal") return "proximal";
-    if (value == "Intermediate") return "intermediate";
-    if (value == "Distal") return "distal";
-    if (value == "Tip") return "tip";
-    return "unknown";
-}
-
-void writeNodeJson(std::ostringstream& json, const RawSkeletonNodeSample& node)
-{
-    json << "{";
-    json << "\"node_id\":" << node.node_id << ",";
-    json << "\"parent_id\":" << node.parent_id << ",";
-    json << "\"side\":\"" << escapeJson(node.side) << "\",";
-    json << "\"chain_type\":\"" << escapeJson(node.chain_type) << "\",";
-    json << "\"finger_joint_type\":\"" << escapeJson(node.finger_joint_type) << "\",";
-    json << "\"has_node_info\":" << (node.has_node_info ? "true" : "false") << ",";
-    json << "\"pos\":[" << node.position.x << "," << node.position.y << "," << node.position.z << "],";
-    json << "\"rot\":[" << node.rotation.w << "," << node.rotation.x << ","
-         << node.rotation.y << "," << node.rotation.z << "]";
-    json << "}";
-}
-
-void writeRawSkeletonNodesJson(std::ostringstream& json, const ManusFrame& frame)
-{
-    json << "\"raw_skeleton_nodes\":[";
-    for (size_t i = 0; i < frame.raw_skeleton_nodes.size(); ++i)
+    switch (chain_type)
     {
-        if (i > 0) json << ",";
-        writeNodeJson(json, frame.raw_skeleton_nodes[i]);
+    case 13: return "hand";
+    case 5:  return "thumb";
+    case 6:  return "index";
+    case 7:  return "middle";
+    case 8:  return "ring";
+    case 9:  return "pinky";
+    default: return "unknown";
     }
-    json << "]";
 }
 
-void writeSemanticSkeletonJson(std::ostringstream& json, const ManusFrame& frame)
+std::string jointTypeName(int joint_type)
 {
-    json << "\"skeleton\":{";
-    bool wrote_any = false;
-
-    for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+    switch (joint_type)
     {
-        if (node.chain_type != "Hand")
-        {
-            continue;
-        }
-        if (wrote_any) json << ",";
-        json << "\"hand\":";
-        writeNodeJson(json, node);
-        wrote_any = true;
-        break;
+    case 1: return "metacarpal";
+    case 2: return "proximal";
+    case 3: return "intermediate";
+    case 4: return "distal";
+    case 5: return "tip";
+    default: return "unknown";
     }
+}
 
-    const char* fingers[] = {"Thumb", "Index", "Middle", "Ring", "Pinky"};
-    for (const char* finger : fingers)
+void writeNodeJson(
+    std::ostringstream& out,
+    const RawSkeletonNodeSample& node)
+{
+    out << "{";
+    out << "\"node_id\":" << node.node_id << ",";
+    out << "\"parent_id\":" << node.parent_id << ",";
+    out << "\"pos\":[" << node.position.x << "," << node.position.y << "," << node.position.z << "],";
+    out << "\"rot\":[" << node.rotation.w << "," << node.rotation.x << "," << node.rotation.y << "," << node.rotation.z << "]";
+    out << "}";
+}
+
+void writeRawSkeletonNodesJson(
+    std::ostringstream& out,
+    const std::vector<RawSkeletonNodeSample>& nodes)
+{
+    out << "\"raw_skeleton_nodes\":[";
+    for (size_t i = 0; i < nodes.size(); ++i)
     {
-        bool wrote_finger_header = false;
-        for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
+        if (i) out << ",";
+        const auto& node = nodes[i];
+        out << "{";
+        out << "\"node_id\":" << node.node_id << ",";
+        out << "\"parent_id\":" << node.parent_id << ",";
+        out << "\"chain_type\":" << node.chain_type << ",";
+        out << "\"finger_joint_type\":" << node.finger_joint_type << ",";
+        out << "\"chain\":\"" << chainTypeName(node.chain_type) << "\",";
+        out << "\"joint\":\"" << jointTypeName(node.finger_joint_type) << "\",";
+        out << "\"pos\":[" << node.position.x << "," << node.position.y << "," << node.position.z << "],";
+        out << "\"rot\":[" << node.rotation.w << "," << node.rotation.x << "," << node.rotation.y << "," << node.rotation.z << "]";
+        out << "}";
+    }
+    out << "]";
+}
+
+void writeSkeletonDictJson(
+    std::ostringstream& out,
+    const std::vector<RawSkeletonNodeSample>& nodes)
+{
+    std::map<std::string, std::map<std::string, RawSkeletonNodeSample>> skeleton_map;
+    std::vector<std::string> chain_order;
+
+    for (const auto& node : nodes)
+    {
+        const std::string chain = chainTypeName(node.chain_type);
+        const std::string joint = jointTypeName(node.finger_joint_type);
+
+        auto chain_it = skeleton_map.find(chain);
+        if (chain_it == skeleton_map.end())
         {
-            if (node.chain_type != finger)
-            {
-                continue;
-            }
-            if (!wrote_finger_header)
-            {
-                if (wrote_any) json << ",";
-                json << "\"" << semanticKey(finger) << "\":{";
-                wrote_finger_header = true;
-                wrote_any = true;
-            }
-            else
-            {
-                json << ",";
-            }
-            json << "\"" << semanticKey(node.finger_joint_type) << "\":";
-            writeNodeJson(json, node);
+            skeleton_map[chain] = {};
+            chain_order.push_back(chain);
         }
-        if (wrote_finger_header)
+        if (skeleton_map[chain].find(joint) == skeleton_map[chain].end())
         {
-            json << "}";
+            skeleton_map[chain][joint] = node;
         }
     }
 
-    json << "}";
+    out << "\"skeleton\":{";
+    bool first_chain = true;
+    for (const auto& chain_name : chain_order)
+    {
+        if (!first_chain) out << ",";
+        first_chain = false;
+
+        const auto& joints = skeleton_map[chain_name];
+        out << "\"" << escapeJson(chain_name) << "\":";
+
+        if (chain_name == "hand" && !joints.empty())
+        {
+            writeNodeJson(out, joints.begin()->second);
+        }
+        else
+        {
+            out << "{";
+            bool first_joint = true;
+            static const std::vector<std::string> joint_order = {
+                "metacarpal", "proximal", "intermediate", "distal", "tip"
+            };
+            for (const auto& jname : joint_order)
+            {
+                auto it = joints.find(jname);
+                if (it == joints.end()) continue;
+                if (!first_joint) out << ",";
+                first_joint = false;
+                out << "\"" << jname << "\":";
+                writeNodeJson(out, it->second);
+            }
+            out << "}";
+        }
+    }
+    out << "}";
 }
 
 std::string frameToJsonLine(const ManusFrame& frame)
@@ -135,7 +166,7 @@ std::string frameToJsonLine(const ManusFrame& frame)
     json << std::fixed << std::setprecision(6);
     json << "{";
     json << "\"type\":\"manus_frame\",";
-    json << "\"version\":3,";
+    json << "\"version\":1,";
     json << "\"seq\":" << frame.seq << ",";
     json << "\"timestamp\":" << frame.timestamp << ",";
     json << "\"dt\":" << frame.dt << ",";
@@ -154,7 +185,9 @@ std::string frameToJsonLine(const ManusFrame& frame)
         json << frame.ergonomics_values[i];
     }
     json << "],";
-    writeSemanticSkeletonJson(json, frame);
+    writeRawSkeletonNodesJson(json, frame.raw_skeleton_nodes);
+    json << ",";
+    writeSkeletonDictJson(json, frame.raw_skeleton_nodes);
     json << "}\n";
     return json.str();
 }
@@ -269,19 +302,13 @@ bool TcpSender::sendFrame(const ManusFrame& frame, std::string& error)
 
     const std::string payload = frameToJsonLine(frame);
     SOCKET sock = reinterpret_cast<SOCKET>(socket_);
-    size_t total_sent = 0;
-    while (total_sent < payload.size())
+    int sent = send(sock, payload.c_str(), static_cast<int>(payload.size()), 0);
+    if (sent == SOCKET_ERROR)
     {
-        const int chunk_size = static_cast<int>(payload.size() - total_sent);
-        const int sent = send(sock, payload.c_str() + total_sent, chunk_size, 0);
-        if (sent == SOCKET_ERROR || sent <= 0)
-        {
-            closesocket(sock);
-            socket_ = nullptr;
-            error = "TCP send failed; will reconnect";
-            return false;
-        }
-        total_sent += static_cast<size_t>(sent);
+        closesocket(sock);
+        socket_ = nullptr;
+        error = "TCP send failed; will reconnect";
+        return false;
     }
     return true;
 }

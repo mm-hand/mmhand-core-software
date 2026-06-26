@@ -33,80 +33,6 @@ std::string sideToString(Side side)
     }
 }
 
-std::string chainTypeToString(ChainType chain_type)
-{
-    switch (chain_type)
-    {
-    case ChainType_Arm:
-        return "Arm";
-    case ChainType_Leg:
-        return "Leg";
-    case ChainType_Neck:
-        return "Neck";
-    case ChainType_Spine:
-        return "Spine";
-    case ChainType_FingerThumb:
-        return "Thumb";
-    case ChainType_FingerIndex:
-        return "Index";
-    case ChainType_FingerMiddle:
-        return "Middle";
-    case ChainType_FingerRing:
-        return "Ring";
-    case ChainType_FingerPinky:
-        return "Pinky";
-    case ChainType_Pelvis:
-        return "Pelvis";
-    case ChainType_Head:
-        return "Head";
-    case ChainType_Shoulder:
-        return "Shoulder";
-    case ChainType_Hand:
-        return "Hand";
-    case ChainType_Foot:
-        return "Foot";
-    case ChainType_Toe:
-        return "Toe";
-    default:
-        return "unknown";
-    }
-}
-
-std::string fingerJointTypeToString(FingerJointType joint_type)
-{
-    switch (joint_type)
-    {
-    case FingerJointType_Metacarpal:
-        return "Metacarpal";
-    case FingerJointType_Proximal:
-        return "Proximal";
-    case FingerJointType_Intermediate:
-        return "Intermediate";
-    case FingerJointType_Distal:
-        return "Distal";
-    case FingerJointType_Tip:
-        return "Tip";
-    default:
-        return "unknown";
-    }
-}
-
-const NodeInfo* findNodeInfo(const std::vector<NodeInfo>& node_infos, uint32_t node_id)
-{
-    if (node_id < node_infos.size() && node_infos[node_id].nodeId == node_id)
-    {
-        return &node_infos[node_id];
-    }
-    for (const NodeInfo& node_info : node_infos)
-    {
-        if (node_info.nodeId == node_id)
-        {
-            return &node_info;
-        }
-    }
-    return nullptr;
-}
-
 Vec3 toVec3(const ManusVec3& value)
 {
     return Vec3{value.x, value.y, value.z};
@@ -285,9 +211,25 @@ void ManusClient::shutdown()
 
 std::vector<ManusFrame> ManusClient::consumeFrames()
 {
-    std::lock_guard<std::mutex> lock(data_mutex_);
     std::vector<ManusFrame> frames;
-    frames.swap(pending_frames_);
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        frames.swap(pending_frames_);
+    }
+    // 锁已释放，SDK 回调可以继续工作；
+    // 在主循环上下文中安全地查询并补全层级信息。
+
+    for (auto& frame : frames)
+    {
+        if (!frame.valid || frame.raw_skeleton_nodes.empty())
+        {
+            continue;
+        }
+        const uint32_t glove_id = static_cast<uint32_t>(frame.glove_id);
+        ensureNodeInfoCache(glove_id);
+        populateNodeHierarchy(frame.raw_skeleton_nodes, glove_id);
+    }
+
     return frames;
 }
 
@@ -496,13 +438,6 @@ void ManusClient::handleRawSkeleton(const SkeletonStreamInfo* raw_skeleton_info)
             continue;
         }
 
-        std::vector<NodeInfo> node_infos(info.nodesCount);
-        result = CoreSdk_GetRawSkeletonNodeInfoArray(info.gloveId, node_infos.data(), info.nodesCount);
-        if (result != SDKReturnCode_Success)
-        {
-            node_infos.clear();
-        }
-
         RawSkeletonSnapshot snapshot;
         const uint32_t sample_count = std::min(info.nodesCount, config_.max_raw_skeleton_nodes);
         snapshot.nodes.reserve(sample_count);
@@ -513,18 +448,8 @@ void ManusClient::handleRawSkeleton(const SkeletonStreamInfo* raw_skeleton_info)
             sample.node_id = node.id;
             sample.position = toVec3(node.transform.position);
             sample.rotation = toQuat(node.transform.rotation);
-            if (!node_infos.empty())
-            {
-                const NodeInfo* node_info = findNodeInfo(node_infos, node.id);
-                if (node_info)
-                {
-                    sample.parent_id = node_info->parentId;
-                    sample.side = sideToString(node_info->side);
-                    sample.chain_type = chainTypeToString(node_info->chainType);
-                    sample.finger_joint_type = fingerJointTypeToString(node_info->fingerJointType);
-                    sample.has_node_info = true;
-                }
-            }
+            // hierarchy info (parent_id, chain_type, finger_joint_type)
+            // will be populated later in consumeFrames() via cache.
             snapshot.nodes.push_back(sample);
         }
         raw_skeleton_by_glove_[info.gloveId] = std::move(snapshot);
@@ -540,4 +465,56 @@ void ManusClient::handleRawDeviceData(const RawDeviceDataInfo* raw_device_info)
 
     std::lock_guard<std::mutex> lock(data_mutex_);
     raw_device_count_ = raw_device_info->rawDeviceDataCount;
+}
+
+void ManusClient::ensureNodeInfoCache(uint32_t glove_id)
+{
+    if (node_info_cache_.find(glove_id) != node_info_cache_.end())
+    {
+        return;
+    }
+
+    uint32_t node_count = 0;
+    SDKReturnCode result = CoreSdk_GetRawSkeletonNodeCount(glove_id, node_count);
+    if (result != SDKReturnCode_Success || node_count == 0)
+    {
+        return;
+    }
+
+    std::vector<NodeInfo> node_infos(node_count);
+    result = CoreSdk_GetRawSkeletonNodeInfoArray(glove_id, node_infos.data(), node_count);
+    if (result != SDKReturnCode_Success)
+    {
+        return;
+    }
+
+    std::unordered_map<uint32_t, NodeInfo> info_map;
+    for (uint32_t i = 0; i < node_count; ++i)
+    {
+        info_map[node_infos[i].nodeId] = node_infos[i];
+    }
+    node_info_cache_[glove_id] = std::move(info_map);
+}
+
+void ManusClient::populateNodeHierarchy(
+    std::vector<RawSkeletonNodeSample>& nodes,
+    uint32_t glove_id)
+{
+    const auto cache_it = node_info_cache_.find(glove_id);
+    if (cache_it == node_info_cache_.end())
+    {
+        return;
+    }
+
+    const auto& info_map = cache_it->second;
+    for (auto& sample : nodes)
+    {
+        const auto it = info_map.find(sample.node_id);
+        if (it != info_map.end())
+        {
+            sample.parent_id = it->second.parentId;
+            sample.chain_type = static_cast<int>(it->second.chainType);
+            sample.finger_joint_type = static_cast<int>(it->second.fingerJointType);
+        }
+    }
 }
