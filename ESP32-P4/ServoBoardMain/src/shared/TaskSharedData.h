@@ -46,8 +46,6 @@
 #define SYSTEM_EVENT_RUN_FEEDBACK 9
 #define SYSTEM_EVENT_RUN_FEEDBACK_DONE 10
 #define SYSTEM_EVENT_PAUSE 11
-#define SYSTEM_EVENT_SIDE_SWAY_ADJUST 12
-#define SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE 13
 
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 #define MULTITURN_NVS_SAVE_REASON_RUN_START 1
@@ -72,36 +70,6 @@
 #define SYSTEM_FAULT_RELEASE_GUARD    (1UL << 3)
 #define SYSTEM_FAULT_SERVO_OFFLINE    (1UL << 4)
 #define SYSTEM_FAULT_CALIBRATION      (1UL << 5)
-
-#define CALIB_DIAG_REASON_NONE 0
-#define CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY 1
-#define CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT 2
-#define CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT 3
-#define CALIB_DIAG_REASON_TELEMETRY_TIMEOUT 4
-#define CALIB_DIAG_REASON_ENCODER_ERROR 5
-#define CALIB_DIAG_REASON_SERVO_OFFLINE 6
-#define CALIB_DIAG_REASON_TURN_UNKNOWN 7
-#define CALIB_DIAG_REASON_OVERLOAD 8
-#define CALIB_DIAG_REASON_LOAD_NOT_REACHED 9
-#define CALIB_DIAG_REASON_ANGLE_NOT_MOVING 10
-#define CALIB_DIAG_REASON_WRONG_DIRECTION 11
-#define CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT 12
-#define CALIB_DIAG_REASON_ZERO_CROSS_INVALID 13
-#define CALIB_DIAG_REASON_WRAP_TOO_LARGE 14
-#define CALIB_DIAG_REASON_ABS_LIMIT_INVALID 15
-#define CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED 16
-#define CALIB_DIAG_REASON_FEEDBACK_LOST 17
-#define CALIB_DIAG_REASON_TASK_START_FAILED 18
-#define CALIB_DIAG_REASON_INTERNAL_ERROR 19
-
-#define CALIB_DIAG_PHASE_NONE 0
-#define CALIB_DIAG_PHASE_INIT 1
-#define CALIB_DIAG_PHASE_FIND_MAX 2
-#define CALIB_DIAG_PHASE_RELEASE 3
-#define CALIB_DIAG_PHASE_RETURN_ZERO 4
-#define CALIB_DIAG_PHASE_DUAL_PRELOAD 5
-#define CALIB_DIAG_PHASE_DUAL_EXCHANGE 6
-#define CALIB_DIAG_PHASE_SEQUENCE 7
 
 #define SERVO_TARGET_OWNER_NONE 0
 #define SERVO_TARGET_OWNER_CONTROL 1
@@ -270,20 +238,6 @@ typedef struct {
 } JointDebugData_t;
 
 typedef struct {
-    uint8_t valid;
-    uint8_t reason;
-    uint8_t phase;
-    uint8_t joint;
-    uint8_t motor;
-    int32_t valueA;
-    int32_t valueB;
-    int32_t valueC;
-    uint32_t bitmap;
-    uint32_t timestamp;
-    uint32_t sequence;
-} CalibrationDiagData_t;
-
-typedef struct {
     uint8_t values[TACTILE_SUMMARY_BYTES];
     uint8_t seq;
     uint32_t timestamp;
@@ -365,7 +319,6 @@ typedef struct {
     volatile uint8_t require_can_feedback;
     volatile uint8_t calibration_fault_latched;
     volatile uint8_t joint16_dual_feedback_fault;
-    CalibrationDiagData_t calibration_diag;
 
     volatile uint32_t overload_fault_bitmap;
     volatile int16_t overload_fault_load[SERVO_TOTAL_NUM];
