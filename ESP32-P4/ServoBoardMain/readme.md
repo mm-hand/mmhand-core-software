@@ -2,6 +2,8 @@
 
 本文档描述 `ESP32-P4/ServoBoardMain` 当前固件架构。当前版本已经按任务层级重构：上位机通信、状态机、实时控制、CAN 通信、舵机通信彼此解耦，通过 `TaskSharedData_t` 中的队列、快照和状态字段交互。
 
+
+
 旧的 `AngleSolver`、`ServoBusManager` 公共模块已经移除：
 
 - 控制求解逻辑并入 `ControlTask` 内部模块。

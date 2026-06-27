@@ -6,14 +6,6 @@ from protocol import ENCODER_COUNT
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
-TELEOP_CENTER_ZERO_JOINTS = {0, 4, 8, 12, 16}
-TELEOP_CENTER_ZERO_MIN_DEG = 0.0
-TELEOP_CENTER_ZERO_MAX_DEG = 79.2
-TELEOP_CENTER_ZERO_MID_DEG = (
-    TELEOP_CENTER_ZERO_MIN_DEG + TELEOP_CENTER_ZERO_MAX_DEG
-) * 0.5
-
-
 class _LazyCameraCombo(QtWidgets.QComboBox):
     popup_requested = Signal()
 
@@ -144,6 +136,7 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self._last_sent_targets: list[Optional[float]] = [None] * ENCODER_COUNT
         self._feedback_angles: list[Optional[float]] = [None] * ENCODER_COUNT
         self._last_timestamp_ms = 0
+        self._send_targets_enabled = False
         self._build()
         self._connect_bridge()
         self.destroyed.connect(lambda _obj=None: self._stop_runner_only())
@@ -160,7 +153,13 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self.hand_count_spin = QtWidgets.QSpinBox()
         self.hand_count_spin.setRange(1, 2)
         self.hand_count_spin.setValue(1)
-        self.send_enabled = QtWidgets.QCheckBox("Send targets to hand")
+        self.send_targets_btn = QtWidgets.QPushButton("Send")
+        self.stop_send_btn = QtWidgets.QPushButton("Stop Send")
+        self.stop_send_btn.setEnabled(False)
+        self.send_targets_btn.setToolTip("Start sending visual retargeting joint targets to the hand")
+        self.stop_send_btn.setToolTip("Stop sending visual retargeting targets; camera tracking keeps running")
+        self.send_targets_btn.setStyleSheet("QPushButton { font-weight: 600; color: #116329; }")
+        self.stop_send_btn.setStyleSheet("QPushButton { font-weight: 600; color: #b3261e; }")
         self.start_btn = QtWidgets.QPushButton("Start")
         self.stop_btn = QtWidgets.QPushButton("Stop")
         self.stop_btn.setEnabled(False)
@@ -170,7 +169,8 @@ class VisualRetargetingView(QtWidgets.QWidget):
         toolbar.addWidget(self.refresh_btn)
         toolbar.addWidget(QtWidgets.QLabel("Hands:"))
         toolbar.addWidget(self.hand_count_spin)
-        toolbar.addWidget(self.send_enabled)
+        toolbar.addWidget(self.send_targets_btn)
+        toolbar.addWidget(self.stop_send_btn)
         toolbar.addStretch(1)
         toolbar.addWidget(self.start_btn)
         toolbar.addWidget(self.stop_btn)
@@ -212,9 +212,8 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self.refresh_btn.clicked.connect(lambda _checked=False: self.refresh_cameras(force=True))
         self.start_btn.clicked.connect(lambda _checked=False: self.start_posture_mocap())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_posture_mocap())
-        self.send_enabled.toggled.connect(
-            lambda checked: self.context.emit_action(f"Visual Retargeting send {'ON' if checked else 'OFF'}")
-        )
+        self.send_targets_btn.clicked.connect(lambda _checked=False: self.start_sending_targets())
+        self.stop_send_btn.clicked.connect(lambda _checked=False: self.stop_sending_targets())
 
     def _connect_bridge(self) -> None:
         self.bridge.frame_ready.connect(self._on_frame_ready)
@@ -271,6 +270,21 @@ class VisualRetargetingView(QtWidgets.QWidget):
             self._runner.stop()
             self.stop_btn.setEnabled(False)
             self._on_status_changed("Stopping Posture mocap...")
+
+    def _set_send_targets_enabled(self, enabled: bool) -> None:
+        self._send_targets_enabled = bool(enabled)
+        self.send_targets_btn.setEnabled(not self._send_targets_enabled)
+        self.stop_send_btn.setEnabled(self._send_targets_enabled)
+
+    def start_sending_targets(self) -> None:
+        self._set_send_targets_enabled(True)
+        self.context.emit_action("Visual Retargeting send ON")
+        self._on_status_changed("Visual Retargeting send enabled")
+
+    def stop_sending_targets(self) -> None:
+        self._set_send_targets_enabled(False)
+        self.context.emit_action("Visual Retargeting send OFF")
+        self._on_status_changed("Visual Retargeting send stopped")
 
     def _stop_runner_only(self) -> None:
         if self._runner is not None:
@@ -359,33 +373,18 @@ class VisualRetargetingView(QtWidgets.QWidget):
             return None, missing_feedback
         return targets, []
 
-    @staticmethod
-    def _map_visual_targets_to_robot_targets(visual_targets: list[float]) -> list[float]:
-        robot_targets = list(visual_targets)
-        for idx in TELEOP_CENTER_ZERO_JOINTS:
-            if idx >= len(robot_targets):
-                continue
-            mapped = TELEOP_CENTER_ZERO_MID_DEG + float(robot_targets[idx])
-            if mapped < TELEOP_CENTER_ZERO_MIN_DEG:
-                mapped = TELEOP_CENTER_ZERO_MIN_DEG
-            elif mapped > TELEOP_CENTER_ZERO_MAX_DEG:
-                mapped = TELEOP_CENTER_ZERO_MAX_DEG
-            robot_targets[idx] = mapped
-        return robot_targets
-
     def _on_joints_ready(self, targets: list, timestamp_ms: int) -> None:
         visual_targets = [float(v) for v in targets[:ENCODER_COUNT]]
         if len(visual_targets) < ENCODER_COUNT:
             visual_targets.extend([0.0] * (ENCODER_COUNT - len(visual_targets)))
-        robot_targets = self._map_visual_targets_to_robot_targets(visual_targets)
-        self._last_targets = robot_targets
+        self._last_targets = visual_targets
         self._last_timestamp_ms = int(timestamp_ms)
         self.frame_label.setText(f"Frame: {timestamp_ms}")
         for idx in range(ENCODER_COUNT):
             text = f"{self._last_targets[idx]:.2f}" if idx < len(self._last_targets) else "-"
             self.angle_table.item(idx, 1).setText(text)
-        if self.send_enabled.isChecked():
-            selected_targets, missing_feedback = self._targets_for_selected_joints(robot_targets)
+        if self._send_targets_enabled:
+            selected_targets, missing_feedback = self._targets_for_selected_joints(self._last_targets)
             if selected_targets is None:
                 if missing_feedback:
                     missing = ",".join(f"J{idx:02d}" for idx in missing_feedback[:4])

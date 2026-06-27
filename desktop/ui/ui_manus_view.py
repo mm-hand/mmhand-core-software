@@ -28,7 +28,8 @@ class ManusUdpView(QtWidgets.QWidget):
         super().__init__(parent)
         self.context = context
         self.selected_joint_mask_getter = selected_joint_mask_getter
-        self._source_mode = "tcp"
+        self._source_mode = "sdk"
+        self._send_enabled = False
         self.receiver = self._make_receiver(self._source_mode)
         self.calibration = ManusCalibrationManager()
         self.raw_skeleton_retargeter = FullRawSkeletonRetargeter(calibration_manager=self.calibration)
@@ -42,8 +43,6 @@ class ManusUdpView(QtWidgets.QWidget):
         self._last_raw_skeleton_preview = []
         self._last_urdf_preview_t = 0.0
         self._urdf_viewer_process: Optional[subprocess.Popen] = None
-        self.raw_q_target_line: Optional[QtWidgets.QLineEdit] = None
-        self.raw_q_urdf_line: Optional[QtWidgets.QLineEdit] = None
         self.urdf_viewer_status_label: Optional[QtWidgets.QLabel] = None
         self._build()
         self._timer = QtCore.QTimer(self)
@@ -60,8 +59,8 @@ class ManusUdpView(QtWidgets.QWidget):
 
         source_row = QtWidgets.QHBoxLayout()
         self.source_combo = QtWidgets.QComboBox()
-        self.source_combo.addItem("TCP Bridge 127.0.0.1:9001", "tcp")
         self.source_combo.addItem("Direct SDK", "sdk")
+        self.source_combo.addItem("TCP Bridge 127.0.0.1:9001", "tcp")
         self.source_combo.currentIndexChanged.connect(lambda _idx: self._on_source_changed())
         source_row.addWidget(QtWidgets.QLabel("Source:"))
         source_row.addWidget(self.source_combo, 1)
@@ -69,8 +68,8 @@ class ManusUdpView(QtWidgets.QWidget):
 
         retarget_row = QtWidgets.QHBoxLayout()
         self.retarget_combo = QtWidgets.QComboBox()
-        self.retarget_combo.addItem("Ergonomics angle mapping", "ergonomics")
         self.retarget_combo.addItem("Full raw skeleton IK", "raw_pinky")
+        self.retarget_combo.addItem("Ergonomics angle mapping", "ergonomics")
         self.retarget_combo.currentIndexChanged.connect(lambda _idx: self._on_retarget_changed())
         retarget_row.addWidget(QtWidgets.QLabel("Retarget:"))
         retarget_row.addWidget(self.retarget_combo, 1)
@@ -140,19 +139,23 @@ class ManusUdpView(QtWidgets.QWidget):
             button_row.addWidget(btn)
         calib_layout.addLayout(button_row)
         send_row = QtWidgets.QHBoxLayout()
-        self.send_enable_check = QtWidgets.QCheckBox("Enable Joint Send")
-        self.send_enable_check.setChecked(False)
-        self.send_enable_check.toggled.connect(lambda checked: self._on_send_enabled(bool(checked)))
+        self.send_btn = QtWidgets.QPushButton("Send")
+        self.stop_btn = QtWidgets.QPushButton("Stop")
+        self.send_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
+        self.stop_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop))
+        self.send_btn.clicked.connect(lambda _checked=False: self._start_joint_send())
+        self.stop_btn.clicked.connect(lambda _checked=False: self._stop_joint_send())
         self.side_cfg_label = QtWidgets.QLabel(f"Side: MANUS {DEFAULT_MANUS_SIDE} -> robot left")
         self.send_count_label = QtWidgets.QLabel("sent=0")
         self.last_sent_label = QtWidgets.QLabel("last_sent_seq=-")
-        send_row.addWidget(self.send_enable_check)
+        send_row.addWidget(self.send_btn)
+        send_row.addWidget(self.stop_btn)
         send_row.addWidget(self.side_cfg_label)
         send_row.addWidget(self.send_count_label)
         send_row.addWidget(self.last_sent_label)
         send_row.addStretch(1)
         calib_layout.addLayout(send_row)
-        self.calib_status_label = QtWidgets.QLabel("Preview only until Enable Joint Send is checked")
+        self.calib_status_label = QtWidgets.QLabel("Preview only until Send is pressed")
         calib_layout.addWidget(self.calib_status_label)
         layout.addWidget(calib)
         self._apply_source_safety()
@@ -163,22 +166,6 @@ class ManusUdpView(QtWidgets.QWidget):
         self.record_fist_flex_btn.clicked.connect(lambda _checked=False: self._record_calibration("fist_flex"))
         self.record_thumb_pinky_root_btn.clicked.connect(lambda _checked=False: self._record_calibration("thumb_pinky_root"))
         self.load_calib_btn.clicked.connect(lambda _checked=False: self._load_calibration())
-
-        raw_q_row = QtWidgets.QHBoxLayout()
-        raw_q_row.addWidget(QtWidgets.QLabel("Raw IK q_target J00-J20:"))
-        self.raw_q_target_line = QtWidgets.QLineEdit()
-        self.raw_q_target_line.setReadOnly(True)
-        self.raw_q_target_line.setPlaceholderText("waiting for Raw IK q_target")
-        raw_q_row.addWidget(self.raw_q_target_line, 1)
-        layout.addLayout(raw_q_row)
-
-        raw_urdf_row = QtWidgets.QHBoxLayout()
-        raw_urdf_row.addWidget(QtWidgets.QLabel("Raw IK q_urdf J00-J20:"))
-        self.raw_q_urdf_line = QtWidgets.QLineEdit()
-        self.raw_q_urdf_line.setReadOnly(True)
-        self.raw_q_urdf_line.setPlaceholderText("waiting for IK internal URDF q")
-        raw_urdf_row.addWidget(self.raw_q_urdf_line, 1)
-        layout.addLayout(raw_urdf_row)
 
         preview_tabs = QtWidgets.QTabWidget()
         self.table = QtWidgets.QTableWidget(0, 3)
@@ -203,9 +190,9 @@ class ManusUdpView(QtWidgets.QWidget):
         self._fit_table_header(self.raw_skeleton_table)
         preview_tabs.addTab(self.raw_skeleton_table, "Raw Skeleton")
 
-        self.raw_skeleton_preview_table = QtWidgets.QTableWidget(0, 10)
+        self.raw_skeleton_preview_table = QtWidgets.QTableWidget(0, 9)
         self.raw_skeleton_preview_table.setHorizontalHeaderLabels([
-            "Robot Joint", "IK Mapping", "Target Debug", "Robot Target XYZ", "IK Error mm", "Joint Limit", "q_urdf", "q_target", "Valid", "Send",
+            "Robot Joint", "Target Debug", "Robot Target XYZ", "IK Error mm", "Joint Limit", "q_urdf", "q_target", "Valid", "Send",
         ])
         self.raw_skeleton_preview_table.verticalHeader().setVisible(False)
         self._fit_table_header(self.raw_skeleton_preview_table)
@@ -260,9 +247,10 @@ class ManusUdpView(QtWidgets.QWidget):
         return ManusReceiver(ip="127.0.0.1", port=9001, timeout_s=MANUS_TIMEOUT_S)
 
     def _on_source_changed(self) -> None:
-        mode = str(self.source_combo.currentData() or "tcp")
+        mode = str(self.source_combo.currentData() or "sdk")
         if mode == self._source_mode:
             return
+        self._stop_joint_send("MANUS joint send stopped: source changed")
         self._timer.stop()
         try:
             self.receiver.stop()
@@ -277,11 +265,11 @@ class ManusUdpView(QtWidgets.QWidget):
         self._start_receiver()
 
     def _apply_source_safety(self) -> None:
-        if not hasattr(self, "send_enable_check"):
+        if not hasattr(self, "send_btn") or not hasattr(self, "stop_btn"):
             return
-        self.send_enable_check.setEnabled(True)
+        self.send_btn.setEnabled(not self._send_enabled)
+        self.stop_btn.setEnabled(self._send_enabled)
         self.safety_label.setText("MANUS direct motor disabled; joint send gated")
-        self.calib_status_label.setText("Preview only until Enable Joint Send is checked")
 
     def _update_endpoint_label(self) -> None:
         if not hasattr(self, "endpoint_label"):
@@ -303,18 +291,19 @@ class ManusUdpView(QtWidgets.QWidget):
         return "MANUS waiting for TCP frames"
 
     def _on_retarget_changed(self) -> None:
+        self._stop_joint_send("MANUS joint send stopped: retarget changed")
         mode = self._retarget_mode()
         if mode == "raw_pinky":
-            self.calib_status_label.setText("Full raw skeleton IK selected; Enable Joint Send drives selected J00-J20")
+            self.calib_status_label.setText("Full raw skeleton IK selected; Send drives selected J00-J20")
         else:
-            self.calib_status_label.setText("Ergonomics angle mapping selected; Enable Joint Send uses Open/Close calibration")
+            self.calib_status_label.setText("Ergonomics angle mapping selected; Send uses Open/Close calibration")
         self._apply_source_safety()
         self._set_status(f"MANUS retarget selected: {self.retarget_combo.currentText()}")
 
     def _retarget_mode(self) -> str:
         if hasattr(self, "retarget_combo"):
-            return str(self.retarget_combo.currentData() or "ergonomics")
-        return "ergonomics"
+            return str(self.retarget_combo.currentData() or "raw_pinky")
+        return "raw_pinky"
 
     def _refresh(self) -> None:
         error = self.receiver.last_error()
@@ -426,35 +415,18 @@ class ManusUdpView(QtWidgets.QWidget):
         send_mode = self._retarget_mode() == "raw_pinky"
         for row, item in enumerate(preview):
             self._set_item(self.raw_skeleton_preview_table, row, 0, item.joint_name)
-            self._set_item(self.raw_skeleton_preview_table, row, 1, item.skeleton_mapping)
-            self._set_item(self.raw_skeleton_preview_table, row, 2, item.target_debug)
-            self._set_item(self.raw_skeleton_preview_table, row, 3, item.target_xyz)
-            self._set_item(self.raw_skeleton_preview_table, row, 4, f"{item.ik_error_mm:.2f}")
-            self._set_item(self.raw_skeleton_preview_table, row, 5, item.joint_limit_deg)
-            self._set_item(self.raw_skeleton_preview_table, row, 6, f"{item.robot_q_urdf_preview:.3f}")
-            self._set_item(self.raw_skeleton_preview_table, row, 7, f"{item.robot_q_target_preview:.3f}")
-            self._set_item(self.raw_skeleton_preview_table, row, 8, "yes" if item.valid else "no")
-            self._set_item(self.raw_skeleton_preview_table, row, 9, "armed" if send_mode else "preview")
+            self._set_item(self.raw_skeleton_preview_table, row, 1, item.target_debug)
+            self._set_item(self.raw_skeleton_preview_table, row, 2, item.target_xyz)
+            self._set_item(self.raw_skeleton_preview_table, row, 3, f"{item.ik_error_mm:.2f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 4, item.joint_limit_deg)
+            self._set_item(self.raw_skeleton_preview_table, row, 5, f"{item.robot_q_urdf_preview:.3f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 6, f"{item.robot_q_target_preview:.3f}")
+            self._set_item(self.raw_skeleton_preview_table, row, 7, "yes" if item.valid else "no")
+            self._set_item(self.raw_skeleton_preview_table, row, 8, "armed" if send_mode else "preview")
         raw_angles = [0.0] * ENCODER_COUNT
         for item in preview:
             if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
                 raw_angles[item.joint_index] = float(item.robot_q_target_preview)
-        if self.raw_q_target_line is not None:
-            self.raw_q_target_line.setText(
-                " ".join(f"J{idx:02d}={float(value):.2f}" for idx, value in enumerate(raw_angles))
-            )
-        urdf_angles = [0.0] * ENCODER_COUNT
-        if self.raw_q_urdf_line is not None:
-            for item in preview:
-                if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
-                    urdf_angles[item.joint_index] = float(item.robot_q_urdf_preview)
-            self.raw_q_urdf_line.setText(
-                " ".join(f"J{idx:02d}={float(value):+.2f}" for idx, value in enumerate(urdf_angles))
-            )
-        else:
-            for item in preview:
-                if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
-                    urdf_angles[item.joint_index] = float(item.robot_q_urdf_preview)
         if self._retarget_mode() == "raw_pinky":
             self._update_urdf_preview_angles(raw_angles)
         return preview
@@ -622,41 +594,45 @@ class ManusUdpView(QtWidgets.QWidget):
         for row, (source, name, node_id, parent_id, pos, rot) in enumerate(rows):
             self._set_skeleton_row(row, source, name, node_id, parent_id, pos, rot)
 
-    def _on_send_enabled(self, checked: bool) -> None:
-        if checked:
-            if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
-                self.send_enable_check.setChecked(False)
-                self._set_status("MANUS joint send blocked: record/load Open and Close first")
-                return
-            try:
-                self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-                self.context.backend.set_pid_control(True)
-            except Exception as exc:
-                self.send_enable_check.setChecked(False)
-                self._set_status(f"MANUS joint send failed to arm: {exc}")
-                return
-            if self._retarget_mode() == "raw_pinky":
-                self.calib_status_label.setText("MANUS joint send armed: full raw skeleton IK -> selected J00-J20")
-            else:
-                self.calib_status_label.setText("MANUS joint send armed: left glove -> left robot joints")
-            self._set_status("MANUS joint send armed")
+    def _start_joint_send(self) -> None:
+        if self._send_enabled:
+            return
+        if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
+            self._set_status("MANUS joint send blocked: record/load Open and Close first")
+            return
+        try:
+            self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.context.backend.set_pid_control(True)
+        except Exception as exc:
+            self._set_status(f"MANUS joint send failed to arm: {exc}")
+            return
+
+        self._send_enabled = True
+        self._apply_source_safety()
+        if self._retarget_mode() == "raw_pinky":
+            self.calib_status_label.setText("MANUS joint send armed: full raw skeleton IK -> selected J00-J20")
         else:
-            try:
-                self.context.backend.invalidate_joint_commands()
-            except Exception:
-                pass
-            self.calib_status_label.setText("Preview only until Enable Joint Send is checked")
-            self._set_status("MANUS joint send disabled")
+            self.calib_status_label.setText("MANUS joint send armed: left glove -> left robot joints")
+        self._set_status("MANUS joint send armed")
+
+    def _stop_joint_send(self, status: str = "MANUS joint send stopped") -> None:
+        self._send_enabled = False
+        try:
+            self.context.backend.invalidate_joint_commands()
+        except Exception:
+            pass
+        self._apply_source_safety()
+        self.calib_status_label.setText("Preview only until Send is pressed")
+        self._set_status(status)
 
     def _maybe_send_joint_targets(self, frame: ManusFrame, preview) -> None:
-        if not self.send_enable_check.isChecked():
+        if not self._send_enabled:
             return
         if not self.receiver.is_alive():
             self._set_status("MANUS joint send paused: source stale")
             return
         if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
-            self.send_enable_check.setChecked(False)
-            self._set_status("MANUS joint send disabled: missing Open/Close calibration")
+            self._stop_joint_send("MANUS joint send stopped: missing Open/Close calibration")
             return
         if frame.seq == self._last_sent_seq:
             return
@@ -700,8 +676,7 @@ class ManusUdpView(QtWidgets.QWidget):
             self.send_count_label.setText(f"sent={self._sent_count}")
             self.last_sent_label.setText(f"last_sent_seq={frame.seq}")
         except Exception as exc:
-            self.send_enable_check.setChecked(False)
-            self._set_status(f"MANUS joint send failed: {exc}")
+            self._stop_joint_send(f"MANUS joint send failed: {exc}")
 
     def _record_calibration(self, pose: str) -> None:
         if self._recording_pose is not None:
@@ -833,12 +808,7 @@ class ManusUdpView(QtWidgets.QWidget):
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
         self._timer.stop()
-        try:
-            self.context.backend.invalidate_joint_commands()
-        except Exception:
-            pass
-        if hasattr(self, "send_enable_check"):
-            self.send_enable_check.setChecked(False)
+        self._stop_joint_send("MANUS joint send stopped: window closed")
         self.receiver.stop()
         super().closeEvent(event)
 

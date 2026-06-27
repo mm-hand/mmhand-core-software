@@ -17,10 +17,10 @@
 |---|---:|---|
 | `kDualAutoStartDeg` | `-3.0 deg` | 对抗双电机关节标定下端点 |
 | `kDualAutoTightDeg` | `80.0 deg` | 对抗双电机关节标定上端点 |
-| `kDualPrimaryTightLoadThreshold` | `190` | 主电机 POS80 阶段负载阈值 |
-| `kDualSecondaryPreloadLoadThreshold` | `190` | 副电机预张紧阶段负载阈值 |
+| `kDualPrimaryTightLoadThreshold` | `175` | 主电机 POS80 阶段负载阈值 |
+| `kDualSecondaryPreloadLoadThreshold` | `175` | 副电机预张紧阶段负载阈值 |
 | `kReverseMinFollowDeg` | `12.0 deg` | NEG3 阶段必须先看到的关节跟随角度 |
-| `kAutoCalibrationOverloadLoadThreshold` | `800` | 自动标定过程负载保护阈值 |
+| `kAutoCalibrationOverloadLoadThreshold` | `330` | 自动标定过程负载保护阈值 |
 | `params.tightLoadHigh` | `200` | 单电机自动标定负载阈值 |
 
 ### 上位机 Rope Init 参数
@@ -60,7 +60,7 @@
 3. 主电机拉 POS80：
 
    - 主电机持续正向收绳。
-   - 负载达到 `190`。
+   - 负载达到 `175`。
    - 电机仍在收绳，但关节角窗口内基本不再变化。
    - 该阶段不要求关节必须先跟随一定角度，因为关节可能一开始就在正向机械限位附近。
 
@@ -70,7 +70,7 @@
 
    - 副电机开始收绳。
    - 主电机保持 POS80 ABS。
-   - 副电机负载达到 `190` 后，认为两根绳都已进入绷紧状态。
+   - 副电机负载达到 `175` 后，认为两根绳都已进入绷紧状态。
 
 6. 进入 NEG3 同步换边阶段：
 
@@ -113,26 +113,6 @@ DUAL_RESULT
 其中 `CHECK_DUAL_EXCHANGE_NEG3` 中的 `load=... ignored` 表示 NEG3 阶段会打印副电机负载，但成功条件不再依赖负载。
 
 ## 单电机自动标定相关变化
-
-## 当前代码校正：双绳 ABS limit
-
-当前双绳 ABS limit 已改为标定成功后写入，标定过程中不使用该 limit；再次标定开始时会先清除该关节关联电机的旧 limit。
-
-双绳关节不再沿用单电机关节的 `tightAbs +/- 4096*5` 窗口。当前规则是：
-
-```text
-primary motor:   min = primaryReleaseAbs,          max = 30719
-secondary motor: min = secondaryReleaseAbs - 1850, max = 30719
-```
-
-以 J00 为例：
-
-```text
-M00: 标定完成时 M00 ABS .. 30719
-M01: 标定完成时 M01 ABS - 1850 .. 30719
-```
-
-运行时 ABS limit 是逐 motor 钳位：某一路超过自己的窗口，只钳该路 target，不影响其它 active motor。
 
 单电机关节仍使用原本的单电机流程，但当前逻辑已经做过两点调整：
 

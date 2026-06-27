@@ -39,7 +39,7 @@ static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 static const uint8_t kDualTendonModelSharedCadGeometry = 1;
 
 static const float kDefaultDualTendonCountsPerMm = 40.0f;
-static const float kDefaultDualTendonKp = 1.25f;
+static const float kDefaultDualTendonKp = 1.0f;
 static const float kDefaultDualTendonKi = 0.0f;
 static const float kDefaultDualTendonKd = 0.03f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;

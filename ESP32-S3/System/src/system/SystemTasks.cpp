@@ -8,7 +8,7 @@
 
 // 队列定义
 QueueHandle_t xQueueEncoderData = NULL;
-SemaphoreHandle_t g_sensorMuxMutex = NULL;
+SemaphoreHandle_t g_sensorSelectMutex = NULL;
 
 /**
  * 启动系统任务
@@ -24,17 +24,17 @@ void startSystemTasks() {
         }
     }
 
-    if (g_sensorMuxMutex == NULL) {
-        g_sensorMuxMutex = xSemaphoreCreateMutex();
-    }
-    if (g_sensorMuxMutex == NULL) {
-        Serial.println("[FATAL] Sensor mux mutex creation failed!");
-        while(1) {
-            vTaskDelay(1000);
+    Serial.println("[SystemTasks] Queue created successfully!");
+
+    if (g_sensorSelectMutex == NULL) {
+        g_sensorSelectMutex = xSemaphoreCreateMutex();
+        if (g_sensorSelectMutex == NULL) {
+            Serial.println("[FATAL] Sensor selector mutex creation failed!");
+            while(1) {
+                vTaskDelay(1000);
+            }
         }
     }
-    
-    Serial.println("[SystemTasks] Queue created successfully!");
     
     // 2. 创建编码器任务 - Core 1, 高优先级
     xTaskCreatePinnedToCore(
@@ -42,9 +42,14 @@ void startSystemTasks() {
     );
 
     // 3. 创建触觉任务 - Core 0, 中优先级
+#if ENABLE_TACTILE_TASK
     xTaskCreatePinnedToCore(
         Task_Tactile, "TacTask", 8192, NULL, 5, &xTacTask, 0
     );
+#else
+    xTacTask = NULL;
+    Serial.println("[SystemTasks] Tactile task disabled (encoder-only test).");
+#endif
 
     // 4. 创建 CAN 任务 - Core 0, 中优先级
     xTaskCreatePinnedToCore(

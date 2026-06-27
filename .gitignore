@@ -1,6 +1,5 @@
 *.zip
 *.mp4
-log/
 
 .DS_Store
 __pycache__/
@@ -15,13 +14,8 @@ desktop/multiturn_cache.json
 
 # Local SDK/build artifacts
 manus/**/build/
-manus/**/build_codex/
-manus/**/Temp/
-manus/**/*.so
-manus/**/*.a
 manus/**/*.dll
 manus/**/*.lib
 manus/**/*.exe
 manus/**/*.pdb
 manus/**/*.exp
-manus/**/*.obj

@@ -7,20 +7,25 @@ class HandGuiContext:
     def __init__(self, app):
         self._app = app
 
-    def __getattr__(self, name):
-        return getattr(self._app, name)
-
     @property
     def root(self):
         return self._app
 
     @property
-    def controller(self):
-        return self._app.controller
+    def backend(self):
+        return self._app.backend
 
     @property
     def current_mode(self) -> str:
         return self._app.current_mode
+
+    @property
+    def control_panel(self):
+        return self._app.control_panel
+
+    @property
+    def tendon_guard(self):
+        return self._app.backend.tendon_guard
 
     def is_comm_connected(self) -> bool:
         return self._app.is_comm_connected()
@@ -57,3 +62,21 @@ class HandGuiContext:
 
     def refresh_cameras(self) -> None:
         self._app.refresh_cameras()
+
+    def draw_pose_angles(self, angles) -> None:
+        self._app.draw_pose_angles(angles)
+
+    def start_calibration(self) -> None:
+        self._app.start_calibration()
+
+    def connect_tactile_serial(self, port: str) -> bool:
+        return self._app.connect_tactile_serial(port)
+
+    def disconnect_tactile_serial(self) -> None:
+        self._app.disconnect_tactile_serial()
+
+    def is_tactile_serial_connected(self) -> bool:
+        return self._app.is_tactile_serial_connected()
+
+    def get_tactile_serial_port(self) -> str:
+        return self._app.get_tactile_serial_port()

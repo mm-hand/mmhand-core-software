@@ -5,6 +5,7 @@
 namespace {
 constexpr bool kEnableEncoderDebugDump = false;
 constexpr int kEncoderDebugDumpDecimation = 100;
+constexpr uint32_t kEncoderTaskPeriodMs = 2;
 }
 
 // 任务句柄
@@ -21,7 +22,7 @@ static int g_testCounter = 0;
  * 负责读取编码器原始数据并发送到队列
  */
 void Task_Encoders(void* pvParameters) {
-    const TickType_t xFrequency = pdMS_TO_TICKS(5); // 200Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(kEncoderTaskPeriodMs);
     TickType_t xLastWakeTime = xTaskGetTickCount();
     
     // 本地数据缓冲

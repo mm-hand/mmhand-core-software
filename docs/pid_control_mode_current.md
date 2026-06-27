@@ -104,7 +104,7 @@ ESP32-P4/ServoBoardMain/src/control/DualTendonControl.cpp
 当前参数：
 
 ```text
-Kp = 1.25
+Kp = 1.0
 Ki = 0.0
 Kd = 0.03
 IntegralLimit = 0.0
@@ -194,7 +194,7 @@ Ki：当前为 0，不补长期静差。
 当前双电机参数：
 
 ```text
-Kp=1.25, Ki=0, Kd=0.03
+Kp=1.0, Ki=0, Kd=0.03
 ```
 
 含义：
@@ -205,12 +205,12 @@ Kd：根据模型反馈速度提供阻尼，抑制接近目标时继续冲。
 Ki：当前为 0，不补静态摩擦造成的长期偏差。
 ```
 
-当前代码中的双绳参数为 `Kp=1.25, Kd=0.03`。如果后续出现明显超调，再考虑降低 Kp 或增加 Kd；如果响应偏软，再小幅增加 Kp。
+从最近的 J00 曲线看，`Kp=1.0, Kd=0.03` 已经能推到目标附近，但最后略有正向超调。下一步优化可以优先考虑：
 
 ```text
-Kp = 1.25
+Kp = 0.9
 Ki = 0.0
-Kd = 0.03
+Kd = 0.04
 ```
 
 如果响应变慢但稳态仍偏差不大，再微调 Kp；如果接近目标后仍慢慢爬高，则继续略增 Kd 或略降 Kp。
@@ -246,26 +246,6 @@ M22 motorRef/motorFbModel/motorErr/correction/current/target
 这样可以判断主副电机到底是同向过推、某一根 tendon 滞后，还是几何模型误差导致的偏差。
 
 ## 最终判断
-
-## 当前代码校正：双绳 PID 参数和输出限幅
-
-当前双绳 PID 参数以 `DualTendonControl.cpp` 为准：
-
-```text
-Kp = 1.25
-Ki = 0.0
-Kd = 0.03
-IntegralLimit = 0.0
-```
-
-本轮调试中暂时取消了双绳 `correction` 的 `+/-400 count` 输出限幅。也就是说 PID correction 会直接按：
-
-```text
-correction = Kp * motorErr + Ki * integral - Kd * dFb
-targetAbs = motorCurrent + correction
-```
-
-计算。最终输出仍会经过舵机协议范围和每个 motor 自己的 ABS limit。
 
 ```text
 单电机：位置式 PID，双环结构，输出作为当前位置上的修正量。

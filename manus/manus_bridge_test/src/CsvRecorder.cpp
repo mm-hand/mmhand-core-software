@@ -50,11 +50,6 @@ void CsvRecorder::writeFrames(const std::vector<ManusFrame>& frames)
         {
             const RawSkeletonNodeSample& node = frame.raw_skeleton_nodes[i];
             file_ << ',' << node.node_id
-                  << ',' << node.parent_id
-                  << ',' << escape(node.side)
-                  << ',' << escape(node.chain_type)
-                  << ',' << escape(node.finger_joint_type)
-                  << ',' << (node.has_node_info ? 1 : 0)
                   << ',' << node.position.x
                   << ',' << node.position.y
                   << ',' << node.position.z
@@ -117,11 +112,6 @@ void CsvRecorder::writeHeader(const ManusFrame& frame)
     for (size_t i = 0; i < frame.raw_skeleton_nodes.size(); ++i)
     {
         file_ << ",raw_node" << i << "_id"
-              << ",raw_node" << i << "_parent_id"
-              << ",raw_node" << i << "_side"
-              << ",raw_node" << i << "_chain_type"
-              << ",raw_node" << i << "_finger_joint_type"
-              << ",raw_node" << i << "_has_node_info"
               << ",raw_node" << i << "_pos_x"
               << ",raw_node" << i << "_pos_y"
               << ",raw_node" << i << "_pos_z"

@@ -12,10 +12,16 @@ extern TaskHandle_t xEncTask;
 extern TaskHandle_t xTacTask;
 extern TaskHandle_t xCanTask;
 
+namespace {
+constexpr uint32_t kBootSettleDelayMs = 10000;
+}
+
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(921600);
+#if ENABLE_TACTILE_TASK
     tactile.prepareBootSelectPins();
-    delay(20000);
+#endif
+    delay(kBootSettleDelayMs);
     Serial.println("\n\n--- System Boot (XSimple AI) ---");
 
 #if ESP_IDF_VERSION_MAJOR >= 5
@@ -35,7 +41,9 @@ void setup() {
     encoders.begin();
     Serial.println("[Init] Encoders... OK");
 
+#if ENABLE_TACTILE_TASK
     tactile.begin();
+#endif
     Serial.println("[Init] Tactile... OK");
 
     if (twaiBus.begin()) {

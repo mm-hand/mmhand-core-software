@@ -2,7 +2,7 @@
 
 import argparse
 
-from core_logic import HandController
+from hand_backend import HandBackend
 from modes import Mode, run
 
 
@@ -30,6 +30,11 @@ def main():
         action="store_true",
         help="development 模式下关闭调试曲线窗口",
     )
+    parser.add_argument(
+        "--tactile-port",
+        default=None,
+        help="Optional S3 tactile serial port. Other data/control stay on --port.",
+    )
     args = parser.parse_args()
 
     # Development mode: run desktop-native console monitor (no client.py import)
@@ -42,20 +47,21 @@ def main():
         show_gui = True
         run_mode = Mode(args.mode)
         port = args.port
+        tactile_port = args.tactile_port
 
-        controller = HandController()
+        backend = HandBackend()
         if port:
-            if controller.initialize(port):
+            if backend.connect(port):
                 print(f"已连接 {port}")
             else:
                 print("连接失败，将以未连接状态启动 GUI")
 
         # 根据启动模式配置 PID 初值；后续可在 GUI 中继续切换模式
         if run_mode == Mode.MONITOR:
-            controller.set_pid_control(False)
+            backend.set_pid_control(False)
         else:
-            controller.set_pid_control(True)
-        run(run_mode, controller, port=port, gui=show_gui)
+            backend.set_pid_control(True)
+        run(run_mode, backend, port=port, tactile_port=tactile_port, gui=show_gui)
 
     else:
         print("无效的应用模式，退出")

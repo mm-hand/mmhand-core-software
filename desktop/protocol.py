@@ -1,6 +1,6 @@
 import struct
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 
 class ControlMode(Enum):
@@ -26,6 +26,8 @@ PACKET_TYPE_ENCODER_RAW = 0x0B
 PACKET_TYPE_SYSTEM_STATUS = 0x0C
 PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
 PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
+PACKET_TYPE_TACTILE_FULL = 0x0F
+PACKET_TYPE_CALIB_DIAG = 0x10
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -38,6 +40,8 @@ CMD_MOTOR_POS = 0xD0
 CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
+CMD_MOTOR_POS_ABS_ONE = 0xDE
+CMD_TENDON_GUARD = 0xD4
 CMD_ACTIVE_SCOPE = 0xD7
 CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
@@ -46,12 +50,13 @@ CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
 # 上位机在线心跳；固件用它判断桌面端是否已经关闭。
 CMD_HOST_HEARTBEAT = 0xDC
 CMD_MULTITURN_NVS_CONTROL = 0xDD
-CMD_SINE_TEST_PARAMS = 0xDE
-CMD_SINE_TEST_START = 0xDF
-CMD_SINE_TEST_STOP = 0xE0
-CMD_MOTOR_POS_ABS_ONE = 0xE1
-CMD_CALIB_LOAD_JOINT = 0xE2
-CMD_CALIB_LOAD_LIMITS = 0xE3
+CMD_HOST_HEARTBEAT = 0xDC
+CMD_CALIB_LOAD_JOINT = 0xDF
+CMD_CALIB_LOAD_LIMITS = 0xE0
+CMD_LOCAL_TEST_PARAMS = 0xE1
+CMD_LOCAL_TEST_START = 0xE2
+CMD_LOCAL_TEST_STOP = 0xE3
+CMD_SIDE_SWAY_ADJUST = 0xE4
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -74,6 +79,37 @@ SYSTEM_FAULT_OVERLOAD = 1 << 2
 SYSTEM_FAULT_RELEASE_GUARD = 1 << 3
 SYSTEM_FAULT_SERVO_OFFLINE = 1 << 4
 SYSTEM_FAULT_CALIBRATION = 1 << 5
+SYSTEM_FAULT_MULTITURN_UNKNOWN = 1 << 6
+
+CALIB_DIAG_REASON_NONE = 0
+CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY = 1
+CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT = 2
+CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT = 3
+CALIB_DIAG_REASON_TELEMETRY_TIMEOUT = 4
+CALIB_DIAG_REASON_ENCODER_ERROR = 5
+CALIB_DIAG_REASON_SERVO_OFFLINE = 6
+CALIB_DIAG_REASON_TURN_UNKNOWN = 7
+CALIB_DIAG_REASON_OVERLOAD = 8
+CALIB_DIAG_REASON_LOAD_NOT_REACHED = 9
+CALIB_DIAG_REASON_ANGLE_NOT_MOVING = 10
+CALIB_DIAG_REASON_WRONG_DIRECTION = 11
+CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT = 12
+CALIB_DIAG_REASON_ZERO_CROSS_INVALID = 13
+CALIB_DIAG_REASON_WRAP_TOO_LARGE = 14
+CALIB_DIAG_REASON_ABS_LIMIT_INVALID = 15
+CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED = 16
+CALIB_DIAG_REASON_FEEDBACK_LOST = 17
+CALIB_DIAG_REASON_TASK_START_FAILED = 18
+CALIB_DIAG_REASON_INTERNAL_ERROR = 19
+
+CALIB_DIAG_PHASE_NONE = 0
+CALIB_DIAG_PHASE_INIT = 1
+CALIB_DIAG_PHASE_FIND_MAX = 2
+CALIB_DIAG_PHASE_RELEASE = 3
+CALIB_DIAG_PHASE_RETURN_ZERO = 4
+CALIB_DIAG_PHASE_DUAL_PRELOAD = 5
+CALIB_DIAG_PHASE_DUAL_EXCHANGE = 6
+CALIB_DIAG_PHASE_SEQUENCE = 7
 
 SERVO_TARGET_OWNER_NONE = 0
 SERVO_TARGET_OWNER_CONTROL = 1
@@ -86,6 +122,11 @@ TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
 TACTILE_SUMMARY_BYTES = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP * TACTILE_AXIS_COUNT
+TACTILE_TIP_TAXELS = 25
+TACTILE_PAD_TAXELS = 52
+TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_PAD_TAXELS, TACTILE_TIP_TAXELS, TACTILE_TIP_TAXELS)
+TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TACTILE_AXIS_COUNT
+TACTILE_FULL_PACKET_MAGIC = b"T2"
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -137,7 +178,7 @@ def parse_proto_ack(payload: bytes) -> Optional[Tuple[int, int, int]]:
     return payload[0], payload[1], payload[2]
 
 
-def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int]]:
+def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, int, int, int, int, int, int, int, int, int, int, bool]]:
     if len(payload) < 13:
         return None
     system_state = payload[0]
@@ -150,6 +191,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
     multi_turn_unknown_bitmap = struct.unpack(">I", payload[13:17])[0] if len(payload) >= 17 else 0
     multiturn_nvs_enabled = payload[17] if len(payload) >= 18 else 1
     multiturn_nvs_snapshot_valid = payload[18] if len(payload) >= 19 else 0
+    has_active_scope_status = len(payload) >= 28
+    active_motor_mask = struct.unpack(">I", payload[19:23])[0] if has_active_scope_status else 0
+    active_joint_mask = struct.unpack(">I", payload[23:27])[0] if has_active_scope_status else 0
+    require_can_feedback = payload[27] if has_active_scope_status else 0
     return (
         system_state,
         control_enabled,
@@ -161,6 +206,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[Tuple[int, int, int, 
         multi_turn_unknown_bitmap,
         multiturn_nvs_enabled,
         multiturn_nvs_snapshot_valid,
+        active_motor_mask,
+        active_joint_mask,
+        require_can_feedback,
+        has_active_scope_status,
     )
 
 
@@ -224,6 +273,30 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     return result
 
 
+def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) < 25:
+        return None
+    idx = 0
+    result = {
+        "valid": bool(payload[idx]),
+        "reason": int(payload[idx + 1]),
+        "phase": int(payload[idx + 2]),
+        "joint": int(payload[idx + 3]),
+        "motor": int(payload[idx + 4]),
+    }
+    idx = 5
+    result["valueA"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["valueB"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["valueC"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["bitmap"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["timestamp_ms"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    return result
+
+
 def parse_calib_ack(payload: bytes) -> Optional[int]:
     if len(payload) < 1:
         return None
@@ -278,11 +351,18 @@ def parse_servo_telem_packet(
     return speeds, loads, volts, temps, online
 
 
-def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
-    if not payload or (len(payload) % 3) != 0:
+def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool], bool]]:
+    if not payload:
         return None
 
-    channel_count = len(payload) // 3
+    if (len(payload) % 7) == 0:
+        channel_count = len(payload) // 7
+        has_hardware_positions = True
+    elif (len(payload) % 3) == 0:
+        channel_count = len(payload) // 3
+        has_hardware_positions = False
+    else:
+        return None
     if channel_count <= 0:
         return None
 
@@ -291,11 +371,18 @@ def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[boo
         start = i * 2
         raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
 
+    hardware_positions: List[int] = []
+    hw_base = channel_count * 2
+    online_base = channel_count * 6 if has_hardware_positions else channel_count * 2
+    if has_hardware_positions:
+        for i in range(channel_count):
+            start = hw_base + i * 4
+            hardware_positions.append(struct.unpack(">i", payload[start:start + 4])[0])
+
     online_flags: List[bool] = []
-    base = channel_count * 2
     for i in range(channel_count):
-        online_flags.append(payload[base + i] == 1)
-    return raw_positions, online_flags
+        online_flags.append(payload[online_base + i] == 1)
+    return raw_positions, hardware_positions, online_flags, has_hardware_positions
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
@@ -339,6 +426,54 @@ def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[i
             cursor += TACTILE_AXIS_COUNT
         out.append(group_data)
     return seq, out
+
+
+def crc16_ccitt(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in bytes(data):
+        crc ^= (int(byte) & 0xFF) << 8
+        for _bit in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc & 0xFFFF
+
+
+def parse_tactile_full_fragment(
+    payload: bytes,
+) -> Optional[Tuple[int, int, int, bytes, Optional[int], Optional[int]]]:
+    if len(payload) >= 9 and payload[:2] == TACTILE_FULL_PACKET_MAGIC:
+        seq = payload[2]
+        summary_seq = payload[3]
+        frag_idx = payload[4]
+        frag_count = payload[5]
+        chunk_len = payload[6]
+        full_crc = payload[7] | (payload[8] << 8)
+        if frag_count <= 0 or frag_idx >= frag_count:
+            return None
+        if len(payload) != 9 + chunk_len:
+            return None
+        return (
+            seq,
+            frag_idx,
+            frag_count,
+            bytes(payload[9:9 + chunk_len]),
+            summary_seq,
+            full_crc,
+        )
+
+    if len(payload) < 4:
+        return None
+    seq = payload[0]
+    frag_idx = payload[1]
+    frag_count = payload[2]
+    chunk_len = payload[3]
+    if frag_count <= 0 or frag_idx >= frag_count:
+        return None
+    if len(payload) != 4 + chunk_len:
+        return None
+    return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
 
 
 def parse_joint_debug_packet(
@@ -412,6 +547,10 @@ def parse_frame(data: bytes) -> Tuple[List[Tuple[int, bytes]], bytearray]:
 
 def build_calibrate_cmd() -> bytes:
     return _build_command_frame(CMD_CALIBRATE)
+
+
+def build_side_sway_adjust_cmd() -> bytes:
+    return _build_command_frame(CMD_SIDE_SWAY_ADJUST)
 
 
 def build_start_cmd() -> bytes:
@@ -593,6 +732,24 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
 
 
+def build_tendon_guard_cmd(config: Sequence[Tuple[bool, int, int]]) -> bytes:
+    payload = bytearray()
+    for idx in range(ENCODER_COUNT):
+        if idx < len(config):
+            enabled, pull_sign, x1_abs = config[idx]
+        else:
+            enabled, pull_sign, x1_abs = False, 1, 0
+        sign_byte = 0xFF if int(pull_sign) < 0 else 0x01
+        x1 = int(x1_abs)
+        if x1 < MOTOR_ABS_CMD_MIN:
+            x1 = MOTOR_ABS_CMD_MIN
+        elif x1 > MOTOR_ABS_CMD_MAX:
+            x1 = MOTOR_ABS_CMD_MAX
+        payload.extend(bytes([1 if enabled else 0, sign_byte]))
+        payload.extend(struct.pack(">h", x1))
+    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))
+
+
 def build_stream_mode_cmd(mode: int) -> bytes:
     mode_int = int(mode)
     if mode_int not in (SENSOR_STREAM_MODE_LEGACY_U16_WRAP, SENSOR_STREAM_MODE_SIGNED_I16):
@@ -600,30 +757,14 @@ def build_stream_mode_cmd(mode: int) -> bytes:
     return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
 
 
-def build_sine_test_params_cmd(rows: List[Tuple[int, float, float, float, float]], hold_s: float) -> bytes:
-    hold_ms = max(0, min(3600000, int(round(float(hold_s) * 1000.0))))
-    valid_rows = []
-    for joint_idx, lo, hi, freq_hz, phase_deg in rows[:5]:
-        idx = int(joint_idx)
-        if not 0 <= idx < ENCODER_COUNT:
-            continue
-        center = 0.5 * (float(lo) + float(hi))
-        amp = 0.5 * abs(float(hi) - float(lo))
-        phase = float(phase_deg) * 3.14159265358979323846 / 180.0
-        valid_rows.append((idx, center, amp, float(freq_hz), phase))
-    payload = bytearray(struct.pack(">IB", hold_ms & 0xFFFFFFFF, len(valid_rows) & 0xFF))
-    for idx, center, amp, freq_hz, phase in valid_rows:
-        payload.append(idx & 0xFF)
-        payload.extend(struct.pack("<ffff", center, amp, freq_hz, phase))
-    for _ in range(5 - len(valid_rows)):
-        payload.append(0)
-        payload.extend(struct.pack("<ffff", 0.0, 0.0, 0.0, 0.0))
-    return _build_command_frame(CMD_SINE_TEST_PARAMS, payload)
+def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:
+    payload = struct.pack("<ff", freq_hz, amplitude_deg)
+    return _build_command_frame(CMD_LOCAL_TEST_PARAMS, payload)
 
 
-def build_sine_test_start_cmd() -> bytes:
-    return _build_command_frame(CMD_SINE_TEST_START, b"")
+def build_local_test_start_cmd() -> bytes:
+    return _build_command_frame(CMD_LOCAL_TEST_START, b"")
 
 
-def build_sine_test_stop_cmd() -> bytes:
-    return _build_command_frame(CMD_SINE_TEST_STOP, b"")
+def build_local_test_stop_cmd() -> bytes:
+    return _build_command_frame(CMD_LOCAL_TEST_STOP, b"")

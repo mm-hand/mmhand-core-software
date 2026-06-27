@@ -20,7 +20,7 @@ static const char* kSlot0Key = "slot0";
 static const char* kSlot1Key = "slot1";
 static const char* kEnabledKey = "enabled";
 static const uint32_t kMagic = 0x4D544E31UL; // MTN1
-static const uint16_t kVersion = 1;
+static const uint16_t kVersion = 2;
 static bool g_nvsReady = false;
 
 static bool ensureNvsReady()
@@ -58,11 +58,66 @@ static uint32_t snapshotCrc(const MultiTurnNvsSnapshot& snapshot)
     return crc32Update(0, (const uint8_t*)&snapshot, offsetof(MultiTurnNvsSnapshot, crc32));
 }
 
+static uint32_t mappingSignature()
+{
+    uint32_t crc = 0;
+    uint8_t byte = (uint8_t)HAND_PROFILE;
+    crc = crc32Update(crc, &byte, 1);
+    byte = (uint8_t)SERVO_TOTAL_NUM;
+    crc = crc32Update(crc, &byte, 1);
+    byte = (uint8_t)ENCODER_TOTAL_NUM;
+    crc = crc32Update(crc, &byte, 1);
+
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t values[3] = {
+            motorMap[ch].busIndex,
+            motorMap[ch].servoID,
+            (uint8_t)(getMotorTendonShortenAbsSign(ch) < 0 ? 0xFF : 0x01),
+        };
+        crc = crc32Update(crc, values, sizeof(values));
+    }
+
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        uint8_t values[2] = {
+            jointMap[joint].busIndex,
+            jointMap[joint].servoID,
+        };
+        crc = crc32Update(crc, values, sizeof(values));
+
+        const JointActuatorGroup& group = jointActuatorGroups[joint];
+        byte = group.count;
+        crc = crc32Update(crc, &byte, 1);
+        for (uint8_t i = 0; i < 2; i++) {
+            const JointActuatorItem& item = group.actuators[i];
+            const uint8_t actValues[10] = {
+                item.motorChannel,
+                (uint8_t)(item.sign < 0 ? 0xFF : 0x01),
+                (uint8_t)(((uint32_t)item.offset >> 24) & 0xFF),
+                (uint8_t)(((uint32_t)item.offset >> 16) & 0xFF),
+                (uint8_t)(((uint32_t)item.offset >> 8) & 0xFF),
+                (uint8_t)((uint32_t)item.offset & 0xFF),
+                (uint8_t)(((uint32_t)item.tensionBias >> 24) & 0xFF),
+                (uint8_t)(((uint32_t)item.tensionBias >> 16) & 0xFF),
+                (uint8_t)(((uint32_t)item.tensionBias >> 8) & 0xFF),
+                (uint8_t)((uint32_t)item.tensionBias & 0xFF),
+            };
+            crc = crc32Update(crc, actValues, sizeof(actValues));
+        }
+    }
+    return crc;
+}
+
 static bool validateSnapshot(const MultiTurnNvsSnapshot& snapshot)
 {
     if (snapshot.magic != kMagic ||
         snapshot.version != kVersion ||
         snapshot.motorCount != SERVO_TOTAL_NUM) {
+        return false;
+    }
+    if (snapshot.mappingSignature != mappingSignature()) {
+        Serial.printf("[NVS MULTITURN] mapping signature mismatch stored=0x%08lX current=0x%08lX\r\n",
+                      (unsigned long)snapshot.mappingSignature,
+                      (unsigned long)mappingSignature());
         return false;
     }
     return snapshot.crc32 == snapshotCrc(snapshot);
@@ -228,6 +283,7 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
     snapshot.sequence = previousSequence + 1;
     snapshot.validMask = validMask |
         (hasPrevious ? (previous.validMask & validMotorChannelMask()) : 0);
+    snapshot.mappingSignature = mappingSignature();
 
     // Only update trusted motors; reuse old values for channels not sampled this cycle.
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {

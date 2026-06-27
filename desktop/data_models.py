@@ -348,6 +348,8 @@ class TactileSensor:
     """单组触觉元：指尖为 (5,5,3)，指腹为 (4,13,3)；末维 Fx,Fy,Fz"""
     contact_forces: np.ndarray  # (5,5,3) 或 (4,13,3)
     resultant: np.ndarray       # (3,)
+    raw_contact_forces: Optional[np.ndarray] = None
+    raw_unsigned_contact_forces: Optional[np.ndarray] = None
 
     @property
     def n_rows(self) -> int:
@@ -417,12 +419,20 @@ class HandModel:
     encoders: List[JointEncoder] = field(default_factory=_default_encoders)
     motors: List[MotorSlot] = field(default_factory=_default_motors)
     tactile_data: List[FingerTactile] = field(default_factory=list)
+    tactile_summary_seq: Optional[int] = None
+    tactile_full_seq: Optional[int] = None
+    tactile_full_summary_seq: Optional[int] = None
+    tactile_full_crc: Optional[int] = None
+    tactile_full_crc_errors: int = 0
+    tactile_full_seq_mismatches: int = 0
+    tactile_full_dropped: int = 0
     calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
+    has_servo_hardware_data: bool = False
     has_system_status_data: bool = False
     system_state: int = 0
     control_enabled: bool = False
@@ -433,17 +443,32 @@ class HandModel:
     multi_turn_unknown_bitmap: int = 0
     multiturn_nvs_enabled: bool = True
     multiturn_nvs_snapshot_valid: bool = False
+    has_active_scope_status: bool = False
+    active_motor_mask: int = 0
+    active_joint_mask: int = 0
+    require_can_feedback: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
+    calib_diag_valid: bool = False
+    calib_diag_reason: int = 0
+    calib_diag_phase: int = 0
+    calib_diag_joint: int = 0xFF
+    calib_diag_motor: int = 0xFF
+    calib_diag_value_a: int = 0
+    calib_diag_value_b: int = 0
+    calib_diag_value_c: int = 0
+    calib_diag_bitmap: int = 0
+    calib_diag_timestamp_ms: int = 0
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     # 伺服单圈原始位置与在线状态（来自 PACKET_TYPE_SERVO_RAW，单位：单圈计数）
     servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_hardware_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
 
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
@@ -511,6 +536,7 @@ class HandModel:
         self.servo_angles = list(other.servo_angles)
         self.servo_online = list(other.servo_online)
         self.servo_raw_positions = list(other.servo_raw_positions)
+        self.servo_hardware_positions = list(getattr(other, "servo_hardware_positions", self.servo_raw_positions))
         self.servo_raw_online = list(other.servo_raw_online)
         self.servo_speed = list(other.servo_speed)
         self.servo_load = list(other.servo_load)
@@ -534,6 +560,7 @@ class HandModel:
         self.has_sensor_data = bool(other.has_sensor_data)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
+        self.has_servo_hardware_data = bool(getattr(other, "has_servo_hardware_data", False))
         self.has_system_status_data = bool(other.has_system_status_data)
         self.system_state = int(other.system_state)
         self.control_enabled = bool(other.control_enabled)
@@ -544,6 +571,10 @@ class HandModel:
         self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
         self.multiturn_nvs_enabled = bool(getattr(other, "multiturn_nvs_enabled", True))
         self.multiturn_nvs_snapshot_valid = bool(getattr(other, "multiturn_nvs_snapshot_valid", False))
+        self.has_active_scope_status = bool(getattr(other, "has_active_scope_status", False))
+        self.active_motor_mask = int(getattr(other, "active_motor_mask", 0) or 0)
+        self.active_joint_mask = int(getattr(other, "active_joint_mask", 0) or 0)
+        self.require_can_feedback = bool(getattr(other, "require_can_feedback", False))
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
@@ -552,4 +583,21 @@ class HandModel:
             dict(item) if isinstance(item, dict) else None
             for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
         ]
+        self.calib_diag_valid = bool(getattr(other, "calib_diag_valid", False))
+        self.calib_diag_reason = int(getattr(other, "calib_diag_reason", 0) or 0)
+        self.calib_diag_phase = int(getattr(other, "calib_diag_phase", 0) or 0)
+        self.calib_diag_joint = int(getattr(other, "calib_diag_joint", 0xFF) or 0)
+        self.calib_diag_motor = int(getattr(other, "calib_diag_motor", 0xFF) or 0)
+        self.calib_diag_value_a = int(getattr(other, "calib_diag_value_a", 0) or 0)
+        self.calib_diag_value_b = int(getattr(other, "calib_diag_value_b", 0) or 0)
+        self.calib_diag_value_c = int(getattr(other, "calib_diag_value_c", 0) or 0)
+        self.calib_diag_bitmap = int(getattr(other, "calib_diag_bitmap", 0) or 0)
+        self.calib_diag_timestamp_ms = int(getattr(other, "calib_diag_timestamp_ms", 0) or 0)
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
+        self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
+        self.tactile_full_seq = getattr(other, "tactile_full_seq", None)
+        self.tactile_full_summary_seq = getattr(other, "tactile_full_summary_seq", None)
+        self.tactile_full_crc = getattr(other, "tactile_full_crc", None)
+        self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
+        self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
+        self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))

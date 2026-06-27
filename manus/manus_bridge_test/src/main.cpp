@@ -29,7 +29,7 @@ struct AppOptions
     std::string output = "manus_log.csv";
     bool connect_locally = true;
     double print_hz = 10.0;
-    uint32_t raw_nodes = 64;
+    uint32_t raw_nodes = 5;
     std::string config_path = "config/manus_bridge_config.json";
 };
 
@@ -38,7 +38,7 @@ struct BridgeConfig
     std::string connection = "local";
     double print_hz = 10.0;
     uint32_t host_search_seconds = 1;
-    uint32_t raw_skeleton_nodes_to_print = 64;
+    uint32_t raw_skeleton_nodes_to_print = 5;
     std::string default_csv_output = "manus_log.csv";
     TcpSenderConfig tcp;
 };
@@ -305,7 +305,6 @@ int main(int argc, char** argv)
               << " max_hz=" << bridge_config.tcp.max_hz
               << "\n";
     std::cout << "Running in " << options.mode << " mode. Press Ctrl+C to stop.\n";
-    DataPrinter printer(options.print_hz);
     uint64_t tcp_sent_total = 0;
     uint64_t tcp_sent_last_report = 0;
     uint64_t tcp_failed_total = 0;
@@ -319,10 +318,6 @@ int main(int argc, char** argv)
     {
         std::vector<ManusFrame> frames = client.consumeFrames();
         manus_frame_total += frames.size();
-        if (options.mode == "debug" && printer.shouldPrint())
-        {
-            printer.print(frames);
-        }
         if (!frames.empty())
         {
             const auto send_now = std::chrono::steady_clock::now();

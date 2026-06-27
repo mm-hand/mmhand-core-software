@@ -62,11 +62,6 @@ void DataPrinter::print(const std::vector<ManusFrame>& frames)
             for (const RawSkeletonNodeSample& node : frame.raw_skeleton_nodes)
             {
                 std::cout << "    node_id=" << node.node_id
-                          << " parent_id=" << node.parent_id
-                          << " side=" << node.side
-                          << " chain=" << node.chain_type
-                          << " joint=" << node.finger_joint_type
-                          << " info=" << (node.has_node_info ? "yes" : "no")
                           << " pos=(" << node.position.x << ", " << node.position.y << ", " << node.position.z << ")"
                           << " rot=(" << node.rotation.w << ", " << node.rotation.x << ", "
                           << node.rotation.y << ", " << node.rotation.z << ")\n";

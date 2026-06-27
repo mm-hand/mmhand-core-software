@@ -23,6 +23,8 @@ extern volatile uint8_t g_calibrationAckRepeatRemaining;
 // 3) keep protocol ACK and fault heartbeat reporting synchronized.
 static uint8_t g_sensorStreamMode = SENSOR_STREAM_MODE_SIGNED_I16;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
+static const uint8_t kTactileFullPacketMagic0 = 0x54; // 'T'
+static const uint8_t kTactileFullPacketMagic1 = 0x32; // '2'
 
 // Append a float using big-endian wire order.
 static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
@@ -72,6 +74,22 @@ static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
     return rawValue;
 }
 
+static uint16_t crc16Ccitt(const uint8_t* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (crc & 0x8000) {
+                crc = (uint16_t)((crc << 1) ^ 0x1021);
+            } else {
+                crc = (uint16_t)(crc << 1);
+            }
+        }
+    }
+    return crc;
+}
+
 static bool calibrationAckPending()
 {
     return g_calibrationAckStatus != CALIB_STATUS_IDLE &&
@@ -115,7 +133,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[28];
+    uint8_t buffer[40];
     size_t idx = 0;
     const uint32_t faultBitmap = sharedData->system_fault_bitmap;
     const uint32_t transitionCount = sharedData->state_transition_count;
@@ -143,6 +161,17 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
     buffer[idx++] = sharedData->multiturn_nvs_enabled ? 1 : 0;
     buffer[idx++] = sharedData->multiturn_nvs_snapshot_valid ? 1 : 0;
+    const uint32_t activeMotorMask = sharedData->active_motor_mask;
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeMotorMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(activeMotorMask & 0xFF);
+    const uint32_t activeJointMask = sharedData->active_joint_mask;
+    buffer[idx++] = (uint8_t)((activeJointMask >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeJointMask >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((activeJointMask >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(activeJointMask & 0xFF);
+    buffer[idx++] = sharedData->require_can_feedback ? 1 : 0;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -260,6 +289,34 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     Serial.write(buffer, idx);
 }
 
+static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
+{
+    uint8_t buffer[40];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_CALIB_DIAG;
+    buffer[idx++] = diag.valid ? 1 : 0;
+    buffer[idx++] = diag.reason;
+    buffer[idx++] = diag.phase;
+    buffer[idx++] = diag.joint;
+    buffer[idx++] = diag.motor;
+    appendI32BigEndian(buffer, &idx, diag.valueA);
+    appendI32BigEndian(buffer, &idx, diag.valueB);
+    appendI32BigEndian(buffer, &idx, diag.valueC);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.bitmap >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(diag.bitmap & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 24) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 16) & 0xFF);
+    buffer[idx++] = (uint8_t)((diag.timestamp >> 8) & 0xFF);
+    buffer[idx++] = (uint8_t)(diag.timestamp & 0xFF);
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
+
 static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
 {
     uint8_t buffer[64];
@@ -283,6 +340,46 @@ static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
     Serial.write(buffer, idx);
 }
 
+static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
+{
+    if (!tactile.fullValid) {
+        return;
+    }
+
+    static const size_t kTactileFullSerialChunkBytes = 240;
+    const uint8_t fragCount = (uint8_t)((TACTILE_FULL_BYTES + kTactileFullSerialChunkBytes - 1) /
+                                        kTactileFullSerialChunkBytes);
+    const uint16_t fullCrc = crc16Ccitt(tactile.fullValues, TACTILE_FULL_BYTES);
+
+    for (uint8_t fragIdx = 0; fragIdx < fragCount; fragIdx++) {
+        const size_t offset = (size_t)fragIdx * kTactileFullSerialChunkBytes;
+        const size_t remaining = TACTILE_FULL_BYTES - offset;
+        const uint8_t chunkLen = (uint8_t)((remaining > kTactileFullSerialChunkBytes)
+            ? kTactileFullSerialChunkBytes
+            : remaining);
+
+        uint8_t buffer[256];
+        size_t idx = 0;
+        buffer[idx++] = PROTOCOL_HEADER;
+        buffer[idx++] = 0x00;
+        buffer[idx++] = PACKET_TYPE_TACTILE_FULL;
+        buffer[idx++] = kTactileFullPacketMagic0;
+        buffer[idx++] = kTactileFullPacketMagic1;
+        buffer[idx++] = tactile.fullSeq;
+        buffer[idx++] = tactile.seq;
+        buffer[idx++] = fragIdx;
+        buffer[idx++] = fragCount;
+        buffer[idx++] = chunkLen;
+        buffer[idx++] = (uint8_t)(fullCrc & 0xFF);
+        buffer[idx++] = (uint8_t)((fullCrc >> 8) & 0xFF);
+        memcpy(buffer + idx, tactile.fullValues + offset, chunkLen);
+        idx += chunkLen;
+        buffer[idx++] = PROTOCOL_TAIL;
+        buffer[1] = (uint8_t)(idx - 2);
+        Serial.write(buffer, idx);
+    }
+}
+
 // Serialize one upstream data packet.
 static void sendDataPacket(ServoStatus_t* pServo,
                            RemoteSensorData_t* pSensorRaw,
@@ -297,6 +394,8 @@ static void sendDataPacket(ServoStatus_t* pServo,
 
     uint8_t buffer[256];
     size_t idx = 0;
+    bool sendFullTactileAfter = false;
+    const RemoteTactileData_t* fullTactile = NULL;
 
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00; // LEN placeholder.
@@ -360,6 +459,14 @@ static void sendDataPacket(ServoStatus_t* pServo,
         }
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
+            const int32_t hw = pServoRaw->servoHardwarePositions[i];
+            buffer[idx++] = (uint8_t)((hw >> 24) & 0xFF);
+            buffer[idx++] = (uint8_t)((hw >> 16) & 0xFF);
+            buffer[idx++] = (uint8_t)((hw >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)(hw & 0xFF);
+        }
+        for (int i = 0; i < SERVO_TOTAL_NUM; i++)
+        {
             buffer[idx++] = pServoRaw->onlineStatus[i];
         }
     }
@@ -387,6 +494,8 @@ static void sendDataPacket(ServoStatus_t* pServo,
         {
             buffer[idx++] = pTactile->values[i];
         }
+        sendFullTactileAfter = pTactile->fullValid;
+        fullTactile = pTactile;
     }
     else if (pJointDebug)
     {
@@ -402,11 +511,6 @@ static void sendDataPacket(ServoStatus_t* pServo,
         const uint16_t cmdPosRaw = (uint16_t)pJointDebug->cmdTargetPos;
         buffer[idx++] = (uint8_t)((cmdPosRaw >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(cmdPosRaw & 0xFF);
-        const uint32_t ts = pJointDebug->timestamp;
-        buffer[idx++] = (uint8_t)((ts >> 24) & 0xFF);
-        buffer[idx++] = (uint8_t)((ts >> 16) & 0xFF);
-        buffer[idx++] = (uint8_t)((ts >> 8) & 0xFF);
-        buffer[idx++] = (uint8_t)(ts & 0xFF);
     }
     else
     {
@@ -416,6 +520,9 @@ static void sendDataPacket(ServoStatus_t* pServo,
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
+    if (sendFullTactileAfter && fullTactile) {
+        sendTactileFullPackets(*fullTactile);
+    }
 }
 
 // Decode a little-endian float from command payload.
@@ -528,13 +635,10 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_RUN_FEEDBACK:
         case CMD_PAUSE:
         case CMD_HOST_HEARTBEAT:
-        case CMD_SINE_TEST_START:
-        case CMD_SINE_TEST_STOP:
+        case CMD_SIDE_SWAY_ADJUST:
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
-        case CMD_SINE_TEST_PARAMS:
-            return kSineTestParamsPayloadBytes;
         case CMD_ANGLE_CTRL:
             return kFloatPayloadBytes;
         case CMD_CALIB_DATA:
@@ -559,6 +663,11 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kCalibLoadJointPayloadBytes;
         case CMD_CALIB_LOAD_LIMITS:
             return kCalibLoadLimitsPayloadBytes;
+        case CMD_LOCAL_TEST_PARAMS:
+            return kLocalTestParamsPayloadBytes;
+        case CMD_LOCAL_TEST_START:
+        case CMD_LOCAL_TEST_STOP:
+            return 0;
         case CMD_SENSOR_STREAM_MODE:
             return 1;
         default:
@@ -598,6 +707,13 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
         sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        return;
+    }
+
+    if (cmd == CMD_SIDE_SWAY_ADJUST)
+    {
+        postSystemEvent(sharedData, SYSTEM_EVENT_SIDE_SWAY_ADJUST);
+        sendProtoAckPacket(CMD_SIDE_SWAY_ADJUST, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
     }
 
@@ -706,9 +822,93 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         uint8_t enabled[ENCODER_TOTAL_NUM] = {0};
         int8_t sign[ENCODER_TOTAL_NUM] = {0};
         int16_t x1Abs[ENCODER_TOTAL_NUM] = {0};
+        uint8_t status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         if (parseTendonGuardPayload(frame + 1, frameLen - 1, enabled, sign, x1Abs)) {
             upperApplyTendonGuardConfig(sharedData, enabled, sign, x1Abs, ENCODER_TOTAL_NUM);
+            status = PROTO_ACK_STATUS_OK;
         }
+        sendProtoAckPacket(CMD_TENDON_GUARD, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_LOCAL_TEST_PARAMS)
+    {
+        const float freqHz = decodeFloatLittleEndian(frame + 1);
+        const float amplitudeDeg = decodeFloatLittleEndian(frame + 5);
+        const bool ok = isfinite(freqHz) && isfinite(amplitudeDeg) && freqHz > 0.0f;
+        if (ok) {
+            SemaphoreHandle_t lock = sharedData->commandStateMutex;
+            if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+                const uint32_t jointMask =
+                    sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+                sharedData->sine_test_joint_mask = jointMask;
+                sharedData->sine_test_hold_ms = 0;
+                for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
+                    sharedData->sine_test_center_deg[i] = sharedData->targetAngles[i];
+                    sharedData->sine_test_amp_deg[i] =
+                        ((jointMask & (1UL << i)) != 0) ? amplitudeDeg : 0.0f;
+                    sharedData->sine_test_freq_hz[i] =
+                        ((jointMask & (1UL << i)) != 0) ? freqHz : 0.0f;
+                    sharedData->sine_test_phase_rad[i] = 0.0f;
+                }
+                xSemaphoreGive(lock);
+            }
+        }
+        Serial.printf("[UPPER] LOCAL_TEST_PARAMS freq=%.4f amp=%.3f mask=0x%08lX ok=%u\r\n",
+                      (double)freqHz,
+                      (double)amplitudeDeg,
+                      (unsigned long)sharedData->sine_test_joint_mask,
+                      ok ? 1U : 0U);
+        sendProtoAckPacket(CMD_LOCAL_TEST_PARAMS,
+                           sharedData->system_state,
+                           ok ? PROTO_ACK_STATUS_OK : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
+
+    if (cmd == CMD_LOCAL_TEST_START)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        SemaphoreHandle_t lock = sharedData->commandStateMutex;
+        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            if (sharedData->sine_test_joint_mask == 0) {
+                sharedData->sine_test_joint_mask =
+                    sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+            }
+            sharedData->sine_test_enabled = 1;
+            sharedData->sine_test_start_ms = millis();
+            sharedData->sine_test_request_token++;
+            sharedData->joint_command_token++;
+            if (lock) {
+                xSemaphoreGive(lock);
+            }
+        }
+        Serial.printf("[UPPER] LOCAL_TEST_START enabled=%u token=%lu mask=0x%08lX status=%u\r\n",
+                      sharedData->sine_test_enabled ? 1U : 0U,
+                      (unsigned long)sharedData->sine_test_request_token,
+                      (unsigned long)sharedData->sine_test_joint_mask,
+                      (unsigned)status);
+        sendProtoAckPacket(cmd, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_LOCAL_TEST_STOP)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        SemaphoreHandle_t lock = sharedData->commandStateMutex;
+        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            sharedData->sine_test_enabled = 0;
+            sharedData->sine_test_request_token++;
+            sharedData->joint_command_token++;
+            if (lock) {
+                xSemaphoreGive(lock);
+            }
+        }
+        Serial.printf("[UPPER] LOCAL_TEST_STOP status=%u\r\n", (unsigned)status);
+        sendProtoAckPacket(cmd, sharedData->system_state, status);
         return;
     }
 
@@ -934,119 +1134,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
-    if (cmd == CMD_SINE_TEST_PARAMS)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kSineTestParamsPayloadBytes) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            const uint32_t holdMs = readU32BigEndian(frame + 1);
-            uint8_t rowCount = frame[5];
-            if (rowCount > kSineTestMaxRows) {
-                rowCount = kSineTestMaxRows;
-            }
-            uint32_t jointMask = 0;
-            float center[ENCODER_TOTAL_NUM] = {0.0f};
-            float amp[ENCODER_TOTAL_NUM] = {0.0f};
-            float freq[ENCODER_TOTAL_NUM] = {0.0f};
-            float phase[ENCODER_TOTAL_NUM] = {0.0f};
-            size_t offset = 6;
-            for (uint8_t row = 0; row < kSineTestMaxRows; row++) {
-                const uint8_t jointIndex = frame[offset++];
-                const float rowCenter = decodeFloatLittleEndian(frame + offset);
-                offset += sizeof(float);
-                const float rowAmp = decodeFloatLittleEndian(frame + offset);
-                offset += sizeof(float);
-                const float rowFreq = decodeFloatLittleEndian(frame + offset);
-                offset += sizeof(float);
-                const float rowPhase = decodeFloatLittleEndian(frame + offset);
-                offset += sizeof(float);
-
-                if (row >= rowCount) {
-                    continue;
-                }
-                if (jointIndex >= ENCODER_TOTAL_NUM ||
-                    !isfinite(rowCenter) ||
-                    !isfinite(rowAmp) || rowAmp < 0.0f || rowAmp > 180.0f ||
-                    !isfinite(rowFreq) || rowFreq < 0.001f || rowFreq > 100.0f ||
-                    !isfinite(rowPhase)) {
-                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                    continue;
-                }
-                jointMask |= (1UL << jointIndex);
-                center[jointIndex] = rowCenter;
-                amp[jointIndex] = rowAmp;
-                freq[jointIndex] = rowFreq;
-                phase[jointIndex] = rowPhase;
-            }
-            if (status == PROTO_ACK_STATUS_OK) {
-                SemaphoreHandle_t lock = sharedData->commandStateMutex;
-                if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                } else {
-                    sharedData->sine_test_joint_mask = jointMask;
-                    sharedData->sine_test_hold_ms = holdMs;
-                    memcpy(sharedData->sine_test_center_deg, center, sizeof(center));
-                    memcpy(sharedData->sine_test_amp_deg, amp, sizeof(amp));
-                    memcpy(sharedData->sine_test_freq_hz, freq, sizeof(freq));
-                    memcpy(sharedData->sine_test_phase_rad, phase, sizeof(phase));
-                    if (lock) {
-                        xSemaphoreGive(lock);
-                    }
-                }
-            }
-        }
-        Serial.printf("[UPPER] SINE_TEST_PARAMS mask=0x%08lX hold=%lums status=%u\r\n",
-                      (unsigned long)sharedData->sine_test_joint_mask,
-                      (unsigned long)sharedData->sine_test_hold_ms,
-                      (unsigned)status);
-        sendProtoAckPacket(CMD_SINE_TEST_PARAMS, sharedData->system_state, status);
-        return;
-    }
-
-    if (cmd == CMD_SINE_TEST_START)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        SemaphoreHandle_t lock = sharedData->commandStateMutex;
-        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            sharedData->sine_test_enabled = 1;
-            sharedData->sine_test_start_ms = millis();
-            sharedData->sine_test_request_token++;
-            sharedData->joint_command_token++;
-            if (lock) {
-                xSemaphoreGive(lock);
-            }
-        }
-        Serial.printf("[UPPER] SINE_TEST_START enabled=%u token=%lu jointMask=0x%08lX status=%u\r\n",
-                      sharedData->sine_test_enabled ? 1U : 0U,
-                      (unsigned long)sharedData->sine_test_request_token,
-                      (unsigned long)sharedData->sine_test_joint_mask,
-                      (unsigned)status);
-        sendProtoAckPacket(CMD_SINE_TEST_START, sharedData->system_state, status);
-        return;
-    }
-
-    if (cmd == CMD_SINE_TEST_STOP)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        SemaphoreHandle_t lock = sharedData->commandStateMutex;
-        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            sharedData->sine_test_enabled = 0;
-            sharedData->sine_test_request_token++;
-            sharedData->joint_command_token++;
-            if (lock) {
-                xSemaphoreGive(lock);
-            }
-        }
-        Serial.printf("[UPPER] SINE_TEST_STOP status=%u\r\n", (unsigned)status);
-        sendProtoAckPacket(CMD_SINE_TEST_STOP, sharedData->system_state, status);
-        return;
-    }
-
     if (cmd == CMD_SENSOR_STREAM_MODE)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
@@ -1090,6 +1177,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
     uint32_t lastJointCalibSnapshotSentMs = 0;
     uint8_t nextJointCalibSnapshotIndex = 0;
+    uint32_t lastCalibrationDiagSequenceSent = 0;
+    uint32_t lastCalibrationDiagSentMs = 0;
 
     Serial.println("<<<SYS_READY>>>");
 
@@ -1304,6 +1393,15 @@ void upperCommunicationTask(void* parameter)
             }
             nextJointCalibSnapshotIndex = 0;
             lastJointCalibSnapshotSentMs = nowMs;
+        }
+
+        const CalibrationDiagData_t calibDiag = sharedData->calibration_diag;
+        if (calibDiag.sequence != lastCalibrationDiagSequenceSent ||
+            (calibDiag.valid &&
+             (uint32_t)(nowMs - lastCalibrationDiagSentMs) >= kSystemStatusHeartbeatMs)) {
+            sendCalibrationDiagPacket(calibDiag);
+            lastCalibrationDiagSequenceSent = calibDiag.sequence;
+            lastCalibrationDiagSentMs = nowMs;
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));

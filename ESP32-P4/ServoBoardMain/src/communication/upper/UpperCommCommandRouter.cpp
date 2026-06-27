@@ -27,6 +27,8 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, u
         for (uint8_t i = 0; i < count; i++) {
             sharedData->targetAngles[i] = angles[i];
         }
+        sharedData->control_mode = CONTROL_MODE_JOINT;
+        sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->joint_command_token++;
         xSemaphoreGive(lock);
     }
@@ -57,6 +59,9 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorTargetRaw[i] = targets[i];
     }
+    sharedData->require_can_feedback = 0;
+    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
     sharedData->motor_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = source;
@@ -85,6 +90,9 @@ void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
     sharedData->motorTargetRaw[motorIndex] = clampServoAbsCommand(target);
     sharedData->active_motor_mask = motorMask;
     sharedData->active_joint_mask = 0;
+    sharedData->require_can_feedback = 0;
+    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
     sharedData->motor_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = source;
@@ -114,6 +122,9 @@ void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorSweepTargetRaw[i] = targets[i];
     }
+    sharedData->require_can_feedback = 0;
+    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
     sharedData->motor_sweep_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
@@ -201,9 +212,24 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
     }
     const uint32_t motorMaskLimit = validMotorChannelMask();
     const uint32_t jointMaskLimit = (1UL << ENCODER_TOTAL_NUM) - 1UL;
+
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        Serial.println("[UPPER] ACTIVE_SCOPE rejected: command mutex busy");
+        return false;
+    }
+
     sharedData->active_motor_mask = activeMotorMask & motorMaskLimit;
     sharedData->active_joint_mask = activeJointMask & jointMaskLimit;
     sharedData->require_can_feedback = requireCanFeedback ? 1 : 0;
+    sharedData->control_mode = requireCanFeedback ? CONTROL_MODE_JOINT : CONTROL_MODE_DIRECT_MOTOR;
+    if (requireCanFeedback) {
+        sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    }
+
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
 
     const uint32_t scopeFaultMask = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE;
     sharedData->system_fault_bitmap &= ~scopeFaultMask;

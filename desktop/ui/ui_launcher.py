@@ -1,5 +1,4 @@
-from comm_layer import list_ports
-from core_logic import HandController
+from hand_backend import HandBackend, list_ports
 from modes import Mode, run
 from .ui_qt_compat import QtWidgets, ensure_app
 from .ui_style import configure_qt_application
@@ -54,12 +53,12 @@ class LauncherWindow(QtWidgets.QDialog):
             mode = Mode.TELEOP
         elif mode_text == "Algorithm":
             mode = Mode.ALGORITHM
-        controller = HandController()
-        if port and not controller.initialize(port):
+        backend = HandBackend()
+        if port and not backend.connect(port):
             QtWidgets.QMessageBox.critical(self, "Connection Failed", f"Cannot open port: {port}")
             return
         self.close()
-        run(mode, controller, port=port, gui=True)
+        run(mode, backend, port=port, gui=True)
 
     def run(self) -> None:
         self.show()
