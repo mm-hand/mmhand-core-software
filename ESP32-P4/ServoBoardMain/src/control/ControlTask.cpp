@@ -16,7 +16,7 @@
 #endif
 
 #ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
-#define FEEDBACK_SERIAL_DEBUG_ENABLE 1
+#define FEEDBACK_SERIAL_DEBUG_ENABLE 0
 #endif
 
 // Match the legacy RoboticHand protection policy: keep reverse/release guard
@@ -48,6 +48,7 @@ static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
+static const uint32_t kFeedbackRunTimeoutMs = 8000;
 static const float kLocalTestTwoPi = 6.28318530717958647692f;
 static const float kLocalTestMinFreqHz = 0.001f;
 static const float kLocalTestMaxFreqHz = 100.0f;
@@ -482,6 +483,12 @@ void controlTask(void* parameter)
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
+    uint32_t feedbackRunToken = 0;
+    uint32_t feedbackRunStartMs = 0;
+    float feedbackRunTargetDeg[ENCODER_TOTAL_NUM] = {0.0f};
+    bool feedbackRunTracking = false;
+    bool feedbackRunDoneEventQueued = false;
+    bool feedbackRunTimeoutEventQueued = false;
     uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
     bool sineTestActive = false;
     uint32_t sineTestStartMs = 0;
@@ -771,6 +778,29 @@ void controlTask(void* parameter)
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
             }
+        }
+
+        const bool feedbackOneShotActive =
+            feedbackRunningState &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            !sineTestActive;
+        if (feedbackOneShotActive) {
+            // Snapshot the clamped target for this command generation. Completion
+            // must be judged against one stable target, not a later UI update.
+            if (!feedbackRunTracking || feedbackRunToken != jointCommandToken) {
+                memcpy(feedbackRunTargetDeg, localTargets, sizeof(feedbackRunTargetDeg));
+                feedbackRunToken = jointCommandToken;
+                feedbackRunStartMs = millis();
+                feedbackRunDoneStableCount = 0;
+                feedbackRunTracking = true;
+                feedbackRunDoneEventQueued = false;
+                feedbackRunTimeoutEventQueued = false;
+            }
+        } else {
+            feedbackRunTracking = false;
+            feedbackRunDoneStableCount = 0;
+            feedbackRunDoneEventQueued = false;
+            feedbackRunTimeoutEventQueued = false;
         }
 
         // PID uses tendon-space ABS so a positive correction has the same "shorten tendon"
@@ -1076,19 +1106,42 @@ void controlTask(void* parameter)
             directRunDoneStableCount = 0;
         }
 
-        if (feedbackRunningState &&
-            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
-            !sineTestActive &&
-            feedbackJointTargetsReached(sharedData, mappedData, localTargets, magAngles)) {
-            if (feedbackRunDoneStableCount < 255) {
-                feedbackRunDoneStableCount++;
-            }
-            if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles) {
-                postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK_DONE);
+        if (feedbackOneShotActive && feedbackRunTracking) {
+            const bool targetsReached = feedbackJointTargetsReached(
+                sharedData,
+                mappedData,
+                feedbackRunTargetDeg,
+                magAngles
+            );
+            if (targetsReached) {
+                if (feedbackRunDoneStableCount < 255) {
+                    feedbackRunDoneStableCount++;
+                }
+                if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles &&
+                    !feedbackRunDoneEventQueued) {
+                    // Queue-full is transient. Keep the completion pending and retry
+                    // instead of dropping it and leaving RUN_FEEDBACK latched.
+                    feedbackRunDoneEventQueued = postSystemEventForToken(
+                        sharedData,
+                        SYSTEM_EVENT_RUN_FEEDBACK_DONE,
+                        feedbackRunToken
+                    );
+                }
+            } else {
                 feedbackRunDoneStableCount = 0;
             }
-        } else {
-            feedbackRunDoneStableCount = 0;
+
+            const uint32_t elapsedMs = (uint32_t)(millis() - feedbackRunStartMs);
+            if (!targetsReached &&
+                !feedbackRunDoneEventQueued &&
+                elapsedMs >= kFeedbackRunTimeoutMs &&
+                !feedbackRunTimeoutEventQueued) {
+                feedbackRunTimeoutEventQueued = postSystemEventForToken(
+                    sharedData,
+                    SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT,
+                    feedbackRunToken
+                );
+            }
         }
 
         vTaskDelayUntil(&lastWakeTime, solverPeriodTicks);

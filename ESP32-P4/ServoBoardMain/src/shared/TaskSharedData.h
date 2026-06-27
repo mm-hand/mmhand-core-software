@@ -55,6 +55,7 @@
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST 12
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE 13
 #define SYSTEM_EVENT_REEVALUATE_READY 14
+#define SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT 15
 
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 #define MULTITURN_NVS_SAVE_REASON_RUN_START 1
@@ -101,6 +102,13 @@
 #define CALIB_DIAG_REASON_FEEDBACK_LOST 17
 #define CALIB_DIAG_REASON_TASK_START_FAILED 18
 #define CALIB_DIAG_REASON_INTERNAL_ERROR 19
+#define CALIB_DIAG_REASON_CONTROL_LOST 20
+#define CALIB_DIAG_REASON_HOLD_TARGET_FAILED 21
+#define CALIB_DIAG_REASON_JOINT_LIST_INVALID 22
+#define CALIB_DIAG_REASON_DUPLICATE_JOINT 23
+#define CALIB_DIAG_REASON_SIDE_ADJUST_FAILED 24
+#define CALIB_DIAG_REASON_JOINT_STEP_FAILED 25
+#define CALIB_DIAG_REASON_OVER_RELEASE 26
 
 #define CALIB_DIAG_PHASE_NONE 0
 #define CALIB_DIAG_PHASE_INIT 1
@@ -195,6 +203,9 @@ typedef struct {
 typedef struct {
     uint8_t event;
     uint32_t timestamp;
+    // Runtime completion events carry the joint command generation they belong
+    // to. This prevents an old "done" event from releasing a newer command.
+    uint32_t token;
 } SystemEvent_t;
 
 typedef struct {

@@ -10,6 +10,7 @@
 // Runtime faults are handled like an E-STOP: clear output ownership, request
 // emergency hold, and return to UNCONTROLLABLE.
 bool postSystemEvent(TaskSharedData_t* sharedData, uint8_t event);
+bool postSystemEventForToken(TaskSharedData_t* sharedData, uint8_t event, uint32_t token);
 void stateMachineTask(void* parameter);
 
 #endif // STATE_MACHINE_TASK_H

@@ -2,6 +2,7 @@
 #include "../config/Config.h"
 #include "../hal/HalTactile.h"
 #include "../hal/HalTWAI.h"
+#include "../system/FirmwareLog.h"
 
 #include <cstring>
 
@@ -200,10 +201,12 @@ void Task_Tactile(void* pvParameters) {
         }
 
         static uint32_t lastPrint = 0;
-        if (kEnableTactileDebugPrint && millis() - lastPrint > 1000) {
+        if (kEnableTactileDebugPrint &&
+            FW_LOG_ENABLED(FW_LOG_LEVEL_TRACE) &&
+            millis() - lastPrint > 1000) {
             lastPrint = millis();
             const TactileReadDiag diag = tactile.getDiagnostics();
-            Serial.printf(
+            FW_LOG_DEBUG_PRINTF(
                 "[Tactile] frame=%lu enabled=%04X ok=%u fail=%u mask=%04X miss=%04X st=%02X crc=%02X/%02X\n",
                 (unsigned long)diag.frameCount,
                 diag.enabledMask,

@@ -1,6 +1,7 @@
 #include "CanTask.h"
 #include "../config/Config.h"
 #include "../hal/HalTWAI.h"
+#include "../system/FirmwareLog.h"
 
 TaskHandle_t xCanTask = NULL;
 
@@ -77,13 +78,13 @@ void Task_CanBus(void *pvParameters) {
 
         const uint32_t nowMs = millis();
         if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
-            Serial.printf("[S3 CAN DBG] encQueue=%lu encTxOk=%lu encTxFail=%lu busRecover=%lu firstRaw=%u err0=%u\r\n",
-                          (unsigned long)encQueueRxCount,
-                          (unsigned long)encTxOkFrames,
-                          (unsigned long)encTxFailFrames,
-                          (unsigned long)busRecoverCount,
-                          (unsigned)txData.rawAngles[0],
-                          (unsigned)txData.errorFlags[0]);
+            FW_LOG_DEBUG_PRINTF("[S3 CAN DBG] encQueue=%lu encTxOk=%lu encTxFail=%lu busRecover=%lu firstRaw=%u err0=%u\r\n",
+                                (unsigned long)encQueueRxCount,
+                                (unsigned long)encTxOkFrames,
+                                (unsigned long)encTxFailFrames,
+                                (unsigned long)busRecoverCount,
+                                (unsigned)txData.rawAngles[0],
+                                (unsigned)txData.errorFlags[0]);
             encQueueRxCount = 0;
             encTxOkFrames = 0;
             encTxFailFrames = 0;

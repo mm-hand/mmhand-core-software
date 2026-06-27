@@ -21,11 +21,35 @@ const uint8_t kDefaultAutoCalibrationJoints[] = {
     4, 5, 6, 7,
     8, 9, 10, 11,
     12, 13, 14, 15,
-    16, 17, 18, 19, 20
+    20, 16, 17, 18, 19
 };
 const uint8_t kDefaultAutoCalibrationJointsCount = sizeof(kDefaultAutoCalibrationJoints) / sizeof(kDefaultAutoCalibrationJoints[0]);
 static const uint8_t kSideSwayAdjustJoints[] = {12, 8, 4, 0};
 static const uint8_t kSideSwayAdjustJointsCount = sizeof(kSideSwayAdjustJoints) / sizeof(kSideSwayAdjustJoints[0]);
+
+// Keep the four fingers in joint order, then calibrate the thumb as:
+// J20 -> J16 -> J17 -> J18 -> J19.
+static uint8_t autoCalibrationSequenceRank(uint8_t jointIndex)
+{
+    if (jointIndex < 16) {
+        return jointIndex;
+    }
+    switch (jointIndex) {
+        case 20:
+            return 16;
+        case 16:
+            return 17;
+        case 17:
+            return 18;
+        case 18:
+            return 19;
+        case 19:
+            return 20;
+        default:
+            return jointIndex;
+    }
+}
+
 static const uint32_t kAutoFeedbackReadyCanTimeoutMs = 500;
 static const uint32_t kAutoFeedbackReadyServoTimeoutMs = 500;
 static const uint32_t kAutoFeedbackReadyTelemetryTimeoutMs = 800;
@@ -40,6 +64,7 @@ static const int32_t kAutoServoZeroPullCounts = 500;
 static const int32_t kAutoServoZeroPullToleranceCounts = 40;
 static const int32_t kDualAutoSlackCounts = 4800;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
+static const int32_t kAutoCalibrationMaxReverseReleaseCounts = 4096 * 3;
 static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
 static const int16_t kDualPrimaryTightLoadThreshold = 190;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
@@ -2790,6 +2815,47 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 ctx->lastCommandMs = nowMs;
             }
 
+            const int32_t actualReleaseTendonDelta =
+                motorRawAbsToTendonAbs(ctx->motorChannel, currentAbs) -
+                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
+            const int32_t commandReleaseTendonDelta =
+                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->commandAbs) -
+                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
+            const int32_t actualReleaseSlackCounts =
+                (actualReleaseTendonDelta < 0) ? -actualReleaseTendonDelta : 0;
+            const int32_t commandReleaseSlackCounts =
+                (commandReleaseTendonDelta < 0) ? -commandReleaseTendonDelta : 0;
+            const int32_t maxReleaseSlackCounts =
+                (actualReleaseSlackCounts > commandReleaseSlackCounts)
+                    ? actualReleaseSlackCounts
+                    : commandReleaseSlackCounts;
+            if (ctx->releaseCommandStarted &&
+                maxReleaseSlackCounts > kAutoCalibrationMaxReverseReleaseCounts) {
+                Serial.printf("[AUTO CALIB] FAIL J%02u over-release after max load slack=%ld/%ld actualSlack=%ld commandSlack=%ld actualTendon=%ld commandTendon=%ld startAbs=%ld currentAbs=%ld cmd=%ld loadThreshold=%d\r\n",
+                              ctx->jointIndex,
+                              (long)maxReleaseSlackCounts,
+                              (long)kAutoCalibrationMaxReverseReleaseCounts,
+                              (long)actualReleaseSlackCounts,
+                              (long)commandReleaseSlackCounts,
+                              (long)actualReleaseTendonDelta,
+                              (long)commandReleaseTendonDelta,
+                              (long)ctx->startServoAbs,
+                              (long)currentAbs,
+                              (long)ctx->commandAbs,
+                              params.tightLoadHigh);
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "over-release after max load",
+                                             CALIB_DIAG_REASON_OVER_RELEASE,
+                                             CALIB_DIAG_PHASE_RELEASE,
+                                             ctx->motorChannel,
+                                             maxReleaseSlackCounts,
+                                             kAutoCalibrationMaxReverseReleaseCounts,
+                                             actualReleaseSlackCounts,
+                                             (uint32_t)commandReleaseSlackCounts);
+                return;
+            }
+
             if ((nowMs - ctx->windowStartMs) >= params.windowMs) {
                 const int32_t windowAbsDelta = abs32(currentAbs - ctx->windowStartAbs);
                 const int32_t windowEncoderDelta =
@@ -2821,12 +2887,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     calibrationDegToEncoderCount(kReleaseMinDirectionDeg);
                 const int32_t releaseWrongWindowThresholdCount =
                     calibrationDegToEncoderCount(kReleaseWrongWindowDeg);
-                const int32_t actualReleaseTendonDelta =
-                    motorRawAbsToTendonAbs(ctx->motorChannel, currentAbs) -
-                    motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
-                const int32_t commandReleaseTendonDelta =
-                    motorRawAbsToTendonAbs(ctx->motorChannel, ctx->commandAbs) -
-                    motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
                 const bool releaseServoWrongDirection =
                     ctx->releaseCommandStarted &&
                     commandReleaseTendonDelta <= -kReleaseServoWrongDirectionCounts &&
@@ -2862,7 +2922,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     ctx->releaseWrongDirectionStable = 0;
                 }
 
-                Serial.printf("[AUTO CALIB] CHECK_RELEASE J%02u abs=%ld raw=%u oriented=%ld releaseCount=%ld releaseDeg=%.3f/%.3f tightenSign=%d alongTighten=%ld alongDeg=%.3f winCount=%ld winAlong=%ld winAlongDeg=%.3f/%.3f winAbs=%ld/%ld winDeg=%.3f/%.3f load=%d cond servo=%u angle=%u angleStable=%u/%u travel=%u reverse=%u reverseStable=%u/%u wrong=%u wrongArmed=%u wrongStable=%u/%u\r\n",
+                Serial.printf("[AUTO CALIB] CHECK_RELEASE J%02u abs=%ld raw=%u oriented=%ld releaseCount=%ld releaseDeg=%.3f/%.3f tightenSign=%d alongTighten=%ld alongDeg=%.3f slack=%ld/%ld actualSlack=%ld commandSlack=%ld winCount=%ld winAlong=%ld winAlongDeg=%.3f/%.3f winAbs=%ld/%ld winDeg=%.3f/%.3f load=%d cond servo=%u angle=%u angleStable=%u/%u travel=%u reverse=%u reverseStable=%u/%u wrong=%u wrongArmed=%u wrongStable=%u/%u\r\n",
                               ctx->jointIndex,
                               (long)currentAbs,
                               (unsigned)currentRaw,
@@ -2873,6 +2933,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                               (int)tightenSign,
                               (long)signedReleaseAlongTighten,
                               signedReleaseAlongTightenDeg,
+                              (long)maxReleaseSlackCounts,
+                              (long)kAutoCalibrationMaxReverseReleaseCounts,
+                              (long)actualReleaseSlackCounts,
+                              (long)commandReleaseSlackCounts,
                               (long)windowEncoderDelta,
                               (long)windowAlongTighten,
                               windowAlongTightenDeg,
@@ -3338,6 +3402,15 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                 const AutoCalibrationParams& params)
 {
     if (!sharedData || !jointList || jointCount == 0 || jointCount > ENCODER_TOTAL_NUM) {
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_JOINT_LIST_INVALID,
+                           CALIB_DIAG_PHASE_SEQUENCE,
+                           0xFF,
+                           0xFF,
+                           jointCount,
+                           ENCODER_TOTAL_NUM,
+                           jointList ? 1 : 0,
+                           0);
         return false;
     }
 
@@ -3345,12 +3418,30 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
     uint8_t orderedJoints[ENCODER_TOTAL_NUM] = {0};
     for (uint8_t i = 0; i < jointCount; i++) {
         if (jointList[i] >= ENCODER_TOTAL_NUM) {
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_JOINT_LIST_INVALID,
+                               CALIB_DIAG_PHASE_SEQUENCE,
+                               jointList[i],
+                               0xFF,
+                               jointList[i],
+                               ENCODER_TOTAL_NUM,
+                               i,
+                               seenJoints);
             return false;
         }
         const uint32_t bit = (1UL << jointList[i]);
         if ((seenJoints & bit) != 0) {
             Serial.printf("[AUTO CALIB] FAIL duplicate joint J%02u in sequence\r\n",
                           jointList[i]);
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_DUPLICATE_JOINT,
+                               CALIB_DIAG_PHASE_SEQUENCE,
+                               jointList[i],
+                               0xFF,
+                               i,
+                               jointCount,
+                               0,
+                               seenJoints);
             return false;
         }
         seenJoints |= bit;
@@ -3359,7 +3450,8 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
 
     for (uint8_t i = 0; i < jointCount; i++) {
         for (uint8_t j = (uint8_t)(i + 1); j < jointCount; j++) {
-            if (orderedJoints[j] < orderedJoints[i]) {
+            if (autoCalibrationSequenceRank(orderedJoints[j]) <
+                autoCalibrationSequenceRank(orderedJoints[i])) {
                 const uint8_t tmp = orderedJoints[i];
                 orderedJoints[i] = orderedJoints[j];
                 orderedJoints[j] = tmp;
@@ -3367,11 +3459,25 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
         }
     }
 
-    const uint32_t fullHandMask = (1UL << ENCODER_TOTAL_NUM) - 1UL;
-    if (seenJoints == fullHandMask) {
-        Serial.println("[AUTO CALIB] FULL_HAND detected; running side-sway pre-adjust");
+    uint32_t sideSwayRequiredMask = 0;
+    for (uint8_t i = 0; i < kSideSwayAdjustJointsCount; i++) {
+        sideSwayRequiredMask |= (1UL << kSideSwayAdjustJoints[i]);
+    }
+    if ((seenJoints & sideSwayRequiredMask) == sideSwayRequiredMask) {
+        Serial.println("[AUTO CALIB] all side-sway dual joints selected; running side-sway pre-adjust");
         if (!runSideSwayPreAdjust(sharedData, params)) {
-            Serial.println("[AUTO CALIB] FULL_HAND side-sway pre-adjust failed");
+            Serial.println("[AUTO CALIB] side-sway pre-adjust failed");
+            if (!sharedData->calibration_diag.valid) {
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
+                                   CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                                   0xFF,
+                                   0xFF,
+                                   seenJoints,
+                                   sideSwayRequiredMask,
+                                   0,
+                                   seenJoints & sideSwayRequiredMask);
+            }
             return false;
         }
     }
@@ -3398,6 +3504,17 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                                        params)) {
                 Serial.printf("[AUTO CALIB] SEQUENCE_SERIAL failed J%02u dual\r\n",
                               orderedJoints[i]);
+                if (!sharedData->calibration_diag.valid) {
+                    setCalibrationDiag(sharedData,
+                                       CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                       CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                                       orderedJoints[i],
+                                       dualPrimaryMotor,
+                                       i,
+                                       jointCount,
+                                       dualSecondaryMotor,
+                                       seenJoints);
+                }
                 return false;
             }
             Serial.printf("[AUTO CALIB] SEQUENCE_SERIAL done J%02u dual\r\n",
@@ -3419,6 +3536,15 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                               sharedData ? (unsigned)sharedData->system_state : 255,
                               sharedData ? (unsigned)sharedData->servo_target_owner : 255,
                               sharedData ? (unsigned)sharedData->control_enabled : 255);
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_CONTROL_LOST,
+                                   CALIB_DIAG_PHASE_SEQUENCE,
+                                   orderedJoints[i],
+                                   0xFF,
+                                   sharedData ? sharedData->system_state : -1,
+                                   sharedData ? sharedData->servo_target_owner : -1,
+                                   sharedData ? sharedData->control_enabled : -1,
+                                   sharedData ? sharedData->active_joint_mask : 0);
                 return false;
             }
 
@@ -3434,6 +3560,15 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                                     ctx.jointIndex,
                                                     params)) {
                 Serial.println("[AUTO CALIB] FAIL sequence append non-active holds");
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
+                                   CALIB_DIAG_PHASE_SEQUENCE,
+                                   ctx.jointIndex,
+                                   0xFF,
+                                   i,
+                                   jointCount,
+                                   batch.count,
+                                   seenJoints);
                 return false;
             }
 
@@ -3441,6 +3576,15 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
 
             if (!publishCalibrationBatch(sharedData, &batch)) {
                 Serial.println("[AUTO CALIB] FAIL sequence publish target batch");
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                   CALIB_DIAG_PHASE_SEQUENCE,
+                                   ctx.jointIndex,
+                                   0xFF,
+                                   batch.count,
+                                   sharedData ? sharedData->servo_target_owner : -1,
+                                   sharedData ? sharedData->system_state : -1,
+                                   seenJoints);
                 return false;
             }
 
@@ -3449,6 +3593,17 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
 
         if (ctx.state == AUTO_CALIB_STATE_FAILED) {
             Serial.printf("[AUTO CALIB] SEQUENCE_SERIAL failed J%02u\r\n", orderedJoints[i]);
+            if (!sharedData->calibration_diag.valid) {
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                   CALIB_DIAG_PHASE_SEQUENCE,
+                                   orderedJoints[i],
+                                   ctx.motorChannel,
+                                   ctx.state,
+                                   ctx.releaseAngleStallStable,
+                                   i,
+                                   seenJoints);
+            }
             return false;
         }
 
@@ -3500,7 +3655,7 @@ void autoCalibrationTask(void* parameter)
         const bool ok = runSideSwayPreAdjust(sharedData, params);
         if (!ok && sharedData && !sharedData->calibration_diag.valid) {
             setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_INTERNAL_ERROR,
+                               CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                0xFF,
                                0xFF,
@@ -3548,7 +3703,7 @@ void autoCalibrationTask(void* parameter)
 
     if (!ok && sharedData && !sharedData->calibration_diag.valid) {
         setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_INTERNAL_ERROR,
+                           CALIB_DIAG_REASON_JOINT_STEP_FAILED,
                            CALIB_DIAG_PHASE_SEQUENCE,
                            0xFF,
                            0xFF,

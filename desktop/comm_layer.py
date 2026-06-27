@@ -95,7 +95,9 @@ from protocol import (
     parse_system_status_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
+    TACTILE_GROUP_COUNT,
     TACTILE_FULL_BYTES,
+    TACTILE_SENSOR_PER_GROUP,
     TACTILE_SENSOR_TAXEL_COUNTS,
     crc16_ccitt,
     PROTO_ACK_STATUS_OK,
@@ -113,11 +115,50 @@ TACTILE_ZERO_NOISE_FLOOR = 3
 TACTILE_ZERO_HOLD_FRAMES = 6
 TACTILE_HOLD_MIN_MAGNITUDE = 12
 TACTILE_FULL_STALE_AFTER_S = 1.0
+TACTILE_SERIAL_OFFLINE_AFTER_S = 0.6
+TACTILE_MODULE_OFFLINE_AFTER_S = 0.6
+TERMINAL_LOG_LEVEL_ERROR = 1
+TERMINAL_LOG_LEVEL_WARN = 2
+TERMINAL_LOG_LEVEL_INFO = 3
+TERMINAL_LOG_LEVEL_DEBUG = 4
+TERMINAL_LOG_LEVEL_TRACE = 5
 TERMINAL_DIAG_ENABLE = False
 TERMINAL_DIAG_INTERVAL_S = 20.0
 SESSION_DIAG_INTERVAL_S = 20.0
-FIRMWARE_LOG_TO_TERMINAL = True
+FIRMWARE_LOG_TO_TERMINAL = False
+FIRMWARE_LOG_TERMINAL_LEVEL = TERMINAL_LOG_LEVEL_WARN
 FIRMWARE_LOG_FILTER_PREFIXES = ("[RX diag]", "[TX diag]")
+FIRMWARE_LOG_TRACE_MARKERS = (
+    " TRACE",
+    "_TRACE",
+    " trace ",
+    "_WAIT",
+    " CHECK_",
+    "RawZ",
+)
+FIRMWARE_LOG_DEBUG_MARKERS = (
+    " DBG",
+    "[CAN RX DBG]",
+    "[S3 CAN DBG]",
+    "[Tactile]",
+)
+FIRMWARE_LOG_WARN_MARKERS = (
+    "WARN",
+    "WARNING",
+    "OFFLINE",
+    "HOTPLUG",
+    "reject",
+    "rejected",
+    "timeout",
+)
+FIRMWARE_LOG_ERROR_MARKERS = (
+    "FAIL",
+    "FAILED",
+    "FATAL",
+    "ERROR",
+    "failed",
+    "error",
+)
 
 # S3 tactile raw group order follows the physical SPI order:
 # G0=thumb(SPI1), G1=index(SPI2), G2=middle(SPI3), G3=ring(SPI4), G4=pinky(SPI5).
@@ -173,7 +214,7 @@ def _build_tactile_fingers(groups: List[List[List[int]]]) -> List[FingerTactile]
             else:
                 rows, cols = tactile_segment_shape(2)
 
-            contact = np.zeros((rows, cols, 3), dtype=float)
+            contact = _synthetic_contact_grid(rows, cols, int(fx), int(fy), int(fz))
             resultant = np.array([float(fx), float(fy), float(fz)], dtype=float)
             sensors.append(TactileSensor(contact_forces=contact, resultant=resultant))
         raw_fingers.append(FingerTactile(sensors=sensors))
@@ -296,6 +337,9 @@ class TactileSerialComm:
         self._tactile_full_seq_mismatches = 0
         self._tactile_full_dropped = 0
         self._last_tactile_full_ts = 0.0
+        self._last_tactile_rx_ts = 0.0
+        self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
+        self._tactile_offline_emitted = False
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
         self._rx_diag_bytes = 0
@@ -326,6 +370,9 @@ class TactileSerialComm:
             self._last_tactile_summary_groups = None
             self._last_tactile_summary_seq = None
             self._last_tactile_full_ts = 0.0
+            self._last_tactile_rx_ts = 0.0
+            self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
+            self._tactile_offline_emitted = False
             self._rx_diag_last_print = time.time()
             self._rx_diag_total_packets = 0
             self._rx_diag_bytes = 0
@@ -357,7 +404,125 @@ class TactileSerialComm:
                 self.rx_queue.task_done()
             except queue.Empty:
                 break
+        stale = self._offline_model_if_stale()
+        if stale is not None:
+            latest = stale
         return latest
+
+    def is_connected(self) -> bool:
+        return bool(self.running and self.serial and getattr(self.serial, "is_open", False))
+
+    def _mark_serial_offline(self) -> None:
+        self.running = False
+        try:
+            if self.serial and getattr(self.serial, "is_open", False):
+                self.serial.close()
+        except Exception:
+            pass
+
+    def _offline_model_if_stale(self) -> Optional[HandModel]:
+        if self._last_tactile_rx_ts <= 0.0:
+            return None
+        if self._tactile_offline_emitted:
+            return None
+        if (time.time() - self._last_tactile_rx_ts) <= TACTILE_SERIAL_OFFLINE_AFTER_S:
+            return None
+        model = HandModel()
+        if self._last_model is not None:
+            model.copy_state_from(self._last_model)
+        model.tactile_data = []
+        model.tactile_online = False
+        model.tactile_last_rx_ts = self._last_tactile_rx_ts
+        model.tactile_module_online = [False] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
+        model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
+        model.timestamp = time.time()
+        self._last_model = model
+        self._tactile_offline_emitted = True
+        return model
+
+    @staticmethod
+    def _summary_sensor_has_tactile_data(values: Optional[List[int]]) -> bool:
+        if not values:
+            return False
+        padded = list(values[:3])
+        while len(padded) < 3:
+            padded.append(0)
+        return (
+            abs(int(padded[0])) > TACTILE_ZERO_NOISE_FLOOR or
+            abs(int(padded[1])) > TACTILE_ZERO_NOISE_FLOOR or
+            int(padded[2]) > TACTILE_ZERO_NOISE_FLOOR
+        )
+
+    @staticmethod
+    def _full_sensor_has_tactile_data(raw: bytes, cursor: int, taxel_count: int) -> bool:
+        end = min(len(raw), int(cursor) + int(taxel_count) * 3)
+        idx = int(cursor)
+        while idx + 2 < end:
+            x = _u8_to_i8(raw[idx])
+            y = _u8_to_i8(raw[idx + 1])
+            z = int(raw[idx + 2])
+            if (
+                abs(int(x)) > TACTILE_ZERO_NOISE_FLOOR or
+                abs(int(y)) > TACTILE_ZERO_NOISE_FLOOR or
+                z > TACTILE_ZERO_NOISE_FLOOR
+            ):
+                return True
+            idx += 3
+        return False
+
+    def _mark_tactile_modules_seen(
+        self,
+        groups: Optional[List[List[List[int]]]] = None,
+        full_raw: Optional[bytes] = None,
+    ) -> None:
+        now = time.time()
+        self._last_tactile_rx_ts = now
+        self._tactile_offline_emitted = False
+        full_active = [[False] * TACTILE_SENSOR_PER_GROUP for _ in range(TACTILE_GROUP_COUNT)]
+        if full_raw is not None:
+            cursor = 0
+            raw_bytes = bytes(full_raw)
+            for group_idx in range(TACTILE_GROUP_COUNT):
+                for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
+                    taxel_count = (
+                        TACTILE_SENSOR_TAXEL_COUNTS[sensor_idx]
+                        if sensor_idx < len(TACTILE_SENSOR_TAXEL_COUNTS)
+                        else 0
+                    )
+                    full_active[group_idx][sensor_idx] = self._full_sensor_has_tactile_data(
+                        raw_bytes,
+                        cursor,
+                        int(taxel_count),
+                    )
+                    cursor += int(taxel_count) * 3
+        for group_idx in range(TACTILE_GROUP_COUNT):
+            src_group = groups[group_idx] if groups and group_idx < len(groups) else None
+            for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
+                if src_group is not None and sensor_idx >= len(src_group):
+                    continue
+                summary_active = (
+                    src_group is not None and
+                    sensor_idx < len(src_group) and
+                    self._summary_sensor_has_tactile_data(src_group[sensor_idx])
+                )
+                if not summary_active and not full_active[group_idx][sensor_idx]:
+                    continue
+                self._tactile_module_last_rx_ts[
+                    group_idx * TACTILE_SENSOR_PER_GROUP + sensor_idx
+                ] = now
+
+    def _apply_tactile_status(self, model: HandModel) -> None:
+        now = time.time()
+        online = self._last_tactile_rx_ts > 0.0 and (
+            now - self._last_tactile_rx_ts
+        ) <= TACTILE_SERIAL_OFFLINE_AFTER_S
+        model.tactile_online = bool(online)
+        model.tactile_last_rx_ts = float(self._last_tactile_rx_ts)
+        module_online: List[bool] = []
+        for ts in self._tactile_module_last_rx_ts:
+            module_online.append(bool(online and ts > 0.0 and (now - ts) <= TACTILE_MODULE_OFFLINE_AFTER_S))
+        model.tactile_module_online = module_online
+        model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
 
     @staticmethod
     def _clear_queue(q: queue.Queue) -> None:
@@ -466,6 +631,7 @@ class TactileSerialComm:
             except Exception as exc:
                 if self.running:
                     print(f"Tactile RX error: {exc}")
+                self._mark_serial_offline()
 
     def _append_firmware_log_byte(self, value: int) -> None:
         if value in (9, 10, 13) or 32 <= value <= 126:
@@ -537,6 +703,7 @@ class TactileSerialComm:
                     continue
                 seq, groups = parsed
                 stable_groups = self._stabilize_tactile_groups(groups)
+                self._mark_tactile_modules_seen(stable_groups)
                 self._last_tactile_summary_groups = stable_groups
                 self._last_tactile_summary_seq = int(seq)
                 model.tactile_summary_seq = int(seq)
@@ -545,11 +712,7 @@ class TactileSerialComm:
                 model.tactile_full_dropped = self._tactile_full_dropped
                 if _summary_groups_all_zero(stable_groups):
                     self._last_tactile_full_ts = 0.0
-                    model.tactile_data = _build_tactile_fingers(stable_groups)
-                elif self._last_tactile_full_ts == 0.0 or (
-                    time.time() - self._last_tactile_full_ts
-                ) > TACTILE_FULL_STALE_AFTER_S:
-                    model.tactile_data = _build_tactile_fingers(stable_groups)
+                model.tactile_data = _build_tactile_fingers(stable_groups)
                 emitted = True
 
             elif pkt_type in TACTILE_SERIAL_FULL_PACKET_TYPES:
@@ -580,6 +743,7 @@ class TactileSerialComm:
                     raw,
                     self._last_tactile_summary_groups,
                 )
+                self._mark_tactile_modules_seen(self._last_tactile_summary_groups, raw)
                 model.tactile_full_seq = int(seq)
                 model.tactile_full_summary_seq = (
                     int(accepted_summary_seq)
@@ -598,6 +762,7 @@ class TactileSerialComm:
                 emitted = True
 
         if emitted:
+            self._apply_tactile_status(model)
             self._last_model = model
             return model
         return None
@@ -790,6 +955,14 @@ class LowerComputerComm:
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
+        rx_thread = self._rx_thread
+        tx_thread = self._tx_thread
+        if rx_thread and rx_thread.is_alive():
+            rx_thread.join(timeout=1.0)
+        if tx_thread and tx_thread.is_alive():
+            tx_thread.join(timeout=1.0)
+        self._rx_thread = None
+        self._tx_thread = None
         log_session("COMM", "serial disconnected")
 
     def start_joint_debug_packet_log(self, path: str) -> None:
@@ -1018,7 +1191,21 @@ class LowerComputerComm:
             return
         if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
             return
+        if self._firmware_log_level(stripped) > FIRMWARE_LOG_TERMINAL_LEVEL:
+            return
         print(text, end="", flush=True)
+
+    @staticmethod
+    def _firmware_log_level(stripped: str) -> int:
+        if any(marker in stripped for marker in FIRMWARE_LOG_ERROR_MARKERS):
+            return TERMINAL_LOG_LEVEL_ERROR
+        if any(marker in stripped for marker in FIRMWARE_LOG_WARN_MARKERS):
+            return TERMINAL_LOG_LEVEL_WARN
+        if any(marker in stripped for marker in FIRMWARE_LOG_TRACE_MARKERS):
+            return TERMINAL_LOG_LEVEL_TRACE
+        if any(marker in stripped for marker in FIRMWARE_LOG_DEBUG_MARKERS):
+            return TERMINAL_LOG_LEVEL_DEBUG
+        return TERMINAL_LOG_LEVEL_INFO
 
     def _extract_packets_and_firmware_logs(self) -> List[tuple]:
         packets: List[tuple] = []

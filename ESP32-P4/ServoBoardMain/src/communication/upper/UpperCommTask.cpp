@@ -3,6 +3,7 @@
 #include "../../shared/TaskSharedData.h"
 #include "../../calibration/CalibrationTask.h"
 #include "../../hardware/HardwareMap.h"
+#include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../persistence/MultiTurnNvsStore.h"
@@ -123,7 +124,7 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
     buffer[idx++] = status;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 // Send the current state-machine status.
@@ -195,7 +196,7 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)(encoderFaultMask & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 // Send the servo overload fault bitmap plus the latched trigger load per motor.
@@ -219,7 +220,7 @@ static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloa
     }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 // Send the joint reverse-release fault bitmap.
@@ -237,7 +238,7 @@ static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
     buffer[idx++] = (uint8_t)(releaseFaultBitmap & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
@@ -272,7 +273,7 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
     }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
@@ -307,7 +308,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
@@ -335,7 +336,7 @@ static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
     buffer[idx++] = (uint8_t)(diag.timestamp & 0xFF);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
@@ -358,7 +359,7 @@ static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
     }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
 }
 
 static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
@@ -397,7 +398,7 @@ static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
         idx += chunkLen;
         buffer[idx++] = PROTOCOL_TAIL;
         buffer[1] = (uint8_t)(idx - 2);
-        Serial.write(buffer, idx);
+        FW_SERIAL_WRITE(buffer, idx);
     }
 }
 
@@ -540,7 +541,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
 
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
-    Serial.write(buffer, idx);
+    FW_SERIAL_WRITE(buffer, idx);
     if (sendFullTactileAfter && fullTactile) {
         sendTactileFullPackets(*fullTactile);
     }

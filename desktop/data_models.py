@@ -426,6 +426,10 @@ class HandModel:
     tactile_full_crc_errors: int = 0
     tactile_full_seq_mismatches: int = 0
     tactile_full_dropped: int = 0
+    tactile_online: bool = False
+    tactile_last_rx_ts: float = 0.0
+    tactile_module_online: List[bool] = field(default_factory=lambda: [False] * (5 * TACTILE_SENSORS_PER_FINGER))
+    tactile_module_last_rx_ts: List[float] = field(default_factory=lambda: [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
     calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
@@ -615,3 +619,11 @@ class HandModel:
         self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
         self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
         self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))
+        self.tactile_online = bool(getattr(other, "tactile_online", False))
+        self.tactile_last_rx_ts = float(getattr(other, "tactile_last_rx_ts", 0.0) or 0.0)
+        self.tactile_module_online = list(
+            getattr(other, "tactile_module_online", [False] * (5 * TACTILE_SENSORS_PER_FINGER))
+        )
+        self.tactile_module_last_rx_ts = list(
+            getattr(other, "tactile_module_last_rx_ts", [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
+        )

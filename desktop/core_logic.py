@@ -789,8 +789,9 @@ class HandController:
         """停止：暂停时也可发送，便于紧急停"""
         if self.comm:
             self.comm.send_command("stop")
-        if getattr(self.current_state, "calib_status", None) in ("PENDING", "RUNNING"):
-            self.current_state.calib_status = "IDLE"
+        with self.state_lock:
+            if getattr(self.current_state, "calib_status", None) in ("PENDING", "RUNNING"):
+                self.current_state.calib_status = "IDLE"
         self._started = False
         self._paused = False
 

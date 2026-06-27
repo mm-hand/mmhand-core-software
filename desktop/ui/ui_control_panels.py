@@ -76,7 +76,7 @@ def _load_default_auto_calibration_joint_indices() -> List[int]:
         4, 5, 6, 7,
         8, 9, 10, 11,
         12, 13, 14, 15,
-        16, 17, 18, 19, 20,
+        20, 16, 17, 18, 19,
     ]
     try:
         repo_root = Path(__file__).resolve().parents[2]
@@ -113,9 +113,9 @@ FINGER_JOINT_RANGES = [
 ]
 
 FINGER_WORKFLOW_JOINT_ORDER = {
-    # Thumb workflow order follows the physical chain from fingertip to root.
-    # UI tables still display joints by numeric Jxx order.
-    "Thumb J16-J20": [19, 18, 17, 16, 20],
+    # Thumb workflow order follows the calibration sequence requested for the
+    # thumb mechanics. UI tables still display joints by numeric Jxx order.
+    "Thumb J16-J20": [20, 16, 17, 18, 19],
 }
 
 
@@ -739,15 +739,15 @@ class ControlPanel(QtWidgets.QWidget):
         abs_limit_bar = QtWidgets.QWidget()
         abs_limit_layout = QtWidgets.QHBoxLayout(abs_limit_bar)
         abs_limit_layout.setContentsMargins(6, 2, 6, 2)
-        abs_limit_layout.addWidget(QtWidgets.QLabel("Feedback ABS Limit"))
+        abs_limit_layout.addWidget(QtWidgets.QLabel("Feedback ABS Limit (default locked)"))
         abs_limit_layout.addStretch(1)
         self.abs_limit_unlock_btn = QtWidgets.QPushButton("Unlock")
         self.abs_limit_unlock_btn.setToolTip(
-            "Temporarily disable calibrated ABS travel limits for the selected feedback joints"
+            "Manually unlock the calibrated 5-turn ABS travel limits for the selected feedback joints"
         )
         self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock")
         self.abs_limit_lock_btn.setToolTip(
-            "Re-enable calibrated ABS travel limits for the selected feedback joints"
+            "Re-enable calibrated 5-turn ABS travel limits; calibration locks them by default"
         )
         self.abs_limit_unlock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(False))
         self.abs_limit_lock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(True))
@@ -1419,15 +1419,15 @@ class ControlPanel(QtWidgets.QWidget):
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         interaction = bool(self._interaction_enabled)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
-        feedback_control_state = system_state in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK)
-        ready_for_feedback = feedback_control_state and self._active_scope_feedback_calibrated()
         for btn in [getattr(self, "send_all_btn", None)]:
             if btn is not None:
                 btn.setVisible(mode != "motor")
-                btn.setEnabled(interaction and ready_for_feedback)
+                # Keep the action reachable so its command guard can report why
+                # feedback is not ready instead of leaving a silent grey button.
+                btn.setEnabled(interaction and mode != "motor")
         if getattr(self, "open_btn", None) is not None:
             self.open_btn.setVisible(mode in ("joint", "test"))
-            self.open_btn.setEnabled(interaction and ready_for_feedback and mode in ("joint", "test"))
+            self.open_btn.setEnabled(mode in ("joint", "test"))
         if getattr(self, "release_half_turn_btn", None) is not None:
             self.release_half_turn_btn.setVisible(mode == "motor")
             self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
@@ -1461,22 +1461,22 @@ class ControlPanel(QtWidgets.QWidget):
         for btn in [getattr(self, "fist_btn", None), getattr(self, "zero_btn", None)]:
             if btn is not None:
                 btn.setVisible(mode in ("joint", "test"))
-                btn.setEnabled(interaction and ready_for_feedback and mode in ("joint", "test"))
+                btn.setEnabled(mode in ("joint", "test"))
         if getattr(self, "rope_init_btn", None) is not None:
             self.rope_init_btn.setEnabled(interaction and mode == "joint")
         if getattr(self, "calib_btn", None) is not None:
             self.calib_btn.setEnabled(system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY))
         if getattr(self, "mid_calib_btn", None) is not None:
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
-        has_abs_limit = self._active_scope_abs_limit_valid_mask() != 0
+        has_active_motor = (self._active_motor_mask_from_ui() & VALID_MOTOR_MASK) != 0
         abs_limit_mode = mode in ("joint", "test")
         if getattr(self, "abs_limit_unlock_btn", None) is not None:
             self.abs_limit_unlock_btn.setEnabled(
-                abs_limit_mode and bool(self.context.is_comm_connected()) and has_abs_limit
+                abs_limit_mode and bool(self.context.is_comm_connected()) and has_active_motor
             )
         if getattr(self, "abs_limit_lock_btn", None) is not None:
             self.abs_limit_lock_btn.setEnabled(
-                abs_limit_mode and bool(self.context.is_comm_connected()) and has_abs_limit
+                abs_limit_mode and bool(self.context.is_comm_connected()) and has_active_motor
             )
         if getattr(self, "pause_btn", None) is not None:
             self.pause_btn.setEnabled(system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK))
@@ -1760,8 +1760,6 @@ class ControlPanel(QtWidgets.QWidget):
             self._error("Tighten Failed", f"{type(exc).__name__}: {exc}")
 
     def apply_preset(self, angles: List[float]) -> None:
-        if not self._interaction_enabled:
-            return
         self._updating = True
         try:
             for i, value in enumerate(angles[:ENCODER_COUNT]):
@@ -1774,14 +1772,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.context.draw_pose_angles(angles)
 
     def apply_open_pose(self) -> None:
-        if not self._interaction_enabled:
-            return
         self.apply_preset([0.0] * ENCODER_COUNT)
         self._set_status("Open Pose set: all joints 0.00 deg")
 
     def apply_fist_pose(self) -> None:
-        if not self._interaction_enabled:
-            return
         state = self._state
         angles: List[float] = []
         fallback_joints: List[int] = []
@@ -1966,6 +1960,14 @@ class ControlPanel(QtWidgets.QWidget):
                 self._dual_rope_init_motors_for_joint(joint_idx) is not None
             )
         ]
+
+    def _active_scope_has_all_side_sway_adjust_joints(self) -> bool:
+        active = set(self._active_scope_side_sway_joint_indices())
+        required = {
+            joint_idx for joint_idx in SIDE_SWAY_ADJUST_JOINT_INDICES
+            if self._dual_rope_init_motors_for_joint(joint_idx) is not None
+        }
+        return bool(required) and required.issubset(active)
 
     def _build_rope_init_tasks(self) -> Tuple[List[dict], List[str], List[str]]:
         state = self._state
@@ -2223,11 +2225,11 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Calibrate blocked: active scope was not accepted by lower controller")
             return
-        side_sway_joints = self._active_scope_side_sway_joint_indices()
-        if side_sway_joints:
+        if self._active_scope_has_all_side_sway_adjust_joints():
+            side_sway_joints = self._active_scope_side_sway_joint_indices()
             if self._request_side_sway_adjust(auto_calibrate=True):
                 self._set_status(
-                    "Calibrate queued: Side Adjust first for side-sway joints " +
+                    "Calibrate queued: all side-sway joints selected; Side Adjust first " +
                     self._format_joint_indices(side_sway_joints)
                 )
             return
@@ -3721,8 +3723,9 @@ class ControlPanel(QtWidgets.QWidget):
         self._set_status(f"Feedback ABS out of limit: {preview}{suffix}")
         QtWidgets.QMessageBox.warning(
             self,
-            "Feedback ABS Limit",
-            "RUN_FEEDBACK servo feedback ABS is outside the calibrated locked window.\n"
+            "Feedback ABS Limit (default locked)",
+            "RUN_FEEDBACK servo feedback ABS is outside the calibrated 5-turn locked window.\n"
+            "Calibration locks this window by default; use Unlock only when you intentionally need to bypass it.\n"
             f"{preview}{suffix}",
         )
 
@@ -4006,7 +4009,7 @@ class ControlPanel(QtWidgets.QWidget):
                 lo, hi = hi, lo
             state_text = "LOCK" if ((locked_bitmap >> motor_idx) & 0x01) != 0 else "UNLOCK"
             summaries.append(f"M{motor_idx:02d} {state_text[0]} [{lo},{hi}]")
-            details.append(f"M{motor_idx:02d}: {state_text}, ABS range [{lo}, {hi}]")
+            details.append(f"M{motor_idx:02d}: {state_text}, 5-turn ABS range [{lo}, {hi}]")
 
         item.setText(" / ".join(summaries) if summaries else "-")
         item.setToolTip("\n".join(details))

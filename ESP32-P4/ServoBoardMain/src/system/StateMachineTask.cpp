@@ -41,6 +41,11 @@ static void setCalibrationStatus(uint8_t status, bool emitAck)
 
 bool postSystemEvent(TaskSharedData_t* sharedData, uint8_t event)
 {
+    return postSystemEventForToken(sharedData, event, 0);
+}
+
+bool postSystemEventForToken(TaskSharedData_t* sharedData, uint8_t event, uint32_t token)
+{
     if (!sharedData || !sharedData->stateEventQueue) {
         return false;
     }
@@ -48,6 +53,7 @@ bool postSystemEvent(TaskSharedData_t* sharedData, uint8_t event)
     SystemEvent_t msg;
     msg.event = event;
     msg.timestamp = millis();
+    msg.token = token;
     return xQueueSend(sharedData->stateEventQueue, &msg, 0) == pdTRUE;
 }
 
@@ -574,6 +580,27 @@ static void updateReadyStateIfIdle(TaskSharedData_t* sharedData)
     }
 }
 
+static bool feedbackCompletionMatchesCurrentCommand(TaskSharedData_t* sharedData,
+                                                    const SystemEvent_t& event)
+{
+    return sharedData &&
+           (event.token == 0 || event.token == sharedData->joint_command_token);
+}
+
+static void releaseFeedbackRun(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+    // Leave the servo's last accepted position in place for a stable hold.
+    // Only the feedback task's ownership is released so another joint scope
+    // can be selected immediately.
+    sharedData->control_enabled = 0;
+    sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+    setSystemState(sharedData, idleOrReadyState(sharedData));
+    requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+}
+
 static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t& event)
 {
     if (!sharedData) {
@@ -701,10 +728,30 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                               (unsigned)sharedData->system_state);
                 break;
             }
-            sharedData->control_enabled = 0;
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            setSystemState(sharedData, idleOrReadyState(sharedData));
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            if (!feedbackCompletionMatchesCurrentCommand(sharedData, event)) {
+                Serial.printf("[STATE] ignore stale RUN_FEEDBACK_DONE token=%lu current=%lu\r\n",
+                              (unsigned long)event.token,
+                              (unsigned long)sharedData->joint_command_token);
+                break;
+            }
+            releaseFeedbackRun(sharedData);
+            break;
+
+        case SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT:
+            if (sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
+                Serial.printf("[STATE] ignore RUN_FEEDBACK_TIMEOUT in state=%u\r\n",
+                              (unsigned)sharedData->system_state);
+                break;
+            }
+            if (!feedbackCompletionMatchesCurrentCommand(sharedData, event)) {
+                Serial.printf("[STATE] ignore stale RUN_FEEDBACK_TIMEOUT token=%lu current=%lu\r\n",
+                              (unsigned long)event.token,
+                              (unsigned long)sharedData->joint_command_token);
+                break;
+            }
+            Serial.printf("[STATE] RUN_FEEDBACK timeout token=%lu; releasing control ownership\r\n",
+                          (unsigned long)event.token);
+            releaseFeedbackRun(sharedData);
             break;
 
         case SYSTEM_EVENT_PAUSE:

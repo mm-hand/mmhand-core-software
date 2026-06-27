@@ -17,13 +17,20 @@ from protocol import (
     CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY,
     CALIB_DIAG_REASON_ANGLE_NOT_MOVING,
     CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT,
+    CALIB_DIAG_REASON_CONTROL_LOST,
+    CALIB_DIAG_REASON_DUPLICATE_JOINT,
     CALIB_DIAG_REASON_ENCODER_ERROR,
     CALIB_DIAG_REASON_FEEDBACK_LOST,
+    CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
     CALIB_DIAG_REASON_INTERNAL_ERROR,
+    CALIB_DIAG_REASON_JOINT_LIST_INVALID,
+    CALIB_DIAG_REASON_JOINT_STEP_FAILED,
     CALIB_DIAG_REASON_LOAD_NOT_REACHED,
+    CALIB_DIAG_REASON_OVER_RELEASE,
     CALIB_DIAG_REASON_OVERLOAD,
     CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
+    CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_TASK_START_FAILED,
     CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
@@ -486,6 +493,12 @@ class HandGUI(QtWidgets.QMainWindow):
     def _stop_tactile_port(self) -> None:
         self.backend.disconnect_tactile_serial()
         self._tactile_state = None
+        if self._state is not None:
+            self._state.tactile_data = []
+            self._state.tactile_online = False
+            self._state.tactile_module_online = [False] * 15
+            self._state.tactile_module_last_rx_ts = [0.0] * 15
+            self._update_display(self._state)
 
     def connect_tactile_serial(self, port: str) -> bool:
         return self._start_tactile_port(port)
@@ -675,6 +688,13 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_FEEDBACK_LOST: "标定过程中反馈丢失",
             CALIB_DIAG_REASON_TASK_START_FAILED: "标定任务启动失败",
             CALIB_DIAG_REASON_INTERNAL_ERROR: "标定内部错误",
+            CALIB_DIAG_REASON_CONTROL_LOST: "标定控制权丢失",
+            CALIB_DIAG_REASON_HOLD_TARGET_FAILED: "保持其他关节失败",
+            CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
+            CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
+            CALIB_DIAG_REASON_SIDE_ADJUST_FAILED: "侧摆预调整失败",
+            CALIB_DIAG_REASON_JOINT_STEP_FAILED: "单关节标定步骤失败",
+            CALIB_DIAG_REASON_OVER_RELEASE: "过度松绳",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -722,6 +742,11 @@ class HandGUI(QtWidgets.QMainWindow):
             elif reason == CALIB_DIAG_REASON_WRONG_DIRECTION:
                 lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
                 suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
+            elif reason == CALIB_DIAG_REASON_OVER_RELEASE:
+                lines.append(
+                    f"数据：release={value_a}, limit={value_b}, actual_release={value_c}, command_release={bitmap}"
+                )
+                suggestions.append("到达 220 最大负载后反向松绳超过 3 圈，已作为标定故障停止。检查负反馈方向、舵机 ABS 方向、绳路是否反绕或打滑；手动回收到安全位置后 Clear Fault 并重新标定。")
             elif reason == CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT:
                 lines.append(f"数据：abs_error={value_a}, required_travel={value_b}, zero_deg_x100={value_c}")
                 suggestions.append("检查回零目标是否被机械限位阻挡、绳索是否太紧、zero pull 参数是否过大；释放机构后重试。")
@@ -742,6 +767,24 @@ class HandGUI(QtWidgets.QMainWindow):
                 suggestions.append("在 Active Scope 中勾选需要标定的关节/电机后再开始标定。")
             elif reason == CALIB_DIAG_REASON_TASK_START_FAILED:
                 suggestions.append("标定任务没有启动。确认上一次标定已经退出；如果仍失败，重启 P4 后再试。")
+            elif reason == CALIB_DIAG_REASON_CONTROL_LOST:
+                lines.append(f"数据：state={value_a}, owner={value_b}, enabled={value_c}, active_joint_mask=0x{bitmap:08X}")
+                suggestions.append("标定过程中控制权被打断。检查是否按过 STOP/E-STOP/Pause/Clear Fault/Enable，或上位机是否发送了其他控制命令；Clear Fault 后重新 ENABLE，再重新标定。")
+            elif reason == CALIB_DIAG_REASON_HOLD_TARGET_FAILED:
+                lines.append(f"数据：current_index={value_a}, joint_count={value_b}, batch_count={value_c}, selected_joint_mask=0x{bitmap:08X}")
+                suggestions.append("标定当前关节时，其他已选关节的保持目标生成失败。检查所选关节对应舵机是否在线、Turn 是否 known、ABS limit 是否有效；必要时减少勾选范围逐个标定。")
+            elif reason == CALIB_DIAG_REASON_JOINT_LIST_INVALID:
+                lines.append(f"数据：joint_or_count={value_a}, max_joint_count={value_b}, index_or_has_list={value_c}, seen_mask=0x{bitmap:08X}")
+                suggestions.append("下位机收到的 active scope/关节列表不合法。取消勾选后重新选择要标定的关节；如果反复出现，检查上位机 active scope 下发和固件关节数量是否一致。")
+            elif reason == CALIB_DIAG_REASON_DUPLICATE_JOINT:
+                lines.append(f"数据：duplicate_index={value_a}, joint_count={value_b}, seen_mask=0x{bitmap:08X}")
+                suggestions.append("同一个关节被重复加入标定序列。重新勾选关节后再标定；如果还出现，检查 active scope 到标定列表的构造逻辑。")
+            elif reason == CALIB_DIAG_REASON_SIDE_ADJUST_FAILED:
+                lines.append(f"数据：selected_mask=0x{value_a:08X}, required_mask=0x{value_b:08X}, matched_mask=0x{bitmap:08X}")
+                suggestions.append("自动标定前的侧摆预调整失败。先单独点击 Side Adjust 检查是否能完成；重点检查四指侧摆双电机关节的副电机是否先松绳、主电机负载是否能到 190、Turn 是否 known。")
+            elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
+                lines.append(f"数据：state={value_a}, stable_samples={value_b}, sequence_index={value_c}, selected_joint_mask=0x{bitmap:08X}")
+                suggestions.append("某个关节标定状态机失败但没有更细的阶段诊断。请查看前后几行 [AUTO CALIB] 日志；通常和反馈突然丢失、目标未发布、机械卡住或方向判断失败有关。")
             elif reason in {
                 CALIB_DIAG_REASON_LOAD_NOT_REACHED,
                 CALIB_DIAG_REASON_ANGLE_NOT_MOVING,

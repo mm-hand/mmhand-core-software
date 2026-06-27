@@ -27,6 +27,9 @@ struct Quat
 struct RawSkeletonNodeSample
 {
     uint32_t node_id = 0;
+    uint32_t parent_id = 0;
+    int chain_type = 0;
+    int finger_joint_type = 0;
     Vec3 position;
     Quat rotation;
 };
@@ -93,6 +96,9 @@ private:
     void handleRawSkeleton(const SkeletonStreamInfo* raw_skeleton_info);
     void handleRawDeviceData(const RawDeviceDataInfo* raw_device_info);
 
+    void ensureNodeInfoCache(uint32_t glove_id);
+    void populateNodeHierarchy(std::vector<RawSkeletonNodeSample>& nodes, uint32_t glove_id);
+
     static ManusClient* instance_;
 
     ManusClientConfig config_;
@@ -104,6 +110,7 @@ private:
     std::vector<ManusFrame> pending_frames_;
     std::unordered_map<uint32_t, std::string> glove_sides_;
     std::unordered_map<uint32_t, RawSkeletonSnapshot> raw_skeleton_by_glove_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, NodeInfo>> node_info_cache_;
     uint32_t raw_device_count_ = 0;
     double last_frame_timestamp_ = 0.0;
 };

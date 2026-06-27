@@ -2,6 +2,7 @@
 #include "driver/twai.h"
 #include "esp_err.h"
 #include "esp_ldo_regulator.h"
+#include "../../system/FirmwareLog.h"
 
 #include <string.h>
 
@@ -632,14 +633,14 @@ void canCommunicationTask(void* parameter) {
                 const uint16_t absSum = (uint16_t)rxMsg.data[5] |
                                         ((uint16_t)rxMsg.data[6] << 8);
                 const uint8_t nonZero = rxMsg.data[7];
-                Serial.printf("[S3TactileRawZ] seq=%u G%uS%u min=%d max=%d sum=%u nz=%u\r\n",
-                              seq,
-                              group,
-                              sensor,
-                              minZ,
-                              maxZ,
-                              absSum,
-                              nonZero);
+                FW_LOG_TRACE_PRINTF("[S3TactileRawZ] seq=%u G%uS%u min=%d max=%d sum=%u nz=%u\r\n",
+                                    seq,
+                                    group,
+                                    sensor,
+                                    minZ,
+                                    maxZ,
+                                    absSum,
+                                    nonZero);
             } else if (rxMsg.identifier >= CAN_ID_TAC_FULL_DUMP_BASE &&
                        rxMsg.identifier <= CAN_ID_TAC_FULL_DUMP_LAST) {
                 if (rxMsg.data_length_code != CAN_TAC_FULL_DLC) {
@@ -715,25 +716,25 @@ void canCommunicationTask(void* parameter) {
         if ((uint32_t)(nowMs - lastCanDiagPrintMs) >= 10000) {
             twai_status_info_t statusInfo;
             const bool hasStatus = (twai_get_status_info(&statusInfo) == ESP_OK);
-            Serial.printf("[CAN RX DBG] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u twai=%d rxQ=%lu rxMiss=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
-                          (unsigned long)encFrameCount,
-                          (unsigned long)encSnapshotCount,
-                          (unsigned long)encoderCrcErrorCount,
-                          (unsigned long)tactileFrameCount,
-                          (unsigned long)tactileSnapshotCount,
-                          (unsigned long)tactileCrcErrorCount,
-                          (unsigned long)otherFrameCount,
-                          (unsigned long)lastCanId,
-                          rxBuffer.isValid ? 1U : 0U,
-                          rxBuffer.isValid ? (unsigned long)(nowMs - rxBuffer.timestamp) : 0UL,
-                          (unsigned)rxBuffer.encoderValues[0],
-                          (unsigned)rxBuffer.errorFlags[0],
-                          hasStatus ? (int)statusInfo.state : -1,
-                          hasStatus ? (unsigned long)statusInfo.msgs_to_rx : 0UL,
-                          hasStatus ? (unsigned long)statusInfo.rx_missed_count : 0UL,
-                          hasStatus ? (unsigned long)statusInfo.bus_error_count : 0UL,
-                          hasStatus ? (unsigned long)statusInfo.rx_error_counter : 0UL,
-                          hasStatus ? (unsigned long)statusInfo.tx_error_counter : 0UL);
+            FW_LOG_DEBUG_PRINTF("[CAN RX DBG] encFrames=%lu encSnap=%lu encCrcErr=%lu tacFrames=%lu tacSnap=%lu tacCrcErr=%lu other=%lu lastId=0x%03lX valid=%u tsAge=%lu firstRaw=%u err0=%u twai=%d rxQ=%lu rxMiss=%lu busErr=%lu rxErr=%lu txErr=%lu\r\n",
+                                (unsigned long)encFrameCount,
+                                (unsigned long)encSnapshotCount,
+                                (unsigned long)encoderCrcErrorCount,
+                                (unsigned long)tactileFrameCount,
+                                (unsigned long)tactileSnapshotCount,
+                                (unsigned long)tactileCrcErrorCount,
+                                (unsigned long)otherFrameCount,
+                                (unsigned long)lastCanId,
+                                rxBuffer.isValid ? 1U : 0U,
+                                rxBuffer.isValid ? (unsigned long)(nowMs - rxBuffer.timestamp) : 0UL,
+                                (unsigned)rxBuffer.encoderValues[0],
+                                (unsigned)rxBuffer.errorFlags[0],
+                                hasStatus ? (int)statusInfo.state : -1,
+                                hasStatus ? (unsigned long)statusInfo.msgs_to_rx : 0UL,
+                                hasStatus ? (unsigned long)statusInfo.rx_missed_count : 0UL,
+                                hasStatus ? (unsigned long)statusInfo.bus_error_count : 0UL,
+                                hasStatus ? (unsigned long)statusInfo.rx_error_counter : 0UL,
+                                hasStatus ? (unsigned long)statusInfo.tx_error_counter : 0UL);
             encFrameCount = 0;
             encSnapshotCount = 0;
             tactileFrameCount = 0;

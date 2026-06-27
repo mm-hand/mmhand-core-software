@@ -4,7 +4,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 MANUS_CONTROL_ENABLED = False
@@ -16,13 +16,21 @@ class ManusFrame:
     seq: int
     timestamp: float
     recv_time: float
+    recv_perf_time: float
     dt: float
     glove_id: int
     side: str
     ergonomics_names: List[str] = field(default_factory=list)
     ergonomics_values: List[float] = field(default_factory=list)
+    raw_skeleton_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    skeleton: Dict[str, Any] = field(default_factory=dict)
     source_addr: str = ""
     valid: bool = True
+    pending_packets_count: int = 0
+    dropped_old_packets_count: int = 0
+    latest_frame_id: int = 0
+    processed_frame_id: int = 0
+    timing_recv_call_ms: float = 0.0
 
 
 class ManusReceiver:
@@ -40,6 +48,7 @@ class ManusReceiver:
         self._last_drop_seq: Optional[int] = None
         self._last_recv_time = 0.0
         self._last_recv_dt = 0.0
+        self._last_consumed_seq: Optional[int] = None
         self._packet_count = 0
         self._raw_packet_count = 0
         self._dropped_frames = 0
@@ -83,7 +92,20 @@ class ManusReceiver:
 
     def get_latest_frame(self) -> Optional[ManusFrame]:
         with self._lock:
-            return self._latest_frame
+            frame = self._latest_frame
+            if frame is None:
+                return None
+            if frame.seq > 0:
+                pending = 1 if self._last_consumed_seq != frame.seq else 0
+                dropped_old = 0
+                if self._last_consumed_seq is not None and frame.seq > self._last_consumed_seq + 1:
+                    dropped_old = frame.seq - self._last_consumed_seq - 1
+                self._last_consumed_seq = frame.seq
+                frame.pending_packets_count = pending
+                frame.dropped_old_packets_count = dropped_old
+                frame.latest_frame_id = frame.seq
+                frame.processed_frame_id = frame.seq
+            return frame
 
     def is_alive(self) -> bool:
         with self._lock:
@@ -252,15 +274,24 @@ class ManusReceiver:
         values = packet.get("ergonomics_values") or []
         if not isinstance(names, list) or not isinstance(values, list):
             raise ValueError("ergonomics_names and ergonomics_values must be lists")
+        raw_skeleton_nodes = packet.get("raw_skeleton_nodes") or []
+        skeleton = packet.get("skeleton") or {}
+        if not isinstance(raw_skeleton_nodes, list):
+            raise ValueError("raw_skeleton_nodes must be a list")
+        if not isinstance(skeleton, dict):
+            raise ValueError("skeleton must be an object")
         return ManusFrame(
             seq=int(packet.get("seq", 0)),
             timestamp=float(packet.get("timestamp", 0.0)),
             recv_time=time.time(),
+            recv_perf_time=time.perf_counter(),
             dt=float(packet.get("dt", 0.0)),
             glove_id=int(packet.get("glove_id", 0)),
             side=str(packet.get("side", "unknown")),
             ergonomics_names=[str(name) for name in names],
             ergonomics_values=[float(value) for value in values],
+            raw_skeleton_nodes=[node for node in raw_skeleton_nodes if isinstance(node, dict)],
+            skeleton=skeleton,
             source_addr=source_addr,
             valid=True,
         )

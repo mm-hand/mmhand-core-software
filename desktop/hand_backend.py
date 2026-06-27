@@ -8,6 +8,7 @@ into HandController or LowerComputerComm directly.
 from dataclasses import dataclass, field
 import os
 import threading
+import time
 from typing import Callable, Iterable, List, Optional, Tuple
 
 from comm_layer import TactileSerialComm, list_ports as _list_ports
@@ -35,6 +36,10 @@ def clone_hand_model(model: HandModel) -> HandModel:
     snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
     snapshot.timestamp = float(getattr(model, "timestamp", 0.0))
     snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
+    snapshot.tactile_online = bool(getattr(model, "tactile_online", False))
+    snapshot.tactile_last_rx_ts = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
+    snapshot.tactile_module_online = list(getattr(model, "tactile_module_online", []) or [])
+    snapshot.tactile_module_last_rx_ts = list(getattr(model, "tactile_module_last_rx_ts", []) or [])
     try:
         snapshot.set_target_angles(model.target_angles)
     except Exception:
@@ -54,6 +59,10 @@ def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
     state.tactile_full_crc_errors = int(getattr(tactile_state, "tactile_full_crc_errors", 0))
     state.tactile_full_seq_mismatches = int(getattr(tactile_state, "tactile_full_seq_mismatches", 0))
     state.tactile_full_dropped = int(getattr(tactile_state, "tactile_full_dropped", 0))
+    state.tactile_online = bool(getattr(tactile_state, "tactile_online", False))
+    state.tactile_last_rx_ts = float(getattr(tactile_state, "tactile_last_rx_ts", 0.0) or 0.0)
+    state.tactile_module_online = list(getattr(tactile_state, "tactile_module_online", []) or [])
+    state.tactile_module_last_rx_ts = list(getattr(tactile_state, "tactile_module_last_rx_ts", []) or [])
     ts = float(getattr(tactile_state, "timestamp", 0.0) or 0.0)
     if ts > 0:
         state.timestamp = ts
@@ -90,6 +99,7 @@ class HandBackend:
         self.tactile_port = ""
         self.tactile_comm: Optional[TactileSerialComm] = None
         self._tactile_state: Optional[HandModel] = None
+        self._next_tactile_reconnect_ts = 0.0
         self._state_callbacks: List[StateCallback] = []
         self._callback_lock = threading.Lock()
         self._ensure_controller_callback_registered()
@@ -176,6 +186,7 @@ class HandBackend:
         self.tactile_comm = comm
         self.tactile_port = str(port)
         self._tactile_state = None
+        self._next_tactile_reconnect_ts = 0.0
         return True
 
     def disconnect_tactile_serial(self) -> None:
@@ -186,11 +197,17 @@ class HandBackend:
                 pass
         self.tactile_comm = None
         self._tactile_state = None
+        self._next_tactile_reconnect_ts = 0.0
 
     def is_tactile_serial_connected(self) -> bool:
         comm = self.tactile_comm
-        serial_obj = getattr(comm, "serial", None) if comm is not None else None
-        return bool(comm is not None and serial_obj is not None and getattr(serial_obj, "is_open", False))
+        if comm is None:
+            return False
+        checker = getattr(comm, "is_connected", None)
+        if callable(checker):
+            return bool(checker())
+        serial_obj = getattr(comm, "serial", None)
+        return bool(serial_obj is not None and getattr(serial_obj, "is_open", False))
 
     def get_tactile_serial_port(self) -> str:
         return self.tactile_port or ""
@@ -199,6 +216,14 @@ class HandBackend:
         comm = self.tactile_comm
         if comm is None:
             return False, state
+        if not self.is_tactile_serial_connected():
+            now = time.time()
+            if self.tactile_port and now >= self._next_tactile_reconnect_ts:
+                self._next_tactile_reconnect_ts = now + 1.0
+                try:
+                    comm.connect()
+                except Exception:
+                    pass
         latest = comm.get_latest_model()
         if latest is None:
             return False, state
