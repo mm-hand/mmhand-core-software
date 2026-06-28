@@ -41,6 +41,9 @@ LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
+MULTITURN_NVS_CONTROL_MAX_ATTEMPTS = 3
+MULTITURN_NVS_CONTROL_RETRY_DELAY_S = 0.15
+NEW_DEVICE_RESET_SETTLE_S = 0.30
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
@@ -81,6 +84,7 @@ class HandController:
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
         self.last_sync_status = "Not connected"
+        self.last_multiturn_nvs_error = ""
         self._trusted_servo_abs: List[Optional[int]] = [None] * MOTOR_COUNT
         self._trusted_servo_raw: List[Optional[int]] = [None] * MOTOR_COUNT
         self._trusted_servo_online: List[bool] = [False] * MOTOR_COUNT
@@ -654,13 +658,46 @@ class HandController:
 
     def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
         if not self.comm:
+            self.last_multiturn_nvs_error = "serial not connected"
             return False
-        self.comm.send_command(("multiturn_nvs_control", bool(enabled)))
-        ack = self.comm.wait_for_ack(CMD_MULTITURN_NVS_CONTROL, MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S)
-        ok = bool(ack is not None and int(ack[2]) == 0)
-        if ok and not enabled:
-            self._clear_trusted_multiturn_cache()
-        return ok
+        self.last_multiturn_nvs_error = ""
+        target = bool(enabled)
+        for attempt in range(1, MULTITURN_NVS_CONTROL_MAX_ATTEMPTS + 1):
+            sent_at = time.time()
+            self.comm.send_command(("multiturn_nvs_control", target))
+            ack = self.comm.wait_for_ack(
+                CMD_MULTITURN_NVS_CONTROL,
+                MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S,
+                received_after=sent_at,
+            )
+            if ack is not None:
+                status = int(ack[2])
+                if status == 0:
+                    if not target:
+                        self._clear_trusted_multiturn_cache()
+                    log_session(
+                        "MULTITURN",
+                        f"NVS control enabled={int(target)} ACK OK attempt={attempt}",
+                    )
+                    return True
+                self.last_multiturn_nvs_error = f"firmware rejected command (status={status})"
+                log_session(
+                    "MULTITURN",
+                    f"NVS control enabled={int(target)} rejected status={status} attempt={attempt}",
+                )
+                return False
+            log_session(
+                "MULTITURN",
+                f"NVS control enabled={int(target)} ACK timeout attempt={attempt}",
+            )
+            if attempt < MULTITURN_NVS_CONTROL_MAX_ATTEMPTS:
+                time.sleep(MULTITURN_NVS_CONTROL_RETRY_DELAY_S)
+
+        self.last_multiturn_nvs_error = (
+            f"no ACK after {MULTITURN_NVS_CONTROL_MAX_ATTEMPTS} attempts; "
+            "wait for servo hotplug recovery or update P4 firmware"
+        )
+        return False
 
     def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
         if not self.comm:
@@ -687,17 +724,33 @@ class HandController:
             return False, "no online motor raw feedback"
 
         self.stop()
-        time.sleep(0.05)
+        # Let STOP and a simultaneous servo hotplug burst settle before the
+        # Flash command; otherwise the binary ACK can be lost among diagnostics.
+        time.sleep(NEW_DEVICE_RESET_SETTLE_S)
 
         if not self.set_multiturn_nvs_enabled(False):
-            return False, "failed to clear lower Flash snapshots"
+            detail = self.last_multiturn_nvs_error or "unknown NVS control error"
+            rollback = ""
+            if flash_was_enabled:
+                if self.set_multiturn_nvs_enabled(True):
+                    rollback = "; Flash restored to ON after uncertain clear result"
+                else:
+                    rollback_detail = self.last_multiturn_nvs_error or "unknown NVS control error"
+                    rollback = f"; Flash restore also failed: {rollback_detail}"
+            return False, f"failed to clear lower Flash snapshots: {detail}{rollback}"
 
         flash_restore_warning = ""
         if flash_was_enabled and not self.set_multiturn_nvs_enabled(True):
-            flash_restore_warning = "; Flash re-enable failed"
+            detail = self.last_multiturn_nvs_error or "unknown NVS control error"
+            flash_restore_warning = f"; Flash re-enable failed: {detail}"
 
+        restore_sent_at = time.time()
         self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
-        ack = self.comm.wait_for_ack(CMD_RESTORE_MULTITURN, MULTITURN_RESTORE_ACK_TIMEOUT_S)
+        ack = self.comm.wait_for_ack(
+            CMD_RESTORE_MULTITURN,
+            MULTITURN_RESTORE_ACK_TIMEOUT_S,
+            received_after=restore_sent_at,
+        )
         if ack is None or int(ack[2]) != 0:
             return False, "restore turn0 request ACK timeout/reject" + flash_restore_warning
 
@@ -729,8 +782,13 @@ class HandController:
             self._clear_trusted_multiturn_cache()
             return False, "restore turn0 request accepted, but feedback did not confirm the new baseline"
 
+        clear_sent_at = time.time()
         self.comm.send_command("clear_calibration")
-        ack = self.comm.wait_for_ack(CMD_CLEAR_CALIBRATION, CLEAR_CALIBRATION_ACK_TIMEOUT_S)
+        ack = self.comm.wait_for_ack(
+            CMD_CLEAR_CALIBRATION,
+            CLEAR_CALIBRATION_ACK_TIMEOUT_S,
+            received_after=clear_sent_at,
+        )
         if ack is None or int(ack[2]) != 0:
             self._clear_trusted_multiturn_cache()
             return False, "turn0 reset confirmed, but calibration/ABS limit clear ACK timeout/reject"

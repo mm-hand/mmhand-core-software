@@ -1594,6 +1594,10 @@ class LowerComputerComm:
                 parsed = parse_proto_ack(payload)
                 if parsed is not None:
                     ack_cmd, applied_mode, status = parsed
+                    log_session(
+                        "PROTO",
+                        f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
+                    )
                     if ack_cmd == CMD_SENSOR_STREAM_MODE:
                         self._stream_mode_applied = int(applied_mode)
                         self._stream_mode_ack_pending = False
@@ -1756,12 +1760,21 @@ class LowerComputerComm:
             self.tx_queue.not_full.notify_all()
             return removed
 
-    def wait_for_ack(self, cmd: int, timeout_s: float = 1.0) -> Optional[tuple]:
+    def wait_for_ack(
+        self,
+        cmd: int,
+        timeout_s: float = 1.0,
+        received_after: Optional[float] = None,
+    ) -> Optional[tuple]:
         deadline = time.time() + max(0.0, float(timeout_s))
         with self._ack_lock:
             while True:
                 ack = self._last_proto_ack
-                if ack is not None and int(ack[0]) == int(cmd):
+                ack_is_new = (
+                    received_after is None or
+                    (ack is not None and len(ack) >= 4 and float(ack[3]) >= float(received_after))
+                )
+                if ack is not None and int(ack[0]) == int(cmd) and ack_is_new:
                     return ack
                 remaining = deadline - time.time()
                 if remaining <= 0:

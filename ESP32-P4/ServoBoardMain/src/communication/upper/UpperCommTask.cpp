@@ -1144,34 +1144,30 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_MULTITURN_NVS_CONTROL)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
+        bool setOk = false;
+        bool clearOk = false;
         if (frameLen < 1 + kMultiTurnNvsControlPayloadBytes) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint8_t action = frame[1];
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
             if (action == 0) {
-                const bool setOk = multiTurnNvsSetEnabled(false);
-                const bool clearOk = multiTurnNvsClearSnapshots();
+                setOk = multiTurnNvsSetEnabled(false);
+                clearOk = multiTurnNvsClearSnapshots();
                 if (setOk && clearOk) {
                     sharedData->multiturn_nvs_enabled = 0;
                     sharedData->multiturn_nvs_snapshot_valid = 0;
                     sharedData->multiturn_nvs_save_valid_mask = 0;
-                    Serial.println("[NVS MULTITURN] control enabled=0 clear=1");
                 } else {
                     status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                    Serial.printf("[NVS MULTITURN] control disable failed set=%u clear=%u\r\n",
-                                  setOk ? 1U : 0U,
-                                  clearOk ? 1U : 0U);
                 }
             } else if (action == 1) {
-                if (multiTurnNvsSetEnabled(true)) {
+                setOk = multiTurnNvsSetEnabled(true);
+                if (setOk) {
                     sharedData->multiturn_nvs_enabled = 1;
                     sharedData->multiturn_nvs_snapshot_valid = multiTurnNvsHasSnapshot() ? 1 : 0;
-                    Serial.printf("[NVS MULTITURN] control enabled=1 snapshot=%u\r\n",
-                                  sharedData->multiturn_nvs_snapshot_valid ? 1U : 0U);
                 } else {
                     status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-                    Serial.println("[NVS MULTITURN] control enable failed");
                 }
             } else {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
@@ -1181,7 +1177,25 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
 #endif
         }
+        // Prioritize the machine-readable ACK over diagnostic text. During
+        // servo hotplug recovery several tasks can log at once on this port.
         sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL, sharedData->system_state, status);
+        if (frameLen >= 1 + kMultiTurnNvsControlPayloadBytes && frame[1] == 0) {
+            if (status == PROTO_ACK_STATUS_OK) {
+                Serial.println("[NVS MULTITURN] control enabled=0 clear=1");
+            } else {
+                Serial.printf("[NVS MULTITURN] control disable failed set=%u clear=%u\r\n",
+                              setOk ? 1U : 0U,
+                              clearOk ? 1U : 0U);
+            }
+        } else if (frameLen >= 1 + kMultiTurnNvsControlPayloadBytes && frame[1] == 1) {
+            if (status == PROTO_ACK_STATUS_OK) {
+                Serial.printf("[NVS MULTITURN] control enabled=1 snapshot=%u\r\n",
+                              sharedData->multiturn_nvs_snapshot_valid ? 1U : 0U);
+            } else {
+                Serial.println("[NVS MULTITURN] control enable failed");
+            }
+        }
         return;
     }
 
