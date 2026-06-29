@@ -277,6 +277,10 @@ class HandBackend:
             "_tx_diag_total_cmds",
             "_tx_diag_angle_live_cmds",
             "_tx_diag_bytes",
+            "_stream_mode_requested",
+            "_stream_mode_applied",
+            "_stream_mode_ack_pending",
+            "_stream_mode_ack_warned",
         ]
         return [(name, getattr(comm, name, "-")) for name in fields]
 

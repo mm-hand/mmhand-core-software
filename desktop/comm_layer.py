@@ -930,11 +930,7 @@ class LowerComputerComm:
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
             self._tx_thread.start()
-            self._stream_mode_applied = None
-            self._stream_mode_ack_pending = True
-            self._stream_mode_ack_warned = False
-            self._stream_mode_ack_deadline = time.time() + 2.0
-            self.send_command(("stream_mode", self._stream_mode_requested))
+            self._request_stream_mode_negotiation()
             return True
         except Exception as exc:
             log_session("COMM", f"serial connect failed port={self.port}: {exc}")
@@ -1187,6 +1183,10 @@ class LowerComputerComm:
         stripped = text.strip()
         if stripped:
             log_session("FW", stripped)
+        if "<<<SYS_READY>>>" in stripped:
+            # P4 may reboot after the first frame was sent; negotiate again
+            # only after the firmware reports that its tasks are ready.
+            self._request_stream_mode_negotiation()
         if not FIRMWARE_LOG_TO_TERMINAL:
             return
         if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
@@ -1235,6 +1235,15 @@ class LowerComputerComm:
             else:
                 self._append_firmware_log_byte(buffer.pop(0))
         return packets
+
+    def _request_stream_mode_negotiation(self) -> None:
+        if not self.running:
+            return
+        self._stream_mode_applied = None
+        self._stream_mode_ack_pending = True
+        self._stream_mode_ack_warned = False
+        self._stream_mode_ack_deadline = time.time() + 2.0
+        self.send_command(("stream_mode", self._stream_mode_requested))
 
     def _check_stream_mode_ack_timeout(self):
         if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
@@ -1415,6 +1424,8 @@ class LowerComputerComm:
                         model.servo_overload_fault[i] = faulted
                         if i < len(trigger_loads):
                             model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
+                    model.has_fault_status_data = True
+                    model.fault_status_last_rx_ts = time.time()
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_RELEASE_FAULT:
@@ -1471,6 +1482,7 @@ class LowerComputerComm:
                     model.has_connectivity_status = bool(has_connectivity_status)
                     model.has_encoder_health_status = bool(has_encoder_health_status)
                     model.has_system_status_data = True
+                    model.system_status_last_rx_ts = time.time()
                     if calib_status == 0:
                         if (
                             model.calib_status in ("PENDING", "RUNNING") and
@@ -1616,7 +1628,6 @@ class LowerComputerComm:
                     ):
                         model.control_enabled = False
                         model.system_state = SYSTEM_STATE_UNCONTROLLABLE
-                        model.has_system_status_data = True
                         if model.calib_status in ("PENDING", "RUNNING"):
                             model.calib_status = "IDLE"
                     if ack_cmd in (
@@ -1634,7 +1645,6 @@ class LowerComputerComm:
                         CMD_CLEAR_CALIBRATION,
                     ) and status == PROTO_ACK_STATUS_OK:
                         model.system_state = int(applied_mode)
-                        model.has_system_status_data = True
                         if ack_cmd == CMD_START:
                             model.control_enabled = False
                         elif ack_cmd == CMD_STOP:

@@ -37,6 +37,7 @@ from session_log import log_session
 
 LEGACY_CALIB_DATA_SYNC_ENABLE = False
 LOWER_SYNC_TIMEOUT_S = 2.5
+LOWER_STATUS_STALE_AFTER_S = 1.0
 LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
@@ -861,7 +862,11 @@ class HandController:
         self._paused = False
 
     def is_started(self) -> bool:
-        return self._started
+        with self.state_lock:
+            has_status = bool(getattr(self.current_state, "has_system_status_data", False))
+            last_rx = float(getattr(self.current_state, "system_status_last_rx_ts", 0.0) or 0.0)
+        status_fresh = has_status and last_rx > 0.0 and (time.time() - last_rx) <= LOWER_STATUS_STALE_AFTER_S
+        return self._started and status_fresh
 
     def register_update_callback(self, callback):
         self.update_callbacks.append(callback)

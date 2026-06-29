@@ -438,6 +438,7 @@ class HandModel:
     has_servo_raw_data: bool = False
     has_servo_hardware_data: bool = False
     has_system_status_data: bool = False
+    system_status_last_rx_ts: float = 0.0
     system_state: int = 0
     control_enabled: bool = False
     servo_target_owner: int = 0
@@ -488,6 +489,8 @@ class HandModel:
     servo_voltage: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_temperature: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_telem_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
+    has_fault_status_data: bool = False
+    fault_status_last_rx_ts: float = 0.0
     # 伺服过载保护锁存状态（来自 PACKET_TYPE_FAULT_STATUS，按 motor channel 位图映射）
     servo_overload_fault: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     servo_overload_trigger_load: List[Optional[int]] = field(default_factory=lambda: [None] * MOTOR_COUNT)
@@ -573,6 +576,7 @@ class HandModel:
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
         self.has_servo_hardware_data = bool(getattr(other, "has_servo_hardware_data", False))
         self.has_system_status_data = bool(other.has_system_status_data)
+        self.system_status_last_rx_ts = float(getattr(other, "system_status_last_rx_ts", 0.0) or 0.0)
         self.system_state = int(other.system_state)
         self.control_enabled = bool(other.control_enabled)
         self.servo_target_owner = int(other.servo_target_owner)
@@ -593,6 +597,8 @@ class HandModel:
         self.encoder_fault_bitmap = int(getattr(other, "encoder_fault_bitmap", 0) or 0)
         self.has_encoder_health_status = bool(getattr(other, "has_encoder_health_status", False))
         self.can_link_online = bool(getattr(other, "can_link_online", False))
+        self.has_fault_status_data = bool(getattr(other, "has_fault_status_data", False))
+        self.fault_status_last_rx_ts = float(getattr(other, "fault_status_last_rx_ts", 0.0) or 0.0)
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))

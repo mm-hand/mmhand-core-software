@@ -1382,6 +1382,13 @@ void servoCommunicationTask(void* parameter)
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
 #endif
+        const TickType_t nextWakeTime = lastWakeTime + taskPeriodTicks;
+        const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
         vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
+        if (periodOverrun) {
+            // Offline bus scans can overrun the 10 ms period. Force one blocked
+            // tick so lower-priority status/desktop communication still runs.
+            vTaskDelay(1);
+        }
     }
 }

@@ -68,6 +68,8 @@ DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT_DIR = os.path.dirname(DESKTOP_DIR)
 DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
+SYSTEM_STATUS_STALE_AFTER_S = 1.0
+FAULT_STATUS_STALE_AFTER_S = 1.0
 
 
 class HandGUI(QtWidgets.QMainWindow):
@@ -104,6 +106,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._joint_debug_csv_path = ""
         self._last_draw = 0.0
         self._draw_interval = 0.033
+        self._last_status_refresh = 0.0
         self._pending_status_text = ""
         self._last_overload_popup_mask = 0
         self._last_fault_popup_key = ""
@@ -230,7 +233,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         self.fault_label = self._make_top_status_label("SYS -", 132)
         self.calib_label = self._make_top_status_label("CALIB -", 82)
-        self.overload_label = self._make_top_status_label("OL OK", 96)
+        self.overload_label = self._make_top_status_label("OL -", 96)
         self.turn_label = self._make_top_status_label("TURN -", 98)
         self.delay_label = self._make_top_status_label("--", 62)
 
@@ -464,6 +467,10 @@ class HandGUI(QtWidgets.QMainWindow):
         state = self._state or HandModel()
         if has_new_state or has_new_tactile or not self.is_comm_connected():
             self._update_display(state)
+        elif self.is_comm_connected() and (time.time() - self._last_status_refresh) >= 0.2:
+            # A serial port can stay open after lower status heartbeats stop.
+            self._last_status_refresh = time.time()
+            self._update_status_text(state)
         if (has_new_state or has_new_tactile) and self._data_logger.is_running():
             self._write_run_data_row(state)
 
@@ -529,34 +536,86 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _update_status_text(self, state: HandModel) -> None:
         self._refresh_start_indicator()
+        now = time.time()
+        self._last_status_refresh = now
+        connected = self.is_comm_connected()
         delay_ms = 0.0
         ts = float(getattr(state, "timestamp", 0.0) or 0.0)
         if ts > 0:
-            delay_ms = max(0.0, (time.time() - ts) * 1000.0)
+            delay_ms = max(0.0, (now - ts) * 1000.0)
+        system_status_fresh = self._packet_status_fresh(
+            state,
+            "has_system_status_data",
+            "system_status_last_rx_ts",
+            SYSTEM_STATUS_STALE_AFTER_S,
+            now,
+        )
+        system_uncontrollable = system_status_fresh and int(getattr(state, "system_state", 0) or 0) == 0
         calib = str(getattr(state, "calib_status", "IDLE") or "IDLE")
-        sys_state = self._system_state_name(getattr(state, "system_state", None)) if getattr(state, "has_system_status_data", False) else "-"
-        sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
-        turn_text, turn_ok, turn_tip = self._turn_known_status(state)
-        sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
-        calib_text = f"CALIB {calib}"
-        overload_text, overload_tip, overload_active = self._format_overload_summary(state)
+        if system_status_fresh:
+            sys_state = self._system_state_name(getattr(state, "system_state", None))
+            sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
+            sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
+            calib_text = f"CALIB {calib}"
+            calib_tip = self._calib_tooltip(state, calib)
+            calib_style = self._calib_status_style(calib)
+        else:
+            has_status = bool(getattr(state, "has_system_status_data", False))
+            sys_faults = []
+            if connected:
+                sys_text = "SYS STATUS LOST" if has_status else "SYS COMM FAULT"
+                sys_tip = (
+                    "SYSTEM_STATUS heartbeat is stale; lower protocol is not healthy"
+                    if has_status
+                    else "No SYSTEM_STATUS received; serial open does not mean lower protocol is healthy"
+                )
+            else:
+                sys_text = "SYS -"
+                sys_tip = "Lower serial disconnected"
+            calib_text = "CALIB -"
+            calib_tip = "Calibration status unavailable"
+            calib_style = "warn" if connected else "neutral"
+        turn_text, turn_ok, turn_tip = self._turn_known_status(state, system_status_fresh)
+        if connected:
+            overload_text, overload_tip, overload_active = self._format_overload_summary(state, now)
+        else:
+            overload_text, overload_tip, overload_active = "OL -", "Lower serial disconnected", False
         delay_text, delay_state = self._format_delay_status(delay_ms)
         self.fault_label.setText(sys_text)
         self.fault_label.setToolTip(sys_tip)
         self.calib_label.setText(calib_text)
-        self.calib_label.setToolTip(self._calib_tooltip(state, calib))
+        self.calib_label.setToolTip(calib_tip)
         self.overload_label.setText(overload_text)
         self.overload_label.setToolTip(overload_tip)
         self.turn_label.setText(turn_text)
         self.turn_label.setToolTip(turn_tip)
         self.delay_label.setText(delay_text)
         self.delay_label.setToolTip(f"Delay: {delay_ms:.0f} ms" if delay_ms else "Delay: -")
-        self._style_top_status_label(self.fault_label, "warn" if sys_faults else "ok")
-        self._style_top_status_label(self.calib_label, self._calib_status_style(calib))
+        system_style = "neutral" if not connected else (
+            "warn" if (not system_status_fresh or system_uncontrollable or sys_faults) else "ok"
+        )
+        self._style_top_status_label(self.fault_label, system_style)
+        self._style_top_status_label(self.calib_label, calib_style)
         self._style_top_status_label(self.overload_label, "warn" if overload_active else "ok")
-        self._style_top_status_label(self.turn_label, "ok" if turn_ok else "warn")
+        self._style_top_status_label(self.turn_label, "neutral" if not connected else ("ok" if turn_ok else "warn"))
         self._style_top_status_label(self.delay_label, delay_state)
         self._handle_fault_side_effects(state)
+
+    @staticmethod
+    def _packet_status_fresh(
+        state: HandModel,
+        valid_attr: str,
+        timestamp_attr: str,
+        stale_after_s: float,
+        now: Optional[float] = None,
+    ) -> bool:
+        if not bool(getattr(state, valid_attr, False)):
+            return False
+        last_rx = float(getattr(state, timestamp_attr, 0.0) or 0.0)
+        if last_rx <= 0.0:
+            return False
+        current = time.time() if now is None else float(now)
+        return max(0.0, current - last_rx) <= float(stale_after_s)
 
     @staticmethod
     def _format_delay_status(delay_ms: float) -> tuple[str, str]:
@@ -615,7 +674,18 @@ class HandGUI(QtWidgets.QMainWindow):
         release_flags = getattr(state, "joint_reverse_release_fault", []) or []
         return [f"J{i:02d}" for i, faulted in enumerate(release_flags) if faulted]
 
-    def _format_overload_summary(self, state: HandModel) -> tuple[str, str, bool]:
+    def _format_overload_summary(self, state: HandModel, now: Optional[float] = None) -> tuple[str, str, bool]:
+        fault_status_fresh = self._packet_status_fresh(
+            state,
+            "has_fault_status_data",
+            "fault_status_last_rx_ts",
+            FAULT_STATUS_STALE_AFTER_S,
+            now,
+        )
+        if not fault_status_fresh:
+            if bool(getattr(state, "has_fault_status_data", False)):
+                return "OL STALE", "FAULT_STATUS heartbeat is stale", True
+            return "OL NO DATA", "No FAULT_STATUS received; overload state is unknown", True
         overload_items = self._overload_detail_items(state)
         if not overload_items:
             return "OL OK", "Overload motors: none", False
@@ -1030,8 +1100,15 @@ class HandGUI(QtWidgets.QMainWindow):
 
         return text, "\n".join(lines)
 
-    def _turn_known_status(self, state: HandModel) -> tuple[str, bool, str]:
-        if not getattr(state, "has_system_status_data", False):
+    def _turn_known_status(self, state: HandModel, system_status_fresh: Optional[bool] = None) -> tuple[str, bool, str]:
+        if system_status_fresh is None:
+            system_status_fresh = self._packet_status_fresh(
+                state,
+                "has_system_status_data",
+                "system_status_last_rx_ts",
+                SYSTEM_STATUS_STALE_AFTER_S,
+            )
+        if not system_status_fresh:
             return "TURN -", False, "Turn: unknown"
         try:
             unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
@@ -1410,9 +1487,22 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _refresh_toolbar_connection_lights(self) -> None:
         connected = self.is_comm_connected()
-        color = "#2e7d32" if connected else "#c62828"
-        border = "#1b5e20" if connected else "#8e0000"
-        tip = "Lower serial connected" if connected else "Lower serial disconnected"
+        state = self._state or HandModel()
+        protocol_healthy = connected and self._packet_status_fresh(
+            state,
+            "has_system_status_data",
+            "system_status_last_rx_ts",
+            SYSTEM_STATUS_STALE_AFTER_S,
+        )
+        if protocol_healthy:
+            color, border = "#2e7d32", "#1b5e20"
+            tip = "Lower serial connected; SYSTEM_STATUS heartbeat healthy"
+        elif connected:
+            color, border = "#ed8b00", "#9a6700"
+            tip = "Serial open, but lower protocol status is missing or stale"
+        else:
+            color, border = "#c62828", "#8e0000"
+            tip = "Lower serial disconnected"
         light = getattr(self, "comm_conn_light", None)
         if light is None:
             return
