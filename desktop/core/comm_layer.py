@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import queue
 import threading
@@ -5,12 +7,15 @@ import time
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-import serial
-import serial.tools.list_ports
+try:
+    import serial
+    import serial.tools.list_ports
+except ModuleNotFoundError:  # pragma: no cover - depends on local environment
+    serial = None
 
-from auto_calib_logger import AutoCalibLogger
-from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
-from protocol import (
+from .auto_calib_logger import AutoCalibLogger
+from .data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
+from .protocol import (
     BAUDRATE,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -107,8 +112,8 @@ from protocol import (
     PROTO_ACK_STATUS_QUEUED,
     SENSOR_STREAM_MODE_SIGNED_I16,
 )
-from run_data_logger import RunDataLogger
-from session_log import log_session
+from .run_data_logger import RunDataLogger
+from .session_log import log_session
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
@@ -300,6 +305,8 @@ def _tactile_axis_magnitude(values: List[int]) -> int:
 
 
 def list_ports() -> List[tuple]:
+    if serial is None:
+        return []
     return [(p.device, p.description) for p in serial.tools.list_ports.comports()]
 
 
@@ -353,6 +360,9 @@ class TactileSerialComm:
         if self.serial and getattr(self.serial, "is_open", False):
             return True
         if not self.port:
+            return False
+        if serial is None:
+            print("Missing Python dependency: pyserial. Install it with: python -m pip install pyserial")
             return False
         try:
             if not is_valid_port(self.port):
@@ -915,6 +925,8 @@ class LowerComputerComm:
             return True
         if not self.port:
             return False
+        if serial is None:
+            raise RuntimeError("Missing Python dependency: pyserial. Install it with: python -m pip install pyserial")
         try:
             self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)
             self.running = True

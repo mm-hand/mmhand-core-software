@@ -113,8 +113,8 @@ struct MultiTurnNvsSnapshot {
 相关代码：
 
 - 上位机：
-  - `desktop/protocol.py`
-  - `desktop/comm_layer.py`
+  - `desktop/core/protocol.py`
+  - `desktop/core/comm_layer.py`
 - 下位机：
   - `ESP32-P4/ServoBoardMain/src/communication/upper/UpperCommTask.cpp`
   - `ESP32-P4/ServoBoardMain/src/communication/servo/ServoCommunicationTask.cpp`
@@ -156,9 +156,9 @@ struct MultiTurnNvsSnapshot {
 - 协议命令：`CMD_MULTITURN_NVS_CONTROL = 0xDD`
 - 上位机：
   - `desktop/ui/ui_control_panels.py`
-  - `desktop/core_logic.py`
-  - `desktop/comm_layer.py`
-  - `desktop/protocol.py`
+  - `desktop/core/core_logic.py`
+  - `desktop/core/comm_layer.py`
+  - `desktop/core/protocol.py`
 - 下位机：
   - `UpperCommTask.cpp`
   - `MultiTurnNvsStore.cpp`

@@ -37,7 +37,7 @@ Calib snapshot saved to calib_load_snapshot.json
 快照文件位置：
 
 ```text
-desktop/config/calib_load_snapshot.json
+desktop/resources/config/calib_load_snapshot.json
 ```
 
 ### 下位机重启后恢复标定
@@ -127,7 +127,7 @@ _maybe_save_calibration_snapshot()
 保存文件：
 
 ```text
-desktop/config/calib_load_snapshot.json
+desktop/resources/config/calib_load_snapshot.json
 ```
 
 主要字段：
@@ -172,9 +172,9 @@ desktop/config/calib_load_snapshot.json
 
 ```text
 desktop/ui/ui_control_panels.py
-desktop/core_logic.py
-desktop/comm_layer.py
-desktop/protocol.py
+desktop/core/core_logic.py
+desktop/core/comm_layer.py
+desktop/core/protocol.py
 ```
 
 UI 入口：
@@ -191,7 +191,7 @@ HandController.load_calibration_snapshot()
 
 加载顺序：
 
-1. 读取 `desktop/config/calib_load_snapshot.json`。
+1. 读取 `desktop/resources/config/calib_load_snapshot.json`。
 2. 校验 `hand_profile`。
 3. 弹出中文确认框，要求用户确认机械未变化。
 4. 下发 `CMD_CALIB_LOAD_LIMITS`，恢复舵机 ABS limit。

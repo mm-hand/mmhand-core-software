@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 desktop/teleop/Posture/.vscode/
 
 # Local run artifacts
@@ -19,3 +20,9 @@ manus/**/*.lib
 manus/**/*.exe
 manus/**/*.pdb
 manus/**/*.exp
+
+# ROSexample/colcon generated artifacts
+ROSexample/**/build/
+ROSexample/**/install/
+ROSexample/**/log/
+*.egg-info/

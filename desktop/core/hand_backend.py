@@ -6,23 +6,19 @@ into HandController or LowerComputerComm directly.
 """
 
 from dataclasses import dataclass, field
-import os
 import threading
 import time
 from typing import Callable, Iterable, List, Optional, Tuple
 
-from comm_layer import TactileSerialComm, list_ports as _list_ports
-from core_logic import HandController
-from data_models import HandModel
-from protocol import ControlMode
+from desktop.paths import TENDON_MANUAL_CALIB_PATH
 
-try:
-    from tendon_guard import TendonGuard
-except ImportError:  # pragma: no cover - package import fallback
-    from ui.ui_tendon_guard import TendonGuard
+from .comm_layer import TactileSerialComm, list_ports as _list_ports
+from .core_logic import HandController
+from .data_models import HandModel
+from .protocol import ControlMode
+from .tendon_guard import TendonGuard
 
 
-DESKTOP_DIR = os.path.dirname(os.path.abspath(__file__))
 StateCallback = Callable[[HandModel], None]
 
 
@@ -92,9 +88,7 @@ class HandBackend:
         tendon_guard_config_path: Optional[str] = None,
     ) -> None:
         self._controller = controller or HandController()
-        guard_path = tendon_guard_config_path or os.path.join(
-            DESKTOP_DIR, "config", "tendon_manual_calib.json"
-        )
+        guard_path = tendon_guard_config_path or str(TENDON_MANUAL_CALIB_PATH)
         self.tendon_guard = tendon_guard or TendonGuard(guard_path)
         self.tactile_port = ""
         self.tactile_comm: Optional[TactileSerialComm] = None

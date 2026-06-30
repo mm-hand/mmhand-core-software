@@ -24,7 +24,7 @@ run_data/
 desktop/logs/
 desktop/multiturn_cache.json
 .vscode/ 本机 IDE 配置
-desktop/config/calib_load_snapshot.json 实机标定快照
+desktop/resources/config/calib_load_snapshot.json 实机标定快照
 嵌套旧副本 mmhand-main/
 
 测试提示

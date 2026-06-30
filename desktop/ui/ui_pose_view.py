@@ -3,17 +3,15 @@ from typing import List, Optional
 
 import numpy as np
 
-from protocol import ENCODER_COUNT
-from visualize.plot_hand_from_urdf import (
+from desktop.paths import DEFAULT_URDF_PATH
+from desktop.core.protocol import ENCODER_COUNT
+from desktop.visualize.plot_hand_from_urdf import (
     DISPLAY_TRANSFORM,
     UrdfKinematics,
     apply_display_transform,
     motor_deg_to_urdf_joint_dict,
 )
 from .ui_qt_compat import QtCore, QtWidgets
-
-
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class Pose3DView(QtWidgets.QWidget):
@@ -57,7 +55,7 @@ class Pose3DView(QtWidgets.QWidget):
             layout.addWidget(self._label, 1)
 
     def _load_urdf(self) -> None:
-        urdf_path = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urdf")
+        urdf_path = str(DEFAULT_URDF_PATH)
         try:
             self._kin = UrdfKinematics(urdf_path)
         except Exception as exc:

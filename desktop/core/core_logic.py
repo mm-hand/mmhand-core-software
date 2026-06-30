@@ -5,13 +5,14 @@ import math
 import queue
 import threading
 import time
-from pathlib import Path
 from typing import List, Optional, Tuple
 
-from comm_layer import LowerComputerComm, list_ports
-from data_models import HandModel
-from hand_geometry import load_calib_zero_raw
-from protocol import (
+from desktop.paths import PACKAGE_DIR
+
+from .comm_layer import LowerComputerComm, list_ports
+from .data_models import HandModel
+from .hand_geometry import load_calib_zero_raw
+from .protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CALIB_DATA,
     CMD_CLEAR_CALIBRATION,
@@ -33,7 +34,7 @@ from protocol import (
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_PAUSED,
 )
-from session_log import log_session
+from .session_log import log_session
 
 LEGACY_CALIB_DATA_SYNC_ENABLE = False
 LOWER_SYNC_TIMEOUT_S = 2.5
@@ -50,7 +51,7 @@ CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
-MULTITURN_CACHE_PATH = Path(__file__).resolve().parent / "multiturn_cache.json"
+MULTITURN_CACHE_PATH = PACKAGE_DIR / "multiturn_cache.json"
 MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 HOST_MULTITURN_CACHE_ENABLE = False
 
@@ -358,7 +359,15 @@ class HandController:
             self.last_sync_status = str(exc)
             return False
 
-        if not self.comm.connect():
+        try:
+            connected = self.comm.connect()
+        except (ValueError, RuntimeError) as exc:
+            log_session("CTRL", f"serial open failed port={comm_port}: {exc}")
+            print(f"连接失败: {exc}")
+            self.last_sync_status = str(exc)
+            return False
+
+        if not connected:
             log_session("CTRL", f"serial open failed port={comm_port}")
             self.last_sync_status = "Serial open failed"
             return False

@@ -1,5 +1,5 @@
-from hand_backend import HandBackend, list_ports
-from modes import Mode, run
+from desktop.core.hand_backend import HandBackend, list_ports
+from desktop.app.ui_runner import Mode, run
 from .ui_qt_compat import QtWidgets, ensure_app
 from .ui_style import configure_qt_application
 

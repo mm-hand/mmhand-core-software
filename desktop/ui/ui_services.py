@@ -3,8 +3,8 @@ import queue
 import threading
 from typing import Dict, Iterable, Optional
 
-from data_models import HandModel
-from run_data_logger import RunDataLogger
+from desktop.core.data_models import HandModel
+from desktop.core.run_data_logger import RunDataLogger
 
 
 def clone_hand_model(model: HandModel) -> HandModel:

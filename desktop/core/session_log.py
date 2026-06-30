@@ -4,9 +4,9 @@ from datetime import datetime
 from threading import Lock
 from typing import Deque, Iterable, Optional
 
+from desktop.paths import LOG_DIR
 
-DESKTOP_DIR = os.path.dirname(os.path.abspath(__file__))
-SESSION_LOG_DIR = os.path.join(DESKTOP_DIR, "logs")
+SESSION_LOG_DIR = str(LOG_DIR)
 SESSION_LOG_MAX_LINES = 2000
 SESSION_LOG_MAX_LINE_CHARS = 300
 SESSION_LOG_KEEP_FILES = 20

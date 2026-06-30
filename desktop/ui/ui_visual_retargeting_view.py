@@ -2,7 +2,7 @@ import threading
 import traceback
 from typing import Callable, Optional
 
-from protocol import ENCODER_COUNT
+from desktop.core.protocol import ENCODER_COUNT
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
@@ -41,7 +41,7 @@ class _CameraScanRunner:
         cameras = []
         try:
             import cv2
-            from teleop.Posture.camera_mocap import open_camera
+            from desktop.teleop.Posture.camera_mocap import open_camera
 
             for idx in range(self.max_index + 1):
                 cap = None
@@ -85,7 +85,7 @@ class _PostureMocapRunner:
     def _run(self) -> None:
         try:
             import cv2
-            from teleop.Posture.camera_mocap import run_mocap_loop
+            from desktop.teleop.Posture.camera_mocap import run_mocap_loop
 
             def on_frame(frame_bgr, fps: float) -> None:
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

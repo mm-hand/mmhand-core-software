@@ -7,18 +7,18 @@ from datetime import datetime
 import math
 from typing import Callable, Optional
 
-from teleop.manus_calibration import (
+from desktop.teleop.manus_calibration import (
     ACTUAL_ROBOT_COMMAND_ENABLED,
     DEFAULT_MANUS_SIDE,
     ManusCalibrationManager,
 )
-from teleop.manus_raw_skeleton_retarget import FullRawSkeletonRetargeter
-from teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
+from desktop.teleop.manus_raw_skeleton_retarget import FullRawSkeletonRetargeter
+from desktop.teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
 try:
-    from teleop.manus_sdk_receiver import ManusSdkReceiver
+    from desktop.teleop.manus_sdk_receiver import ManusSdkReceiver
 except Exception:
     ManusSdkReceiver = None
-from protocol import ControlMode, ENCODER_COUNT
+from desktop.core.protocol import ControlMode, ENCODER_COUNT
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 

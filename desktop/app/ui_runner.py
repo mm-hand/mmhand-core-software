@@ -1,12 +1,14 @@
-# modes.py - Mode entrypoints (GUI-only flow)
+"""UI mode runner with optional ROS2 joint-target input."""
+
+from __future__ import annotations
 
 import threading
 from enum import Enum
 from typing import Optional
 
-from hand_backend import HandBackend
+from desktop.core.hand_backend import HandBackend
+from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 
-# Keep this as a fallback only; runtime pose source is decided in ui_main.py.
 POSE_DISPLAY_FROM_TEXT = False
 
 
@@ -22,8 +24,8 @@ def _run_monitor_gui(
     tactile_port: Optional[str] = None,
 ) -> None:
     backend.reset()
-    # 涓嬩綅鏈?start 涓庢樉绀虹敱涓荤晫闈?[Start]/[Stop] 鎺у埗
-    from ui_main import HandGUI
+    from desktop.ui.ui_app import HandGUI
+
     gui_win = HandGUI(
         backend,
         title_suffix="Monitor",
@@ -43,9 +45,9 @@ def _run_teleop_gui(
 ) -> None:
     backend.reset()
     try:
-        from teleop.example_teleop import run as teleop_run
+        from desktop.teleop.example_teleop import run as teleop_run
     except ImportError:
-        print("teleop.example_teleop module not found. Please implement run(backend, port=None).")
+        print("desktop.teleop.example_teleop module not found. Please implement run(backend, port=None).")
         return
     if not callable(teleop_run):
         print("example_teleop.run must be callable: run(backend, port).")
@@ -65,9 +67,9 @@ def _run_algorithm_gui(
 ) -> None:
     backend.reset()
     try:
-        from algorithm.example_algorithm import run as algorithm_run
+        from desktop.algorithm.example_algorithm import run as algorithm_run
     except ImportError:
-        print("algorithm.example_algorithm module not found. Please implement run(backend, stop_event=None).")
+        print("desktop.algorithm.example_algorithm module not found. Please implement run(backend, stop_event=None).")
         return
     if not callable(algorithm_run):
         print("example_algorithm.run must be callable: run(backend, stop_event=None).")
@@ -75,12 +77,13 @@ def _run_algorithm_gui(
 
     stop_event = threading.Event()
 
-    def run_alg():
+    def run_alg() -> None:
         algorithm_run(backend, stop_event=stop_event)
 
     alg_thread = threading.Thread(target=run_alg, daemon=False)
     alg_thread.start()
-    from ui_main import HandGUI
+    from desktop.ui.ui_app import HandGUI
+
     gui_win = HandGUI(
         backend,
         title_suffix="Algorithm",
@@ -103,23 +106,54 @@ def run(
     tactile_port: Optional[str] = None,
     gui: bool = True,
 ) -> None:
-    """
-    Unified GUI entrypoint for all modes.
-    The `gui` argument is kept only for backward compatibility.
-    """
+    _ = gui
     if not isinstance(backend, HandBackend):
         backend = HandBackend(backend)
 
     if mode == Mode.MONITOR:
         _run_monitor_gui(backend, port, tactile_port)
         return
-
     if mode == Mode.TELEOP:
         _run_teleop_gui(backend, port, tactile_port)
         return
-
     if mode == Mode.ALGORITHM:
         _run_algorithm_gui(backend, port, tactile_port)
         return
-
     raise ValueError(f"Unknown mode: {mode}")
+
+
+def run_ui(
+    *,
+    mode: str = "monitor",
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+    auto_start: bool = False,
+    backend: Optional[HandBackend] = None,
+) -> int:
+    backend = backend or HandBackend()
+    if port:
+        if backend.connect(port):
+            print(f"Connected {port}")
+        else:
+            print("Connection failed; launching UI without an active device")
+    if auto_start and not ros2_enabled:
+        backend.start()
+
+    bridge = None
+    if ros2_enabled:
+        bridge = Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+        try:
+            bridge.start()
+            print(f"ROS2 joint target input enabled on {ros_topic}")
+        except Exception as exc:
+            print(f"ROS2 disabled: {exc}")
+            bridge = None
+
+    try:
+        run(Mode(mode), backend, port=port, tactile_port=tactile_port, gui=True)
+    finally:
+        if bridge is not None:
+            bridge.stop()
+    return 0

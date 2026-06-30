@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+from desktop.paths import DEFAULT_URDF_PATH as DESKTOP_DEFAULT_URDF_PATH
+
 PACKAGE_DIR = Path(__file__).resolve().parent
 POSTURE_DIR = PACKAGE_DIR.parent
-DESKTOP_DIR = POSTURE_DIR.parents[1]
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -12,7 +13,7 @@ MODEL_URL = (
 )
 
 DEFAULT_MODEL_PATH = POSTURE_DIR / "models" / "hand_landmarker.task"
-DEFAULT_URDF_PATH = DESKTOP_DIR / "hku_hand_v2_urdf" / "urdf" / "hand.urdf"
+DEFAULT_URDF_PATH = DESKTOP_DEFAULT_URDF_PATH
 
 # 官方 21 个手部关键点连线拓扑（用于可视化骨架）。
 HAND_CONNECTIONS = (

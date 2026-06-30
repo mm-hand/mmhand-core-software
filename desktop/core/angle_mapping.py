@@ -21,13 +21,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from protocol import ENCODER_COUNT
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH as DEFAULT_CALIB_LOAD_SNAPSHOT_PATH
+
+from .protocol import ENCODER_COUNT
 
 
 DEBUG_ANGLE_MAPPING = False
 
-DESKTOP_DIR = Path(__file__).resolve().parent
-CALIB_LOAD_SNAPSHOT_PATH = DESKTOP_DIR / "config" / "calib_load_snapshot.json"
+CALIB_LOAD_SNAPSHOT_PATH = Path(DEFAULT_CALIB_LOAD_SNAPSHOT_PATH)
 
 
 @dataclass(frozen=True)

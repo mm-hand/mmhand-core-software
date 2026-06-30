@@ -33,7 +33,7 @@ MANUS ergonomics
 - `desktop/teleop/manus_receiver.py`：TCP Bridge 接收器。
 - `desktop/teleop/manus_sdk_receiver.py`：Direct SDK 接收器。
 - `desktop/teleop/manus_calibration.py`：Open/Close 校准、归一化、J00-J20 映射。
-- `desktop/config/manus_calibration.json`：MANUS 校准数据。
+- `desktop/resources/config/manus_calibration.json`：MANUS 校准数据。
 - `manus/manus_bridge_test/`：旧版 TCP Bridge 源码。
 - `manus/mmhand_manus_sdk/`：Direct SDK 的 C ABI 包装层。
 

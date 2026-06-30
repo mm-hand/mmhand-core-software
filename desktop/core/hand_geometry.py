@@ -6,11 +6,13 @@ import os
 from typing import List, Tuple, Optional
 import numpy as np
 
-from protocol import ENCODER_COUNT
+from desktop.paths import CALIB_DEG_PATH as DEFAULT_CALIB_DEG_PATH
+from desktop.paths import HAND_GEO_PATH as DEFAULT_HAND_GEO_PATH
 
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
-HAND_GEO_PATH = os.path.join(CONFIG_DIR, "hand_geo.json")
-CALIB_DEG_PATH = os.path.join(CONFIG_DIR, "calib_deg.json")
+from .protocol import ENCODER_COUNT
+
+HAND_GEO_PATH = str(DEFAULT_HAND_GEO_PATH)
+CALIB_DEG_PATH = str(DEFAULT_CALIB_DEG_PATH)
 
 
 def load_hand_geo(path: Optional[str] = None) -> dict:

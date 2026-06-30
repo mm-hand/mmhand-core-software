@@ -3,7 +3,7 @@ import os
 import time
 from typing import List, Sequence, Tuple
 
-from protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
+from .protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
 
 MOTOR_TO_JOINT_INDEX = [

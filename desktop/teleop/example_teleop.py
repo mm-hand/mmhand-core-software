@@ -6,7 +6,7 @@
 # 调用 backend.send_joint_targets(angles, source="...", live=True)。
 
 from typing import Optional
-from hand_backend import HandBackend
+from desktop.core.hand_backend import HandBackend
 
 
 def run(
@@ -15,7 +15,7 @@ def run(
     tactile_port: Optional[str] = None,
 ) -> None:
     """遥操作入口：接收 backend 与 port，在此填写你的遥操逻辑。"""
-    from ui_main import HandGUI
+    from desktop.ui.ui_app import HandGUI
     if not isinstance(backend, HandBackend):
         backend = HandBackend(backend)
     backend.set_pid_control(True)

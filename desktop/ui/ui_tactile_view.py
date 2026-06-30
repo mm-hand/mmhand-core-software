@@ -10,8 +10,9 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-from hand_backend import list_ports
-from data_models import (
+from desktop.paths import DEFAULT_URDF_PATH
+from desktop.core.hand_backend import list_ports
+from desktop.core.data_models import (
     HandModel,
     FingerTactile,
     TactileSensor,
@@ -77,8 +78,7 @@ TACTILE_3D_SURFACE_OFFSET = 0.003
 TACTILE_FINGER_LABELS = ("Thumb", "Index", "Middle", "Ring", "Pinky")
 TACTILE_MODULE_DISPLAY_ORDER = (2, 1, 0)
 TACTILE_SENSOR_INDEX_FROM_MODULE = {2: 0, 1: 1, 0: 2}
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-URDF_HAND_PATH = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urdf")
+URDF_HAND_PATH = str(DEFAULT_URDF_PATH)
 URDF_MAX_TRIANGLES_PER_LINK = 0
 _URDF_HAND_MESH_CACHE = None
 _URDF_HAND_LINK_VERTEX_CACHE = None

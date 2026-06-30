@@ -3,11 +3,12 @@ import time
 import importlib
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Tuple
 
-from comm_layer import choose_serial_port_interactive
-from core_logic import HandController
-from protocol import ENCODER_COUNT
+from desktop.core.comm_layer import choose_serial_port_interactive
+from desktop.core.hand_backend import HandBackend
+from desktop.core.protocol import ENCODER_COUNT
+from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 
 try:
     _colorama = importlib.import_module("colorama")
@@ -87,36 +88,35 @@ def _render_calib_status(calib_status: str) -> str:
     return "IDLE"
 
 
-def _snapshot_controller_state(controller: HandController) -> Dict[str, object]:
-    with controller.state_lock:
-        s = controller.current_state
-        return {
-            "timestamp": s.timestamp,
-            "calib_status": s.calib_status,
-            "enc_raw": [e.raw for e in s.encoders],
-            "enc_err": [e.error for e in s.encoders],
-            "servo_angles": list(s.servo_angles),
-            "servo_online": list(s.servo_online),
-            "servo_speed": list(s.servo_speed),
-            "servo_load": list(s.servo_load),
-            "servo_voltage": list(s.servo_voltage),
-            "servo_temp": list(s.servo_temperature),
-            "servo_telem_online": list(s.servo_telem_online),
-            "servo_overload_fault": list(s.servo_overload_fault),
-            "servo_overload_trigger_load": list(getattr(s, "servo_overload_trigger_load", [])),
-            "jd_valid": list(s.joint_debug_valid),
-            "jd_target": list(s.joint_debug_target_deg),
-            "jd_actual": list(s.joint_debug_actual_deg),
-            "jd_l1": list(s.joint_debug_loop1_output),
-            "jd_l2a": list(s.joint_debug_loop2_actual),
-            "jd_l2o": list(s.joint_debug_loop2_output),
-            "jd_cmd_valid": list(s.joint_debug_cmd_valid),
-            "jd_cmd_pos": list(s.joint_debug_cmd_target_pos),
-        }
+def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
+    s = backend.get_state_snapshot()
+    return {
+        "timestamp": s.timestamp,
+        "calib_status": s.calib_status,
+        "enc_raw": [e.raw for e in s.encoders],
+        "enc_err": [e.error for e in s.encoders],
+        "servo_angles": list(s.servo_angles),
+        "servo_online": list(s.servo_online),
+        "servo_speed": list(s.servo_speed),
+        "servo_load": list(s.servo_load),
+        "servo_voltage": list(s.servo_voltage),
+        "servo_temp": list(s.servo_temperature),
+        "servo_telem_online": list(s.servo_telem_online),
+        "servo_overload_fault": list(s.servo_overload_fault),
+        "servo_overload_trigger_load": list(getattr(s, "servo_overload_trigger_load", [])),
+        "jd_valid": list(s.joint_debug_valid),
+        "jd_target": list(s.joint_debug_target_deg),
+        "jd_actual": list(s.joint_debug_actual_deg),
+        "jd_l1": list(s.joint_debug_loop1_output),
+        "jd_l2a": list(s.joint_debug_loop2_actual),
+        "jd_l2o": list(s.joint_debug_loop2_output),
+        "jd_cmd_valid": list(s.joint_debug_cmd_valid),
+        "jd_cmd_pos": list(s.joint_debug_cmd_target_pos),
+    }
 
 
-def _print_console(controller: HandController, connected_port: str, plot_status: str) -> None:
-    snap = _snapshot_controller_state(controller)
+def _print_console(backend: HandBackend, connected_port: str, plot_status: str, ros_status: str = "") -> None:
+    snap = _snapshot_backend_state(backend)
     last_update = float(snap["timestamp"])
     latency_ms = (time.time() - last_update) * 1000.0 if last_update > 0 else 9999.0
     rows = (ENCODER_COUNT + 2) // 3
@@ -126,10 +126,13 @@ def _print_console(controller: HandController, connected_port: str, plot_status:
     port_text = f"{Fore.GREEN}Connected: {connected_port}{Style.RESET_ALL}"
     latency_color = Fore.GREEN if latency_ms < 100 else (Fore.YELLOW if latency_ms < 500 else Fore.RED)
     plot_color = Fore.GREEN if "ENABLED" in plot_status else Fore.YELLOW
-    print(
+    status_line = (
         f"Status: {port_text} | Latency: {latency_color}{latency_ms:.0f} ms{Style.RESET_ALL}"
         f" | Plot: {plot_color}{plot_status}{Style.RESET_ALL}"
     )
+    if ros_status:
+        status_line += f" | ROS2: {ros_status}"
+    print(status_line)
     print("-" * 88)
 
     print("Raw magnetic encoder data (count | degree):")
@@ -238,8 +241,8 @@ class _JointPlotter:
         self.ax.legend(loc="upper right", ncol=2, fontsize=8)
         self._plt.show(block=False)
 
-    def update(self, controller: HandController) -> None:
-        snap = _snapshot_controller_state(controller)
+    def update(self, backend: HandBackend) -> None:
+        snap = _snapshot_backend_state(backend)
         now = time.time()
         jd_valid = snap["jd_valid"]
         jd_target = snap["jd_target"]
@@ -278,23 +281,50 @@ class _JointPlotter:
         self._plt.pause(0.001)
 
 
-def run_development_mode(*, no_plot: bool = False) -> None:
-    selected_port = choose_serial_port_interactive()
-    if not selected_port:
-        return
+def _mark_calibration_pending(backend: HandBackend) -> None:
+    try:
+        with backend.state_lock:
+            backend.current_state.calib_status = "PENDING"
+    except Exception:
+        pass
 
-    controller = HandController()
-    if not controller.initialize(selected_port):
+
+def run_cli_monitor(
+    *,
+    port: Optional[str] = None,
+    tactile_port: Optional[str] = None,
+    no_plot: bool = False,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+    auto_start: bool = False,
+    backend: Optional[HandBackend] = None,
+    key_reader_factory: Callable[[], _KeyReader] = _KeyReader,
+    max_iterations: Optional[int] = None,
+    render: bool = True,
+    sleep_s: float = 0.06,
+) -> int:
+    selected_port = port or choose_serial_port_interactive()
+    if not selected_port:
+        return 1
+
+    backend = backend or HandBackend()
+    if not backend.connect(selected_port):
         print(f"Failed to connect to {selected_port}.")
-        return
+        return 2
 
     print(f"Connecting to {selected_port} ...")
-    controller.set_pid_control(False)
-    controller.start()
+    backend.set_pid_control(bool(ros2_enabled))
+    if tactile_port:
+        if backend.connect_tactile_serial(tactile_port):
+            print(f"Connected tactile serial: {tactile_port}")
+        else:
+            print(f"Failed to connect tactile serial: {tactile_port}")
+    if auto_start:
+        backend.start()
 
     plotter = None
     plot_status = "DISABLED (--no-plot)" if no_plot else "DISABLED"
-    if not no_plot:
+    if not no_plot and render:
         try:
             plotter = _JointPlotter()
             plot_status = "ENABLED"
@@ -302,30 +332,52 @@ def run_development_mode(*, no_plot: bool = False) -> None:
             plotter = None
             plot_status = f"DISABLED ({exc})"
 
+    ros_bridge = None
+    ros_status = "OFF"
+    if ros2_enabled:
+        ros_bridge = Ros2JointTargetBridge(
+            backend,
+            topic=ros_topic,
+            auto_start=auto_start,
+        )
+        try:
+            ros_bridge.start()
+            ros_status = f"ON {ros_topic}"
+        except Exception as exc:
+            print(f"ROS2 disabled: {exc}")
+            ros_bridge = None
+            ros_status = f"ERROR {exc}"
+
+    iterations = 0
     try:
-        with _KeyReader() as key_reader:
+        with key_reader_factory() as key_reader:
             while True:
-                _print_console(controller, selected_port, plot_status)
+                if render:
+                    _print_console(backend, selected_port, plot_status, ros_status)
                 if plotter is not None:
-                    plotter.update(controller)
+                    plotter.update(backend)
 
                 key = key_reader.read_key()
                 if key == "q":
                     break
                 if key == "s":
-                    controller.start()
+                    backend.start()
                 if key == "x":
-                    controller.stop()
+                    backend.stop()
                 if key == "r":
-                    controller.reset()
+                    backend.reset()
                 if key == "c":
-                    if controller.comm and controller.comm.serial and controller.comm.serial.is_open:
-                        controller.comm.send_command("calibrate")
-                        with controller.state_lock:
-                            controller.current_state.calib_status = "PENDING"
-                time.sleep(0.06)
+                    if backend.request_firmware_calibration():
+                        _mark_calibration_pending(backend)
+                iterations += 1
+                if max_iterations is not None and iterations >= max_iterations:
+                    break
+                time.sleep(sleep_s)
     except KeyboardInterrupt:
         pass
     finally:
-        controller.shutdown()
+        if ros_bridge is not None:
+            ros_bridge.stop()
+        backend.shutdown()
         print("\nMonitor exited.")
+    return 0

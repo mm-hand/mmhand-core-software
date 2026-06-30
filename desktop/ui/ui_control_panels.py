@@ -7,8 +7,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from data_models import HandModel
-from protocol import (
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MOTOR_MID_CALIB_PATH, PROJECT_ROOT
+from desktop.core.data_models import HandModel
+from desktop.core.protocol import (
     ENCODER_COUNT,
     HAND_PROFILE,
     MOTOR_COUNT,
@@ -55,8 +56,6 @@ ROPE_INIT_STEP_COUNTS = ROPE_INIT_TIGHTEN_STEP_COUNTS
 ROPE_INIT_TIMER_MS = 50
 ROPE_INIT_TIMEOUT_S = 8.0
 ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
-MOTOR_MID_CALIB_PATH = Path(__file__).resolve().parents[1] / "config" / "motor_mid_calib.json"
-CALIB_LOAD_SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "config" / "calib_load_snapshot.json"
 TEST_ROW_COUNT = 5
 TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
@@ -80,7 +79,7 @@ def _load_default_auto_calibration_joint_indices() -> List[int]:
         20, 16, 17, 18, 19,
     ]
     try:
-        repo_root = Path(__file__).resolve().parents[2]
+        repo_root = PROJECT_ROOT
         source_path = repo_root / "ESP32-P4" / "ServoBoardMain" / "src" / "calibration" / "AutoCalibrationTask.cpp"
         text = source_path.read_text(encoding="utf-8", errors="ignore")
         match = re.search(

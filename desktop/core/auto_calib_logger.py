@@ -3,9 +3,9 @@ from datetime import datetime
 from threading import RLock
 from typing import Optional
 
+from desktop.paths import LOG_DIR
 
-DESKTOP_DIR = os.path.dirname(os.path.abspath(__file__))
-AUTO_CALIB_LOG_DIR = os.path.join(DESKTOP_DIR, "logs", "auto_calib")
+AUTO_CALIB_LOG_DIR = os.path.join(str(LOG_DIR), "auto_calib")
 AUTO_CALIB_LOG_KEEP_FILES = 20
 
 

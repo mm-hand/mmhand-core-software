@@ -1,8 +1,10 @@
 """Tests for core_logic.py - HandController.set_motor_positions_absolute"""
 
 import pytest
-from unittest.mock import MagicMock, patch
-from protocol import ControlMode, MOTOR_COUNT, MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX
+from unittest.mock import MagicMock
+
+from desktop.core.core_logic import HandController
+from desktop.core.protocol import ControlMode, MOTOR_COUNT, MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX
 
 
 class TestSetMotorPositionsAbsolute:
@@ -11,9 +13,7 @@ class TestSetMotorPositionsAbsolute:
     @pytest.fixture
     def controller(self):
         """Create a HandController instance with mocked dependencies."""
-        with patch('core_logic.has_calib_file', return_value=False):
-            from core_logic import HandController
-            return HandController()
+        return HandController()
 
     @pytest.fixture
     def mock_comm(self):
@@ -42,7 +42,7 @@ class TestSetMotorPositionsAbsolute:
         controller.comm = mock_comm
         controller._control_mode = ControlMode.DIRECT_MOTOR
 
-        test_values = [0, 1000, -5000, 15000] * (MOTOR_COUNT // 4)
+        test_values = [0, 1000, -5000, 15000] * ((MOTOR_COUNT + 3) // 4)
         motor_abs = test_values[:MOTOR_COUNT]
         controller.set_motor_positions_absolute(motor_abs)
 
@@ -156,7 +156,7 @@ class TestSetMotorPositionsAbsolute:
             15000,                     # Valid
             MOTOR_ABS_CMD_MIN,         # Exact min
             MOTOR_ABS_CMD_MAX,         # Exact max
-        ] * (MOTOR_COUNT // 6)
+        ] * ((MOTOR_COUNT + 5) // 6)
         motor_abs = motor_abs[:MOTOR_COUNT]
 
         controller.set_motor_positions_absolute(motor_abs)

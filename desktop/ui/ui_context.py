@@ -1,6 +1,6 @@
 from typing import Optional
 
-from data_models import HandModel
+from desktop.core.data_models import HandModel
 
 
 class HandGuiContext:

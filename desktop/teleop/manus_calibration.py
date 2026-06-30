@@ -8,12 +8,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from protocol import ENCODER_COUNT
+from desktop.paths import MANUS_CALIBRATION_PATH
+from desktop.core.protocol import ENCODER_COUNT
 
 from .manus_receiver import ManusFrame, ManusReceiver
 
 
-MANUS_CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "config" / "manus_calibration.json"
 MANUS_JOINT_SEND_GATED = True
 MANUS_PREVIEW_ONLY = not MANUS_JOINT_SEND_GATED
 ACTUAL_ROBOT_COMMAND_ENABLED = False

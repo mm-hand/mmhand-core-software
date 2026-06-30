@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
-from protocol import TASK_RUNTIME_NAMES, TASK_RUNTIME_STATE_MACHINE, TASK_RUNTIME_CONTROL
+from desktop.core.protocol import TASK_RUNTIME_NAMES, TASK_RUNTIME_STATE_MACHINE, TASK_RUNTIME_CONTROL
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
 

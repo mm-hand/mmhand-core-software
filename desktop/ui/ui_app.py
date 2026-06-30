@@ -3,10 +3,11 @@ import time
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from auto_calib_logger import AUTO_CALIB_LOG_DIR
-from data_models import HandModel
-from hand_backend import HandBackend, list_ports
-from protocol import (
+from desktop.paths import POSE_FIST_PATH, PROJECT_ROOT
+from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
+from desktop.core.data_models import HandModel
+from desktop.core.hand_backend import HandBackend, list_ports
+from desktop.core.protocol import (
     CALIB_DIAG_PHASE_DUAL_EXCHANGE,
     CALIB_DIAG_PHASE_DUAL_PRELOAD,
     CALIB_DIAG_PHASE_FIND_MAX,
@@ -54,7 +55,7 @@ from protocol import (
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
-from session_log import close_session_log, log_session
+from desktop.core.session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
@@ -66,8 +67,7 @@ from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
 from .ui_windows import DisplayWindowManager
 
 
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECT_ROOT_DIR = os.path.dirname(DESKTOP_DIR)
+PROJECT_ROOT_DIR = str(PROJECT_ROOT)
 DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
 SYSTEM_STATUS_STALE_AFTER_S = 1.0
@@ -96,7 +96,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._on_close_extra = on_close_extra
         self._action_callback = action_callback
         self._pose_generate = bool(pose_generate)
-        self._pose_generate_path = pose_generate_path or os.path.join(DESKTOP_DIR, "pose_fist_21deg.txt")
+        self._pose_generate_path = pose_generate_path or str(POSE_FIST_PATH)
         self.tactile_port = tactile_port or ""
         self._tactile_state: Optional[HandModel] = None
         self._state: Optional[HandModel] = None

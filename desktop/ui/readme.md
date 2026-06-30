@@ -1,14 +1,14 @@
 # Desktop Qt UI Architecture
 
-The desktop upper-computer UI now runs on Qt through `PySide6`/`PyQt5` compatibility plus `pyqtgraph`. The public entrypoint remains unchanged:
+The desktop upper-computer UI now runs on Qt through `PySide6`/`PyQt5` compatibility plus `pyqtgraph`. Use the package entrypoint for normal launches:
 
-```python
-from ui_main import HandGUI, LauncherWindow
+```bash
+python -m desktop ui
 ```
 
 ## Overview
 
-- `hand_backend.py` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, and the command API that Qt/ROS/teleop/algorithm code should share.
+- `desktop.core.hand_backend` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, and the command API that Qt/ROS/teleop/algorithm code should share.
 - `ui_qt_compat.py` selects the Qt binding. It tries `PySide6` first, then falls back to `PyQt5`, and sets `PYQTGRAPH_QT_LIB` before pyqtgraph is imported.
 - `ui_app.py` defines `HandGUI(QMainWindow)`. It owns the Qt window, top toolbar, main splitter, state polling timers, display updates, and UI logging. Hardware lifecycle and command orchestration go through `HandBackend`.
 - `ui_launcher.py` defines the Qt startup dialog for port and mode selection.
@@ -46,9 +46,9 @@ from ui_main import HandGUI, LauncherWindow
 - Serial receive, camera capture, tactile matrix preparation, and CSV writing may run in background threads.
 - Background producers must use latest-only or bounded queues to avoid UI backlog.
 
-## Compatibility Notes
+## Import Notes
 
-- `ui_main.py`, `main.py`, `modes.py`, and `teleop/example_teleop.py` can keep importing `HandGUI` as before.
+- Import `HandGUI` from `desktop.ui.ui_app` and `LauncherWindow` from `desktop.ui.ui_launcher`.
 - `HandGUI` accepts a `HandBackend`; passing a legacy `HandController` still works because it is wrapped in a backend at construction time.
 - Hardware protocol, calibration files, and `HandController` command methods are not changed by the UI migration.
 - If `PySide6.QtWidgets` fails to import because of a DLL issue, the UI falls back to installed `PyQt5`.

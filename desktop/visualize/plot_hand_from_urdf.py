@@ -21,6 +21,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
 from matplotlib.widgets import Slider
 
+from desktop.paths import DEFAULT_URDF_PATH, HAND_GEO_PATH
+
 
 # 与 hku_hand_v2_urdf/config/joint_names_V2D18-URDF.yaml 中顺序一致（21 个）
 # 显示坐标系（左乘 T @ T_urdf）：
@@ -43,11 +45,8 @@ def _make_display_transform() -> np.ndarray:
 
 DISPLAY_TRANSFORM: np.ndarray = _make_display_transform()
 
-# 姿态窗口 Figure / Axes 统一底色（与 ui_main 中 Figure 一致）。mplot3d 的 ax.clear() 会把 axes 恢复成默认白底，必须与 fig.patch 一起设回，否则宽屏两侧「信箱」与绘图区会错色。
+# 姿态窗口 Figure / Axes 统一底色（与 ui_app 中 Figure 一致）。mplot3d 的 ax.clear() 会把 axes 恢复成默认白底，必须与 fig.patch 一起设回，否则宽屏两侧「信箱」与绘图区会错色。
 POSE_VIEW_BG = "#e8eaee"
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 JOINT_ORDER: List[str] = [
     "1-1",
     "1-2",
@@ -87,11 +86,10 @@ _FALLBACK_ANGLE_MAPPING: List[List[int]] = [
 
 def load_angle_mapping_for_ui() -> List[List[int]]:
     """与 hand_visualizer_ui 相同：从 config/hand_geo.json 读取 angle_mapping。"""
-    p = os.path.join(DESKTOP_DIR, "config", "hand_geo.json")
     try:
-        from hand_geometry import load_hand_geo
+        from desktop.core.hand_geometry import load_hand_geo
 
-        geo = load_hand_geo(p)
+        geo = load_hand_geo(str(HAND_GEO_PATH))
         m = geo.get("angle_mapping")
         if m and isinstance(m, list) and len(m) >= 5:
             return [list(row) for row in m[:5]]
@@ -110,7 +108,7 @@ def motor_deg_to_urdf_joint_dict(
     拇指 URDF 有 5 个关节：5-1..5-4 来自映射中 4 个电机；5-5 使用第 21 路（索引 20），
     若不可用则与 5-4 相同。
     """
-    from protocol import ENCODER_COUNT
+    from desktop.core.protocol import ENCODER_COUNT
 
     m = angle_mapping if angle_mapping is not None else load_angle_mapping_for_ui()
     deg = list(angles_deg)
@@ -134,7 +132,7 @@ def motor_deg_to_urdf_joint_dict(
 
 def load_motor_degrees_from_text(path: str) -> List[float]:
     """从文本读取 ENCODER_COUNT 路关节角（度）。支持 # 行注释，数字间空格/逗号/分号分隔。"""
-    from protocol import ENCODER_COUNT
+    from desktop.core.protocol import ENCODER_COUNT
 
     nums: List[float] = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -364,7 +362,7 @@ def apply_mplot3d_camera_zoom(ax, dist: float = 6.0) -> None:
     """拉近 mplot3d 相机（Axes3D._dist，默认约 10），手部在视窗中占比更大。
 
     注意：鼠标旋转时/结束后 mplot3d 常会把 _dist 恢复成 ~10，需在交互回调里再次写入目标距离
-    （见 ui_main：motion_notify 的 after_idle、button_release、scroll 同步）。
+    （见 ui_app：motion_notify 的 after_idle、button_release、scroll 同步）。
     """
     if hasattr(ax, "_dist"):
         try:
@@ -979,7 +977,7 @@ def run_interactive(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    default_urdf = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urdf")
+    default_urdf = str(DEFAULT_URDF_PATH)
 
     p = argparse.ArgumentParser(
         description="从 URDF 绘制 HKU 手骨架：默认交互 21 关节，可选静态快照。",

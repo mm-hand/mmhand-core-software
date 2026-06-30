@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple, NamedTuple
 import numpy as np
 from enum import Enum
 
-from protocol import ENCODER_COUNT, MOTOR_COUNT
+from .protocol import ENCODER_COUNT, MOTOR_COUNT
 
 # 角度 → 度 转换因子 (14 位编码器 16384 = 360°)
 RAW_TO_DEG = 360.0 / 16384.0
