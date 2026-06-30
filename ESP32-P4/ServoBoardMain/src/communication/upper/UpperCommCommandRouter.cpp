@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "../../hardware/HardwareMap.h"
+#include "../../shared/SharedSafetyState.h"
+#include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
 
 // Clamp a host absolute motor command to the firmware multi-turn range.
@@ -59,9 +61,11 @@ void upperApplyMotorTargets(TaskSharedData_t* sharedData,
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorTargetRaw[i] = targets[i];
     }
-    sharedData->require_can_feedback = 0;
-    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
-    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
+    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
+    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
     sharedData->motor_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = source;
@@ -88,18 +92,23 @@ void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
         return;
     }
     sharedData->motorTargetRaw[motorIndex] = clampServoAbsCommand(target);
-    sharedData->active_motor_mask = motorMask;
-    sharedData->active_joint_mask = 0;
-    sharedData->require_can_feedback = 0;
-    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
-    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    {
+        SharedSafetyGuard safetyGuard;
+        sharedAtomicStore(&sharedData->active_motor_mask, motorMask);
+        sharedAtomicStore(&sharedData->active_joint_mask, (uint32_t)0);
+        sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
+    }
+    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
+    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
     sharedData->motor_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = source;
     if (lock) {
         xSemaphoreGive(lock);
     }
-    Serial.printf("[UPPER] SINGLE_MOTOR_TARGET M%02u target=%ld mask=0x%08lX\r\n",
+    FW_LOG_INFO_PRINTF("[UPPER] SINGLE_MOTOR_TARGET M%02u target=%ld mask=0x%08lX\r\n",
                   (unsigned)motorIndex,
                   (long)clampServoAbsCommand(target),
                   (unsigned long)motorMask);
@@ -122,9 +131,11 @@ void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     for (uint8_t i = 0; i < count; i++) {
         sharedData->motorSweepTargetRaw[i] = targets[i];
     }
-    sharedData->require_can_feedback = 0;
-    sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
-    sharedData->system_fault_latched_bitmap &= ~SYSTEM_FAULT_CAN_OFFLINE;
+    sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
+    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
+    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
     sharedData->motor_sweep_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
@@ -204,7 +215,7 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
         (state != SYSTEM_STATE_IDLE &&
          state != SYSTEM_STATE_READY &&
          state != SYSTEM_STATE_UNCONTROLLABLE)) {
-        Serial.printf("[UPPER] ACTIVE_SCOPE rejected state=%u owner=%u enabled=%u\r\n",
+        FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE rejected state=%u owner=%u enabled=%u\r\n",
                       (unsigned)state,
                       (unsigned)sharedData->servo_target_owner,
                       (unsigned)sharedData->control_enabled);
@@ -215,13 +226,19 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
 
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        Serial.println("[UPPER] ACTIVE_SCOPE rejected: command mutex busy");
+        FW_LOG_INFO_PRINTLN("[UPPER] ACTIVE_SCOPE rejected: command mutex busy");
         return false;
     }
 
-    sharedData->active_motor_mask = activeMotorMask & motorMaskLimit;
-    sharedData->active_joint_mask = activeJointMask & jointMaskLimit;
-    sharedData->require_can_feedback = requireCanFeedback ? 1 : 0;
+    const uint32_t appliedMotorMask = activeMotorMask & motorMaskLimit;
+    const uint32_t appliedJointMask = activeJointMask & jointMaskLimit;
+    {
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->active_motor_mask, appliedMotorMask);
+        sharedAtomicStore(&sharedData->active_joint_mask, appliedJointMask);
+        sharedAtomicStore(&sharedData->require_can_feedback,
+                          (uint8_t)(requireCanFeedback ? 1 : 0));
+    }
     sharedData->control_mode = requireCanFeedback ? CONTROL_MODE_JOINT : CONTROL_MODE_DIRECT_MOTOR;
     if (requireCanFeedback) {
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
@@ -232,12 +249,12 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
     }
 
     const uint32_t scopeFaultMask = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE;
-    sharedData->system_fault_bitmap &= ~scopeFaultMask;
-    sharedData->system_fault_latched_bitmap &= ~scopeFaultMask;
+    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap, ~scopeFaultMask);
+    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap, ~scopeFaultMask);
 
-    Serial.printf("[UPPER] ACTIVE_SCOPE motor=0x%08lX joint=0x%08lX can=%u\r\n",
-                  (unsigned long)sharedData->active_motor_mask,
-                  (unsigned long)sharedData->active_joint_mask,
-                  (unsigned)sharedData->require_can_feedback);
+    FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE motor=0x%08lX joint=0x%08lX can=%u\r\n",
+                  (unsigned long)appliedMotorMask,
+                  (unsigned long)appliedJointMask,
+                  (unsigned)(requireCanFeedback ? 1 : 0));
     return true;
 }

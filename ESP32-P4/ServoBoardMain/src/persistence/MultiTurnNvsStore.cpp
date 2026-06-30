@@ -10,6 +10,7 @@
 #include <nvs_flash.h>
 
 #include "../hardware/HardwareMap.h"
+#include "../system/FirmwareLog.h"
 
 // NVS layout:
 // - namespace: mt_abs
@@ -115,7 +116,7 @@ static bool validateSnapshot(const MultiTurnNvsSnapshot& snapshot)
         return false;
     }
     if (snapshot.mappingSignature != mappingSignature()) {
-        Serial.printf("[NVS MULTITURN] mapping signature mismatch stored=0x%08lX current=0x%08lX\r\n",
+        FW_LOG_INFO_PRINTF("[NVS MULTITURN] mapping signature mismatch stored=0x%08lX current=0x%08lX\r\n",
                       (unsigned long)snapshot.mappingSignature,
                       (unsigned long)mappingSignature());
         return false;

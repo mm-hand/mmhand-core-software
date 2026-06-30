@@ -1,10 +1,12 @@
 #include "UpperCommTask.h"
 #include "../can/CanCommTask.h"
 #include "../../shared/TaskSharedData.h"
+#include "../../shared/SharedSafetyState.h"
 #include "../../calibration/CalibrationTask.h"
 #include "../../hardware/HardwareMap.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
+#include "../../system/TaskRuntimeMonitor.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../persistence/MultiTurnNvsStore.h"
 #endif
@@ -52,6 +54,20 @@ static void appendI16BigEndian(uint8_t* buffer, size_t* idx, int16_t value)
     const uint16_t v = (uint16_t)value;
     buffer[(*idx)++] = (uint8_t)((v >> 8) & 0xFF);
     buffer[(*idx)++] = (uint8_t)(v & 0xFF);
+}
+
+static void appendU16BigEndian(uint8_t* buffer, size_t* idx, uint16_t value)
+{
+    buffer[(*idx)++] = (uint8_t)((value >> 8) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)(value & 0xFF);
+}
+
+static void appendU32BigEndian(uint8_t* buffer, size_t* idx, uint32_t value)
+{
+    buffer[(*idx)++] = (uint8_t)((value >> 24) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)((value >> 16) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)((value >> 8) & 0xFF);
+    buffer[(*idx)++] = (uint8_t)(value & 0xFF);
 }
 
 static int16_t clampI16Local(int32_t value)
@@ -128,15 +144,37 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
 }
 
 // Send the current state-machine status.
-static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
+static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
-        return;
+        return false;
     }
 
     uint8_t buffer[56];
     size_t idx = 0;
-    const uint32_t faultBitmap = sharedData->system_fault_bitmap;
+    uint32_t faultBitmap = 0;
+    uint32_t unknownBitmap = 0;
+    uint32_t activeMotorMask = 0;
+    uint32_t activeJointMask = 0;
+    uint32_t servoOnlineMask = 0;
+    uint32_t encoderOnlineMask = 0;
+    uint32_t encoderWarnMask = 0;
+    uint32_t encoderFaultMask = 0;
+    uint8_t canLinkOnline = 0;
+    uint8_t requireCanFeedback = 0;
+    {
+        SharedSafetyGuard guard;
+        faultBitmap = sharedAtomicLoad(&sharedData->system_fault_bitmap);
+        unknownBitmap = sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap);
+        activeMotorMask = sharedAtomicLoad(&sharedData->active_motor_mask);
+        activeJointMask = sharedAtomicLoad(&sharedData->active_joint_mask);
+        servoOnlineMask = sharedAtomicLoad(&sharedData->servo_online_bitmap);
+        encoderOnlineMask = sharedAtomicLoad(&sharedData->encoder_online_bitmap);
+        encoderWarnMask = sharedAtomicLoad(&sharedData->encoder_warn_bitmap);
+        encoderFaultMask = sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
+        canLinkOnline = sharedAtomicLoad(&sharedData->can_link_online);
+        requireCanFeedback = sharedAtomicLoad(&sharedData->require_can_feedback);
+    }
     const uint32_t transitionCount = sharedData->state_transition_count;
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -155,45 +193,70 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((transitionCount >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((transitionCount >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(transitionCount & 0xFF);
-    const uint32_t unknownBitmap = sharedData->multi_turn_unknown_bitmap;
     buffer[idx++] = (uint8_t)((unknownBitmap >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((unknownBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((unknownBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
     buffer[idx++] = sharedData->multiturn_nvs_enabled ? 1 : 0;
     buffer[idx++] = sharedData->multiturn_nvs_snapshot_valid ? 1 : 0;
-    const uint32_t activeMotorMask = sharedData->active_motor_mask;
     buffer[idx++] = (uint8_t)((activeMotorMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((activeMotorMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((activeMotorMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(activeMotorMask & 0xFF);
-    const uint32_t activeJointMask = sharedData->active_joint_mask;
     buffer[idx++] = (uint8_t)((activeJointMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((activeJointMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((activeJointMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(activeJointMask & 0xFF);
-    buffer[idx++] = sharedData->require_can_feedback ? 1 : 0;
-    const uint32_t servoOnlineMask = sharedData->servo_online_bitmap;
+    buffer[idx++] = requireCanFeedback ? 1 : 0;
     buffer[idx++] = (uint8_t)((servoOnlineMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((servoOnlineMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((servoOnlineMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(servoOnlineMask & 0xFF);
-    const uint32_t encoderOnlineMask = sharedData->encoder_online_bitmap;
     buffer[idx++] = (uint8_t)((encoderOnlineMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderOnlineMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderOnlineMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(encoderOnlineMask & 0xFF);
-    buffer[idx++] = sharedData->can_link_online ? 1 : 0;
-    const uint32_t encoderWarnMask = sharedData->encoder_warn_bitmap;
+    buffer[idx++] = canLinkOnline ? 1 : 0;
     buffer[idx++] = (uint8_t)((encoderWarnMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderWarnMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderWarnMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(encoderWarnMask & 0xFF);
-    const uint32_t encoderFaultMask = sharedData->encoder_fault_bitmap;
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(encoderFaultMask & 0xFF);
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
+static void sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
+{
+    uint8_t buffer[64];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_TASK_DIAG;
+    buffer[idx++] = 2; // Payload version.
+    buffer[idx++] = diag.taskId;
+    buffer[idx++] = diag.active;
+    buffer[idx++] = diag.priority;
+    buffer[idx++] = (uint8_t)diag.coreId;
+    appendU32BigEndian(buffer, &idx, diag.stackAllocatedBytes);
+    appendU32BigEndian(buffer, &idx, diag.stackCurrentFreeBytes);
+    appendU32BigEndian(buffer, &idx, diag.stackMinFreeBytes);
+    appendU32BigEndian(buffer, &idx, diag.loopCount);
+    appendU32BigEndian(buffer, &idx, diag.maxGapUs);
+    appendU32BigEndian(buffer, &idx, diag.maxExecUs);
+    appendU32BigEndian(buffer, &idx, diag.overrunCount);
+    appendU16BigEndian(buffer, &idx, diag.consecutiveOverruns);
+    appendU16BigEndian(buffer, &idx, diag.maxConsecutiveOverruns);
+    appendU16BigEndian(buffer, &idx, diag.core0IdlePermille);
+    appendU16BigEndian(buffer, &idx, diag.core1IdlePermille);
+    appendU32BigEndian(buffer, &idx, diag.systemStatusMaxGapMs);
+    appendU32BigEndian(buffer, &idx, diag.stopLastLatencyUs);
+    appendU32BigEndian(buffer, &idx, diag.stopMaxLatencyUs);
+    appendU32BigEndian(buffer, &idx, diag.timestampMs);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -203,6 +266,13 @@ static void sendSystemStatusPacket(TaskSharedData_t* sharedData)
 static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloadFaultBitmap)
 {
     uint8_t buffer[8 + SERVO_TOTAL_NUM * 2];
+    int16_t faultLoads[SERVO_TOTAL_NUM] = {0};
+    if (sharedData) {
+        SharedSafetyGuard guard;
+        for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+            faultLoads[ch] = sharedData->overload_fault_load[ch];
+        }
+    }
     size_t idx = 0;
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -213,7 +283,7 @@ static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloa
     buffer[idx++] = (uint8_t)((overloadFaultBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(overloadFaultBitmap & 0xFF);
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const int16_t load = sharedData ? sharedData->overload_fault_load[ch] : 0;
+        const int16_t load = faultLoads[ch];
         const uint16_t encodedLoad = (uint16_t)load;
         buffer[idx++] = (uint8_t)((encodedLoad >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(encodedLoad & 0xFF);
@@ -249,8 +319,17 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
 
     uint8_t buffer[128];
     size_t idx = 0;
-    const uint32_t validBitmap = sharedData->motor_abs_limit_valid_bitmap;
-    const uint32_t lockedBitmap = sharedData->motor_abs_limit_locked_bitmap;
+    uint32_t validBitmap = 0;
+    uint32_t lockedBitmap = 0;
+    int32_t limitMin[SERVO_TOTAL_NUM] = {0};
+    int32_t limitMax[SERVO_TOTAL_NUM] = {0};
+    {
+        SharedSafetyGuard guard;
+        validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+        lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+        memcpy(limitMin, sharedData->motor_abs_limit_min, sizeof(limitMin));
+        memcpy(limitMax, sharedData->motor_abs_limit_max, sizeof(limitMax));
+    }
 
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -264,8 +343,8 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((lockedBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(lockedBitmap & 0xFF);
     for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
-        const int16_t minAbs = (int16_t)sharedData->motor_abs_limit_min[i];
-        const int16_t maxAbs = (int16_t)sharedData->motor_abs_limit_max[i];
+        const int16_t minAbs = (int16_t)limitMin[i];
+        const int16_t maxAbs = (int16_t)limitMax[i];
         buffer[idx++] = (uint8_t)(((uint16_t)minAbs >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)((uint16_t)minAbs & 0xFF);
         buffer[idx++] = (uint8_t)(((uint16_t)maxAbs >> 8) & 0xFF);
@@ -718,7 +797,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     }
 
     const uint8_t cmd = frame[0];
-    // 任意合法上位机帧都说明 host 在线；界面空闲时由 heartbeat 帧刷新该时间戳。
+    // 任意合法上位机帧都说�?host 在线；界面空闲时�?heartbeat 帧刷新该时间戳�?
     sharedData->host_rx_heartbeat_ms = millis();
 
     if (cmd == CMD_HOST_HEARTBEAT)
@@ -763,9 +842,13 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_STOP)
     {
+        taskRuntimeMarkStopReceived();
         sharedData->sine_test_enabled = 0;
-        postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
-        sendProtoAckPacket(CMD_STOP, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        const bool accepted = requestEmergencyStop(sharedData);
+        sendProtoAckPacket(CMD_STOP,
+                           sharedData->system_state,
+                           accepted ? PROTO_ACK_STATUS_QUEUED
+                                    : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
 
@@ -863,7 +946,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             SemaphoreHandle_t lock = sharedData->commandStateMutex;
             if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE) {
                 const uint32_t jointMask =
-                    sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+                    sharedAtomicLoad(&sharedData->active_joint_mask) &
+                    ((1UL << ENCODER_TOTAL_NUM) - 1UL);
                 sharedData->sine_test_joint_mask = jointMask;
                 sharedData->sine_test_hold_ms = 0;
                 for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
@@ -877,7 +961,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 xSemaphoreGive(lock);
             }
         }
-        Serial.printf("[UPPER] LOCAL_TEST_PARAMS freq=%.4f amp=%.3f mask=0x%08lX ok=%u\r\n",
+        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_PARAMS freq=%.4f amp=%.3f mask=0x%08lX ok=%u\r\n",
                       (double)freqHz,
                       (double)amplitudeDeg,
                       (unsigned long)sharedData->sine_test_joint_mask,
@@ -897,7 +981,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         } else {
             if (sharedData->sine_test_joint_mask == 0) {
                 sharedData->sine_test_joint_mask =
-                    sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+                    sharedAtomicLoad(&sharedData->active_joint_mask) &
+                    ((1UL << ENCODER_TOTAL_NUM) - 1UL);
             }
             sharedData->sine_test_enabled = 1;
             sharedData->sine_test_start_ms = millis();
@@ -907,7 +992,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 xSemaphoreGive(lock);
             }
         }
-        Serial.printf("[UPPER] LOCAL_TEST_START enabled=%u token=%lu mask=0x%08lX status=%u\r\n",
+        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_START enabled=%u token=%lu mask=0x%08lX status=%u\r\n",
                       sharedData->sine_test_enabled ? 1U : 0U,
                       (unsigned long)sharedData->sine_test_request_token,
                       (unsigned long)sharedData->sine_test_joint_mask,
@@ -930,7 +1015,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 xSemaphoreGive(lock);
             }
         }
-        Serial.printf("[UPPER] LOCAL_TEST_STOP status=%u\r\n", (unsigned)status);
+        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_STOP status=%u\r\n", (unsigned)status);
         sendProtoAckPacket(cmd, sharedData->system_state, status);
         return;
     }
@@ -985,17 +1070,17 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                            sizeof(sharedData->restore_multi_turn_abs));
                     sharedData->restore_multi_turn_mask =
                         motorMask & validMotorChannelMask();
-                    sharedData->restore_multi_turn_request_token++;
+                    sharedAtomicAddFetch(&sharedData->restore_multi_turn_request_token, (uint32_t)1);
                     if (lock) {
                         xSemaphoreGive(lock);
                     }
                 }
             }
         }
-        Serial.printf("[UPPER] RESTORE_MULTITURN request status=%u mask=0x%08lX token=%lu\r\n",
+        FW_LOG_INFO_PRINTF("[UPPER] RESTORE_MULTITURN request status=%u mask=0x%08lX token=%lu\r\n",
                       (unsigned)status,
                       (unsigned long)sharedData->restore_multi_turn_mask,
-                      (unsigned long)sharedData->restore_multi_turn_request_token);
+                      (unsigned long)sharedAtomicLoad(&sharedData->restore_multi_turn_request_token));
         sendProtoAckPacket(CMD_RESTORE_MULTITURN, sharedData->system_state, status);
         return;
     }
@@ -1008,16 +1093,24 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         } else {
             const bool lockEnable = frame[1] != 0;
             const uint32_t requestedMask = readU32BigEndian(frame + 2) & validMotorChannelMask();
-            const uint32_t validMask = sharedData->motor_abs_limit_valid_bitmap;
-            if (lockEnable) {
-                sharedData->motor_abs_limit_locked_bitmap |= (requestedMask & validMask);
-            } else {
-                sharedData->motor_abs_limit_locked_bitmap &= ~requestedMask;
+            uint32_t validMask = 0;
+            uint32_t lockedMask = 0;
+            {
+                SharedSafetyGuard guard;
+                validMask = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+                if (lockEnable) {
+                    sharedAtomicFetchOr(&sharedData->motor_abs_limit_locked_bitmap,
+                                        requestedMask & validMask);
+                } else {
+                    sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap,
+                                         ~requestedMask);
+                }
+                lockedMask = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
             }
-            Serial.printf("[UPPER] ABS_LIMIT_%s mask=0x%08lX locked=0x%08lX valid=0x%08lX\r\n",
+            FW_LOG_INFO_PRINTF("[UPPER] ABS_LIMIT_%s mask=0x%08lX locked=0x%08lX valid=0x%08lX\r\n",
                           lockEnable ? "LOCK" : "UNLOCK",
                           (unsigned long)requestedMask,
-                          (unsigned long)sharedData->motor_abs_limit_locked_bitmap,
+                          (unsigned long)lockedMask,
                           (unsigned long)validMask);
         }
         sendProtoAckPacket(CMD_MOTOR_ABS_LIMIT_LOCK, sharedData->system_state, status);
@@ -1036,18 +1129,27 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         } else {
             const uint32_t validMask = readU32BigEndian(frame + 1) & validMotorChannelMask();
             const uint32_t lockedMask = readU32BigEndian(frame + 5) & validMotorChannelMask();
+            int32_t loadedMin[SERVO_TOTAL_NUM] = {0};
+            int32_t loadedMax[SERVO_TOTAL_NUM] = {0};
             const uint8_t* p = frame + 9;
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-                sharedData->motor_abs_limit_min[ch] = readI16BigEndian(p);
+                loadedMin[ch] = readI16BigEndian(p);
                 p += 2;
-                sharedData->motor_abs_limit_max[ch] = readI16BigEndian(p);
+                loadedMax[ch] = readI16BigEndian(p);
                 p += 2;
             }
-            sharedData->motor_abs_limit_valid_bitmap = validMask;
-            sharedData->motor_abs_limit_locked_bitmap = lockedMask & validMask;
-            Serial.printf("[UPPER] CALIB_LOAD_LIMITS valid=0x%08lX locked=0x%08lX\r\n",
-                          (unsigned long)sharedData->motor_abs_limit_valid_bitmap,
-                          (unsigned long)sharedData->motor_abs_limit_locked_bitmap);
+            const uint32_t appliedLockedMask = lockedMask & validMask;
+            {
+                SharedSafetyGuard guard;
+                memcpy(sharedData->motor_abs_limit_min, loadedMin, sizeof(loadedMin));
+                memcpy(sharedData->motor_abs_limit_max, loadedMax, sizeof(loadedMax));
+                sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap, validMask);
+                sharedAtomicStore(&sharedData->motor_abs_limit_locked_bitmap,
+                                  appliedLockedMask);
+            }
+            FW_LOG_INFO_PRINTF("[UPPER] CALIB_LOAD_LIMITS valid=0x%08lX locked=0x%08lX\r\n",
+                          (unsigned long)validMask,
+                          (unsigned long)appliedLockedMask);
         }
         sendProtoAckPacket(CMD_CALIB_LOAD_LIMITS, sharedData->system_state, status);
         return;
@@ -1100,9 +1202,10 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                         g_calibrationStatus = CALIB_STATUS_SUCCESS;
                         g_calibrationAckStatus = CALIB_STATUS_SUCCESS;
                         g_calibrationAckRepeatRemaining = 5;
-                        sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CALIBRATION;
+                        sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                                             (uint32_t)~SYSTEM_FAULT_CALIBRATION);
                     }
-                    Serial.printf("[UPPER] CALIB_LOAD_JOINT J%02u success=%u start=%ld tight=%ld span=%ld dir=%d\r\n",
+                    FW_LOG_INFO_PRINTF("[UPPER] CALIB_LOAD_JOINT J%02u success=%u start=%ld tight=%ld span=%ld dir=%d\r\n",
                                   jointIndex,
                                   result.success ? 1U : 0U,
                                   (long)result.startEncoder,
@@ -1124,18 +1227,22 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
-            sharedData->motor_abs_limit_valid_bitmap = 0;
-            sharedData->motor_abs_limit_locked_bitmap = 0;
-            memset((void*)sharedData->motor_abs_limit_min, 0, sizeof(sharedData->motor_abs_limit_min));
-            memset((void*)sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
+            {
+                SharedSafetyGuard guard;
+                sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap, (uint32_t)0);
+                sharedAtomicStore(&sharedData->motor_abs_limit_locked_bitmap, (uint32_t)0);
+                memset(sharedData->motor_abs_limit_min, 0, sizeof(sharedData->motor_abs_limit_min));
+                memset(sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
+            }
             memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
             memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
             g_calibrationStatus = CALIB_STATUS_IDLE;
             g_calibrationAckStatus = CALIB_STATUS_IDLE;
             g_calibrationAckRepeatRemaining = 0;
-            sharedData->system_fault_bitmap &= ~SYSTEM_FAULT_CALIBRATION;
+            sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                                 (uint32_t)~SYSTEM_FAULT_CALIBRATION);
             postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
-            Serial.println("[UPPER] CLEAR_CALIBRATION: joint calibration and ABS limits cleared");
+            FW_LOG_INFO_PRINTLN("[UPPER] CLEAR_CALIBRATION: joint calibration and ABS limits cleared");
         }
         sendProtoAckPacket(CMD_CLEAR_CALIBRATION, sharedData->system_state, status);
         return;
@@ -1182,18 +1289,18 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL, sharedData->system_state, status);
         if (frameLen >= 1 + kMultiTurnNvsControlPayloadBytes && frame[1] == 0) {
             if (status == PROTO_ACK_STATUS_OK) {
-                Serial.println("[NVS MULTITURN] control enabled=0 clear=1");
+                FW_LOG_INFO_PRINTLN("[NVS MULTITURN] control enabled=0 clear=1");
             } else {
-                Serial.printf("[NVS MULTITURN] control disable failed set=%u clear=%u\r\n",
+                FW_LOG_INFO_PRINTF("[NVS MULTITURN] control disable failed set=%u clear=%u\r\n",
                               setOk ? 1U : 0U,
                               clearOk ? 1U : 0U);
             }
         } else if (frameLen >= 1 + kMultiTurnNvsControlPayloadBytes && frame[1] == 1) {
             if (status == PROTO_ACK_STATUS_OK) {
-                Serial.printf("[NVS MULTITURN] control enabled=1 snapshot=%u\r\n",
+                FW_LOG_INFO_PRINTF("[NVS MULTITURN] control enabled=1 snapshot=%u\r\n",
                               sharedData->multiturn_nvs_snapshot_valid ? 1U : 0U);
             } else {
-                Serial.println("[NVS MULTITURN] control enable failed");
+                FW_LOG_INFO_PRINTLN("[NVS MULTITURN] control enable failed");
             }
         }
         return;
@@ -1244,11 +1351,16 @@ void upperCommunicationTask(void* parameter)
     uint8_t nextJointCalibSnapshotIndex = 0;
     uint32_t lastCalibrationDiagSequenceSent = 0;
     uint32_t lastCalibrationDiagSentMs = 0;
+    uint32_t lastTaskDiagSentMs = 0;
+    uint8_t nextTaskDiagId = 0;
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    const TickType_t taskPeriodTicks = pdMS_TO_TICKS(5);
 
-    Serial.println("<<<SYS_READY>>>");
+    FW_LOG_INFO_PRINTLN("<<<SYS_READY>>>");
 
     for (;;)
     {
+        taskRuntimeMarkLoopStart(TASK_RUNTIME_UPPER_COMM);
         while (Serial.available())
         {
             const int byteVal = Serial.read();
@@ -1338,14 +1450,6 @@ void upperCommunicationTask(void* parameter)
             lastSensorTimestampSent = mappedAngleData.timestamp;
             sentPacket = true;
         }
-        else if (sharedData->canRxQueue &&
-            xQueuePeek(sharedData->canRxQueue, &sensorRawData, 0) == pdTRUE &&
-            sensorRawData.timestamp != lastSensorTimestampSent)
-        {
-            sendDataPacket(NULL, &sensorRawData, NULL, NULL, NULL, NULL, NULL, NULL);
-            lastSensorTimestampSent = sensorRawData.timestamp;
-            sentPacket = true;
-        }
 
         if (sharedData->canRxQueue &&
             xQueuePeek(sharedData->canRxQueue, &sensorRawData, 0) == pdTRUE &&
@@ -1403,7 +1507,8 @@ void upperCommunicationTask(void* parameter)
         }
 
         const uint32_t nowMs = millis();
-        const uint32_t faultBitmap = sharedData->overload_fault_bitmap;
+        const uint32_t faultBitmap =
+            sharedAtomicLoad(&sharedData->overload_fault_bitmap);
         const bool bitmapChanged =
             (!faultStatusSentInitialized) || (faultBitmap != lastFaultStatusSent);
         const bool heartbeatDue =
@@ -1415,7 +1520,8 @@ void upperCommunicationTask(void* parameter)
             faultStatusSentInitialized = true;
         }
 
-        const uint32_t releaseFaultBitmap = sharedData->reverse_release_fault_bitmap;
+        const uint32_t releaseFaultBitmap =
+            sharedAtomicLoad(&sharedData->reverse_release_fault_bitmap);
         const bool releaseBitmapChanged =
             (!releaseFaultSentInitialized) || (releaseFaultBitmap != lastReleaseFaultSent);
         const bool releaseHeartbeatDue =
@@ -1435,14 +1541,27 @@ void upperCommunicationTask(void* parameter)
             (!systemStatusSentInitialized) ||
             ((nowMs - lastSystemStatusSentMs) >= kSystemStatusHeartbeatMs);
         if (systemStatusChanged || systemStatusHeartbeatDue) {
-            sendSystemStatusPacket(sharedData);
-            lastSystemStatusTransitionSent = stateTransitionCount;
-            lastSystemStatusSentMs = nowMs;
-            systemStatusSentInitialized = true;
+            if (sendSystemStatusPacket(sharedData)) {
+                taskRuntimeMarkSystemStatusSent();
+                lastSystemStatusTransitionSent = stateTransitionCount;
+                lastSystemStatusSentMs = nowMs;
+                systemStatusSentInitialized = true;
+            }
         }
 
-        const uint32_t limitValidBitmap = sharedData->motor_abs_limit_valid_bitmap;
-        const uint32_t limitLockedBitmap = sharedData->motor_abs_limit_locked_bitmap;
+        if ((uint32_t)(nowMs - lastTaskDiagSentMs) >= kTaskDiagHeartbeatMs) {
+            TaskRuntimeSnapshot runtimeDiag;
+            if (taskRuntimeGetSnapshot(nextTaskDiagId, &runtimeDiag)) {
+                sendTaskRuntimePacket(runtimeDiag);
+            }
+            nextTaskDiagId = (uint8_t)((nextTaskDiagId + 1) % TASK_RUNTIME_COUNT);
+            lastTaskDiagSentMs = nowMs;
+        }
+
+        const uint32_t limitValidBitmap =
+            sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+        const uint32_t limitLockedBitmap =
+            sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         if (limitValidBitmap != lastMotorAbsLimitValidSent ||
             limitLockedBitmap != lastMotorAbsLimitLockedSent ||
             (uint32_t)(nowMs - lastMotorAbsLimitSentMs) >= kMotorAbsLimitHeartbeatMs) {
@@ -1464,7 +1583,11 @@ void upperCommunicationTask(void* parameter)
             lastJointCalibSnapshotSentMs = nowMs;
         }
 
-        const CalibrationDiagData_t calibDiag = sharedData->calibration_diag;
+        CalibrationDiagData_t calibDiag;
+        {
+            SharedSafetyGuard guard;
+            calibDiag = sharedData->calibration_diag;
+        }
         if (calibDiag.sequence != lastCalibrationDiagSequenceSent ||
             (calibDiag.valid &&
              (uint32_t)(nowMs - lastCalibrationDiagSentMs) >= kSystemStatusHeartbeatMs)) {
@@ -1473,6 +1596,11 @@ void upperCommunicationTask(void* parameter)
             lastCalibrationDiagSentMs = nowMs;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        taskRuntimeMarkLoopEnd(TASK_RUNTIME_UPPER_COMM);
+        const TickType_t nextWakeTime = lastWakeTime + taskPeriodTicks;
+        const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+        taskRuntimeMarkPeriodResult(TASK_RUNTIME_UPPER_COMM, periodOverrun);
+        vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
+        if (periodOverrun) vTaskDelay(1);
     }
 }

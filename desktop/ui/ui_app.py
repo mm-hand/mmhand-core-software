@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from typing import Callable, List, Optional
 
+from auto_calib_logger import AUTO_CALIB_LOG_DIR
 from data_models import HandModel
 from hand_backend import HandBackend, list_ports
 from protocol import (
@@ -60,6 +61,7 @@ from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
 from .ui_services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
+from .ui_task_runtime import TaskRuntimeWindow
 from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
 from .ui_windows import DisplayWindowManager
 
@@ -114,7 +116,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._fault_dialog_active = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
-        self._top_status_expanded = False
+        self._task_runtime_window: Optional[TaskRuntimeWindow] = None
         self.context = HandGuiContext(self)
         self.tendon_guard = self.backend.tendon_guard
 
@@ -158,10 +160,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
         self.save_data_check.setChecked(False)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
-        self.plot_btn = QtWidgets.QPushButton("Plot")
-        self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
-        self.tactile_btn = QtWidgets.QPushButton("Tactile")
-        self.tactile_btn.clicked.connect(lambda _checked=False: self._display_windows.open_tactile())
         self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -169,8 +167,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._refresh_start_indicator()
 
         for widget in [
-            QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            self.save_data_check, self.plot_btn, self.tactile_btn, self.comm_conn_light, self.start_indicator,
+            QtWidgets.QLabel("Port:"), self.port_combo, self.comm_conn_light,
+            self.connect_btn, self.save_data_check, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
@@ -194,36 +192,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot = JointRealtimePlotView(self.context, self)
 
     def _build_top_status_strip(self, toolbar: QtWidgets.QToolBar) -> None:
-        self.top_status_toggle = QtWidgets.QToolButton()
-        self.top_status_toggle.setText("»")
-        self.top_status_toggle.setCheckable(True)
-        self.top_status_toggle.setChecked(False)
-        self.top_status_toggle.setFixedWidth(28)
-        self.top_status_toggle.setMinimumHeight(30)
-        self.top_status_toggle.setToolTip("Show status details")
-        self.top_status_toggle.toggled.connect(self._set_top_status_expanded)
-        self.top_status_toggle.setStyleSheet(
-            "QToolButton {"
-            "color:#24292f;"
-            "background:#f6f8fa;"
-            "border:1px solid #b8b8b8;"
-            "border-radius:3px;"
-            "font-weight:700;"
-            "}"
-            "QToolButton:checked { background:#eef6ff; border-color:#8cbdff; }"
-        )
-        toolbar.addWidget(self.top_status_toggle)
-
-        self.top_status_toolbar = QtWidgets.QToolBar("Status Details")
-        self.top_status_toolbar.setObjectName("TopStatusToolbar")
-        self.top_status_toolbar.setMovable(False)
-        self.top_status_toolbar.setFloatable(False)
-        self.top_status_toolbar.setAllowedAreas(QtCore.Qt.TopToolBarArea)
-
-        status_spacer = QtWidgets.QWidget()
-        status_spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        self.top_status_toolbar.addWidget(status_spacer)
-
         strip = QtWidgets.QWidget()
         strip.setObjectName("TopStatusStrip")
         strip.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
@@ -254,23 +222,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "}"
         )
         self.top_status_strip = strip
-        self.top_status_toolbar.addWidget(strip)
-        self.addToolBarBreak(QtCore.Qt.TopToolBarArea)
-        self.addToolBar(QtCore.Qt.TopToolBarArea, self.top_status_toolbar)
-        self._set_top_status_expanded(False)
-
-    def _set_top_status_expanded(self, expanded: bool) -> None:
-        self._top_status_expanded = bool(expanded)
-        if hasattr(self, "top_status_toolbar"):
-            self.top_status_toolbar.setVisible(self._top_status_expanded)
-        if hasattr(self, "top_status_toggle"):
-            self.top_status_toggle.blockSignals(True)
-            self.top_status_toggle.setChecked(self._top_status_expanded)
-            self.top_status_toggle.setText("«" if self._top_status_expanded else "»")
-            self.top_status_toggle.setToolTip(
-                "Hide status details" if self._top_status_expanded else "Show status details"
-            )
-            self.top_status_toggle.blockSignals(False)
+        toolbar.addWidget(strip)
 
     def _make_top_status_label(self, text: str, min_width: int) -> QtWidgets.QLabel:
         label = QtWidgets.QLabel(text)
@@ -341,8 +293,92 @@ class HandGUI(QtWidgets.QMainWindow):
         servo_status.triggered.connect(self.show_servo_status_dialog)
         protocol_status = action_cls("Protocol / Comm Status", self)
         protocol_status.triggered.connect(self.show_protocol_status_dialog)
-        for action in [refresh_ports, connect, refresh_cameras, servo_status, protocol_status]:
+        task_runtime = action_cls("Task Runtime", self)
+        task_runtime.triggered.connect(self.show_task_runtime_window)
+        auto_calib_log = action_cls("Auto Calib Log", self)
+        auto_calib_log.triggered.connect(self.show_auto_calib_log_dialog)
+        for action in [refresh_ports, connect, refresh_cameras, servo_status, protocol_status, task_runtime, auto_calib_log]:
             menu.addAction(action)
+
+    def show_task_runtime_window(self) -> None:
+        if self._task_runtime_window is None:
+            self._task_runtime_window = TaskRuntimeWindow(self)
+            self._task_runtime_window.destroyed.connect(lambda _obj=None: setattr(self, "_task_runtime_window", None))
+        if self._state is not None:
+            self._task_runtime_window.update_state(self._state)
+        self._task_runtime_window.show()
+        self._task_runtime_window.raise_()
+        self._task_runtime_window.activateWindow()
+
+    def show_auto_calib_log_dialog(self) -> None:
+        latest = self._latest_auto_calib_log_path()
+        if not latest:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Auto Calib Log",
+                f"No auto calibration log found.\nFolder: {AUTO_CALIB_LOG_DIR}",
+            )
+            return
+        try:
+            with open(latest, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Auto Calib Log", f"Failed to read:\n{latest}\n\n{exc}")
+            return
+        log_text = "".join(lines).strip() or "(empty)"
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Auto Calib Log")
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        path_label = QtWidgets.QLabel(f"Latest log: {latest}")
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(path_label)
+
+        log_view = QtWidgets.QPlainTextEdit()
+        log_view.setReadOnly(True)
+        log_view.setFont(QtGui.QFont("Consolas", 10))
+        try:
+            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        except AttributeError:
+            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        log_view.setPlainText(log_text)
+        layout.addWidget(log_view, 1)
+
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, 0, QtCore.Qt.AlignRight)
+
+        screen = dialog.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            width = min(max(760, int(area.width() * 0.80)), max(480, area.width() - 80))
+            height = min(max(520, int(area.height() * 0.78)), max(360, area.height() - 80))
+            dialog.resize(width, height)
+            dialog.setMinimumSize(min(760, width), min(460, height))
+        else:
+            dialog.resize(1100, 700)
+            dialog.setMinimumSize(760, 460)
+
+        scroll_bar = log_view.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        dialog.exec()
+
+    @staticmethod
+    def _latest_auto_calib_log_path() -> str:
+        try:
+            paths = [
+                os.path.join(AUTO_CALIB_LOG_DIR, name)
+                for name in os.listdir(AUTO_CALIB_LOG_DIR)
+                if name.startswith("auto_calib_") and name.lower().endswith(".log")
+            ]
+        except OSError:
+            return ""
+        if not paths:
+            return ""
+        paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        return paths[0]
 
     def refresh_ports(self) -> None:
         current = self.current_port
@@ -527,6 +563,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_draw = now
         self.control_panel.update_state(state)
         self._display_windows.update_views(state)
+        if self._task_runtime_window is not None:
+            self._task_runtime_window.update_state(state)
         self.joint_plot.append_state(state)
         self.joint_plot.update_plot()
         self._update_status_text(state)
@@ -1538,6 +1576,9 @@ class HandGUI(QtWidgets.QMainWindow):
             log_session("APP", "window closing")
             self.control_panel.stop_all_tests("window closed")
             self._display_windows.close_all()
+            if self._task_runtime_window is not None:
+                self._task_runtime_window.close()
+                self._task_runtime_window = None
             self.joint_plot.close()
             self._stop_data_recording("closed")
             self._stop_tactile_port()

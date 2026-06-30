@@ -24,6 +24,7 @@
 #define PACKET_TYPE_JOINT_CALIB_SNAPSHOT 0x0E
 #define PACKET_TYPE_TACTILE_FULL 0x0F
 #define PACKET_TYPE_CALIB_DIAG 0x10
+#define PACKET_TYPE_TASK_DIAG 0x11
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -77,6 +78,7 @@ static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
 static const uint32_t kSystemStatusHeartbeatMs = 100;
+static const uint32_t kTaskDiagHeartbeatMs = 250;
 static const uint32_t kMotorAbsLimitHeartbeatMs = 500;
 static const uint32_t kJointCalibSnapshotHeartbeatMs = 1000;
 

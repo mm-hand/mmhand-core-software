@@ -8,6 +8,7 @@ import numpy as np
 import serial
 import serial.tools.list_ports
 
+from auto_calib_logger import AutoCalibLogger
 from data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
 from protocol import (
     BAUDRATE,
@@ -22,6 +23,7 @@ from protocol import (
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
+    PACKET_TYPE_TASK_DIAG,
     PACKET_TYPE_TACTILE,
     PACKET_TYPE_TACTILE_FULL,
     PROTOCOL_HEADER,
@@ -93,6 +95,7 @@ from protocol import (
     parse_servo_raw_packet,
     parse_servo_telem_packet,
     parse_system_status_packet,
+    parse_task_diag_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
     TACTILE_GROUP_COUNT,
@@ -165,6 +168,8 @@ FIRMWARE_LOG_ERROR_MARKERS = (
 # The UI/model order is also thumb, index, middle, ring, pinky.
 TACTILE_UI_GROUP_FROM_RAW = (0, 1, 2, 3, 4)
 TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
+MAPPED_ANGLE_COUNT_MARGIN = 512
+MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
 
 
 def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
@@ -856,6 +861,7 @@ class LowerComputerComm:
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
         self._tx_lock = threading.Lock()
+        self._offline_lock = threading.Lock()
         self._ack_lock = threading.Condition()
         self._rx_buffer = bytearray()
         self._firmware_text_buffer = bytearray()
@@ -877,7 +883,9 @@ class LowerComputerComm:
         self._tx_diag_bytes = 0
         self._last_heartbeat_tx = 0.0
         self._heartbeat_enabled = False
+        self._offline_reported = False
         self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
+        self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
         self._tactile_zero_counts: List[List[int]] = [
             [0 for _ in range(3)] for _ in range(5)
@@ -910,6 +918,7 @@ class LowerComputerComm:
         try:
             self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)
             self.running = True
+            self._offline_reported = False
             self._rx_buffer = bytearray()
             self._firmware_text_buffer = bytearray()
             self._last_model = None
@@ -926,6 +935,8 @@ class LowerComputerComm:
             self._last_tactile_summary_seq = None
             self._last_tactile_full_ts = 0.0
             self._reset_tactile_full_reassembly()
+            auto_calib_path = self._auto_calib_logger.start(self.port)
+            log_session("AUTO_CALIB", f"log started {auto_calib_path}")
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
@@ -946,7 +957,11 @@ class LowerComputerComm:
 
     def disconnect(self):
         self.running = False
+        self._heartbeat_enabled = False
         self.stop_joint_debug_packet_log()
+        auto_calib_path = self._auto_calib_logger.close()
+        if auto_calib_path:
+            log_session("AUTO_CALIB", f"log saved {auto_calib_path}")
         log_session("COMM", "serial disconnect requested")
         if self.serial and self.serial.is_open:
             self.serial.close()
@@ -960,6 +975,74 @@ class LowerComputerComm:
         self._rx_thread = None
         self._tx_thread = None
         log_session("COMM", "serial disconnected")
+
+    def is_connected(self) -> bool:
+        return bool(self.running and self.serial and getattr(self.serial, "is_open", False))
+
+    def _build_offline_model(self) -> HandModel:
+        model = HandModel()
+        if self._last_model is not None:
+            model.copy_state_from(self._last_model)
+        model.timestamp = time.time()
+        model.calib_status = "DISCONNECTED"
+        model.has_system_status_data = False
+        model.has_connectivity_status = False
+        model.has_encoder_health_status = False
+        model.has_servo_angle_data = False
+        model.has_servo_raw_data = False
+        model.has_servo_hardware_data = False
+        model.has_fault_status_data = False
+        model.servo_online_bitmap = 0
+        model.encoder_online_bitmap = 0
+        model.encoder_warn_bitmap = 0
+        model.encoder_fault_bitmap = 0
+        model.can_link_online = False
+        model.servo_online = [False] * MOTOR_COUNT
+        model.servo_raw_online = [False] * MOTOR_COUNT
+        model.servo_telem_online = [False] * MOTOR_COUNT
+        for motor in model.motors:
+            motor.error = True
+            motor.state = MotorState.ERROR
+        model.tactile_online = False
+        model.tactile_module_online = [False] * len(model.tactile_module_online)
+        self._last_model = model
+        return model
+
+    def _push_rx_model(self, model: HandModel) -> None:
+        try:
+            self.rx_queue.put_nowait(model)
+        except queue.Full:
+            try:
+                self.rx_queue.get_nowait()
+                self.rx_queue.task_done()
+            except queue.Empty:
+                pass
+            try:
+                self.rx_queue.put_nowait(model)
+            except queue.Full:
+                pass
+
+    def _mark_comm_offline(self, reason: str, exc: Optional[BaseException] = None) -> None:
+        with self._offline_lock:
+            if self._offline_reported:
+                return
+            self._offline_reported = True
+            detail = f"{reason}: {exc}" if exc is not None else reason
+            log_session("COMM", f"serial offline {detail}")
+            print(f"Serial offline: {detail}")
+            self.running = False
+            self._heartbeat_enabled = False
+            self._stream_mode_ack_pending = False
+            with self._ack_lock:
+                self._last_proto_ack = None
+                self._ack_lock.notify_all()
+            try:
+                if self.serial and getattr(self.serial, "is_open", False):
+                    self.serial.close()
+            except Exception as close_exc:
+                log_session("COMM", f"serial close after offline failed: {close_exc}")
+            self.serial = None
+            self._push_rx_model(self._build_offline_model())
 
     def start_joint_debug_packet_log(self, path: str) -> None:
         fieldnames = [
@@ -1164,6 +1247,8 @@ class LowerComputerComm:
             except Exception as exc:
                 log_session("COMM", f"RX error: {exc}")
                 print(f"RX error: {exc}")
+                self._mark_comm_offline("RX error", exc)
+                break
 
     def _append_firmware_log_byte(self, value: int) -> None:
         if value in (9, 10, 13) or 32 <= value <= 126:
@@ -1183,6 +1268,8 @@ class LowerComputerComm:
         stripped = text.strip()
         if stripped:
             log_session("FW", stripped)
+            if "[AUTO CALIB]" in stripped or "[BOOT CALIB]" in stripped:
+                self._auto_calib_logger.log("FW", stripped)
         if "<<<SYS_READY>>>" in stripped:
             # P4 may reboot after the first frame was sent; negotiate again
             # only after the firmware reports that its tasks are ready.
@@ -1308,7 +1395,8 @@ class LowerComputerComm:
                 if angles:
                     for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
                         model.encoders[i].encoder_id = i
-                        model.encoders[i].raw = angles[i]
+                        if self._mapped_angle_count_plausible(i, int(angles[i]), model):
+                            model.encoders[i].raw = angles[i]
                         model.encoders[i].zero_raw = 0
                         model.encoders[i].error = errors[i] if i < len(errors) else False
 
@@ -1526,6 +1614,7 @@ class LowerComputerComm:
             elif pkt_type == PACKET_TYPE_CALIB_DIAG:
                 parsed = parse_calib_diag_packet(payload)
                 if parsed is not None:
+                    self._log_auto_calib_diag(parsed)
                     model.calib_diag_valid = bool(parsed.get("valid", False))
                     model.calib_diag_reason = int(parsed.get("reason", 0) or 0)
                     model.calib_diag_phase = int(parsed.get("phase", 0) or 0)
@@ -1537,6 +1626,17 @@ class LowerComputerComm:
                     model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
                     model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
                     emitted = True
+
+            elif pkt_type == PACKET_TYPE_TASK_DIAG:
+                parsed = parse_task_diag_packet(payload)
+                if parsed is not None:
+                    task_id = int(parsed.get("task_id", -1) or -1)
+                    if task_id >= 0:
+                        now = time.time()
+                        parsed["host_rx_ts"] = now
+                        model.task_runtime[task_id] = dict(parsed)
+                        model.task_runtime_last_rx_ts = now
+                        emitted = True
 
             elif pkt_type == PACKET_TYPE_TACTILE:
                 parsed = parse_tactile_packet(payload)
@@ -1606,6 +1706,11 @@ class LowerComputerComm:
                 parsed = parse_proto_ack(payload)
                 if parsed is not None:
                     ack_cmd, applied_mode, status = parsed
+                    if ack_cmd in (CMD_CALIBRATE, CMD_SIDE_SWAY_ADJUST, CMD_CLEAR_CALIBRATION):
+                        self._auto_calib_logger.log(
+                            "ACK",
+                            f"cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
+                        )
                     log_session(
                         "PROTO",
                         f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
@@ -1687,6 +1792,27 @@ class LowerComputerComm:
         return model if emitted else None
 
     @staticmethod
+    def _mapped_angle_count_plausible(joint_idx: int, value: int, model: HandModel) -> bool:
+        if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
+            return False
+        if value == 0:
+            return True
+        results = getattr(model, "joint_calib_results", []) or []
+        if joint_idx >= len(results):
+            return False
+        result = results[joint_idx]
+        if not isinstance(result, dict) or not bool(result.get("success", False)):
+            return False
+        try:
+            angle_max = float(result.get("angleMax", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(angle_max) or angle_max <= 0.0:
+            return False
+        max_count = int(round(angle_max * MAPPED_ANGLE_COUNTS_PER_DEG))
+        return -MAPPED_ANGLE_COUNT_MARGIN <= int(value) <= (max_count + MAPPED_ANGLE_COUNT_MARGIN)
+
+    @staticmethod
     def _apply_connectivity_visibility(model: HandModel) -> None:
         if bool(getattr(model, "has_connectivity_status", False)):
             servo_mask = int(getattr(model, "servo_online_bitmap", 0) or 0)
@@ -1710,6 +1836,17 @@ class LowerComputerComm:
                 model.encoders[i].error = not usable
 
     def send_command(self, cmd: SendCmd):
+        if not self.is_connected():
+            log_session("COMM", f"drop TX while offline cmd={cmd!r}")
+            return
+        if cmd in ("calibrate", "side_sway_adjust", "clear_calibration"):
+            self._auto_calib_logger.log("TX", str(cmd))
+        elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
+            "active_scope",
+            "calib_load_limits",
+            "calib_load_joint",
+        ):
+            self._auto_calib_logger.log("TX", repr(cmd))
         if cmd == "stop":
             self._enqueue_stop_immediately()
             return
@@ -1823,6 +1960,8 @@ class LowerComputerComm:
             except Exception as exc:
                 log_session("COMM", f"TX error: {exc}")
                 print(f"TX error: {exc}")
+                self._mark_comm_offline("TX error", exc)
+                break
 
     def _maybe_send_host_heartbeat(self) -> None:
         """Send a lightweight online heartbeat without using the normal command queue."""
@@ -1838,6 +1977,25 @@ class LowerComputerComm:
             self.serial.write(data)
         self._last_heartbeat_tx = now
         self._update_tx_diag("host_heartbeat", len(data))
+
+    def _log_auto_calib_diag(self, parsed: dict) -> None:
+        if parsed is None:
+            return
+        self._auto_calib_logger.log(
+            "CALIB_DIAG",
+            (
+                f"valid={int(bool(parsed.get('valid', False)))} "
+                f"reason={int(parsed.get('reason', 0) or 0)} "
+                f"phase={int(parsed.get('phase', 0) or 0)} "
+                f"joint={int(parsed.get('joint', 0xFF) or 0)} "
+                f"motor={int(parsed.get('motor', 0xFF) or 0)} "
+                f"valueA={int(parsed.get('valueA', 0) or 0)} "
+                f"valueB={int(parsed.get('valueB', 0) or 0)} "
+                f"valueC={int(parsed.get('valueC', 0) or 0)} "
+                f"bitmap=0x{int(parsed.get('bitmap', 0) or 0):08X} "
+                f"device_ms={int(parsed.get('timestamp_ms', 0) or 0)}"
+            ),
+        )
 
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":

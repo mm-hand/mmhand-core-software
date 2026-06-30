@@ -19,6 +19,7 @@ from protocol import (
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_READY,
@@ -275,6 +276,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._motors_by_joint = _motors_by_joint_index()
         self._last_calib_status: Optional[str] = None
         self._last_calib_snapshot_signature: Optional[str] = None
+        self._last_joint_calib_valid_mask: Optional[int] = None
         self._side_sway_adjust_pending = False
         self._calibration_after_side_sway_pending = False
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
@@ -302,8 +304,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_target_initialized = False
         self.motor_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * MOTOR_COUNT
         self.motor_group_use_checks: List[QtWidgets.QCheckBox] = []
-        self.abs_limit_unlock_btn: Optional[QtWidgets.QPushButton] = None
-        self.abs_limit_lock_btn: Optional[QtWidgets.QPushButton] = None
+        self.abs_limit_lock_toggle_btn: Optional[QtWidgets.QPushButton] = None
         # UI relative multi-turn targets. Device command = origin feedback + this value.
         self._motor_abs_pos: List[Optional[int]] = [None] * MOTOR_COUNT
         # Servo absolute feedback captured when direct control is synced or held.
@@ -654,8 +655,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_target_spins = []
         self.motor_sliders = []
         self.motor_send_buttons = []
-        self.abs_limit_unlock_btn = None
-        self.abs_limit_lock_btn = None
+        self.abs_limit_lock_toggle_btn = None
         self.motor_use_checks = [None] * MOTOR_COUNT
         self.motor_group_use_checks = []
         self._motor_target_user_set = []
@@ -684,7 +684,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         workflow = QtWidgets.QGroupBox("Manual Workflow")
         wf_layout = QtWidgets.QHBoxLayout(workflow)
-        self.manual_check = QtWidgets.QCheckBox("Hand Manual")
+        self.manual_check = QtWidgets.QCheckBox("Control Enable")
         self.manual_check.setChecked(False)
         self.send_all_btn = QtWidgets.QPushButton("Send All")
         self.new_device_reset_btn = QtWidgets.QPushButton("New Device Reset")
@@ -741,18 +741,12 @@ class ControlPanel(QtWidgets.QWidget):
         abs_limit_layout.setContentsMargins(6, 2, 6, 2)
         abs_limit_layout.addWidget(QtWidgets.QLabel("Feedback ABS Limit (default locked)"))
         abs_limit_layout.addStretch(1)
-        self.abs_limit_unlock_btn = QtWidgets.QPushButton("Unlock")
-        self.abs_limit_unlock_btn.setToolTip(
-            "Manually unlock the calibrated 5-turn ABS travel limits for the selected feedback joints"
+        self.abs_limit_lock_toggle_btn = QtWidgets.QPushButton("LOCK")
+        self.abs_limit_lock_toggle_btn.setMinimumWidth(86)
+        self.abs_limit_lock_toggle_btn.clicked.connect(
+            lambda _checked=False: self.toggle_abs_limit_lock()
         )
-        self.abs_limit_lock_btn = QtWidgets.QPushButton("Lock")
-        self.abs_limit_lock_btn.setToolTip(
-            "Re-enable calibrated 5-turn ABS travel limits; calibration locks them by default"
-        )
-        self.abs_limit_unlock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(False))
-        self.abs_limit_lock_btn.clicked.connect(lambda _checked=False: self.set_abs_limit_lock(True))
-        abs_limit_layout.addWidget(self.abs_limit_unlock_btn)
-        abs_limit_layout.addWidget(self.abs_limit_lock_btn)
+        abs_limit_layout.addWidget(self.abs_limit_lock_toggle_btn)
         joint_page_layout.addWidget(abs_limit_bar)
         joint_page_layout.addWidget(self.joint_table, 1)
         self._sync_scope_group_checks()
@@ -850,6 +844,69 @@ class ControlPanel(QtWidgets.QWidget):
         item = QtWidgets.QTableWidgetItem(text)
         item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
         return item
+
+    @staticmethod
+    def _set_item_text_if_changed(item: Optional[QtWidgets.QTableWidgetItem], text: str) -> None:
+        if item is not None and item.text() != str(text):
+            item.setText(str(text))
+
+    @staticmethod
+    def _set_item_tooltip_if_changed(item: Optional[QtWidgets.QTableWidgetItem], text: str) -> None:
+        if item is not None and item.toolTip() != str(text):
+            item.setToolTip(str(text))
+
+    @staticmethod
+    def _set_spin_value_if_changed(spin, value, tol: float = 0.0) -> None:
+        if spin is None:
+            return
+        current = float(spin.value())
+        target = float(value)
+        if abs(current - target) <= float(tol):
+            return
+        was_blocked = spin.blockSignals(True)
+        try:
+            spin.setValue(value)
+        finally:
+            spin.blockSignals(was_blocked)
+
+    @staticmethod
+    def _set_slider_value_if_changed(slider: Optional[QtWidgets.QSlider], value: int) -> None:
+        if slider is None:
+            return
+        target = int(value)
+        if int(slider.value()) == target:
+            return
+        was_blocked = slider.blockSignals(True)
+        try:
+            slider.setValue(target)
+        finally:
+            slider.blockSignals(was_blocked)
+
+    @staticmethod
+    def _set_spin_range_if_changed(spin, lo, hi) -> None:
+        if spin is None:
+            return
+        if abs(float(spin.minimum()) - float(lo)) <= 0.0005 and abs(float(spin.maximum()) - float(hi)) <= 0.0005:
+            return
+        was_blocked = spin.blockSignals(True)
+        try:
+            spin.setRange(lo, hi)
+        finally:
+            spin.blockSignals(was_blocked)
+
+    @staticmethod
+    def _set_slider_range_if_changed(slider: Optional[QtWidgets.QSlider], lo: int, hi: int) -> None:
+        if slider is None:
+            return
+        lo = int(lo)
+        hi = int(hi)
+        if int(slider.minimum()) == lo and int(slider.maximum()) == hi:
+            return
+        was_blocked = slider.blockSignals(True)
+        try:
+            slider.setRange(lo, hi)
+        finally:
+            slider.blockSignals(was_blocked)
 
     def _build_joint_table(self) -> QtWidgets.QTableWidget:
         joint_rows, group_ranges = _joint_rows_by_finger_group()
@@ -1402,9 +1459,9 @@ class ControlPanel(QtWidgets.QWidget):
                 pass
         self._update_manual_action_buttons()
         self._apply_control_mode_policy()
-        self._set_status(f"Hand Manual: {'ON' if self._interaction_enabled else 'OFF'}")
+        self._set_status(f"Control Enable: {'ON' if self._interaction_enabled else 'OFF'}")
         if not self._interaction_enabled:
-            self.stop_all_tests("stopped: Hand Manual OFF", update_status=False)
+            self.stop_all_tests("stopped: Control Enable OFF", update_status=False)
 
     def _apply_control_mode_policy(self) -> None:
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
@@ -1470,12 +1527,9 @@ class ControlPanel(QtWidgets.QWidget):
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
         has_active_motor = (self._active_motor_mask_from_ui() & VALID_MOTOR_MASK) != 0
         abs_limit_mode = mode in ("joint", "test")
-        if getattr(self, "abs_limit_unlock_btn", None) is not None:
-            self.abs_limit_unlock_btn.setEnabled(
-                abs_limit_mode and bool(self.context.is_comm_connected()) and has_active_motor
-            )
-        if getattr(self, "abs_limit_lock_btn", None) is not None:
-            self.abs_limit_lock_btn.setEnabled(
+        if getattr(self, "abs_limit_lock_toggle_btn", None) is not None:
+            self._refresh_abs_limit_lock_toggle_button()
+            self.abs_limit_lock_toggle_btn.setEnabled(
                 abs_limit_mode and bool(self.context.is_comm_connected()) and has_active_motor
             )
         if getattr(self, "pause_btn", None) is not None:
@@ -2282,6 +2336,32 @@ class ControlPanel(QtWidgets.QWidget):
             return 0
         return self._active_motor_mask_from_ui() & int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
 
+    def _abs_limit_toggle_target_locked(self) -> bool:
+        mask = self._active_scope_abs_limit_valid_mask()
+        if mask == 0 or self._state is None:
+            return True
+        locked_bitmap = int(getattr(self._state, "motor_abs_limit_locked_bitmap", 0) or 0)
+        all_locked = (locked_bitmap & mask) == mask
+        return not all_locked
+
+    def _refresh_abs_limit_lock_toggle_button(self) -> None:
+        button = getattr(self, "abs_limit_lock_toggle_btn", None)
+        if button is None:
+            return
+        target_locked = self._abs_limit_toggle_target_locked()
+        button.setText("LOCK" if target_locked else "UNLOCK")
+        if target_locked:
+            button.setToolTip(
+                "Lock the calibrated 5-turn ABS travel limits for the selected feedback joints"
+            )
+        else:
+            button.setToolTip(
+                "Unlock the calibrated 5-turn ABS travel limits for the selected feedback joints"
+            )
+
+    def toggle_abs_limit_lock(self) -> None:
+        self.set_abs_limit_lock(self._abs_limit_toggle_target_locked())
+
     def _active_scope_abs_limit_missing_mask(self) -> int:
         active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
         if active_mask == 0:
@@ -2458,6 +2538,10 @@ class ControlPanel(QtWidgets.QWidget):
         action = "locked" if locked else "unlocked"
         self.context.emit_action(f"ABS limits {action}: mask=0x{mask:08X}")
         self._set_status(f"ABS limits {action}" if ok else f"ABS limits {action} ACK timeout")
+        if ok and self._state is not None:
+            current = int(getattr(self._state, "motor_abs_limit_locked_bitmap", 0) or 0)
+            self._state.motor_abs_limit_locked_bitmap = (current | mask) if locked else (current & ~mask)
+            self._refresh_abs_limit_lock_toggle_button()
 
     def toggle_multiturn_nvs(self) -> None:
         if not self.context.is_comm_connected():
@@ -3151,6 +3235,12 @@ class ControlPanel(QtWidgets.QWidget):
         )
         if calib_finished_success:
             self._joint_target_initialized = False
+        joint_calib_valid_mask = self._joint_calib_valid_mask(state)
+        if self._last_joint_calib_valid_mask is not None and joint_calib_valid_mask != self._last_joint_calib_valid_mask:
+            self._joint_target_initialized = False
+            if joint_calib_valid_mask == 0:
+                self._joint_target_user_set = [False] * ENCODER_COUNT
+        self._last_joint_calib_valid_mask = joint_calib_valid_mask
         skip_calib_snapshot = False
         if self._side_sway_adjust_pending and self._last_calib_status in active_calib_statuses:
             if calib_status == "SUCCESS":
@@ -3836,19 +3926,23 @@ class ControlPanel(QtWidgets.QWidget):
         if idx < len(self.joint_max_items):
             item = self.joint_max_items[idx]
             if item is not None:
-                item.setText(f"{hi:.2f}")
+                self._set_item_text_if_changed(item, f"{hi:.2f}")
                 if calibrated is not None:
-                    item.setToolTip("From lower-controller calibration angleMax")
+                    self._set_item_tooltip_if_changed(item, "From lower-controller calibration angleMax")
                 else:
-                    item.setToolTip("Default target max")
+                    self._set_item_tooltip_if_changed(item, "Default target max")
         if idx < len(self.joint_target_spins):
             spin = self.joint_target_spins[idx]
             if spin is not None:
-                spin.setRange(lo, hi)
+                self._set_spin_range_if_changed(spin, lo, hi)
         if idx < len(self.joint_sliders):
             slider = self.joint_sliders[idx]
             if slider is not None:
-                slider.setRange(int(round(lo * 100.0)), int(round(hi * 100.0)))
+                self._set_slider_range_if_changed(
+                    slider,
+                    int(round(lo * 100.0)),
+                    int(round(hi * 100.0)),
+                )
 
     def _joint_angle_feedback_valid(self, idx: int, state=None) -> bool:
         state = self._state if state is None else state
@@ -3888,13 +3982,57 @@ class ControlPanel(QtWidgets.QWidget):
     def _joint_encoder_display_valid(self, idx: int, state: Optional[HandModel] = None) -> bool:
         return self._joint_encoder_status(idx, state) in ("ok", "warn")
 
+    def _joint_angle_display_calibrated(self, idx: int, state: Optional[HandModel] = None) -> bool:
+        state = self._state if state is None else state
+        if state is None or idx < 0 or idx >= ENCODER_COUNT:
+            return False
+        results = getattr(state, "joint_calib_results", []) or []
+        if idx >= len(results):
+            return False
+        result = results[idx]
+        return isinstance(result, dict) and bool(result.get("success", False))
+
+    @staticmethod
+    def _joint_calib_valid_mask(state: Optional[HandModel]) -> int:
+        if state is None:
+            return 0
+        mask = 0
+        results = getattr(state, "joint_calib_results", []) or []
+        for idx, result in enumerate(results[:ENCODER_COUNT]):
+            if isinstance(result, dict) and bool(result.get("success", False)):
+                mask |= (1 << idx)
+        return mask
+
     def _joint_feedback_target(self, idx: int) -> float:
         state = self._state
-        if self._joint_encoder_display_valid(idx, state) and self._joint_angle_feedback_valid(idx, state):
+        if (
+            self._joint_angle_display_calibrated(idx, state) and
+            self._joint_encoder_display_valid(idx, state) and
+            self._joint_angle_feedback_valid(idx, state)
+        ):
             return self._clamp_joint_target_deg(idx, float(state.angles[idx]))
         if idx < len(self.joint_target_spins):
             return self._clamp_joint_target_deg(idx, float(self.joint_target_spins[idx].value()))
         return self._joint_target_min_deg(idx)
+
+    def _joint_angle_batch_suspicious_zero(self, state: Optional[HandModel]) -> bool:
+        if state is None or not bool(getattr(state, "has_sensor_data", False)):
+            return False
+        angles = list(getattr(state, "angles", []) or [])
+        if len(angles) < ENCODER_COUNT:
+            return False
+        if any(abs(float(value)) > 0.001 for value in angles[:ENCODER_COUNT]):
+            return False
+        encoders = list(getattr(state, "encoders", []) or [])
+        raw_online = any(
+            int(getattr(encoders[i], "raw_sensor", 0) or 0) not in (0, 0xFFFF)
+            for i in range(min(ENCODER_COUNT, len(encoders)))
+        )
+        if not raw_online:
+            return False
+        calib_active = str(getattr(state, "calib_status", "") or "") in ("PENDING", "RUNNING")
+        system_calib = int(getattr(state, "system_state", -1) or -1) == SYSTEM_STATE_CALIBRATION_RUNNING
+        return bool(self._joint_target_initialized or calib_active or system_calib)
 
     def _motor_feedback_target(self, idx: int) -> int:
         state = self._state
@@ -3948,6 +4086,10 @@ class ControlPanel(QtWidgets.QWidget):
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
         joint_has_data = bool(state is not None and getattr(state, "has_sensor_data", False))
+        suspicious_zero_angles = self._joint_angle_batch_suspicious_zero(state)
+        table = getattr(self, "joint_table", None)
+        if table is not None:
+            table.setUpdatesEnabled(False)
         self._updating = True
         try:
             for i in range(ENCODER_COUNT):
@@ -3955,31 +4097,43 @@ class ControlPanel(QtWidgets.QWidget):
                 self._refresh_joint_abs_limit_item(i, state)
                 encoder_status = self._joint_encoder_status(i, state)
                 display_valid = encoder_status in ("ok", "warn")
+                angle_calibrated = self._joint_angle_display_calibrated(i, state)
                 self._set_joint_encoder_dot(i, encoder_status)
                 if display_valid and joint_has_data and i < len(getattr(state, "angles", [])):
-                    self.joint_current_items[i].setText(f"{float(state.angles[i]):.2f}")
+                    if angle_calibrated and not suspicious_zero_angles:
+                        self._set_item_text_if_changed(self.joint_current_items[i], f"{float(state.angles[i]):.2f}")
+                    elif not angle_calibrated:
+                        self._set_item_text_if_changed(self.joint_current_items[i], "0.00")
                     if i < len(getattr(state, "encoders", [])):
-                        self.joint_encoder_items[i].setText(str(getattr(state.encoders[i], "raw_sensor", getattr(state.encoders[i], "raw", "-"))))
+                        self._set_item_text_if_changed(
+                            self.joint_encoder_items[i],
+                            str(getattr(state.encoders[i], "raw_sensor", getattr(state.encoders[i], "raw", "-"))),
+                        )
                     else:
-                        self.joint_encoder_items[i].setText("-")
+                        self._set_item_text_if_changed(self.joint_encoder_items[i], "-")
                 else:
-                    self.joint_current_items[i].setText("-")
-                    self.joint_encoder_items[i].setText("-")
-            if joint_has_data:
+                    self._set_item_text_if_changed(self.joint_current_items[i], "-")
+                    self._set_item_text_if_changed(self.joint_encoder_items[i], "-")
+            if joint_has_data and sync_target and not suspicious_zero_angles:
                 for i in range(min(ENCODER_COUNT, len(getattr(state, "angles", [])))):
                     if not self._joint_encoder_display_valid(i, state):
                         continue
                     user_set = i < len(self._joint_target_user_set) and self._joint_target_user_set[i]
-                    if not sync_target and user_set:
+                    if user_set:
                         continue
-                    target = self._clamp_joint_target_deg(i, float(state.angles[i]))
-                    self.joint_target_spins[i].setValue(target)
-                    self.joint_sliders[i].setValue(int(round(target * 100.0)))
-                    if sync_target and i < len(self._joint_target_user_set):
+                    if self._joint_angle_display_calibrated(i, state):
+                        target = self._clamp_joint_target_deg(i, float(state.angles[i]))
+                    else:
+                        target = 0.0
+                    self._set_spin_value_if_changed(self.joint_target_spins[i], target, tol=0.0005)
+                    self._set_slider_value_if_changed(self.joint_sliders[i], int(round(target * 100.0)))
+                    if i < len(self._joint_target_user_set):
                         self._joint_target_user_set[i] = False
                 self._joint_target_initialized = True
         finally:
             self._updating = False
+            if table is not None:
+                table.setUpdatesEnabled(True)
 
     def _refresh_joint_abs_limit_item(self, joint_idx: int, state: Optional[HandModel]) -> None:
         if joint_idx < 0 or joint_idx >= len(self.joint_abs_limit_items):
@@ -4053,6 +4207,9 @@ class ControlPanel(QtWidgets.QWidget):
             return
         motor_has_abs = bool(getattr(state, "has_servo_angle_data", False))
         motor_has_raw = bool(getattr(state, "has_servo_raw_data", False))
+        table = getattr(self, "motor_table", None)
+        if table is not None:
+            table.setUpdatesEnabled(False)
         self._updating = True
         try:
             unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
@@ -4160,14 +4317,16 @@ class ControlPanel(QtWidgets.QWidget):
                         dev_abs = int(raw_single)
                     self._motor_session_origin_abs[i] = dev_abs
                     self._motor_abs_pos[i] = 0
-                    self.motor_target_spins[i].setValue(0)
-                    self.motor_sliders[i].setValue(0)
+                    self._set_spin_value_if_changed(self.motor_target_spins[i], 0)
+                    self._set_slider_value_if_changed(self.motor_sliders[i], 0)
                     self._motor_last_slider[i] = 0
                     self._motor_target_user_set[i] = False
                 self._motor_target_initialized = True
                 self._seed_motor_last_sent_after_sync(state)
         finally:
             self._updating = False
+            if table is not None:
+                table.setUpdatesEnabled(True)
         for i in range(MOTOR_COUNT):
             if not self._motor_display_valid(i, state):
                 continue
@@ -4215,8 +4374,8 @@ class ControlPanel(QtWidgets.QWidget):
     def _set_motor_target_widget(self, idx: int, value: int) -> None:
         self._updating = True
         try:
-            self.motor_target_spins[idx].setValue(int(value))
-            self.motor_sliders[idx].setValue(self._slider_from_abs_pos(int(value)))
+            self._set_spin_value_if_changed(self.motor_target_spins[idx], int(value))
+            self._set_slider_value_if_changed(self.motor_sliders[idx], self._slider_from_abs_pos(int(value)))
         finally:
             self._updating = False
 
@@ -4224,8 +4383,8 @@ class ControlPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             target = clamp_motor_abs(int(relative_target))
-            self.motor_target_spins[idx].setValue(target)
-            self.motor_sliders[idx].setValue(self._slider_from_abs_pos(target))
+            self._set_spin_value_if_changed(self.motor_target_spins[idx], target)
+            self._set_slider_value_if_changed(self.motor_sliders[idx], self._slider_from_abs_pos(target))
         finally:
             self._updating = False
 
@@ -4425,7 +4584,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _on_start_test(self) -> None:
         if not self._interaction_enabled:
-            self._set_status("Start Test blocked: Hand Manual must be ON")
+            self._set_status("Start Test blocked: Control Enable must be ON")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -4488,7 +4647,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _on_start_ff_test(self) -> None:
         if not self._interaction_enabled:
-            self._set_status("Feedforward Test blocked: Hand Manual must be ON")
+            self._set_status("Feedforward Test blocked: Control Enable must be ON")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -4543,7 +4702,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _on_start_tri_test(self) -> None:
         if not self._interaction_enabled:
-            self._set_status("Triangle Wave Test blocked: Hand Manual must be ON")
+            self._set_status("Triangle Wave Test blocked: Control Enable must be ON")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -4576,7 +4735,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _on_start_local_test(self) -> None:
         if not self._interaction_enabled:
-            self._set_status("Local Test blocked: Hand Manual must be ON")
+            self._set_status("Local Test blocked: Control Enable must be ON")
             return
         self.stop_all_tests("restarted by local test", update_status=False)
         if not self.context.is_comm_connected():
@@ -4617,7 +4776,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._on_stop_test("stopped on mode switch", update_status=False)
             return
         if not self._interaction_enabled:
-            self._on_stop_test("stopped: Hand Manual OFF")
+            self._on_stop_test("stopped: Control Enable OFF")
             return
         if not self.backend.is_started():
             self._on_stop_test("stopped: press Enable to start controller")
@@ -4647,7 +4806,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._on_stop_ff_test("stopped on mode switch", update_status=False)
             return
         if not self._interaction_enabled:
-            self._on_stop_ff_test("stopped: Hand Manual OFF")
+            self._on_stop_ff_test("stopped: Control Enable OFF")
             return
         if not self.backend.is_started():
             self._on_stop_ff_test("stopped: press Enable to start controller")
@@ -4679,7 +4838,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._on_stop_tri_test("stopped on mode switch", update_status=False)
             return
         if not self._interaction_enabled:
-            self._on_stop_tri_test("stopped: Hand Manual OFF")
+            self._on_stop_tri_test("stopped: Control Enable OFF")
             return
         if not self.backend.is_started():
             self._on_stop_tri_test("stopped: press Enable to start controller")

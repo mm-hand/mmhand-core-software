@@ -2,7 +2,9 @@
 #include "driver/twai.h"
 #include "esp_err.h"
 #include "esp_ldo_regulator.h"
+#include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
+#include "../../system/TaskRuntimeMonitor.h"
 
 #include <string.h>
 
@@ -107,18 +109,18 @@ static void ensureTwaiGpioPowerReady(void) {
 
     esp_err_t ret = esp_ldo_acquire_channel(&ldo_cfg, &s_canVo4Ldo);
     if (ret != ESP_OK) {
-        Serial.printf("[CAN] VO4 acquire failed: %s\n", esp_err_to_name(ret));
+        FW_LOG_INFO_PRINTF("[CAN] VO4 acquire failed: %s\n", esp_err_to_name(ret));
         return;
     }
 
     ret = esp_ldo_channel_adjust_voltage(s_canVo4Ldo, 3300);
     if (ret != ESP_OK) {
-        Serial.printf("[CAN] VO4 set 3.3V failed: %s\n", esp_err_to_name(ret));
+        FW_LOG_INFO_PRINTF("[CAN] VO4 set 3.3V failed: %s\n", esp_err_to_name(ret));
         return;
     }
 
     powered = true;
-    Serial.println("[CAN] VO4 set to 3.3V for GPIO47/48");
+    FW_LOG_INFO_PRINTLN("[CAN] VO4 set to 3.3V for GPIO47/48");
     vTaskDelay(pdMS_TO_TICKS(20));
 }
 
@@ -240,10 +242,12 @@ static void publishEncoderHealth(TaskSharedData_t* sharedData,
         }
     }
 
-    sharedData->encoder_online_bitmap = onlineMask;
-    sharedData->encoder_warn_bitmap = warnMask;
-    sharedData->encoder_fault_bitmap = faultMask;
-    sharedData->can_link_online = (onlineMask != 0 || warnMask != 0) ? 1 : 0;
+    SharedSafetyGuard guard;
+    sharedAtomicStore(&sharedData->encoder_online_bitmap, onlineMask);
+    sharedAtomicStore(&sharedData->encoder_warn_bitmap, warnMask);
+    sharedAtomicStore(&sharedData->encoder_fault_bitmap, faultMask);
+    sharedAtomicStore(&sharedData->can_link_online,
+                      (uint8_t)((onlineMask != 0 || warnMask != 0) ? 1 : 0));
 }
 
 static void updateEncoderHealthGood(EncoderHealthState* health,
@@ -333,14 +337,17 @@ static void clearEncoderHealth(TaskSharedData_t* sharedData,
     }
     if (sharedData) {
         const uint32_t allEncoderMask = encoderChannelMask();
-        uint32_t faultMask = sharedData->active_joint_mask & allEncoderMask;
+        const uint32_t activeJointMask =
+            sharedAtomicLoad(&sharedData->active_joint_mask);
+        uint32_t faultMask = activeJointMask & allEncoderMask;
         if (faultMask == 0) {
             faultMask = allEncoderMask;
         }
-        sharedData->encoder_online_bitmap = 0;
-        sharedData->encoder_warn_bitmap = 0;
-        sharedData->encoder_fault_bitmap = faultMask;
-        sharedData->can_link_online = 0;
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->encoder_online_bitmap, (uint32_t)0);
+        sharedAtomicStore(&sharedData->encoder_warn_bitmap, (uint32_t)0);
+        sharedAtomicStore(&sharedData->encoder_fault_bitmap, faultMask);
+        sharedAtomicStore(&sharedData->can_link_online, (uint8_t)0);
     }
 }
 
@@ -362,18 +369,18 @@ static void setupTwai() {
     g_config.rx_queue_len = 512;
     esp_err_t ret = twai_driver_install(&g_config, &t_config, &f_config);
     if (ret != ESP_OK) {
-        Serial.printf("[CAN] Driver install failed: %s\n", esp_err_to_name(ret));
+        FW_LOG_INFO_PRINTF("[CAN] Driver install failed: %s\n", esp_err_to_name(ret));
         return;
     }
 
     ret = twai_start();
     if (ret != ESP_OK) {
-        Serial.printf("[CAN] Driver start failed: %s\n", esp_err_to_name(ret));
+        FW_LOG_INFO_PRINTF("[CAN] Driver start failed: %s\n", esp_err_to_name(ret));
         return;
     }
 
     installed = true;
-    Serial.println("[CAN] Driver installed and started OK");
+    FW_LOG_INFO_PRINTLN("[CAN] Driver installed and started OK");
 }
 
 void canCommunicationTask(void* parameter) {
@@ -426,6 +433,8 @@ void canCommunicationTask(void* parameter) {
     const uint8_t kAllTactileFramesMask = (uint8_t)((1U << CAN_TAC_SUMMARY_FRAME_COUNT) - 1U);
 
     for (;;) {
+        const TickType_t loopStartTicks = xTaskGetTickCount();
+        taskRuntimeMarkLoopStart(TASK_RUNTIME_CAN_COMM);
         while (twai_receive(&rxMsg, 0) == ESP_OK) {
             const uint32_t nowMs = millis();
             lastCanId = rxMsg.identifier;
@@ -776,7 +785,7 @@ void canCommunicationTask(void* parameter) {
             clearEncoderHealth(sharedData, encoderHealth);
             xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
             resetEncoderReassembly(&encoderState);
-            Serial.println("[CAN HOTPLUG] encoder stream offline");
+            FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] encoder stream offline");
         }
 
         if ((uint32_t)(nowMs - lastTwaiHealthCheckMs) >= 100) {
@@ -789,13 +798,13 @@ void canCommunicationTask(void* parameter) {
                     xQueueOverwrite(sharedData->canRxQueue, &rxBuffer);
                     if (twai_initiate_recovery() == ESP_OK) {
                         twaiRecoveryRequested = true;
-                        Serial.println("[CAN HOTPLUG] bus-off recovery started");
+                        FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] bus-off recovery started");
                     }
                 } else if (twaiRecoveryRequested && statusInfo.state == TWAI_STATE_STOPPED) {
                     if (twai_start() == ESP_OK) {
                         twaiRecoveryRequested = false;
                         resetEncoderReassembly(&encoderState);
-                        Serial.println("[CAN HOTPLUG] controller restarted after recovery");
+                        FW_LOG_INFO_PRINTLN("[CAN HOTPLUG] controller restarted after recovery");
                     }
                 }
             }
@@ -810,6 +819,10 @@ void canCommunicationTask(void* parameter) {
             twai_transmit(&txMsg, pdMS_TO_TICKS(10));
         }
 
+        taskRuntimeMarkLoopEnd(TASK_RUNTIME_CAN_COMM);
+        const bool periodOverrun =
+            (TickType_t)(xTaskGetTickCount() - loopStartTicks) >= pdMS_TO_TICKS(1);
+        taskRuntimeMarkPeriodResult(TASK_RUNTIME_CAN_COMM, periodOverrun);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

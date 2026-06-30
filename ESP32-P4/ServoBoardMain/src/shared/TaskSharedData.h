@@ -128,11 +128,14 @@
 #define TWAI_RX_PIN 48
 
 // FreeRTOS task priorities.
-#define TASK_UPPER_COMM_PRIORITY 1
-#define TASK_STATE_MACHINE_PRIORITY 2
+#define TASK_UPPER_COMM_PRIORITY 2
+#define TASK_STATE_MACHINE_PRIORITY 5
 #define TASK_CAN_COMM_PRIORITY 3
 #define TASK_SERVO_COMM_PRIORITY 3
 #define TASK_CONTROL_PRIORITY 4
+#define TASK_AUTO_CALIB_PRIORITY 2
+#define TASK_MONITOR_PRIORITY 1
+#define TASK_NVS_PERSIST_PRIORITY 1
 #define TASK_SOLVER_PRIORITY TASK_CONTROL_PRIORITY
 
 // FreeRTOS task stack sizes.
@@ -141,6 +144,9 @@
 #define STATE_MACHINE_TASK_STACK_SIZE 4096
 #define SERVO_COMM_TASK_STACK_SIZE 6144
 #define CONTROL_TASK_STACK_SIZE 8192
+#define AUTO_CALIB_TASK_STACK_SIZE 8192
+#define TASK_MONITOR_STACK_SIZE 4096
+#define NVS_PERSIST_TASK_STACK_SIZE 4096
 #define SOLVER_TASK_STACK_SIZE CONTROL_TASK_STACK_SIZE
 
 #define SERVO_TARGET_BATCH_MAX SERVO_TOTAL_NUM
@@ -314,6 +320,33 @@ typedef struct {
 } RemoteTactileData_t;
 
 typedef struct {
+    uint32_t requestToken;
+    uint32_t validMask;
+    int32_t motorAbs[SERVO_TOTAL_NUM];
+    int16_t motorRaw[SERVO_TOTAL_NUM];
+    int16_t motorTurn[SERVO_TOTAL_NUM];
+    uint32_t queuedAtMs;
+    uint8_t reason;
+    uint8_t turnChanged;
+    uint8_t edgeChanged;
+} MultiTurnNvsSaveJob_t;
+
+typedef struct {
+    uint32_t requestToken;
+    uint32_t validMask;
+    uint32_t sequence;
+    uint32_t queuedAtMs;
+    int32_t motorAbs[SERVO_TOTAL_NUM];
+    int16_t motorRaw[SERVO_TOTAL_NUM];
+    int16_t motorTurn[SERVO_TOTAL_NUM];
+    uint32_t completedAtMs;
+    uint8_t reason;
+    uint8_t success;
+    uint8_t turnChanged;
+    uint8_t edgeChanged;
+} MultiTurnNvsSaveResult_t;
+
+typedef struct {
     QueueHandle_t cmdQueue;
     QueueHandle_t statusQueue;
     QueueHandle_t stateEventQueue;
@@ -328,6 +361,8 @@ typedef struct {
     QueueHandle_t mappedAngleQueue;
     QueueHandle_t jointDebugQueue;
     QueueHandle_t tactileQueue;
+    QueueHandle_t multiturnNvsSaveQueue;
+    QueueHandle_t multiturnNvsResultQueue;
 
     float targetAngles[ENCODER_TOTAL_NUM];
     SemaphoreHandle_t targetAnglesMutex;
@@ -355,6 +390,7 @@ typedef struct {
     volatile uint8_t system_state;
     volatile uint8_t paused_resume_state;
     volatile uint8_t servo_target_owner;
+    volatile uint32_t emergency_stop_request_token;
     volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;
     volatile uint32_t system_fault_latched_bitmap;

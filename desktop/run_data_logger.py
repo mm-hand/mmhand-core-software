@@ -4,6 +4,9 @@ import threading
 from typing import Dict, Iterable, Optional
 
 
+RUN_DATA_CSV_KEEP_FILES = 20
+
+
 class RunDataLogger:
     """Simple CSV logger for runtime snapshots."""
 
@@ -26,6 +29,7 @@ class RunDataLogger:
             folder = os.path.dirname(path)
             if folder:
                 os.makedirs(folder, exist_ok=True)
+                self._prune_old_csv(folder)
             self._file = open(path, "w", newline="", encoding="utf-8")
             self._writer = None
             self._pending_rows = 0
@@ -58,6 +62,23 @@ class RunDataLogger:
         self._fieldnames = None
         self._pending_rows = 0
         self._path = ""
+
+    @staticmethod
+    def _prune_old_csv(folder: str) -> None:
+        try:
+            entries = [
+                os.path.join(folder, name)
+                for name in os.listdir(folder)
+                if name.lower().endswith(".csv") and os.path.isfile(os.path.join(folder, name))
+            ]
+        except OSError:
+            return
+        entries.sort(key=lambda item: os.path.getmtime(item), reverse=True)
+        for path in entries[RUN_DATA_CSV_KEEP_FILES - 1:]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def is_running(self) -> bool:
         with self._lock:

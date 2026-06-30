@@ -474,6 +474,8 @@ class HandModel:
     calib_diag_value_c: int = 0
     calib_diag_bitmap: int = 0
     calib_diag_timestamp_ms: int = 0
+    task_runtime: dict = field(default_factory=dict)
+    task_runtime_last_rx_ts: float = 0.0
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -617,6 +619,12 @@ class HandModel:
         self.calib_diag_value_c = int(getattr(other, "calib_diag_value_c", 0) or 0)
         self.calib_diag_bitmap = int(getattr(other, "calib_diag_bitmap", 0) or 0)
         self.calib_diag_timestamp_ms = int(getattr(other, "calib_diag_timestamp_ms", 0) or 0)
+        self.task_runtime = {
+            int(task_id): dict(item)
+            for task_id, item in getattr(other, "task_runtime", {}).items()
+            if isinstance(item, dict)
+        }
+        self.task_runtime_last_rx_ts = float(getattr(other, "task_runtime_last_rx_ts", 0.0) or 0.0)
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
         self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
         self.tactile_full_seq = getattr(other, "tactile_full_seq", None)

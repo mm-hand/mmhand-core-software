@@ -20,14 +20,7 @@
 
 #define FW_LOG_ENABLED(level) (FW_LOG_LEVEL >= (level))
 
-static inline SemaphoreHandle_t fwSerialMutex()
-{
-    static SemaphoreHandle_t mutex = NULL;
-    if (mutex == NULL) {
-        mutex = xSemaphoreCreateMutex();
-    }
-    return mutex;
-}
+SemaphoreHandle_t fwSerialMutex();
 
 static inline bool fwSerialTake()
 {
@@ -79,6 +72,19 @@ static inline void fwLogPrintln(uint8_t level, const char* text)
     fwSerialGive(locked);
 }
 
+static inline void fwLogPrint(uint8_t level, const char* text)
+{
+    if (!FW_LOG_ENABLED(level) || !text) {
+        return;
+    }
+    const bool locked = fwSerialTake();
+    if (!locked) {
+        return;
+    }
+    Serial.print(text);
+    fwSerialGive(locked);
+}
+
 static inline void fwLogPrintf(uint8_t level, const char* fmt, ...)
 {
     if (!FW_LOG_ENABLED(level) || !fmt) {
@@ -100,6 +106,7 @@ static inline void fwLogPrintf(uint8_t level, const char* fmt, ...)
 #define FW_SERIAL_WRITE(data, len) fwSerialWrite((data), (len))
 #define FW_LOG_PRINTF(level, ...) fwLogPrintf((level), __VA_ARGS__)
 #define FW_LOG_PRINTLN(level, text) fwLogPrintln((level), (text))
+#define FW_LOG_PRINT(level, text) fwLogPrint((level), (text))
 
 #define FW_LOG_ERROR_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_ERROR, __VA_ARGS__)
 #define FW_LOG_WARN_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_WARN, __VA_ARGS__)
@@ -107,6 +114,7 @@ static inline void fwLogPrintf(uint8_t level, const char* fmt, ...)
 #define FW_LOG_DEBUG_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define FW_LOG_TRACE_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_TRACE, __VA_ARGS__)
 
+#define FW_LOG_INFO_PRINT(text) FW_LOG_PRINT(FW_LOG_LEVEL_INFO, (text))
 #define FW_LOG_ERROR_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_ERROR, text)
 #define FW_LOG_WARN_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_WARN, text)
 #define FW_LOG_INFO_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_INFO, text)

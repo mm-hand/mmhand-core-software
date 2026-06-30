@@ -50,8 +50,14 @@ class DisplayWindowManager:
 
     def attach_menu(self, menubar: QtWidgets.QMenuBar) -> None:
         menu = menubar.addMenu("View")
+        action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
+        plot_action = action_cls("Plot", self.owner)
+        plot_action.triggered.connect(
+            lambda _checked=False: self.owner._open_joint_rt_window()
+        )
+        menu.addAction(plot_action)
+        menu.addSeparator()
         for key, label in [("pose", "Hand Pose"), ("tactile", "Tactile"), ("cameras", "Cameras")]:
-            action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
             action = action_cls(label, self.owner)
             action.setCheckable(True)
             action.toggled.connect(lambda checked, k=key: self.open(k) if checked else self.close(k))

@@ -28,6 +28,24 @@ PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
 PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
 PACKET_TYPE_TACTILE_FULL = 0x0F
 PACKET_TYPE_CALIB_DIAG = 0x10
+PACKET_TYPE_TASK_DIAG = 0x11
+
+TASK_RUNTIME_UPPER_COMM = 0
+TASK_RUNTIME_STATE_MACHINE = 1
+TASK_RUNTIME_CAN_COMM = 2
+TASK_RUNTIME_SERVO_COMM = 3
+TASK_RUNTIME_CONTROL = 4
+TASK_RUNTIME_AUTO_CALIB = 5
+TASK_RUNTIME_MONITOR = 6
+TASK_RUNTIME_NAMES = {
+    TASK_RUNTIME_UPPER_COMM: "UpperComm",
+    TASK_RUNTIME_STATE_MACHINE: "StateMachine",
+    TASK_RUNTIME_CAN_COMM: "CAN",
+    TASK_RUNTIME_SERVO_COMM: "Servo",
+    TASK_RUNTIME_CONTROL: "Control",
+    TASK_RUNTIME_AUTO_CALIB: "AutoCalibration",
+    TASK_RUNTIME_MONITOR: "TaskMonitor",
+}
 
 # Downstream commands (desktop -> device)
 CMD_CALIBRATE = 0xCA
@@ -315,6 +333,68 @@ def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
     result["bitmap"] = struct.unpack(">I", payload[idx:idx + 4])[0]
     idx += 4
     result["timestamp_ms"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    return result
+
+
+def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) < 53 or payload[0] not in (1, 2):
+        return None
+    version = int(payload[0])
+    if version == 2 and len(payload) < 57:
+        return None
+    idx = 1
+    task_id = payload[idx]
+    idx += 1
+    active = payload[idx] != 0
+    idx += 1
+    priority = payload[idx]
+    idx += 1
+    core_raw = payload[idx]
+    core_id = core_raw - 256 if core_raw >= 128 else core_raw
+    idx += 1
+
+    def read_u32() -> int:
+        nonlocal idx
+        value = struct.unpack(">I", payload[idx:idx + 4])[0]
+        idx += 4
+        return value
+
+    def read_u16() -> int:
+        nonlocal idx
+        value = struct.unpack(">H", payload[idx:idx + 2])[0]
+        idx += 2
+        return value
+
+    result = {
+        "version": version,
+        "task_id": task_id,
+        "task_name": TASK_RUNTIME_NAMES.get(task_id, f"Task{task_id}"),
+        "active": active,
+        "priority": priority,
+        "core_id": core_id,
+        "stack_allocated_bytes": read_u32(),
+    }
+    if version >= 2:
+        result["stack_current_free_bytes"] = read_u32()
+        result["stack_min_free_bytes"] = read_u32()
+    else:
+        min_free = read_u32()
+        result["stack_current_free_bytes"] = min_free
+        result["stack_min_free_bytes"] = min_free
+    result.update({
+        "loop_count": read_u32(),
+        "max_gap_us": read_u32(),
+        "max_exec_us": read_u32(),
+        "overrun_count": read_u32(),
+        "consecutive_overruns": read_u16(),
+        "max_consecutive_overruns": read_u16(),
+        "core0_idle_permille": read_u16(),
+        "core1_idle_permille": read_u16(),
+        "system_status_max_gap_ms": read_u32(),
+        "stop_last_latency_us": read_u32(),
+        "stop_max_latency_us": read_u32(),
+        "device_timestamp_ms": read_u32(),
+    })
     return result
 
 
