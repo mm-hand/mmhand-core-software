@@ -86,6 +86,8 @@ class HandGUI(QtWidgets.QMainWindow):
         pose_generate: bool = False,
         pose_generate_path: Optional[str] = None,
         tactile_port: Optional[str] = None,
+        ros2_enabled: bool = False,
+        ros_topic: str = "/mmhand/joint_targets",
     ):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
@@ -98,6 +100,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._pose_generate = bool(pose_generate)
         self._pose_generate_path = pose_generate_path or str(POSE_FIST_PATH)
         self.tactile_port = tactile_port or ""
+        self.ros2_enabled = bool(ros2_enabled)
+        self.ros_topic = str(ros_topic)
         self._tactile_state: Optional[HandModel] = None
         self._state: Optional[HandModel] = None
         self._state_buffer = LatestStateBuffer()
@@ -801,7 +805,7 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
             CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
             CALIB_DIAG_REASON_SIDE_ADJUST_FAILED: "侧摆预调整失败",
-            CALIB_DIAG_REASON_JOINT_STEP_FAILED: "单关节标定步骤失败",
+            CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
             CALIB_DIAG_REASON_OVER_RELEASE: "过度松绳",
         }
         phase_names = {
@@ -891,8 +895,11 @@ class HandGUI(QtWidgets.QMainWindow):
                 lines.append(f"数据：selected_mask=0x{value_a:08X}, required_mask=0x{value_b:08X}, matched_mask=0x{bitmap:08X}")
                 suggestions.append("自动标定前的侧摆预调整失败。先单独点击 Side Adjust 检查是否能完成；重点检查四指侧摆双电机关节的副电机是否先松绳、主电机负载是否能到 190、Turn 是否 known。")
             elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
-                lines.append(f"数据：state={value_a}, stable_samples={value_b}, sequence_index={value_c}, selected_joint_mask=0x{bitmap:08X}")
-                suggestions.append("某个关节标定状态机失败但没有更细的阶段诊断。请查看前后几行 [AUTO CALIB] 日志；通常和反馈突然丢失、目标未发布、机械卡住或方向判断失败有关。")
+                lines.append(
+                    f"数据：completed_mask=0x{value_a:08X}, failed_mask=0x{value_b:08X}, "
+                    f"selected_count={value_c}, failed_mask_dup=0x{bitmap:08X}"
+                )
+                suggestions.append("本次已成功的关节结果会保留；下次只勾选 failed_mask 对应的失败关节重新标定。若需要细节，请查看前后几行 [AUTO CALIB] 日志。")
             elif reason in {
                 CALIB_DIAG_REASON_LOAD_NOT_REACHED,
                 CALIB_DIAG_REASON_ANGLE_NOT_MOVING,

@@ -42,6 +42,8 @@ def _run_teleop_gui(
     backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     backend.reset()
     try:
@@ -53,9 +55,15 @@ def _run_teleop_gui(
         print("example_teleop.run must be callable: run(backend, port).")
         return
     try:
-        teleop_run(backend, port, tactile_port=tactile_port)
+        teleop_run(
+            backend,
+            port,
+            tactile_port=tactile_port,
+            ros2_enabled=ros2_enabled,
+            ros_topic=ros_topic,
+        )
     except TypeError as exc:
-        if "tactile_port" not in str(exc):
+        if not any(name in str(exc) for name in ("tactile_port", "ros2_enabled", "ros_topic")):
             raise
         teleop_run(backend, port)
 
@@ -105,6 +113,8 @@ def run(
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     gui: bool = True,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     _ = gui
     if not isinstance(backend, HandBackend):
@@ -114,7 +124,13 @@ def run(
         _run_monitor_gui(backend, port, tactile_port)
         return
     if mode == Mode.TELEOP:
-        _run_teleop_gui(backend, port, tactile_port)
+        _run_teleop_gui(
+            backend,
+            port,
+            tactile_port,
+            ros2_enabled=ros2_enabled,
+            ros_topic=ros_topic,
+        )
         return
     if mode == Mode.ALGORITHM:
         _run_algorithm_gui(backend, port, tactile_port)
@@ -152,7 +168,15 @@ def run_ui(
             bridge = None
 
     try:
-        run(Mode(mode), backend, port=port, tactile_port=tactile_port, gui=True)
+        run(
+            Mode(mode),
+            backend,
+            port=port,
+            tactile_port=tactile_port,
+            gui=True,
+            ros2_enabled=bridge is not None,
+            ros_topic=ros_topic,
+        )
     finally:
         if bridge is not None:
             bridge.stop()
