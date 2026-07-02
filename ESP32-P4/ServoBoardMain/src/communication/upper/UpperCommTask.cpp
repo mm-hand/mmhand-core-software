@@ -150,7 +150,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[56];
+    uint8_t buffer[72];
     size_t idx = 0;
     uint32_t faultBitmap = 0;
     uint32_t unknownBitmap = 0;
@@ -225,6 +225,10 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(encoderFaultMask & 0xFF);
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_result_token));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_valid_mask));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_fail_count));
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;

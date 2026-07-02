@@ -6,6 +6,7 @@ import argparse
 from typing import Optional, Sequence
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
+DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -15,11 +16,27 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional S3 tactile serial port. Other data/control stay on --port.",
     )
-    parser.add_argument("--ros2", action="store_true", help="Enable ROS2 joint target subscriber.")
+    parser.add_argument("--ros2", action="store_true", help="Enable ROS2 21-angle subscriber.")
+    parser.add_argument(
+        "--ros2-input",
+        choices=["joint_target", "raw_ik"],
+        default="joint_target",
+        help="Select ROS2 input path: final joint targets or external MANUS/IK raw targets.",
+    )
+    parser.add_argument(
+        "--ros2-joint-target-topic",
+        default=DEFAULT_JOINT_TARGET_TOPIC,
+        help=f"ROS2 Float32MultiArray topic for final 21 joint targets (default: {DEFAULT_JOINT_TARGET_TOPIC}).",
+    )
+    parser.add_argument(
+        "--ros2-raw-ik-topic",
+        default=DEFAULT_RAW_IK_TARGET_TOPIC,
+        help=f"ROS2 Float32MultiArray topic for external MANUS/IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
+    )
     parser.add_argument(
         "--ros-topic",
-        default=DEFAULT_JOINT_TARGET_TOPIC,
-        help=f"ROS2 Float32MultiArray topic for 21 joint targets (default: {DEFAULT_JOINT_TARGET_TOPIC}).",
+        default=None,
+        help="Legacy ROS2 topic override for the selected --ros2-input.",
     )
     parser.add_argument(
         "--auto-start",
@@ -48,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_ros_topic(args: argparse.Namespace) -> str:
+    if args.ros_topic:
+        return str(args.ros_topic)
+    if args.ros2_input == "raw_ik":
+        return str(args.ros2_raw_ik_topic)
+    return str(args.ros2_joint_target_topic)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -62,7 +87,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             port=args.port,
             tactile_port=args.tactile_port,
             ros2_enabled=bool(args.ros2),
-            ros_topic=args.ros_topic,
+            ros2_input=args.ros2_input,
+            ros_topic=_resolve_ros_topic(args),
             auto_start=bool(args.auto_start),
         )
     if args.command == "cli":
@@ -73,7 +99,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             tactile_port=args.tactile_port,
             no_plot=bool(args.no_plot),
             ros2_enabled=bool(args.ros2),
-            ros_topic=args.ros_topic,
+            ros2_input=args.ros2_input,
+            ros_topic=_resolve_ros_topic(args),
             auto_start=bool(args.auto_start),
         )
     parser.error(f"unknown command: {args.command}")

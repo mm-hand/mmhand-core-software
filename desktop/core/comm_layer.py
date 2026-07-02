@@ -1560,6 +1560,11 @@ class LowerComputerComm:
                         encoder_warn_bitmap,
                         encoder_fault_bitmap,
                         has_encoder_health_status,
+                        multiturn_nvs_save_request_token,
+                        multiturn_nvs_save_result_token,
+                        multiturn_nvs_save_valid_mask,
+                        multiturn_nvs_save_fail_count,
+                        has_multiturn_nvs_status,
                     ) = parsed
                     model.system_state = int(system_state)
                     model.control_enabled = bool(control_enabled)
@@ -1570,6 +1575,11 @@ class LowerComputerComm:
                     model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
                     model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
                     model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
+                    model.multiturn_nvs_save_request_token = int(multiturn_nvs_save_request_token)
+                    model.multiturn_nvs_save_result_token = int(multiturn_nvs_save_result_token)
+                    model.multiturn_nvs_save_valid_mask = int(multiturn_nvs_save_valid_mask)
+                    model.multiturn_nvs_save_fail_count = int(multiturn_nvs_save_fail_count)
+                    model.has_multiturn_nvs_status = bool(has_multiturn_nvs_status)
                     model.active_motor_mask = int(active_motor_mask)
                     model.active_joint_mask = int(active_joint_mask)
                     model.require_can_feedback = bool(require_can_feedback)

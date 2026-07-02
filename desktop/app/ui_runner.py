@@ -8,6 +8,7 @@ from typing import Optional
 
 from desktop.core.hand_backend import HandBackend
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
+from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
 POSE_DISPLAY_FROM_TEXT = False
 
@@ -106,6 +107,18 @@ def _run_algorithm_gui(
     alg_thread.join(timeout=3.0)
 
 
+def _make_ros2_bridge(
+    backend: HandBackend,
+    *,
+    ros2_input: str,
+    ros_topic: str,
+    auto_start: bool,
+):
+    if ros2_input == "raw_ik":
+        return RawIkTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+    return Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+
+
 def run(
     mode: Mode,
     backend: HandBackend,
@@ -114,6 +127,7 @@ def run(
     tactile_port: Optional[str] = None,
     gui: bool = True,
     ros2_enabled: bool = False,
+    ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     _ = gui
@@ -144,6 +158,7 @@ def run_ui(
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     ros2_enabled: bool = False,
+    ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
     backend: Optional[HandBackend] = None,
@@ -159,10 +174,15 @@ def run_ui(
 
     bridge = None
     if ros2_enabled:
-        bridge = Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+        bridge = _make_ros2_bridge(
+            backend,
+            ros2_input=ros2_input,
+            ros_topic=ros_topic,
+            auto_start=auto_start,
+        )
         try:
             bridge.start()
-            print(f"ROS2 joint target input enabled on {ros_topic}")
+            print(f"ROS2 {ros2_input} input enabled on {ros_topic}")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             bridge = None
@@ -175,6 +195,7 @@ def run_ui(
             tactile_port=tactile_port,
             gui=True,
             ros2_enabled=bridge is not None,
+            ros2_input=ros2_input,
             ros_topic=ros_topic,
         )
     finally:

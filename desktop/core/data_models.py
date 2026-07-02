@@ -448,6 +448,11 @@ class HandModel:
     multi_turn_unknown_bitmap: int = 0
     multiturn_nvs_enabled: bool = True
     multiturn_nvs_snapshot_valid: bool = False
+    multiturn_nvs_save_request_token: int = 0
+    multiturn_nvs_save_result_token: int = 0
+    multiturn_nvs_save_valid_mask: int = 0
+    multiturn_nvs_save_fail_count: int = 0
+    has_multiturn_nvs_status: bool = False
     has_active_scope_status: bool = False
     active_motor_mask: int = 0
     active_joint_mask: int = 0
@@ -588,6 +593,11 @@ class HandModel:
         self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
         self.multiturn_nvs_enabled = bool(getattr(other, "multiturn_nvs_enabled", True))
         self.multiturn_nvs_snapshot_valid = bool(getattr(other, "multiturn_nvs_snapshot_valid", False))
+        self.multiturn_nvs_save_request_token = int(getattr(other, "multiturn_nvs_save_request_token", 0) or 0)
+        self.multiturn_nvs_save_result_token = int(getattr(other, "multiturn_nvs_save_result_token", 0) or 0)
+        self.multiturn_nvs_save_valid_mask = int(getattr(other, "multiturn_nvs_save_valid_mask", 0) or 0)
+        self.multiturn_nvs_save_fail_count = int(getattr(other, "multiturn_nvs_save_fail_count", 0) or 0)
+        self.has_multiturn_nvs_status = bool(getattr(other, "has_multiturn_nvs_status", False))
         self.has_active_scope_status = bool(getattr(other, "has_active_scope_status", False))
         self.active_motor_mask = int(getattr(other, "active_motor_mask", 0) or 0)
         self.active_joint_mask = int(getattr(other, "active_joint_mask", 0) or 0)

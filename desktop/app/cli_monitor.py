@@ -9,6 +9,7 @@ from desktop.core.comm_layer import choose_serial_port_interactive
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import ENCODER_COUNT
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
+from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
 try:
     _colorama = importlib.import_module("colorama")
@@ -289,12 +290,25 @@ def _mark_calibration_pending(backend: HandBackend) -> None:
         pass
 
 
+def _make_ros2_bridge(
+    backend: HandBackend,
+    *,
+    ros2_input: str,
+    ros_topic: str,
+    auto_start: bool,
+):
+    if ros2_input == "raw_ik":
+        return RawIkTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+    return Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+
+
 def run_cli_monitor(
     *,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     no_plot: bool = False,
     ros2_enabled: bool = False,
+    ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
     backend: Optional[HandBackend] = None,
@@ -335,14 +349,15 @@ def run_cli_monitor(
     ros_bridge = None
     ros_status = "OFF"
     if ros2_enabled:
-        ros_bridge = Ros2JointTargetBridge(
+        ros_bridge = _make_ros2_bridge(
             backend,
-            topic=ros_topic,
+            ros2_input=ros2_input,
+            ros_topic=ros_topic,
             auto_start=auto_start,
         )
         try:
             ros_bridge.start()
-            ros_status = f"ON {ros_topic}"
+            ros_status = f"ON {ros2_input} {ros_topic}"
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             ros_bridge = None

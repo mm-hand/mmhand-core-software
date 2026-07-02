@@ -227,6 +227,19 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     has_encoder_health_status = len(payload) >= 45
     encoder_warn_bitmap = struct.unpack(">I", payload[37:41])[0] if has_encoder_health_status else 0
     encoder_fault_bitmap = struct.unpack(">I", payload[41:45])[0] if has_encoder_health_status else 0
+    has_multiturn_nvs_status = len(payload) >= 61
+    multiturn_nvs_save_request_token = (
+        struct.unpack(">I", payload[45:49])[0] if has_multiturn_nvs_status else 0
+    )
+    multiturn_nvs_save_result_token = (
+        struct.unpack(">I", payload[49:53])[0] if has_multiturn_nvs_status else 0
+    )
+    multiturn_nvs_save_valid_mask = (
+        struct.unpack(">I", payload[53:57])[0] if has_multiturn_nvs_status else 0
+    )
+    multiturn_nvs_save_fail_count = (
+        struct.unpack(">I", payload[57:61])[0] if has_multiturn_nvs_status else 0
+    )
     return (
         system_state,
         control_enabled,
@@ -249,6 +262,11 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         encoder_warn_bitmap,
         encoder_fault_bitmap,
         has_encoder_health_status,
+        multiturn_nvs_save_request_token,
+        multiturn_nvs_save_result_token,
+        multiturn_nvs_save_valid_mask,
+        multiturn_nvs_save_fail_count,
+        has_multiturn_nvs_status,
     )
 
 

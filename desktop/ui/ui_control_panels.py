@@ -56,6 +56,7 @@ ROPE_INIT_STEP_COUNTS = ROPE_INIT_TIGHTEN_STEP_COUNTS
 ROPE_INIT_TIMER_MS = 50
 ROPE_INIT_TIMEOUT_S = 8.0
 ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
+ROPE_INIT_READY_RECHECK_DELAYS_MS = (250, 900)
 TEST_ROW_COUNT = 5
 TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
@@ -343,6 +344,8 @@ class ControlPanel(QtWidgets.QWidget):
         self._rope_init_timer.timeout.connect(self._rope_init_tick)
         self._rope_init_tasks: List[dict] = []
         self._rope_init_started_at = 0.0
+        self._rope_init_ready_recheck_pending = False
+        self._rope_init_ready_recheck_remaining = 0
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
         self._test_t0 = 0.0
         self._test_hold_s = float(TEST_DEFAULT_HOLD_S)
@@ -2126,7 +2129,11 @@ class ControlPanel(QtWidgets.QWidget):
         tasks, skipped, missing = self._build_rope_init_tasks()
         if not tasks:
             detail = "; ".join(skipped[:4]) if skipped else ", ".join(missing[:4])
-            self._set_status(f"Rope Init no action: {detail or 'all selected joints are inside workspace'}")
+            suffix = ""
+            if skipped and self._apply_active_scope_for_current_mode():
+                self._schedule_rope_init_ready_recheck()
+                suffix = "; READY recheck scheduled"
+            self._set_status(f"Rope Init no action: {detail or 'all selected joints are inside workspace'}{suffix}")
             return
 
         self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
@@ -2159,10 +2166,55 @@ class ControlPanel(QtWidgets.QWidget):
             if mode in ("joint", "test") and self.context.is_comm_connected():
                 if self._apply_active_scope_for_current_mode():
                     suffix = "; feedback scope reapplied"
+                    self._schedule_rope_init_ready_recheck()
                 else:
                     suffix = "; feedback scope reapply failed"
             self._set_status(f"{reason}{suffix}")
             self._update_manual_action_buttons()
+
+    def _schedule_rope_init_ready_recheck(self) -> None:
+        if self._rope_init_ready_recheck_pending:
+            return
+        self._rope_init_ready_recheck_pending = True
+        self._rope_init_ready_recheck_remaining = len(ROPE_INIT_READY_RECHECK_DELAYS_MS)
+        for delay_ms in ROPE_INIT_READY_RECHECK_DELAYS_MS:
+            QtCore.QTimer.singleShot(int(delay_ms), self._rope_init_ready_recheck)
+
+    def _rope_init_ready_recheck(self) -> None:
+        if not self._rope_init_ready_recheck_pending:
+            return
+        self._rope_init_ready_recheck_remaining = max(0, self._rope_init_ready_recheck_remaining - 1)
+        if self._rope_init_timer.isActive() or self._rope_init_tasks:
+            if self._rope_init_ready_recheck_remaining <= 0:
+                self._rope_init_ready_recheck_pending = False
+            return
+        if not self.context.is_comm_connected():
+            self._rope_init_ready_recheck_pending = False
+            self._rope_init_ready_recheck_remaining = 0
+            return
+        state = self._state
+        system_state = getattr(state, "system_state", None) if state is not None else None
+        if system_state == SYSTEM_STATE_READY:
+            self._rope_init_ready_recheck_pending = False
+            self._rope_init_ready_recheck_remaining = 0
+            self._set_status("Rope Init complete; READY confirmed")
+            return
+        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
+            self._rope_init_ready_recheck_pending = False
+            self._rope_init_ready_recheck_remaining = 0
+            return
+        mode = self._manual_submode() if self._app_mode == "manual" else "joint"
+        if mode not in ("joint", "test"):
+            self._rope_init_ready_recheck_pending = False
+            self._rope_init_ready_recheck_remaining = 0
+            return
+        if self._apply_active_scope_for_current_mode():
+            self._set_status("Rope Init complete; READY recheck requested")
+        else:
+            self._rope_init_ready_recheck_pending = False
+            self._rope_init_ready_recheck_remaining = 0
+        if self._rope_init_ready_recheck_remaining <= 0:
+            self._rope_init_ready_recheck_pending = False
 
     def _apply_rope_init_motor_target_to_ui(self, motor_idx: int, target_abs: int) -> None:
         if motor_idx < 0 or motor_idx >= MOTOR_COUNT:

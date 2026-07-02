@@ -51,6 +51,7 @@ CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
+MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S = 2.0
 MULTITURN_CACHE_PATH = PACKAGE_DIR / "multiturn_cache.json"
 MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 HOST_MULTITURN_CACHE_ENABLE = False
@@ -709,6 +710,40 @@ class HandController:
         )
         return False
 
+    def _wait_for_multiturn_nvs_save(
+        self,
+        baseline_request_token: int,
+        baseline_fail_count: int,
+        required_mask: int,
+        timeout_s: float = MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S,
+    ) -> Tuple[bool, str]:
+        deadline = time.time() + timeout_s
+        required_mask = int(required_mask)
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                has_status = bool(getattr(state, "has_multiturn_nvs_status", False))
+                request_token = int(getattr(state, "multiturn_nvs_save_request_token", 0) or 0)
+                result_token = int(getattr(state, "multiturn_nvs_save_result_token", 0) or 0)
+                valid_mask = int(getattr(state, "multiturn_nvs_save_valid_mask", 0) or 0)
+                fail_count = int(getattr(state, "multiturn_nvs_save_fail_count", 0) or 0)
+                snapshot_valid = bool(getattr(state, "multiturn_nvs_snapshot_valid", False))
+
+            if not has_status:
+                return False, "firmware does not report NVS save status; update P4 firmware"
+            if fail_count > baseline_fail_count:
+                return False, f"NVS save failed; fail_count {baseline_fail_count}->{fail_count}"
+            if request_token > baseline_request_token and result_token >= request_token:
+                if snapshot_valid and (valid_mask & required_mask) == required_mask:
+                    return True, f"NVS snapshot saved token={result_token} mask=0x{valid_mask:08X}"
+                return False, (
+                    f"NVS save completed but mask invalid: "
+                    f"valid=0x{valid_mask:08X} required=0x{required_mask:08X}"
+                )
+            time.sleep(0.02)
+
+        return False, "NVS save confirmation timeout"
+
     def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
         if not self.comm:
             return False, "serial not connected"
@@ -754,6 +789,10 @@ class HandController:
             detail = self.last_multiturn_nvs_error or "unknown NVS control error"
             flash_restore_warning = f"; Flash re-enable failed: {detail}"
 
+        with self.state_lock:
+            baseline_save_request_token = int(getattr(self.current_state, "multiturn_nvs_save_request_token", 0) or 0)
+            baseline_save_fail_count = int(getattr(self.current_state, "multiturn_nvs_save_fail_count", 0) or 0)
+
         restore_sent_at = time.time()
         self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
         ack = self.comm.wait_for_ack(
@@ -792,6 +831,18 @@ class HandController:
             self._clear_trusted_multiturn_cache()
             return False, "restore turn0 request accepted, but feedback did not confirm the new baseline"
 
+        nvs_save_message = ""
+        if flash_was_enabled and not flash_restore_warning:
+            save_ok, save_message = self._wait_for_multiturn_nvs_save(
+                baseline_save_request_token,
+                baseline_save_fail_count,
+                restore_mask,
+            )
+            if not save_ok:
+                self._clear_trusted_multiturn_cache()
+                return False, f"turn0 reset confirmed, but Flash snapshot was not saved: {save_message}"
+            nvs_save_message = f"; {save_message}"
+
         clear_sent_at = time.time()
         self.comm.send_command("clear_calibration")
         ack = self.comm.wait_for_ack(
@@ -807,7 +858,10 @@ class HandController:
 
         count = bin(restore_mask).count("1")
         flash_text = "Flash ON" if flash_was_enabled and not flash_restore_warning else "Flash OFF"
-        return True, f"reset {count} motor(s) to current raw as turn0; cleared calibration/ABS limits; {flash_text}{flash_restore_warning}"
+        return True, (
+            f"reset {count} motor(s) to current raw as turn0; "
+            f"cleared calibration/ABS limits; {flash_text}{flash_restore_warning}{nvs_save_message}"
+        )
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         if not self.comm:

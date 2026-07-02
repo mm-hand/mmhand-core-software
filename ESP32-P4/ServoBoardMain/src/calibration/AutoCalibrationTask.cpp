@@ -65,7 +65,9 @@ static const float kAutoCalibrationStartDeg = -5.0f;
 static const float kAutoCalibrationZeroDeg = 0.0f;
 static const int32_t kAutoServoZeroPullCounts = 500;
 static const int32_t kAutoServoZeroPullToleranceCounts = 40;
+static const uint32_t kAutoTightClampHoldMs = 120;
 static const int32_t kDualAutoSlackCounts = 3200;
+static const int32_t kDualSecondaryPreloadTargetLeadCounts = 4096 * 5;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
 static const int32_t kAutoCalibrationMaxReverseReleaseCounts = 4096 * 3;
 static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
@@ -89,6 +91,7 @@ static int32_t abs32(int32_t value)
 {
     return value < 0 ? -value : value;
 }
+
 
 static int16_t clampToServoPosLocal(int32_t value)
 {
@@ -943,6 +946,7 @@ enum AutoCalibState {
     AUTO_CALIB_STATE_IDLE = 0,
     AUTO_CALIB_STATE_INIT,
     AUTO_CALIB_STATE_TIGHTEN,
+    AUTO_CALIB_STATE_CLAMP_TIGHT,
     AUTO_CALIB_STATE_RETURN_ZERO,
     AUTO_CALIB_STATE_DONE,
     AUTO_CALIB_STATE_FAILED
@@ -1824,6 +1828,13 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
 
         vTaskDelay(pdMS_TO_TICKS(params.loopMs));
     }
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] CANCEL %s J%02u M%02u state=%u owner=%u enabled=%u\r\n",
+                  phase,
+                  jointIndex,
+                  motorChannel,
+                  sharedData ? (unsigned)sharedData->system_state : 255,
+                  sharedData ? (unsigned)sharedData->servo_target_owner : 255,
+                  sharedData ? (unsigned)sharedData->control_enabled : 255);
     return false;
 }
 
@@ -1841,15 +1852,18 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
                                           int32_t* outPreloadEncoder,
                                           int16_t* outPreloadLoad)
 {
-    int32_t commandAbs = secondaryStartAbs;
-    int32_t commandRemainder = 0;
-    uint32_t lastCommandMs = millis();
+    const int32_t preloadTargetAbs = clampToServoAbsRangeLocal(
+        motorApplyTendonDelta(secondaryMotor,
+                              secondaryStartAbs,
+                              kDualSecondaryPreloadTargetLeadCounts));
     uint32_t lastTraceMs = 0;
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_PRELOAD_SECONDARY_BEGIN J%02u secondary=M%02u startAbs=%ld shortenSign=%d primaryHold=M%02u holdAbs=%ld loadThreshold=%d\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_PRELOAD_SECONDARY_BEGIN J%02u secondary=M%02u startAbs=%ld targetAbs=%ld lead=%ld shortenSign=%d primaryHold=M%02u holdAbs=%ld loadThreshold=%d\r\n",
                   jointIndex,
                   secondaryMotor,
                   (long)secondaryStartAbs,
+                  (long)preloadTargetAbs,
+                  (long)kDualSecondaryPreloadTargetLeadCounts,
                   (int)secondaryShortenSign,
                   primaryMotor,
                   (long)primaryHoldAbs,
@@ -1902,32 +1916,21 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
                                                       params);
         }
 
-        const uint32_t dtMs = nowMs - lastCommandMs;
-        if (dtMs >= params.loopMs) {
-            const int32_t numerator =
-                (int32_t)dtMs * params.tightenSpeedCountsPerSec + commandRemainder;
-            const int32_t stepCounts = numerator / 1000;
-            commandRemainder = numerator % 1000;
-            if (stepCounts > 0) {
-                commandAbs = motorApplyTendonDelta(secondaryMotor, commandAbs, stepCounts);
-                if (!publishDualMotorCalibrationTargets(sharedData,
-                                                        secondaryMotor,
-                                                        commandAbs,
-                                                        primaryMotor,
-                                                        primaryHoldAbs,
-                                                        params)) {
-                    return false;
-                }
-            }
-            lastCommandMs = nowMs;
+        if (!publishDualMotorCalibrationTargets(sharedData,
+                                                secondaryMotor,
+                                                preloadTargetAbs,
+                                                primaryMotor,
+                                                primaryHoldAbs,
+                                                params)) {
+            return false;
         }
 
         if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
             lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_PRELOAD_SECONDARY J%02u M%02u cmd=%ld abs=%ld raw=%u oriented=%ld load=%d/%d primaryHoldAbs=%ld\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_PRELOAD_SECONDARY J%02u M%02u target=%ld abs=%ld raw=%u oriented=%ld load=%d/%d primaryHoldAbs=%ld\r\n",
                           jointIndex,
                           secondaryMotor,
-                          (long)commandAbs,
+                          (long)preloadTargetAbs,
                           (long)currentAbs,
                           (unsigned)currentRaw,
                           (long)currentEncoder,
@@ -1938,6 +1941,15 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
 
         vTaskDelay(pdMS_TO_TICKS(params.loopMs));
     }
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] CANCEL DUAL_PRELOAD_SECONDARY J%02u secondary=M%02u primary=M%02u targetAbs=%ld holdAbs=%ld state=%u owner=%u enabled=%u\r\n",
+                  jointIndex,
+                  secondaryMotor,
+                  primaryMotor,
+                  (long)preloadTargetAbs,
+                  (long)primaryHoldAbs,
+                  sharedData ? (unsigned)sharedData->system_state : 255,
+                  sharedData ? (unsigned)sharedData->servo_target_owner : 255,
+                  sharedData ? (unsigned)sharedData->control_enabled : 255);
     return false;
 }
 
@@ -2143,6 +2155,15 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
 
         vTaskDelay(pdMS_TO_TICKS(params.loopMs));
     }
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] CANCEL DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u cmd=%ld primary=M%02u cmd=%ld state=%u owner=%u enabled=%u\r\n",
+                  jointIndex,
+                  secondaryMotor,
+                  (long)secondaryCommandAbs,
+                  primaryMotor,
+                  (long)primaryCommandAbs,
+                  sharedData ? (unsigned)sharedData->system_state : 255,
+                  sharedData ? (unsigned)sharedData->servo_target_owner : 255,
+                  sharedData ? (unsigned)sharedData->control_enabled : 255);
     return false;
 }
 
@@ -2159,6 +2180,8 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     clearCalibratedMotorAbsLimitsForJoint(sharedData, jointIndex);
     const int8_t primaryShortenSign = getMotorTendonShortenAbsSign(primaryMotor);
     const int8_t secondaryShortenSign = getMotorTendonShortenAbsSign(secondaryMotor);
+    const int16_t primaryTightLoadThreshold = kDualPrimaryTightLoadThreshold;
+    const int16_t secondaryPreloadLoadThreshold = kDualSecondaryPreloadLoadThreshold;
 
     uint16_t initialRaw = 0;
     int32_t initialEncoder = 0;
@@ -2187,8 +2210,8 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   secondaryMotor,
                   (int)secondaryShortenSign,
                   (long)kDualAutoSlackCounts,
-                  kDualPrimaryTightLoadThreshold,
-                  kDualSecondaryPreloadLoadThreshold,
+                  primaryTightLoadThreshold,
+                  secondaryPreloadLoadThreshold,
                   kAutoCalibrationStartDeg,
                   (long)initialEncoder,
                   (long)primaryAbs,
@@ -2229,7 +2252,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                             primaryShortenSign,
                             primaryAbs,
                             initialEncoder,
-                            kDualPrimaryTightLoadThreshold,
+                            primaryTightLoadThreshold,
                             false,
                             0,
                             0,
@@ -2266,7 +2289,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                        secondaryStartAbs,
                                        primaryMotor,
                                        primary80Abs,
-                                       kDualSecondaryPreloadLoadThreshold,
+                                       secondaryPreloadLoadThreshold,
                                        params,
                                        &secondaryPreloadAbs,
                                        &secondaryPreloadRaw,
@@ -3224,7 +3247,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     g_encoderOffsetManual[ctx->jointIndex] = result.offset;
                     ctx->result = result;
                     ctx->resultValid = true;
-                    ctx->targetAbs = result.zeroServoAbs;
+                    ctx->targetAbs = currentAbs;
                     ctx->returnZeroStartAbs = tightServoAbs;
                     ctx->zeroMappedCaptured = false;
                     ctx->zeroMappedCaptureAbs = 0;
@@ -3233,8 +3256,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     ctx->zeroMappedLastAbs = 0;
                     ctx->zeroMappedLastReturnTravel = 0;
                     ctx->zeroMappedLastDeg = NAN;
-                    ctx->state = AUTO_CALIB_STATE_RETURN_ZERO;
+                    ctx->state = AUTO_CALIB_STATE_CLAMP_TIGHT;
                     ctx->stateBeginMs = nowMs;
+                    ctx->lastTraceMs = nowMs;
 
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] TIGHT_FOUND J%02u startDeg=%.3f raw=%u encoder=%ld abs=%ld load=%d releaseDeg=%.3f winDeg=%.3f\r\n",
                                   ctx->jointIndex,
@@ -3268,16 +3292,13 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   (long)result.startServoAbs,
                                   (long)result.zeroServoAbs,
                                   (long)result.tightServoAbs);
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] RETURN_ZERO J%02u targetAbs=%ld speed=%u acc=%u\r\n",
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] CLAMP_TIGHT J%02u targetAbs=%ld zeroTargetAbs=%ld holdMs=%lu speed=%u acc=%u\r\n",
                                   ctx->jointIndex,
                                   (long)ctx->targetAbs,
+                                  (long)result.zeroServoAbs,
+                                  (unsigned long)kAutoTightClampHoldMs,
                                   ctx->motionCfg.tightenSpeed,
                                   ctx->motionCfg.tightenAcc);
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] BEGIN_RETURN_ZERO J%02u fromTightAbs=%ld targetZeroAbs=%ld delta=%ld\r\n",
-                                  ctx->jointIndex,
-                                  (long)tightServoAbs,
-                                  (long)ctx->targetAbs,
-                                  (long)(ctx->targetAbs - tightServoAbs));
 
                     appendJointCalibrationTargetToBatch(batch,
                                                         ctx->jointIndex,
@@ -3293,6 +3314,80 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             return;
         }
 
+        case AUTO_CALIB_STATE_CLAMP_TIGHT:
+        {
+            if (!ctx->resultValid) {
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "clamp tight without result",
+                                             CALIB_DIAG_REASON_INTERNAL_ERROR,
+                                             CALIB_DIAG_PHASE_RETURN_ZERO,
+                                             ctx->motorChannel,
+                                             0,
+                                             0,
+                                             0,
+                                             0);
+                return;
+            }
+            if (!appendJointCalibrationTargetToBatch(batch,
+                                                     ctx->jointIndex,
+                                                     clampToServoPosLocal(ctx->targetAbs),
+                                                     ctx->motionCfg)) {
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "clamp tight target append failed",
+                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                             CALIB_DIAG_PHASE_RETURN_ZERO,
+                                             ctx->motorChannel,
+                                             ctx->targetAbs,
+                                             0,
+                                             0,
+                                             0);
+                return;
+            }
+            if ((uint32_t)(nowMs - ctx->stateBeginMs) < kAutoTightClampHoldMs) {
+                return;
+            }
+
+            int32_t clampCurrentAbs = ctx->returnZeroStartAbs;
+            if (readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &clampCurrentAbs)) {
+                ctx->returnZeroStartAbs = clampCurrentAbs;
+            }
+            ctx->targetAbs = ctx->result.zeroServoAbs;
+            ctx->zeroMappedLastValid = false;
+            ctx->zeroMappedLastAbs = 0;
+            ctx->zeroMappedLastReturnTravel = 0;
+            ctx->zeroMappedLastDeg = NAN;
+            ctx->state = AUTO_CALIB_STATE_RETURN_ZERO;
+            ctx->stateBeginMs = nowMs;
+            ctx->lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] RETURN_ZERO J%02u targetAbs=%ld speed=%u acc=%u\r\n",
+                          ctx->jointIndex,
+                          (long)ctx->targetAbs,
+                          ctx->motionCfg.tightenSpeed,
+                          ctx->motionCfg.tightenAcc);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] BEGIN_RETURN_ZERO J%02u fromClampAbs=%ld targetZeroAbs=%ld delta=%ld\r\n",
+                          ctx->jointIndex,
+                          (long)ctx->returnZeroStartAbs,
+                          (long)ctx->targetAbs,
+                          (long)(ctx->targetAbs - ctx->returnZeroStartAbs));
+            if (!appendJointCalibrationTargetToBatch(batch,
+                                                     ctx->jointIndex,
+                                                     clampToServoPosLocal(ctx->targetAbs),
+                                                     ctx->motionCfg)) {
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "return zero target append failed",
+                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                             CALIB_DIAG_PHASE_RETURN_ZERO,
+                                             ctx->motorChannel,
+                                             ctx->targetAbs,
+                                             0,
+                                             0,
+                                             0);
+            }
+            return;
+        }
         case AUTO_CALIB_STATE_RETURN_ZERO:
         {
             if (!ctx->resultValid) {

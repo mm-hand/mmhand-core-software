@@ -19,7 +19,6 @@ try:
 except Exception:
     ManusSdkReceiver = None
 from desktop.core.protocol import ControlMode, ENCODER_COUNT
-from desktop.ros2.joint_target_publisher import Ros2JointTargetPublisher
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -44,7 +43,6 @@ class ManusUdpView(QtWidgets.QWidget):
         self._last_raw_skeleton_preview = []
         self._last_urdf_preview_t = 0.0
         self._urdf_viewer_process: Optional[subprocess.Popen] = None
-        self._ros_publisher: Optional[Ros2JointTargetPublisher] = None
         self.urdf_viewer_status_label: Optional[QtWidgets.QLabel] = None
         self._build()
         self._timer = QtCore.QTimer(self)
@@ -148,17 +146,11 @@ class ManusUdpView(QtWidgets.QWidget):
         self.send_btn.clicked.connect(lambda _checked=False: self._start_joint_send())
         self.stop_btn.clicked.connect(lambda _checked=False: self._stop_joint_send())
         self.side_cfg_label = QtWidgets.QLabel(f"Side: MANUS {DEFAULT_MANUS_SIDE} -> robot left")
-        self.ros_route_check = QtWidgets.QCheckBox("Route via ROS2")
-        self.ros_route_check.setChecked(bool(getattr(self.context, "ros2_enabled", False)))
-        self.ros_route_check.setToolTip(
-            f"Publish 21 degree targets on {getattr(self.context, 'ros_topic', '/mmhand/joint_targets')}"
-        )
         self.send_count_label = QtWidgets.QLabel("sent=0")
         self.last_sent_label = QtWidgets.QLabel("last_sent_seq=-")
         send_row.addWidget(self.send_btn)
         send_row.addWidget(self.stop_btn)
         send_row.addWidget(self.side_cfg_label)
-        send_row.addWidget(self.ros_route_check)
         send_row.addWidget(self.send_count_label)
         send_row.addWidget(self.last_sent_label)
         send_row.addStretch(1)
@@ -602,36 +594,12 @@ class ManusUdpView(QtWidgets.QWidget):
         for row, (source, name, node_id, parent_id, pos, rot) in enumerate(rows):
             self._set_skeleton_row(row, source, name, node_id, parent_id, pos, rot)
 
-    def _route_via_ros2(self) -> bool:
-        return bool(self.ros_route_check.isChecked())
-
-    def _ensure_ros_publisher(self) -> Ros2JointTargetPublisher:
-        topic = str(getattr(self.context, "ros_topic", "/mmhand/joint_targets"))
-        publisher = self._ros_publisher
-        if publisher is None or publisher.topic != topic:
-            if publisher is not None:
-                publisher.stop()
-            publisher = Ros2JointTargetPublisher(topic=topic)
-            self._ros_publisher = publisher
-        publisher.start()
-        return publisher
-
-    def _publish_ros_targets(self, targets: list[float]) -> None:
-        publisher = self._ensure_ros_publisher()
-        publisher.publish_values(targets)
-
     def _start_joint_send(self) -> None:
         if self._send_enabled:
             return
         if self._retarget_mode() == "ergonomics" and not self.calibration.has_open_close():
             self._set_status("MANUS joint send blocked: record/load Open and Close first")
             return
-        if self._route_via_ros2():
-            try:
-                self._ensure_ros_publisher()
-            except Exception as exc:
-                self._set_status(f"MANUS ROS2 publisher failed to arm: {exc}")
-                return
         try:
             self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
             self.context.backend.set_pid_control(True)
@@ -641,12 +609,7 @@ class ManusUdpView(QtWidgets.QWidget):
 
         self._send_enabled = True
         self._apply_source_safety()
-        if self._route_via_ros2():
-            topic = str(getattr(self.context, "ros_topic", "/mmhand/joint_targets"))
-            self.calib_status_label.setText(
-                f"MANUS ROS2 publish armed: selected J00-J20 -> {topic}"
-            )
-        elif self._retarget_mode() == "raw_pinky":
+        if self._retarget_mode() == "raw_pinky":
             self.calib_status_label.setText("MANUS joint send armed: full raw skeleton IK -> selected J00-J20")
         else:
             self.calib_status_label.setText("MANUS joint send armed: left glove -> left robot joints")
@@ -704,12 +667,9 @@ class ManusUdpView(QtWidgets.QWidget):
                 self._set_status("MANUS joint send blocked: no teleop joint selected")
             return
         try:
-            if self._route_via_ros2():
-                self._publish_ros_targets(selected_targets)
-            else:
-                self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-                self.context.backend.set_pid_control(True)
-                self.context.send_joint_targets(selected_targets, source=source_name, live=True)
+            self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.context.backend.set_pid_control(True)
+            self.context.send_joint_targets(selected_targets, source=source_name, live=True)
             self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
             self._sent_count += 1
@@ -850,9 +810,6 @@ class ManusUdpView(QtWidgets.QWidget):
         self._timer.stop()
         self._stop_joint_send("MANUS joint send stopped: window closed")
         self.receiver.stop()
-        if self._ros_publisher is not None:
-            self._ros_publisher.stop()
-            self._ros_publisher = None
         super().closeEvent(event)
 
 

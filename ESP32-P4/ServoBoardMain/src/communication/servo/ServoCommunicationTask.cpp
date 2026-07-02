@@ -336,7 +336,15 @@ public:
 
         const int16_t currentRaw = normalizeServoRawSingleTurn(fb.rawPosition);
         const int16_t restoredRaw = normalizeServoRawSingleTurn(absPosition);
-        if (singleTurnDistanceCounts(currentRaw, restoredRaw) > rawToleranceCounts) {
+        const uint16_t rawDistance = singleTurnDistanceCounts(currentRaw, restoredRaw);
+        if (rawDistance > rawToleranceCounts) {
+            FW_LOG_INFO_PRINTF("[SERVO RESTORE REJECT] id=%u currentRaw=%d restoredRaw=%d distance=%u tol=%u logical=%ld\r\n",
+                          (unsigned)id,
+                          (int)currentRaw,
+                          (int)restoredRaw,
+                          (unsigned)rawDistance,
+                          (unsigned)rawToleranceCounts,
+                          (long)absPosition);
             return false;
         }
 
@@ -1289,7 +1297,7 @@ static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
     const bool hostOnline = hostHeartbeatMs != 0 &&
         (uint32_t)(nowMs - hostHeartbeatMs) <= kHostHeartbeatOfflineMs;
 
-        if (state->hostWasOnline && !hostOnline) {
+    if (state->hostWasOnline && !hostOnline) {
         saveCurrentMultiTurnSnapshot(sharedData,
                                      state,
                                      MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE,
@@ -1304,10 +1312,6 @@ static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
         *lastSaveToken = token;
         const uint8_t reason = sharedData->multiturn_nvs_save_reason;
         saveCurrentMultiTurnSnapshot(sharedData, state, reason, true, token);
-    }
-
-    if (hostOnline) {
-        return;
     }
 
     int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
@@ -1332,15 +1336,23 @@ static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
     }
 
     const uint32_t elapsed = state->initialized ? (uint32_t)(nowMs - state->lastSaveMs) : 0xFFFFFFFFUL;
+    // Keep turn/edge anchors fresh even while the desktop host is online. Without
+    // this, a servo power cycle after crossing a turn boundary can only see a stale
+    // NVS raw/turn pair and the hotplug restore will correctly reject it.
     if (turnChanged || edgeChanged) {
-        if (elapsed >= kNvsSaveMinIntervalMs) {
+        if (turnChanged || elapsed >= kNvsSaveMinIntervalMs) {
             saveCurrentMultiTurnSnapshot(sharedData,
                                          state,
                                          MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE,
                                          true,
                                          0);
         }
-    } else if (elapsed >= kNvsOfflinePeriodicSaveMs) {
+        return;
+    }
+    if (hostOnline) {
+        return;
+    }
+    if (elapsed >= kNvsOfflinePeriodicSaveMs) {
         saveCurrentMultiTurnSnapshot(sharedData,
                                      state,
                                      MULTITURN_NVS_SAVE_REASON_OFFLINE_MOVE,
