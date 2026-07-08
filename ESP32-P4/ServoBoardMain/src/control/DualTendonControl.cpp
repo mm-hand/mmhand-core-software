@@ -22,6 +22,7 @@ struct DualTendonJointConfig {
     float ki[2];
     float kd[2];
     float integralLimit[2];
+    int32_t maxReleaseFromCalibCounts;
 };
 
 struct DualTendonJointState {
@@ -43,6 +44,8 @@ static const float kDefaultDualTendonKp = 1.0f;
 static const float kDefaultDualTendonKi = 0.0f;
 static const float kDefaultDualTendonKd = 0.03f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
+static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 450;
+static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 600;
 
 static const Point2D kJoint16Origin = {0.0f, 0.0f};
 static const Point2D kJoint16A1_0 = {-5.741894f, 0.244188f};
@@ -78,6 +81,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     out->kd[1] = kDefaultDualTendonKd;
     out->integralLimit[0] = kDefaultDualTendonIntegralLimit;
     out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
+    out->maxReleaseFromCalibCounts = kDefaultDualTendonMaxReleaseFromCalibCounts;
 
     switch (jointIndex) {
         case 0:
@@ -85,10 +89,16 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
         case 8:
         case 12:
         case kJoint16Index:
+            out->model = kDualTendonModelSharedCadGeometry;
+            out->motorZero[0] = 2557.0f;
+            out->motorZero[1] = 358.0f;
+            return true;
         case 20:
             out->model = kDualTendonModelSharedCadGeometry;
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;
+            out->maxReleaseFromCalibCounts =
+                kJoint20DualTendonMaxReleaseFromCalibCounts;
             return true;
         default:
             out->enabled = 0;
@@ -175,6 +185,22 @@ static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActu
         return false;
     }
     return outActuators[0].sign != outActuators[1].sign;
+}
+
+static int32_t clampDualTendonReleaseFromCalib(uint8_t motorChannel,
+                                               int32_t calibratedZeroRawAbs,
+                                               int32_t maxReleaseFromCalibCounts,
+                                               int32_t targetRawAbs)
+{
+    const int32_t zeroTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, calibratedZeroRawAbs);
+    const int32_t minReleaseTendonAbs =
+        zeroTendonAbs - maxReleaseFromCalibCounts;
+    int32_t targetTendonAbs = motorRawAbsToTendonAbs(motorChannel, targetRawAbs);
+    if (targetTendonAbs < minReleaseTendonAbs) {
+        targetTendonAbs = minReleaseTendonAbs;
+    }
+    return clampServoPos(motorTendonAbsToRawAbs(motorChannel, targetTendonAbs));
 }
 
 } // namespace
@@ -278,7 +304,14 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
             cfg.ki[i] * state.integral[i] -
             cfg.kd[i] * dFb;
         outTargets->pidCorrection[i] = correction;
-        outTargets->targetAbs[i] = clampServoPos((int32_t)(motorCurrent + correction));
+        const int32_t requestedTarget =
+            clampServoPos((int32_t)(motorCurrent + correction));
+        outTargets->targetAbs[i] = clampDualTendonReleaseFromCalib(
+            motorChannel,
+            (int32_t)cfg.motorZero[i],
+            cfg.maxReleaseFromCalibCounts,
+            requestedTarget
+        );
         state.prevFbModel[i] = outTargets->motorFbModel[i];
     }
 

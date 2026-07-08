@@ -13,14 +13,6 @@ run_data/
 desktop/logs/
 desktop/multiturn_cache.json
 
-# Local SDK/build artifacts
-manus/**/build/
-manus/**/*.dll
-manus/**/*.lib
-manus/**/*.exe
-manus/**/*.pdb
-manus/**/*.exp
-
 # ROSexample/colcon generated artifacts
 ROSexample/**/build/
 ROSexample/**/install/

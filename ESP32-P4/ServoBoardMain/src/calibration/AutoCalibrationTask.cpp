@@ -84,6 +84,7 @@ static const uint32_t kReleasePreHoldMs = 500;
 static const uint8_t kReleaseDirectionStableSamples = 2;
 static const uint8_t kReleaseWrongDirectionStableSamples = 3;
 static const int32_t kReleaseServoWrongDirectionCounts = 120;
+static const int32_t kSideSwayMaxCommandLeadCounts = 400;
 static const float kAutoZeroMappedToleranceDeg = 6.0f;
 static const float kAutoZeroCrossMaxAbsDeg = 160.0f;
 
@@ -937,7 +938,7 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
     params.stallActualDeg = 0.75f;
     params.minTightTravelDeg = 5.0f;
     params.startLoadDelta = 25;
-    params.tightLoadHigh = 220;
+    params.tightLoadHigh = 250;
     params.startLoadStableSamples = 3;
     return params;
 }
@@ -1466,6 +1467,15 @@ static bool adjustSideSwayJointToLoad(TaskSharedData_t* sharedData,
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
                 commandAbs = motorApplyTendonDelta(primaryMotor, commandAbs, stepCounts);
+                const int8_t shortenSign = getMotorTendonShortenAbsSign(primaryMotor);
+                const int32_t commandLead =
+                    (int32_t)shortenSign * (commandAbs - currentAbs);
+                if (commandLead > kSideSwayMaxCommandLeadCounts) {
+                    commandAbs = motorApplyTendonDelta(primaryMotor,
+                                                       currentAbs,
+                                                       kSideSwayMaxCommandLeadCounts);
+                    commandRemainder = 0;
+                }
                 if (!isServoCommandInsideLimit(commandAbs)) {
                     setCalibrationDiag(sharedData,
                                        CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
@@ -2333,6 +2343,15 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                       (long)neg3Encoder,
                       (long)primary80Encoder,
                       (long)signedSpan);
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_WRONG_DIRECTION,
+                           CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                           jointIndex,
+                           0xFF,
+                           signedSpan,
+                           kDefaultEncoderDirection[jointIndex],
+                           g_encoderDirection[jointIndex],
+                           (uint32_t)(1UL << jointIndex));
         return false;
     }
     const int32_t resultStartEncoder =
@@ -2528,7 +2547,7 @@ static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
 // stepAutoCalibrationJoint - 单关节自动标定的并行状态机步进函数
 // ============================================================================
 // 核心逻辑（非阻塞）：
-// 在每一帧定时调度中被调用。它将原先阻塞式的“死循环拉绳”重构成了状态机步进�?// 主要卡点判定条件 (AUTO_CALIB_STATE_TIGHTEN)�?// 1) 舵机在指定的时间窗口内，绝对位置必须移动了一定的距离，否则认为拉紧停滞�?// 2) 电流反馈 (load) 必须达到并稳定超过设定的阈�?(tightLoadHigh)�?// 3) 磁编码器的角度必须在连续多次采样中变化小于容�?(stallActualDeg)，证明机械已经完全抵住死区�?// 只有当以上条件同时满足时，才判定为“成功寻找到物理零位”，进而校准磁编与舵机�?// ============================================================================
+// 在每一帧定时调度中被调用。它将原先阻塞式的“死循环拉绳”重构成了状态机步进�?// 主要卡点判定条件 (AUTO_CALIB_STATE_TIGHTEN)�?// 1) 舵机在指定的时间窗口内，绝对位置必须移动了一定的距离，否则认为拉紧停滞�?// 2) 电流反馈 (load) 必须达到并稳定超过设定的阈�?(tightLoadHigh)�?// 3) 磁编码器的角度必须在连续多次采样中变化小于容�?(stallActualDeg)，证明机械已经完全抵住死区�?// 只有当以上条件同时满足时，才判定为“成功寻找到物理零位”，进而校准磁编与舵机�?// ============================================================================
 static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                      TaskSharedData_t* sharedData,
                                      const AutoCalibrationParams& params,
@@ -3835,15 +3854,17 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                       (unsigned long)failedJointMask,
                       (unsigned long)completedJointMask,
                       (unsigned long)seenJoints);
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                           CALIB_DIAG_PHASE_SEQUENCE,
-                           firstFailedJoint,
-                           0xFF,
-                           completedJointMask,
-                           failedJointMask,
-                           jointCount,
-                           failedJointMask);
+        if (!hasCalibrationDiag(sharedData)) {
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                               CALIB_DIAG_PHASE_SEQUENCE,
+                               firstFailedJoint,
+                               0xFF,
+                               completedJointMask,
+                               failedJointMask,
+                               jointCount,
+                               failedJointMask);
+        }
         return false;
     }
 

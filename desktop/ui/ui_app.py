@@ -852,8 +852,14 @@ class HandGUI(QtWidgets.QMainWindow):
                 lines.append(f"数据：unknown_mask=0x{bitmap:08X}")
                 suggestions.append("不要继续发送运动命令。若换过机械/舵机/映射或舵机单独断电，先 New Device Reset，再 Clear Fault 和重新标定。")
             elif reason == CALIB_DIAG_REASON_WRONG_DIRECTION:
-                lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
-                suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
+                if phase == CALIB_DIAG_PHASE_DUAL_EXCHANGE and motor == 0xFF:
+                    lines.append(
+                        f"数据：signed_span={value_a}, default_dir={value_b}, runtime_dir={value_c}, joint_mask=0x{bitmap:08X}"
+                    )
+                    suggestions.append("双电机方向一致性检查失败。检查该关节磁编码器方向表、主/副舵机 M/J 映射、tendon 收放方向和绳路是否反绕；方向修正后重新标定。")
+                else:
+                    lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
+                    suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
             elif reason == CALIB_DIAG_REASON_OVER_RELEASE:
                 lines.append(
                     f"数据：release={value_a}, limit={value_b}, actual_release={value_c}, command_release={bitmap}"
