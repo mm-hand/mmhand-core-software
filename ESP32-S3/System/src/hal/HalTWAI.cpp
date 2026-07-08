@@ -97,8 +97,9 @@ bool HalTWAI::begin() {
 
 bool HalTWAI::sendFrame(uint32_t id, const uint8_t *data, uint8_t len) {
     if (!_is_initialized) return false;
+    if (!data || len > 8) return false;
 
-    twai_message_t message;
+    twai_message_t message = {};
     message.identifier = id;
     message.extd = 0;
     message.rtr = 0;

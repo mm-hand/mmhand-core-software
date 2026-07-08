@@ -9,7 +9,7 @@
 ```text
 TCP Bridge:
 MANUS 手套 -> MANUS Core -> manus_bridge_test.exe
--> TCP JSON 127.0.0.1:9001 -> desktop 上位机 -> P4 -> 灵巧手
+-> TCP JSON Linux_IP:9001 -> desktop 上位机 -> P4 -> 灵巧手
 
 Direct SDK:
 MANUS 手套 -> MANUS Core -> MANUS C++ SDK
@@ -33,7 +33,7 @@ MANUS ergonomics
 - `desktop/teleop/manus_receiver.py`：TCP Bridge 接收器。
 - `desktop/teleop/manus_sdk_receiver.py`：Direct SDK 接收器。
 - `desktop/teleop/manus_calibration.py`：Open/Close 校准、归一化、J00-J20 映射。
-- `desktop/config/manus_calibration.json`：MANUS 校准数据。
+- `desktop/resources/config/manus_calibration.json`：MANUS 校准数据。
 - `manus/manus_bridge_test/`：旧版 TCP Bridge 源码。
 - `manus/mmhand_manus_sdk/`：Direct SDK 的 C ABI 包装层。
 
@@ -43,7 +43,7 @@ MANUS ergonomics
 2. 启动 mmhand desktop 上位机。
 3. 在遥操区域选择 `Mode 2: MANUS / Rokoko Glove`。
 4. 在 `Source` 选择输入源：
-   - `TCP Bridge 127.0.0.1:9001`
+   - `TCP Bridge :9001`
    - `Direct SDK`
 5. 等待页面显示 `LIVE`，并确认 Typed Ergonomics 表格有数据。
 6. 点击 `Load Calibration`，或重新执行 `Record Open`、`Record Close`。
@@ -75,7 +75,11 @@ cd manus/manus_bridge_test
 .\scripts\run_windows.ps1
 ```
 
-然后在上位机选择 `TCP Bridge 127.0.0.1:9001`。
+同机调试时可以保持 `config/manus_bridge_config.json` 的 `tcp.target_ip=127.0.0.1`。
+如果 MANUS Core/bridge 在 Windows，上位机在 Linux，把 Windows 端 `tcp.target_ip`
+改成 Linux 上位机的局域网 IP，并确保 Linux 放行 TCP 9001 端口。
+
+然后在上位机选择 `TCP Bridge :9001`。
 
 正常状态应看到：
 

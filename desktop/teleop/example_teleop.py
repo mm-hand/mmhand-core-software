@@ -6,16 +6,19 @@
 # 调用 backend.send_joint_targets(angles, source="...", live=True)。
 
 from typing import Optional
-from hand_backend import HandBackend
+from desktop.core.hand_backend import HandBackend
+from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC
 
 
 def run(
     backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     """遥操作入口：接收 backend 与 port，在此填写你的遥操逻辑。"""
-    from ui_main import HandGUI
+    from desktop.ui.ui_app import HandGUI
     if not isinstance(backend, HandBackend):
         backend = HandBackend(backend)
     backend.set_pid_control(True)
@@ -25,5 +28,7 @@ def run(
         current_port=port,
         current_mode="Teleoperation",
         tactile_port=tactile_port,
+        ros2_enabled=ros2_enabled,
+        ros_topic=ros_topic,
     )
     gui.run()

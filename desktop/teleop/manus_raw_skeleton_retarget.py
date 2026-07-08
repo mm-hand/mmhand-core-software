@@ -7,13 +7,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-import angle_mapping
-from protocol import ENCODER_COUNT
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from desktop.core import angle_mapping
+from desktop.core.protocol import ENCODER_COUNT
 
-from teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH
-from teleop.Posture.hand_retargeting.math_utils import axis_angle_rotation
-from teleop.Posture.hand_retargeting.retargeting import HandRetargeter
-from teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel
+from desktop.teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH
+from desktop.teleop.Posture.hand_retargeting.math_utils import axis_angle_rotation
+from desktop.teleop.Posture.hand_retargeting.retargeting import HandRetargeter
+from desktop.teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel
 
 from .manus_calibration import (
     DEFAULT_MANUS_SIDE,
@@ -24,7 +25,6 @@ from .manus_calibration import (
 from .manus_receiver import ManusFrame
 
 RAW_IK_JOINT_INDICES = list(range(ENCODER_COUNT))
-CALIB_LOAD_SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "config" / "calib_load_snapshot.json"
 DEBUG_TIMING = True
 FINGER_ORDER = ("pinky", "ring", "middle", "index", "thumb")
 FINGER_NAME_FOR_CALIBRATION = {

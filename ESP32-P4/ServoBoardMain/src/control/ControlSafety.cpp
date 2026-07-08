@@ -25,7 +25,8 @@ static const float kTendonGuardReleaseAngleEpsDeg = 0.0f;
 bool shouldEmergencyStop(bool canBusOnline,
                          const RemoteSensorData_t& sensorData,
                          const MappedAngleData_t& mappedData,
-                         uint8_t jointIndex)
+                         uint8_t jointIndex,
+                         bool encoderFeedbackFault)
 {
     // 闭环控制必须同时具备 CAN 在线、通道无错误、映射值有效三类条件。
     if (!canBusOnline || !sensorData.isValid) {
@@ -34,7 +35,7 @@ bool shouldEmergencyStop(bool canBusOnline,
     if (jointIndex >= ENCODER_TOTAL_NUM) {
         return true;
     }
-    if (sensorData.errorFlags[jointIndex] != 0) {
+    if (encoderFeedbackFault) {
         return true;
     }
     if (mappedData.validFlags[jointIndex] == 0) {

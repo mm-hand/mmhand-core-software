@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 desktop/teleop/Posture/.vscode/
 
 # Local run artifacts
@@ -12,10 +13,8 @@ run_data/
 desktop/logs/
 desktop/multiturn_cache.json
 
-# Local SDK/build artifacts
-manus/**/build/
-manus/**/*.dll
-manus/**/*.lib
-manus/**/*.exe
-manus/**/*.pdb
-manus/**/*.exp
+# ROSexample/colcon generated artifacts
+ROSexample/**/build/
+ROSexample/**/install/
+ROSexample/**/log/
+*.egg-info/

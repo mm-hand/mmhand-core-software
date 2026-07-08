@@ -1,5 +1,6 @@
 #include "ControlOutputBuilder.h"
 #include "../hardware/HardwareMap.h"
+#include "../shared/SharedSafetyState.h"
 
 static const int32_t kServoSingleTurnModulo = 4096;
 static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
@@ -19,10 +20,18 @@ int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
     int32_t clamped = value;
     if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
         const uint32_t bit = (1UL << motorChannel);
-        if (((sharedData->motor_abs_limit_valid_bitmap & bit) != 0) &&
-            ((sharedData->motor_abs_limit_locked_bitmap & bit) != 0)) {
-            int32_t lo = sharedData->motor_abs_limit_min[motorChannel];
-            int32_t hi = sharedData->motor_abs_limit_max[motorChannel];
+        uint32_t validBitmap = 0;
+        uint32_t lockedBitmap = 0;
+        int32_t lo = 0;
+        int32_t hi = 0;
+        {
+            SharedSafetyGuard guard;
+            validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+            lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+            lo = sharedData->motor_abs_limit_min[motorChannel];
+            hi = sharedData->motor_abs_limit_max[motorChannel];
+        }
+        if (((validBitmap & bit) != 0) && ((lockedBitmap & bit) != 0)) {
             if (lo > hi) {
                 const int32_t tmp = lo;
                 lo = hi;

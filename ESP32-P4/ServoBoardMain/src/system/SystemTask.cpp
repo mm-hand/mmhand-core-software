@@ -1,44 +1,42 @@
-#include "SystemTask.h"
+﻿#include "SystemTask.h"
 #include "../calibration/CalibrationTask.h"
+#include "FirmwareLog.h"
 #include "StateMachineTask.h"
+#include "TaskRuntimeMonitor.h"
 #include "../control/ControlTask.h"
 #include "../communication/servo/ServoCommunicationTask.h"
 #include "../hardware/HardwareMap.h"
+#include "../persistence/MultiTurnNvsPersistenceTask.h"
 
 #include <string.h>
 
-// SystemTask 模块职责：
-// 1) 完成系统级资源初始化（队列、互斥锁、共享状态）；
-// 2) 维护跨任务共享对象 sharedData；
-// 3) 创建并拉起上位机通信、状态机、CAN、舵机通信和控制任务。
-
+// SystemTask 妯″潡鑱岃矗锛?// 1) 瀹屾垚绯荤粺绾ц祫婧愬垵濮嬪寲锛堥槦鍒椼€佷簰鏂ラ攣銆佸叡浜姸鎬侊級锛?// 2) 缁存姢璺ㄤ换鍔″叡浜璞?sharedData锛?// 3) 鍒涘缓骞舵媺璧蜂笂浣嶆満閫氫俊銆佺姸鎬佹満銆丆AN銆佽埖鏈洪€氫俊鍜屾帶鍒朵换鍔°€?
 // Persistent calibration state reported in SYSTEM_STATUS.
 volatile uint8_t g_calibrationStatus = CALIB_STATUS_IDLE;
 // Short-lived calibration event stream reported as repeated CALIB_ACK packets.
 volatile uint8_t g_calibrationAckStatus = CALIB_STATUS_IDLE;
 volatile uint8_t g_calibrationAckRepeatRemaining = 0;
 
-// 全局共享数据中心，保存任务间队列句柄与控制状态。
+// Shared task data and queues.
 TaskSharedData_t sharedData;
 
-// 任务句柄用于系统侧管理（当前主要用于可见性与后续扩展）。
+// Task handles used for runtime visibility and future management.
 TaskHandle_t upperCommTaskHandle = NULL;
 TaskHandle_t stateMachineTaskHandle = NULL;
 TaskHandle_t canCommTaskHandle = NULL;
 TaskHandle_t servoCommTaskHandle = NULL;
 TaskHandle_t controlTaskHandle = NULL;
+TaskHandle_t taskMonitorTaskHandle = NULL;
+TaskHandle_t nvsPersistTaskHandle = NULL;
 
-// 系统启动总入口：按“资源初始化 -> 参数初始化 -> 任务创建”顺序执行。
 void System_Init() {
-    // 1) 串口初始化：用于上位机通信与启动日志输出。
-    Serial.begin(921600);
+        Serial.begin(921600);
     while (!Serial) {
         delay(10);
     }
     delay(1000);
 
-    // 2) 创建跨任务消息队列。
-    sharedData.cmdQueue = xQueueCreate(5, sizeof(ServoCommand_t));
+        sharedData.cmdQueue = xQueueCreate(5, sizeof(ServoCommand_t));
     sharedData.statusQueue = xQueueCreate(3, sizeof(ServoStatus_t));
     sharedData.stateEventQueue = xQueueCreate(8, sizeof(SystemEvent_t));
     sharedData.canRxQueue = xQueueCreate(1, sizeof(RemoteSensorData_t));
@@ -52,6 +50,8 @@ void System_Init() {
     sharedData.mappedAngleQueue = xQueueCreate(1, sizeof(MappedAngleData_t));
     sharedData.jointDebugQueue = xQueueCreate(8, sizeof(JointDebugData_t));
     sharedData.tactileQueue = xQueueCreate(3, sizeof(RemoteTactileData_t));
+    sharedData.multiturnNvsSaveQueue = xQueueCreate(1, sizeof(MultiTurnNvsSaveJob_t));
+    sharedData.multiturnNvsResultQueue = xQueueCreate(1, sizeof(MultiTurnNvsSaveResult_t));
 
     if (!sharedData.cmdQueue || !sharedData.statusQueue ||
         !sharedData.stateEventQueue ||
@@ -60,16 +60,14 @@ void System_Init() {
         !sharedData.servoAngleQueue || !sharedData.servoRawQueue ||
         !sharedData.servoTelemetryQueue || !sharedData.servoTelemetrySnapshotQueue ||
         !sharedData.mappedAngleQueue ||
-        !sharedData.jointDebugQueue || !sharedData.tactileQueue) {
-        // 资源不足时停在此处，避免系统在不完整状态下继续运行。
+        !sharedData.jointDebugQueue || !sharedData.tactileQueue ||
+        !sharedData.multiturnNvsSaveQueue || !sharedData.multiturnNvsResultQueue) {
         while (1) {}
     }
 
-    // 3) 初始化目标角缓存与控制相关状态。
     sharedData.targetAnglesMutex = xSemaphoreCreateMutex();
     sharedData.commandStateMutex = xSemaphoreCreateMutex();
     if (!sharedData.targetAnglesMutex || !sharedData.commandStateMutex) {
-        // 互斥锁创建失败同样进入安全停机。
         while (1) {}
     }
     memset(sharedData.targetAngles, 0, sizeof(sharedData.targetAngles));
@@ -96,6 +94,7 @@ void System_Init() {
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;
     sharedData.paused_resume_state = SYSTEM_STATE_IDLE;
     sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
+    sharedData.emergency_stop_request_token = 0;
     sharedData.servo_emergency_stop_token = 0;
     sharedData.system_fault_bitmap = 0;
     sharedData.system_fault_latched_bitmap = 0;
@@ -104,6 +103,11 @@ void System_Init() {
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
+    sharedData.servo_online_bitmap = 0;
+    sharedData.encoder_online_bitmap = 0;
+    sharedData.encoder_warn_bitmap = 0;
+    sharedData.encoder_fault_bitmap = 0;
+    sharedData.can_link_online = 0;
     sharedData.restore_multi_turn_mask = 0;
     sharedData.restore_multi_turn_request_token = 0;
     sharedData.restore_multi_turn_result_token = 0;
@@ -140,11 +144,9 @@ void System_Init() {
     sharedData.calib_zero_raw_valid = 0;
 
 
-    // 4) 当前测试阶段：禁用自动标定动作，使用手动配置入口。
-    initManualCalibrationForTest();
+        initManualCalibrationForTest();
 
-    // 5) 创建上位机通信任务：负责串口协议解析与遥测上报。
-    xTaskCreate(
+        xTaskCreate(
         upperCommunicationTask,
         "upperCommunicationTask",
         UPPER_COMM_TASK_STACK_SIZE,
@@ -153,8 +155,7 @@ void System_Init() {
         &upperCommTaskHandle
     );
 
-    // 6) 创建状态机任务：统一维护 control_enabled、owner、system_state。
-    xTaskCreate(
+        xTaskCreate(
         stateMachineTask,
         "stateMachineTask",
         STATE_MACHINE_TASK_STACK_SIZE,
@@ -163,8 +164,7 @@ void System_Init() {
         &stateMachineTaskHandle
     );
 
-    // 7) 创建 CAN 通信任务：接收编码器、触觉和错误详情帧。
-    xTaskCreate(
+        xTaskCreate(
         canCommunicationTask,
         "canCommunicationTask",
         CAN_COMM_TASK_STACK_SIZE,
@@ -173,8 +173,7 @@ void System_Init() {
         &canCommTaskHandle
     );
 
-    // 8) 创建舵机通信任务：唯一直接访问 FTServo/SMS_STS 与 UART 的任务。
-    xTaskCreate(
+        xTaskCreate(
         servoCommunicationTask,
         "servoCommunicationTask",
         SERVO_COMM_TASK_STACK_SIZE,
@@ -183,8 +182,7 @@ void System_Init() {
         &servoCommTaskHandle
     );
 
-    // 9) 创建实时控制任务：读取快照和反馈，生成舵机目标 batch。
-    xTaskCreate(
+        xTaskCreate(
         controlTask,
         "controlTask",
         CONTROL_TASK_STACK_SIZE,
@@ -193,12 +191,35 @@ void System_Init() {
         &controlTaskHandle
     );
 
-    Serial.println("FreeRTOS tasks created successfully.");
-    Serial.println("System ready.");
+    xTaskCreate(
+        multiTurnNvsPersistenceTask,
+        "multiTurnNvsPersist",
+        NVS_PERSIST_TASK_STACK_SIZE,
+        &sharedData,
+        TASK_NVS_PERSIST_PRIORITY,
+        &nvsPersistTaskHandle
+    );
+
+    taskRuntimeRegister(TASK_RUNTIME_UPPER_COMM, upperCommTaskHandle, UPPER_COMM_TASK_STACK_SIZE);
+    taskRuntimeRegister(TASK_RUNTIME_STATE_MACHINE, stateMachineTaskHandle, STATE_MACHINE_TASK_STACK_SIZE);
+    taskRuntimeRegister(TASK_RUNTIME_CAN_COMM, canCommTaskHandle, CAN_COMM_TASK_STACK_SIZE);
+    taskRuntimeRegister(TASK_RUNTIME_SERVO_COMM, servoCommTaskHandle, SERVO_COMM_TASK_STACK_SIZE);
+    taskRuntimeRegister(TASK_RUNTIME_CONTROL, controlTaskHandle, CONTROL_TASK_STACK_SIZE);
+
+    xTaskCreate(
+        taskRuntimeMonitorTask,
+        "taskRuntimeMonitor",
+        TASK_MONITOR_STACK_SIZE,
+        &sharedData,
+        TASK_MONITOR_PRIORITY,
+        &taskMonitorTaskHandle
+    );
+    taskRuntimeRegister(TASK_RUNTIME_MONITOR, taskMonitorTaskHandle, TASK_MONITOR_STACK_SIZE);
+
+    FW_LOG_INFO_PRINTLN("FreeRTOS tasks created successfully.");
+    FW_LOG_INFO_PRINTLN("System ready.");
 }
 
-// 系统主循环：仅保留轻量节拍，实际业务由各任务并行执行。
 void System_Loop() {
-    // 主循环保持轻量占位，主要工作在各 FreeRTOS 任务中执行。
     vTaskDelay(pdMS_TO_TICKS(10));
 }

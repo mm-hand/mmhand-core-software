@@ -1,0 +1,122 @@
+"""Optional ROS2 raw-IK target subscriber for desktop backends."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import threading
+from typing import Optional
+
+from desktop.core.hand_backend import HandBackend
+from desktop.ros2.joint_targets import JointTargetCommandHandler
+
+DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
+
+
+@dataclass(frozen=True)
+class Ros2RawIkTargetConfig:
+    topic: str = DEFAULT_RAW_IK_TARGET_TOPIC
+    auto_start: bool = False
+
+
+class RawIkTargetBridge:
+    """Background ROS2 subscriber for external MANUS/IK 21-angle output."""
+
+    def __init__(
+        self,
+        backend: HandBackend,
+        *,
+        topic: str = DEFAULT_RAW_IK_TARGET_TOPIC,
+        auto_start: bool = False,
+    ) -> None:
+        self.config = Ros2RawIkTargetConfig(topic=topic, auto_start=auto_start)
+        self.handler = JointTargetCommandHandler(
+            backend,
+            topic=self.config.topic,
+            auto_start=self.config.auto_start,
+            warning_sink=self._warn,
+        )
+        self._thread: Optional[threading.Thread] = None
+        self._node = None
+        self._rclpy = None
+        self._shutdown_rclpy = False
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        try:
+            import rclpy
+            from rclpy.node import Node
+            from std_msgs.msg import Float32MultiArray
+        except Exception as exc:  # pragma: no cover - environment dependent
+            raise RuntimeError(
+                "ROS2 support requires rclpy and std_msgs in the active Python environment"
+            ) from exc
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
+            self._shutdown_rclpy = True
+
+        bridge = self
+
+        class _RawIkTargetNode(Node):
+            def __init__(self) -> None:
+                super().__init__("mmhand_desktop_raw_ik_target_subscriber")
+                self.create_subscription(
+                    Float32MultiArray,
+                    bridge.config.topic,
+                    bridge.handler.handle_message,
+                    10,
+                )
+                self.get_logger().info(
+                    f"Listening for Float32MultiArray raw IK targets on {bridge.config.topic}"
+                )
+
+        self._rclpy = rclpy
+        self._node = _RawIkTargetNode()
+        self._thread = threading.Thread(target=self._spin, name="mmhand-ros2-raw-ik-target", daemon=True)
+        self._started = True
+        self._thread.start()
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        rclpy = self._rclpy
+        node = self._node
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+        if self._shutdown_rclpy and rclpy is not None:
+            try:
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self._thread = None
+        self._node = None
+        self._rclpy = None
+        self._started = False
+        self._shutdown_rclpy = False
+
+    def _spin(self) -> None:
+        try:
+            self._rclpy.spin(self._node)
+        except Exception as exc:
+            self._warn(f"ROS2 raw IK target subscriber stopped: {exc}")
+
+    def _warn(self, text: str) -> None:
+        node = self._node
+        try:
+            if node is not None:
+                node.get_logger().warn(text)
+                return
+        except Exception:
+            pass
+        print(text)
+
+
+__all__ = ["DEFAULT_RAW_IK_TARGET_TOPIC", "RawIkTargetBridge", "Ros2RawIkTargetConfig"]

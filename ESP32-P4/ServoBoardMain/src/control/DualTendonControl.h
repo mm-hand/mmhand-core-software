@@ -17,6 +17,14 @@ struct DualTendonMotorTargets {
 bool isDualTendonJoint(uint8_t jointIndex);
 void resetDualTendonController(uint8_t jointIndex);
 
+// Block only a command that would release farther after actual motor feedback
+// has reached the calibrated release allowance. Tightening always passes.
+int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
+                                       uint8_t motorChannel,
+                                       int32_t calibratedAnchorRawAbs,
+                                       int32_t currentRawAbs,
+                                       int32_t targetRawAbs);
+
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,

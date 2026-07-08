@@ -54,6 +54,8 @@
 #define SYSTEM_EVENT_PAUSE 11
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST 12
 #define SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE 13
+#define SYSTEM_EVENT_REEVALUATE_READY 14
+#define SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT 15
 
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 #define MULTITURN_NVS_SAVE_REASON_RUN_START 1
@@ -100,6 +102,13 @@
 #define CALIB_DIAG_REASON_FEEDBACK_LOST 17
 #define CALIB_DIAG_REASON_TASK_START_FAILED 18
 #define CALIB_DIAG_REASON_INTERNAL_ERROR 19
+#define CALIB_DIAG_REASON_CONTROL_LOST 20
+#define CALIB_DIAG_REASON_HOLD_TARGET_FAILED 21
+#define CALIB_DIAG_REASON_JOINT_LIST_INVALID 22
+#define CALIB_DIAG_REASON_DUPLICATE_JOINT 23
+#define CALIB_DIAG_REASON_SIDE_ADJUST_FAILED 24
+#define CALIB_DIAG_REASON_JOINT_STEP_FAILED 25
+#define CALIB_DIAG_REASON_OVER_RELEASE 26
 
 #define CALIB_DIAG_PHASE_NONE 0
 #define CALIB_DIAG_PHASE_INIT 1
@@ -119,11 +128,14 @@
 #define TWAI_RX_PIN 48
 
 // FreeRTOS task priorities.
-#define TASK_UPPER_COMM_PRIORITY 1
-#define TASK_STATE_MACHINE_PRIORITY 2
+#define TASK_UPPER_COMM_PRIORITY 2
+#define TASK_STATE_MACHINE_PRIORITY 5
 #define TASK_CAN_COMM_PRIORITY 3
 #define TASK_SERVO_COMM_PRIORITY 3
 #define TASK_CONTROL_PRIORITY 4
+#define TASK_AUTO_CALIB_PRIORITY 2
+#define TASK_MONITOR_PRIORITY 1
+#define TASK_NVS_PERSIST_PRIORITY 1
 #define TASK_SOLVER_PRIORITY TASK_CONTROL_PRIORITY
 
 // FreeRTOS task stack sizes.
@@ -132,6 +144,9 @@
 #define STATE_MACHINE_TASK_STACK_SIZE 4096
 #define SERVO_COMM_TASK_STACK_SIZE 6144
 #define CONTROL_TASK_STACK_SIZE 8192
+#define AUTO_CALIB_TASK_STACK_SIZE 8192
+#define TASK_MONITOR_STACK_SIZE 4096
+#define NVS_PERSIST_TASK_STACK_SIZE 4096
 #define SOLVER_TASK_STACK_SIZE CONTROL_TASK_STACK_SIZE
 
 #define SERVO_TARGET_BATCH_MAX SERVO_TOTAL_NUM
@@ -194,6 +209,9 @@ typedef struct {
 typedef struct {
     uint8_t event;
     uint32_t timestamp;
+    // Runtime completion events carry the joint command generation they belong
+    // to. This prevents an old "done" event from releasing a newer command.
+    uint32_t token;
 } SystemEvent_t;
 
 typedef struct {
@@ -302,6 +320,33 @@ typedef struct {
 } RemoteTactileData_t;
 
 typedef struct {
+    uint32_t requestToken;
+    uint32_t validMask;
+    int32_t motorAbs[SERVO_TOTAL_NUM];
+    int16_t motorRaw[SERVO_TOTAL_NUM];
+    int16_t motorTurn[SERVO_TOTAL_NUM];
+    uint32_t queuedAtMs;
+    uint8_t reason;
+    uint8_t turnChanged;
+    uint8_t edgeChanged;
+} MultiTurnNvsSaveJob_t;
+
+typedef struct {
+    uint32_t requestToken;
+    uint32_t validMask;
+    uint32_t sequence;
+    uint32_t queuedAtMs;
+    int32_t motorAbs[SERVO_TOTAL_NUM];
+    int16_t motorRaw[SERVO_TOTAL_NUM];
+    int16_t motorTurn[SERVO_TOTAL_NUM];
+    uint32_t completedAtMs;
+    uint8_t reason;
+    uint8_t success;
+    uint8_t turnChanged;
+    uint8_t edgeChanged;
+} MultiTurnNvsSaveResult_t;
+
+typedef struct {
     QueueHandle_t cmdQueue;
     QueueHandle_t statusQueue;
     QueueHandle_t stateEventQueue;
@@ -316,6 +361,8 @@ typedef struct {
     QueueHandle_t mappedAngleQueue;
     QueueHandle_t jointDebugQueue;
     QueueHandle_t tactileQueue;
+    QueueHandle_t multiturnNvsSaveQueue;
+    QueueHandle_t multiturnNvsResultQueue;
 
     float targetAngles[ENCODER_TOTAL_NUM];
     SemaphoreHandle_t targetAnglesMutex;
@@ -343,6 +390,7 @@ typedef struct {
     volatile uint8_t system_state;
     volatile uint8_t paused_resume_state;
     volatile uint8_t servo_target_owner;
+    volatile uint32_t emergency_stop_request_token;
     volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;
     volatile uint32_t system_fault_latched_bitmap;
@@ -350,6 +398,11 @@ typedef struct {
     volatile uint32_t active_motor_mask;
     volatile uint32_t active_joint_mask;
     volatile uint32_t multi_turn_unknown_bitmap;
+    volatile uint32_t servo_online_bitmap;
+    volatile uint32_t encoder_online_bitmap;
+    volatile uint32_t encoder_warn_bitmap;
+    volatile uint32_t encoder_fault_bitmap;
+    volatile uint8_t can_link_online;
     int32_t restore_multi_turn_abs[SERVO_TOTAL_NUM];
     volatile uint32_t restore_multi_turn_mask;
     volatile uint32_t restore_multi_turn_request_token;

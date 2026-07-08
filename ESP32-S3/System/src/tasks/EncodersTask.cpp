@@ -1,49 +1,45 @@
-#include "EncodersTask.h"
+﻿#include "EncodersTask.h"
 #include "../config/Config.h"
 #include "../hal/HalEncoders.h"
 
 namespace {
-constexpr bool kEnableEncoderDebugDump = false;
+constexpr bool kEnableEncoderDebugDump = true;
 constexpr int kEncoderDebugDumpDecimation = 100;
 constexpr uint32_t kEncoderTaskPeriodMs = 2;
 }
 
-// 任务句柄
+// 浠诲姟鍙ユ焺
 TaskHandle_t xEncTask = NULL;
 
-// 队列（外部声明，在SystemTasks中定义）
+// 闃熷垪锛堝閮ㄥ０鏄庯紝鍦⊿ystemTasks涓畾涔夛級
 extern QueueHandle_t xQueueEncoderData;
 
-// 测试计数器
 static int g_testCounter = 0;
 
 /**
- * 编码器任务 (200Hz)
- * 负责读取编码器原始数据并发送到队列
+ * 缂栫爜鍣ㄤ换鍔?(200Hz)
+ * 璐熻矗璇诲彇缂栫爜鍣ㄥ師濮嬫暟鎹苟鍙戦€佸埌闃熷垪
  */
 void Task_Encoders(void* pvParameters) {
     const TickType_t xFrequency = pdMS_TO_TICKS(kEncoderTaskPeriodMs);
     TickType_t xLastWakeTime = xTaskGetTickCount();
     
-    // 本地数据缓冲
+    // 鏈湴鏁版嵁缂撳啿
     EncoderData localData{};
 
     Serial.println("[Task_Encoders] Started!");
 
     for (;;) {
-        // 1. 读取编码器原始数据
         EncoderData rawData = encoders.getData();
         
-        // 复制原始数据到本地结构
         localData = rawData;
 
-        // 打印测试结果 (每100次循环打印一次)
+        // 鎵撳嵃娴嬭瘯缁撴灉 (姣?00娆″惊鐜墦鍗颁竴娆?
         if (kEnableEncoderDebugDump && (g_testCounter % kEncoderDebugDumpDecimation) == 1) {
             Serial.println(">>> Encoders (raw Angle: 0~16383)");
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-                // [ID:数据] 格式优化
+                // [ID:鏁版嵁] 鏍煎紡浼樺寲
                 Serial.printf("[%02d:%05d] ", i, localData.rawAngles[i]);
-                // 每 5 个换行
                 if ((i + 1) % 5 == 0) {
                     Serial.println();
                 }
@@ -53,25 +49,25 @@ void Task_Encoders(void* pvParameters) {
             }
         }
 
-        // 2. 处理错误标记
+        // 2. 澶勭悊閿欒鏍囪
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
             if (localData.errorFlags[i]) {
-                localData.rawAngles[i] = 0xFFFF;  // 错误标记
+                localData.rawAngles[i] = 0xFFFF;  // 閿欒鏍囪
             }
         }
 
-        // 3. 发送到队列
+        // 3. 鍙戦€佸埌闃熷垪
         if (xQueueEncoderData != NULL) {
             xQueueOverwrite(xQueueEncoderData, &localData);
             
-            // 调试打印 (每秒一次，避免刷屏)
+            // 璋冭瘯鎵撳嵃 (姣忕涓€娆★紝閬垮厤鍒峰睆)
             static uint32_t lastPrint = 0;
             if (millis() - lastPrint > 1000) {
                 // Serial.println("[Task_Encoders] Queue filled OK.");
                 lastPrint = millis();
             }
         } else {
-            // 错误：队列未创建
+            // 閿欒锛氶槦鍒楁湭鍒涘缓
             static uint32_t lastErr = 0;
             if (millis() - lastErr > 2000) {
                 Serial.println("[FATAL] xQueueEncoderData is NULL!");

@@ -15,6 +15,9 @@ from typing import Callable
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+PROJECT_ROOT = SCRIPT_DIR.parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from hand_retargeting.constants import DEFAULT_MODEL_PATH, DEFAULT_URDF_PATH, MODEL_URL
 

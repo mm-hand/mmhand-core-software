@@ -3,9 +3,11 @@ import time
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from data_models import HandModel
-from hand_backend import HandBackend, list_ports
-from protocol import (
+from desktop.paths import POSE_FIST_PATH, PROJECT_ROOT
+from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
+from desktop.core.data_models import HandModel
+from desktop.core.hand_backend import HandBackend, list_ports
+from desktop.core.protocol import (
     CALIB_DIAG_PHASE_DUAL_EXCHANGE,
     CALIB_DIAG_PHASE_DUAL_PRELOAD,
     CALIB_DIAG_PHASE_FIND_MAX,
@@ -17,13 +19,20 @@ from protocol import (
     CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY,
     CALIB_DIAG_REASON_ANGLE_NOT_MOVING,
     CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT,
+    CALIB_DIAG_REASON_CONTROL_LOST,
+    CALIB_DIAG_REASON_DUPLICATE_JOINT,
     CALIB_DIAG_REASON_ENCODER_ERROR,
     CALIB_DIAG_REASON_FEEDBACK_LOST,
+    CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
     CALIB_DIAG_REASON_INTERNAL_ERROR,
+    CALIB_DIAG_REASON_JOINT_LIST_INVALID,
+    CALIB_DIAG_REASON_JOINT_STEP_FAILED,
     CALIB_DIAG_REASON_LOAD_NOT_REACHED,
+    CALIB_DIAG_REASON_OVER_RELEASE,
     CALIB_DIAG_REASON_OVERLOAD,
     CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
+    CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_TASK_START_FAILED,
     CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
@@ -46,21 +55,23 @@ from protocol import (
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
-from session_log import close_session_log, log_session
+from desktop.core.session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
 from .ui_services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
+from .ui_task_runtime import TaskRuntimeWindow
 from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
 from .ui_windows import DisplayWindowManager
 
 
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECT_ROOT_DIR = os.path.dirname(DESKTOP_DIR)
+PROJECT_ROOT_DIR = str(PROJECT_ROOT)
 DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
+SYSTEM_STATUS_STALE_AFTER_S = 1.0
+FAULT_STATUS_STALE_AFTER_S = 1.0
 
 
 class HandGUI(QtWidgets.QMainWindow):
@@ -75,6 +86,8 @@ class HandGUI(QtWidgets.QMainWindow):
         pose_generate: bool = False,
         pose_generate_path: Optional[str] = None,
         tactile_port: Optional[str] = None,
+        ros2_enabled: bool = False,
+        ros_topic: str = "/mmhand/joint_targets",
     ):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
@@ -85,8 +98,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self._on_close_extra = on_close_extra
         self._action_callback = action_callback
         self._pose_generate = bool(pose_generate)
-        self._pose_generate_path = pose_generate_path or os.path.join(DESKTOP_DIR, "pose_fist_21deg.txt")
+        self._pose_generate_path = pose_generate_path or str(POSE_FIST_PATH)
         self.tactile_port = tactile_port or ""
+        self.ros2_enabled = bool(ros2_enabled)
+        self.ros_topic = str(ros_topic)
         self._tactile_state: Optional[HandModel] = None
         self._state: Optional[HandModel] = None
         self._state_buffer = LatestStateBuffer()
@@ -97,6 +112,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._joint_debug_csv_path = ""
         self._last_draw = 0.0
         self._draw_interval = 0.033
+        self._last_status_refresh = 0.0
         self._pending_status_text = ""
         self._last_overload_popup_mask = 0
         self._last_fault_popup_key = ""
@@ -104,7 +120,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._fault_dialog_active = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
-        self._top_status_expanded = False
+        self._task_runtime_window: Optional[TaskRuntimeWindow] = None
         self.context = HandGuiContext(self)
         self.tendon_guard = self.backend.tendon_guard
 
@@ -148,10 +164,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
         self.save_data_check.setChecked(False)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
-        self.plot_btn = QtWidgets.QPushButton("Plot")
-        self.plot_btn.clicked.connect(lambda _checked=False: self._open_joint_rt_window())
-        self.tactile_btn = QtWidgets.QPushButton("Tactile")
-        self.tactile_btn.clicked.connect(lambda _checked=False: self._display_windows.open_tactile())
         self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
         self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -159,8 +171,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._refresh_start_indicator()
 
         for widget in [
-            QtWidgets.QLabel("Port:"), self.port_combo, self.connect_btn,
-            self.save_data_check, self.plot_btn, self.tactile_btn, self.comm_conn_light, self.start_indicator,
+            QtWidgets.QLabel("Port:"), self.port_combo, self.comm_conn_light,
+            self.connect_btn, self.save_data_check, self.start_indicator,
         ]:
             toolbar.addWidget(widget)
 
@@ -184,36 +196,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot = JointRealtimePlotView(self.context, self)
 
     def _build_top_status_strip(self, toolbar: QtWidgets.QToolBar) -> None:
-        self.top_status_toggle = QtWidgets.QToolButton()
-        self.top_status_toggle.setText("»")
-        self.top_status_toggle.setCheckable(True)
-        self.top_status_toggle.setChecked(False)
-        self.top_status_toggle.setFixedWidth(28)
-        self.top_status_toggle.setMinimumHeight(30)
-        self.top_status_toggle.setToolTip("Show status details")
-        self.top_status_toggle.toggled.connect(self._set_top_status_expanded)
-        self.top_status_toggle.setStyleSheet(
-            "QToolButton {"
-            "color:#24292f;"
-            "background:#f6f8fa;"
-            "border:1px solid #b8b8b8;"
-            "border-radius:3px;"
-            "font-weight:700;"
-            "}"
-            "QToolButton:checked { background:#eef6ff; border-color:#8cbdff; }"
-        )
-        toolbar.addWidget(self.top_status_toggle)
-
-        self.top_status_toolbar = QtWidgets.QToolBar("Status Details")
-        self.top_status_toolbar.setObjectName("TopStatusToolbar")
-        self.top_status_toolbar.setMovable(False)
-        self.top_status_toolbar.setFloatable(False)
-        self.top_status_toolbar.setAllowedAreas(QtCore.Qt.TopToolBarArea)
-
-        status_spacer = QtWidgets.QWidget()
-        status_spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        self.top_status_toolbar.addWidget(status_spacer)
-
         strip = QtWidgets.QWidget()
         strip.setObjectName("TopStatusStrip")
         strip.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
@@ -223,7 +205,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         self.fault_label = self._make_top_status_label("SYS -", 132)
         self.calib_label = self._make_top_status_label("CALIB -", 82)
-        self.overload_label = self._make_top_status_label("OL OK", 96)
+        self.overload_label = self._make_top_status_label("OL -", 96)
         self.turn_label = self._make_top_status_label("TURN -", 98)
         self.delay_label = self._make_top_status_label("--", 62)
 
@@ -244,23 +226,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "}"
         )
         self.top_status_strip = strip
-        self.top_status_toolbar.addWidget(strip)
-        self.addToolBarBreak(QtCore.Qt.TopToolBarArea)
-        self.addToolBar(QtCore.Qt.TopToolBarArea, self.top_status_toolbar)
-        self._set_top_status_expanded(False)
-
-    def _set_top_status_expanded(self, expanded: bool) -> None:
-        self._top_status_expanded = bool(expanded)
-        if hasattr(self, "top_status_toolbar"):
-            self.top_status_toolbar.setVisible(self._top_status_expanded)
-        if hasattr(self, "top_status_toggle"):
-            self.top_status_toggle.blockSignals(True)
-            self.top_status_toggle.setChecked(self._top_status_expanded)
-            self.top_status_toggle.setText("«" if self._top_status_expanded else "»")
-            self.top_status_toggle.setToolTip(
-                "Hide status details" if self._top_status_expanded else "Show status details"
-            )
-            self.top_status_toggle.blockSignals(False)
+        toolbar.addWidget(strip)
 
     def _make_top_status_label(self, text: str, min_width: int) -> QtWidgets.QLabel:
         label = QtWidgets.QLabel(text)
@@ -331,8 +297,92 @@ class HandGUI(QtWidgets.QMainWindow):
         servo_status.triggered.connect(self.show_servo_status_dialog)
         protocol_status = action_cls("Protocol / Comm Status", self)
         protocol_status.triggered.connect(self.show_protocol_status_dialog)
-        for action in [refresh_ports, connect, refresh_cameras, servo_status, protocol_status]:
+        task_runtime = action_cls("Task Runtime", self)
+        task_runtime.triggered.connect(self.show_task_runtime_window)
+        auto_calib_log = action_cls("Auto Calib Log", self)
+        auto_calib_log.triggered.connect(self.show_auto_calib_log_dialog)
+        for action in [refresh_ports, connect, refresh_cameras, servo_status, protocol_status, task_runtime, auto_calib_log]:
             menu.addAction(action)
+
+    def show_task_runtime_window(self) -> None:
+        if self._task_runtime_window is None:
+            self._task_runtime_window = TaskRuntimeWindow(self)
+            self._task_runtime_window.destroyed.connect(lambda _obj=None: setattr(self, "_task_runtime_window", None))
+        if self._state is not None:
+            self._task_runtime_window.update_state(self._state)
+        self._task_runtime_window.show()
+        self._task_runtime_window.raise_()
+        self._task_runtime_window.activateWindow()
+
+    def show_auto_calib_log_dialog(self) -> None:
+        latest = self._latest_auto_calib_log_path()
+        if not latest:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Auto Calib Log",
+                f"No auto calibration log found.\nFolder: {AUTO_CALIB_LOG_DIR}",
+            )
+            return
+        try:
+            with open(latest, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Auto Calib Log", f"Failed to read:\n{latest}\n\n{exc}")
+            return
+        log_text = "".join(lines).strip() or "(empty)"
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Auto Calib Log")
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        path_label = QtWidgets.QLabel(f"Latest log: {latest}")
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(path_label)
+
+        log_view = QtWidgets.QPlainTextEdit()
+        log_view.setReadOnly(True)
+        log_view.setFont(QtGui.QFont("Consolas", 10))
+        try:
+            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        except AttributeError:
+            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        log_view.setPlainText(log_text)
+        layout.addWidget(log_view, 1)
+
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, 0, QtCore.Qt.AlignRight)
+
+        screen = dialog.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            width = min(max(760, int(area.width() * 0.80)), max(480, area.width() - 80))
+            height = min(max(520, int(area.height() * 0.78)), max(360, area.height() - 80))
+            dialog.resize(width, height)
+            dialog.setMinimumSize(min(760, width), min(460, height))
+        else:
+            dialog.resize(1100, 700)
+            dialog.setMinimumSize(760, 460)
+
+        scroll_bar = log_view.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        dialog.exec()
+
+    @staticmethod
+    def _latest_auto_calib_log_path() -> str:
+        try:
+            paths = [
+                os.path.join(AUTO_CALIB_LOG_DIR, name)
+                for name in os.listdir(AUTO_CALIB_LOG_DIR)
+                if name.startswith("auto_calib_") and name.lower().endswith(".log")
+            ]
+        except OSError:
+            return ""
+        if not paths:
+            return ""
+        paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        return paths[0]
 
     def refresh_ports(self) -> None:
         current = self.current_port
@@ -457,6 +507,10 @@ class HandGUI(QtWidgets.QMainWindow):
         state = self._state or HandModel()
         if has_new_state or has_new_tactile or not self.is_comm_connected():
             self._update_display(state)
+        elif self.is_comm_connected() and (time.time() - self._last_status_refresh) >= 0.2:
+            # A serial port can stay open after lower status heartbeats stop.
+            self._last_status_refresh = time.time()
+            self._update_status_text(state)
         if (has_new_state or has_new_tactile) and self._data_logger.is_running():
             self._write_run_data_row(state)
 
@@ -486,6 +540,12 @@ class HandGUI(QtWidgets.QMainWindow):
     def _stop_tactile_port(self) -> None:
         self.backend.disconnect_tactile_serial()
         self._tactile_state = None
+        if self._state is not None:
+            self._state.tactile_data = []
+            self._state.tactile_online = False
+            self._state.tactile_module_online = [False] * 15
+            self._state.tactile_module_last_rx_ts = [0.0] * 15
+            self._update_display(self._state)
 
     def connect_tactile_serial(self, port: str) -> bool:
         return self._start_tactile_port(port)
@@ -507,6 +567,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_draw = now
         self.control_panel.update_state(state)
         self._display_windows.update_views(state)
+        if self._task_runtime_window is not None:
+            self._task_runtime_window.update_state(state)
         self.joint_plot.append_state(state)
         self.joint_plot.update_plot()
         self._update_status_text(state)
@@ -516,34 +578,86 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _update_status_text(self, state: HandModel) -> None:
         self._refresh_start_indicator()
+        now = time.time()
+        self._last_status_refresh = now
+        connected = self.is_comm_connected()
         delay_ms = 0.0
         ts = float(getattr(state, "timestamp", 0.0) or 0.0)
         if ts > 0:
-            delay_ms = max(0.0, (time.time() - ts) * 1000.0)
+            delay_ms = max(0.0, (now - ts) * 1000.0)
+        system_status_fresh = self._packet_status_fresh(
+            state,
+            "has_system_status_data",
+            "system_status_last_rx_ts",
+            SYSTEM_STATUS_STALE_AFTER_S,
+            now,
+        )
+        system_uncontrollable = system_status_fresh and int(getattr(state, "system_state", 0) or 0) == 0
         calib = str(getattr(state, "calib_status", "IDLE") or "IDLE")
-        sys_state = self._system_state_name(getattr(state, "system_state", None)) if getattr(state, "has_system_status_data", False) else "-"
-        sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
-        turn_text, turn_ok, turn_tip = self._turn_known_status(state)
-        sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
-        calib_text = f"CALIB {calib}"
-        overload_text, overload_tip, overload_active = self._format_overload_summary(state)
+        if system_status_fresh:
+            sys_state = self._system_state_name(getattr(state, "system_state", None))
+            sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
+            sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
+            calib_text = f"CALIB {calib}"
+            calib_tip = self._calib_tooltip(state, calib)
+            calib_style = self._calib_status_style(calib)
+        else:
+            has_status = bool(getattr(state, "has_system_status_data", False))
+            sys_faults = []
+            if connected:
+                sys_text = "SYS STATUS LOST" if has_status else "SYS COMM FAULT"
+                sys_tip = (
+                    "SYSTEM_STATUS heartbeat is stale; lower protocol is not healthy"
+                    if has_status
+                    else "No SYSTEM_STATUS received; serial open does not mean lower protocol is healthy"
+                )
+            else:
+                sys_text = "SYS -"
+                sys_tip = "Lower serial disconnected"
+            calib_text = "CALIB -"
+            calib_tip = "Calibration status unavailable"
+            calib_style = "warn" if connected else "neutral"
+        turn_text, turn_ok, turn_tip = self._turn_known_status(state, system_status_fresh)
+        if connected:
+            overload_text, overload_tip, overload_active = self._format_overload_summary(state, now)
+        else:
+            overload_text, overload_tip, overload_active = "OL -", "Lower serial disconnected", False
         delay_text, delay_state = self._format_delay_status(delay_ms)
         self.fault_label.setText(sys_text)
         self.fault_label.setToolTip(sys_tip)
         self.calib_label.setText(calib_text)
-        self.calib_label.setToolTip(self._calib_tooltip(state, calib))
+        self.calib_label.setToolTip(calib_tip)
         self.overload_label.setText(overload_text)
         self.overload_label.setToolTip(overload_tip)
         self.turn_label.setText(turn_text)
         self.turn_label.setToolTip(turn_tip)
         self.delay_label.setText(delay_text)
         self.delay_label.setToolTip(f"Delay: {delay_ms:.0f} ms" if delay_ms else "Delay: -")
-        self._style_top_status_label(self.fault_label, "warn" if sys_faults else "ok")
-        self._style_top_status_label(self.calib_label, self._calib_status_style(calib))
+        system_style = "neutral" if not connected else (
+            "warn" if (not system_status_fresh or system_uncontrollable or sys_faults) else "ok"
+        )
+        self._style_top_status_label(self.fault_label, system_style)
+        self._style_top_status_label(self.calib_label, calib_style)
         self._style_top_status_label(self.overload_label, "warn" if overload_active else "ok")
-        self._style_top_status_label(self.turn_label, "ok" if turn_ok else "warn")
+        self._style_top_status_label(self.turn_label, "neutral" if not connected else ("ok" if turn_ok else "warn"))
         self._style_top_status_label(self.delay_label, delay_state)
         self._handle_fault_side_effects(state)
+
+    @staticmethod
+    def _packet_status_fresh(
+        state: HandModel,
+        valid_attr: str,
+        timestamp_attr: str,
+        stale_after_s: float,
+        now: Optional[float] = None,
+    ) -> bool:
+        if not bool(getattr(state, valid_attr, False)):
+            return False
+        last_rx = float(getattr(state, timestamp_attr, 0.0) or 0.0)
+        if last_rx <= 0.0:
+            return False
+        current = time.time() if now is None else float(now)
+        return max(0.0, current - last_rx) <= float(stale_after_s)
 
     @staticmethod
     def _format_delay_status(delay_ms: float) -> tuple[str, str]:
@@ -602,7 +716,18 @@ class HandGUI(QtWidgets.QMainWindow):
         release_flags = getattr(state, "joint_reverse_release_fault", []) or []
         return [f"J{i:02d}" for i, faulted in enumerate(release_flags) if faulted]
 
-    def _format_overload_summary(self, state: HandModel) -> tuple[str, str, bool]:
+    def _format_overload_summary(self, state: HandModel, now: Optional[float] = None) -> tuple[str, str, bool]:
+        fault_status_fresh = self._packet_status_fresh(
+            state,
+            "has_fault_status_data",
+            "fault_status_last_rx_ts",
+            FAULT_STATUS_STALE_AFTER_S,
+            now,
+        )
+        if not fault_status_fresh:
+            if bool(getattr(state, "has_fault_status_data", False)):
+                return "OL STALE", "FAULT_STATUS heartbeat is stale", True
+            return "OL NO DATA", "No FAULT_STATUS received; overload state is unknown", True
         overload_items = self._overload_detail_items(state)
         if not overload_items:
             return "OL OK", "Overload motors: none", False
@@ -675,6 +800,13 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_FEEDBACK_LOST: "标定过程中反馈丢失",
             CALIB_DIAG_REASON_TASK_START_FAILED: "标定任务启动失败",
             CALIB_DIAG_REASON_INTERNAL_ERROR: "标定内部错误",
+            CALIB_DIAG_REASON_CONTROL_LOST: "标定控制权丢失",
+            CALIB_DIAG_REASON_HOLD_TARGET_FAILED: "保持其他关节失败",
+            CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
+            CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
+            CALIB_DIAG_REASON_SIDE_ADJUST_FAILED: "侧摆预调整失败",
+            CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
+            CALIB_DIAG_REASON_OVER_RELEASE: "过度松绳",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -720,8 +852,19 @@ class HandGUI(QtWidgets.QMainWindow):
                 lines.append(f"数据：unknown_mask=0x{bitmap:08X}")
                 suggestions.append("不要继续发送运动命令。若换过机械/舵机/映射或舵机单独断电，先 New Device Reset，再 Clear Fault 和重新标定。")
             elif reason == CALIB_DIAG_REASON_WRONG_DIRECTION:
-                lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
-                suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
+                if phase == CALIB_DIAG_PHASE_DUAL_EXCHANGE and motor == 0xFF:
+                    lines.append(
+                        f"数据：signed_span={value_a}, default_dir={value_b}, runtime_dir={value_c}, joint_mask=0x{bitmap:08X}"
+                    )
+                    suggestions.append("双电机方向一致性检查失败。检查该关节磁编码器方向表、主/副舵机 M/J 映射、tendon 收放方向和绳路是否反绕；方向修正后重新标定。")
+                else:
+                    lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
+                    suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
+            elif reason == CALIB_DIAG_REASON_OVER_RELEASE:
+                lines.append(
+                    f"数据：release={value_a}, limit={value_b}, actual_release={value_c}, command_release={bitmap}"
+                )
+                suggestions.append("到达 220 最大负载后反向松绳超过 3 圈，已作为标定故障停止。检查负反馈方向、舵机 ABS 方向、绳路是否反绕或打滑；手动回收到安全位置后 Clear Fault 并重新标定。")
             elif reason == CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT:
                 lines.append(f"数据：abs_error={value_a}, required_travel={value_b}, zero_deg_x100={value_c}")
                 suggestions.append("检查回零目标是否被机械限位阻挡、绳索是否太紧、zero pull 参数是否过大；释放机构后重试。")
@@ -742,6 +885,27 @@ class HandGUI(QtWidgets.QMainWindow):
                 suggestions.append("在 Active Scope 中勾选需要标定的关节/电机后再开始标定。")
             elif reason == CALIB_DIAG_REASON_TASK_START_FAILED:
                 suggestions.append("标定任务没有启动。确认上一次标定已经退出；如果仍失败，重启 P4 后再试。")
+            elif reason == CALIB_DIAG_REASON_CONTROL_LOST:
+                lines.append(f"数据：state={value_a}, owner={value_b}, enabled={value_c}, active_joint_mask=0x{bitmap:08X}")
+                suggestions.append("标定过程中控制权被打断。检查是否按过 STOP/E-STOP/Pause/Clear Fault/Enable，或上位机是否发送了其他控制命令；Clear Fault 后重新 ENABLE，再重新标定。")
+            elif reason == CALIB_DIAG_REASON_HOLD_TARGET_FAILED:
+                lines.append(f"数据：current_index={value_a}, joint_count={value_b}, batch_count={value_c}, selected_joint_mask=0x{bitmap:08X}")
+                suggestions.append("标定当前关节时，其他已选关节的保持目标生成失败。检查所选关节对应舵机是否在线、Turn 是否 known、ABS limit 是否有效；必要时减少勾选范围逐个标定。")
+            elif reason == CALIB_DIAG_REASON_JOINT_LIST_INVALID:
+                lines.append(f"数据：joint_or_count={value_a}, max_joint_count={value_b}, index_or_has_list={value_c}, seen_mask=0x{bitmap:08X}")
+                suggestions.append("下位机收到的 active scope/关节列表不合法。取消勾选后重新选择要标定的关节；如果反复出现，检查上位机 active scope 下发和固件关节数量是否一致。")
+            elif reason == CALIB_DIAG_REASON_DUPLICATE_JOINT:
+                lines.append(f"数据：duplicate_index={value_a}, joint_count={value_b}, seen_mask=0x{bitmap:08X}")
+                suggestions.append("同一个关节被重复加入标定序列。重新勾选关节后再标定；如果还出现，检查 active scope 到标定列表的构造逻辑。")
+            elif reason == CALIB_DIAG_REASON_SIDE_ADJUST_FAILED:
+                lines.append(f"数据：selected_mask=0x{value_a:08X}, required_mask=0x{value_b:08X}, matched_mask=0x{bitmap:08X}")
+                suggestions.append("自动标定前的侧摆预调整失败。先单独点击 Side Adjust 检查是否能完成；重点检查四指侧摆双电机关节的副电机是否先松绳、主电机负载是否能到 190、Turn 是否 known。")
+            elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
+                lines.append(
+                    f"数据：completed_mask=0x{value_a:08X}, failed_mask=0x{value_b:08X}, "
+                    f"selected_count={value_c}, failed_mask_dup=0x{bitmap:08X}"
+                )
+                suggestions.append("本次已成功的关节结果会保留；下次只勾选 failed_mask 对应的失败关节重新标定。若需要细节，请查看前后几行 [AUTO CALIB] 日志。")
             elif reason in {
                 CALIB_DIAG_REASON_LOAD_NOT_REACHED,
                 CALIB_DIAG_REASON_ANGLE_NOT_MOVING,
@@ -987,8 +1151,15 @@ class HandGUI(QtWidgets.QMainWindow):
 
         return text, "\n".join(lines)
 
-    def _turn_known_status(self, state: HandModel) -> tuple[str, bool, str]:
-        if not getattr(state, "has_system_status_data", False):
+    def _turn_known_status(self, state: HandModel, system_status_fresh: Optional[bool] = None) -> tuple[str, bool, str]:
+        if system_status_fresh is None:
+            system_status_fresh = self._packet_status_fresh(
+                state,
+                "has_system_status_data",
+                "system_status_last_rx_ts",
+                SYSTEM_STATUS_STALE_AFTER_S,
+            )
+        if not system_status_fresh:
             return "TURN -", False, "Turn: unknown"
         try:
             unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
@@ -1367,9 +1538,22 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _refresh_toolbar_connection_lights(self) -> None:
         connected = self.is_comm_connected()
-        color = "#2e7d32" if connected else "#c62828"
-        border = "#1b5e20" if connected else "#8e0000"
-        tip = "Lower serial connected" if connected else "Lower serial disconnected"
+        state = self._state or HandModel()
+        protocol_healthy = connected and self._packet_status_fresh(
+            state,
+            "has_system_status_data",
+            "system_status_last_rx_ts",
+            SYSTEM_STATUS_STALE_AFTER_S,
+        )
+        if protocol_healthy:
+            color, border = "#2e7d32", "#1b5e20"
+            tip = "Lower serial connected; SYSTEM_STATUS heartbeat healthy"
+        elif connected:
+            color, border = "#ed8b00", "#9a6700"
+            tip = "Serial open, but lower protocol status is missing or stale"
+        else:
+            color, border = "#c62828", "#8e0000"
+            tip = "Lower serial disconnected"
         light = getattr(self, "comm_conn_light", None)
         if light is None:
             return
@@ -1405,6 +1589,9 @@ class HandGUI(QtWidgets.QMainWindow):
             log_session("APP", "window closing")
             self.control_panel.stop_all_tests("window closed")
             self._display_windows.close_all()
+            if self._task_runtime_window is not None:
+                self._task_runtime_window.close()
+                self._task_runtime_window = None
             self.joint_plot.close()
             self._stop_data_recording("closed")
             self._stop_tactile_port()

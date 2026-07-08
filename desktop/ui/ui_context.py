@@ -1,6 +1,6 @@
 from typing import Optional
 
-from data_models import HandModel
+from desktop.core.data_models import HandModel
 
 
 class HandGuiContext:
@@ -18,6 +18,14 @@ class HandGuiContext:
     @property
     def current_mode(self) -> str:
         return self._app.current_mode
+
+    @property
+    def ros2_enabled(self) -> bool:
+        return bool(getattr(self._app, "ros2_enabled", False))
+
+    @property
+    def ros_topic(self) -> str:
+        return str(getattr(self._app, "ros_topic", "/mmhand/joint_targets"))
 
     @property
     def control_panel(self):

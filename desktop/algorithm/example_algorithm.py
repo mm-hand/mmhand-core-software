@@ -8,7 +8,7 @@ import time
 from typing import Optional
 import threading
 
-from hand_backend import HandBackend
+from desktop.core.hand_backend import HandBackend
 
 
 def run(

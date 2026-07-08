@@ -1,6 +1,12 @@
 import argparse
+import os
+import sys
 import time
 from typing import Dict
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 try:
     import serial
@@ -9,8 +15,8 @@ except ModuleNotFoundError:
     print("Run: python -m pip install pyserial")
     raise
 
-from comm_layer import list_ports
-from protocol import BAUDRATE, PROTOCOL_HEADER, PROTOCOL_TAIL, build_calibrate_cmd
+from desktop.core.comm_layer import list_ports
+from desktop.core.protocol import BAUDRATE, PROTOCOL_HEADER, PROTOCOL_TAIL, build_calibrate_cmd
 
 
 PACKET_NAMES = {

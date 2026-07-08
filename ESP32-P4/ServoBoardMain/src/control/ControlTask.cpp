@@ -1,11 +1,14 @@
-#include "ControlTask.h"
+﻿#include "ControlTask.h"
 
 #include <math.h>
 #include <string.h>
 
 #include "../calibration/CalibrationTask.h"
 #include "../hardware/HardwareMap.h"
+#include "../shared/SharedSafetyState.h"
+#include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
+#include "../system/TaskRuntimeMonitor.h"
 #include "ControlOutputBuilder.h"
 #include "ControlSafety.h"
 #include "ControlSolver.h"
@@ -16,7 +19,7 @@
 #endif
 
 #ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
-#define FEEDBACK_SERIAL_DEBUG_ENABLE 1
+#define FEEDBACK_SERIAL_DEBUG_ENABLE 0
 #endif
 
 // Match the legacy RoboticHand protection policy: keep reverse/release guard
@@ -26,11 +29,13 @@
 #endif
 
 static ControlSolver g_controlSolver;
+static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
+static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
+static uint32_t g_dualReleaseAnchorValidBitmap = 0;
 
 static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 
-// 默认上报的关节调试通道。
 static const uint8_t kDebugJointIndices[] = {0,1,2,3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
@@ -48,6 +53,7 @@ static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
+static const uint32_t kFeedbackRunTimeoutMs = 8000;
 static const float kLocalTestTwoPi = 6.28318530717958647692f;
 static const float kLocalTestMinFreqHz = 0.001f;
 static const float kLocalTestMaxFreqHz = 100.0f;
@@ -78,8 +84,7 @@ static float sanitizeLocalTestAmp(float ampDeg)
     return ampDeg;
 }
 
-// 协议字段使用 int16 传输，保留最大正值 32767 作为异常/占位，正常值限制到 32766。
-
+// 鍗忚瀛楁浣跨敤 int16 浼犺緭锛屼繚鐣欐渶澶ф鍊?32767 浣滀负寮傚父/鍗犱綅锛屾甯稿€奸檺鍒跺埌 32766銆?
 static int16_t clampMappedCountForProtocol(int32_t value)
 {
     if (value > 32766) return 32766;
@@ -87,7 +92,6 @@ static int16_t clampMappedCountForProtocol(int32_t value)
     return (int16_t)value;
 }
 
-// 按安装方向统一磁编码器方向，输出范围保持在 [0, kEncoderModulo)。
 static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
     int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
@@ -242,18 +246,61 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
         const uint8_t motorChannel = tendonTargets.motorChannel[i];
         if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
-            continue;
+            return 0;
         }
         const MotorMapItem& motor = motorMap[motorChannel];
-        const int16_t clampedTarget = clampServoPosByMotorAbsLimit(sharedData,
-                                                                   motorChannel,
-                                                                   tendonTargets.targetAbs[i]);
+        const uint32_t bit = (1UL << motorChannel);
+        uint32_t validBitmap = 0;
+        uint32_t lockedBitmap = 0;
+        int32_t limitMin = 0;
+        int32_t limitMax = 0;
+        {
+            SharedSafetyGuard guard;
+            validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+            lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+            limitMin = sharedData->motor_abs_limit_min[motorChannel];
+            limitMax = sharedData->motor_abs_limit_max[motorChannel];
+        }
+        if ((validBitmap & bit) == 0 || (lockedBitmap & bit) == 0) {
+            return 0;
+        }
+        if (limitMin > limitMax) {
+            const int32_t tmp = limitMin;
+            limitMin = limitMax;
+            limitMax = tmp;
+        }
+
+        // Calibration stores the tight endpoint as the end of the allowed
+        // range in the motor's tendon-shortening direction.
+        const int32_t calibratedTightAbs =
+            (getMotorTendonShortenAbsSign(motorChannel) > 0) ? limitMax : limitMin;
+        const int32_t currentRawAbs = servoData.servoAngles[motorChannel];
+        if ((g_dualReleaseAnchorValidBitmap & bit) == 0 ||
+            g_dualReleaseAnchorCalibSignature[motorChannel] != calibratedTightAbs) {
+            // The calibration limit becomes available only after calibration
+            // completes. Capture the motor's actual position at the first
+            // feedback output after that calibration; this is the release
+            // reference requested for both tendons, not either motor's tight
+            // endpoint from an earlier calibration phase.
+            g_dualReleaseAnchorRawAbs[motorChannel] = currentRawAbs;
+            g_dualReleaseAnchorCalibSignature[motorChannel] = calibratedTightAbs;
+            g_dualReleaseAnchorValidBitmap |= bit;
+        }
+        // Dual-tendon feedback commands are not position-clamped against the
+        // calibration anchor. The release guard below observes actual motor
+        // feedback and blocks only further release after the allowance is hit.
+        const int32_t releaseLimitedTarget = clampDualTendonReleaseFromCalib(
+            jointIndex,
+            motorChannel,
+            g_dualReleaseAnchorRawAbs[motorChannel],
+            currentRawAbs,
+            tendonTargets.targetAbs[i]);
         JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
         target.motorChannel = motorChannel;
         target.busIndex = motor.busIndex;
         target.servoId = motor.servoID;
         target.sign = 1;
-        target.targetAbs = clampedTarget;
+        target.targetAbs = clampServoPos(releaseLimitedTarget);
     }
 
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
@@ -276,12 +323,13 @@ static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
     }
     const uint32_t validMask = validMotorChannelMask();
     if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
-        return sharedData->active_motor_mask & validMask;
+        return sharedAtomicLoad(&sharedData->active_motor_mask) & validMask;
     }
 
     uint32_t mask = 0;
     const uint32_t activeJointMask =
-        sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
         if ((activeJointMask & (1UL << jointIndex)) == 0) {
             continue;
@@ -327,7 +375,8 @@ static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
         return false;
     }
 
-    const uint32_t requiredMask = sharedData->active_motor_mask & validMotorChannelMask();
+    const uint32_t requiredMask =
+        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
     if (requiredMask == 0) {
         return false;
     }
@@ -359,7 +408,9 @@ static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
         return false;
     }
 
-    const uint32_t requiredMask = sharedData->active_joint_mask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    const uint32_t requiredMask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     if (requiredMask == 0) {
         return false;
     }
@@ -422,16 +473,10 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
 }
 
 // ============================================================================
-// ControlTask - 核心实时控制任务
+// ControlTask - 鏍稿績瀹炴椂鎺у埗浠诲姟
 // ============================================================================
-// 运行频率：通常为 100Hz (10ms 周期)
-// 职责：
-// 1) 收集总线传来的伺服电机绝对位置与磁编码器角度。
-// 2) 读取上位机下发的命令快照 (ControlCommandSnapshot_t)。
-// 3) 根据不同模式 (CONTROL_MODE_JOINT 闭环 / CONTROL_MODE_DIRECT_MOTOR 直控) 执行分发。
-// 4) 执行安全检查（如急停、过载、反向释放保护、工作空间限位）。
-// 5) 调用双环 PID 求解器 (ControlSolver) 获得目标脉冲，并组装 Batch 交给底层。
-// ============================================================================
+// 杩愯棰戠巼锛氶€氬父涓?100Hz (10ms 鍛ㄦ湡)
+// 鑱岃矗锛?// 1) 鏀堕泦鎬荤嚎浼犳潵鐨勪己鏈嶇數鏈虹粷瀵逛綅缃笌纾佺紪鐮佸櫒瑙掑害銆?// 2) 璇诲彇涓婁綅鏈轰笅鍙戠殑鍛戒护蹇収 (ControlCommandSnapshot_t)銆?// 3) 鏍规嵁涓嶅悓妯″紡 (CONTROL_MODE_JOINT 闂幆 / CONTROL_MODE_DIRECT_MOTOR 鐩存帶) 鎵ц鍒嗗彂銆?// 4) 鎵ц瀹夊叏妫€鏌ワ紙濡傛€ュ仠銆佽繃杞姐€佸弽鍚戦噴鏀句繚鎶ゃ€佸伐浣滅┖闂撮檺浣嶏級銆?// 5) 璋冪敤鍙岀幆 PID 姹傝В鍣?(ControlSolver) 鑾峰緱鐩爣鑴夊啿锛屽苟缁勮 Batch 浜ょ粰搴曞眰銆?// ============================================================================
 void controlTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -452,14 +497,19 @@ void controlTask(void* parameter)
     MappedAngleData_t mappedData;
     ReleaseGuardState releaseGuards[ENCODER_TOTAL_NUM];
     resetAllReleaseGuardStates(releaseGuards);
-    uint32_t lastReleaseFaultResetToken = sharedData->reverse_release_fault_reset_token;
-    sharedData->reverse_release_fault_bitmap = 0;
+    uint32_t lastReleaseFaultResetToken =
+        sharedAtomicLoad(&sharedData->reverse_release_fault_reset_token);
+    sharedAtomicStore(&sharedData->reverse_release_fault_bitmap, (uint32_t)0);
     uint32_t overloadFaultLatched = 0;
     uint8_t overloadHighCount[SERVO_TOTAL_NUM] = {0};
-    uint32_t lastOverloadFaultResetToken = sharedData->overload_fault_reset_token;
-    sharedData->overload_fault_bitmap = 0;
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        sharedData->overload_fault_load[ch] = 0;
+    uint32_t lastOverloadFaultResetToken =
+        sharedAtomicLoad(&sharedData->overload_fault_reset_token);
+    {
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
+        for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+            sharedData->overload_fault_load[ch] = 0;
+        }
     }
     ControlCommandSnapshot_t commandSnapshot;
     memset(&commandSnapshot, 0, sizeof(commandSnapshot));
@@ -482,6 +532,12 @@ void controlTask(void* parameter)
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
+    uint32_t feedbackRunToken = 0;
+    uint32_t feedbackRunStartMs = 0;
+    float feedbackRunTargetDeg[ENCODER_TOTAL_NUM] = {0.0f};
+    bool feedbackRunTracking = false;
+    bool feedbackRunDoneEventQueued = false;
+    bool feedbackRunTimeoutEventQueued = false;
     uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
     bool sineTestActive = false;
     uint32_t sineTestStartMs = 0;
@@ -489,8 +545,14 @@ void controlTask(void* parameter)
 
     while (1)
     {
+        taskRuntimeMarkLoopStart(TASK_RUNTIME_CONTROL);
         if (!readControlCommandSnapshot(sharedData, &commandSnapshot)) {
+            taskRuntimeMarkLoopEnd(TASK_RUNTIME_CONTROL);
+            const TickType_t nextWakeTime = lastWakeTime + solverPeriodTicks;
+            const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+            taskRuntimeMarkPeriodResult(TASK_RUNTIME_CONTROL, periodOverrun);
             vTaskDelayUntil(&lastWakeTime, solverPeriodTicks);
+            if (periodOverrun) vTaskDelay(1);
             continue;
         }
 
@@ -523,22 +585,27 @@ void controlTask(void* parameter)
             lastMotorDirectSource = motorDirectSource;
         }
 
-        const uint32_t releaseFaultResetToken = sharedData->reverse_release_fault_reset_token;
+        const uint32_t releaseFaultResetToken =
+            sharedAtomicLoad(&sharedData->reverse_release_fault_reset_token);
         if (releaseFaultResetToken != lastReleaseFaultResetToken)
         {
             resetAllReleaseGuardStates(releaseGuards);
-            sharedData->reverse_release_fault_bitmap = 0;
+            sharedAtomicStore(&sharedData->reverse_release_fault_bitmap, (uint32_t)0);
             lastReleaseFaultResetToken = releaseFaultResetToken;
         }
 
-        const uint32_t overloadFaultResetToken = sharedData->overload_fault_reset_token;
+        const uint32_t overloadFaultResetToken =
+            sharedAtomicLoad(&sharedData->overload_fault_reset_token);
         if (overloadFaultResetToken != lastOverloadFaultResetToken)
         {
             overloadFaultLatched = 0;
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
-            sharedData->overload_fault_bitmap = 0;
-            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-                sharedData->overload_fault_load[ch] = 0;
+            {
+                SharedSafetyGuard guard;
+                sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
+                for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                    sharedData->overload_fault_load[ch] = 0;
+                }
             }
             lastOverloadFaultResetToken = overloadFaultResetToken;
         }
@@ -580,11 +647,15 @@ void controlTask(void* parameter)
             prevMotorOnline[ch] = onlineNow;
         }
 
-        // 过载保护锁存位由运行期检测维护，并继续写入共享状态供上位机显示。
-        sharedData->overload_fault_bitmap |= overloadFaultLatched;
-        overloadFaultLatched = sharedData->overload_fault_bitmap;
+        sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
+        overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
 
-        // 从主执行舵机反馈构建每个关节的绝对位置，供闭环 PID 与安全判断使用。
+        // Calibration clears these validity bits before producing new limits.
+        // Mirror that transition so a repeated calibration always captures a
+        // fresh pair of release anchors, even if a tight endpoint is identical.
+        g_dualReleaseAnchorValidBitmap &=
+            sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+
         memset(absolutePositionRaw, 0, sizeof(absolutePositionRaw));
         memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
@@ -600,13 +671,13 @@ void controlTask(void* parameter)
             }
         }
 
-        sharedData->joint16_dual_feedback_fault = 0;
+        sharedAtomicStore(&sharedData->joint16_dual_feedback_fault, (uint8_t)0);
 
 #if SOLVER_DIAG_LOG_ENABLE
         const uint32_t nowMs = millis();
         if (nowMs - lastDiagLogMs >= 500) {
             lastDiagLogMs = nowMs;
-            Serial.printf("[Solver] j16 qRef=%.2f qFb=%.2f\r\n",
+            FW_LOG_INFO_PRINTF("[Solver] j16 qRef=%.2f qFb=%.2f\r\n",
                           (double)localTargets[kJoint16Index],
                           (double)magAngles[kJoint16Index]);
         }
@@ -624,9 +695,19 @@ void controlTask(void* parameter)
 
         if (canBusOnline)
         {
+            uint32_t encoderOnlineMask = 0;
+            uint32_t encoderFaultMask = 0;
+            {
+                SharedSafetyGuard guard;
+                encoderOnlineMask = sharedAtomicLoad(&sharedData->encoder_online_bitmap);
+                encoderFaultMask = sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
+            }
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
             {
-                if (sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
+                const uint32_t bit = (1UL << i);
+                if (((encoderOnlineMask & bit) == 0) ||
+                    ((encoderFaultMask & bit) != 0) ||
+                    sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
                     continue;
@@ -744,8 +825,11 @@ void controlTask(void* parameter)
                     (overloadFaultLatched & bit) == 0)
                 {
                     overloadFaultLatched |= bit;
-                    sharedData->overload_fault_load[ch] = telemetryData.load[ch];
-                    Serial.printf("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
+                    {
+                        SharedSafetyGuard guard;
+                        sharedData->overload_fault_load[ch] = telemetryData.load[ch];
+                    }
+                    FW_LOG_INFO_PRINTF("[CONTROL] OVERLOAD_HOLD M%02u load=%d threshold=%d cycles=%u mode=%u\r\n",
                                   (unsigned)ch,
                                   loadMag,
                                   overloadThreshold,
@@ -758,14 +842,36 @@ void controlTask(void* parameter)
         {
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
         }
-        sharedData->overload_fault_bitmap |= overloadFaultLatched;
-        overloadFaultLatched = sharedData->overload_fault_bitmap;
+        sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
+        overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
 
-        // 关节闭环模式下先按标定结果限制目标角度，避免目标超过当前工作空间。
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
             }
+        }
+
+        const bool feedbackOneShotActive =
+            feedbackRunningState &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            !sineTestActive;
+        if (feedbackOneShotActive) {
+            // Snapshot the clamped target for this command generation. Completion
+            // must be judged against one stable target, not a later UI update.
+            if (!feedbackRunTracking || feedbackRunToken != jointCommandToken) {
+                memcpy(feedbackRunTargetDeg, localTargets, sizeof(feedbackRunTargetDeg));
+                feedbackRunToken = jointCommandToken;
+                feedbackRunStartMs = millis();
+                feedbackRunDoneStableCount = 0;
+                feedbackRunTracking = true;
+                feedbackRunDoneEventQueued = false;
+                feedbackRunTimeoutEventQueued = false;
+            }
+        } else {
+            feedbackRunTracking = false;
+            feedbackRunDoneStableCount = 0;
+            feedbackRunDoneEventQueued = false;
+            feedbackRunTimeoutEventQueued = false;
         }
 
         // PID uses tendon-space ABS so a positive correction has the same "shorten tendon"
@@ -774,10 +880,10 @@ void controlTask(void* parameter)
         g_controlSolver.compute(localTargets, magAngles, absolutePositionTendon, outPulsesTendon);
         if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
         {
-            // 直控模式：motorTargetRaw 按 motor channel 对齐，支持绝对多圈、单圈 raw 和 sweep 输入。
             if (controlEnabled) {
                 const uint32_t activeMotorMask =
-                    sharedData->active_motor_mask & validMotorChannelMask();
+                    sharedAtomicLoad(&sharedData->active_motor_mask) &
+                    validMotorChannelMask();
                 for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
                 {
                     if (((activeMotorMask >> ch) & 0x1UL) == 0) {
@@ -837,7 +943,6 @@ void controlTask(void* parameter)
         }
         else
         {
-            // 负反馈模式：逐关节评估安全条件，PID 输出再映射到一个或两个执行舵机。
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
                 const uint8_t bus = jointMap[jointIndex].busIndex;
@@ -878,20 +983,27 @@ void controlTask(void* parameter)
 
                 bool emergency =
                     (!normalOutputAllowed) ||
-                    shouldEmergencyStop(canBusOnline, sensorData, mappedData, jointIndex);
+                    shouldEmergencyStop(canBusOnline,
+                                        sensorData,
+                                        mappedData,
+                                        jointIndex,
+                                        ((sharedAtomicLoad(&sharedData->encoder_fault_bitmap) &
+                                          (1UL << jointIndex)) != 0));
                 if (jointIndex == kJoint16Index) {
                     emergency = emergency || overloadFaultActive;
                 } else {
-                    // Tendon guard is a hard release boundary from the host: once the
-                    // configured x1 ABS is reached, hold this joint instead of releasing.
-                    emergency = emergency || releaseFaultActive || holdByTendonGuard || overloadFaultActive;
+                    // Tendon boundary hits are advisory; release risk is latched only
+                    // after the joint fails to return during sustained release motion.
+                    (void)holdByTendonGuard;
+                    emergency = emergency || releaseFaultActive || overloadFaultActive;
                 }
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
                     hotplugHoldMotor[jointMotorCh];
                 const bool jointActive =
-                    (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
+                    (sharedAtomicLoad(&sharedData->active_joint_mask) &
+                     (1UL << jointIndex)) != 0;
 
                 if (bus >= NUM_BUSES) {
                     continue;
@@ -899,8 +1011,7 @@ void controlTask(void* parameter)
 
                 if (!controlEnabled)
                 {
-                    // 状态机未授权 START/RUN 时，不向舵机追加新的控制目标。
-                    continue;
+                    // 鐘舵€佹満鏈巿鏉?START/RUN 鏃讹紝涓嶅悜鑸垫満杩藉姞鏂扮殑鎺у埗鐩爣銆?                    continue;
                 }
 
                 if (!jointActive)
@@ -912,7 +1023,6 @@ void controlTask(void* parameter)
 
                 if (emergency)
                 {
-                    // 故障或保护触发时保持当前位置，避免异常状态下继续运动。
                     const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -981,16 +1091,17 @@ void controlTask(void* parameter)
             }
         }
 
-        sharedData->reverse_release_fault_bitmap =
+        const uint32_t releaseFaultBitmap =
 #if REVERSE_GUARD_ENABLE
             buildReleaseFaultBitmap(releaseGuards);
 #else
             0;
 #endif
+        sharedAtomicStore(&sharedData->reverse_release_fault_bitmap,
+                          releaseFaultBitmap);
 
         if (sharedData->jointDebugQueue)
         {
-            // 上报少量关节调试数据，便于观察目标、反馈、PID 输出和最终舵机命令。
             for (uint8_t di = 0; di < kDebugJointCount; di++)
             {
                 const uint8_t jointIndex = kDebugJointIndices[di];
@@ -1023,11 +1134,12 @@ void controlTask(void* parameter)
                 for (uint8_t di = 0; di < kDebugJointCount; di++) {
                     const uint8_t jointIndex = kDebugJointIndices[di];
                     const bool jointActive =
-                        (sharedData->active_joint_mask & (1UL << jointIndex)) != 0;
+                        (sharedAtomicLoad(&sharedData->active_joint_mask) &
+                         (1UL << jointIndex)) != 0;
                     if (!jointActive) {
                         continue;
                     }
-                    Serial.printf(
+                    FW_LOG_INFO_PRINTF(
                         "[FB DBG] J%02u valid=%u tgt=%.3f act=%.3f l1=%.3f l2act=%ld l2out=%.3f cmd=%d curAbs=%ld cmdValid=%u\r\n",
                         jointIndex,
                         (unsigned)(mappedData.validFlags[jointIndex] != 0 ? 1 : 0),
@@ -1066,21 +1178,49 @@ void controlTask(void* parameter)
             directRunDoneStableCount = 0;
         }
 
-        if (feedbackRunningState &&
-            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
-            !sineTestActive &&
-            feedbackJointTargetsReached(sharedData, mappedData, localTargets, magAngles)) {
-            if (feedbackRunDoneStableCount < 255) {
-                feedbackRunDoneStableCount++;
-            }
-            if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles) {
-                postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK_DONE);
+        if (feedbackOneShotActive && feedbackRunTracking) {
+            const bool targetsReached = feedbackJointTargetsReached(
+                sharedData,
+                mappedData,
+                feedbackRunTargetDeg,
+                magAngles
+            );
+            if (targetsReached) {
+                if (feedbackRunDoneStableCount < 255) {
+                    feedbackRunDoneStableCount++;
+                }
+                if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles &&
+                    !feedbackRunDoneEventQueued) {
+                    // Queue-full is transient. Keep the completion pending and retry
+                    // instead of dropping it and leaving RUN_FEEDBACK latched.
+                    feedbackRunDoneEventQueued = postSystemEventForToken(
+                        sharedData,
+                        SYSTEM_EVENT_RUN_FEEDBACK_DONE,
+                        feedbackRunToken
+                    );
+                }
+            } else {
                 feedbackRunDoneStableCount = 0;
             }
-        } else {
-            feedbackRunDoneStableCount = 0;
+
+            const uint32_t elapsedMs = (uint32_t)(millis() - feedbackRunStartMs);
+            if (!targetsReached &&
+                !feedbackRunDoneEventQueued &&
+                elapsedMs >= kFeedbackRunTimeoutMs &&
+                !feedbackRunTimeoutEventQueued) {
+                feedbackRunTimeoutEventQueued = postSystemEventForToken(
+                    sharedData,
+                    SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT,
+                    feedbackRunToken
+                );
+            }
         }
 
+        taskRuntimeMarkLoopEnd(TASK_RUNTIME_CONTROL);
+        const TickType_t nextWakeTime = lastWakeTime + solverPeriodTicks;
+        const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+        taskRuntimeMarkPeriodResult(TASK_RUNTIME_CONTROL, periodOverrun);
         vTaskDelayUntil(&lastWakeTime, solverPeriodTicks);
+        if (periodOverrun) vTaskDelay(1);
     }
 }

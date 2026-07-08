@@ -13,14 +13,15 @@ import numpy as np
 
 
 DESKTOP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if DESKTOP_ROOT not in sys.path:
-    sys.path.insert(0, DESKTOP_ROOT)
+PROJECT_ROOT = os.path.dirname(DESKTOP_ROOT)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from protocol import ENCODER_COUNT  # noqa: E402
-from teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH  # noqa: E402
-from teleop.Posture.hand_retargeting.math_utils import make_transform, parse_xyz, rpy_to_rotation  # noqa: E402
-from teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel  # noqa: E402
-from ui.ui_qt_compat import QtCore, QtGui, QtWidgets  # noqa: E402
+from desktop.core.protocol import ENCODER_COUNT  # noqa: E402
+from desktop.teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH  # noqa: E402
+from desktop.teleop.Posture.hand_retargeting.math_utils import make_transform, parse_xyz, rpy_to_rotation  # noqa: E402
+from desktop.teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel  # noqa: E402
+from desktop.ui.ui_qt_compat import QtCore, QtGui, QtWidgets  # noqa: E402
 
 
 SEMANTIC_JOINT_TO_ENCODER_INDEX = {

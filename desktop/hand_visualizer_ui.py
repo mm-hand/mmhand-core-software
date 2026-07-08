@@ -2,16 +2,15 @@
 # 功能拷贝自 plot_hand.py，几何参数从 config/hand_geo.json 加载
 # 将 21 个电机角度（度）映射为 20 个关节角（弧度）并绘制左手 3D 模型
 
-import os
 import numpy as np
 from typing import List, Optional, Sequence, Tuple
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from protocol import ENCODER_COUNT
-from hand_geometry import load_hand_geo
+from desktop.paths import HAND_GEO_PATH as DEFAULT_HAND_GEO_PATH
+from desktop.core.protocol import ENCODER_COUNT
+from desktop.core.hand_geometry import load_hand_geo
 
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
-HAND_GEO_PATH = os.path.join(CONFIG_DIR, "hand_geo.json")
+HAND_GEO_PATH = str(DEFAULT_HAND_GEO_PATH)
 # 21 电机索引 -> 20 关节角，可从 hand_geo.json 的 angle_mapping 覆盖
 DEFAULT_ANGLE_MAPPING = [
     [3, 0, 1, 2],    # thumb: abduct=3, flex=0,1,2

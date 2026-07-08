@@ -227,7 +227,9 @@ void HalEncoders::decodeFrame(
     uint16_t issuedCmd,
     bool fullDiag
 ) {
-    if (rawVal == 0x0000 || rawVal == 0xFFFF) {
+    // 0x0000 is a valid AS5047P ANGLECOM response at mechanical zero
+    // (parity=0, error=0, angle=0). Do not treat zero crossing as link loss.
+    if (rawVal == 0xFFFF) {
         markLinkLost(outData, encoderId);
         return;
     }

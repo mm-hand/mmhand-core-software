@@ -10,8 +10,9 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-from hand_backend import list_ports
-from data_models import (
+from desktop.paths import DEFAULT_URDF_PATH
+from desktop.core.hand_backend import list_ports
+from desktop.core.data_models import (
     HandModel,
     FingerTactile,
     TactileSensor,
@@ -36,8 +37,8 @@ import pyqtgraph as pg
 TACTILE_REAL_INTERVAL_S = 0.033
 TACTILE_FAKE_INTERVAL_S = 0.25
 TACTILE_NOISE_FLOOR = 1.0
-TACTILE_RISE_ALPHA = 0.50
-TACTILE_FALL_ALPHA = 0.30
+TACTILE_RISE_ALPHA = 0.85
+TACTILE_FALL_ALPHA = 0.45
 TACTILE_DISPLAY_FLOOR = 6.0
 TACTILE_AXIS_LEVELS = (70.0, 70.0, 180.0)
 TACTILE_2D_ARRAY_SCALE = 8
@@ -74,8 +75,10 @@ TACTILE_3D_DISPLAY_FLOOR = 2.0
 TACTILE_3D_DOT_RADIUS = 0.00155
 TACTILE_3D_HALO_RADIUS = 0.0054
 TACTILE_3D_SURFACE_OFFSET = 0.003
-DESKTOP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-URDF_HAND_PATH = os.path.join(DESKTOP_DIR, "hku_hand_v2_urdf", "urdf", "hand.urdf")
+TACTILE_FINGER_LABELS = ("Thumb", "Index", "Middle", "Ring", "Pinky")
+TACTILE_MODULE_DISPLAY_ORDER = (2, 1, 0)
+TACTILE_SENSOR_INDEX_FROM_MODULE = {2: 0, 1: 1, 0: 2}
+URDF_HAND_PATH = str(DEFAULT_URDF_PATH)
 URDF_MAX_TRIANGLES_PER_LINK = 0
 _URDF_HAND_MESH_CACHE = None
 _URDF_HAND_LINK_VERTEX_CACHE = None
@@ -1250,6 +1253,7 @@ class TactileView(QtWidgets.QWidget):
         self.use_3d = False
         self.raw_visible = False
         self._raw_text_cache = ""
+        self.module_status_labels: List[List[QtWidgets.QLabel]] = []
         self._settings = QtCore.QSettings("mmhand", "desktop")
         self._build_ui()
 
@@ -1304,6 +1308,30 @@ class TactileView(QtWidgets.QWidget):
         s3_hint.setStyleSheet("color:#64748b;")
         s3_row.addWidget(s3_hint)
         layout.addLayout(s3_row)
+        module_row = QtWidgets.QHBoxLayout()
+        module_row.setSpacing(10)
+        module_row.addWidget(QtWidgets.QLabel("Touch modules:"))
+        self.module_status_labels = []
+        for finger_idx, finger_name in enumerate(TACTILE_FINGER_LABELS):
+            group = QtWidgets.QHBoxLayout()
+            group.setSpacing(3)
+            name_label = QtWidgets.QLabel(finger_name)
+            name_label.setStyleSheet("color:#334155;")
+            group.addWidget(name_label)
+            labels: List[QtWidgets.QLabel] = []
+            for module_id in TACTILE_MODULE_DISPLAY_ORDER:
+                item = QtWidgets.QLabel(str(module_id))
+                item.setAlignment(QtCore.Qt.AlignCenter)
+                item.setFixedSize(20, 20)
+                item.setToolTip(f"{finger_name} tactile module {module_id}")
+                labels.append(item)
+                group.addWidget(item)
+            holder = QtWidgets.QWidget()
+            holder.setLayout(group)
+            module_row.addWidget(holder)
+            self.module_status_labels.append(labels)
+        module_row.addStretch(1)
+        layout.addLayout(module_row)
         self.s3_refresh_btn.clicked.connect(lambda _checked=False: self._refresh_s3_ports())
         self.s3_connect_btn.clicked.connect(lambda _checked=False: self._connect_s3_tactile_port())
         self.s3_disconnect_btn.clicked.connect(lambda _checked=False: self._disconnect_s3_tactile_port())
@@ -1374,6 +1402,7 @@ class TactileView(QtWidgets.QWidget):
         )
         layout.addWidget(self.raw_text)
         self._apply_matrix(self._build_matrix(None, self.axis), self.axis, False)
+        self._refresh_tactile_module_status(None)
 
     def build(self, _parent) -> None:
         pass
@@ -1390,6 +1419,7 @@ class TactileView(QtWidgets.QWidget):
         self._last_update_ts = now
         self._refresh_s3_status()
         display_state = self._fake_display_state(state) if use_fake else state
+        self._refresh_tactile_module_status(display_state)
         if self.values_label.isVisible():
             self.values_label.setText(self._format_values(display_state))
         if self.peak_label.isVisible():
@@ -1418,6 +1448,7 @@ class TactileView(QtWidgets.QWidget):
         self._display_matrix = None
         self.raw_text.clear()
         self._raw_text_cache = ""
+        self._refresh_tactile_module_status(None)
         if self.hand_3d is not None:
             self.hand_3d.clear()
         self._apply_matrix(self._build_matrix(None, self.axis), self.axis, False)
@@ -1538,6 +1569,7 @@ class TactileView(QtWidgets.QWidget):
             self.s3_status_label.setText(f"S3 tactile disconnect failed: {exc}")
             return
         self.s3_status_label.setText("S3 tactile: disconnected")
+        self.clear()
         self._refresh_s3_status()
 
     def _refresh_s3_status(self) -> None:
@@ -1561,6 +1593,77 @@ class TactileView(QtWidgets.QWidget):
         self.s3_status_label.setStyleSheet(f"color:{color};")
         self.s3_connect_btn.setEnabled(not connected)
         self.s3_disconnect_btn.setEnabled(connected)
+
+    def _refresh_tactile_module_status(self, state: Optional[HandModel]) -> None:
+        if not getattr(self, "module_status_labels", None):
+            return
+        module_online = list(getattr(state, "tactile_module_online", []) or []) if state is not None else []
+        module_ts = list(getattr(state, "tactile_module_last_rx_ts", []) or []) if state is not None else []
+        tactile_online = bool(getattr(state, "tactile_online", False)) if state is not None else False
+        tactile = state.tactile_data if state is not None and getattr(state, "tactile_data", None) else []
+        now = time.time()
+        for finger_idx, labels in enumerate(self.module_status_labels):
+            finger_name = TACTILE_FINGER_LABELS[finger_idx] if finger_idx < len(TACTILE_FINGER_LABELS) else f"G{finger_idx}"
+            finger = tactile[finger_idx] if finger_idx < len(tactile) else FingerTactile(sensors=[])
+            for label_idx, module_id in enumerate(TACTILE_MODULE_DISPLAY_ORDER):
+                if label_idx >= len(labels):
+                    continue
+                sensor_idx = TACTILE_SENSOR_INDEX_FROM_MODULE.get(int(module_id), int(module_id))
+                status_idx = finger_idx * 3 + int(sensor_idx)
+                known = status_idx < len(module_online)
+                sensor_active = (
+                    int(sensor_idx) < len(finger.sensors) and
+                    self._sensor_has_tactile_activity(finger.sensors[int(sensor_idx)])
+                )
+                online = bool(tactile_online and ((known and module_online[status_idx]) or sensor_active))
+                ts = float(module_ts[status_idx]) if status_idx < len(module_ts) else 0.0
+                age = (now - ts) if ts > 0.0 else None
+                item = labels[label_idx]
+                if online:
+                    item.setStyleSheet(
+                        "QLabel { color:#ffffff; background:#16a34a; border:1px solid #15803d; border-radius:3px; }"
+                    )
+                    age_text = f"{age:.2f}s ago" if age is not None else "recently"
+                    source = "live values" if sensor_active else "module status"
+                    item.setToolTip(f"{finger_name} module {module_id}: tactile data active ({source}), last data {age_text}")
+                elif known or ts > 0.0:
+                    item.setStyleSheet(
+                        "QLabel { color:#ffffff; background:#dc2626; border:1px solid #991b1b; border-radius:3px; }"
+                    )
+                    age_text = f"{age:.2f}s ago" if age is not None else "unknown"
+                    item.setToolTip(f"{finger_name} module {module_id}: no tactile data or stale, last data {age_text}")
+                else:
+                    item.setStyleSheet(
+                        "QLabel { color:#475569; background:#e2e8f0; border:1px solid #cbd5e1; border-radius:3px; }"
+                    )
+                    item.setToolTip(f"{finger_name} module {module_id}: unknown, no tactile data yet")
+
+    @staticmethod
+    def _sensor_has_tactile_activity(sensor: TactileSensor) -> bool:
+        resultant = getattr(sensor, "resultant", None)
+        if resultant is not None and len(resultant) >= 3:
+            force = np.asarray(resultant[:3], dtype=float)
+            if np.any(np.isfinite(force)):
+                level = max(abs(float(force[0])), abs(float(force[1])), max(0.0, float(force[2])))
+                if level > TACTILE_NOISE_FLOOR:
+                    return True
+
+        for attr in ("raw_contact_forces", "contact_forces", "raw_unsigned_contact_forces"):
+            values = getattr(sensor, attr, None)
+            if values is None:
+                continue
+            arr = np.asarray(values, dtype=float)
+            if arr.size == 0 or arr.ndim < 3 or arr.shape[2] < 3:
+                continue
+            if attr == "raw_unsigned_contact_forces":
+                z = arr[:, :, 2]
+                if np.any(np.isfinite(z)) and float(np.nanmax(z)) > TACTILE_NOISE_FLOOR:
+                    return True
+                continue
+            xyz = arr[:, :, :3]
+            if np.any(np.isfinite(xyz)) and float(np.nanmax(np.abs(xyz))) > TACTILE_NOISE_FLOOR:
+                return True
+        return False
 
     def _set_view3d(self, checked: bool) -> None:
         if not checked:
@@ -1923,8 +2026,34 @@ class TactileView(QtWidgets.QWidget):
             full_summary_seq = getattr(state, "tactile_full_summary_seq", None)
             full_crc = getattr(state, "tactile_full_crc", None)
             crc_text = f"0x{int(full_crc) & 0xFFFF:04X}" if full_crc is not None else "-"
+            last_rx = float(getattr(state, "tactile_last_rx_ts", 0.0) or 0.0)
+            age_text = f"{time.time() - last_rx:.2f}s" if last_rx > 0.0 else "-"
+            module_online = list(getattr(state, "tactile_module_online", []) or [])
+            module_text = []
+            for fi in range(5):
+                vals = []
+                finger = tactile[fi] if fi < len(tactile) else FingerTactile(sensors=[])
+                for module_id in TACTILE_MODULE_DISPLAY_ORDER:
+                    sensor_idx = TACTILE_SENSOR_INDEX_FROM_MODULE.get(int(module_id), int(module_id))
+                    idx = fi * 3 + int(sensor_idx)
+                    sensor_active = (
+                        int(sensor_idx) < len(finger.sensors) and
+                        cls._sensor_has_tactile_activity(finger.sensors[int(sensor_idx)])
+                    )
+                    vals.append(
+                        "1"
+                        if (
+                            (idx < len(module_online) and module_online[idx]) or
+                            sensor_active
+                        )
+                        else "0"
+                    )
+                module_text.append("".join(vals))
             lines.append(
                 "link "
+                f"online={1 if bool(getattr(state, 'tactile_online', False)) else 0} "
+                f"age={age_text} "
+                f"modules(210)={','.join(module_text) if module_text else '-'} "
                 f"summary_seq={summary_seq if summary_seq is not None else '-'} "
                 f"full_seq={full_seq if full_seq is not None else '-'} "
                 f"full_summary_seq={full_summary_seq if full_summary_seq is not None else '-'} "

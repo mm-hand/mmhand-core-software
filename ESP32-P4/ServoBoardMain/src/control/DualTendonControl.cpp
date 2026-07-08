@@ -22,6 +22,7 @@ struct DualTendonJointConfig {
     float ki[2];
     float kd[2];
     float integralLimit[2];
+    int32_t maxReleaseFromCalibCounts;
 };
 
 struct DualTendonJointState {
@@ -43,7 +44,9 @@ static const float kDefaultDualTendonKp = 1.0f;
 static const float kDefaultDualTendonKi = 0.0f;
 static const float kDefaultDualTendonKd = 0.03f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
-static const int32_t kDualTendonMaxReleaseFromCalibCounts = 450;
+static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 900;
+static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1600;
+static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 2500;
 
 static const Point2D kJoint16Origin = {0.0f, 0.0f};
 static const Point2D kJoint16A1_0 = {-5.741894f, 0.244188f};
@@ -79,17 +82,30 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     out->kd[1] = kDefaultDualTendonKd;
     out->integralLimit[0] = kDefaultDualTendonIntegralLimit;
     out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
+    out->maxReleaseFromCalibCounts = kDefaultDualTendonMaxReleaseFromCalibCounts;
 
     switch (jointIndex) {
         case 0:
         case 4:
         case 8:
         case 12:
+            out->model = kDualTendonModelSharedCadGeometry;
+            out->motorZero[0] = 2557.0f;
+            out->motorZero[1] = 358.0f;
+            return true;
         case kJoint16Index:
+            out->model = kDualTendonModelSharedCadGeometry;
+            out->motorZero[0] = 2557.0f;
+            out->motorZero[1] = 358.0f;
+            out->maxReleaseFromCalibCounts =
+                kThumbDualTendonMaxReleaseFromCalibCounts;
+            return true;
         case 20:
             out->model = kDualTendonModelSharedCadGeometry;
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;
+            out->maxReleaseFromCalibCounts =
+                kJoint20DualTendonMaxReleaseFromCalibCounts;
             return true;
         default:
             out->enabled = 0;
@@ -178,21 +194,6 @@ static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActu
     return outActuators[0].sign != outActuators[1].sign;
 }
 
-static int32_t clampDualTendonReleaseFromCalib(uint8_t motorChannel,
-                                               int32_t calibratedZeroRawAbs,
-                                               int32_t targetRawAbs)
-{
-    const int32_t zeroTendonAbs =
-        motorRawAbsToTendonAbs(motorChannel, calibratedZeroRawAbs);
-    const int32_t minReleaseTendonAbs =
-        zeroTendonAbs - kDualTendonMaxReleaseFromCalibCounts;
-    int32_t targetTendonAbs = motorRawAbsToTendonAbs(motorChannel, targetRawAbs);
-    if (targetTendonAbs < minReleaseTendonAbs) {
-        targetTendonAbs = minReleaseTendonAbs;
-    }
-    return clampServoPos(motorTendonAbsToRawAbs(motorChannel, targetTendonAbs));
-}
-
 } // namespace
 
 bool isDualTendonJoint(uint8_t jointIndex)
@@ -211,6 +212,37 @@ void resetDualTendonController(uint8_t jointIndex)
         return;
     }
     g_dualTendonState[jointIndex] = DualTendonJointState();
+}
+
+int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
+                                       uint8_t motorChannel,
+                                       int32_t calibratedAnchorRawAbs,
+                                       int32_t currentRawAbs,
+                                       int32_t targetRawAbs)
+{
+    DualTendonJointConfig cfg;
+    if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
+        return clampServoPos(targetRawAbs);
+    }
+
+    const int32_t calibratedAnchorTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, calibratedAnchorRawAbs);
+    const int32_t currentTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, currentRawAbs);
+    const int32_t targetTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, targetRawAbs);
+    const int32_t actualReleaseFromCalib =
+        calibratedAnchorTendonAbs - currentTendonAbs;
+
+    // This is a stateless, feedback-based one-way gate. Do not reshape the
+    // requested command while the actual tendon is inside the release window.
+    // Once feedback reaches the boundary, hold only requests that would move
+    // farther in the release direction; a tightening request always passes.
+    if (actualReleaseFromCalib >= cfg.maxReleaseFromCalibCounts &&
+        targetTendonAbs < currentTendonAbs) {
+        return clampServoPos(currentRawAbs);
+    }
+    return clampServoPos(targetRawAbs);
 }
 
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
@@ -294,13 +326,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
             cfg.ki[i] * state.integral[i] -
             cfg.kd[i] * dFb;
         outTargets->pidCorrection[i] = correction;
-        const int32_t requestedTarget =
+        outTargets->targetAbs[i] =
             clampServoPos((int32_t)(motorCurrent + correction));
-        outTargets->targetAbs[i] = clampDualTendonReleaseFromCalib(
-            motorChannel,
-            (int32_t)cfg.motorZero[i],
-            requestedTarget
-        );
         state.prevFbModel[i] = outTargets->motorFbModel[i];
     }
 

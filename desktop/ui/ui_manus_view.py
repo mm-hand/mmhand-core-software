@@ -7,18 +7,18 @@ from datetime import datetime
 import math
 from typing import Callable, Optional
 
-from teleop.manus_calibration import (
+from desktop.teleop.manus_calibration import (
     ACTUAL_ROBOT_COMMAND_ENABLED,
     DEFAULT_MANUS_SIDE,
     ManusCalibrationManager,
 )
-from teleop.manus_raw_skeleton_retarget import FullRawSkeletonRetargeter
-from teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
+from desktop.teleop.manus_raw_skeleton_retarget import FullRawSkeletonRetargeter
+from desktop.teleop.manus_receiver import MANUS_CONTROL_ENABLED, MANUS_TIMEOUT_S, ManusFrame, ManusReceiver
 try:
-    from teleop.manus_sdk_receiver import ManusSdkReceiver
+    from desktop.teleop.manus_sdk_receiver import ManusSdkReceiver
 except Exception:
     ManusSdkReceiver = None
-from protocol import ControlMode, ENCODER_COUNT
+from desktop.core.protocol import ControlMode, ENCODER_COUNT
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -60,7 +60,7 @@ class ManusUdpView(QtWidgets.QWidget):
         source_row = QtWidgets.QHBoxLayout()
         self.source_combo = QtWidgets.QComboBox()
         self.source_combo.addItem("Direct SDK", "sdk")
-        self.source_combo.addItem("TCP Bridge 127.0.0.1:9001", "tcp")
+        self.source_combo.addItem("TCP Bridge :9001", "tcp")
         self.source_combo.currentIndexChanged.connect(lambda _idx: self._on_source_changed())
         source_row.addWidget(QtWidgets.QLabel("Source:"))
         source_row.addWidget(self.source_combo, 1)
@@ -244,7 +244,7 @@ class ManusUdpView(QtWidgets.QWidget):
             if ManusSdkReceiver is None:
                 raise RuntimeError("MANUS Direct SDK receiver is not available")
             return ManusSdkReceiver(timeout_s=MANUS_TIMEOUT_S)
-        return ManusReceiver(ip="127.0.0.1", port=9001, timeout_s=MANUS_TIMEOUT_S)
+        return ManusReceiver(ip="0.0.0.0", port=9001, timeout_s=MANUS_TIMEOUT_S)
 
     def _on_source_changed(self) -> None:
         mode = str(self.source_combo.currentData() or "sdk")
@@ -278,7 +278,7 @@ class ManusUdpView(QtWidgets.QWidget):
             dll_path = getattr(self.receiver, "dll_path", "")
             self.endpoint_label.setText(f"Direct SDK dll={dll_path or '-'} timeout={MANUS_TIMEOUT_S:.1f}s")
         else:
-            self.endpoint_label.setText(f"TCP 127.0.0.1:9001 timeout={MANUS_TIMEOUT_S:.1f}s")
+            self.endpoint_label.setText(f"TCP 0.0.0.0:9001 timeout={MANUS_TIMEOUT_S:.1f}s")
 
     def _waiting_status_text(self) -> str:
         if self._source_mode == "sdk":
