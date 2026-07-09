@@ -1,0 +1,4888 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 20,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/ControlSafety.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 65,
+      "nonEmptyLines": 59,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 89,
+      "nonEmptyLines": 77,
+      "functions": [
+        {
+          "name": "ControlSolver",
+          "startLine": 6,
+          "endLine": 12,
+          "params": []
+        },
+        {
+          "name": "begin",
+          "startLine": 14,
+          "endLine": 33,
+          "params": []
+        },
+        {
+          "name": "init",
+          "startLine": 35,
+          "endLine": 44,
+          "params": [
+            "zeroOffsets",
+            "gearRatios",
+            "directions"
+          ]
+        },
+        {
+          "name": "setPIDParams",
+          "startLine": 46,
+          "endLine": 53,
+          "params": [
+            "pidParams"
+          ]
+        },
+        {
+          "name": "compute",
+          "startLine": 55,
+          "endLine": 76,
+          "params": [
+            "targetDegs",
+            "magActualDegs",
+            "absolutePosition",
+            "outServoPulses"
+          ]
+        },
+        {
+          "name": "getPidOutput",
+          "startLine": 78,
+          "endLine": 84,
+          "params": [
+            "jointIndex",
+            "loopIndex"
+          ]
+        },
+        {
+          "name": "resetAll",
+          "startLine": 86,
+          "endLine": 89,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "ControlSolver",
+          "line": 6,
+          "isDefault": false
+        },
+        {
+          "name": "begin",
+          "line": 14,
+          "isDefault": false
+        },
+        {
+          "name": "init",
+          "line": 35,
+          "isDefault": false
+        },
+        {
+          "name": "setPIDParams",
+          "line": 46,
+          "isDefault": false
+        },
+        {
+          "name": "compute",
+          "line": 55,
+          "isDefault": false
+        },
+        {
+          "name": "getPidOutput",
+          "line": 78,
+          "isDefault": false
+        },
+        {
+          "name": "resetAll",
+          "line": 86,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "ControlSolver",
+          "callee": "memset",
+          "lineNumber": 8
+        },
+        {
+          "caller": "ControlSolver",
+          "callee": "memset",
+          "lineNumber": 9
+        },
+        {
+          "caller": "ControlSolver",
+          "callee": "memset",
+          "lineNumber": 10
+        },
+        {
+          "caller": "ControlSolver",
+          "callee": "memset",
+          "lineNumber": 11
+        },
+        {
+          "caller": "begin",
+          "callee": "init",
+          "lineNumber": 26
+        },
+        {
+          "caller": "begin",
+          "callee": "setPIDParams",
+          "lineNumber": 32
+        },
+        {
+          "caller": "setPIDParams",
+          "callee": "PID_Init",
+          "lineNumber": 50
+        },
+        {
+          "caller": "setPIDParams",
+          "callee": "PID_Init",
+          "lineNumber": 51
+        },
+        {
+          "caller": "compute",
+          "callee": "f_PID_Calculate",
+          "lineNumber": 66
+        },
+        {
+          "caller": "compute",
+          "callee": "f_PID_Calculate",
+          "lineNumber": 71
+        },
+        {
+          "caller": "resetAll",
+          "callee": "memset",
+          "lineNumber": 88
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 7,
+        "functionCount": 7,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/ControlSolver.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 40,
+      "nonEmptyLines": 35,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/ControlTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 1226,
+      "nonEmptyLines": 1120,
+      "functions": [
+        {
+          "name": "sanitizeLocalTestFreq",
+          "startLine": 62,
+          "endLine": 71,
+          "params": [
+            "freqHz"
+          ]
+        },
+        {
+          "name": "sanitizeLocalTestAmp",
+          "startLine": 73,
+          "endLine": 85,
+          "params": [
+            "ampDeg"
+          ]
+        },
+        {
+          "name": "clampMappedCountForProtocol",
+          "startLine": 88,
+          "endLine": 93,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "orientEncoderRaw",
+          "startLine": 95,
+          "endLine": 102,
+          "params": [
+            "rawValue",
+            "direction"
+          ]
+        },
+        {
+          "name": "wrapEncoderCount",
+          "startLine": 104,
+          "endLine": 109,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "forwardEncoderDelta",
+          "startLine": 111,
+          "endLine": 114,
+          "params": [
+            "from",
+            "to"
+          ]
+        },
+        {
+          "name": "convertEncoderCountToDeg",
+          "startLine": 117,
+          "endLine": 120,
+          "params": [
+            "encoderCount"
+          ]
+        },
+        {
+          "name": "degToEncoderCount",
+          "startLine": 122,
+          "endLine": 126,
+          "params": [
+            "deg"
+          ]
+        },
+        {
+          "name": "mapCalibratedEncoderToDeg",
+          "startLine": 128,
+          "endLine": 148,
+          "params": [
+            "calib",
+            "orientedRaw"
+          ]
+        },
+        {
+          "name": "clampJointTargetDegByCalib",
+          "startLine": 150,
+          "endLine": 179,
+          "params": [
+            "targetDeg",
+            "jointIndex"
+          ]
+        },
+        {
+          "name": "findMotorChannel",
+          "startLine": 182,
+          "endLine": 185,
+          "params": [
+            "bus",
+            "id"
+          ]
+        },
+        {
+          "name": "appendJointActuatorHoldTargets",
+          "startLine": 187,
+          "endLine": 217,
+          "params": [
+            "batch",
+            "jointIndex",
+            "servoData",
+            "speed",
+            "acc"
+          ]
+        },
+        {
+          "name": "appendDualTendonTargets",
+          "startLine": 219,
+          "endLine": 307,
+          "params": [
+            "batch",
+            "sharedData",
+            "jointIndex",
+            "qRefDeg",
+            "qFbDeg",
+            "servoData",
+            "commandToken",
+            "speed",
+            "acc"
+          ]
+        },
+        {
+          "name": "servoLoadMagnitude",
+          "startLine": 309,
+          "endLine": 316,
+          "params": [
+            "rawLoad"
+          ]
+        },
+        {
+          "name": "activeOverloadMotorMask",
+          "startLine": 318,
+          "endLine": 347,
+          "params": [
+            "sharedData",
+            "commandSnapshot"
+          ]
+        },
+        {
+          "name": "jointHasOverloadFault",
+          "startLine": 349,
+          "endLine": 361,
+          "params": [
+            "jointIndex",
+            "overloadFaultBitmap"
+          ]
+        },
+        {
+          "name": "abs32Local",
+          "startLine": 363,
+          "endLine": 366,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "directAbsoluteTargetsReached",
+          "startLine": 368,
+          "endLine": 400,
+          "params": [
+            "sharedData",
+            "servoData",
+            "commandSnapshot"
+          ]
+        },
+        {
+          "name": "feedbackJointTargetsReached",
+          "startLine": 402,
+          "endLine": 433,
+          "params": [
+            "sharedData",
+            "mappedData",
+            "targetDegs",
+            "actualDegs"
+          ]
+        },
+        {
+          "name": "readControlCommandSnapshot",
+          "startLine": 435,
+          "endLine": 473,
+          "params": [
+            "sharedData",
+            "out"
+          ]
+        },
+        {
+          "name": "controlTask",
+          "startLine": 480,
+          "endLine": 1226,
+          "params": [
+            "parameter"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "controlTask",
+          "line": 480,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "sanitizeLocalTestFreq",
+          "callee": "isfinite",
+          "lineNumber": 64
+        },
+        {
+          "caller": "sanitizeLocalTestAmp",
+          "callee": "isfinite",
+          "lineNumber": 75
+        },
+        {
+          "caller": "forwardEncoderDelta",
+          "callee": "wrapEncoderCount",
+          "lineNumber": 113
+        },
+        {
+          "caller": "mapCalibratedEncoderToDeg",
+          "callee": "forwardEncoderDelta",
+          "lineNumber": 131
+        },
+        {
+          "caller": "mapCalibratedEncoderToDeg",
+          "callee": "forwardEncoderDelta",
+          "lineNumber": 139
+        },
+        {
+          "caller": "mapCalibratedEncoderToDeg",
+          "callee": "forwardEncoderDelta",
+          "lineNumber": 140
+        },
+        {
+          "caller": "mapCalibratedEncoderToDeg",
+          "callee": "degToEncoderCount",
+          "lineNumber": 142
+        },
+        {
+          "caller": "mapCalibratedEncoderToDeg",
+          "callee": "convertEncoderCountToDeg",
+          "lineNumber": 147
+        },
+        {
+          "caller": "clampJointTargetDegByCalib",
+          "callee": "isfinite",
+          "lineNumber": 152
+        },
+        {
+          "caller": "clampJointTargetDegByCalib",
+          "callee": "isfinite",
+          "lineNumber": 169
+        },
+        {
+          "caller": "findMotorChannel",
+          "callee": "findMotorChannelByBusId",
+          "lineNumber": 184
+        },
+        {
+          "caller": "appendJointActuatorHoldTargets",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 199
+        },
+        {
+          "caller": "appendJointActuatorHoldTargets",
+          "callee": "getJointActuator",
+          "lineNumber": 202
+        },
+        {
+          "caller": "appendJointActuatorHoldTargets",
+          "callee": "clampServoPos",
+          "lineNumber": 213
+        },
+        {
+          "caller": "appendJointActuatorHoldTargets",
+          "callee": "appendJointActuatorRuntimeTargets",
+          "lineNumber": 216
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "memset",
+          "lineNumber": 234
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "computeDualTendonMotorTargets",
+          "lineNumber": 235
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "isMotorChannelValid",
+          "lineNumber": 248
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 259
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 260
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "getMotorTendonShortenAbsSign",
+          "lineNumber": 276
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "clampDualTendonReleaseFromCalib",
+          "lineNumber": 292
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "clampServoPos",
+          "lineNumber": 303
+        },
+        {
+          "caller": "appendDualTendonTargets",
+          "callee": "appendJointActuatorRuntimeTargets",
+          "lineNumber": 306
+        },
+        {
+          "caller": "activeOverloadMotorMask",
+          "callee": "validMotorChannelMask",
+          "lineNumber": 324
+        },
+        {
+          "caller": "activeOverloadMotorMask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 326
+        },
+        {
+          "caller": "activeOverloadMotorMask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 331
+        },
+        {
+          "caller": "activeOverloadMotorMask",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 337
+        },
+        {
+          "caller": "activeOverloadMotorMask",
+          "callee": "getJointActuator",
+          "lineNumber": 340
+        },
+        {
+          "caller": "jointHasOverloadFault",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 351
+        },
+        {
+          "caller": "jointHasOverloadFault",
+          "callee": "getJointActuator",
+          "lineNumber": 354
+        },
+        {
+          "caller": "directAbsoluteTargetsReached",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 379
+        },
+        {
+          "caller": "directAbsoluteTargetsReached",
+          "callee": "validMotorChannelMask",
+          "lineNumber": 379
+        },
+        {
+          "caller": "directAbsoluteTargetsReached",
+          "callee": "clampServoPos",
+          "lineNumber": 394
+        },
+        {
+          "caller": "directAbsoluteTargetsReached",
+          "callee": "abs32Local",
+          "lineNumber": 395
+        },
+        {
+          "caller": "feedbackJointTargetsReached",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 412
+        },
+        {
+          "caller": "feedbackJointTargetsReached",
+          "callee": "fabsf",
+          "lineNumber": 427
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 443
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 443
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 447
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 448
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 449
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 461
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 462
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 463
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 464
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 465
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 466
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "memcpy",
+          "lineNumber": 467
+        },
+        {
+          "caller": "readControlCommandSnapshot",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 470
+        },
+        {
+          "caller": "controlTask",
+          "callee": "vTaskDelete",
+          "lineNumber": 484
+        },
+        {
+          "caller": "controlTask",
+          "callee": "begin",
+          "lineNumber": 488
+        },
+        {
+          "caller": "controlTask",
+          "callee": "resetAllReleaseGuardStates",
+          "lineNumber": 499
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 501
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 502
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 506
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 509
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 515
+        },
+        {
+          "caller": "controlTask",
+          "callee": "readControlCommandSnapshot",
+          "lineNumber": 516
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 522
+        },
+        {
+          "caller": "controlTask",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 523
+        },
+        {
+          "caller": "controlTask",
+          "callee": "taskRuntimeMarkLoopStart",
+          "lineNumber": 548
+        },
+        {
+          "caller": "controlTask",
+          "callee": "readControlCommandSnapshot",
+          "lineNumber": 549
+        },
+        {
+          "caller": "controlTask",
+          "callee": "taskRuntimeMarkLoopEnd",
+          "lineNumber": 550
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 552
+        },
+        {
+          "caller": "controlTask",
+          "callee": "taskRuntimeMarkPeriodResult",
+          "lineNumber": 553
+        },
+        {
+          "caller": "controlTask",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 554
+        },
+        {
+          "caller": "controlTask",
+          "callee": "vTaskDelay",
+          "lineNumber": 555
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 562
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 569
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 576
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 584
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 589
+        },
+        {
+          "caller": "controlTask",
+          "callee": "resetAllReleaseGuardStates",
+          "lineNumber": 592
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 593
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 598
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 602
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 605
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 614
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 615
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 621
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 622
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueuePeek",
+          "lineNumber": 625
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 629
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueuePeek",
+          "lineNumber": 632
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 634
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicFetchOr",
+          "lineNumber": 650
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 651
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 657
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 659
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 660
+        },
+        {
+          "caller": "controlTask",
+          "callee": "findMotorChannel",
+          "lineNumber": 665
+        },
+        {
+          "caller": "controlTask",
+          "callee": "motorRawAbsToTendonAbs",
+          "lineNumber": 670
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 674
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 677
+        },
+        {
+          "caller": "controlTask",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 680
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueuePeek",
+          "lineNumber": 687
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 688
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 692
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 693
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 702
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 703
+        },
+        {
+          "caller": "controlTask",
+          "callee": "orientEncoderRaw",
+          "lineNumber": 716
+        },
+        {
+          "caller": "controlTask",
+          "callee": "mapCalibratedEncoderToDeg",
+          "lineNumber": 725
+        },
+        {
+          "caller": "controlTask",
+          "callee": "degToEncoderCount",
+          "lineNumber": 726
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampMappedCountForProtocol",
+          "lineNumber": 727
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueueOverwrite",
+          "lineNumber": 734
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memcpy",
+          "lineNumber": 737
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 748
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 755
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sanitizeLocalTestFreq",
+          "lineNumber": 765
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sanitizeLocalTestAmp",
+          "lineNumber": 766
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sinf",
+          "lineNumber": 770
+        },
+        {
+          "caller": "controlTask",
+          "callee": "activeOverloadMotorMask",
+          "lineNumber": 796
+        },
+        {
+          "caller": "controlTask",
+          "callee": "servoLoadMagnitude",
+          "lineNumber": 815
+        },
+        {
+          "caller": "controlTask",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 832
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 843
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicFetchOr",
+          "lineNumber": 845
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 846
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampJointTargetDegByCalib",
+          "lineNumber": 850
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memcpy",
+          "lineNumber": 862
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 864
+        },
+        {
+          "caller": "controlTask",
+          "callee": "compute",
+          "lineNumber": 880
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 885
+        },
+        {
+          "caller": "controlTask",
+          "callee": "validMotorChannelMask",
+          "lineNumber": 886
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 901
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendServoTarget",
+          "lineNumber": 902
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 908
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoSingleTurnRaw",
+          "lineNumber": 912
+        },
+        {
+          "caller": "controlTask",
+          "callee": "anchorSingleTurnSweepToCurrent",
+          "lineNumber": 915
+        },
+        {
+          "caller": "controlTask",
+          "callee": "wrapServoRawDelta",
+          "lineNumber": 920
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 923
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 927
+        },
+        {
+          "caller": "controlTask",
+          "callee": "expandSingleTurnTargetNearCurrent",
+          "lineNumber": 931
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoSingleTurnRaw",
+          "lineNumber": 933
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendServoTarget",
+          "lineNumber": 939
+        },
+        {
+          "caller": "controlTask",
+          "callee": "findMotorChannel",
+          "lineNumber": 950
+        },
+        {
+          "caller": "controlTask",
+          "callee": "jointHasOverloadFault",
+          "lineNumber": 956
+        },
+        {
+          "caller": "controlTask",
+          "callee": "updateReleaseGuardState",
+          "lineNumber": 965
+        },
+        {
+          "caller": "controlTask",
+          "callee": "shouldBlockReleaseByTendonGuard",
+          "lineNumber": 970
+        },
+        {
+          "caller": "controlTask",
+          "callee": "shouldEmergencyStop",
+          "lineNumber": 986
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 990
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1005
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 1019
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 1026
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendJointActuatorHoldTargets",
+          "lineNumber": 1027
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 1036
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendJointActuatorHoldTargets",
+          "lineNumber": 1037
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 1044
+        },
+        {
+          "caller": "controlTask",
+          "callee": "isDualTendonJoint",
+          "lineNumber": 1047
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendDualTendonTargets",
+          "lineNumber": 1050
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendJointActuatorHoldTargets",
+          "lineNumber": 1060
+        },
+        {
+          "caller": "controlTask",
+          "callee": "motorTendonAbsToRawAbs",
+          "lineNumber": 1072
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPosByMotorAbsLimit",
+          "lineNumber": 1073
+        },
+        {
+          "caller": "controlTask",
+          "callee": "clampServoPos",
+          "lineNumber": 1077
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendJointActuatorHoldTargets",
+          "lineNumber": 1082
+        },
+        {
+          "caller": "controlTask",
+          "callee": "appendJointActuatorTargets",
+          "lineNumber": 1085
+        },
+        {
+          "caller": "controlTask",
+          "callee": "buildReleaseFaultBitmap",
+          "lineNumber": 1096
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 1100
+        },
+        {
+          "caller": "controlTask",
+          "callee": "memset",
+          "lineNumber": 1109
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 1111
+        },
+        {
+          "caller": "controlTask",
+          "callee": "getPidOutput",
+          "lineNumber": 1115
+        },
+        {
+          "caller": "controlTask",
+          "callee": "getPidOutput",
+          "lineNumber": 1117
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueueSend",
+          "lineNumber": 1121
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueueReceive",
+          "lineNumber": 1123
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueueSend",
+          "lineNumber": 1124
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 1131
+        },
+        {
+          "caller": "controlTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1137
+        },
+        {
+          "caller": "controlTask",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 1142
+        },
+        {
+          "caller": "controlTask",
+          "callee": "getPidOutput",
+          "lineNumber": 1148
+        },
+        {
+          "caller": "controlTask",
+          "callee": "getPidOutput",
+          "lineNumber": 1150
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xQueueOverwrite",
+          "lineNumber": 1160
+        },
+        {
+          "caller": "controlTask",
+          "callee": "directAbsoluteTargetsReached",
+          "lineNumber": 1166
+        },
+        {
+          "caller": "controlTask",
+          "callee": "postSystemEvent",
+          "lineNumber": 1171
+        },
+        {
+          "caller": "controlTask",
+          "callee": "feedbackJointTargetsReached",
+          "lineNumber": 1182
+        },
+        {
+          "caller": "controlTask",
+          "callee": "postSystemEventForToken",
+          "lineNumber": 1196
+        },
+        {
+          "caller": "controlTask",
+          "callee": "millis",
+          "lineNumber": 1206
+        },
+        {
+          "caller": "controlTask",
+          "callee": "postSystemEventForToken",
+          "lineNumber": 1211
+        },
+        {
+          "caller": "controlTask",
+          "callee": "taskRuntimeMarkLoopEnd",
+          "lineNumber": 1219
+        },
+        {
+          "caller": "controlTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 1221
+        },
+        {
+          "caller": "controlTask",
+          "callee": "taskRuntimeMarkPeriodResult",
+          "lineNumber": 1222
+        },
+        {
+          "caller": "controlTask",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 1223
+        },
+        {
+          "caller": "controlTask",
+          "callee": "vTaskDelay",
+          "lineNumber": 1224
+        }
+      ],
+      "metrics": {
+        "importCount": 11,
+        "exportCount": 1,
+        "functionCount": 21,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/ControlTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 13,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/DualTendonControl.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 335,
+      "nonEmptyLines": 296,
+      "functions": [
+        {
+          "name": "getDualTendonConfig",
+          "startLine": 66,
+          "endLine": 114,
+          "params": [
+            "jointIndex",
+            "out"
+          ]
+        },
+        {
+          "name": "constrainFloat",
+          "startLine": 116,
+          "endLine": 121,
+          "params": [
+            "value",
+            "minValue",
+            "maxValue"
+          ]
+        },
+        {
+          "name": "rotateAroundCW",
+          "startLine": 123,
+          "endLine": 133,
+          "params": [
+            "p",
+            "origin",
+            "thetaRad"
+          ]
+        },
+        {
+          "name": "dist2D",
+          "startLine": 135,
+          "endLine": 140,
+          "params": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "name": "joint16Tendon1LengthChange",
+          "startLine": 142,
+          "endLine": 150,
+          "params": [
+            "qRad"
+          ]
+        },
+        {
+          "name": "joint16Tendon2LengthChange",
+          "startLine": 152,
+          "endLine": 160,
+          "params": [
+            "qRad"
+          ]
+        },
+        {
+          "name": "tendonLengthChange",
+          "startLine": 162,
+          "endLine": 183,
+          "params": [
+            "cfg",
+            "jointIndex",
+            "actuatorIndex",
+            "qDeg",
+            "outMm"
+          ]
+        },
+        {
+          "name": "getDualTendonActuators",
+          "startLine": 185,
+          "endLine": 195,
+          "params": [
+            "jointIndex",
+            "outActuators"
+          ]
+        },
+        {
+          "name": "isDualTendonJoint",
+          "startLine": 199,
+          "endLine": 207,
+          "params": [
+            "jointIndex"
+          ]
+        },
+        {
+          "name": "resetDualTendonController",
+          "startLine": 209,
+          "endLine": 215,
+          "params": [
+            "jointIndex"
+          ]
+        },
+        {
+          "name": "clampDualTendonReleaseFromCalib",
+          "startLine": 217,
+          "endLine": 246,
+          "params": [
+            "jointIndex",
+            "motorChannel",
+            "calibratedAnchorRawAbs",
+            "currentRawAbs",
+            "targetRawAbs"
+          ]
+        },
+        {
+          "name": "computeDualTendonMotorTargets",
+          "startLine": 248,
+          "endLine": 335,
+          "params": [
+            "jointIndex",
+            "qRefDeg",
+            "qFbDeg",
+            "servoData",
+            "commandToken",
+            "outTargets"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Point2D",
+          "startLine": 11,
+          "endLine": 14,
+          "methods": [],
+          "properties": [
+            "x",
+            "y"
+          ]
+        },
+        {
+          "name": "DualTendonJointConfig",
+          "startLine": 16,
+          "endLine": 26,
+          "methods": [],
+          "properties": [
+            "enabled",
+            "model",
+            "motorZero",
+            "countsPerMm",
+            "kp",
+            "ki",
+            "kd",
+            "integralLimit",
+            "maxReleaseFromCalibCounts"
+          ]
+        },
+        {
+          "name": "DualTendonJointState",
+          "startLine": 28,
+          "endLine": 33,
+          "methods": [],
+          "properties": [
+            "lastToken",
+            "integral",
+            "prevFbModel",
+            "prevValid"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Point2D",
+          "line": 11,
+          "isDefault": false
+        },
+        {
+          "name": "DualTendonJointConfig",
+          "line": 16,
+          "isDefault": false
+        },
+        {
+          "name": "DualTendonJointState",
+          "line": 28,
+          "isDefault": false
+        },
+        {
+          "name": "isDualTendonJoint",
+          "line": 199,
+          "isDefault": false
+        },
+        {
+          "name": "resetDualTendonController",
+          "line": 209,
+          "isDefault": false
+        },
+        {
+          "name": "clampDualTendonReleaseFromCalib",
+          "line": 217,
+          "isDefault": false
+        },
+        {
+          "name": "computeDualTendonMotorTargets",
+          "line": 248,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "getDualTendonConfig",
+          "callee": "memset",
+          "lineNumber": 72
+        },
+        {
+          "caller": "rotateAroundCW",
+          "callee": "cosf",
+          "lineNumber": 127
+        },
+        {
+          "caller": "rotateAroundCW",
+          "callee": "sinf",
+          "lineNumber": 128
+        },
+        {
+          "caller": "dist2D",
+          "callee": "sqrtf",
+          "lineNumber": 139
+        },
+        {
+          "caller": "joint16Tendon1LengthChange",
+          "callee": "rotateAroundCW",
+          "lineNumber": 144
+        },
+        {
+          "caller": "joint16Tendon1LengthChange",
+          "callee": "rotateAroundCW",
+          "lineNumber": 145
+        },
+        {
+          "caller": "joint16Tendon1LengthChange",
+          "callee": "dist2D",
+          "lineNumber": 146
+        },
+        {
+          "caller": "joint16Tendon1LengthChange",
+          "callee": "dist2D",
+          "lineNumber": 147
+        },
+        {
+          "caller": "joint16Tendon2LengthChange",
+          "callee": "rotateAroundCW",
+          "lineNumber": 154
+        },
+        {
+          "caller": "joint16Tendon2LengthChange",
+          "callee": "rotateAroundCW",
+          "lineNumber": 155
+        },
+        {
+          "caller": "joint16Tendon2LengthChange",
+          "callee": "dist2D",
+          "lineNumber": 156
+        },
+        {
+          "caller": "joint16Tendon2LengthChange",
+          "callee": "dist2D",
+          "lineNumber": 157
+        },
+        {
+          "caller": "tendonLengthChange",
+          "callee": "joint16Tendon1LengthChange",
+          "lineNumber": 176
+        },
+        {
+          "caller": "tendonLengthChange",
+          "callee": "joint16Tendon2LengthChange",
+          "lineNumber": 177
+        },
+        {
+          "caller": "getDualTendonActuators",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 187
+        },
+        {
+          "caller": "getDualTendonActuators",
+          "callee": "getJointActuator",
+          "lineNumber": 190
+        },
+        {
+          "caller": "getDualTendonActuators",
+          "callee": "getJointActuator",
+          "lineNumber": 191
+        },
+        {
+          "caller": "isDualTendonJoint",
+          "callee": "getDualTendonConfig",
+          "lineNumber": 202
+        },
+        {
+          "caller": "isDualTendonJoint",
+          "callee": "getDualTendonActuators",
+          "lineNumber": 206
+        },
+        {
+          "caller": "resetDualTendonController",
+          "callee": "DualTendonJointState",
+          "lineNumber": 214
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "getDualTendonConfig",
+          "lineNumber": 224
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "clampServoPos",
+          "lineNumber": 225
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "motorRawAbsToTendonAbs",
+          "lineNumber": 229
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "motorRawAbsToTendonAbs",
+          "lineNumber": 231
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "motorRawAbsToTendonAbs",
+          "lineNumber": 233
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "clampServoPos",
+          "lineNumber": 243
+        },
+        {
+          "caller": "clampDualTendonReleaseFromCalib",
+          "callee": "clampServoPos",
+          "lineNumber": 245
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "getDualTendonConfig",
+          "lineNumber": 260
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "getDualTendonActuators",
+          "lineNumber": 265
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "tendonLengthChange",
+          "lineNumber": 272
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "tendonLengthChange",
+          "lineNumber": 273
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "isMotorChannelValid",
+          "lineNumber": 283
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "motorRawAbsToTendonAbs",
+          "lineNumber": 290
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "motorTendonAbsToRawAbs",
+          "lineNumber": 294
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "motorTendonAbsToRawAbs",
+          "lineNumber": 296
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "constrainFloat",
+          "lineNumber": 320
+        },
+        {
+          "caller": "computeDualTendonMotorTargets",
+          "callee": "clampServoPos",
+          "lineNumber": 330
+        }
+      ],
+      "metrics": {
+        "importCount": 4,
+        "exportCount": 7,
+        "functionCount": 12,
+        "classCount": 3
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/control/DualTendonControl.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 35,
+      "nonEmptyLines": 29,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/hardware/HardwareMap.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 209,
+      "nonEmptyLines": 188,
+      "functions": [
+        {
+          "name": "isMotorMapItemValid",
+          "startLine": 92,
+          "endLine": 95,
+          "params": [
+            "item"
+          ]
+        },
+        {
+          "name": "isMotorChannelValid",
+          "startLine": 97,
+          "endLine": 100,
+          "params": [
+            "motorChannel"
+          ]
+        },
+        {
+          "name": "validMotorChannelMask",
+          "startLine": 102,
+          "endLine": 111,
+          "params": []
+        },
+        {
+          "name": "getMotorTendonShortenAbsSign",
+          "startLine": 113,
+          "endLine": 119,
+          "params": [
+            "motorChannel"
+          ]
+        },
+        {
+          "name": "motorRawAbsToTendonAbs",
+          "startLine": 121,
+          "endLine": 124,
+          "params": [
+            "motorChannel",
+            "rawAbs"
+          ]
+        },
+        {
+          "name": "motorTendonAbsToRawAbs",
+          "startLine": 126,
+          "endLine": 129,
+          "params": [
+            "motorChannel",
+            "tendonAbs"
+          ]
+        },
+        {
+          "name": "motorRawDeltaFromTendonDelta",
+          "startLine": 131,
+          "endLine": 134,
+          "params": [
+            "motorChannel",
+            "tendonDelta"
+          ]
+        },
+        {
+          "name": "motorApplyTendonDelta",
+          "startLine": 136,
+          "endLine": 139,
+          "params": [
+            "motorChannel",
+            "rawAbs",
+            "tendonDelta"
+          ]
+        },
+        {
+          "name": "getJointActuatorCount",
+          "startLine": 141,
+          "endLine": 151,
+          "params": [
+            "jointIndex"
+          ]
+        },
+        {
+          "name": "getJointActuator",
+          "startLine": 153,
+          "endLine": 164,
+          "params": [
+            "jointIndex",
+            "actuatorIndex",
+            "out"
+          ]
+        },
+        {
+          "name": "getJointActuatorGroup",
+          "startLine": 166,
+          "endLine": 188,
+          "params": [
+            "jointIndex",
+            "out"
+          ]
+        },
+        {
+          "name": "findPrimaryMotorChannelForJoint",
+          "startLine": 190,
+          "endLine": 197,
+          "params": [
+            "jointIndex"
+          ]
+        },
+        {
+          "name": "findMotorChannelByBusId",
+          "startLine": 199,
+          "endLine": 209,
+          "params": [
+            "busIndex",
+            "servoID"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "isMotorMapItemValid",
+          "line": 92,
+          "isDefault": false
+        },
+        {
+          "name": "isMotorChannelValid",
+          "line": 97,
+          "isDefault": false
+        },
+        {
+          "name": "validMotorChannelMask",
+          "line": 102,
+          "isDefault": false
+        },
+        {
+          "name": "getMotorTendonShortenAbsSign",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "motorRawAbsToTendonAbs",
+          "line": 121,
+          "isDefault": false
+        },
+        {
+          "name": "motorTendonAbsToRawAbs",
+          "line": 126,
+          "isDefault": false
+        },
+        {
+          "name": "motorRawDeltaFromTendonDelta",
+          "line": 131,
+          "isDefault": false
+        },
+        {
+          "name": "motorApplyTendonDelta",
+          "line": 136,
+          "isDefault": false
+        },
+        {
+          "name": "getJointActuatorCount",
+          "line": 141,
+          "isDefault": false
+        },
+        {
+          "name": "getJointActuator",
+          "line": 153,
+          "isDefault": false
+        },
+        {
+          "name": "getJointActuatorGroup",
+          "line": 166,
+          "isDefault": false
+        },
+        {
+          "name": "findPrimaryMotorChannelForJoint",
+          "line": 190,
+          "isDefault": false
+        },
+        {
+          "name": "findMotorChannelByBusId",
+          "line": 199,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "isMotorChannelValid",
+          "callee": "isMotorMapItemValid",
+          "lineNumber": 99
+        },
+        {
+          "caller": "validMotorChannelMask",
+          "callee": "isMotorChannelValid",
+          "lineNumber": 106
+        },
+        {
+          "caller": "motorRawAbsToTendonAbs",
+          "callee": "getMotorTendonShortenAbsSign",
+          "lineNumber": 123
+        },
+        {
+          "caller": "motorTendonAbsToRawAbs",
+          "callee": "getMotorTendonShortenAbsSign",
+          "lineNumber": 128
+        },
+        {
+          "caller": "motorRawDeltaFromTendonDelta",
+          "callee": "getMotorTendonShortenAbsSign",
+          "lineNumber": 133
+        },
+        {
+          "caller": "motorApplyTendonDelta",
+          "callee": "motorRawDeltaFromTendonDelta",
+          "lineNumber": 138
+        },
+        {
+          "caller": "getJointActuator",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 155
+        },
+        {
+          "caller": "getJointActuator",
+          "callee": "isMotorChannelValid",
+          "lineNumber": 159
+        },
+        {
+          "caller": "getJointActuatorGroup",
+          "callee": "getJointActuatorCount",
+          "lineNumber": 180
+        },
+        {
+          "caller": "getJointActuatorGroup",
+          "callee": "getJointActuator",
+          "lineNumber": 183
+        },
+        {
+          "caller": "findPrimaryMotorChannelForJoint",
+          "callee": "getJointActuator",
+          "lineNumber": 193
+        },
+        {
+          "caller": "findMotorChannelByBusId",
+          "callee": "isMotorChannelValid",
+          "lineNumber": 202
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 13,
+        "functionCount": 13,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/hardware/HardwareMap.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 32,
+      "nonEmptyLines": 26,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/shared/SharedSafetyState.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 13,
+      "nonEmptyLines": 10,
+      "functions": [
+        {
+          "name": "sharedSafetyLock",
+          "startLine": 5,
+          "endLine": 8,
+          "params": []
+        },
+        {
+          "name": "sharedSafetyUnlock",
+          "startLine": 10,
+          "endLine": 13,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "sharedSafetyLock",
+          "line": 5,
+          "isDefault": false
+        },
+        {
+          "name": "sharedSafetyUnlock",
+          "line": 10,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "sharedSafetyLock",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 7
+        },
+        {
+          "caller": "sharedSafetyUnlock",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 12
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/shared/SharedSafetyState.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 50,
+      "nonEmptyLines": 40,
+      "callGraph": [
+        {
+          "caller": "SharedSafetyGuard",
+          "callee": "sharedSafetyLock",
+          "lineNumber": 13
+        },
+        {
+          "caller": "~SharedSafetyGuard",
+          "callee": "sharedSafetyUnlock",
+          "lineNumber": 14
+        },
+        {
+          "caller": "sharedAtomicLoad",
+          "callee": "__atomic_load_n",
+          "lineNumber": 23
+        },
+        {
+          "caller": "sharedAtomicStore",
+          "callee": "__atomic_store_n",
+          "lineNumber": 29
+        },
+        {
+          "caller": "sharedAtomicFetchOr",
+          "callee": "__atomic_fetch_or",
+          "lineNumber": 35
+        },
+        {
+          "caller": "sharedAtomicFetchAnd",
+          "callee": "__atomic_fetch_and",
+          "lineNumber": 41
+        },
+        {
+          "caller": "sharedAtomicAddFetch",
+          "callee": "__atomic_add_fetch",
+          "lineNumber": 47
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/shared/TaskSharedData.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 444,
+      "nonEmptyLines": 398,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/FirmwareLog.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 15,
+      "nonEmptyLines": 14,
+      "functions": [
+        {
+          "name": "fwSerialMutex",
+          "startLine": 3,
+          "endLine": 15,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "fwSerialMutex",
+          "line": 3,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "fwSerialMutex",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 8
+        },
+        {
+          "caller": "fwSerialMutex",
+          "callee": "xSemaphoreCreateMutex",
+          "lineNumber": 10
+        },
+        {
+          "caller": "fwSerialMutex",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 12
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/FirmwareLog.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 122,
+      "nonEmptyLines": 107,
+      "functions": [
+        {
+          "name": "fwSerialTake",
+          "startLine": 25,
+          "endLine": 35,
+          "params": []
+        },
+        {
+          "name": "fwSerialGive",
+          "startLine": 37,
+          "endLine": 46,
+          "params": [
+            "locked"
+          ]
+        },
+        {
+          "name": "fwSerialWrite",
+          "startLine": 48,
+          "endLine": 60,
+          "params": [
+            "data",
+            "len"
+          ]
+        },
+        {
+          "name": "fwLogPrintln",
+          "startLine": 62,
+          "endLine": 73,
+          "params": [
+            "level",
+            "text"
+          ]
+        },
+        {
+          "name": "fwLogPrint",
+          "startLine": 75,
+          "endLine": 86,
+          "params": [
+            "level",
+            "text"
+          ]
+        },
+        {
+          "name": "fwLogPrintf",
+          "startLine": 88,
+          "endLine": 104,
+          "params": [
+            "level",
+            "fmt"
+          ]
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "fwSerialTake",
+          "callee": "fwSerialMutex",
+          "lineNumber": 27
+        },
+        {
+          "caller": "fwSerialTake",
+          "callee": "xTaskGetSchedulerState",
+          "lineNumber": 31
+        },
+        {
+          "caller": "fwSerialTake",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 34
+        },
+        {
+          "caller": "fwSerialTake",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 34
+        },
+        {
+          "caller": "fwSerialGive",
+          "callee": "xTaskGetSchedulerState",
+          "lineNumber": 39
+        },
+        {
+          "caller": "fwSerialGive",
+          "callee": "fwSerialMutex",
+          "lineNumber": 42
+        },
+        {
+          "caller": "fwSerialGive",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 44
+        },
+        {
+          "caller": "fwSerialWrite",
+          "callee": "fwSerialTake",
+          "lineNumber": 53
+        },
+        {
+          "caller": "fwSerialWrite",
+          "callee": "write",
+          "lineNumber": 57
+        },
+        {
+          "caller": "fwSerialWrite",
+          "callee": "fwSerialGive",
+          "lineNumber": 58
+        },
+        {
+          "caller": "fwLogPrintln",
+          "callee": "FW_LOG_ENABLED",
+          "lineNumber": 64
+        },
+        {
+          "caller": "fwLogPrintln",
+          "callee": "fwSerialTake",
+          "lineNumber": 67
+        },
+        {
+          "caller": "fwLogPrintln",
+          "callee": "println",
+          "lineNumber": 71
+        },
+        {
+          "caller": "fwLogPrintln",
+          "callee": "fwSerialGive",
+          "lineNumber": 72
+        },
+        {
+          "caller": "fwLogPrint",
+          "callee": "FW_LOG_ENABLED",
+          "lineNumber": 77
+        },
+        {
+          "caller": "fwLogPrint",
+          "callee": "fwSerialTake",
+          "lineNumber": 80
+        },
+        {
+          "caller": "fwLogPrint",
+          "callee": "print",
+          "lineNumber": 84
+        },
+        {
+          "caller": "fwLogPrint",
+          "callee": "fwSerialGive",
+          "lineNumber": 85
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "FW_LOG_ENABLED",
+          "lineNumber": 90
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "va_start",
+          "lineNumber": 95
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "vsnprintf",
+          "lineNumber": 96
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "va_end",
+          "lineNumber": 97
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "fwSerialTake",
+          "lineNumber": 98
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "print",
+          "lineNumber": 102
+        },
+        {
+          "caller": "fwLogPrintf",
+          "callee": "fwSerialGive",
+          "lineNumber": 103
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 6,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/StateMachineTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 1096,
+      "nonEmptyLines": 1006,
+      "functions": [
+        {
+          "name": "setCalibrationStatus",
+          "startLine": 31,
+          "endLine": 43,
+          "params": [
+            "status",
+            "emitAck"
+          ]
+        },
+        {
+          "name": "postSystemEvent",
+          "startLine": 45,
+          "endLine": 48,
+          "params": [
+            "sharedData",
+            "event"
+          ]
+        },
+        {
+          "name": "requestEmergencyStop",
+          "startLine": 50,
+          "endLine": 63,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "postSystemEventForToken",
+          "startLine": 65,
+          "endLine": 79,
+          "params": [
+            "sharedData",
+            "event",
+            "token"
+          ]
+        },
+        {
+          "name": "requestMultiTurnNvsSave",
+          "startLine": 81,
+          "endLine": 93,
+          "params": [
+            "sharedData",
+            "reason"
+          ]
+        },
+        {
+          "name": "setSystemState",
+          "startLine": 95,
+          "endLine": 104,
+          "params": [
+            "sharedData",
+            "state"
+          ]
+        },
+        {
+          "name": "resetCommandState",
+          "startLine": 106,
+          "endLine": 143,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "setCommandModeJoint",
+          "startLine": 145,
+          "endLine": 160,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "setCommandModeDirect",
+          "startLine": 162,
+          "endLine": 176,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "resetServoTargetQueue",
+          "startLine": 178,
+          "endLine": 183,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "requestServoEmergencyTorqueOff",
+          "startLine": 185,
+          "endLine": 190,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "canAcceptStart",
+          "startLine": 192,
+          "endLine": 198,
+          "params": [
+            "state"
+          ]
+        },
+        {
+          "name": "canAcceptRunDirect",
+          "startLine": 200,
+          "endLine": 204,
+          "params": [
+            "state"
+          ]
+        },
+        {
+          "name": "canAcceptRunFeedback",
+          "startLine": 206,
+          "endLine": 209,
+          "params": [
+            "state"
+          ]
+        },
+        {
+          "name": "canAcceptCalibrate",
+          "startLine": 211,
+          "endLine": 215,
+          "params": [
+            "state"
+          ]
+        },
+        {
+          "name": "canAcceptSideSwayAdjust",
+          "startLine": 217,
+          "endLine": 224,
+          "params": [
+            "state"
+          ]
+        },
+        {
+          "name": "activeMotorsMultiTurnKnown",
+          "startLine": 226,
+          "endLine": 234,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "activeMotorsAbsLimitsCalibrated",
+          "startLine": 236,
+          "endLine": 265,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "logFeedbackReadyReject",
+          "startLine": 267,
+          "endLine": 339,
+          "params": [
+            "sharedData",
+            "reason",
+            "a",
+            "b",
+            "c",
+            "d"
+          ]
+        },
+        {
+          "name": "logMultiTurnUnknownReject",
+          "startLine": 341,
+          "endLine": 350,
+          "params": [
+            "sharedData",
+            "eventName"
+          ]
+        },
+        {
+          "name": "enterFaultHold",
+          "startLine": 352,
+          "endLine": 366,
+          "params": [
+            "sharedData",
+            "faultBits"
+          ]
+        },
+        {
+          "name": "resetControlProtectionFaults",
+          "startLine": 368,
+          "endLine": 383,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "readyServoRequiredMask",
+          "startLine": 385,
+          "endLine": 391,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "readyRequiresCan",
+          "startLine": 393,
+          "endLine": 402,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "requiredServosOnline",
+          "startLine": 404,
+          "endLine": 439,
+          "params": [
+            "sharedData",
+            "servoSnapshot"
+          ]
+        },
+        {
+          "name": "isControllableEntryReady",
+          "startLine": 441,
+          "endLine": 499,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "activeJointsInControlWorkspace",
+          "startLine": 505,
+          "endLine": 602,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "idleOrReadyState",
+          "startLine": 604,
+          "endLine": 610,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "updateReadyStateIfIdle",
+          "startLine": 612,
+          "endLine": 625,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "feedbackCompletionMatchesCurrentCommand",
+          "startLine": 627,
+          "endLine": 632,
+          "params": [
+            "sharedData",
+            "event"
+          ]
+        },
+        {
+          "name": "releaseFeedbackRun",
+          "startLine": 634,
+          "endLine": 646,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "handleSystemEvent",
+          "startLine": 648,
+          "endLine": 955,
+          "params": [
+            "sharedData",
+            "event"
+          ]
+        },
+        {
+          "name": "collectSystemFaults",
+          "startLine": 957,
+          "endLine": 1023,
+          "params": [
+            "sharedData"
+          ]
+        },
+        {
+          "name": "stateMachineTask",
+          "startLine": 1031,
+          "endLine": 1096,
+          "params": [
+            "parameter"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "postSystemEvent",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "requestEmergencyStop",
+          "line": 50,
+          "isDefault": false
+        },
+        {
+          "name": "postSystemEventForToken",
+          "line": 65,
+          "isDefault": false
+        },
+        {
+          "name": "stateMachineTask",
+          "line": 1031,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "postSystemEvent",
+          "callee": "postSystemEventForToken",
+          "lineNumber": 47
+        },
+        {
+          "caller": "requestEmergencyStop",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 59
+        },
+        {
+          "caller": "requestEmergencyStop",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 60
+        },
+        {
+          "caller": "requestEmergencyStop",
+          "callee": "taskRuntimeMarkStopRequested",
+          "lineNumber": 61
+        },
+        {
+          "caller": "postSystemEventForToken",
+          "callee": "requestEmergencyStop",
+          "lineNumber": 68
+        },
+        {
+          "caller": "postSystemEventForToken",
+          "callee": "millis",
+          "lineNumber": 76
+        },
+        {
+          "caller": "postSystemEventForToken",
+          "callee": "xQueueSend",
+          "lineNumber": 78
+        },
+        {
+          "caller": "requestMultiTurnNvsSave",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 91
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 113
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 113
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "memset",
+          "lineNumber": 135
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "memset",
+          "lineNumber": 136
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "memset",
+          "lineNumber": 137
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "memset",
+          "lineNumber": 138
+        },
+        {
+          "caller": "resetCommandState",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 141
+        },
+        {
+          "caller": "setCommandModeJoint",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 152
+        },
+        {
+          "caller": "setCommandModeJoint",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 152
+        },
+        {
+          "caller": "setCommandModeJoint",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 158
+        },
+        {
+          "caller": "setCommandModeDirect",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 169
+        },
+        {
+          "caller": "setCommandModeDirect",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 169
+        },
+        {
+          "caller": "setCommandModeDirect",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 174
+        },
+        {
+          "caller": "resetServoTargetQueue",
+          "callee": "xQueueReset",
+          "lineNumber": 181
+        },
+        {
+          "caller": "requestServoEmergencyTorqueOff",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 188
+        },
+        {
+          "caller": "activeMotorsMultiTurnKnown",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 231
+        },
+        {
+          "caller": "activeMotorsMultiTurnKnown",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 233
+        },
+        {
+          "caller": "activeMotorsAbsLimitsCalibrated",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 241
+        },
+        {
+          "caller": "activeMotorsAbsLimitsCalibrated",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 246
+        },
+        {
+          "caller": "activeMotorsAbsLimitsCalibrated",
+          "callee": "millis",
+          "lineNumber": 254
+        },
+        {
+          "caller": "activeMotorsAbsLimitsCalibrated",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 257
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "millis",
+          "lineNumber": 280
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 298
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 305
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 310
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 314
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 319
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 324
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 329
+        },
+        {
+          "caller": "logFeedbackReadyReject",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 336
+        },
+        {
+          "caller": "logMultiTurnUnknownReject",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 346
+        },
+        {
+          "caller": "logMultiTurnUnknownReject",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 348
+        },
+        {
+          "caller": "logMultiTurnUnknownReject",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 349
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 357
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "sharedAtomicFetchOr",
+          "lineNumber": 358
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 360
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "sharedAtomicFetchOr",
+          "lineNumber": 361
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 364
+        },
+        {
+          "caller": "enterFaultHold",
+          "callee": "setSystemState",
+          "lineNumber": 365
+        },
+        {
+          "caller": "resetControlProtectionFaults",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 373
+        },
+        {
+          "caller": "resetControlProtectionFaults",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 376
+        },
+        {
+          "caller": "resetControlProtectionFaults",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 381
+        },
+        {
+          "caller": "resetControlProtectionFaults",
+          "callee": "sharedAtomicAddFetch",
+          "lineNumber": 382
+        },
+        {
+          "caller": "readyServoRequiredMask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 390
+        },
+        {
+          "caller": "readyServoRequiredMask",
+          "callee": "validMotorChannelMask",
+          "lineNumber": 390
+        },
+        {
+          "caller": "readyRequiresCan",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 401
+        },
+        {
+          "caller": "requiredServosOnline",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 406
+        },
+        {
+          "caller": "requiredServosOnline",
+          "callee": "millis",
+          "lineNumber": 409
+        },
+        {
+          "caller": "requiredServosOnline",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 411
+        },
+        {
+          "caller": "requiredServosOnline",
+          "callee": "millis",
+          "lineNumber": 429
+        },
+        {
+          "caller": "requiredServosOnline",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 432
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "millis",
+          "lineNumber": 447
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 455
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 456
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 457
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 458
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "xQueuePeek",
+          "lineNumber": 464
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "readyRequiresCan",
+          "lineNumber": 468
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "readyRequiresCan",
+          "lineNumber": 480
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "xQueuePeek",
+          "lineNumber": 487
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "requiredServosOnline",
+          "lineNumber": 490
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 497
+        },
+        {
+          "caller": "isControllableEntryReady",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 498
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "readyRequiresCan",
+          "lineNumber": 510
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 511
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 513
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 514
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 516
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "activeMotorsMultiTurnKnown",
+          "lineNumber": 519
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 520
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 522
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 523
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "activeMotorsAbsLimitsCalibrated",
+          "lineNumber": 528
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 533
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 536
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 538
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "millis",
+          "lineNumber": 546
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 548
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "xQueuePeek",
+          "lineNumber": 551
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 552
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 557
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 561
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 571
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 581
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "isfinite",
+          "lineNumber": 585
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "calibrationDegToEncoderCount",
+          "lineNumber": 588
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "calibrationDegToEncoderCount",
+          "lineNumber": 589
+        },
+        {
+          "caller": "activeJointsInControlWorkspace",
+          "callee": "logFeedbackReadyReject",
+          "lineNumber": 591
+        },
+        {
+          "caller": "idleOrReadyState",
+          "callee": "isControllableEntryReady",
+          "lineNumber": 606
+        },
+        {
+          "caller": "idleOrReadyState",
+          "callee": "activeJointsInControlWorkspace",
+          "lineNumber": 609
+        },
+        {
+          "caller": "updateReadyStateIfIdle",
+          "callee": "setSystemState",
+          "lineNumber": 623
+        },
+        {
+          "caller": "updateReadyStateIfIdle",
+          "callee": "idleOrReadyState",
+          "lineNumber": 623
+        },
+        {
+          "caller": "releaseFeedbackRun",
+          "callee": "setSystemState",
+          "lineNumber": 644
+        },
+        {
+          "caller": "releaseFeedbackRun",
+          "callee": "idleOrReadyState",
+          "lineNumber": 644
+        },
+        {
+          "caller": "releaseFeedbackRun",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 645
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "canAcceptStart",
+          "lineNumber": 657
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 658
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "activeJointsInControlWorkspace",
+          "lineNumber": 665
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 668
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 668
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeDirect",
+          "lineNumber": 674
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeJoint",
+          "lineNumber": 676
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 678
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 682
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 686
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 689
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 689
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "xQueueReset",
+          "lineNumber": 696
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 698
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 702
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 704
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetCommandState",
+          "lineNumber": 708
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 711
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 712
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetControlProtectionFaults",
+          "lineNumber": 713
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 714
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 715
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 716
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 717
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 718
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "canAcceptRunDirect",
+          "lineNumber": 722
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 723
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "activeMotorsMultiTurnKnown",
+          "lineNumber": 727
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "logMultiTurnUnknownReject",
+          "lineNumber": 728
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 731
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeDirect",
+          "lineNumber": 734
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 735
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 736
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "canAcceptRunFeedback",
+          "lineNumber": 740
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 741
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "activeMotorsMultiTurnKnown",
+          "lineNumber": 745
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "logMultiTurnUnknownReject",
+          "lineNumber": 746
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "activeMotorsAbsLimitsCalibrated",
+          "lineNumber": 749
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 750
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 753
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeJoint",
+          "lineNumber": 756
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 757
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 758
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 763
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 769
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 769
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 770
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 775
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "feedbackCompletionMatchesCurrentCommand",
+          "lineNumber": 779
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 780
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "releaseFeedbackRun",
+          "lineNumber": 785
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 790
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "feedbackCompletionMatchesCurrentCommand",
+          "lineNumber": 794
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 795
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 800
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "releaseFeedbackRun",
+          "lineNumber": 802
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 808
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 815
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 816
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "canAcceptCalibrate",
+          "lineNumber": 821
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 822
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 826
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 829
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeJoint",
+          "lineNumber": 830
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 831
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 832
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "startAutoCalibrationTask",
+          "lineNumber": 833
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "memset",
+          "lineNumber": 835
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "millis",
+          "lineNumber": 841
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 847
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 848
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 849
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 850
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "canAcceptSideSwayAdjust",
+          "lineNumber": 857
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 858
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "resetServoTargetQueue",
+          "lineNumber": 862
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 865
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCommandModeJoint",
+          "lineNumber": 866
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 867
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 868
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "startSideSwayAdjustTask",
+          "lineNumber": 869
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "memset",
+          "lineNumber": 871
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "millis",
+          "lineNumber": 877
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 883
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 884
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 885
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 886
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 893
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 899
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicFetchAnd",
+          "lineNumber": 900
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 901
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 902
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 903
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 903
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 904
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 909
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 915
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 916
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 917
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 917
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestMultiTurnNvsSave",
+          "lineNumber": 918
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "idleOrReadyState",
+          "lineNumber": 928
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 929
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 930
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 933
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 934
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "FW_LOG_INFO_PRINTF",
+          "lineNumber": 940
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 946
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setCalibrationStatus",
+          "lineNumber": 947
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "requestServoEmergencyTorqueOff",
+          "lineNumber": 948
+        },
+        {
+          "caller": "handleSystemEvent",
+          "callee": "setSystemState",
+          "lineNumber": 949
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "millis",
+          "lineNumber": 963
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 972
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 974
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 975
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 976
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "readyRequiresCan",
+          "lineNumber": 980
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "xQueuePeek",
+          "lineNumber": 981
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "xQueuePeek",
+          "lineNumber": 993
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "requiredServosOnline",
+          "lineNumber": 996
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1007
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1010
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1013
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1016
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "readyServoRequiredMask",
+          "lineNumber": 1017
+        },
+        {
+          "caller": "collectSystemFaults",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1020
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "vTaskDelete",
+          "lineNumber": 1035
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "setSystemState",
+          "lineNumber": 1039
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "millis",
+          "lineNumber": 1042
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 1043
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 1044
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "taskRuntimeMarkLoopStart",
+          "lineNumber": 1048
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "sharedAtomicLoad",
+          "lineNumber": 1050
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "millis",
+          "lineNumber": 1055
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "handleSystemEvent",
+          "lineNumber": 1057
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "xQueueReceive",
+          "lineNumber": 1061
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "handleSystemEvent",
+          "lineNumber": 1062
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "collectSystemFaults",
+          "lineNumber": 1065
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "sharedAtomicStore",
+          "lineNumber": 1066
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "millis",
+          "lineNumber": 1073
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "isAutoCalibrationFeedbackReady",
+          "lineNumber": 1074
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 1076
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "postSystemEvent",
+          "lineNumber": 1077
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "enterFaultHold",
+          "lineNumber": 1083
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "updateReadyStateIfIdle",
+          "lineNumber": 1086
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "taskRuntimeMarkLoopEnd",
+          "lineNumber": 1089
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 1091
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "taskRuntimeMarkPeriodResult",
+          "lineNumber": 1092
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 1093
+        },
+        {
+          "caller": "stateMachineTask",
+          "callee": "vTaskDelay",
+          "lineNumber": 1094
+        }
+      ],
+      "metrics": {
+        "importCount": 8,
+        "exportCount": 4,
+        "functionCount": 34,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/StateMachineTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 17,
+      "nonEmptyLines": 14,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/SystemTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 225,
+      "nonEmptyLines": 205,
+      "functions": [
+        {
+          "name": "System_Init",
+          "startLine": 32,
+          "endLine": 221,
+          "params": []
+        },
+        {
+          "name": "System_Loop",
+          "startLine": 223,
+          "endLine": 225,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "System_Init",
+          "line": 32,
+          "isDefault": false
+        },
+        {
+          "name": "System_Loop",
+          "line": 223,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "System_Init",
+          "callee": "begin",
+          "lineNumber": 33
+        },
+        {
+          "caller": "System_Init",
+          "callee": "delay",
+          "lineNumber": 35
+        },
+        {
+          "caller": "System_Init",
+          "callee": "delay",
+          "lineNumber": 37
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 39
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 40
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 41
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 42
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 43
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 44
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 45
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 46
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 47
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 48
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 49
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 50
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 51
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 52
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 53
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xQueueCreate",
+          "lineNumber": 54
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xSemaphoreCreateMutex",
+          "lineNumber": 68
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xSemaphoreCreateMutex",
+          "lineNumber": 69
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 73
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 74
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 75
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 76
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 77
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 88
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 89
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 90
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 91
+        },
+        {
+          "caller": "System_Init",
+          "callee": "validMotorChannelMask",
+          "lineNumber": 102
+        },
+        {
+          "caller": "System_Init",
+          "callee": "millis",
+          "lineNumber": 123
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 126
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 127
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 131
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 139
+        },
+        {
+          "caller": "System_Init",
+          "callee": "memset",
+          "lineNumber": 140
+        },
+        {
+          "caller": "System_Init",
+          "callee": "initManualCalibrationForTest",
+          "lineNumber": 147
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 149
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 158
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 167
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 176
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 185
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 194
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 203
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 204
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 205
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 206
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 207
+        },
+        {
+          "caller": "System_Init",
+          "callee": "xTaskCreate",
+          "lineNumber": 209
+        },
+        {
+          "caller": "System_Init",
+          "callee": "taskRuntimeRegister",
+          "lineNumber": 217
+        },
+        {
+          "caller": "System_Init",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 219
+        },
+        {
+          "caller": "System_Init",
+          "callee": "FW_LOG_INFO_PRINTLN",
+          "lineNumber": 220
+        },
+        {
+          "caller": "System_Loop",
+          "callee": "vTaskDelay",
+          "lineNumber": 224
+        },
+        {
+          "caller": "System_Loop",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 224
+        }
+      ],
+      "metrics": {
+        "importCount": 9,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/SystemTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 37,
+      "nonEmptyLines": 30,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/TaskRuntimeMonitor.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 325,
+      "nonEmptyLines": 300,
+      "functions": [
+        {
+          "name": "clampUs",
+          "startLine": 48,
+          "endLine": 53,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "sampleCurrentTaskStackFreeBytes",
+          "startLine": 55,
+          "endLine": 66,
+          "params": []
+        },
+        {
+          "name": "sampleTaskStacks",
+          "startLine": 68,
+          "endLine": 87,
+          "params": []
+        },
+        {
+          "name": "sampleCoreIdle",
+          "startLine": 89,
+          "endLine": 144,
+          "params": []
+        },
+        {
+          "name": "taskRuntimeRegister",
+          "startLine": 148,
+          "endLine": 161,
+          "params": [
+            "taskId",
+            "handle",
+            "stackAllocatedBytes"
+          ]
+        },
+        {
+          "name": "taskRuntimeUnregister",
+          "startLine": 163,
+          "endLine": 176,
+          "params": [
+            "taskId"
+          ]
+        },
+        {
+          "name": "taskRuntimeMarkLoopStart",
+          "startLine": 178,
+          "endLine": 198,
+          "params": [
+            "taskId"
+          ]
+        },
+        {
+          "name": "taskRuntimeMarkLoopEnd",
+          "startLine": 200,
+          "endLine": 215,
+          "params": [
+            "taskId"
+          ]
+        },
+        {
+          "name": "taskRuntimeMarkPeriodResult",
+          "startLine": 217,
+          "endLine": 232,
+          "params": [
+            "taskId",
+            "overrun"
+          ]
+        },
+        {
+          "name": "taskRuntimeGetSnapshot",
+          "startLine": 234,
+          "endLine": 263,
+          "params": [
+            "taskId",
+            "out"
+          ]
+        },
+        {
+          "name": "taskRuntimeMarkSystemStatusSent",
+          "startLine": 265,
+          "endLine": 275,
+          "params": []
+        },
+        {
+          "name": "taskRuntimeMarkStopReceived",
+          "startLine": 277,
+          "endLine": 284,
+          "params": []
+        },
+        {
+          "name": "taskRuntimeMarkStopRequested",
+          "startLine": 286,
+          "endLine": 292,
+          "params": []
+        },
+        {
+          "name": "taskRuntimeMarkStopTorqueOffComplete",
+          "startLine": 294,
+          "endLine": 307,
+          "params": []
+        },
+        {
+          "name": "taskRuntimeMonitorTask",
+          "startLine": 309,
+          "endLine": 325,
+          "params": [
+            "parameter"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "TaskRuntimeSlot",
+          "startLine": 8,
+          "endLine": 24,
+          "methods": [],
+          "properties": [
+            "handle",
+            "active",
+            "priority",
+            "coreId",
+            "stackAllocatedBytes",
+            "stackCurrentFreeBytes",
+            "stackMinFreeBytes",
+            "loopCount",
+            "maxGapUs",
+            "maxExecUs",
+            "overrunCount",
+            "consecutiveOverruns",
+            "maxConsecutiveOverruns",
+            "lastLoopStartUs",
+            "currentLoopStartUs"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "TaskRuntimeSlot",
+          "line": 8,
+          "isDefault": false
+        },
+        {
+          "name": "clampUs",
+          "line": 48,
+          "isDefault": false
+        },
+        {
+          "name": "sampleCurrentTaskStackFreeBytes",
+          "line": 55,
+          "isDefault": false
+        },
+        {
+          "name": "sampleTaskStacks",
+          "line": 68,
+          "isDefault": false
+        },
+        {
+          "name": "sampleCoreIdle",
+          "line": 89,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeRegister",
+          "line": 148,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeUnregister",
+          "line": 163,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkLoopStart",
+          "line": 178,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkLoopEnd",
+          "line": 200,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkPeriodResult",
+          "line": 217,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeGetSnapshot",
+          "line": 234,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkSystemStatusSent",
+          "line": 265,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkStopReceived",
+          "line": 277,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkStopRequested",
+          "line": 286,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMarkStopTorqueOffComplete",
+          "line": 294,
+          "isDefault": false
+        },
+        {
+          "name": "taskRuntimeMonitorTask",
+          "line": 309,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "sampleCurrentTaskStackFreeBytes",
+          "callee": "pxTaskGetStackStart",
+          "lineNumber": 59
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 72
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 74
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "uxTaskGetStackHighWaterMark",
+          "lineNumber": 78
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "uxTaskPriorityGet",
+          "lineNumber": 79
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 80
+        },
+        {
+          "caller": "sampleTaskStacks",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 85
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "uxTaskGetSystemState",
+          "lineNumber": 94
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "strcmp",
+          "lineNumber": 102
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "strcmp",
+          "lineNumber": 104
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "strcmp",
+          "lineNumber": 122
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "strcmp",
+          "lineNumber": 124
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 129
+        },
+        {
+          "caller": "sampleCoreIdle",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 138
+        },
+        {
+          "caller": "taskRuntimeRegister",
+          "callee": "uxTaskPriorityGet",
+          "lineNumber": 151
+        },
+        {
+          "caller": "taskRuntimeRegister",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 152
+        },
+        {
+          "caller": "taskRuntimeRegister",
+          "callee": "memset",
+          "lineNumber": 154
+        },
+        {
+          "caller": "taskRuntimeRegister",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 160
+        },
+        {
+          "caller": "taskRuntimeUnregister",
+          "callee": "uxTaskGetStackHighWaterMark",
+          "lineNumber": 166
+        },
+        {
+          "caller": "taskRuntimeUnregister",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 167
+        },
+        {
+          "caller": "taskRuntimeUnregister",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 175
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "esp_timer_get_time",
+          "lineNumber": 181
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "xPortGetCoreID",
+          "lineNumber": 182
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "sampleCurrentTaskStackFreeBytes",
+          "lineNumber": 183
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 184
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "clampUs",
+          "lineNumber": 187
+        },
+        {
+          "caller": "taskRuntimeMarkLoopStart",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 197
+        },
+        {
+          "caller": "taskRuntimeMarkLoopEnd",
+          "callee": "esp_timer_get_time",
+          "lineNumber": 203
+        },
+        {
+          "caller": "taskRuntimeMarkLoopEnd",
+          "callee": "sampleCurrentTaskStackFreeBytes",
+          "lineNumber": 204
+        },
+        {
+          "caller": "taskRuntimeMarkLoopEnd",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 205
+        },
+        {
+          "caller": "taskRuntimeMarkLoopEnd",
+          "callee": "clampUs",
+          "lineNumber": 208
+        },
+        {
+          "caller": "taskRuntimeMarkLoopEnd",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 214
+        },
+        {
+          "caller": "taskRuntimeMarkPeriodResult",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 220
+        },
+        {
+          "caller": "taskRuntimeMarkPeriodResult",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 231
+        },
+        {
+          "caller": "taskRuntimeGetSnapshot",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 237
+        },
+        {
+          "caller": "taskRuntimeGetSnapshot",
+          "callee": "millis",
+          "lineNumber": 260
+        },
+        {
+          "caller": "taskRuntimeGetSnapshot",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 261
+        },
+        {
+          "caller": "taskRuntimeMarkSystemStatusSent",
+          "callee": "millis",
+          "lineNumber": 267
+        },
+        {
+          "caller": "taskRuntimeMarkSystemStatusSent",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 268
+        },
+        {
+          "caller": "taskRuntimeMarkSystemStatusSent",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 274
+        },
+        {
+          "caller": "taskRuntimeMarkStopReceived",
+          "callee": "esp_timer_get_time",
+          "lineNumber": 279
+        },
+        {
+          "caller": "taskRuntimeMarkStopReceived",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 280
+        },
+        {
+          "caller": "taskRuntimeMarkStopReceived",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 283
+        },
+        {
+          "caller": "taskRuntimeMarkStopRequested",
+          "callee": "esp_timer_get_time",
+          "lineNumber": 288
+        },
+        {
+          "caller": "taskRuntimeMarkStopRequested",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 289
+        },
+        {
+          "caller": "taskRuntimeMarkStopRequested",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 291
+        },
+        {
+          "caller": "taskRuntimeMarkStopTorqueOffComplete",
+          "callee": "esp_timer_get_time",
+          "lineNumber": 296
+        },
+        {
+          "caller": "taskRuntimeMarkStopTorqueOffComplete",
+          "callee": "portENTER_CRITICAL",
+          "lineNumber": 297
+        },
+        {
+          "caller": "taskRuntimeMarkStopTorqueOffComplete",
+          "callee": "clampUs",
+          "lineNumber": 299
+        },
+        {
+          "caller": "taskRuntimeMarkStopTorqueOffComplete",
+          "callee": "portEXIT_CRITICAL",
+          "lineNumber": 306
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 312
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 313
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "taskRuntimeMarkLoopStart",
+          "lineNumber": 315
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "sampleTaskStacks",
+          "lineNumber": 316
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "sampleCoreIdle",
+          "lineNumber": 317
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "taskRuntimeMarkLoopEnd",
+          "lineNumber": 318
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 320
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "taskRuntimeMarkPeriodResult",
+          "lineNumber": 321
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 322
+        },
+        {
+          "caller": "taskRuntimeMonitorTask",
+          "callee": "vTaskDelay",
+          "lineNumber": 323
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 16,
+        "functionCount": 15,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "ESP32-P4/ServoBoardMain/src/system/TaskRuntimeMonitor.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 52,
+      "nonEmptyLines": 46,
+      "classes": [
+        {
+          "name": "TaskRuntimeSnapshot",
+          "startLine": 18,
+          "endLine": 38,
+          "methods": [],
+          "properties": [
+            "taskId",
+            "active",
+            "priority",
+            "coreId",
+            "stackAllocatedBytes",
+            "stackCurrentFreeBytes",
+            "stackMinFreeBytes",
+            "loopCount",
+            "maxGapUs",
+            "maxExecUs",
+            "overrunCount",
+            "consecutiveOverruns",
+            "maxConsecutiveOverruns",
+            "core0IdlePermille",
+            "core1IdlePermille",
+            "systemStatusMaxGapMs",
+            "stopLastLatencyUs",
+            "stopMaxLatencyUs",
+            "timestampMs"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "TaskRuntimeSnapshot",
+          "line": 18,
+          "isDefault": false
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,3158 @@
+{
+  "nodes": [
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/SyncWritePos/SyncWritePos.ino",
+      "type": "file",
+      "name": "SyncWritePos.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/SyncWritePos/SyncWritePos.ino",
+      "summary": "SyncWritePos.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/WritePos/WritePos.ino",
+      "type": "file",
+      "name": "WritePos.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/WritePos/WritePos.ino",
+      "summary": "WritePos.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/WritePWM/WritePWM.ino",
+      "type": "file",
+      "name": "WritePWM.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/WritePWM/WritePWM.ino",
+      "summary": "WritePWM.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/Broadcast/Broadcast.ino",
+      "type": "file",
+      "name": "Broadcast.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/Broadcast/Broadcast.ino",
+      "summary": "Broadcast.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/CalibrationOfs/CalibrationOfs.ino",
+      "type": "file",
+      "name": "CalibrationOfs.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/CalibrationOfs/CalibrationOfs.ino",
+      "summary": "CalibrationOfs.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "calibration",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/FeedBack/FeedBack.ino",
+      "type": "file",
+      "name": "FeedBack.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/FeedBack/FeedBack.ino",
+      "summary": "FeedBack.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/Ping/Ping.ino",
+      "type": "file",
+      "name": "Ping.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/Ping/Ping.ino",
+      "summary": "Ping.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/ProgramEprom/ProgramEprom.ino",
+      "type": "file",
+      "name": "ProgramEprom.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/ProgramEprom/ProgramEprom.ino",
+      "summary": "ProgramEprom.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/RegWritePos/RegWritePos.ino",
+      "type": "file",
+      "name": "RegWritePos.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/RegWritePos/RegWritePos.ino",
+      "summary": "RegWritePos.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncRead/SyncRead.ino",
+      "type": "file",
+      "name": "SyncRead.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncRead/SyncRead.ino",
+      "summary": "SyncRead.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncWritePos/SyncWritePos.ino",
+      "type": "file",
+      "name": "SyncWritePos.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncWritePos/SyncWritePos.ino",
+      "summary": "SyncWritePos.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncWriteSpe/SyncWriteSpe.ino",
+      "type": "file",
+      "name": "SyncWriteSpe.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/SyncWriteSpe/SyncWriteSpe.ino",
+      "summary": "SyncWriteSpe.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/WritePos/WritePos.ino",
+      "type": "file",
+      "name": "WritePos.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/WritePos/WritePos.ino",
+      "summary": "WritePos.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/WriteSpe/WriteSpe.ino",
+      "type": "file",
+      "name": "WriteSpe.ino",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/examples/SMS_STS/WriteSpe/WriteSpe.ino",
+      "summary": "WriteSpe.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:ESP32-P4/libraries/FTServo_Arduino/library.properties",
+      "type": "config",
+      "name": "library.properties",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/library.properties",
+      "summary": "library.properties 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "type": "file",
+      "name": "HLSCL.cpp",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "summary": "HLSCL.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:HLSCL",
+      "type": "function",
+      "name": "HLSCL",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        10,
+        13
+      ],
+      "summary": "HLSCL 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WritePosEx",
+      "type": "function",
+      "name": "WritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        23,
+        36
+      ],
+      "summary": "WritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:RegWritePosEx",
+      "type": "function",
+      "name": "RegWritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        38,
+        51
+      ],
+      "summary": "RegWritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWritePosEx",
+      "type": "function",
+      "name": "SyncWritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        53,
+        71
+      ],
+      "summary": "SyncWritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWriteSpe",
+      "type": "function",
+      "name": "SyncWriteSpe",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        73,
+        91
+      ],
+      "summary": "SyncWriteSpe 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WheelMode",
+      "type": "function",
+      "name": "WheelMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        93,
+        96
+      ],
+      "summary": "WheelMode 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EleMode",
+      "type": "function",
+      "name": "EleMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        98,
+        101
+      ],
+      "summary": "EleMode 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteSpe",
+      "type": "function",
+      "name": "WriteSpe",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        103,
+        116
+      ],
+      "summary": "WriteSpe 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteEle",
+      "type": "function",
+      "name": "WriteEle",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        118,
+        125
+      ],
+      "summary": "WriteEle 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "type": "function",
+      "name": "EnableTorque",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        127,
+        130
+      ],
+      "summary": "EnableTorque 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "type": "function",
+      "name": "unLockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        132,
+        136
+      ],
+      "summary": "unLockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:LockEprom",
+      "type": "function",
+      "name": "LockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        138,
+        141
+      ],
+      "summary": "LockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "type": "function",
+      "name": "CalibrationOfs",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        143,
+        148
+      ],
+      "summary": "CalibrationOfs 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:FeedBack",
+      "type": "function",
+      "name": "FeedBack",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        150,
+        157
+      ],
+      "summary": "FeedBack 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadPos",
+      "type": "function",
+      "name": "ReadPos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        159,
+        174
+      ],
+      "summary": "ReadPos 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadSpeed",
+      "type": "function",
+      "name": "ReadSpeed",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        176,
+        190
+      ],
+      "summary": "ReadSpeed 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadLoad",
+      "type": "function",
+      "name": "ReadLoad",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        192,
+        206
+      ],
+      "summary": "ReadLoad 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadVoltage",
+      "type": "function",
+      "name": "ReadVoltage",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        208,
+        217
+      ],
+      "summary": "ReadVoltage 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadTemper",
+      "type": "function",
+      "name": "ReadTemper",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        219,
+        228
+      ],
+      "summary": "ReadTemper 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadMove",
+      "type": "function",
+      "name": "ReadMove",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        230,
+        239
+      ],
+      "summary": "ReadMove 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadCurrent",
+      "type": "function",
+      "name": "ReadCurrent",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        241,
+        255
+      ],
+      "summary": "ReadCurrent 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ServoMode",
+      "type": "function",
+      "name": "ServoMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "lineRange": [
+        257,
+        260
+      ],
+      "summary": "ServoMode 是 ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.h",
+      "type": "file",
+      "name": "HLSCL.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.h",
+      "summary": "HLSCL.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/INST.h",
+      "type": "file",
+      "name": "INST.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/INST.h",
+      "summary": "INST.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "type": "file",
+      "name": "SCS.cpp",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "summary": "SCS.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS",
+      "type": "function",
+      "name": "SCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        11,
+        15
+      ],
+      "summary": "SCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "function",
+      "name": "Host2SCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        33,
+        42
+      ],
+      "summary": "Host2SCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS2Host",
+      "type": "function",
+      "name": "SCS2Host",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        46,
+        59
+      ],
+      "summary": "SCS2Host 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "function",
+      "name": "writeBuf",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        61,
+        89
+      ],
+      "summary": "writeBuf 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "function",
+      "name": "genWrite",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        93,
+        99
+      ],
+      "summary": "genWrite 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "function",
+      "name": "regWrite",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        103,
+        109
+      ],
+      "summary": "regWrite 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "type": "function",
+      "name": "RegWriteAction",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        113,
+        119
+      ],
+      "summary": "RegWriteAction 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "function",
+      "name": "syncWrite",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        123,
+        150
+      ],
+      "summary": "syncWrite 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "function",
+      "name": "writeByte",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        152,
+        158
+      ],
+      "summary": "writeByte 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "type": "function",
+      "name": "writeWord",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        160,
+        168
+      ],
+      "summary": "writeWord 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "function",
+      "name": "Read",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        172,
+        217
+      ],
+      "summary": "Read 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "function",
+      "name": "readByte",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        220,
+        229
+      ],
+      "summary": "readByte 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "function",
+      "name": "readWord",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        232,
+        242
+      ],
+      "summary": "readWord 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "type": "function",
+      "name": "Ping",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        245,
+        276
+      ],
+      "summary": "Ping 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "function",
+      "name": "checkHead",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        278,
+        298
+      ],
+      "summary": "checkHead 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "function",
+      "name": "Ack",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        300,
+        330
+      ],
+      "summary": "Ack 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "type": "function",
+      "name": "syncReadPacketTx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        332,
+        355
+      ],
+      "summary": "syncReadPacketTx 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadBegin",
+      "type": "function",
+      "name": "syncReadBegin",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        357,
+        362
+      ],
+      "summary": "syncReadBegin 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadEnd",
+      "type": "function",
+      "name": "syncReadEnd",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        364,
+        370
+      ],
+      "summary": "syncReadEnd 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketRx",
+      "type": "function",
+      "name": "syncReadPacketRx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        372,
+        409
+      ],
+      "summary": "syncReadPacketRx 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToByte",
+      "type": "function",
+      "name": "syncReadRxPacketToByte",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        411,
+        418
+      ],
+      "summary": "syncReadRxPacketToByte 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToWrod",
+      "type": "function",
+      "name": "syncReadRxPacketToWrod",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        420,
+        434
+      ],
+      "summary": "syncReadRxPacketToWrod 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "type": "function",
+      "name": "Reset",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        436,
+        442
+      ],
+      "summary": "Reset 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "type": "function",
+      "name": "Recal",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "lineRange": [
+        444,
+        450
+      ],
+      "summary": "Recal 是 ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.h",
+      "type": "file",
+      "name": "SCS.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.h",
+      "summary": "SCS.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "type": "file",
+      "name": "SCSCL.cpp",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "summary": "SCSCL.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SCSCL",
+      "type": "function",
+      "name": "SCSCL",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        10,
+        13
+      ],
+      "summary": "SCSCL 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePos",
+      "type": "function",
+      "name": "WritePos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        23,
+        31
+      ],
+      "summary": "WritePos 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:RegWritePos",
+      "type": "function",
+      "name": "RegWritePos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        33,
+        41
+      ],
+      "summary": "RegWritePos 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SyncWritePos",
+      "type": "function",
+      "name": "SyncWritePos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        43,
+        63
+      ],
+      "summary": "SyncWritePos 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:EnableTorque",
+      "type": "function",
+      "name": "EnableTorque",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        65,
+        68
+      ],
+      "summary": "EnableTorque 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:unLockEprom",
+      "type": "function",
+      "name": "unLockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        70,
+        73
+      ],
+      "summary": "unLockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:LockEprom",
+      "type": "function",
+      "name": "LockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        75,
+        78
+      ],
+      "summary": "LockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:FeedBack",
+      "type": "function",
+      "name": "FeedBack",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        80,
+        87
+      ],
+      "summary": "FeedBack 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadPos",
+      "type": "function",
+      "name": "ReadPos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        89,
+        100
+      ],
+      "summary": "ReadPos 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadSpeed",
+      "type": "function",
+      "name": "ReadSpeed",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        102,
+        116
+      ],
+      "summary": "ReadSpeed 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadLoad",
+      "type": "function",
+      "name": "ReadLoad",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        118,
+        132
+      ],
+      "summary": "ReadLoad 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadVoltage",
+      "type": "function",
+      "name": "ReadVoltage",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        134,
+        143
+      ],
+      "summary": "ReadVoltage 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadTemper",
+      "type": "function",
+      "name": "ReadTemper",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        145,
+        154
+      ],
+      "summary": "ReadTemper 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadMove",
+      "type": "function",
+      "name": "ReadMove",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        156,
+        165
+      ],
+      "summary": "ReadMove 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadCurrent",
+      "type": "function",
+      "name": "ReadCurrent",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        167,
+        181
+      ],
+      "summary": "ReadCurrent 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:PWMMode",
+      "type": "function",
+      "name": "PWMMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        183,
+        191
+      ],
+      "summary": "PWMMode 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePWM",
+      "type": "function",
+      "name": "WritePWM",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "lineRange": [
+        193,
+        203
+      ],
+      "summary": "WritePWM 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.h",
+      "type": "file",
+      "name": "SCSCL.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.h",
+      "summary": "SCSCL.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "type": "file",
+      "name": "SCSerial.cpp",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "summary": "SCSerial.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:SCSerial",
+      "type": "function",
+      "name": "SCSerial",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "lineRange": [
+        10,
+        14
+      ],
+      "summary": "SCSerial 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:readSCS",
+      "type": "function",
+      "name": "readSCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "lineRange": [
+        28,
+        51
+      ],
+      "summary": "readSCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:writeSCS",
+      "type": "function",
+      "name": "writeSCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "lineRange": [
+        79,
+        85
+      ],
+      "summary": "writeSCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "function",
+      "name": "rFlushSCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "lineRange": [
+        92,
+        95
+      ],
+      "summary": "rFlushSCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "function",
+      "name": "wFlushSCS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "lineRange": [
+        97,
+        99
+      ],
+      "summary": "wFlushSCS 是 ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.h",
+      "type": "file",
+      "name": "SCSerial.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.h",
+      "summary": "SCSerial.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCServo.h",
+      "type": "file",
+      "name": "SCServo.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SCServo.h",
+      "summary": "SCServo.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:HLSCL",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:HLSCL",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:RegWritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:RegWritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWriteSpe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWriteSpe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WheelMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WheelMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EleMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EleMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteSpe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteSpe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteEle",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteEle",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:LockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:LockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:FeedBack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:FeedBack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadPos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadPos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadSpeed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadSpeed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadVoltage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadVoltage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadTemper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadTemper",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadMove",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadMove",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadCurrent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadCurrent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ServoMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ServoMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:RegWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:RegWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:SyncWriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WheelMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EleMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:WriteEle",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:LockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:EnableTorque",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:unLockEprom",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:CalibrationOfs",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:FeedBack",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadPos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadSpeed",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadVoltage",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadTemper",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadMove",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ReadCurrent",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp:ServoMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS2Host",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS2Host",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadBegin",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadBegin",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadEnd",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadEnd",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketRx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketRx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToByte",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToByte",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToWrod",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToWrod",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:RegWriteAction",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS2Host",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:checkHead",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadRxPacketToWrod",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:SCS2Host",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Reset",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeBuf",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Recal",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ack",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SCSCL",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SCSCL",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:RegWritePos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:RegWritePos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SyncWritePos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SyncWritePos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:EnableTorque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:EnableTorque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:unLockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:unLockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:LockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:LockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:FeedBack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:FeedBack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadPos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadPos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadSpeed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadSpeed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadVoltage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadVoltage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadTemper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadTemper",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadMove",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadMove",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadCurrent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadCurrent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:PWMMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:PWMMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePWM",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePWM",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:RegWritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:RegWritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SyncWritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:SyncWritePos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:EnableTorque",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:unLockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:LockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:FeedBack",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadPos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadSpeed",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadVoltage",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadTemper",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadMove",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:ReadCurrent",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:PWMMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePWM",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp:WritePWM",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:SCSerial",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:SCSerial",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:readSCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:readSCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:writeSCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:writeSCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:rFlushSCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp:wFlushSCS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

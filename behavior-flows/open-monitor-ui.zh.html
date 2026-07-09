@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>函数调用与变量传递：打开、标定、反馈、遥操作</title>
+<style>
+body{margin:0;background:#f5f3ee;color:#202124;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.62}
+main{max-width:1180px;margin:0 auto;background:#fffefa;min-height:100vh;padding:34px 30px 80px;box-shadow:0 0 0 1px #e4dccd}
+h1{font-size:28px;margin:0 0 8px}h2{font-size:22px;margin:34px 0 12px;border-top:1px solid #e7dfd1;padding-top:24px}h3{font-size:17px;margin:24px 0 8px}
+p{margin:8px 0}.lead{color:#444;max-width:980px}
+code{font-family:Consolas,"SFMono-Regular",monospace;font-size:.92em;background:#f1efe8;padding:1px 4px;border-radius:4px}
+.chain{display:flex;flex-direction:column;gap:12px;margin:16px 0 22px}
+.call{border:1px solid #d8d1c3;border-left:5px solid #1d5f8c;border-radius:10px;background:#fff;padding:13px 14px}
+.call.green{border-left-color:#26724d}.call.amber{border-left-color:#9a6700}.call.red{border-left-color:#a53d3d}.call.violet{border-left-color:#6750a4}
+.title{font-weight:700;font-family:Consolas,"SFMono-Regular",monospace}.file{color:#6b7280;font-family:Consolas,"SFMono-Regular",monospace;font-size:12px;margin-top:2px}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;margin-top:10px;font-size:14px}.k{color:#6b7280}.v{color:#262626}
+.arrow{color:#8a8173;text-align:center;font-size:18px;margin:-4px 0}
+.note{border:1px solid #dfd7c8;background:#faf7ef;border-radius:10px;padding:12px 14px;margin:14px 0;color:#3f3f46}
+table{border-collapse:collapse;width:100%;background:#fff;margin:12px 0 20px;border:1px solid #d8d1c3}
+th,td{border-bottom:1px solid #e7dfd1;padding:9px 10px;text-align:left;vertical-align:top;font-size:14px}
+th{background:#f1eadf}.mini{font-size:13px;color:#4b5563}
+pre{white-space:pre-wrap;word-break:break-word;background:#1f2937;color:#f9fafb;border-radius:10px;padding:14px;overflow:auto;font-size:13px;line-height:1.55}
+@media(max-width:720px){main{padding:22px 14px 60px}.kv{grid-template-columns:1fr}.k{font-weight:700}}
+</style>
+</head>
+<body>
+<main>
+<h1>函数调用与变量传递：打开、标定、反馈、遥操作</h1>
+<p class="lead">这版不再画示意图，而是按真实代码说明：哪个函数调用哪个函数，参数名是什么，函数内部怎样改变量，返回值或对象怎样进入下一步。你可以把它当成一条人工整理的调用栈。</p>
+
+<h2>0. 总主线：这个事件里只有两种数据在流动</h2>
+<table>
+  <tr><th>方向</th><th>具体变量</th><th>说明</th></tr>
+  <tr><td>上位机发给 P4</td><td><code>args.port</code>、<code>port</code>、<code>comm_port</code>、<code>cmd</code>、<code>angles</code>、<code>guarded</code></td><td>连接参数和控制命令。最后都会进入 <code>LowerComputerComm.tx_queue</code>，再由 <code>_tx_loop()</code> 写串口。</td></tr>
+  <tr><td>P4 回到上位机</td><td><code>chunk</code>、<code>packets</code>、<code>payload</code>、<code>model: HandModel</code>、<code>current_state</code>、<code>state</code></td><td>P4 原始字节逐步被解析成 <code>HandModel</code>，再通过 callback 给 UI。</td></tr>
+</table>
+
+<h2>1. 打开 UI + 连接主控串口：参数怎样一路传下去</h2>
+<div class="chain">
+  <div class="call">
+    <div class="title">main(argv=None)</div>
+    <div class="file">desktop/app/entry.py:76</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>argv</code> 或命令行，例如 <code>desktop ui --mode monitor --port COMx --tactile-port COMy</code></div>
+      <div class="k">内部变量</div><div class="v"><code>args = parser.parse_args(argv)</code></div>
+      <div class="k">调用下游</div><div class="v"><code>run_ui(mode=args.mode, port=args.port, tactile_port=args.tactile_port, ros2_enabled=bool(args.ros2), ...)</code></div>
+      <div class="k">关键变化</div><div class="v">命令行字符串被结构化成 <code>args</code>，然后按名字传给 <code>run_ui()</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call">
+    <div class="title">run_ui(mode, port, tactile_port, ros2_enabled, ..., backend=None)</div>
+    <div class="file">desktop/app/ui_runner.py:155</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>mode="monitor"</code>、<code>port="COMx"</code>、<code>tactile_port="COMy"</code></div>
+      <div class="k">内部变量</div><div class="v"><code>backend = backend or HandBackend()</code></div>
+      <div class="k">调用下游</div><div class="v">如果 <code>port</code> 存在：<code>backend.connect(port)</code>；随后 <code>run(Mode(mode), backend, port=port, tactile_port=tactile_port, ...)</code></div>
+      <div class="k">关键变化</div><div class="v"><code>port</code> 还只是 UI 启动参数；从这里开始它变成 backend 的连接请求。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call">
+    <div class="title">HandBackend.connect(port)</div>
+    <div class="file">desktop/core/hand_backend.py:155</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>port</code></div>
+      <div class="k">内部动作</div><div class="v">先 <code>_ensure_controller_callback_registered()</code>，保证控制器状态能回调到 backend。</div>
+      <div class="k">调用下游</div><div class="v"><code>self._controller.initialize(str(port))</code></div>
+      <div class="k">返回</div><div class="v"><code>bool(...)</code>，告诉 UI 是否连接成功。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">HandController.initialize(comm_port)</div>
+    <div class="file">desktop/core/core_logic.py:352</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>comm_port = str(port)</code></div>
+      <div class="k">内部状态</div><div class="v"><code>_reset_local_runtime_state("SYNCING")</code> 创建新的 <code>HandModel</code>，并把 <code>current_state.calib_status</code> 设为 <code>"SYNCING"</code>。</div>
+      <div class="k">创建对象</div><div class="v"><code>self.comm = LowerComputerComm(comm_port)</code></div>
+      <div class="k">调用下游</div><div class="v"><code>connected = self.comm.connect()</code></div>
+      <div class="k">线程</div><div class="v">连接成功后：<code>self.running=True</code>，创建并启动 <code>self._update_thread = threading.Thread(target=self._update_loop)</code>。</div>
+      <div class="k">同步等待</div><div class="v"><code>_wait_for_lower_sync()</code> 等 P4 回传 <code>has_system_status_data</code> 和舵机反馈。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">LowerComputerComm.connect()</div>
+    <div class="file">desktop/core/comm_layer.py:922</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v">对象字段 <code>self.port</code>，来自 <code>LowerComputerComm(comm_port)</code></div>
+      <div class="k">内部变量</div><div class="v"><code>self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)</code></div>
+      <div class="k">清理状态</div><div class="v">清空 <code>rx_queue</code>/<code>tx_queue</code>，重置 <code>_rx_buffer</code>、诊断、触觉重组状态。</div>
+      <div class="k">线程</div><div class="v">启动 <code>_rx_thread -> _rx_loop()</code> 和 <code>_tx_thread -> _tx_loop()</code>。</div>
+      <div class="k">额外命令</div><div class="v"><code>_request_stream_mode_negotiation()</code> 会发 <code>("stream_mode", self._stream_mode_requested)</code>。</div>
+    </div>
+  </div>
+</div>
+
+<h2>2. P4 数据回流：bytes 怎样变成 UI 上的状态</h2>
+<div class="chain">
+  <div class="call green">
+    <div class="title">LowerComputerComm._rx_loop()</div>
+    <div class="file">desktop/core/comm_layer.py:1241</div>
+    <div class="kv">
+      <div class="k">输入来源</div><div class="v"><code>self.serial</code>，P4 串口。</div>
+      <div class="k">核心变量</div><div class="v"><code>chunk = self.serial.read(self.serial.in_waiting)</code>；<code>self._rx_buffer.extend(chunk)</code></div>
+      <div class="k">调用下游</div><div class="v"><code>packets = self._extract_packets_and_firmware_logs()</code>；<code>model = self._process_packets(packets)</code></div>
+      <div class="k">输出</div><div class="v">如果 <code>model</code> 非空：<code>self.rx_queue.put_nowait(model)</code></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">LowerComputerComm._process_packets(packets)</div>
+    <div class="file">desktop/core/comm_layer.py:1390</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>packets: List[(pkt_type, payload)]</code></div>
+      <div class="k">内部对象</div><div class="v"><code>model = HandModel()</code>；如果有 <code>_last_model</code>，先 <code>model.copy_state_from(self._last_model)</code>，避免每个包都必须带完整状态。</div>
+      <div class="k">包类型处理</div><div class="v"><code>pkt_type == 0x01</code> 写编码器；<code>PACKET_TYPE_SERVO_RAW</code> 写 <code>servo_raw_positions</code>；<code>PACKET_TYPE_SYSTEM_STATUS</code> 写 <code>system_state/control_enabled/active_motor_mask/require_can_feedback</code>；<code>0x02</code> 写 <code>calib_status</code>。</div>
+      <div class="k">输出</div><div class="v">返回被填好的 <code>model</code>，也就是 P4 最新状态快照。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">HandController._update_loop()</div>
+    <div class="file">desktop/core/core_logic.py:488</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>new_model = self.comm.rx_queue.get(timeout=0.1)</code></div>
+      <div class="k">内部状态</div><div class="v">在 <code>state_lock</code> 里：<code>self.current_state.copy_state_from(new_model)</code>，再复制 <code>calib_status/tactile_data/timestamp</code>。</div>
+      <div class="k">运行标志</div><div class="v">如果 <code>new_model.has_system_status_data</code>，根据 <code>new_model.system_state</code> 更新 <code>self._started</code> 和 <code>self._paused</code>。</div>
+      <div class="k">输出</div><div class="v">对每个 <code>cb in self.update_callbacks</code> 调用 <code>cb(self.current_state)</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call">
+    <div class="title">HandBackend._on_controller_state_update(state)</div>
+    <div class="file">desktop/core/hand_backend.py:128</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>state = self.current_state</code>，由控制器回调传入。</div>
+      <div class="k">内部变量</div><div class="v"><code>snapshot = clone_hand_model(state)</code>，避免 UI 直接拿控制器里的可变对象。</div>
+      <div class="k">输出</div><div class="v">遍历 <code>self._state_callbacks</code>，调用 UI 注册的 <code>callback(snapshot)</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call">
+    <div class="title">HandGUI._on_state_update(state)</div>
+    <div class="file">desktop/ui/ui_app.py:495</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>state</code> 是 backend 克隆后的 <code>HandModel</code>。</div>
+      <div class="k">条件</div><div class="v">如果 <code>not self.is_comm_connected()</code>，直接返回。</div>
+      <div class="k">内部动作</div><div class="v"><code>self._state_buffer.set(clone_hand_model(state))</code>，再次 clone 后放入“最新状态缓冲”。</div>
+      <div class="k">为什么不直接画</div><div class="v">串口线程和 UI 线程节奏不同；这里只存最新值，真正刷新由定时器做。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call">
+    <div class="title">HandGUI._display_poll()</div>
+    <div class="file">desktop/ui/ui_app.py:500</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>latest, version = self._state_buffer.consume_latest(self._state_buffer_version)</code></div>
+      <div class="k">内部状态</div><div class="v">如果有 <code>latest</code>：<code>self._state_buffer_version = version</code>，<code>self._state = latest</code>。</div>
+      <div class="k">触觉合并</div><div class="v"><code>has_new_tactile = self._consume_tactile_state()</code>；里面会调用 <code>backend.consume_tactile_state_into(self._state)</code>。</div>
+      <div class="k">输出</div><div class="v"><code>state = self._state or HandModel()</code>，再传给 <code>_update_display(state)</code>。</div>
+    </div>
+  </div>
+</div>
+
+<div class="note">这一段的对象变化可以简写成：<code>serial bytes -> chunk -> _rx_buffer -> packets -> model -> rx_queue -> new_model -> current_state -> snapshot -> state_buffer/latest -> self._state -> UI</code>。</div>
+
+<h2>3. 标定过程：传递的是命令，不是角度</h2>
+<div class="chain">
+  <div class="call amber">
+    <div class="title">ControlPanel.calibrate()</div>
+    <div class="file">desktop/ui/ui_control_panels.py:2329</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v">用户点击 Calibrate，无显式参数。</div>
+      <div class="k">先检查</div><div class="v"><code>_apply_active_scope_for_current_mode()</code>，确保 UI 当前选择的关节/电机范围已发给 P4。</div>
+      <div class="k">分支</div><div class="v">如果 <code>_active_scope_has_all_side_sway_adjust_joints()</code>，先 <code>_request_side_sway_adjust(auto_calibrate=True)</code>；否则进入 <code>_start_calibration_now()</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call amber">
+    <div class="title">ControlPanel._start_calibration_now()</div>
+    <div class="file">desktop/ui/ui_control_panels.py:2343</div>
+    <div class="kv">
+      <div class="k">内部变量</div><div class="v">清 <code>_side_sway_adjust_pending</code>、<code>_calibration_after_side_sway_pending</code>；遍历 <code>_active_scope_joint_indices()</code>，把对应 <code>_joint_target_user_set[joint_idx]</code> 设为 <code>False</code>。</div>
+      <div class="k">调用下游</div><div class="v"><code>self.context.start_calibration()</code>，最终转到 <code>HandGUI.start_calibration()</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call amber">
+    <div class="title">HandGUI.start_calibration()</div>
+    <div class="file">desktop/ui/ui_app.py:1243</div>
+    <div class="kv">
+      <div class="k">先检查</div><div class="v">如果没有连接：<code>self._connect_selected_port()</code>。</div>
+      <div class="k">调用下游</div><div class="v"><code>self.backend.request_firmware_calibration()</code></div>
+      <div class="k">UI 反馈</div><div class="v">成功时设置状态文字 <code>"Calibration command sent"</code> 并 <code>emit_action("Calibrate")</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call amber">
+    <div class="title">HandController.request_firmware_calibration()</div>
+    <div class="file">desktop/core/core_logic.py:621</div>
+    <div class="kv">
+      <div class="k">条件</div><div class="v">如果 <code>not self.comm</code> 返回 <code>False</code>。</div>
+      <div class="k">核心命令</div><div class="v"><code>self.comm.send_command("calibrate")</code></div>
+      <div class="k">内部状态</div><div class="v"><code>self._started = False</code>，等待 P4 后续系统状态重新确认。</div>
+    </div>
+  </div>
+</div>
+
+<h2>4. 反馈闭环：发目标前怎样检查，目标怎样被改写</h2>
+<div class="chain">
+  <div class="call red">
+    <div class="title">HandGUI.send_joint_targets(angles, source="", live=False)</div>
+    <div class="file">desktop/ui/ui_app.py:1223</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>angles: List[float]</code>、<code>source</code>、<code>live</code>。遥操作一般 <code>live=True</code>。</div>
+      <div class="k">先检查</div><div class="v"><code>guard = self.control_panel.feedback_command_allowed</code>；如果返回 <code>False</code>，本次目标直接丢弃。</div>
+      <div class="k">再同步保护</div><div class="v"><code>self.control_panel._refresh_tendon_guard_from_ui()</code></div>
+      <div class="k">调用下游</div><div class="v"><code>result = self.backend.send_joint_targets(angles, source=source, live=live)</code></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call red">
+    <div class="title">ControlPanel.feedback_command_allowed(source, show_status=True)</div>
+    <div class="file">desktop/ui/ui_control_panels.py:2537</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>source</code> 只用于提示，比如 <code>"Visual Retargeting"</code>。</div>
+      <div class="k">只限制模式</div><div class="v">如果 <code>_app_mode</code> 不在 <code>("manual", "teleop")</code>，直接 <code>True</code>。</div>
+      <div class="k">关键变量</div><div class="v"><code>active_mask</code>、<code>unknown_mask</code>、<code>missing_mask</code>、<code>missing_joints</code>、<code>mismatch</code>。</div>
+      <div class="k">阻断原因</div><div class="v">没选 active motor、multi-turn 未知、ABS limit 缺失、关节标定没加载、UI/P4 active scope 不一致，任一成立就返回 <code>False</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call red">
+    <div class="title">HandBackend.send_joint_targets(angles, source, live)</div>
+    <div class="file">desktop/core/hand_backend.py:232</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>angles</code> 是 UI/遥操作给出的目标角。</div>
+      <div class="k">当前状态</div><div class="v"><code>state = self.get_current_state()</code>，拿的是控制器当前 <code>HandModel</code>。</div>
+      <div class="k">目标改写</div><div class="v"><code>guarded, blocked, message = self.tendon_guard.apply(state, list(angles), source=source)</code>。这里 <code>angles</code> 可能被 tendon guard 改成更安全的 <code>guarded</code>。</div>
+      <div class="k">发送分支</div><div class="v"><code>live=True</code> 调 <code>set_target_angles_live(guarded)</code>；否则调 <code>set_target_angles(guarded)</code>。</div>
+      <div class="k">反馈运行</div><div class="v">如果 <code>source</code> 非空、没有 <code>blocked</code>，且 source 不是 <code>Hold...</code>，就调用 <code>request_run_feedback()</code>。</div>
+      <div class="k">返回</div><div class="v"><code>JointCommandResult(sent=True, blocked=list(blocked), message=message, targets=guarded)</code></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call red">
+    <div class="title">HandController.request_run_feedback()</div>
+    <div class="file">desktop/core/core_logic.py:635</div>
+    <div class="kv">
+      <div class="k">条件</div><div class="v">如果暂停或无通信对象，返回 <code>False</code>。</div>
+      <div class="k">读取状态</div><div class="v">在 <code>state_lock</code> 里读 <code>state = current_state.system_state</code>。</div>
+      <div class="k">分支</div><div class="v">如果已经是 <code>SYSTEM_STATE_RUN_FEEDBACK</code>，返回 <code>True</code>；如果不是 <code>SYSTEM_STATE_READY</code>，返回 <code>False</code>。</div>
+      <div class="k">核心命令</div><div class="v">只有 READY 时才 <code>self.comm.send_command("run_feedback")</code>。</div>
+    </div>
+  </div>
+</div>
+
+<h2>5. 遥操作：外部目标怎样变成统一的 angles</h2>
+<h3>5.1 视觉重定向</h3>
+<div class="chain">
+  <div class="call violet">
+    <div class="title">VisualRetargetingView._on_joints_ready(targets, timestamp_ms)</div>
+    <div class="file">desktop/ui/ui_visual_retargeting_view.py:376</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>targets</code> 来自视觉姿态线程，<code>timestamp_ms</code> 是帧时间。</div>
+      <div class="k">长度处理</div><div class="v"><code>visual_targets = [float(v) for v in targets[:ENCODER_COUNT]]</code>；不够则补 <code>0.0</code>。</div>
+      <div class="k">保存预览</div><div class="v"><code>self._last_targets = visual_targets</code>，表格显示每个目标角。</div>
+      <div class="k">选择关节</div><div class="v">如果允许发送，调用 <code>_targets_for_selected_joints(self._last_targets)</code>。</div>
+      <div class="k">输出</div><div class="v">得到 <code>selected_targets</code> 后：<code>context.send_joint_targets(selected_targets, source="Visual Retargeting", live=True)</code>。</div>
+    </div>
+  </div>
+</div>
+<div class="note"><code>_targets_for_selected_joints()</code> 的规则：选中的关节用外部目标；没选中的关节用 <code>_feedback_angles[idx]</code> 或 <code>_last_sent_targets[idx]</code> 保持。如果保持也没有，就返回 <code>(None, missing_feedback)</code>，阻断发送。</div>
+
+<h3>5.2 MANUS / Rokoko</h3>
+<div class="chain">
+  <div class="call violet">
+    <div class="title">ManusView._maybe_send_joint_targets(frame, preview)</div>
+    <div class="file">desktop/ui/ui_manus_view.py:628</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>frame</code> 是手套帧，<code>preview</code> 是 retarget 预览结果。</div>
+      <div class="k">阻断条件</div><div class="v"><code>_send_enabled</code> 为假、receiver 不活跃、缺少手套校准、重复 <code>frame.seq</code>，都会 return。</div>
+      <div class="k">生成角度</div><div class="v">raw 模式：<code>angles = raw_skeleton_retargeter.target_angles(raw_preview)</code>；ergonomics 模式：初始化 <code>angles = [0.0] * ENCODER_COUNT</code>，再用 <code>item.robot_q_target_preview</code> 填每个关节。</div>
+      <div class="k">选择关节</div><div class="v"><code>selected_targets, missing_feedback = _targets_for_selected_joints(angles)</code></div>
+      <div class="k">发送前设置</div><div class="v"><code>set_control_mode(ControlMode.JOINT_ANGLE)</code>，<code>set_pid_control(True)</code>。</div>
+      <div class="k">输出</div><div class="v"><code>context.send_joint_targets(selected_targets, source=source_name, live=True)</code></div>
+    </div>
+  </div>
+</div>
+
+<h3>5.3 ROS2</h3>
+<div class="chain">
+  <div class="call violet">
+    <div class="title">JointTargetCommandHandler.handle_values(values)</div>
+    <div class="file">desktop/ros2/joint_targets.py:46</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>values</code> 来自 ROS2 <code>Float32MultiArray.data</code>。</div>
+      <div class="k">转换</div><div class="v"><code>targets = [float(v) for v in values]</code></div>
+      <div class="k">校验</div><div class="v">长度必须等于 <code>ENCODER_COUNT</code>；每个值必须 <code>math.isfinite(v)</code>。</div>
+      <div class="k">模式</div><div class="v"><code>backend.set_control_mode(ControlMode.JOINT_ANGLE)</code>；如果 <code>auto_start</code> 且还没启动，调用 <code>backend.start()</code>。</div>
+      <div class="k">输出</div><div class="v"><code>backend.send_joint_targets(targets, source=f"ROS2:{self.topic}", live=True)</code>。注意 ROS2 绕过了 <code>HandGUI.send_joint_targets()</code>，但仍进入 backend 的 tendon guard 和 run_feedback 逻辑。</div>
+    </div>
+  </div>
+</div>
+
+<h2>6. 命令最终怎样入队和写串口</h2>
+<div class="chain">
+  <div class="call green">
+    <div class="title">LowerComputerComm.send_command(cmd)</div>
+    <div class="file">desktop/core/comm_layer.py:1860</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>cmd</code> 可能是 <code>"calibrate"</code>、<code>"run_feedback"</code>、<code>("angle_live", guarded)</code>、或 <code>HandModel</code>。</div>
+      <div class="k">离线处理</div><div class="v">如果 <code>not self.is_connected()</code>，记录日志并丢弃。</div>
+      <div class="k">高优先级</div><div class="v"><code>"stop"</code> 会清队列立即入队；<code>"pause"</code> 会删除高频命令后入队。</div>
+      <div class="k">高频命令</div><div class="v"><code>("angle_live", ...)</code> 属于高频命令，走 <code>_enqueue_latest_high_rate(cmd)</code>，队列里只保留最新高频目标。</div>
+      <div class="k">普通命令</div><div class="v">普通命令走 <code>self.tx_queue.put_nowait(cmd)</code>。</div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">LowerComputerComm._tx_loop()</div>
+    <div class="file">desktop/core/comm_layer.py:1969</div>
+    <div class="kv">
+      <div class="k">输入</div><div class="v"><code>cmd = self.tx_queue.get(timeout=TX_QUEUE_GET_TIMEOUT)</code></div>
+      <div class="k">编码</div><div class="v"><code>data = self._encode_command(cmd)</code></div>
+      <div class="k">写串口</div><div class="v">如果 <code>data</code> 非空：<code>self.serial.write(data)</code></div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+  <div class="call green">
+    <div class="title">LowerComputerComm._encode_command(cmd)</div>
+    <div class="file">desktop/core/comm_layer.py:2038</div>
+    <div class="kv">
+      <div class="k">命令映射</div><div class="v"><code>"calibrate" -> build_calibrate_cmd()</code>；<code>"run_feedback" -> build_run_feedback_cmd()</code>；<code>("angle_live", guarded) -> build_angle_cmd(guarded)</code>；<code>HandModel -> build_angle_cmd(model.target_angles)</code>。</div>
+      <div class="k">输出</div><div class="v"><code>bytes</code> 协议帧，交给 <code>serial.write()</code>。</div>
+    </div>
+  </div>
+</div>
+
+<h2>7. 用户选择会进入哪些分支：完整决策树</h2>
+<p>这次事件里，用户不是只“打开 UI”。打开以后每个按钮都会根据当前状态进入不同分支。下面按用户动作拆开。</p>
+
+<h3>7.1 用户选择 Port / 自动传入 --port</h3>
+<table>
+  <tr><th>用户选择/状态</th><th>进入分支</th><th>变量怎样传</th><th>失败出口</th></tr>
+  <tr>
+    <td>启动时传 <code>--port COMx</code></td>
+    <td><code>run_ui()</code> 直接调用 <code>backend.connect(port)</code></td>
+    <td><code>args.port -> port -> str(port) -> comm_port -> LowerComputerComm.port</code></td>
+    <td>连接失败时打印 <code>Connection failed; launching UI without an active device</code>，UI 仍打开。</td>
+  </tr>
+  <tr>
+    <td>UI 里选择串口</td>
+    <td><code>HandGUI._connect_selected_port()</code></td>
+    <td><code>port_combo.currentData() -> port -> backend.connect(port)</code></td>
+    <td>无端口：<code>No serial port selected</code>；打开失败：弹 <code>Connection Failed</code>。</td>
+  </tr>
+  <tr>
+    <td>换到另一个串口</td>
+    <td>先 <code>_disconnect_current_port()</code>，再 <code>_connect_selected_port()</code></td>
+    <td>旧 <code>current_port</code> 清空；新 <code>port</code> 重走连接链</td>
+    <td>断开时会清 UI live state 和显示窗口状态。</td>
+  </tr>
+</table>
+
+<h3>7.2 用户按 ENABLE / Start</h3>
+<div class="call red">
+  <div class="title">ControlPanel.start_controller()</div>
+  <div class="file">desktop/ui/ui_control_panels.py:1856</div>
+  <div class="kv">
+    <div class="k">未连接</div><div class="v">先 <code>context.connect_selected_port()</code>；失败则返回。</div>
+    <div class="k">active scope</div><div class="v"><code>_apply_active_scope_for_current_mode()</code> 失败：状态为 <code>Enable blocked: active scope was not accepted...</code>。</div>
+    <div class="k">如果 P4 是 PAUSED</div><div class="v">清 <code>_estop_latched</code>，调用 <code>backend.start()</code>，这是 Resume 分支。</div>
+    <div class="k">multi-turn 未知</div><div class="v"><code>unknown_mask != 0</code>：显示 Turn recovery guide，返回。</div>
+    <div class="k">缺电机反馈</div><div class="v"><code>_sync_motor_targets_to_feedback()</code> 返回 False：状态 <code>Enable waits for fresh motor feedback</code>。</div>
+    <div class="k">正常路径</div><div class="v"><code>targets = _build_motor_abs_command_list()</code>，设置 <code>DIRECT_MOTOR</code>，关闭 PID，<code>set_motor_positions_absolute(targets)</code>，最后 <code>backend.start()</code>。</div>
+  </div>
+</div>
+
+<h3>7.3 用户按 Rope Init：主动防松绳/寻绳分支</h3>
+<div class="call amber">
+  <div class="title">ControlPanel.rope_init_controller()</div>
+  <div class="file">desktop/ui/ui_control_panels.py:2107</div>
+  <div class="kv">
+    <div class="k">只允许的 UI 模式</div><div class="v"><code>_manual_submode() == "joint"</code>。如果用户在 Motor Channels，直接提示 <code>Rope Init is only available in Joint Channels</code>。</div>
+    <div class="k">如果已有 Rope Init 在跑</div><div class="v"><code>_rope_init_timer.isActive()</code> 时先 <code>_stop_rope_init("Rope Init restarted", update_status=False)</code>，再重启。</div>
+    <div class="k">未连接</div><div class="v">调用 <code>context.connect_selected_port()</code>；失败返回。</div>
+    <div class="k">未 ENABLE</div><div class="v"><code>not backend.is_started()</code>：提示 <code>press ENABLE to enter IDLE first</code>。</div>
+    <div class="k">P4 状态不允许</div><div class="v"><code>system_state</code> 必须在 <code>IDLE/READY/RUN_DIRECT</code>，否则提示等待。</div>
+    <div class="k">Turn UNKNOWN</div><div class="v"><code>unknown_mask != 0</code>：进入 Turn recovery guide，Rope Init 不执行。</div>
+    <div class="k">构建任务</div><div class="v"><code>tasks, skipped, missing = _build_rope_init_tasks()</code>。</div>
+    <div class="k">没有任务</div><div class="v">如果全都 <code>skipped</code> 或 <code>missing</code>，显示 <code>Rope Init no action</code>；如果只是 skipped 且 active scope 可应用，会安排 READY recheck。</div>
+    <div class="k">有任务</div><div class="v">设置 <code>ControlMode.DIRECT_MOTOR</code>、<code>PID=False</code>，保存 <code>_rope_init_tasks</code>，启动 50ms 定时器，然后立即 <code>_rope_init_tick()</code>。</div>
+  </div>
+</div>
+
+<table>
+  <tr><th>_build_rope_init_tasks() 对每个关节的分支</th><th>变量</th><th>结果</th></tr>
+  <tr><td>没有关节角反馈</td><td><code>state is None</code> 或 <code>not has_sensor_data</code></td><td>返回 <code>missing=["joint angle feedback"]</code></td></tr>
+  <tr><td>当前关节角已经在工作区</td><td><code>joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG</code>，当前阈值是 <code>0.0 deg</code></td><td>加入 <code>skipped</code>，不动这个关节。</td></tr>
+  <tr><td>双电机侧摆关节</td><td><code>_dual_rope_init_motors_for_joint(joint_idx)</code> 返回两个电机</td><td>生成 <code>{"type":"dual","joint":J,"primary":M1,"secondary":M2,"target_deg":0.0}</code></td></tr>
+  <tr><td>普通单电机关节</td><td><code>TendonGuard.primary_motor_for_joint(joint_idx)</code></td><td>生成 <code>{"type":"single","joint":J,"motor":M,"target_deg":0.0}</code></td></tr>
+  <tr><td>电机不在线/无 ABS/冲突</td><td><code>servo_online</code>、<code>servo_angles</code>、<code>seen_motors</code></td><td>加入 <code>missing</code>，该关节不执行。</td></tr>
+</table>
+
+<div class="call amber">
+  <div class="title">ControlPanel._rope_init_tick()</div>
+  <div class="file">desktop/ui/ui_control_panels.py:2235</div>
+  <div class="kv">
+    <div class="k">停止条件</div><div class="v">任务空：完成；超过 <code>ROPE_INIT_TIMEOUT_S=8.0</code>：超时；缺关节反馈/状态不允许/Turn UNKNOWN：停止。</div>
+    <div class="k">单电机任务</div><div class="v">读取 <code>feedback_abs = _motor_feedback_abs(motor_idx)</code>，新目标为 <code>motor_abs_after_tendon_action(feedback_abs, motor_idx, ROPE_INIT_STEP_COUNTS)</code>；当前 step 是 <code>60 counts</code>。</div>
+    <div class="k">双电机任务</div><div class="v">计算 <code>error_deg = target_deg - joint_deg</code>；主电机按 <code>step_sign</code>，副电机按 <code>-step_sign</code>，分别调用 <code>_rope_init_dual_motor_delta()</code>。收紧步长 <code>60</code>，放松步长 <code>30</code>。</div>
+    <div class="k">发给 P4</div><div class="v">把所有电机目标放到 <code>targets</code>，调用 <code>backend.set_motor_positions_absolute(targets)</code>。</div>
+    <div class="k">UI 同步</div><div class="v">对移动过的电机调用 <code>_apply_rope_init_motor_target_to_ui(motor_idx, targets[motor_idx])</code>，把 UI 的电机相对目标归零。</div>
+  </div>
+</div>
+
+<h3>7.4 用户在 Motor Channels 按 Release Half Turn / Tighten Half Turn</h3>
+<table>
+  <tr><th>用户动作</th><th>入口函数</th><th>分支条件</th><th>目标计算</th></tr>
+  <tr>
+    <td>Release Half Turn</td>
+    <td><code>release_all_motors_half_turn()</code><br><span class="mini">desktop/ui/ui_control_panels.py:1660</span></td>
+    <td>必须 <code>_interaction_enabled</code>、在 <code>motor</code> 子模式、已连接、已 ENABLE、Turn 已知、有 <code>has_servo_angle_data</code>、选了 active motor。</td>
+    <td><code>targets[idx] = motor_abs_after_tendon_action(current, idx, -MOTOR_RELEASE_HALF_TURN_COUNTS)</code>。半圈是 <code>4096/2 = 2048 counts</code>。</td>
+  </tr>
+  <tr>
+    <td>Tighten Half Turn</td>
+    <td><code>tighten_all_motors_half_turn()</code><br><span class="mini">desktop/ui/ui_control_panels.py:1739</span></td>
+    <td>检查条件和 Release 一样。</td>
+    <td><code>targets[idx] = motor_abs_after_tendon_action(current, idx, MOTOR_RELEASE_HALF_TURN_COUNTS)</code>。</td>
+  </tr>
+</table>
+<div class="note">这两个按钮不是走关节角 <code>send_joint_targets()</code>，而是直接进入电机绝对位置：<code>backend.set_control_mode(DIRECT_MOTOR)</code>、<code>backend.set_pid_control(False)</code>、<code>backend.set_motor_positions_absolute(targets)</code>。</div>
+
+<h3>7.5 用户编辑防松绳参数：sign/x1 怎么影响运行</h3>
+<div class="call red">
+  <div class="title">ControlPanel._on_joint_tie_field_commit(joint_idx)</div>
+  <div class="file">desktop/ui/ui_control_panels.py:4101</div>
+  <div class="kv">
+    <div class="k">用户输入</div><div class="v">每个关节有 <code>sign</code> 和 <code>x1_abs</code>。<code>sign</code> 只能是 <code>+</code>、<code>-</code> 或空。</div>
+    <div class="k">解析</div><div class="v"><code>sign = TendonGuard.parse_sign_text(sign_text)</code>；<code>x1 = clamp_motor_abs(int(...))</code>。</div>
+    <div class="k">保存</div><div class="v"><code>tendon_guard.set_joint(joint_idx, sign != 0, 1 if sign >= 0 else -1, x1)</code>，写入本地 JSON。</div>
+    <div class="k">同步到 P4</div><div class="v"><code>backend.sync_tendon_guard(force=True)</code>，最终 <code>HandController.set_tendon_guard_config(config)</code>，再 <code>send_command(("tendon_guard", config))</code>。</div>
+  </div>
+</div>
+
+<div class="call red">
+  <div class="title">TendonGuard.apply(state, target_angles, source)</div>
+  <div class="file">desktop/core/tendon_guard.py:123</div>
+  <div class="kv">
+    <div class="k">何时调用</div><div class="v">任何 UI/遥操作/ROS2 发关节角目标时，都会在 <code>HandBackend.send_joint_targets()</code> 里调用。</div>
+    <div class="k">输入</div><div class="v"><code>state</code> 是当前反馈；<code>target_angles</code> 是用户/遥操作想发的目标。</div>
+    <div class="k">先规范长度</div><div class="v"><code>guarded = target_angles[:ENCODER_COUNT]</code>，不足补 <code>0.0</code>。</div>
+    <div class="k">不保护的出口</div><div class="v">没有 <code>state</code>、没有 <code>has_sensor_data</code>、没有 <code>servo_abs/servo_online</code>，都直接返回原目标。</div>
+    <div class="k">逐关节判断</div><div class="v">只有该关节 <code>cfg.enabled</code> 时才检查。取 <code>motor_idx = primary_motor_for_joint(joint_idx)</code>、<code>cur_joint_deg = state.angles[joint_idx]</code>、<code>target_joint_deg = guarded[joint_idx]</code>。</div>
+    <div class="k">判断是否在松绳</div><div class="v"><code>release_cmd = target_joint_deg < cur_joint_deg - release_angle_eps_deg</code>。也就是目标角比当前角更小，认为是在反向释放。</div>
+    <div class="k">边界判断</div><div class="v">如果 <code>sign>0</code> 且 <code>abs_now <= x1_abs + margin</code>，或 <code>sign<0</code> 且 <code>abs_now >= x1_abs - margin</code>，认为碰到防松边界。</div>
+    <div class="k">保护动作</div><div class="v">把 <code>guarded[joint_idx]</code> 改回 <code>cur_joint_deg</code>，并把 <code>joint_idx</code> 加入 <code>blocked</code>。</div>
+    <div class="k">返回</div><div class="v"><code>guarded, blocked, msg</code>。backend 后续真正发送的是 <code>guarded</code>，不是用户原始 <code>angles</code>。</div>
+  </div>
+</div>
+
+<h3>7.6 P4 也可能回报反向松绳故障</h3>
+<div class="call green">
+  <div class="title">LowerComputerComm._process_packets()</div>
+  <div class="file">desktop/core/comm_layer.py:1531</div>
+  <div class="kv">
+    <div class="k">包类型</div><div class="v"><code>PACKET_TYPE_RELEASE_FAULT</code></div>
+    <div class="k">解析</div><div class="v"><code>release_fault_bitmap = parse_release_fault_packet(payload)</code></div>
+    <div class="k">写入模型</div><div class="v">遍历所有关节：<code>model.joint_reverse_release_fault[i] = ((bitmap >> i) & 1) != 0</code></div>
+    <div class="k">UI 表现</div><div class="v"><code>HandGUI</code> 的故障摘要会把它显示成“反向松绳保护”，并建议检查 tendon 方向、标定方向、磁编码器方向和绳路。</div>
+  </div>
+</div>
+
+<h3>7.7 用户按 Calibrate：和 Rope Init / Side Adjust 的关系</h3>
+<table>
+  <tr><th>用户状态/选择</th><th>进入分支</th><th>变量</th><th>结果</th></tr>
+  <tr><td>active scope 不能被 P4 接受</td><td><code>ControlPanel.calibrate()</code> 直接返回</td><td><code>_apply_active_scope_for_current_mode() == False</code></td><td><code>Calibrate blocked...</code></td></tr>
+  <tr><td>选中了所有侧摆关节</td><td>先 <code>_request_side_sway_adjust(auto_calibrate=True)</code></td><td><code>SIDE_SWAY_ADJUST_JOINT_INDICES = {12,8,4,0}</code></td><td>先侧摆调整，成功后再进入标定。</td></tr>
+  <tr><td>普通标定</td><td><code>_start_calibration_now()</code></td><td>清 <code>_joint_target_user_set[joint_idx]</code>、<code>_joint_target_initialized=False</code></td><td><code>HandGUI.start_calibration() -> request_firmware_calibration() -> send_command("calibrate")</code></td></tr>
+</table>
+
+<h3>7.8 用户发关节目标 / 遥操作 / ROS2：哪些分支会阻断</h3>
+<table>
+  <tr><th>来源</th><th>入口</th><th>变量转换</th><th>阻断/分支</th></tr>
+  <tr><td>手动 Send All / 滑条</td><td><code>HandGUI.send_joint_targets(angles, source, live)</code></td><td><code>angles -> tendon_guard.apply(...) -> guarded</code></td><td><code>feedback_command_allowed()</code> 可能因 active motor、Turn UNKNOWN、ABS limit、关节标定、active scope mismatch 阻断。</td></tr>
+  <tr><td>视觉遥操作</td><td><code>VisualRetargetingView._on_joints_ready(targets, timestamp_ms)</code></td><td><code>targets -> visual_targets -> selected_targets</code></td><td>未选关节要用反馈角保持；缺反馈则阻断。</td></tr>
+  <tr><td>MANUS/Rokoko</td><td><code>ManusView._maybe_send_joint_targets(frame, preview)</code></td><td><code>frame/preview -> angles -> selected_targets</code></td><td>源 stale、缺手套校准、raw skeleton 无效、未选关节缺反馈都会阻断。</td></tr>
+  <tr><td>ROS2</td><td><code>JointTargetCommandHandler.handle_values(values)</code></td><td><code>values -> targets</code></td><td>长度不是 <code>ENCODER_COUNT</code>、非数字、非有限值会阻断；ROS2 不经过 UI 的 <code>feedback_command_allowed()</code>，但仍经过 backend 的 <code>TendonGuard.apply()</code>。</td></tr>
+</table>
+
+<h2>8. 最短可记版本</h2>
+<pre>启动参数:
+args.port
+  -> run_ui(port)
+  -> HandBackend.connect(port)
+  -> HandController.initialize(comm_port)
+  -> LowerComputerComm(comm_port).connect()
+
+P4 状态回流:
+serial.read() -> chunk -> _rx_buffer -> packets -> HandModel model
+  -> rx_queue -> new_model -> current_state
+  -> backend snapshot -> UI state_buffer -> self._state -> _update_display(state)
+
+标定:
+ControlPanel.calibrate()
+  -> HandGUI.start_calibration()
+  -> HandController.request_firmware_calibration()
+  -> send_command("calibrate")
+  -> tx_queue -> _tx_loop() -> serial.write(bytes)
+
+遥操作/目标角:
+external targets -> selected_targets/targets
+  -> send_joint_targets(angles, source, live=True)
+  -> tendon_guard.apply(...) 得到 guarded
+  -> set_target_angles_live(guarded)
+  -> send_command(("angle_live", guarded))
+  -> tx_queue -> _tx_loop() -> serial.write(bytes)
+  -> request_run_feedback() -> send_command("run_feedback")</pre>
+</main>
+</body>
+</html>

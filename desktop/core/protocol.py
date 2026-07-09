@@ -143,6 +143,8 @@ SERVO_TARGET_OWNER_CALIBRATION = 2
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 27
+DUAL_TENDON_LUT_ACTUATOR_COUNT = 2
+DUAL_TENDON_LUT_MAX_SAMPLES = 24
 TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
@@ -327,6 +329,38 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["scaled"] = bool(payload[idx])
     idx += 1
     result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
+    idx += 1
+    result["dualTendonLutValid"] = False
+    result["dualTendonLutCount"] = 0
+    result["dualTendonLutMotor"] = [0xFF, 0xFF]
+    result["dualTendonLutAngleStartDeg"] = 0.0
+    result["dualTendonLutAngleStepDeg"] = 0.0
+    result["dualTendonLutMotorAbs"] = [
+        [0] * DUAL_TENDON_LUT_MAX_SAMPLES
+        for _ in range(DUAL_TENDON_LUT_ACTUATOR_COUNT)
+    ]
+    extended_len = 54 + 1 + 1 + 2 + 4 + 4 + (
+        DUAL_TENDON_LUT_ACTUATOR_COUNT * DUAL_TENDON_LUT_MAX_SAMPLES * 2
+    )
+    if len(payload) >= extended_len:
+        result["dualTendonLutValid"] = bool(payload[idx])
+        idx += 1
+        result["dualTendonLutCount"] = int(payload[idx])
+        idx += 1
+        result["dualTendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
+        idx += 2
+        result["dualTendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
+        idx += 4
+        result["dualTendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
+        idx += 4
+        motor_abs: List[List[int]] = []
+        for _actuator in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+            row: List[int] = []
+            for _sample in range(DUAL_TENDON_LUT_MAX_SAMPLES):
+                row.append(struct.unpack(">h", payload[idx:idx + 2])[0])
+                idx += 2
+            motor_abs.append(row)
+        result["dualTendonLutMotorAbs"] = motor_abs
     return result
 
 
@@ -784,6 +818,21 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     payload.append(1 if bool(result.get("scaled", False)) else 0)
     direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
     payload.extend(struct.pack(">b", direction))
+    payload.append(1 if bool(result.get("dualTendonLutValid", False)) else 0)
+    payload.append(int(result.get("dualTendonLutCount", 0)) & 0xFF)
+    motors = list(result.get("dualTendonLutMotor", [0xFF, 0xFF]))
+    while len(motors) < DUAL_TENDON_LUT_ACTUATOR_COUNT:
+        motors.append(0xFF)
+    for i in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+        payload.append(int(motors[i]) & 0xFF)
+    payload.extend(_pack_float_be(float(result.get("dualTendonLutAngleStartDeg", 0.0))))
+    payload.extend(_pack_float_be(float(result.get("dualTendonLutAngleStepDeg", 0.0))))
+    motor_abs = result.get("dualTendonLutMotorAbs", [])
+    for actuator in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+        row = motor_abs[actuator] if actuator < len(motor_abs) else []
+        for sample in range(DUAL_TENDON_LUT_MAX_SAMPLES):
+            value = row[sample] if sample < len(row) else 0
+            payload.extend(struct.pack(">h", _clamp_i16(value)))
     return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
 
 

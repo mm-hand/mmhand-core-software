@@ -1,0 +1,1267 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 2,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "pytest.ini",
+      "language": "config",
+      "fileCategory": "config",
+      "totalLines": 10,
+      "nonEmptyLines": 10,
+      "metrics": {}
+    },
+    {
+      "path": "tools/build_protocol_docx.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 329,
+      "nonEmptyLines": 282,
+      "functions": [
+        {
+          "name": "set_run_font",
+          "startLine": 18,
+          "endLine": 26,
+          "params": [
+            "run",
+            "size",
+            "bold",
+            "color",
+            "name",
+            "east_asia"
+          ]
+        },
+        {
+          "name": "set_paragraph_format",
+          "startLine": 29,
+          "endLine": 33,
+          "params": [
+            "paragraph",
+            "before",
+            "after",
+            "line"
+          ]
+        },
+        {
+          "name": "set_cell_shading",
+          "startLine": 36,
+          "endLine": 42,
+          "params": [
+            "cell",
+            "fill"
+          ]
+        },
+        {
+          "name": "set_cell_margins",
+          "startLine": 45,
+          "endLine": 57,
+          "params": [
+            "table",
+            "top",
+            "start",
+            "bottom",
+            "end"
+          ]
+        },
+        {
+          "name": "set_table_width",
+          "startLine": 60,
+          "endLine": 85,
+          "params": [
+            "table",
+            "widths"
+          ]
+        },
+        {
+          "name": "add_page_number",
+          "startLine": 88,
+          "endLine": 103,
+          "params": [
+            "paragraph"
+          ]
+        },
+        {
+          "name": "configure_document",
+          "startLine": 106,
+          "endLine": 145,
+          "params": [
+            "doc"
+          ]
+        },
+        {
+          "name": "parse_inline",
+          "startLine": 148,
+          "endLine": 167,
+          "params": [
+            "paragraph",
+            "text",
+            "size"
+          ]
+        },
+        {
+          "name": "add_code_block",
+          "startLine": 170,
+          "endLine": 182,
+          "params": [
+            "doc",
+            "text"
+          ]
+        },
+        {
+          "name": "add_markdown_table",
+          "startLine": 185,
+          "endLine": 220,
+          "params": [
+            "doc",
+            "rows"
+          ]
+        },
+        {
+          "name": "add_picture",
+          "startLine": 223,
+          "endLine": 235,
+          "params": [
+            "doc",
+            "md_dir",
+            "alt",
+            "rel_path"
+          ]
+        },
+        {
+          "name": "add_title_block",
+          "startLine": 238,
+          "endLine": 247,
+          "params": [
+            "doc"
+          ]
+        },
+        {
+          "name": "build",
+          "startLine": 250,
+          "endLine": 325,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "set_run_font",
+          "line": 18,
+          "isDefault": false
+        },
+        {
+          "name": "set_paragraph_format",
+          "line": 29,
+          "isDefault": false
+        },
+        {
+          "name": "set_cell_shading",
+          "line": 36,
+          "isDefault": false
+        },
+        {
+          "name": "set_cell_margins",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "set_table_width",
+          "line": 60,
+          "isDefault": false
+        },
+        {
+          "name": "add_page_number",
+          "line": 88,
+          "isDefault": false
+        },
+        {
+          "name": "configure_document",
+          "line": 106,
+          "isDefault": false
+        },
+        {
+          "name": "parse_inline",
+          "line": 148,
+          "isDefault": false
+        },
+        {
+          "name": "add_code_block",
+          "line": 170,
+          "isDefault": false
+        },
+        {
+          "name": "add_markdown_table",
+          "line": 185,
+          "isDefault": false
+        },
+        {
+          "name": "add_picture",
+          "line": 223,
+          "isDefault": false
+        },
+        {
+          "name": "add_title_block",
+          "line": 238,
+          "isDefault": false
+        },
+        {
+          "name": "build",
+          "line": 250,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "set_run_font",
+          "callee": "run._element.rPr.rFonts.set",
+          "lineNumber": 20
+        },
+        {
+          "caller": "set_run_font",
+          "callee": "qn",
+          "lineNumber": 20
+        },
+        {
+          "caller": "set_run_font",
+          "callee": "Pt",
+          "lineNumber": 22
+        },
+        {
+          "caller": "set_run_font",
+          "callee": "RGBColor.from_string",
+          "lineNumber": 26
+        },
+        {
+          "caller": "set_paragraph_format",
+          "callee": "Pt",
+          "lineNumber": 31
+        },
+        {
+          "caller": "set_paragraph_format",
+          "callee": "Pt",
+          "lineNumber": 32
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "cell._tc.get_or_add_tcPr",
+          "lineNumber": 37
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "tc_pr.find",
+          "lineNumber": 38
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "qn",
+          "lineNumber": 38
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "OxmlElement",
+          "lineNumber": 40
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "tc_pr.append",
+          "lineNumber": 41
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "shd.set",
+          "lineNumber": 42
+        },
+        {
+          "caller": "set_cell_shading",
+          "callee": "qn",
+          "lineNumber": 42
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "tbl_pr.find",
+          "lineNumber": 47
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "qn",
+          "lineNumber": 47
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "OxmlElement",
+          "lineNumber": 49
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "tbl_pr.append",
+          "lineNumber": 50
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "tbl_cell_mar.find",
+          "lineNumber": 52
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "qn",
+          "lineNumber": 52
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "OxmlElement",
+          "lineNumber": 54
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "tbl_cell_mar.append",
+          "lineNumber": 55
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "node.set",
+          "lineNumber": 56
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "qn",
+          "lineNumber": 56
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "str",
+          "lineNumber": 56
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "node.set",
+          "lineNumber": 57
+        },
+        {
+          "caller": "set_cell_margins",
+          "callee": "qn",
+          "lineNumber": 57
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_pr.find",
+          "lineNumber": 64
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 64
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "OxmlElement",
+          "lineNumber": 66
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_pr.append",
+          "lineNumber": 67
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_w.set",
+          "lineNumber": 68
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 68
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_w.set",
+          "lineNumber": 69
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 69
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_pr.find",
+          "lineNumber": 70
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 70
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "OxmlElement",
+          "lineNumber": 72
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_pr.append",
+          "lineNumber": 73
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_ind.set",
+          "lineNumber": 74
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 74
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tbl_ind.set",
+          "lineNumber": 75
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 75
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "enumerate",
+          "lineNumber": 77
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "min",
+          "lineNumber": 78
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "len",
+          "lineNumber": 78
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "Inches",
+          "lineNumber": 79
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "cell._tc.get_or_add_tcPr().find",
+          "lineNumber": 80
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "cell._tc.get_or_add_tcPr",
+          "lineNumber": 80
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 80
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "OxmlElement",
+          "lineNumber": 82
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "cell._tc.get_or_add_tcPr().append",
+          "lineNumber": 83
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "cell._tc.get_or_add_tcPr",
+          "lineNumber": 83
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tc_w.set",
+          "lineNumber": 84
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 84
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "str",
+          "lineNumber": 84
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "int",
+          "lineNumber": 84
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "tc_w.set",
+          "lineNumber": 85
+        },
+        {
+          "caller": "set_table_width",
+          "callee": "qn",
+          "lineNumber": 85
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "paragraph.add_run",
+          "lineNumber": 90
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "set_run_font",
+          "lineNumber": 91
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "OxmlElement",
+          "lineNumber": 92
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "fld_begin.set",
+          "lineNumber": 93
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "qn",
+          "lineNumber": 93
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "OxmlElement",
+          "lineNumber": 94
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "instr.set",
+          "lineNumber": 95
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "qn",
+          "lineNumber": 95
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "OxmlElement",
+          "lineNumber": 97
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "fld_end.set",
+          "lineNumber": 98
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "qn",
+          "lineNumber": 98
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "run._r.append",
+          "lineNumber": 99
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "run._r.append",
+          "lineNumber": 100
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "run._r.append",
+          "lineNumber": 101
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "paragraph.add_run",
+          "lineNumber": 102
+        },
+        {
+          "caller": "add_page_number",
+          "callee": "set_run_font",
+          "lineNumber": 103
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 108
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 109
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 110
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 111
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 112
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 113
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 114
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Inches",
+          "lineNumber": 115
+        },
+        {
+          "caller": "configure_document",
+          "callee": "normal._element.rPr.rFonts.set",
+          "lineNumber": 120
+        },
+        {
+          "caller": "configure_document",
+          "callee": "qn",
+          "lineNumber": 120
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Pt",
+          "lineNumber": 121
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Pt",
+          "lineNumber": 122
+        },
+        {
+          "caller": "configure_document",
+          "callee": "st._element.rPr.rFonts.set",
+          "lineNumber": 132
+        },
+        {
+          "caller": "configure_document",
+          "callee": "qn",
+          "lineNumber": 132
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Pt",
+          "lineNumber": 133
+        },
+        {
+          "caller": "configure_document",
+          "callee": "RGBColor.from_string",
+          "lineNumber": 134
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Pt",
+          "lineNumber": 136
+        },
+        {
+          "caller": "configure_document",
+          "callee": "Pt",
+          "lineNumber": 137
+        },
+        {
+          "caller": "configure_document",
+          "callee": "set_run_font",
+          "lineNumber": 144
+        },
+        {
+          "caller": "configure_document",
+          "callee": "add_page_number",
+          "lineNumber": 145
+        },
+        {
+          "caller": "configure_document",
+          "callee": "section.footer.add_paragraph",
+          "lineNumber": 145
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "re.compile",
+          "lineNumber": 150
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "token_re.finditer",
+          "lineNumber": 152
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "match.start",
+          "lineNumber": 153
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "paragraph.add_run",
+          "lineNumber": 154
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "match.start",
+          "lineNumber": 154
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "set_run_font",
+          "lineNumber": 155
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "match.group",
+          "lineNumber": 156
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "token.startswith",
+          "lineNumber": 157
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "paragraph.add_run",
+          "lineNumber": 158
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "set_run_font",
+          "lineNumber": 159
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "RGBColor.from_string",
+          "lineNumber": 160
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "token.startswith",
+          "lineNumber": 161
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "paragraph.add_run",
+          "lineNumber": 162
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "set_run_font",
+          "lineNumber": 163
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "match.end",
+          "lineNumber": 164
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "len",
+          "lineNumber": 165
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "paragraph.add_run",
+          "lineNumber": 166
+        },
+        {
+          "caller": "parse_inline",
+          "callee": "set_run_font",
+          "lineNumber": 167
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 171
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "set_paragraph_format",
+          "lineNumber": 172
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "Inches",
+          "lineNumber": 173
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "enumerate",
+          "lineNumber": 174
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "text.rstrip(\"\\n\").splitlines",
+          "lineNumber": 174
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "text.rstrip",
+          "lineNumber": 174
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "p.add_run().add_break",
+          "lineNumber": 176
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "p.add_run",
+          "lineNumber": 176
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "p.add_run",
+          "lineNumber": 177
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "set_run_font",
+          "lineNumber": 178
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "p._p.get_or_add_pPr",
+          "lineNumber": 179
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "OxmlElement",
+          "lineNumber": 180
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "shd.set",
+          "lineNumber": 181
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "qn",
+          "lineNumber": 181
+        },
+        {
+          "caller": "add_code_block",
+          "callee": "p._p.pPr.append",
+          "lineNumber": 182
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "c.strip",
+          "lineNumber": 188
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "row.strip().strip(\"|\").split",
+          "lineNumber": 188
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "row.strip().strip",
+          "lineNumber": 188
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "row.strip",
+          "lineNumber": 188
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "data.append",
+          "lineNumber": 189
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "len",
+          "lineNumber": 190
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "max",
+          "lineNumber": 193
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "len",
+          "lineNumber": 193
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "doc.add_table",
+          "lineNumber": 194
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "len",
+          "lineNumber": 194
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "set_cell_margins",
+          "lineNumber": 196
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "set_table_width",
+          "lineNumber": 205
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "enumerate",
+          "lineNumber": 207
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "range",
+          "lineNumber": 208
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "table.cell",
+          "lineNumber": 209
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "len",
+          "lineNumber": 211
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "set_paragraph_format",
+          "lineNumber": 214
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "parse_inline",
+          "lineNumber": 215
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "set_cell_shading",
+          "lineNumber": 217
+        },
+        {
+          "caller": "add_markdown_table",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 220
+        },
+        {
+          "caller": "add_picture",
+          "callee": "(md_dir / rel_path).resolve",
+          "lineNumber": 224
+        },
+        {
+          "caller": "add_picture",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 225
+        },
+        {
+          "caller": "add_picture",
+          "callee": "set_paragraph_format",
+          "lineNumber": 227
+        },
+        {
+          "caller": "add_picture",
+          "callee": "p.add_run",
+          "lineNumber": 228
+        },
+        {
+          "caller": "add_picture",
+          "callee": "run.add_picture",
+          "lineNumber": 229
+        },
+        {
+          "caller": "add_picture",
+          "callee": "str",
+          "lineNumber": 229
+        },
+        {
+          "caller": "add_picture",
+          "callee": "Inches",
+          "lineNumber": 229
+        },
+        {
+          "caller": "add_picture",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 230
+        },
+        {
+          "caller": "add_picture",
+          "callee": "set_paragraph_format",
+          "lineNumber": 232
+        },
+        {
+          "caller": "add_picture",
+          "callee": "cap.add_run",
+          "lineNumber": 233
+        },
+        {
+          "caller": "add_picture",
+          "callee": "set_run_font",
+          "lineNumber": 234
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 239
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "set_paragraph_format",
+          "lineNumber": 240
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "p.add_run",
+          "lineNumber": 241
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "set_run_font",
+          "lineNumber": 242
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 244
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "set_paragraph_format",
+          "lineNumber": 245
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "p2.add_run",
+          "lineNumber": 246
+        },
+        {
+          "caller": "add_title_block",
+          "callee": "set_run_font",
+          "lineNumber": 247
+        },
+        {
+          "caller": "build",
+          "callee": "MD_PATH.read_text",
+          "lineNumber": 251
+        },
+        {
+          "caller": "build",
+          "callee": "text.splitlines",
+          "lineNumber": 252
+        },
+        {
+          "caller": "build",
+          "callee": "Document",
+          "lineNumber": 253
+        },
+        {
+          "caller": "build",
+          "callee": "configure_document",
+          "lineNumber": 254
+        },
+        {
+          "caller": "build",
+          "callee": "add_title_block",
+          "lineNumber": 255
+        },
+        {
+          "caller": "flush_table",
+          "callee": "add_markdown_table",
+          "lineNumber": 265
+        },
+        {
+          "caller": "build",
+          "callee": "raw.rstrip",
+          "lineNumber": 269
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 271
+        },
+        {
+          "caller": "build",
+          "callee": "flush_table",
+          "lineNumber": 272
+        },
+        {
+          "caller": "build",
+          "callee": "add_code_block",
+          "lineNumber": 277
+        },
+        {
+          "caller": "build",
+          "callee": "\"\\n\".join",
+          "lineNumber": 277
+        },
+        {
+          "caller": "build",
+          "callee": "code_lines.append",
+          "lineNumber": 282
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 285
+        },
+        {
+          "caller": "build",
+          "callee": "line.endswith",
+          "lineNumber": 285
+        },
+        {
+          "caller": "build",
+          "callee": "table_lines.append",
+          "lineNumber": 286
+        },
+        {
+          "caller": "build",
+          "callee": "flush_table",
+          "lineNumber": 288
+        },
+        {
+          "caller": "build",
+          "callee": "line.strip",
+          "lineNumber": 290
+        },
+        {
+          "caller": "build",
+          "callee": "re.match",
+          "lineNumber": 293
+        },
+        {
+          "caller": "build",
+          "callee": "add_picture",
+          "lineNumber": 295
+        },
+        {
+          "caller": "build",
+          "callee": "img.group",
+          "lineNumber": 295
+        },
+        {
+          "caller": "build",
+          "callee": "img.group",
+          "lineNumber": 295
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 298
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 299
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 301
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 302
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 304
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 305
+        },
+        {
+          "caller": "build",
+          "callee": "line.startswith",
+          "lineNumber": 307
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 308
+        },
+        {
+          "caller": "build",
+          "callee": "set_paragraph_format",
+          "lineNumber": 309
+        },
+        {
+          "caller": "build",
+          "callee": "parse_inline",
+          "lineNumber": 310
+        },
+        {
+          "caller": "build",
+          "callee": "re.match",
+          "lineNumber": 312
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 314
+        },
+        {
+          "caller": "build",
+          "callee": "set_paragraph_format",
+          "lineNumber": 315
+        },
+        {
+          "caller": "build",
+          "callee": "parse_inline",
+          "lineNumber": 316
+        },
+        {
+          "caller": "build",
+          "callee": "m_num.group",
+          "lineNumber": 316
+        },
+        {
+          "caller": "build",
+          "callee": "doc.add_paragraph",
+          "lineNumber": 319
+        },
+        {
+          "caller": "build",
+          "callee": "set_paragraph_format",
+          "lineNumber": 320
+        },
+        {
+          "caller": "build",
+          "callee": "parse_inline",
+          "lineNumber": 321
+        },
+        {
+          "caller": "build",
+          "callee": "flush_table",
+          "lineNumber": 323
+        },
+        {
+          "caller": "build",
+          "callee": "doc.save",
+          "lineNumber": 324
+        },
+        {
+          "caller": "build",
+          "callee": "print",
+          "lineNumber": 325
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 13,
+        "functionCount": 13,
+        "classCount": 0
+      }
+    }
+  ]
+}

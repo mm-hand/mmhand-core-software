@@ -1,0 +1,3636 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 25,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "desktop/ui/__init__.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 2,
+      "nonEmptyLines": 1,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "desktop/visualize/__init__.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 1,
+      "nonEmptyLines": 1,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "desktop/visualize/plot_hand.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 663,
+      "nonEmptyLines": 579,
+      "functions": [
+        {
+          "name": "_darken_color",
+          "startLine": 10,
+          "endLine": 18,
+          "params": [
+            "color",
+            "factor"
+          ]
+        },
+        {
+          "name": "_draw_xyz_indicator",
+          "startLine": 21,
+          "endLine": 30,
+          "params": [
+            "ax",
+            "half_range",
+            "length_ratio"
+          ]
+        },
+        {
+          "name": "_demo_sequence_10x21",
+          "startLine": 490,
+          "endLine": 517,
+          "params": []
+        },
+        {
+          "name": "_parse_args",
+          "startLine": 520,
+          "endLine": 573,
+          "params": []
+        },
+        {
+          "name": "_apply_preset_angles",
+          "startLine": 576,
+          "endLine": 593,
+          "params": [
+            "hand",
+            "preset"
+          ]
+        },
+        {
+          "name": "_apply_custom_angles",
+          "startLine": 596,
+          "endLine": 606,
+          "params": [
+            "hand",
+            "angles20"
+          ]
+        },
+        {
+          "name": "main",
+          "startLine": 609,
+          "endLine": 659,
+          "params": []
+        }
+      ],
+      "classes": [
+        {
+          "name": "RobotHandVisualizer",
+          "startLine": 33,
+          "endLine": 487,
+          "methods": [
+            "__init__",
+            "set_joint_angles",
+            "set_all_joint_angles",
+            "set_angles_from_row",
+            "set_palm_pose",
+            "_euler_to_rotation_matrix",
+            "_rotate_point",
+            "_compute_finger_joints",
+            "get_all_joint_positions",
+            "draw",
+            "animate_hand",
+            "animate_sequence"
+          ],
+          "properties": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "_darken_color",
+          "line": 10,
+          "isDefault": false
+        },
+        {
+          "name": "_draw_xyz_indicator",
+          "line": 21,
+          "isDefault": false
+        },
+        {
+          "name": "RobotHandVisualizer",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "_demo_sequence_10x21",
+          "line": 490,
+          "isDefault": false
+        },
+        {
+          "name": "_parse_args",
+          "line": 520,
+          "isDefault": false
+        },
+        {
+          "name": "_apply_preset_angles",
+          "line": 576,
+          "isDefault": false
+        },
+        {
+          "name": "_apply_custom_angles",
+          "line": 596,
+          "isDefault": false
+        },
+        {
+          "name": "main",
+          "line": 609,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "_darken_color",
+          "callee": "np.array",
+          "lineNumber": 14
+        },
+        {
+          "caller": "_darken_color",
+          "callee": "mcolors.to_rgb",
+          "lineNumber": 14
+        },
+        {
+          "caller": "_darken_color",
+          "callee": "mcolors.to_hex",
+          "lineNumber": 16
+        },
+        {
+          "caller": "_darken_color",
+          "callee": "np.clip",
+          "lineNumber": 16
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.quiver",
+          "lineNumber": 25
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.quiver",
+          "lineNumber": 26
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.quiver",
+          "lineNumber": 27
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.text",
+          "lineNumber": 28
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.text",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_draw_xyz_indicator",
+          "callee": "ax.text",
+          "lineNumber": 30
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 63
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 64
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 65
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 66
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 67
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 77
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 78
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 79
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 80
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 81
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.array",
+          "lineNumber": 85
+        },
+        {
+          "caller": "__init__",
+          "callee": "np.eye",
+          "lineNumber": 89
+        },
+        {
+          "caller": "set_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 95
+        },
+        {
+          "caller": "set_all_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 106
+        },
+        {
+          "caller": "set_all_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 107
+        },
+        {
+          "caller": "set_all_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 108
+        },
+        {
+          "caller": "set_all_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 109
+        },
+        {
+          "caller": "set_all_joint_angles",
+          "callee": "np.array",
+          "lineNumber": 110
+        },
+        {
+          "caller": "set_angles_from_row",
+          "callee": "list",
+          "lineNumber": 117
+        },
+        {
+          "caller": "set_angles_from_row",
+          "callee": "len",
+          "lineNumber": 118
+        },
+        {
+          "caller": "set_angles_from_row",
+          "callee": "a.append",
+          "lineNumber": 119
+        },
+        {
+          "caller": "set_angles_from_row",
+          "callee": "self.set_all_joint_angles",
+          "lineNumber": 120
+        },
+        {
+          "caller": "set_palm_pose",
+          "callee": "np.array",
+          "lineNumber": 126
+        },
+        {
+          "caller": "set_palm_pose",
+          "callee": "np.array",
+          "lineNumber": 129
+        },
+        {
+          "caller": "set_palm_pose",
+          "callee": "self._euler_to_rotation_matrix",
+          "lineNumber": 133
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.array",
+          "lineNumber": 137
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 138
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 138
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 139
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 139
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.array",
+          "lineNumber": 141
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 141
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 141
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 143
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 143
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.array",
+          "lineNumber": 145
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 145
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 145
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.sin",
+          "lineNumber": 146
+        },
+        {
+          "caller": "_euler_to_rotation_matrix",
+          "callee": "np.cos",
+          "lineNumber": 146
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "getattr",
+          "lineNumber": 169
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 172
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 172
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 172
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 173
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 173
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 178
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 178
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 178
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 180
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 180
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 181
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 181
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 181
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 183
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 183
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 184
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 184
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 184
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 186
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 186
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 189
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 190
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 191
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 192
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "getattr",
+          "lineNumber": 199
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 203
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 203
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 203
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 205
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 205
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 209
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 209
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 209
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 211
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 211
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 212
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 212
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 212
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 214
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 214
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 215
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 215
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 215
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.sin",
+          "lineNumber": 217
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.cos",
+          "lineNumber": 217
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 219
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "np.array",
+          "lineNumber": 220
+        },
+        {
+          "caller": "_compute_finger_joints",
+          "callee": "self._rotate_point",
+          "lineNumber": 227
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "self._rotate_point",
+          "lineNumber": 249
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "np.array",
+          "lineNumber": 249
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "all_points.extend",
+          "lineNumber": 251
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "np.array",
+          "lineNumber": 255
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "np.array",
+          "lineNumber": 257
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "self.finger_origins.items",
+          "lineNumber": 260
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "np.array",
+          "lineNumber": 261
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "self._rotate_point",
+          "lineNumber": 262
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "self._compute_finger_joints",
+          "lineNumber": 264
+        },
+        {
+          "caller": "get_all_joint_positions",
+          "callee": "all_points.extend",
+          "lineNumber": 266
+        },
+        {
+          "caller": "draw",
+          "callee": "self.get_all_joint_positions",
+          "lineNumber": 279
+        },
+        {
+          "caller": "draw",
+          "callee": "finger_joints.items",
+          "lineNumber": 290
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.plot",
+          "lineNumber": 292
+        },
+        {
+          "caller": "draw",
+          "callee": "colors.get",
+          "lineNumber": 296
+        },
+        {
+          "caller": "draw",
+          "callee": "finger_joints.items",
+          "lineNumber": 303
+        },
+        {
+          "caller": "draw",
+          "callee": "colors.get",
+          "lineNumber": 304
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.plot",
+          "lineNumber": 308
+        },
+        {
+          "caller": "draw",
+          "callee": "len",
+          "lineNumber": 312
+        },
+        {
+          "caller": "draw",
+          "callee": "np.array",
+          "lineNumber": 313
+        },
+        {
+          "caller": "draw",
+          "callee": "np.array",
+          "lineNumber": 314
+        },
+        {
+          "caller": "draw",
+          "callee": "np.linalg.norm",
+          "lineNumber": 316
+        },
+        {
+          "caller": "draw",
+          "callee": "np.array",
+          "lineNumber": 320
+        },
+        {
+          "caller": "draw",
+          "callee": "abs",
+          "lineNumber": 320
+        },
+        {
+          "caller": "draw",
+          "callee": "np.array",
+          "lineNumber": 320
+        },
+        {
+          "caller": "draw",
+          "callee": "np.cross",
+          "lineNumber": 321
+        },
+        {
+          "caller": "draw",
+          "callee": "np.linalg.norm",
+          "lineNumber": 322
+        },
+        {
+          "caller": "draw",
+          "callee": "np.cross",
+          "lineNumber": 325
+        },
+        {
+          "caller": "draw",
+          "callee": "np.linalg.norm",
+          "lineNumber": 326
+        },
+        {
+          "caller": "draw",
+          "callee": "getattr",
+          "lineNumber": 328
+        },
+        {
+          "caller": "draw",
+          "callee": "np.column_stack",
+          "lineNumber": 330
+        },
+        {
+          "caller": "draw",
+          "callee": "np.linspace",
+          "lineNumber": 335
+        },
+        {
+          "caller": "draw",
+          "callee": "np.vstack",
+          "lineNumber": 336
+        },
+        {
+          "caller": "draw",
+          "callee": "np.cos",
+          "lineNumber": 336
+        },
+        {
+          "caller": "draw",
+          "callee": "np.sin",
+          "lineNumber": 336
+        },
+        {
+          "caller": "draw",
+          "callee": "np.zeros",
+          "lineNumber": 336
+        },
+        {
+          "caller": "draw",
+          "callee": "base_pts.tolist",
+          "lineNumber": 340
+        },
+        {
+          "caller": "draw",
+          "callee": "Poly3DCollection",
+          "lineNumber": 341
+        },
+        {
+          "caller": "draw",
+          "callee": "_darken_color",
+          "lineNumber": 343
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.add_collection3d",
+          "lineNumber": 348
+        },
+        {
+          "caller": "draw",
+          "callee": "range",
+          "lineNumber": 351
+        },
+        {
+          "caller": "draw",
+          "callee": "Poly3DCollection",
+          "lineNumber": 354
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.add_collection3d",
+          "lineNumber": 361
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.legend",
+          "lineNumber": 365
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.grid",
+          "lineNumber": 368
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.axis",
+          "lineNumber": 369
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.set_xlim",
+          "lineNumber": 373
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.set_ylim",
+          "lineNumber": 374
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.set_zlim",
+          "lineNumber": 375
+        },
+        {
+          "caller": "draw",
+          "callee": "_draw_xyz_indicator",
+          "lineNumber": 378
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.view_init",
+          "lineNumber": 381
+        },
+        {
+          "caller": "draw",
+          "callee": "ax.set_title",
+          "lineNumber": 383
+        },
+        {
+          "caller": "update",
+          "callee": "fig.clf",
+          "lineNumber": 398
+        },
+        {
+          "caller": "update",
+          "callee": "fig.add_subplot",
+          "lineNumber": 399
+        },
+        {
+          "caller": "update",
+          "callee": "self.set_all_joint_angles",
+          "lineNumber": 407
+        },
+        {
+          "caller": "update",
+          "callee": "self.set_all_joint_angles",
+          "lineNumber": 416
+        },
+        {
+          "caller": "update",
+          "callee": "self.set_all_joint_angles",
+          "lineNumber": 425
+        },
+        {
+          "caller": "update",
+          "callee": "self.draw",
+          "lineNumber": 434
+        },
+        {
+          "caller": "update",
+          "callee": "ax.set_title",
+          "lineNumber": 435
+        },
+        {
+          "caller": "update",
+          "callee": "ax.view_init",
+          "lineNumber": 436
+        },
+        {
+          "caller": "animate_hand",
+          "callee": "animation.FuncAnimation",
+          "lineNumber": 438
+        },
+        {
+          "caller": "animate_sequence",
+          "callee": "np.asarray",
+          "lineNumber": 458
+        },
+        {
+          "caller": "animate_sequence",
+          "callee": "ValueError",
+          "lineNumber": 460
+        },
+        {
+          "caller": "animate_sequence",
+          "callee": "plt.figure",
+          "lineNumber": 464
+        },
+        {
+          "caller": "animate_sequence",
+          "callee": "fig.add_subplot",
+          "lineNumber": 466
+        },
+        {
+          "caller": "update",
+          "callee": "fig.clf",
+          "lineNumber": 477
+        },
+        {
+          "caller": "update",
+          "callee": "fig.add_subplot",
+          "lineNumber": 478
+        },
+        {
+          "caller": "update",
+          "callee": "self.set_angles_from_row",
+          "lineNumber": 479
+        },
+        {
+          "caller": "update",
+          "callee": "self.draw",
+          "lineNumber": 480
+        },
+        {
+          "caller": "update",
+          "callee": "ax.set_title",
+          "lineNumber": 481
+        },
+        {
+          "caller": "update",
+          "callee": "ax.view_init",
+          "lineNumber": 482
+        },
+        {
+          "caller": "animate_sequence",
+          "callee": "animation.FuncAnimation",
+          "lineNumber": 484
+        },
+        {
+          "caller": "_demo_sequence_10x21",
+          "callee": "np.array",
+          "lineNumber": 510
+        },
+        {
+          "caller": "_demo_sequence_10x21",
+          "callee": "np.array",
+          "lineNumber": 511
+        },
+        {
+          "caller": "_demo_sequence_10x21",
+          "callee": "np.array",
+          "lineNumber": 514
+        },
+        {
+          "caller": "_demo_sequence_10x21",
+          "callee": "range",
+          "lineNumber": 516
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "argparse.ArgumentParser",
+          "lineNumber": 529
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 530
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 536
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 543
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 551
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 556
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 561
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.add_argument",
+          "lineNumber": 567
+        },
+        {
+          "caller": "_parse_args",
+          "callee": "parser.parse_args",
+          "lineNumber": 573
+        },
+        {
+          "caller": "_apply_preset_angles",
+          "callee": "hand.set_all_joint_angles",
+          "lineNumber": 579
+        },
+        {
+          "caller": "_apply_preset_angles",
+          "callee": "hand.set_all_joint_angles",
+          "lineNumber": 587
+        },
+        {
+          "caller": "_apply_custom_angles",
+          "callee": "len",
+          "lineNumber": 598
+        },
+        {
+          "caller": "_apply_custom_angles",
+          "callee": "ValueError",
+          "lineNumber": 599
+        },
+        {
+          "caller": "_apply_custom_angles",
+          "callee": "list",
+          "lineNumber": 600
+        },
+        {
+          "caller": "_apply_custom_angles",
+          "callee": "hand.set_all_joint_angles",
+          "lineNumber": 606
+        },
+        {
+          "caller": "main",
+          "callee": "_parse_args",
+          "lineNumber": 610
+        },
+        {
+          "caller": "main",
+          "callee": "RobotHandVisualizer",
+          "lineNumber": 612
+        },
+        {
+          "caller": "main",
+          "callee": "hand.set_palm_pose",
+          "lineNumber": 615
+        },
+        {
+          "caller": "main",
+          "callee": "plt.figure",
+          "lineNumber": 618
+        },
+        {
+          "caller": "main",
+          "callee": "fig.add_subplot",
+          "lineNumber": 619
+        },
+        {
+          "caller": "main",
+          "callee": "hand.animate_hand",
+          "lineNumber": 620
+        },
+        {
+          "caller": "main",
+          "callee": "plt.show",
+          "lineNumber": 621
+        },
+        {
+          "caller": "main",
+          "callee": "open",
+          "lineNumber": 628
+        },
+        {
+          "caller": "main",
+          "callee": "line.strip",
+          "lineNumber": 630
+        },
+        {
+          "caller": "main",
+          "callee": "line.startswith",
+          "lineNumber": 631
+        },
+        {
+          "caller": "main",
+          "callee": "line.replace(\",\", \" \").split",
+          "lineNumber": 633
+        },
+        {
+          "caller": "main",
+          "callee": "line.replace",
+          "lineNumber": 633
+        },
+        {
+          "caller": "main",
+          "callee": "float",
+          "lineNumber": 634
+        },
+        {
+          "caller": "main",
+          "callee": "len",
+          "lineNumber": 635
+        },
+        {
+          "caller": "main",
+          "callee": "data.append",
+          "lineNumber": 636
+        },
+        {
+          "caller": "main",
+          "callee": "ValueError",
+          "lineNumber": 638
+        },
+        {
+          "caller": "main",
+          "callee": "np.array",
+          "lineNumber": 639
+        },
+        {
+          "caller": "main",
+          "callee": "_demo_sequence_10x21",
+          "lineNumber": 641
+        },
+        {
+          "caller": "main",
+          "callee": "plt.figure",
+          "lineNumber": 642
+        },
+        {
+          "caller": "main",
+          "callee": "fig.add_subplot",
+          "lineNumber": 643
+        },
+        {
+          "caller": "main",
+          "callee": "hand.animate_sequence",
+          "lineNumber": 644
+        },
+        {
+          "caller": "main",
+          "callee": "plt.show",
+          "lineNumber": 645
+        },
+        {
+          "caller": "main",
+          "callee": "_apply_custom_angles",
+          "lineNumber": 650
+        },
+        {
+          "caller": "main",
+          "callee": "_apply_preset_angles",
+          "lineNumber": 652
+        },
+        {
+          "caller": "main",
+          "callee": "plt.figure",
+          "lineNumber": 654
+        },
+        {
+          "caller": "main",
+          "callee": "fig.add_subplot",
+          "lineNumber": 655
+        },
+        {
+          "caller": "main",
+          "callee": "hand.draw",
+          "lineNumber": 656
+        },
+        {
+          "caller": "main",
+          "callee": "plt.title",
+          "lineNumber": 658
+        },
+        {
+          "caller": "main",
+          "callee": "plt.show",
+          "lineNumber": 659
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 8,
+        "functionCount": 7,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "desktop/visualize/plot_j02_run.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 175,
+      "nonEmptyLines": 139,
+      "functions": [
+        {
+          "name": "_default_run_data_dir",
+          "startLine": 28,
+          "endLine": 30,
+          "params": []
+        },
+        {
+          "name": "_latest_csv_file",
+          "startLine": 33,
+          "endLine": 48,
+          "params": [
+            "run_data_dir"
+          ]
+        },
+        {
+          "name": "_safe_float",
+          "startLine": 51,
+          "endLine": 58,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "_load_j02_series",
+          "startLine": 61,
+          "endLine": 119,
+          "params": [
+            "csv_path"
+          ]
+        },
+        {
+          "name": "_plot_j02",
+          "startLine": 122,
+          "endLine": 139,
+          "params": [
+            "csv_path",
+            "save_path"
+          ]
+        },
+        {
+          "name": "main",
+          "startLine": 142,
+          "endLine": 171,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "_default_run_data_dir",
+          "line": 28,
+          "isDefault": false
+        },
+        {
+          "name": "_latest_csv_file",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "_safe_float",
+          "line": 51,
+          "isDefault": false
+        },
+        {
+          "name": "_load_j02_series",
+          "line": 61,
+          "isDefault": false
+        },
+        {
+          "name": "_plot_j02",
+          "line": 122,
+          "isDefault": false
+        },
+        {
+          "name": "main",
+          "line": 142,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "_default_run_data_dir",
+          "callee": "os.path.dirname",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_default_run_data_dir",
+          "callee": "os.path.dirname",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_default_run_data_dir",
+          "callee": "os.path.dirname",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_default_run_data_dir",
+          "callee": "os.path.abspath",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_default_run_data_dir",
+          "callee": "os.path.join",
+          "lineNumber": 30
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "os.path.isdir",
+          "lineNumber": 34
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "FileNotFoundError",
+          "lineNumber": 35
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "os.listdir",
+          "lineNumber": 38
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "name.lower().endswith",
+          "lineNumber": 39
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "name.lower",
+          "lineNumber": 39
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "os.path.join",
+          "lineNumber": 40
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "os.path.isfile",
+          "lineNumber": 41
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "candidates.append",
+          "lineNumber": 42
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "FileNotFoundError",
+          "lineNumber": 45
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "candidates.sort",
+          "lineNumber": 47
+        },
+        {
+          "caller": "_latest_csv_file",
+          "callee": "os.path.getmtime",
+          "lineNumber": 47
+        },
+        {
+          "caller": "_safe_float",
+          "callee": "float",
+          "lineNumber": 53
+        },
+        {
+          "caller": "_safe_float",
+          "callee": "math.isfinite",
+          "lineNumber": 54
+        },
+        {
+          "caller": "_safe_float",
+          "callee": "float",
+          "lineNumber": 58
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "open",
+          "lineNumber": 75
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "csv.DictReader",
+          "lineNumber": 76
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "ValueError",
+          "lineNumber": 78
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "ValueError",
+          "lineNumber": 82
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 85
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 85
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 85
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "math.isfinite",
+          "lineNumber": 86
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 89
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 89
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 89
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str(row.get(tgt_key, \"\")).strip",
+          "lineNumber": 90
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 90
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 90
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "float",
+          "lineNumber": 92
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 94
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "host_ts.append",
+          "lineNumber": 96
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "host_current.append",
+          "lineNumber": 97
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "host_target.append",
+          "lineNumber": 98
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 100
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 100
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 100
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 101
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 101
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 101
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "_safe_float",
+          "lineNumber": 102
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "str",
+          "lineNumber": 102
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "row.get",
+          "lineNumber": 102
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "math.isfinite",
+          "lineNumber": 103
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "math.isfinite",
+          "lineNumber": 103
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "math.isfinite",
+          "lineNumber": 103
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "debug_ts.append",
+          "lineNumber": 105
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "debug_current.append",
+          "lineNumber": 106
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "debug_target.append",
+          "lineNumber": 107
+        },
+        {
+          "caller": "_load_j02_series",
+          "callee": "ValueError",
+          "lineNumber": 115
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "_load_j02_series",
+          "lineNumber": 123
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.figure",
+          "lineNumber": 125
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.plot",
+          "lineNumber": 126
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.plot",
+          "lineNumber": 127
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.xlabel",
+          "lineNumber": 128
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.ylabel",
+          "lineNumber": 129
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.title",
+          "lineNumber": 130
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "os.path.basename",
+          "lineNumber": 130
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.grid",
+          "lineNumber": 131
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.legend",
+          "lineNumber": 132
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.tight_layout",
+          "lineNumber": 133
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.savefig",
+          "lineNumber": 136
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "print",
+          "lineNumber": 137
+        },
+        {
+          "caller": "_plot_j02",
+          "callee": "plt.show",
+          "lineNumber": 139
+        },
+        {
+          "caller": "main",
+          "callee": "argparse.ArgumentParser",
+          "lineNumber": 143
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 144
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 150
+        },
+        {
+          "caller": "main",
+          "callee": "_default_run_data_dir",
+          "lineNumber": 153
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 156
+        },
+        {
+          "caller": "main",
+          "callee": "parser.parse_args",
+          "lineNumber": 162
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 165
+        },
+        {
+          "caller": "main",
+          "callee": "_latest_csv_file",
+          "lineNumber": 165
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 165
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 166
+        },
+        {
+          "caller": "main",
+          "callee": "_plot_j02",
+          "lineNumber": 167
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 170
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 6,
+        "functionCount": 6,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "desktop/visualize/plot_servo_load_slim.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 250,
+      "nonEmptyLines": 200,
+      "functions": [
+        {
+          "name": "_safe_float",
+          "startLine": 26,
+          "endLine": 33,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "_safe_int",
+          "startLine": 36,
+          "endLine": 40,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "_load_without_direction_bit",
+          "startLine": 43,
+          "endLine": 45,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "_read_rows",
+          "startLine": 48,
+          "endLine": 51,
+          "params": [
+            "csv_path"
+          ]
+        },
+        {
+          "name": "_parse_motor_token",
+          "startLine": 54,
+          "endLine": 58,
+          "params": [
+            "token"
+          ]
+        },
+        {
+          "name": "_parse_motor_list",
+          "startLine": 61,
+          "endLine": 70,
+          "params": [
+            "text"
+          ]
+        },
+        {
+          "name": "_parse_joint_token",
+          "startLine": 73,
+          "endLine": 77,
+          "params": [
+            "token"
+          ]
+        },
+        {
+          "name": "_parse_joint_list",
+          "startLine": 80,
+          "endLine": 89,
+          "params": [
+            "text"
+          ]
+        },
+        {
+          "name": "_motors_from_columns",
+          "startLine": 92,
+          "endLine": 99,
+          "params": [
+            "fieldnames"
+          ]
+        },
+        {
+          "name": "_resolve_motors",
+          "startLine": 102,
+          "endLine": 110,
+          "params": [
+            "fieldnames",
+            "motors_text",
+            "plot_all"
+          ]
+        },
+        {
+          "name": "_series",
+          "startLine": 113,
+          "endLine": 114,
+          "params": [
+            "rows",
+            "key"
+          ]
+        },
+        {
+          "name": "_time_series",
+          "startLine": 117,
+          "endLine": 134,
+          "params": [
+            "rows"
+          ]
+        },
+        {
+          "name": "_joint_columns",
+          "startLine": 137,
+          "endLine": 140,
+          "params": [
+            "fieldnames",
+            "joints"
+          ]
+        },
+        {
+          "name": "_ensure_matplotlib",
+          "startLine": 143,
+          "endLine": 148,
+          "params": []
+        },
+        {
+          "name": "_auto_save_path",
+          "startLine": 151,
+          "endLine": 154,
+          "params": [
+            "csv_path",
+            "motors",
+            "x_axis"
+          ]
+        },
+        {
+          "name": "plot_slim_csv",
+          "startLine": 157,
+          "endLine": 215,
+          "params": [
+            "csv_path",
+            "motors",
+            "joints",
+            "x_axis",
+            "save_path",
+            "show_joint"
+          ]
+        },
+        {
+          "name": "main",
+          "startLine": 218,
+          "endLine": 246,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "_safe_float",
+          "line": 26,
+          "isDefault": false
+        },
+        {
+          "name": "_safe_int",
+          "line": 36,
+          "isDefault": false
+        },
+        {
+          "name": "_load_without_direction_bit",
+          "line": 43,
+          "isDefault": false
+        },
+        {
+          "name": "_read_rows",
+          "line": 48,
+          "isDefault": false
+        },
+        {
+          "name": "_parse_motor_token",
+          "line": 54,
+          "isDefault": false
+        },
+        {
+          "name": "_parse_motor_list",
+          "line": 61,
+          "isDefault": false
+        },
+        {
+          "name": "_parse_joint_token",
+          "line": 73,
+          "isDefault": false
+        },
+        {
+          "name": "_parse_joint_list",
+          "line": 80,
+          "isDefault": false
+        },
+        {
+          "name": "_motors_from_columns",
+          "line": 92,
+          "isDefault": false
+        },
+        {
+          "name": "_resolve_motors",
+          "line": 102,
+          "isDefault": false
+        },
+        {
+          "name": "_series",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "_time_series",
+          "line": 117,
+          "isDefault": false
+        },
+        {
+          "name": "_joint_columns",
+          "line": 137,
+          "isDefault": false
+        },
+        {
+          "name": "_ensure_matplotlib",
+          "line": 143,
+          "isDefault": false
+        },
+        {
+          "name": "_auto_save_path",
+          "line": 151,
+          "isDefault": false
+        },
+        {
+          "name": "plot_slim_csv",
+          "line": 157,
+          "isDefault": false
+        },
+        {
+          "name": "main",
+          "line": 218,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "_safe_float",
+          "callee": "float",
+          "lineNumber": 28
+        },
+        {
+          "caller": "_safe_float",
+          "callee": "math.isfinite",
+          "lineNumber": 29
+        },
+        {
+          "caller": "_safe_float",
+          "callee": "float",
+          "lineNumber": 33
+        },
+        {
+          "caller": "_safe_int",
+          "callee": "int",
+          "lineNumber": 38
+        },
+        {
+          "caller": "_safe_int",
+          "callee": "float",
+          "lineNumber": 38
+        },
+        {
+          "caller": "_load_without_direction_bit",
+          "callee": "_safe_int",
+          "lineNumber": 44
+        },
+        {
+          "caller": "_load_without_direction_bit",
+          "callee": "abs",
+          "lineNumber": 45
+        },
+        {
+          "caller": "_read_rows",
+          "callee": "open",
+          "lineNumber": 49
+        },
+        {
+          "caller": "_read_rows",
+          "callee": "csv.DictReader",
+          "lineNumber": 50
+        },
+        {
+          "caller": "_read_rows",
+          "callee": "list",
+          "lineNumber": 51
+        },
+        {
+          "caller": "_read_rows",
+          "callee": "list",
+          "lineNumber": 51
+        },
+        {
+          "caller": "_parse_motor_token",
+          "callee": "str(token).strip().upper",
+          "lineNumber": 55
+        },
+        {
+          "caller": "_parse_motor_token",
+          "callee": "str(token).strip",
+          "lineNumber": 55
+        },
+        {
+          "caller": "_parse_motor_token",
+          "callee": "str",
+          "lineNumber": 55
+        },
+        {
+          "caller": "_parse_motor_token",
+          "callee": "token.startswith",
+          "lineNumber": 56
+        },
+        {
+          "caller": "_parse_motor_token",
+          "callee": "int",
+          "lineNumber": 58
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "str(text or \"\").replace(\";\", \",\").split",
+          "lineNumber": 63
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "str(text or \"\").replace",
+          "lineNumber": 63
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "str",
+          "lineNumber": 63
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "piece.strip",
+          "lineNumber": 64
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "_parse_motor_token",
+          "lineNumber": 67
+        },
+        {
+          "caller": "_parse_motor_list",
+          "callee": "motors.append",
+          "lineNumber": 69
+        },
+        {
+          "caller": "_parse_joint_token",
+          "callee": "str(token).strip().upper",
+          "lineNumber": 74
+        },
+        {
+          "caller": "_parse_joint_token",
+          "callee": "str(token).strip",
+          "lineNumber": 74
+        },
+        {
+          "caller": "_parse_joint_token",
+          "callee": "str",
+          "lineNumber": 74
+        },
+        {
+          "caller": "_parse_joint_token",
+          "callee": "token.startswith",
+          "lineNumber": 75
+        },
+        {
+          "caller": "_parse_joint_token",
+          "callee": "int",
+          "lineNumber": 77
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "str(text or \"\").replace(\";\", \",\").split",
+          "lineNumber": 82
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "str(text or \"\").replace",
+          "lineNumber": 82
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "str",
+          "lineNumber": 82
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "piece.strip",
+          "lineNumber": 83
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "_parse_joint_token",
+          "lineNumber": 86
+        },
+        {
+          "caller": "_parse_joint_list",
+          "callee": "joints.append",
+          "lineNumber": 88
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "set",
+          "lineNumber": 93
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "re.compile",
+          "lineNumber": 94
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "pattern.match",
+          "lineNumber": 96
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "motors.add",
+          "lineNumber": 98
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "int",
+          "lineNumber": 98
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "match.group",
+          "lineNumber": 98
+        },
+        {
+          "caller": "_motors_from_columns",
+          "callee": "sorted",
+          "lineNumber": 99
+        },
+        {
+          "caller": "_resolve_motors",
+          "callee": "_motors_from_columns",
+          "lineNumber": 103
+        },
+        {
+          "caller": "_resolve_motors",
+          "callee": "_parse_motor_list",
+          "lineNumber": 103
+        },
+        {
+          "caller": "_resolve_motors",
+          "callee": "ValueError",
+          "lineNumber": 105
+        },
+        {
+          "caller": "_resolve_motors",
+          "callee": "\", \".join",
+          "lineNumber": 108
+        },
+        {
+          "caller": "_resolve_motors",
+          "callee": "ValueError",
+          "lineNumber": 109
+        },
+        {
+          "caller": "_series",
+          "callee": "_safe_float",
+          "lineNumber": 114
+        },
+        {
+          "caller": "_series",
+          "callee": "row.get",
+          "lineNumber": 114
+        },
+        {
+          "caller": "_time_series",
+          "callee": "_safe_float",
+          "lineNumber": 119
+        },
+        {
+          "caller": "_time_series",
+          "callee": "row.get",
+          "lineNumber": 119
+        },
+        {
+          "caller": "_time_series",
+          "callee": "any",
+          "lineNumber": 120
+        },
+        {
+          "caller": "_time_series",
+          "callee": "math.isfinite",
+          "lineNumber": 120
+        },
+        {
+          "caller": "_time_series",
+          "callee": "_safe_float",
+          "lineNumber": 123
+        },
+        {
+          "caller": "_time_series",
+          "callee": "row.get",
+          "lineNumber": 123
+        },
+        {
+          "caller": "_time_series",
+          "callee": "math.isfinite",
+          "lineNumber": 124
+        },
+        {
+          "caller": "_time_series",
+          "callee": "float",
+          "lineNumber": 126
+        },
+        {
+          "caller": "_time_series",
+          "callee": "range",
+          "lineNumber": 126
+        },
+        {
+          "caller": "_time_series",
+          "callee": "len",
+          "lineNumber": 126
+        },
+        {
+          "caller": "_time_series",
+          "callee": "math.isfinite",
+          "lineNumber": 131
+        },
+        {
+          "caller": "_time_series",
+          "callee": "out.append",
+          "lineNumber": 133
+        },
+        {
+          "caller": "_joint_columns",
+          "callee": "re.match",
+          "lineNumber": 140
+        },
+        {
+          "caller": "_ensure_matplotlib",
+          "callee": "RuntimeError",
+          "lineNumber": 148
+        },
+        {
+          "caller": "_auto_save_path",
+          "callee": "os.path.splitext",
+          "lineNumber": 152
+        },
+        {
+          "caller": "_auto_save_path",
+          "callee": "os.path.abspath",
+          "lineNumber": 152
+        },
+        {
+          "caller": "_auto_save_path",
+          "callee": "\"_\".join",
+          "lineNumber": 153
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_read_rows",
+          "lineNumber": 163
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "ValueError",
+          "lineNumber": 165
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_ensure_matplotlib",
+          "lineNumber": 167
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "plt.subplots",
+          "lineNumber": 168
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "hasattr",
+          "lineNumber": 169
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "list",
+          "lineNumber": 170
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes_obj.ravel",
+          "lineNumber": 170
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "isinstance",
+          "lineNumber": 171
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "list",
+          "lineNumber": 172
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_time_series",
+          "lineNumber": 176
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "os.path.basename",
+          "lineNumber": 177
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "rows[0].get",
+          "lineNumber": 178
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "title_parts.append",
+          "lineNumber": 180
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_series",
+          "lineNumber": 185
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "len",
+          "lineNumber": 186
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_load_without_direction_bit",
+          "lineNumber": 191
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "row.get",
+          "lineNumber": 191
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].plot",
+          "lineNumber": 192
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].scatter",
+          "lineNumber": 193
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].set_title",
+          "lineNumber": 195
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "\" | \".join",
+          "lineNumber": 195
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].set_ylabel",
+          "lineNumber": 196
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].grid",
+          "lineNumber": 197
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[0].legend",
+          "lineNumber": 198
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "len",
+          "lineNumber": 200
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_joint_columns",
+          "lineNumber": 201
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_series",
+          "lineNumber": 202
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "len",
+          "lineNumber": 202
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[1].plot",
+          "lineNumber": 203
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "_series",
+          "lineNumber": 203
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[1].set_ylabel",
+          "lineNumber": 204
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[1].grid",
+          "lineNumber": 205
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[1].legend",
+          "lineNumber": 206
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "axes[-1].set_xlabel",
+          "lineNumber": 208
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "fig.tight_layout",
+          "lineNumber": 209
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "fig.savefig",
+          "lineNumber": 212
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "print",
+          "lineNumber": 213
+        },
+        {
+          "caller": "plot_slim_csv",
+          "callee": "plt.show",
+          "lineNumber": 215
+        },
+        {
+          "caller": "main",
+          "callee": "argparse.ArgumentParser",
+          "lineNumber": 219
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 220
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 221
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 222
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 223
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 224
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 225
+        },
+        {
+          "caller": "main",
+          "callee": "parser.add_argument",
+          "lineNumber": 226
+        },
+        {
+          "caller": "main",
+          "callee": "parser.parse_args",
+          "lineNumber": 227
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 230
+        },
+        {
+          "caller": "main",
+          "callee": "_read_rows",
+          "lineNumber": 231
+        },
+        {
+          "caller": "main",
+          "callee": "_resolve_motors",
+          "lineNumber": 232
+        },
+        {
+          "caller": "main",
+          "callee": "_parse_joint_list",
+          "lineNumber": 233
+        },
+        {
+          "caller": "main",
+          "callee": "_auto_save_path",
+          "lineNumber": 235
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 237
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 238
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 239
+        },
+        {
+          "caller": "main",
+          "callee": "', '.join",
+          "lineNumber": 239
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 241
+        },
+        {
+          "caller": "main",
+          "callee": "', '.join",
+          "lineNumber": 241
+        },
+        {
+          "caller": "main",
+          "callee": "plot_slim_csv",
+          "lineNumber": 242
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 245
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 17,
+        "functionCount": 17,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "desktop/visualize/plot_step_response.py",
+      "language": "python",
+      "fileCategory": "code",
+      "totalLines": 237,
+      "nonEmptyLines": 194,
+      "functions": [
+        {
+          "name": "default_run_data_dir",
+          "startLine": 24,
+          "endLine": 25,
+          "params": []
+        },
+        {
+          "name": "latest_run_csv",
+          "startLine": 28,
+          "endLine": 50,
+          "params": [
+            "run_data_dir"
+          ]
+        },
+        {
+          "name": "safe_float",
+          "startLine": 53,
+          "endLine": 60,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "read_rows",
+          "startLine": 63,
+          "endLine": 72,
+          "params": [
+            "csv_path"
+          ]
+        },
+        {
+          "name": "parse_joint",
+          "startLine": 75,
+          "endLine": 82,
+          "params": [
+            "text"
+          ]
+        },
+        {
+          "name": "parse_joints",
+          "startLine": 85,
+          "endLine": 97,
+          "params": [
+            "text"
+          ]
+        },
+        {
+          "name": "host_time_s",
+          "startLine": 100,
+          "endLine": 106,
+          "params": [
+            "rows"
+          ]
+        },
+        {
+          "name": "finite_count",
+          "startLine": 109,
+          "endLine": 110,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "choose_actual_series",
+          "startLine": 113,
+          "endLine": 135,
+          "params": [
+            "rows",
+            "joint",
+            "source"
+          ]
+        },
+        {
+          "name": "target_series",
+          "startLine": 138,
+          "endLine": 140,
+          "params": [
+            "rows",
+            "joint"
+          ]
+        },
+        {
+          "name": "save_path_for",
+          "startLine": 143,
+          "endLine": 149,
+          "params": [
+            "csv_path",
+            "joints",
+            "out"
+          ]
+        },
+        {
+          "name": "plot_step_response",
+          "startLine": 152,
+          "endLine": 210,
+          "params": [
+            "csv_path",
+            "joints",
+            "source",
+            "out",
+            "show"
+          ]
+        },
+        {
+          "name": "build_parser",
+          "startLine": 213,
+          "endLine": 221,
+          "params": []
+        },
+        {
+          "name": "main",
+          "startLine": 224,
+          "endLine": 233,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "default_run_data_dir",
+          "line": 24,
+          "isDefault": false
+        },
+        {
+          "name": "latest_run_csv",
+          "line": 28,
+          "isDefault": false
+        },
+        {
+          "name": "safe_float",
+          "line": 53,
+          "isDefault": false
+        },
+        {
+          "name": "read_rows",
+          "line": 63,
+          "isDefault": false
+        },
+        {
+          "name": "parse_joint",
+          "line": 75,
+          "isDefault": false
+        },
+        {
+          "name": "parse_joints",
+          "line": 85,
+          "isDefault": false
+        },
+        {
+          "name": "host_time_s",
+          "line": 100,
+          "isDefault": false
+        },
+        {
+          "name": "finite_count",
+          "line": 109,
+          "isDefault": false
+        },
+        {
+          "name": "choose_actual_series",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "target_series",
+          "line": 138,
+          "isDefault": false
+        },
+        {
+          "name": "save_path_for",
+          "line": 143,
+          "isDefault": false
+        },
+        {
+          "name": "plot_step_response",
+          "line": 152,
+          "isDefault": false
+        },
+        {
+          "name": "build_parser",
+          "line": 213,
+          "isDefault": false
+        },
+        {
+          "name": "main",
+          "line": 224,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "default_run_data_dir",
+          "callee": "os.path.join",
+          "lineNumber": 25
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "os.path.isdir",
+          "lineNumber": 29
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "FileNotFoundError",
+          "lineNumber": 30
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "os.listdir",
+          "lineNumber": 33
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "name.lower",
+          "lineNumber": 34
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "lower.endswith",
+          "lineNumber": 35
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "lower.endswith",
+          "lineNumber": 37
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "lower.endswith",
+          "lineNumber": 39
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "lower.startswith",
+          "lineNumber": 41
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "os.path.join",
+          "lineNumber": 43
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "os.path.isfile",
+          "lineNumber": 44
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "candidates.append",
+          "lineNumber": 45
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "FileNotFoundError",
+          "lineNumber": 48
+        },
+        {
+          "caller": "latest_run_csv",
+          "callee": "candidates.sort",
+          "lineNumber": 49
+        },
+        {
+          "caller": "safe_float",
+          "callee": "float",
+          "lineNumber": 55
+        },
+        {
+          "caller": "safe_float",
+          "callee": "str(value).strip",
+          "lineNumber": 55
+        },
+        {
+          "caller": "safe_float",
+          "callee": "str",
+          "lineNumber": 55
+        },
+        {
+          "caller": "safe_float",
+          "callee": "math.isfinite",
+          "lineNumber": 56
+        },
+        {
+          "caller": "safe_float",
+          "callee": "float",
+          "lineNumber": 60
+        },
+        {
+          "caller": "read_rows",
+          "callee": "open",
+          "lineNumber": 64
+        },
+        {
+          "caller": "read_rows",
+          "callee": "csv.DictReader",
+          "lineNumber": 65
+        },
+        {
+          "caller": "read_rows",
+          "callee": "list",
+          "lineNumber": 66
+        },
+        {
+          "caller": "read_rows",
+          "callee": "list",
+          "lineNumber": 67
+        },
+        {
+          "caller": "read_rows",
+          "callee": "ValueError",
+          "lineNumber": 69
+        },
+        {
+          "caller": "read_rows",
+          "callee": "ValueError",
+          "lineNumber": 71
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "str(text).strip().upper",
+          "lineNumber": 76
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "str(text).strip",
+          "lineNumber": 76
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "str",
+          "lineNumber": 76
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "raw.startswith",
+          "lineNumber": 77
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "int",
+          "lineNumber": 79
+        },
+        {
+          "caller": "parse_joint",
+          "callee": "argparse.ArgumentTypeError",
+          "lineNumber": 81
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "str(text).strip().lower",
+          "lineNumber": 86
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "str(text).strip",
+          "lineNumber": 86
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "str",
+          "lineNumber": 86
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "list",
+          "lineNumber": 88
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "range",
+          "lineNumber": 88
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "raw.replace(\";\", \",\").split",
+          "lineNumber": 90
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "raw.replace",
+          "lineNumber": 90
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "part.strip",
+          "lineNumber": 91
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "joints.append",
+          "lineNumber": 94
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "parse_joint",
+          "lineNumber": 94
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "argparse.ArgumentTypeError",
+          "lineNumber": 96
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "sorted",
+          "lineNumber": 97
+        },
+        {
+          "caller": "parse_joints",
+          "callee": "set",
+          "lineNumber": 97
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "safe_float",
+          "lineNumber": 101
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "row.get",
+          "lineNumber": 101
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "math.isfinite",
+          "lineNumber": 102
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "math.isfinite",
+          "lineNumber": 105
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "float",
+          "lineNumber": 105
+        },
+        {
+          "caller": "host_time_s",
+          "callee": "enumerate",
+          "lineNumber": 106
+        },
+        {
+          "caller": "finite_count",
+          "callee": "sum",
+          "lineNumber": 110
+        },
+        {
+          "caller": "finite_count",
+          "callee": "math.isfinite",
+          "lineNumber": 110
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "safe_float",
+          "lineNumber": 122
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "row.get",
+          "lineNumber": 122
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "str(row.get(debug_valid_key, \"\")).strip",
+          "lineNumber": 125
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "str",
+          "lineNumber": 125
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "row.get",
+          "lineNumber": 125
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "safe_float",
+          "lineNumber": 126
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "row.get",
+          "lineNumber": 126
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "debug.append",
+          "lineNumber": 127
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "float",
+          "lineNumber": 127
+        },
+        {
+          "caller": "choose_actual_series",
+          "callee": "finite_count",
+          "lineNumber": 133
+        },
+        {
+          "caller": "target_series",
+          "callee": "safe_float",
+          "lineNumber": 140
+        },
+        {
+          "caller": "target_series",
+          "callee": "row.get",
+          "lineNumber": 140
+        },
+        {
+          "caller": "save_path_for",
+          "callee": "os.path.abspath",
+          "lineNumber": 145
+        },
+        {
+          "caller": "save_path_for",
+          "callee": "os.path.splitext",
+          "lineNumber": 146
+        },
+        {
+          "caller": "save_path_for",
+          "callee": "os.path.abspath",
+          "lineNumber": 146
+        },
+        {
+          "caller": "save_path_for",
+          "callee": "len",
+          "lineNumber": 147
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "read_rows",
+          "lineNumber": 159
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "host_time_s",
+          "lineNumber": 160
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "save_path_for",
+          "lineNumber": 161
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "len",
+          "lineNumber": 163
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "target_series",
+          "lineNumber": 165
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "choose_actual_series",
+          "lineNumber": 166
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "finite_count",
+          "lineNumber": 167
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ValueError",
+          "lineNumber": 168
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "finite_count",
+          "lineNumber": 169
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ValueError",
+          "lineNumber": 170
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.figure",
+          "lineNumber": 172
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.plot",
+          "lineNumber": 173
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.plot",
+          "lineNumber": 174
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.xlabel",
+          "lineNumber": 175
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.ylabel",
+          "lineNumber": 176
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.title",
+          "lineNumber": 177
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "os.path.basename",
+          "lineNumber": 177
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.grid",
+          "lineNumber": 178
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.legend",
+          "lineNumber": 179
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.tight_layout",
+          "lineNumber": 180
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "math.ceil",
+          "lineNumber": 183
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "len",
+          "lineNumber": 183
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.subplots",
+          "lineNumber": 184
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "max",
+          "lineNumber": 184
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "list",
+          "lineNumber": 185
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "hasattr",
+          "lineNumber": 185
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "zip",
+          "lineNumber": 186
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "target_series",
+          "lineNumber": 187
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "choose_actual_series",
+          "lineNumber": 188
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.plot",
+          "lineNumber": 189
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.plot",
+          "lineNumber": 190
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.set_title",
+          "lineNumber": 191
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.grid",
+          "lineNumber": 192
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.set_ylabel",
+          "lineNumber": 193
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "len",
+          "lineNumber": 194
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.axis",
+          "lineNumber": 195
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "flat_axes[0].legend",
+          "lineNumber": 196
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "ax.set_xlabel",
+          "lineNumber": 198
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "fig.suptitle",
+          "lineNumber": 199
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "os.path.basename",
+          "lineNumber": 199
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "fig.tight_layout",
+          "lineNumber": 200
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "os.makedirs",
+          "lineNumber": 202
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "os.path.dirname",
+          "lineNumber": 202
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.savefig",
+          "lineNumber": 203
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "print",
+          "lineNumber": 204
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "print",
+          "lineNumber": 205
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.show",
+          "lineNumber": 207
+        },
+        {
+          "caller": "plot_step_response",
+          "callee": "plt.close",
+          "lineNumber": 209
+        },
+        {
+          "caller": "build_parser",
+          "callee": "argparse.ArgumentParser",
+          "lineNumber": 214
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 215
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 216
+        },
+        {
+          "caller": "build_parser",
+          "callee": "default_run_data_dir",
+          "lineNumber": 216
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 217
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 218
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 219
+        },
+        {
+          "caller": "build_parser",
+          "callee": "parser.add_argument",
+          "lineNumber": 220
+        },
+        {
+          "caller": "main",
+          "callee": "build_parser().parse_args",
+          "lineNumber": 225
+        },
+        {
+          "caller": "main",
+          "callee": "build_parser",
+          "lineNumber": 225
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 227
+        },
+        {
+          "caller": "main",
+          "callee": "latest_run_csv",
+          "lineNumber": 227
+        },
+        {
+          "caller": "main",
+          "callee": "os.path.abspath",
+          "lineNumber": 227
+        },
+        {
+          "caller": "main",
+          "callee": "parse_joints",
+          "lineNumber": 228
+        },
+        {
+          "caller": "main",
+          "callee": "plot_step_response",
+          "lineNumber": 229
+        },
+        {
+          "caller": "main",
+          "callee": "print",
+          "lineNumber": 232
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 14,
+        "functionCount": 14,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-P4/.githooks/pre-commit",
+      "language": "unknown",
+      "fileCategory": "code",
+      "totalLines": 5,
+      "nonEmptyLines": 4,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/.gitmodules",
+      "language": "unknown",
+      "fileCategory": "code",
+      "totalLines": 3,
+      "nonEmptyLines": 3,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/Broadcast/Broadcast.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 22,
+      "nonEmptyLines": 18,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/CalibrationOfs/CalibrationOfs.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 28,
+      "nonEmptyLines": 24,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/FeedBack/FeedBack.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 148,
+      "nonEmptyLines": 137,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/Ping/Ping.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 34,
+      "nonEmptyLines": 30,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/ProgramEprom/ProgramEprom.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 27,
+      "nonEmptyLines": 22,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/RegWritePos/RegWritePos.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 26,
+      "nonEmptyLines": 22,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/SyncRead/SyncRead.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 45,
+      "nonEmptyLines": 40,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/SyncWritePos/SyncWritePos.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 39,
+      "nonEmptyLines": 35,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/SyncWriteSpe/SyncWriteSpe.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 50,
+      "nonEmptyLines": 44,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/WriteEle/WriteEle.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 31,
+      "nonEmptyLines": 25,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/WritePos/WritePos.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 22,
+      "nonEmptyLines": 18,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/HLSCL/WriteSpe/WriteSpe.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 31,
+      "nonEmptyLines": 25,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/Broadcast/Broadcast.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 25,
+      "nonEmptyLines": 20,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/FeedBack/FeedBack.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 147,
+      "nonEmptyLines": 136,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/Ping/Ping.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 33,
+      "nonEmptyLines": 29,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/ProgramEprom/ProgramEprom.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 28,
+      "nonEmptyLines": 23,
+      "metrics": {}
+    },
+    {
+      "path": "ESP32-P4/libraries/FTServo_Arduino/examples/SCSCL/RegWritePos/RegWritePos.ino",
+      "language": "ino",
+      "fileCategory": "code",
+      "totalLines": 29,
+      "nonEmptyLines": 24,
+      "metrics": {}
+    }
+  ]
+}

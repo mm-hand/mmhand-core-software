@@ -1,0 +1,143 @@
+{
+  "nodes": [
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "type": "file",
+      "name": "MultiTurnNvsPersistenceTask.cpp",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "summary": "MultiTurnNvsPersistenceTask.cpp 实现任务调度或后台循环，负责把共享队列、硬件反馈和系统状态串起来。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "task",
+        "servo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:publishNvsSaveResult",
+      "type": "function",
+      "name": "publishNvsSaveResult",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "lineRange": [
+        7,
+        27
+      ],
+      "summary": "publishNvsSaveResult 是 ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:multiTurnNvsPersistenceTask",
+      "type": "function",
+      "name": "multiTurnNvsPersistenceTask",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "lineRange": [
+        29,
+        61
+      ],
+      "summary": "multiTurnNvsPersistenceTask 是 ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.h",
+      "type": "file",
+      "name": "MultiTurnNvsPersistenceTask.h",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.h",
+      "summary": "MultiTurnNvsPersistenceTask.h 实现任务调度或后台循环，负责把共享队列、硬件反馈和系统状态串起来。",
+      "tags": [
+        "source-code",
+        "c",
+        "task",
+        "servo"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.cpp",
+      "type": "file",
+      "name": "MultiTurnNvsStore.cpp",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.cpp",
+      "summary": "MultiTurnNvsStore.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.h",
+      "type": "file",
+      "name": "MultiTurnNvsStore.h",
+      "filePath": "ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.h",
+      "summary": "MultiTurnNvsStore.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "target": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "target": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "target": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:publishNvsSaveResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "target": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:multiTurnNvsPersistenceTask",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp",
+      "target": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:multiTurnNvsPersistenceTask",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:multiTurnNvsPersistenceTask",
+      "target": "function:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsPersistenceTask.cpp:publishNvsSaveResult",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.cpp",
+      "target": "file:ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

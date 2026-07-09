@@ -1,0 +1,148 @@
+{
+  "nodes": [
+    {
+      "id": "config:.understand-anything/intermediate/batch-3.json",
+      "type": "config",
+      "name": "batch-3.json",
+      "filePath": ".understand-anything/intermediate/batch-3.json",
+      "summary": "batch-3.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-4.json",
+      "type": "config",
+      "name": "batch-4.json",
+      "filePath": ".understand-anything/intermediate/batch-4.json",
+      "summary": "batch-4.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-5.json",
+      "type": "config",
+      "name": "batch-5.json",
+      "filePath": ".understand-anything/intermediate/batch-5.json",
+      "summary": "batch-5.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-6.json",
+      "type": "config",
+      "name": "batch-6.json",
+      "filePath": ".understand-anything/intermediate/batch-6.json",
+      "summary": "batch-6.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-7.json",
+      "type": "config",
+      "name": "batch-7.json",
+      "filePath": ".understand-anything/intermediate/batch-7.json",
+      "summary": "batch-7.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-8.json",
+      "type": "config",
+      "name": "batch-8.json",
+      "filePath": ".understand-anything/intermediate/batch-8.json",
+      "summary": "batch-8.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batch-9.json",
+      "type": "config",
+      "name": "batch-9.json",
+      "filePath": ".understand-anything/intermediate/batch-9.json",
+      "summary": "batch-9.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/batches.json",
+      "type": "config",
+      "name": "batches.json",
+      "filePath": ".understand-anything/intermediate/batches.json",
+      "summary": "batches.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/fingerprint-input.json",
+      "type": "config",
+      "name": "fingerprint-input.json",
+      "filePath": ".understand-anything/intermediate/fingerprint-input.json",
+      "summary": "fingerprint-input.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/review.json",
+      "type": "config",
+      "name": "review.json",
+      "filePath": ".understand-anything/intermediate/review.json",
+      "summary": "review.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.understand-anything/intermediate/scan-result.json",
+      "type": "config",
+      "name": "scan-result.json",
+      "filePath": ".understand-anything/intermediate/scan-result.json",
+      "summary": "scan-result.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "can"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": []
+}

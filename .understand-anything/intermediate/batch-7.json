@@ -1,0 +1,3277 @@
+{
+  "nodes": [
+    {
+      "id": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "type": "file",
+      "name": "CsvRecorder.cpp",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "summary": "CsvRecorder.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:open",
+      "type": "function",
+      "name": "open",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        5,
+        15
+      ],
+      "summary": "open 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "type": "function",
+      "name": "writeFrames",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        17,
+        65
+      ],
+      "summary": "writeFrames 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        67,
+        74
+      ],
+      "summary": "close 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:isOpen",
+      "type": "function",
+      "name": "isOpen",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        76,
+        79
+      ],
+      "summary": "isOpen 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:escape",
+      "type": "function",
+      "name": "escape",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        81,
+        103
+      ],
+      "summary": "escape 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeHeader",
+      "type": "function",
+      "name": "writeHeader",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "lineRange": [
+        105,
+        125
+      ],
+      "summary": "writeHeader 是 manus/manus_bridge_test/src/CsvRecorder.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "type": "file",
+      "name": "CsvRecorder.h",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.h",
+      "summary": "CsvRecorder.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/CsvRecorder.h:CsvRecorder",
+      "type": "class",
+      "name": "CsvRecorder",
+      "filePath": "manus/manus_bridge_test/src/CsvRecorder.h",
+      "lineRange": [
+        8,
+        22
+      ],
+      "summary": "CsvRecorder 是 manus/manus_bridge_test/src/CsvRecorder.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "type": "file",
+      "name": "DataPrinter.cpp",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.cpp",
+      "summary": "DataPrinter.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/DataPrinter.cpp:DataPrinter",
+      "type": "function",
+      "name": "DataPrinter",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.cpp",
+      "lineRange": [
+        6,
+        10
+      ],
+      "summary": "DataPrinter 是 manus/manus_bridge_test/src/DataPrinter.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/DataPrinter.cpp:shouldPrint",
+      "type": "function",
+      "name": "shouldPrint",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.cpp",
+      "lineRange": [
+        12,
+        21
+      ],
+      "summary": "shouldPrint 是 manus/manus_bridge_test/src/DataPrinter.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "function",
+      "name": "print",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.cpp",
+      "lineRange": [
+        23,
+        71
+      ],
+      "summary": "print 是 manus/manus_bridge_test/src/DataPrinter.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "type": "file",
+      "name": "DataPrinter.h",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.h",
+      "summary": "DataPrinter.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/DataPrinter.h:DataPrinter",
+      "type": "class",
+      "name": "DataPrinter",
+      "filePath": "manus/manus_bridge_test/src/DataPrinter.h",
+      "lineRange": [
+        7,
+        18
+      ],
+      "summary": "DataPrinter 是 manus/manus_bridge_test/src/DataPrinter.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "type": "file",
+      "name": "ManusClient.cpp",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "summary": "ManusClient.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:nowSeconds",
+      "type": "function",
+      "name": "nowSeconds",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        14,
+        19
+      ],
+      "summary": "nowSeconds 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:sideToString",
+      "type": "function",
+      "name": "sideToString",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        21,
+        34
+      ],
+      "summary": "sideToString 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:toVec3",
+      "type": "function",
+      "name": "toVec3",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        36,
+        39
+      ],
+      "summary": "toVec3 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:toQuat",
+      "type": "function",
+      "name": "toQuat",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        41,
+        44
+      ],
+      "summary": "toQuat 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:sdkCode",
+      "type": "function",
+      "name": "sdkCode",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        46,
+        49
+      ],
+      "summary": "sdkCode 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:ManusClient",
+      "type": "function",
+      "name": "ManusClient",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        52,
+        55
+      ],
+      "summary": "ManusClient 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:~ManusClient",
+      "type": "function",
+      "name": "~ManusClient",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        57,
+        64
+      ],
+      "summary": "~ManusClient 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:initialize",
+      "type": "function",
+      "name": "initialize",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        66,
+        142
+      ],
+      "summary": "initialize 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "type": "function",
+      "name": "connect",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        144,
+        199
+      ],
+      "summary": "connect 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:shutdown",
+      "type": "function",
+      "name": "shutdown",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        201,
+        210
+      ],
+      "summary": "shutdown 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "type": "function",
+      "name": "consumeFrames",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        212,
+        234
+      ],
+      "summary": "consumeFrames 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:isConnected",
+      "type": "function",
+      "name": "isConnected",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        236,
+        239
+      ],
+      "summary": "isConnected 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onConnected",
+      "type": "function",
+      "name": "onConnected",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        288,
+        294
+      ],
+      "summary": "onConnected 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onDisconnected",
+      "type": "function",
+      "name": "onDisconnected",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        296,
+        302
+      ],
+      "summary": "onDisconnected 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLog",
+      "type": "function",
+      "name": "onLog",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        304,
+        310
+      ],
+      "summary": "onLog 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLandscape",
+      "type": "function",
+      "name": "onLandscape",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        312,
+        318
+      ],
+      "summary": "onLandscape 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onErgonomics",
+      "type": "function",
+      "name": "onErgonomics",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        320,
+        326
+      ],
+      "summary": "onErgonomics 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawSkeleton",
+      "type": "function",
+      "name": "onRawSkeleton",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        328,
+        334
+      ],
+      "summary": "onRawSkeleton 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawDeviceData",
+      "type": "function",
+      "name": "onRawDeviceData",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        336,
+        342
+      ],
+      "summary": "onRawDeviceData 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleLandscape",
+      "type": "function",
+      "name": "handleLandscape",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        344,
+        358
+      ],
+      "summary": "handleLandscape 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleErgonomics",
+      "type": "function",
+      "name": "handleErgonomics",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        360,
+        415
+      ],
+      "summary": "handleErgonomics 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "type": "function",
+      "name": "handleRawSkeleton",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        417,
+        457
+      ],
+      "summary": "handleRawSkeleton 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawDeviceData",
+      "type": "function",
+      "name": "handleRawDeviceData",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        459,
+        468
+      ],
+      "summary": "handleRawDeviceData 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:ensureNodeInfoCache",
+      "type": "function",
+      "name": "ensureNodeInfoCache",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        470,
+        497
+      ],
+      "summary": "ensureNodeInfoCache 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.cpp:populateNodeHierarchy",
+      "type": "function",
+      "name": "populateNodeHierarchy",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.cpp",
+      "lineRange": [
+        499,
+        520
+      ],
+      "summary": "populateNodeHierarchy 是 manus/manus_bridge_test/src/ManusClient.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "file",
+      "name": "ManusClient.h",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "summary": "ManusClient.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "test"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "function",
+      "name": "ManusClient",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        68,
+        68
+      ],
+      "summary": "ManusClient 是 manus/manus_bridge_test/src/ManusClient.h 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:Vec3",
+      "type": "class",
+      "name": "Vec3",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        12,
+        17
+      ],
+      "summary": "Vec3 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:Quat",
+      "type": "class",
+      "name": "Quat",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        19,
+        25
+      ],
+      "summary": "Quat 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:RawSkeletonNodeSample",
+      "type": "class",
+      "name": "RawSkeletonNodeSample",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        27,
+        35
+      ],
+      "summary": "RawSkeletonNodeSample 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:ManusFrame",
+      "type": "class",
+      "name": "ManusFrame",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        37,
+        53
+      ],
+      "summary": "ManusFrame 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClientConfig",
+      "type": "class",
+      "name": "ManusClientConfig",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        55,
+        60
+      ],
+      "summary": "ManusClientConfig 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "class",
+      "name": "ManusClient",
+      "filePath": "manus/manus_bridge_test/src/ManusClient.h",
+      "lineRange": [
+        62,
+        116
+      ],
+      "summary": "ManusClient 是 manus/manus_bridge_test/src/ManusClient.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "type": "file",
+      "name": "TcpSender.cpp",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "summary": "TcpSender.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:monotonicSeconds",
+      "type": "function",
+      "name": "monotonicSeconds",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        18,
+        21
+      ],
+      "summary": "monotonicSeconds 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:escapeJson",
+      "type": "function",
+      "name": "escapeJson",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        23,
+        39
+      ],
+      "summary": "escapeJson 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:chainTypeName",
+      "type": "function",
+      "name": "chainTypeName",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        41,
+        53
+      ],
+      "summary": "chainTypeName 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:jointTypeName",
+      "type": "function",
+      "name": "jointTypeName",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        55,
+        66
+      ],
+      "summary": "jointTypeName 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeNodeJson",
+      "type": "function",
+      "name": "writeNodeJson",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        68,
+        78
+      ],
+      "summary": "writeNodeJson 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "type": "function",
+      "name": "writeRawSkeletonNodesJson",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        80,
+        101
+      ],
+      "summary": "writeRawSkeletonNodesJson 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "type": "function",
+      "name": "writeSkeletonDictJson",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        103,
+        161
+      ],
+      "summary": "writeSkeletonDictJson 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "type": "function",
+      "name": "frameToJsonLine",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        163,
+        193
+      ],
+      "summary": "frameToJsonLine 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:TcpSender",
+      "type": "function",
+      "name": "TcpSender",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        196,
+        196
+      ],
+      "summary": "TcpSender 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:~TcpSender",
+      "type": "function",
+      "name": "~TcpSender",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        198,
+        201
+      ],
+      "summary": "~TcpSender 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:open",
+      "type": "function",
+      "name": "open",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        203,
+        225
+      ],
+      "summary": "open 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        227,
+        239
+      ],
+      "summary": "close 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:isEnabled",
+      "type": "function",
+      "name": "isEnabled",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        241,
+        244
+      ],
+      "summary": "isEnabled 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:isConnected",
+      "type": "function",
+      "name": "isConnected",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        246,
+        249
+      ],
+      "summary": "isConnected 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "type": "function",
+      "name": "tryConnect",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        251,
+        286
+      ],
+      "summary": "tryConnect 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "type": "function",
+      "name": "sendFrame",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.cpp",
+      "lineRange": [
+        288,
+        314
+      ],
+      "summary": "sendFrame 是 manus/manus_bridge_test/src/TcpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "type": "file",
+      "name": "TcpSender.h",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.h",
+      "summary": "TcpSender.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "function",
+      "name": "TcpSender",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.h",
+      "lineRange": [
+        23,
+        23
+      ],
+      "summary": "TcpSender 是 manus/manus_bridge_test/src/TcpSender.h 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSenderConfig",
+      "type": "class",
+      "name": "TcpSenderConfig",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.h",
+      "lineRange": [
+        8,
+        15
+      ],
+      "summary": "TcpSenderConfig 是 manus/manus_bridge_test/src/TcpSender.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "class",
+      "name": "TcpSender",
+      "filePath": "manus/manus_bridge_test/src/TcpSender.h",
+      "lineRange": [
+        17,
+        42
+      ],
+      "summary": "TcpSender 是 manus/manus_bridge_test/src/TcpSender.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "type": "file",
+      "name": "UdpSender.cpp",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "summary": "UdpSender.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:escapeJson",
+      "type": "function",
+      "name": "escapeJson",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        14,
+        42
+      ],
+      "summary": "escapeJson 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:frameToJson",
+      "type": "function",
+      "name": "frameToJson",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        44,
+        74
+      ],
+      "summary": "frameToJson 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:UdpSender",
+      "type": "function",
+      "name": "UdpSender",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        77,
+        77
+      ],
+      "summary": "UdpSender 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:~UdpSender",
+      "type": "function",
+      "name": "~UdpSender",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        79,
+        82
+      ],
+      "summary": "~UdpSender 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:open",
+      "type": "function",
+      "name": "open",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        84,
+        119
+      ],
+      "summary": "open 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        121,
+        131
+      ],
+      "summary": "close 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:isEnabled",
+      "type": "function",
+      "name": "isEnabled",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        133,
+        136
+      ],
+      "summary": "isEnabled 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.cpp:sendFrame",
+      "type": "function",
+      "name": "sendFrame",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.cpp",
+      "lineRange": [
+        138,
+        170
+      ],
+      "summary": "sendFrame 是 manus/manus_bridge_test/src/UdpSender.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "type": "file",
+      "name": "UdpSender.h",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.h",
+      "summary": "UdpSender.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "function",
+      "name": "UdpSender",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.h",
+      "lineRange": [
+        22,
+        22
+      ],
+      "summary": "UdpSender 是 manus/manus_bridge_test/src/UdpSender.h 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSenderConfig",
+      "type": "class",
+      "name": "UdpSenderConfig",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.h",
+      "lineRange": [
+        8,
+        14
+      ],
+      "summary": "UdpSenderConfig 是 manus/manus_bridge_test/src/UdpSender.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "class",
+      "name": "UdpSender",
+      "filePath": "manus/manus_bridge_test/src/UdpSender.h",
+      "lineRange": [
+        16,
+        36
+      ],
+      "summary": "UdpSender 是 manus/manus_bridge_test/src/UdpSender.h 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/src/main.cpp",
+      "type": "file",
+      "name": "main.cpp",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "summary": "main.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "test"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:handleSignal",
+      "type": "function",
+      "name": "handleSignal",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        21,
+        24
+      ],
+      "summary": "handleSignal 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:printUsage",
+      "type": "function",
+      "name": "printUsage",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        46,
+        52
+      ],
+      "summary": "printUsage 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:readTextFile",
+      "type": "function",
+      "name": "readTextFile",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        54,
+        62
+      ],
+      "summary": "readTextFile 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:jsonStringValue",
+      "type": "function",
+      "name": "jsonStringValue",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        64,
+        69
+      ],
+      "summary": "jsonStringValue 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:jsonDoubleValue",
+      "type": "function",
+      "name": "jsonDoubleValue",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        71,
+        76
+      ],
+      "summary": "jsonDoubleValue 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:jsonUintValue",
+      "type": "function",
+      "name": "jsonUintValue",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        78,
+        83
+      ],
+      "summary": "jsonUintValue 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:jsonBoolValue",
+      "type": "function",
+      "name": "jsonBoolValue",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        85,
+        94
+      ],
+      "summary": "jsonBoolValue 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:jsonObjectValue",
+      "type": "function",
+      "name": "jsonObjectValue",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        96,
+        126
+      ],
+      "summary": "jsonObjectValue 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "type": "function",
+      "name": "loadBridgeConfig",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        128,
+        153
+      ],
+      "summary": "loadBridgeConfig 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:parseArgs",
+      "type": "function",
+      "name": "parseArgs",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        155,
+        237
+      ],
+      "summary": "parseArgs 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        240,
+        399
+      ],
+      "summary": "main 是 manus/manus_bridge_test/src/main.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/main.cpp:AppOptions",
+      "type": "class",
+      "name": "AppOptions",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        26,
+        34
+      ],
+      "summary": "AppOptions 是 manus/manus_bridge_test/src/main.cpp 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:manus/manus_bridge_test/src/main.cpp:BridgeConfig",
+      "type": "class",
+      "name": "BridgeConfig",
+      "filePath": "manus/manus_bridge_test/src/main.cpp",
+      "lineRange": [
+        36,
+        44
+      ],
+      "summary": "BridgeConfig 是 manus/manus_bridge_test/src/main.cpp 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "cpp"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:open",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:isOpen",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:isOpen",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:escape",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:escape",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeHeader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.cpp",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeHeader",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeHeader",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:escape",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeHeader",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:escape",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "target": "class:manus/manus_bridge_test/src/CsvRecorder.h:CsvRecorder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "target": "class:manus/manus_bridge_test/src/CsvRecorder.h:CsvRecorder",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:DataPrinter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:DataPrinter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:shouldPrint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:shouldPrint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.cpp",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "target": "class:manus/manus_bridge_test/src/DataPrinter.h:DataPrinter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "target": "class:manus/manus_bridge_test/src/DataPrinter.h:DataPrinter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:nowSeconds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:nowSeconds",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sideToString",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sideToString",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toVec3",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toVec3",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toQuat",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toQuat",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sdkCode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sdkCode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:ManusClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:ManusClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:~ManusClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:~ManusClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:initialize",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:initialize",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:shutdown",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:shutdown",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:isConnected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:isConnected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onConnected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onConnected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onDisconnected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onDisconnected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLog",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLog",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLandscape",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLandscape",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onErgonomics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onErgonomics",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawSkeleton",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawSkeleton",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawDeviceData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawDeviceData",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleLandscape",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleLandscape",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleErgonomics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleErgonomics",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawDeviceData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawDeviceData",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:ensureNodeInfoCache",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:ensureNodeInfoCache",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:populateNodeHierarchy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.cpp",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:populateNodeHierarchy",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:~ManusClient",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:shutdown",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:initialize",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sdkCode",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sdkCode",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:ensureNodeInfoCache",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:populateNodeHierarchy",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:onLandscape",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleLandscape",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:onErgonomics",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleErgonomics",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawSkeleton",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:onRawDeviceData",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawDeviceData",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleLandscape",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:sideToString",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleErgonomics",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:nowSeconds",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toVec3",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/ManusClient.cpp:handleRawSkeleton",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:toQuat",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:Vec3",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:Vec3",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:Quat",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:Quat",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:RawSkeletonNodeSample",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:RawSkeletonNodeSample",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClientConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClientConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "target": "class:manus/manus_bridge_test/src/ManusClient.h:ManusClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:monotonicSeconds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:monotonicSeconds",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:escapeJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:escapeJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:chainTypeName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:chainTypeName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:jointTypeName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:jointTypeName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeNodeJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeNodeJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:TcpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:TcpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:~TcpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:~TcpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:open",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:isEnabled",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:isEnabled",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:isConnected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:isConnected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:chainTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:jointTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:chainTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:jointTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:escapeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeNodeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:escapeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeRawSkeletonNodesJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:writeSkeletonDictJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:~TcpSender",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:close",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:open",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:close",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:monotonicSeconds",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:isEnabled",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:tryConnect",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/TcpSender.cpp:sendFrame",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.cpp:frameToJsonLine",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "function:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSenderConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSenderConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "target": "class:manus/manus_bridge_test/src/TcpSender.h:TcpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:escapeJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:escapeJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:frameToJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:frameToJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:UdpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:UdpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:~UdpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:~UdpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:open",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:isEnabled",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:isEnabled",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:sendFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.cpp",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:sendFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/UdpSender.cpp:frameToJson",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:escapeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/UdpSender.cpp:~UdpSender",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:close",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/UdpSender.cpp:open",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:close",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/UdpSender.cpp:sendFrame",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:isEnabled",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/UdpSender.cpp:sendFrame",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.cpp:frameToJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "function:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSenderConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSenderConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/UdpSender.h",
+      "target": "class:manus/manus_bridge_test/src/UdpSender.h:UdpSender",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "file:manus/manus_bridge_test/src/CsvRecorder.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "file:manus/manus_bridge_test/src/DataPrinter.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "file:manus/manus_bridge_test/src/ManusClient.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "file:manus/manus_bridge_test/src/TcpSender.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:handleSignal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:handleSignal",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:printUsage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:printUsage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:readTextFile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:readTextFile",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonStringValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonStringValue",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonDoubleValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonDoubleValue",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonUintValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonUintValue",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonBoolValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonBoolValue",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonObjectValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonObjectValue",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:parseArgs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:parseArgs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "class:manus/manus_bridge_test/src/main.cpp:AppOptions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "class:manus/manus_bridge_test/src/main.cpp:AppOptions",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "class:manus/manus_bridge_test/src/main.cpp:BridgeConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/manus_bridge_test/src/main.cpp",
+      "target": "class:manus/manus_bridge_test/src/main.cpp:BridgeConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:readTextFile",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonStringValue",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonDoubleValue",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonUintValue",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonObjectValue",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:jsonBoolValue",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:parseArgs",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:printUsage",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:parseArgs",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:printUsage",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/main.cpp:loadBridgeConfig",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:initialize",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:connect",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:consumeFrames",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:isOpen",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/CsvRecorder.cpp:writeFrames",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/manus_bridge_test/src/main.cpp:main",
+      "target": "function:manus/manus_bridge_test/src/ManusClient.cpp:shutdown",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

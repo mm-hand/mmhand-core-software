@@ -1,0 +1,73 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 1,
+  "filesSkipped": [
+    ".understand-anything/intermediate/batch-1.json",
+    ".understand-anything/intermediate/batch-10.json",
+    ".understand-anything/intermediate/batch-11.json",
+    ".understand-anything/intermediate/batch-12.json",
+    ".understand-anything/intermediate/batch-13.json",
+    ".understand-anything/intermediate/batch-14.json",
+    ".understand-anything/intermediate/batch-15.json",
+    ".understand-anything/intermediate/batch-16.json",
+    ".understand-anything/intermediate/batch-17.json",
+    ".understand-anything/intermediate/batch-18.json",
+    ".understand-anything/intermediate/batch-19.json",
+    ".understand-anything/intermediate/batch-2.json",
+    ".understand-anything/intermediate/batch-20.json",
+    ".understand-anything/intermediate/batch-21.json",
+    ".understand-anything/intermediate/batch-22.json",
+    ".understand-anything/intermediate/batch-23.json",
+    ".understand-anything/intermediate/batch-24.json",
+    ".understand-anything/intermediate/batch-25.json",
+    ".understand-anything/intermediate/batch-26.json"
+  ],
+  "results": [
+    {
+      "path": ".understand-anything/intermediate/assembled-graph.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 52248,
+      "nonEmptyLines": 52248,
+      "sections": [
+        {
+          "heading": "version",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "project",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "nodes",
+          "level": 1,
+          "line": 35
+        },
+        {
+          "heading": "edges",
+          "level": 1,
+          "line": 25222
+        },
+        {
+          "heading": "layers",
+          "level": 1,
+          "line": 51733
+        },
+        {
+          "heading": "tour",
+          "level": 1,
+          "line": 52170
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 6
+      }
+    }
+  ]
+}

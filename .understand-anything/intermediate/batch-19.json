@@ -1,0 +1,2683 @@
+{
+  "nodes": [
+    {
+      "id": "file:.understand-anything/.understandignore",
+      "type": "file",
+      "name": ".understandignore",
+      "filePath": ".understand-anything/.understandignore",
+      "summary": ".understandignore 是 unknown code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "unknown",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:.understand-anything/tmp/ua_finalize_graph.py",
+      "type": "file",
+      "name": "ua_finalize_graph.py",
+      "filePath": ".understand-anything/tmp/ua_finalize_graph.py",
+      "summary": "ua_finalize_graph.py 是 python code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_finalize_graph.py:layer_for",
+      "type": "function",
+      "name": "layer_for",
+      "filePath": ".understand-anything/tmp/ua_finalize_graph.py",
+      "lineRange": [
+        16,
+        35
+      ],
+      "summary": "layer_for 是 .understand-anything/tmp/ua_finalize_graph.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_finalize_graph.py:existing",
+      "type": "function",
+      "name": "existing",
+      "filePath": ".understand-anything/tmp/ua_finalize_graph.py",
+      "lineRange": [
+        63,
+        64
+      ],
+      "summary": "existing 是 .understand-anything/tmp/ua_finalize_graph.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "type": "file",
+      "name": "ua_generate_batch_graphs.py",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "summary": "ua_generate_batch_graphs.py 是 python code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:load_json",
+      "type": "function",
+      "name": "load_json",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        11,
+        12
+      ],
+      "summary": "load_json 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_type",
+      "type": "function",
+      "name": "file_node_type",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        20,
+        40
+      ],
+      "summary": "file_node_type 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:prefix_for_type",
+      "type": "function",
+      "name": "prefix_for_type",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        43,
+        54
+      ],
+      "summary": "prefix_for_type 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_id",
+      "type": "function",
+      "name": "file_node_id",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        57,
+        60
+      ],
+      "summary": "file_node_id 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:complexity",
+      "type": "function",
+      "name": "complexity",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        63,
+        68
+      ],
+      "summary": "complexity 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:role_summary",
+      "type": "function",
+      "name": "role_summary",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        71,
+        92
+      ],
+      "summary": "role_summary 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:tags_for",
+      "type": "function",
+      "name": "tags_for",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        95,
+        121
+      ],
+      "summary": "tags_for 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:add_edge",
+      "type": "function",
+      "name": "add_edge",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        124,
+        130
+      ],
+      "summary": "add_edge 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:clean_callee_name",
+      "type": "function",
+      "name": "clean_callee_name",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        173,
+        183
+      ],
+      "summary": "clean_callee_name 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:resolve_call_target",
+      "type": "function",
+      "name": "resolve_call_target",
+      "filePath": ".understand-anything/tmp/ua_generate_batch_graphs.py",
+      "lineRange": [
+        186,
+        208
+      ],
+      "summary": "resolve_call_target 是 .understand-anything/tmp/ua_generate_batch_graphs.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:data_plot.py",
+      "type": "file",
+      "name": "data_plot.py",
+      "filePath": "data_plot.py",
+      "summary": "data_plot.py 是 python code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:data_plot.py:open_csv_with_fallback",
+      "type": "function",
+      "name": "open_csv_with_fallback",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        138,
+        155
+      ],
+      "summary": "open_csv_with_fallback 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:clean_system_time",
+      "type": "function",
+      "name": "clean_system_time",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        158,
+        159
+      ],
+      "summary": "clean_system_time 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_time_tick",
+      "type": "function",
+      "name": "parse_time_tick",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        162,
+        169
+      ],
+      "summary": "parse_time_tick 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_payload",
+      "type": "function",
+      "name": "parse_payload",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        172,
+        176
+      ],
+      "summary": "parse_payload 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_can_id",
+      "type": "function",
+      "name": "parse_can_id",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        179,
+        184
+      ],
+      "summary": "parse_can_id 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:make_sensor_can_id",
+      "type": "function",
+      "name": "make_sensor_can_id",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        187,
+        193
+      ],
+      "summary": "make_sensor_can_id 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:make_resultant_can_id",
+      "type": "function",
+      "name": "make_resultant_can_id",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        196,
+        201
+      ],
+      "summary": "make_resultant_can_id 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:decode_force_word",
+      "type": "function",
+      "name": "decode_force_word",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        204,
+        212
+      ],
+      "summary": "decode_force_word 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:encode_force_word",
+      "type": "function",
+      "name": "encode_force_word",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        215,
+        220
+      ],
+      "summary": "encode_force_word 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:decode_packet",
+      "type": "function",
+      "name": "decode_packet",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        223,
+        229
+      ],
+      "summary": "decode_packet 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:encode_packet",
+      "type": "function",
+      "name": "encode_packet",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        232,
+        236
+      ],
+      "summary": "encode_packet 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:make_default_record_path",
+      "type": "function",
+      "name": "make_default_record_path",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        239,
+        242
+      ],
+      "summary": "make_default_record_path 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_compact_frame_line",
+      "type": "function",
+      "name": "parse_compact_frame_line",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        303,
+        329
+      ],
+      "summary": "parse_compact_frame_line 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_resultant_line",
+      "type": "function",
+      "name": "parse_resultant_line",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        332,
+        346
+      ],
+      "summary": "parse_resultant_line 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:make_live_sensor_packet",
+      "type": "function",
+      "name": "make_live_sensor_packet",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        349,
+        366
+      ],
+      "summary": "make_live_sensor_packet 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:parse_packet_line",
+      "type": "function",
+      "name": "parse_packet_line",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        369,
+        380
+      ],
+      "summary": "parse_packet_line 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:value_for_metric",
+      "type": "function",
+      "name": "value_for_metric",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        741,
+        748
+      ],
+      "summary": "value_for_metric 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:load_replay_frames",
+      "type": "function",
+      "name": "load_replay_frames",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        751,
+        839
+      ],
+      "summary": "load_replay_frames 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:data_plot.py:color_for_value",
+      "type": "function",
+      "name": "color_for_value",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        842,
+        854
+      ],
+      "summary": "color_for_value 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:print_summary",
+      "type": "function",
+      "name": "print_summary",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        1766,
+        1780
+      ],
+      "summary": "print_summary 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:data_plot.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        1783,
+        1804
+      ],
+      "summary": "main 是 data_plot.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:ForcePoint",
+      "type": "class",
+      "name": "ForcePoint",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        69,
+        76
+      ],
+      "summary": "ForcePoint 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:ReplayFrame",
+      "type": "class",
+      "name": "ReplayFrame",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        80,
+        91
+      ],
+      "summary": "ReplayFrame 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:CsvStats",
+      "type": "class",
+      "name": "CsvStats",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        95,
+        103
+      ],
+      "summary": "CsvStats 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveStats",
+      "type": "class",
+      "name": "LiveStats",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        107,
+        114
+      ],
+      "summary": "LiveStats 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveResultantSample",
+      "type": "class",
+      "name": "LiveResultantSample",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        118,
+        125
+      ],
+      "summary": "LiveResultantSample 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveSensorPacket",
+      "type": "class",
+      "name": "LiveSensorPacket",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        129,
+        135
+      ],
+      "summary": "LiveSensorPacket 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveLineParser",
+      "type": "class",
+      "name": "LiveLineParser",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        245,
+        285
+      ],
+      "summary": "LiveLineParser 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveFrameAssembler",
+      "type": "class",
+      "name": "LiveFrameAssembler",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        383,
+        431
+      ],
+      "summary": "LiveFrameAssembler 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:data_plot.py:LiveSerialFeed",
+      "type": "class",
+      "name": "LiveSerialFeed",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        434,
+        529
+      ],
+      "summary": "LiveSerialFeed 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:data_plot.py:LiveCsvRecorder",
+      "type": "class",
+      "name": "LiveCsvRecorder",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        532,
+        623
+      ],
+      "summary": "LiveCsvRecorder 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:data_plot.py:HeatmapReplayApp",
+      "type": "class",
+      "name": "HeatmapReplayApp",
+      "filePath": "data_plot.py",
+      "lineRange": [
+        857,
+        1763
+      ],
+      "summary": "HeatmapReplayApp 是 data_plot.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:desktop/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/algorithm/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/algorithm/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/app/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/app/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:desktop/config/raw_ik_q_target.json",
+      "type": "config",
+      "name": "raw_ik_q_target.json",
+      "filePath": "desktop/config/raw_ik_q_target.json",
+      "summary": "raw_ik_q_target.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/examples/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/examples/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:desktop/requirements.txt",
+      "type": "document",
+      "name": "requirements.txt",
+      "filePath": "desktop/requirements.txt",
+      "summary": "requirements.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:desktop/resources/hku_hand_v2_urdf/.claude/settings.local.json",
+      "type": "config",
+      "name": "settings.local.json",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/.claude/settings.local.json",
+      "summary": "settings.local.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:desktop/resources/hku_hand_v2_urdf/config/joint_names_V2D18-URDF.yaml",
+      "type": "config",
+      "name": "joint_names_V2D18-URDF.yaml",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/config/joint_names_V2D18-URDF.yaml",
+      "summary": "joint_names_V2D18-URDF.yaml 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/resources/hku_hand_v2_urdf/launch/display.launch",
+      "type": "file",
+      "name": "display.launch",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/launch/display.launch",
+      "summary": "display.launch 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "launch",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/resources/hku_hand_v2_urdf/launch/gazebo.launch",
+      "type": "file",
+      "name": "gazebo.launch",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/launch/gazebo.launch",
+      "summary": "gazebo.launch 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "launch",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "type": "file",
+      "name": "manipulability_analysis.py",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "summary": "manipulability_analysis.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_info",
+      "type": "function",
+      "name": "get_joint_info",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        19,
+        27
+      ],
+      "summary": "get_joint_info 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_body_id",
+      "type": "function",
+      "name": "get_body_id",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        30,
+        32
+      ],
+      "summary": "get_body_id 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "function",
+      "name": "get_joint_id",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        35,
+        37
+      ],
+      "summary": "get_joint_id 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_dof_adr_for_joint",
+      "type": "function",
+      "name": "get_dof_adr_for_joint",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        40,
+        48
+      ],
+      "summary": "get_dof_adr_for_joint 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:set_joint_positions",
+      "type": "function",
+      "name": "set_joint_positions",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        51,
+        68
+      ],
+      "summary": "set_joint_positions 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "type": "function",
+      "name": "compute_jacobians_for_joints",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        71,
+        107
+      ],
+      "summary": "compute_jacobians_for_joints 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_manipulability",
+      "type": "function",
+      "name": "compute_manipulability",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        110,
+        131
+      ],
+      "summary": "compute_manipulability 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_index_finger_config",
+      "type": "function",
+      "name": "get_index_finger_config",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        134,
+        174
+      ],
+      "summary": "get_index_finger_config 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_thumb_config",
+      "type": "function",
+      "name": "get_thumb_config",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        177,
+        221
+      ],
+      "summary": "get_thumb_config 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "type": "function",
+      "name": "analyze_manipulability",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        224,
+        270
+      ],
+      "summary": "analyze_manipulability 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "lineRange": [
+        273,
+        362
+      ],
+      "summary": "main 是 desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "schema:desktop/resources/hku_hand_v2_urdf/urdf/V2D18-URDF.csv",
+      "type": "schema",
+      "name": "V2D18-URDF.csv",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/urdf/V2D18-URDF.csv",
+      "summary": "V2D18-URDF.csv 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "csv",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:desktop/resources/joint_sequence_example.txt",
+      "type": "document",
+      "name": "joint_sequence_example.txt",
+      "filePath": "desktop/resources/joint_sequence_example.txt",
+      "summary": "joint_sequence_example.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:desktop/resources/pose_fist_21deg.txt",
+      "type": "document",
+      "name": "pose_fist_21deg.txt",
+      "filePath": "desktop/resources/pose_fist_21deg.txt",
+      "summary": "pose_fist_21deg.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/ros2/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/ros2/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/teleop/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/teleop/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/teleop/Posture/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/teleop/Posture/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/teleop/Posture/hand_retargeting/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/__init__.py",
+      "summary": "__init__.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "type": "file",
+      "name": "interfaces.py",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "summary": "interfaces.py 属于 Python 上位机，用于 UI、串口通信、状态模型、ROS2 或遥操作链路。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:get_joint_angle_stream",
+      "type": "function",
+      "name": "get_joint_angle_stream",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        130,
+        132
+      ],
+      "summary": "get_joint_angle_stream 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:print_robot_joint_angles",
+      "type": "function",
+      "name": "print_robot_joint_angles",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        135,
+        139
+      ],
+      "summary": "print_robot_joint_angles 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:on_target_joint_sequence",
+      "type": "function",
+      "name": "on_target_joint_sequence",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        145,
+        155
+      ],
+      "summary": "on_target_joint_sequence 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_parse_args",
+      "type": "function",
+      "name": "_parse_args",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        158,
+        194
+      ],
+      "summary": "_parse_args 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_print_frame",
+      "type": "function",
+      "name": "_print_frame",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        197,
+        200
+      ],
+      "summary": "_print_frame 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        203,
+        327
+      ],
+      "summary": "main 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleFrame",
+      "type": "class",
+      "name": "JointAngleFrame",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        14,
+        20
+      ],
+      "summary": "JointAngleFrame 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleStream",
+      "type": "class",
+      "name": "JointAngleStream",
+      "filePath": "desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "lineRange": [
+        23,
+        123
+      ],
+      "summary": "JointAngleStream 是 desktop/teleop/Posture/hand_retargeting/interfaces.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:desktop/teleop/Posture/models/hand_landmarker.task",
+      "type": "file",
+      "name": "hand_landmarker.task",
+      "filePath": "desktop/teleop/Posture/models/hand_landmarker.task",
+      "summary": "hand_landmarker.task 实现任务调度或后台循环，负责把共享队列、硬件反馈和系统状态串起来。",
+      "tags": [
+        "source-code",
+        "task",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:desktop/teleop/Posture/requirements.txt",
+      "type": "document",
+      "name": "requirements.txt",
+      "filePath": "desktop/teleop/Posture/requirements.txt",
+      "summary": "requirements.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "ui"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:.understand-anything/tmp/ua_finalize_graph.py",
+      "target": "function:.understand-anything/tmp/ua_finalize_graph.py:layer_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_finalize_graph.py",
+      "target": "function:.understand-anything/tmp/ua_finalize_graph.py:layer_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_finalize_graph.py",
+      "target": "function:.understand-anything/tmp/ua_finalize_graph.py:existing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_finalize_graph.py",
+      "target": "function:.understand-anything/tmp/ua_finalize_graph.py:existing",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:load_json",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:load_json",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_type",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_type",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:prefix_for_type",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:prefix_for_type",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:complexity",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:complexity",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:role_summary",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:role_summary",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:tags_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:tags_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:add_edge",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:add_edge",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:clean_callee_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:clean_callee_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:resolve_call_target",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:.understand-anything/tmp/ua_generate_batch_graphs.py",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:resolve_call_target",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_id",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_type",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:file_node_id",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:prefix_for_type",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:resolve_call_target",
+      "target": "function:.understand-anything/tmp/ua_generate_batch_graphs.py:clean_callee_name",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:open_csv_with_fallback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:open_csv_with_fallback",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:clean_system_time",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:clean_system_time",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_time_tick",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_time_tick",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_payload",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_payload",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_can_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_can_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_sensor_can_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_sensor_can_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_resultant_can_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_resultant_can_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:decode_force_word",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:decode_force_word",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:encode_force_word",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:encode_force_word",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:decode_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:decode_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:encode_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:encode_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_default_record_path",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_default_record_path",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_compact_frame_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_compact_frame_line",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_resultant_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_resultant_line",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_live_sensor_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:make_live_sensor_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_packet_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:parse_packet_line",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:value_for_metric",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:value_for_metric",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:load_replay_frames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:load_replay_frames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:color_for_value",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:color_for_value",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:print_summary",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:print_summary",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "function:data_plot.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:ForcePoint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:ForcePoint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:ReplayFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:ReplayFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:CsvStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:CsvStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveResultantSample",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveResultantSample",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveSensorPacket",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveSensorPacket",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveLineParser",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveLineParser",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveFrameAssembler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveFrameAssembler",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveSerialFeed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveSerialFeed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveCsvRecorder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:LiveCsvRecorder",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:HeatmapReplayApp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:data_plot.py",
+      "target": "class:data_plot.py:HeatmapReplayApp",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:decode_force_word",
+      "target": "class:data_plot.py:ForcePoint",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:decode_packet",
+      "target": "function:data_plot.py:decode_force_word",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:encode_packet",
+      "target": "function:data_plot.py:encode_force_word",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:parse_compact_frame_line",
+      "target": "function:data_plot.py:decode_force_word",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:parse_compact_frame_line",
+      "target": "class:data_plot.py:ReplayFrame",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:parse_resultant_line",
+      "target": "class:data_plot.py:LiveResultantSample",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:make_live_sensor_packet",
+      "target": "function:data_plot.py:parse_can_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:make_live_sensor_packet",
+      "target": "class:data_plot.py:LiveSensorPacket",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:parse_packet_line",
+      "target": "function:data_plot.py:parse_payload",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:parse_packet_line",
+      "target": "function:data_plot.py:make_live_sensor_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "class:data_plot.py:CsvStats",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:open_csv_with_fallback",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:parse_can_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:parse_payload",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:decode_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "class:data_plot.py:ForcePoint",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "class:data_plot.py:ReplayFrame",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:clean_system_time",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:load_replay_frames",
+      "target": "function:data_plot.py:parse_time_tick",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:print_summary",
+      "target": "function:data_plot.py:load_replay_frames",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:print_summary",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:main",
+      "target": "function:desktop/teleop/Posture/camera_mocap.py:parse_args",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:main",
+      "target": "function:data_plot.py:print_summary",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:data_plot.py:main",
+      "target": "class:data_plot.py:HeatmapReplayApp",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_info",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_info",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_body_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_body_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_dof_adr_for_joint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_dof_adr_for_joint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:set_joint_positions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:set_joint_positions",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_manipulability",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_manipulability",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_index_finger_config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_index_finger_config",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_thumb_config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_thumb_config",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_info",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_dof_adr_for_joint",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:set_joint_positions",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_body_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_dof_adr_for_joint",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_manipulability",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_index_finger_config",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_thumb_config",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_id",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:set_joint_positions",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_jacobians_for_joints",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:compute_manipulability",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_joint_info",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_index_finger_config",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:analyze_manipulability",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:main",
+      "target": "function:desktop/resources/hku_hand_v2_urdf/manipulability_analysis.py:get_thumb_config",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:get_joint_angle_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:get_joint_angle_stream",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:print_robot_joint_angles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:print_robot_joint_angles",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:on_target_joint_sequence",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:on_target_joint_sequence",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_parse_args",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_parse_args",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_print_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_print_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleStream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:desktop/teleop/Posture/hand_retargeting/interfaces.py",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/interfaces.py:JointAngleStream",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:print_robot_joint_angles",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_parse_args",
+      "target": "function:desktop/teleop/Posture/camera_mocap.py:parse_args",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_print_frame",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_parse_args",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/vision.py:ensure_model_exists",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/retargeting.py:HandRetargeter",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "class:desktop/teleop/Posture/hand_retargeting/vision.py:LatestResultStore",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:get_joint_angle_stream",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/vision.py:draw_landmarks",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/vision.py:extract_hand_points_for_retargeting",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:on_target_joint_sequence",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:main",
+      "target": "function:desktop/teleop/Posture/hand_retargeting/interfaces.py:_print_frame",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

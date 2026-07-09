@@ -1,0 +1,3498 @@
+{
+  "nodes": [
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "type": "file",
+      "name": "SMS_STS.cpp",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "summary": "SMS_STS.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SMS_STS",
+      "type": "function",
+      "name": "SMS_STS",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        10,
+        13
+      ],
+      "summary": "SMS_STS 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WritePosEx",
+      "type": "function",
+      "name": "WritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        23,
+        36
+      ],
+      "summary": "WritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:RegWritePosEx",
+      "type": "function",
+      "name": "RegWritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        38,
+        51
+      ],
+      "summary": "RegWritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWritePosEx",
+      "type": "function",
+      "name": "SyncWritePosEx",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        53,
+        77
+      ],
+      "summary": "SyncWritePosEx 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWriteSpe",
+      "type": "function",
+      "name": "SyncWriteSpe",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        79,
+        97
+      ],
+      "summary": "SyncWriteSpe 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WheelMode",
+      "type": "function",
+      "name": "WheelMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        99,
+        102
+      ],
+      "summary": "WheelMode 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WriteSpe",
+      "type": "function",
+      "name": "WriteSpe",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        104,
+        117
+      ],
+      "summary": "WriteSpe 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:EnableTorque",
+      "type": "function",
+      "name": "EnableTorque",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        119,
+        122
+      ],
+      "summary": "EnableTorque 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:unLockEprom",
+      "type": "function",
+      "name": "unLockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        124,
+        127
+      ],
+      "summary": "unLockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:LockEprom",
+      "type": "function",
+      "name": "LockEprom",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        129,
+        132
+      ],
+      "summary": "LockEprom 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:CalibrationOfs",
+      "type": "function",
+      "name": "CalibrationOfs",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        134,
+        137
+      ],
+      "summary": "CalibrationOfs 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:FeedBack",
+      "type": "function",
+      "name": "FeedBack",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        139,
+        146
+      ],
+      "summary": "FeedBack 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadPos",
+      "type": "function",
+      "name": "ReadPos",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        148,
+        163
+      ],
+      "summary": "ReadPos 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadSpeed",
+      "type": "function",
+      "name": "ReadSpeed",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        165,
+        179
+      ],
+      "summary": "ReadSpeed 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadLoad",
+      "type": "function",
+      "name": "ReadLoad",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        181,
+        195
+      ],
+      "summary": "ReadLoad 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadVoltage",
+      "type": "function",
+      "name": "ReadVoltage",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        197,
+        206
+      ],
+      "summary": "ReadVoltage 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadTemper",
+      "type": "function",
+      "name": "ReadTemper",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        208,
+        217
+      ],
+      "summary": "ReadTemper 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadMove",
+      "type": "function",
+      "name": "ReadMove",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        219,
+        228
+      ],
+      "summary": "ReadMove 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadCurrent",
+      "type": "function",
+      "name": "ReadCurrent",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        230,
+        244
+      ],
+      "summary": "ReadCurrent 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ServoMode",
+      "type": "function",
+      "name": "ServoMode",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "lineRange": [
+        246,
+        249
+      ],
+      "summary": "ServoMode 是 ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.h",
+      "type": "file",
+      "name": "SMS_STS.h",
+      "filePath": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.h",
+      "summary": "SMS_STS.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "type": "file",
+      "name": "ServoManager.cpp",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "summary": "ServoManager.cpp 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "servo"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ServoManager",
+      "type": "function",
+      "name": "ServoManager",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        4,
+        9
+      ],
+      "summary": "ServoManager 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:~ServoManager",
+      "type": "function",
+      "name": "~ServoManager",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        11,
+        16
+      ],
+      "summary": "~ServoManager 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:begin",
+      "type": "function",
+      "name": "begin",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        18,
+        98
+      ],
+      "summary": "begin 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "type": "function",
+      "name": "InitializeSingleServo",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        100,
+        148
+      ],
+      "summary": "InitializeSingleServo 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SetMultiTurnMode",
+      "type": "function",
+      "name": "SetMultiTurnMode",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        150,
+        185
+      ],
+      "summary": "SetMultiTurnMode 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "type": "function",
+      "name": "CalibrateCenter",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        187,
+        242
+      ],
+      "summary": "CalibrateCenter 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "function",
+      "name": "EnableTorque",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        244,
+        255
+      ],
+      "summary": "EnableTorque 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:MoveSingleServo",
+      "type": "function",
+      "name": "MoveSingleServo",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        257,
+        276
+      ],
+      "summary": "MoveSingleServo 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ReadSinglePosLoad",
+      "type": "function",
+      "name": "ReadSinglePosLoad",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        278,
+        296
+      ],
+      "summary": "ReadSinglePosLoad 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "type": "function",
+      "name": "FindLimitPosition",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        298,
+        341
+      ],
+      "summary": "FindLimitPosition 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncMoveServos",
+      "type": "function",
+      "name": "SyncMoveServos",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        343,
+        376
+      ],
+      "summary": "SyncMoveServos 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "type": "function",
+      "name": "SyncReadPosLoad",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        378,
+        444
+      ],
+      "summary": "SyncReadPosLoad 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EmergencyStop",
+      "type": "function",
+      "name": "EmergencyStop",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        446,
+        451
+      ],
+      "summary": "EmergencyStop 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:Resume",
+      "type": "function",
+      "name": "Resume",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        453,
+        458
+      ],
+      "summary": "Resume 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateRandomTargets",
+      "type": "function",
+      "name": "GenerateRandomTargets",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        460,
+        464
+      ],
+      "summary": "GenerateRandomTargets 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateReciprocatingTargets",
+      "type": "function",
+      "name": "GenerateReciprocatingTargets",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        466,
+        500
+      ],
+      "summary": "GenerateReciprocatingTargets 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ClearErrors",
+      "type": "function",
+      "name": "ClearErrors",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        502,
+        506
+      ],
+      "summary": "ClearErrors 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "function",
+      "name": "UpdateServoPosLoad",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        508,
+        525
+      ],
+      "summary": "UpdateServoPosLoad 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ResetServoState",
+      "type": "function",
+      "name": "ResetServoState",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "lineRange": [
+        527,
+        536
+      ],
+      "summary": "ResetServoState 是 ESP32-P4/libraries/ServoManager/ServoManager.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/ServoManager/ServoManager.h",
+      "type": "file",
+      "name": "ServoManager.h",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoManager.h",
+      "summary": "ServoManager.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/libraries/ServoManager/ServoState.h",
+      "type": "file",
+      "name": "ServoState.h",
+      "filePath": "ESP32-P4/libraries/ServoManager/ServoState.h",
+      "summary": "ServoState.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/ServoBoardMain.ino",
+      "type": "file",
+      "name": "ServoBoardMain.ino",
+      "filePath": "ESP32-P4/ServoBoardMain/ServoBoardMain.ino",
+      "summary": "ServoBoardMain.ino 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "ino",
+        "servo"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/communication/servo/INST.h",
+      "type": "file",
+      "name": "INST.h",
+      "filePath": "ESP32-P4/ServoBoardMain/src/communication/servo/INST.h",
+      "summary": "INST.h 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "c",
+        "servo"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "type": "file",
+      "name": "pid.c",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "summary": "pid.c 属于控制链路，负责目标、反馈、安全约束或舵机输出构建。",
+      "tags": [
+        "source-code",
+        "c",
+        "control",
+        "servo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Param_Init",
+      "type": "function",
+      "name": "PID_Param_Init",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "lineRange": [
+        29,
+        49
+      ],
+      "summary": "PID_Param_Init 是 ESP32-P4/ServoBoardMain/src/control/pid.c 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Calc_Clear",
+      "type": "function",
+      "name": "PID_Calc_Clear",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "lineRange": [
+        59,
+        68
+      ],
+      "summary": "PID_Calc_Clear 是 ESP32-P4/ServoBoardMain/src/control/pid.c 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Init",
+      "type": "function",
+      "name": "PID_Init",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "lineRange": [
+        81,
+        90
+      ],
+      "summary": "PID_Init 是 ESP32-P4/ServoBoardMain/src/control/pid.c 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_ErrorHandle",
+      "type": "function",
+      "name": "PID_ErrorHandle",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "lineRange": [
+        100,
+        108
+      ],
+      "summary": "PID_ErrorHandle 是 ESP32-P4/ServoBoardMain/src/control/pid.c 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:f_PID_Calculate",
+      "type": "function",
+      "name": "f_PID_Calculate",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "lineRange": [
+        119,
+        175
+      ],
+      "summary": "f_PID_Calculate 是 ESP32-P4/ServoBoardMain/src/control/pid.c 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "c"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/ServoBoardMain/src/control/pid.h",
+      "type": "file",
+      "name": "pid.h",
+      "filePath": "ESP32-P4/ServoBoardMain/src/control/pid.h",
+      "summary": "pid.h 属于控制链路，负责目标、反馈、安全约束或舵机输出构建。",
+      "tags": [
+        "source-code",
+        "c",
+        "control",
+        "servo"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:ESP32-P4/tools/client.py",
+      "type": "file",
+      "name": "client.py",
+      "filePath": "ESP32-P4/tools/client.py",
+      "summary": "client.py 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:parse_stream_mode_request",
+      "type": "function",
+      "name": "parse_stream_mode_request",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        53,
+        68
+      ],
+      "summary": "parse_stream_mode_request 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:_plot_joint_indices",
+      "type": "function",
+      "name": "_plot_joint_indices",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        100,
+        101
+      ],
+      "summary": "_plot_joint_indices 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:_make_plot_buffers",
+      "type": "function",
+      "name": "_make_plot_buffers",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        104,
+        105
+      ],
+      "summary": "_make_plot_buffers 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:_make_plot_start_times",
+      "type": "function",
+      "name": "_make_plot_start_times",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        108,
+        109
+      ],
+      "summary": "_make_plot_start_times 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_sensor_packet",
+      "type": "function",
+      "name": "process_sensor_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        160,
+        174
+      ],
+      "summary": "process_sensor_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_calib_ack_packet",
+      "type": "function",
+      "name": "process_calib_ack_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        177,
+        190
+      ],
+      "summary": "process_calib_ack_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_proto_ack_packet",
+      "type": "function",
+      "name": "process_proto_ack_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        193,
+        208
+      ],
+      "summary": "process_proto_ack_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_servo_angle_packet",
+      "type": "function",
+      "name": "process_servo_angle_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        211,
+        224
+      ],
+      "summary": "process_servo_angle_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_servo_telem_packet",
+      "type": "function",
+      "name": "process_servo_telem_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        227,
+        241
+      ],
+      "summary": "process_servo_telem_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:process_joint1_debug_packet",
+      "type": "function",
+      "name": "process_joint1_debug_packet",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        244,
+        273
+      ],
+      "summary": "process_joint1_debug_packet 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:parse_stream",
+      "type": "function",
+      "name": "parse_stream",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        276,
+        316
+      ],
+      "summary": "parse_stream 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:serial_thread",
+      "type": "function",
+      "name": "serial_thread",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        319,
+        340
+      ],
+      "summary": "serial_thread 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:format_mapped_cell",
+      "type": "function",
+      "name": "format_mapped_cell",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        343,
+        349
+      ],
+      "summary": "format_mapped_cell 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:format_servo_cell",
+      "type": "function",
+      "name": "format_servo_cell",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        352,
+        357
+      ],
+      "summary": "format_servo_cell 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:format_telemetry_cell",
+      "type": "function",
+      "name": "format_telemetry_cell",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        360,
+        371
+      ],
+      "summary": "format_telemetry_cell 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:render_calib_status",
+      "type": "function",
+      "name": "render_calib_status",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        374,
+        389
+      ],
+      "summary": "render_calib_status 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:print_ui",
+      "type": "function",
+      "name": "print_ui",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        470,
+        613
+      ],
+      "summary": "print_ui 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:choose_serial_port",
+      "type": "function",
+      "name": "choose_serial_port",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        616,
+        652
+      ],
+      "summary": "choose_serial_port 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:handle_keyboard_input",
+      "type": "function",
+      "name": "handle_keyboard_input",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        655,
+        667
+      ],
+      "summary": "handle_keyboard_input 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/client.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        670,
+        697
+      ],
+      "summary": "main 是 ESP32-P4/tools/client.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:ESP32-P4/tools/client.py:JointDebugInfo",
+      "type": "class",
+      "name": "JointDebugInfo",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        113,
+        120
+      ],
+      "summary": "JointDebugInfo 是 ESP32-P4/tools/client.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:ESP32-P4/tools/client.py:MachineState",
+      "type": "class",
+      "name": "MachineState",
+      "filePath": "ESP32-P4/tools/client.py",
+      "lineRange": [
+        124,
+        154
+      ],
+      "summary": "MachineState 是 ESP32-P4/tools/client.py 中的主要类型，封装相关状态、接口或业务行为。",
+      "tags": [
+        "class",
+        "type",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "type": "file",
+      "name": "strip_utf8_bom.py",
+      "filePath": "ESP32-P4/tools/strip_utf8_bom.py",
+      "summary": "strip_utf8_bom.py 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/tools/strip_utf8_bom.py:iter_source_files",
+      "type": "function",
+      "name": "iter_source_files",
+      "filePath": "ESP32-P4/tools/strip_utf8_bom.py",
+      "lineRange": [
+        23,
+        34
+      ],
+      "summary": "iter_source_files 是 ESP32-P4/tools/strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/strip_utf8_bom.py:strip_bom",
+      "type": "function",
+      "name": "strip_bom",
+      "filePath": "ESP32-P4/tools/strip_utf8_bom.py",
+      "lineRange": [
+        37,
+        42
+      ],
+      "summary": "strip_bom 是 ESP32-P4/tools/strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "ESP32-P4/tools/strip_utf8_bom.py",
+      "lineRange": [
+        45,
+        64
+      ],
+      "summary": "main 是 ESP32-P4/tools/strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "type": "file",
+      "name": "watch_strip_utf8_bom.py",
+      "filePath": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "summary": "watch_strip_utf8_bom.py 属于 ESP32-P4 主控固件，用于状态机、控制、通信、标定或持久化。",
+      "tags": [
+        "source-code",
+        "python",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:iter_source_files",
+      "type": "function",
+      "name": "iter_source_files",
+      "filePath": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "lineRange": [
+        24,
+        35
+      ],
+      "summary": "iter_source_files 是 ESP32-P4/tools/watch_strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:strip_bom",
+      "type": "function",
+      "name": "strip_bom",
+      "filePath": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "lineRange": [
+        38,
+        43
+      ],
+      "summary": "strip_bom 是 ESP32-P4/tools/watch_strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "type": "function",
+      "name": "scan_once",
+      "filePath": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "lineRange": [
+        46,
+        61
+      ],
+      "summary": "scan_once 是 ESP32-P4/tools/watch_strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "lineRange": [
+        64,
+        77
+      ],
+      "summary": "main 是 ESP32-P4/tools/watch_strip_utf8_bom.py 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "python"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:ESP32-S3/System/.theia/launch.json",
+      "type": "config",
+      "name": "launch.json",
+      "filePath": "ESP32-S3/System/.theia/launch.json",
+      "summary": "launch.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:ESP32-S3/System/System.ino",
+      "type": "file",
+      "name": "System.ino",
+      "filePath": "ESP32-S3/System/System.ino",
+      "summary": "System.ino 属于 ESP32-S3 传感固件，用于编码器、触觉、CAN 或系统任务。",
+      "tags": [
+        "source-code",
+        "ino",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:manus/manus_bridge_test/CMakeLists.txt",
+      "type": "document",
+      "name": "CMakeLists.txt",
+      "filePath": "manus/manus_bridge_test/CMakeLists.txt",
+      "summary": "CMakeLists.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "test"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:manus/manus_bridge_test/config/manus_bridge_config.json",
+      "type": "config",
+      "name": "manus_bridge_config.json",
+      "filePath": "manus/manus_bridge_test/config/manus_bridge_config.json",
+      "summary": "manus_bridge_config.json 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:manus/manus_bridge_test/include/README_include_manus_sdk_here.txt",
+      "type": "document",
+      "name": "README_include_manus_sdk_here.txt",
+      "filePath": "manus/manus_bridge_test/include/README_include_manus_sdk_here.txt",
+      "summary": "README_include_manus_sdk_here.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/scripts/build_windows.ps1",
+      "type": "file",
+      "name": "build_windows.ps1",
+      "filePath": "manus/manus_bridge_test/scripts/build_windows.ps1",
+      "summary": "build_windows.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "ui",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/manus_bridge_test/scripts/run_windows.ps1",
+      "type": "file",
+      "name": "run_windows.ps1",
+      "filePath": "manus/manus_bridge_test/scripts/run_windows.ps1",
+      "summary": "run_windows.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:manus/manus_bridge_test/third_party/ManusSDK/README_put_manus_sdk_here.txt",
+      "type": "document",
+      "name": "README_put_manus_sdk_here.txt",
+      "filePath": "manus/manus_bridge_test/third_party/ManusSDK/README_put_manus_sdk_here.txt",
+      "summary": "README_put_manus_sdk_here.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "test"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:manus/mmhand_manus_sdk/CMakeLists.txt",
+      "type": "document",
+      "name": "CMakeLists.txt",
+      "filePath": "manus/mmhand_manus_sdk/CMakeLists.txt",
+      "summary": "CMakeLists.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/mmhand_manus_sdk/include/mmhand_manus_sdk.h",
+      "type": "file",
+      "name": "mmhand_manus_sdk.h",
+      "filePath": "manus/mmhand_manus_sdk/include/mmhand_manus_sdk.h",
+      "summary": "mmhand_manus_sdk.h 是 c code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "c",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/mmhand_manus_sdk/scripts/build_windows.ps1",
+      "type": "file",
+      "name": "build_windows.ps1",
+      "filePath": "manus/mmhand_manus_sdk/scripts/build_windows.ps1",
+      "summary": "build_windows.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "type": "file",
+      "name": "mmhand_manus_sdk.cpp",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "summary": "mmhand_manus_sdk.cpp 是 cpp code 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "cpp",
+        "project"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:setError",
+      "type": "function",
+      "name": "setError",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        21,
+        25
+      ],
+      "summary": "setError 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:escapeJson",
+      "type": "function",
+      "name": "escapeJson",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        27,
+        56
+      ],
+      "summary": "escapeJson 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:chainTypeName",
+      "type": "function",
+      "name": "chainTypeName",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        58,
+        73
+      ],
+      "summary": "chainTypeName 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:jointTypeName",
+      "type": "function",
+      "name": "jointTypeName",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        75,
+        88
+      ],
+      "summary": "jointTypeName 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeNodeJson",
+      "type": "function",
+      "name": "writeNodeJson",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        90,
+        100
+      ],
+      "summary": "writeNodeJson 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "type": "function",
+      "name": "writeRawSkeletonNodesJson",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        102,
+        123
+      ],
+      "summary": "writeRawSkeletonNodesJson 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "type": "function",
+      "name": "writeSkeletonDictJson",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        125,
+        189
+      ],
+      "summary": "writeSkeletonDictJson 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "type": "function",
+      "name": "frameToJson",
+      "filePath": "manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "lineRange": [
+        191,
+        226
+      ],
+      "summary": "frameToJson 是 manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp 中的重要函数，承担该文件的一部分核心处理逻辑。",
+      "tags": [
+        "function",
+        "logic",
+        "cpp"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:manus/SDKClient.sln",
+      "type": "config",
+      "name": "SDKClient.sln",
+      "filePath": "manus/SDKClient.sln",
+      "summary": "SDKClient.sln 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SMS_STS",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SMS_STS",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:RegWritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:RegWritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWritePosEx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWritePosEx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWriteSpe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWriteSpe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WheelMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WheelMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WriteSpe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WriteSpe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:EnableTorque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:EnableTorque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:unLockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:unLockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:LockEprom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:LockEprom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:CalibrationOfs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:CalibrationOfs",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:FeedBack",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:FeedBack",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadPos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadPos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadSpeed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadSpeed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadVoltage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadVoltage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadTemper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadTemper",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadMove",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadMove",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadCurrent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadCurrent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ServoMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ServoMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:RegWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:RegWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:regWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWritePosEx",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:SyncWriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WheelMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Host2SCS",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:WriteSpe",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:EnableTorque",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:unLockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:LockEprom",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:CalibrationOfs",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:FeedBack",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Read",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadPos",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadSpeed",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadVoltage",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadTemper",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadMove",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ReadCurrent",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:readWord",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp:ServoMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:writeByte",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "file:ESP32-P4/libraries/ServoManager/ServoManager.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ServoManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ServoManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:~ServoManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:~ServoManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:begin",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:begin",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SetMultiTurnMode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SetMultiTurnMode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:MoveSingleServo",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:MoveSingleServo",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ReadSinglePosLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ReadSinglePosLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncMoveServos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncMoveServos",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EmergencyStop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EmergencyStop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:Resume",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:Resume",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateRandomTargets",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateRandomTargets",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateReciprocatingTargets",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:GenerateReciprocatingTargets",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ClearErrors",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ClearErrors",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ResetServoState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/libraries/ServoManager/ServoManager.cpp",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ResetServoState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:begin",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:Ping",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:begin",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ResetServoState",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SetMultiTurnMode",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:MoveSingleServo",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:InitializeSingleServo",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SetMultiTurnMode",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:genWrite",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:CalibrateCenter",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ReadSinglePosLoad",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:ReadSinglePosLoad",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:FindLimitPosition",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:MoveSingleServo",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadBegin",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketTx",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadPacketRx",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:UpdateServoPosLoad",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EmergencyStop",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:SyncReadPosLoad",
+      "target": "function:ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp:syncReadEnd",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EmergencyStop",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:Resume",
+      "target": "function:ESP32-P4/libraries/ServoManager/ServoManager.cpp:EnableTorque",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "file:ESP32-P4/ServoBoardMain/src/control/pid.h",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Param_Init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Calc_Clear",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Init",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_ErrorHandle",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:f_PID_Calculate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/ServoBoardMain/src/control/pid.c",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:f_PID_Calculate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Init",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Calc_Clear",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Init",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Param_Init",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:f_PID_Calculate",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_ErrorHandle",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:f_PID_Calculate",
+      "target": "function:ESP32-P4/ServoBoardMain/src/control/pid.c:PID_Calc_Clear",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:parse_stream_mode_request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:parse_stream_mode_request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_plot_joint_indices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_plot_joint_indices",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_make_plot_buffers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_make_plot_buffers",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_make_plot_start_times",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:_make_plot_start_times",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_sensor_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_sensor_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_calib_ack_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_calib_ack_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_proto_ack_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_proto_ack_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_angle_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_angle_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_telem_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_telem_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_joint1_debug_packet",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:process_joint1_debug_packet",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:parse_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:parse_stream",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:serial_thread",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:serial_thread",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_mapped_cell",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_mapped_cell",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_servo_cell",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_servo_cell",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_telemetry_cell",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:format_telemetry_cell",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:render_calib_status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:render_calib_status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:print_ui",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:print_ui",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:choose_serial_port",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:choose_serial_port",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:handle_keyboard_input",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:handle_keyboard_input",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "function:ESP32-P4/tools/client.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "class:ESP32-P4/tools/client.py:JointDebugInfo",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "class:ESP32-P4/tools/client.py:JointDebugInfo",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "class:ESP32-P4/tools/client.py:MachineState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/client.py",
+      "target": "class:ESP32-P4/tools/client.py:MachineState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream_mode_request",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:_make_plot_buffers",
+      "target": "function:ESP32-P4/tools/client.py:_plot_joint_indices",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:_make_plot_start_times",
+      "target": "function:ESP32-P4/tools/client.py:_plot_joint_indices",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:process_proto_ack_packet",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_sensor_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_calib_ack_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_angle_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_servo_telem_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_joint1_debug_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:parse_stream",
+      "target": "function:ESP32-P4/tools/client.py:process_proto_ack_packet",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:serial_thread",
+      "target": "function:ESP32-P4/tools/client.py:parse_stream",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:serial_thread",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "class:ESP32-P4/tools/client.py:JointDebugInfo",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "function:ESP32-P4/tools/client.py:format_mapped_cell",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "function:ESP32-P4/tools/client.py:format_servo_cell",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "function:ESP32-P4/tools/client.py:format_telemetry_cell",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:print_ui",
+      "target": "function:ESP32-P4/tools/client.py:render_calib_status",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:choose_serial_port",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:main",
+      "target": "function:ESP32-P4/tools/client.py:choose_serial_port",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:main",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:main",
+      "target": "function:ESP32-P4/tools/client.py:print_ui",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:main",
+      "target": "function:ESP32-S3/System/src/hal/HalTactile.cpp:update",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/client.py:main",
+      "target": "function:ESP32-P4/tools/client.py:handle_keyboard_input",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:iter_source_files",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:iter_source_files",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:strip_bom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:strip_bom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "target": "function:desktop/teleop/Posture/camera_mocap.py:parse_args",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:iter_source_files",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "target": "function:ESP32-P4/tools/strip_utf8_bom.py:strip_bom",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/strip_utf8_bom.py:main",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:iter_source_files",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:iter_source_files",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:strip_bom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:strip_bom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:ESP32-P4/tools/watch_strip_utf8_bom.py",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:iter_source_files",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:strip_bom",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "target": "function:desktop/teleop/Posture/camera_mocap.py:parse_args",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "target": "function:manus/manus_bridge_test/src/DataPrinter.cpp:print",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:main",
+      "target": "function:ESP32-P4/tools/watch_strip_utf8_bom.py:scan_once",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:setError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:setError",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:escapeJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:escapeJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:chainTypeName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:chainTypeName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:jointTypeName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:jointTypeName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeNodeJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeNodeJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:chainTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:jointTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:chainTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:jointTypeName",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:escapeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeNodeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:escapeJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeRawSkeletonNodesJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:frameToJson",
+      "target": "function:manus/mmhand_manus_sdk/src/mmhand_manus_sdk.cpp:writeSkeletonDictJson",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

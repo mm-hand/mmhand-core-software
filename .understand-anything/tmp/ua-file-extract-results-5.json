@@ -1,0 +1,2814 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 20,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "ESP32-S3/System/src/config/Config.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 198,
+      "nonEmptyLines": 166,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalEncoders.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 400,
+      "nonEmptyLines": 343,
+      "functions": [
+        {
+          "name": "HalEncoders",
+          "startLine": 15,
+          "endLine": 22,
+          "params": []
+        },
+        {
+          "name": "begin",
+          "startLine": 24,
+          "endLine": 36,
+          "params": []
+        },
+        {
+          "name": "setupSPI",
+          "startLine": 38,
+          "endLine": 40,
+          "params": []
+        },
+        {
+          "name": "setMux",
+          "startLine": 42,
+          "endLine": 47,
+          "params": [
+            "ch"
+          ]
+        },
+        {
+          "name": "transferOnce",
+          "startLine": 49,
+          "endLine": 109,
+          "params": [
+            "muxChannel",
+            "count",
+            "txBuf",
+            "rxBuf"
+          ]
+        },
+        {
+          "name": "get_parity",
+          "startLine": 111,
+          "endLine": 118,
+          "params": [
+            "n"
+          ]
+        },
+        {
+          "name": "build_command_frame",
+          "startLine": 120,
+          "endLine": 128,
+          "params": [
+            "addr",
+            "is_read"
+          ]
+        },
+        {
+          "name": "remapGroupIndex",
+          "startLine": 130,
+          "endLine": 148,
+          "params": [
+            "groupCount",
+            "transferIndex"
+          ]
+        },
+        {
+          "name": "mapGlobalEncoderIndex",
+          "startLine": 150,
+          "endLine": 152,
+          "params": [
+            "groupStart",
+            "groupCount",
+            "transferIndex"
+          ]
+        },
+        {
+          "name": "getData",
+          "startLine": 184,
+          "endLine": 188,
+          "params": []
+        },
+        {
+          "name": "pickRegisterForState",
+          "startLine": 190,
+          "endLine": 199,
+          "params": [
+            "encoderId",
+            "fullDiag"
+          ]
+        },
+        {
+          "name": "getGroupMuxChannel",
+          "startLine": 201,
+          "endLine": 212,
+          "params": [
+            "groupIndex"
+          ]
+        },
+        {
+          "name": "markLinkLost",
+          "startLine": 214,
+          "endLine": 221,
+          "params": [
+            "outData",
+            "encoderId"
+          ]
+        },
+        {
+          "name": "decodeFrame",
+          "startLine": 223,
+          "endLine": 284,
+          "params": [
+            "outData",
+            "encoderId",
+            "rawVal",
+            "issuedCmd",
+            "fullDiag"
+          ]
+        },
+        {
+          "name": "collectGroup138",
+          "startLine": 286,
+          "endLine": 323,
+          "params": [
+            "groupIndex",
+            "groupStart",
+            "count",
+            "outData"
+          ]
+        },
+        {
+          "name": "collectGroup151",
+          "startLine": 325,
+          "endLine": 367,
+          "params": [
+            "groupIndex",
+            "groupStart",
+            "count",
+            "outData"
+          ]
+        },
+        {
+          "name": "getData",
+          "startLine": 369,
+          "endLine": 400,
+          "params": [
+            "outData"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "HalEncoders",
+          "line": 15,
+          "isDefault": false
+        },
+        {
+          "name": "begin",
+          "line": 24,
+          "isDefault": false
+        },
+        {
+          "name": "setupSPI",
+          "line": 38,
+          "isDefault": false
+        },
+        {
+          "name": "setMux",
+          "line": 42,
+          "isDefault": false
+        },
+        {
+          "name": "transferOnce",
+          "line": 49,
+          "isDefault": false
+        },
+        {
+          "name": "get_parity",
+          "line": 111,
+          "isDefault": false
+        },
+        {
+          "name": "build_command_frame",
+          "line": 120,
+          "isDefault": false
+        },
+        {
+          "name": "remapGroupIndex",
+          "line": 130,
+          "isDefault": false
+        },
+        {
+          "name": "mapGlobalEncoderIndex",
+          "line": 150,
+          "isDefault": false
+        },
+        {
+          "name": "getData",
+          "line": 184,
+          "isDefault": false
+        },
+        {
+          "name": "pickRegisterForState",
+          "line": 190,
+          "isDefault": false
+        },
+        {
+          "name": "getGroupMuxChannel",
+          "line": 201,
+          "isDefault": false
+        },
+        {
+          "name": "markLinkLost",
+          "line": 214,
+          "isDefault": false
+        },
+        {
+          "name": "decodeFrame",
+          "line": 223,
+          "isDefault": false
+        },
+        {
+          "name": "collectGroup138",
+          "line": 286,
+          "isDefault": false
+        },
+        {
+          "name": "collectGroup151",
+          "line": 325,
+          "isDefault": false
+        },
+        {
+          "name": "getData",
+          "line": 369,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "begin",
+          "callee": "pinMode",
+          "lineNumber": 27
+        },
+        {
+          "caller": "begin",
+          "callee": "digitalWrite",
+          "lineNumber": 28
+        },
+        {
+          "caller": "begin",
+          "callee": "pinMode",
+          "lineNumber": 31
+        },
+        {
+          "caller": "begin",
+          "callee": "pinMode",
+          "lineNumber": 32
+        },
+        {
+          "caller": "begin",
+          "callee": "pinMode",
+          "lineNumber": 33
+        },
+        {
+          "caller": "begin",
+          "callee": "setMux",
+          "lineNumber": 34
+        },
+        {
+          "caller": "begin",
+          "callee": "setupSPI",
+          "lineNumber": 35
+        },
+        {
+          "caller": "setupSPI",
+          "callee": "beginEncoderSensorSpi",
+          "lineNumber": 39
+        },
+        {
+          "caller": "setMux",
+          "callee": "digitalWrite",
+          "lineNumber": 43
+        },
+        {
+          "caller": "setMux",
+          "callee": "digitalWrite",
+          "lineNumber": 44
+        },
+        {
+          "caller": "setMux",
+          "callee": "digitalWrite",
+          "lineNumber": 45
+        },
+        {
+          "caller": "setMux",
+          "callee": "delayMicroseconds",
+          "lineNumber": 46
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "setupSPI",
+          "lineNumber": 55
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 63
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 63
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "setMux",
+          "lineNumber": 68
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "aligned",
+          "lineNumber": 70
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "aligned",
+          "lineNumber": 71
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "digitalWrite",
+          "lineNumber": 80
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "delayMicroseconds",
+          "lineNumber": 81
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "spi_device_transmit",
+          "lineNumber": 89
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "digitalWrite",
+          "lineNumber": 99
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "delayMicroseconds",
+          "lineNumber": 100
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "setMux",
+          "lineNumber": 104
+        },
+        {
+          "caller": "transferOnce",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 106
+        },
+        {
+          "caller": "build_command_frame",
+          "callee": "get_parity",
+          "lineNumber": 124
+        },
+        {
+          "caller": "mapGlobalEncoderIndex",
+          "callee": "remapGroupIndex",
+          "lineNumber": 151
+        },
+        {
+          "caller": "getData",
+          "callee": "getData",
+          "lineNumber": 186
+        },
+        {
+          "caller": "getGroupMuxChannel",
+          "callee": "static_cast<uint8_t>",
+          "lineNumber": 211
+        },
+        {
+          "caller": "decodeFrame",
+          "callee": "markLinkLost",
+          "lineNumber": 233
+        },
+        {
+          "caller": "decodeFrame",
+          "callee": "get_parity",
+          "lineNumber": 237
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "mapGlobalEncoderIndex",
+          "lineNumber": 292
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "pickRegisterForState",
+          "lineNumber": 297
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "build_command_frame",
+          "lineNumber": 299
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "getGroupMuxChannel",
+          "lineNumber": 303
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "transferOnce",
+          "lineNumber": 304
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "mapGlobalEncoderIndex",
+          "lineNumber": 307
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "markLinkLost",
+          "lineNumber": 316
+        },
+        {
+          "caller": "collectGroup138",
+          "callee": "decodeFrame",
+          "lineNumber": 321
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "mapGlobalEncoderIndex",
+          "lineNumber": 338
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "pickRegisterForState",
+          "lineNumber": 343
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "build_command_frame",
+          "lineNumber": 345
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "getGroupMuxChannel",
+          "lineNumber": 349
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "transferOnce",
+          "lineNumber": 350
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "transferOnce",
+          "lineNumber": 351
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "mapGlobalEncoderIndex",
+          "lineNumber": 354
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "markLinkLost",
+          "lineNumber": 360
+        },
+        {
+          "caller": "collectGroup151",
+          "callee": "decodeFrame",
+          "lineNumber": 365
+        },
+        {
+          "caller": "getData",
+          "callee": "collectGroup151",
+          "lineNumber": 391
+        },
+        {
+          "caller": "getData",
+          "callee": "collectGroup138",
+          "lineNumber": 393
+        },
+        {
+          "caller": "getData",
+          "callee": "memcpy",
+          "lineNumber": 399
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 17,
+        "functionCount": 17,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalEncoders.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 67,
+      "nonEmptyLines": 52,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalSensorSpi.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 98,
+      "nonEmptyLines": 83,
+      "functions": [
+        {
+          "name": "beginSpiDevice",
+          "startLine": 27,
+          "endLine": 68,
+          "params": [
+            "host",
+            "sckPin",
+            "misoPin",
+            "mosiPin",
+            "clockHz",
+            "spiMode",
+            "maxTransferBytes",
+            "device",
+            "started"
+          ]
+        },
+        {
+          "name": "beginTactileSensorSpi",
+          "startLine": 72,
+          "endLine": 84,
+          "params": []
+        },
+        {
+          "name": "beginEncoderSensorSpi",
+          "startLine": 86,
+          "endLine": 98,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "beginSpiDevice",
+          "line": 27,
+          "isDefault": false
+        },
+        {
+          "name": "beginTactileSensorSpi",
+          "line": 72,
+          "isDefault": false
+        },
+        {
+          "name": "beginEncoderSensorSpi",
+          "line": 86,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "beginSpiDevice",
+          "callee": "spi_bus_initialize",
+          "lineNumber": 50
+        },
+        {
+          "caller": "beginSpiDevice",
+          "callee": "spi_bus_add_device",
+          "lineNumber": 61
+        },
+        {
+          "caller": "beginTactileSensorSpi",
+          "callee": "beginSpiDevice",
+          "lineNumber": 73
+        },
+        {
+          "caller": "beginEncoderSensorSpi",
+          "callee": "beginSpiDevice",
+          "lineNumber": 87
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 3,
+        "functionCount": 3,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalSensorSpi.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalTWAI.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 432,
+      "nonEmptyLines": 373,
+      "functions": [
+        {
+          "name": "tactileAxisMagnitude",
+          "startLine": 15,
+          "endLine": 23,
+          "params": [
+            "axes"
+          ]
+        },
+        {
+          "name": "writeFilteredTactileSummary",
+          "startLine": 25,
+          "endLine": 35,
+          "params": [
+            "dst",
+            "src"
+          ]
+        },
+        {
+          "name": "crc16Ccitt",
+          "startLine": 37,
+          "endLine": 50,
+          "params": [
+            "data",
+            "len"
+          ]
+        },
+        {
+          "name": "HalTWAI",
+          "startLine": 73,
+          "endLine": 73,
+          "params": []
+        },
+        {
+          "name": "begin",
+          "startLine": 75,
+          "endLine": 96,
+          "params": []
+        },
+        {
+          "name": "sendFrame",
+          "startLine": 98,
+          "endLine": 110,
+          "params": [
+            "id",
+            "data",
+            "len"
+          ]
+        },
+        {
+          "name": "sendEncoderData",
+          "startLine": 112,
+          "endLine": 151,
+          "params": [
+            "encData"
+          ]
+        },
+        {
+          "name": "sendTactileSummary",
+          "startLine": 153,
+          "endLine": 187,
+          "params": [
+            "tacData"
+          ]
+        },
+        {
+          "name": "sendTactileFullDump",
+          "startLine": 189,
+          "endLine": 235,
+          "params": [
+            "tacData",
+            "seq"
+          ]
+        },
+        {
+          "name": "sendTactileRawDiag",
+          "startLine": 237,
+          "endLine": 280,
+          "params": [
+            "tacData"
+          ]
+        },
+        {
+          "name": "sendCalibrationAck",
+          "startLine": 282,
+          "endLine": 293,
+          "params": [
+            "success"
+          ]
+        },
+        {
+          "name": "receiveMonitor",
+          "startLine": 295,
+          "endLine": 307,
+          "params": [
+            "outCmd"
+          ]
+        },
+        {
+          "name": "encodeFaultCode",
+          "startLine": 309,
+          "endLine": 366,
+          "params": [
+            "rawLatchedError",
+            "errorFlag"
+          ]
+        },
+        {
+          "name": "sendErrorStatus",
+          "startLine": 370,
+          "endLine": 400,
+          "params": [
+            "data"
+          ]
+        },
+        {
+          "name": "maintain",
+          "startLine": 402,
+          "endLine": 432,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "tactileAxisMagnitude",
+          "line": 15,
+          "isDefault": false
+        },
+        {
+          "name": "writeFilteredTactileSummary",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "crc16Ccitt",
+          "line": 37,
+          "isDefault": false
+        },
+        {
+          "name": "HalTWAI",
+          "line": 73,
+          "isDefault": false
+        },
+        {
+          "name": "begin",
+          "line": 75,
+          "isDefault": false
+        },
+        {
+          "name": "sendFrame",
+          "line": 98,
+          "isDefault": false
+        },
+        {
+          "name": "sendEncoderData",
+          "line": 112,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileSummary",
+          "line": 153,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileFullDump",
+          "line": 189,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileRawDiag",
+          "line": 237,
+          "isDefault": false
+        },
+        {
+          "name": "sendCalibrationAck",
+          "line": 282,
+          "isDefault": false
+        },
+        {
+          "name": "receiveMonitor",
+          "line": 295,
+          "isDefault": false
+        },
+        {
+          "name": "encodeFaultCode",
+          "line": 309,
+          "isDefault": false
+        },
+        {
+          "name": "sendErrorStatus",
+          "line": 370,
+          "isDefault": false
+        },
+        {
+          "name": "maintain",
+          "line": 402,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "tactileAxisMagnitude",
+          "callee": "abs",
+          "lineNumber": 16
+        },
+        {
+          "caller": "tactileAxisMagnitude",
+          "callee": "abs",
+          "lineNumber": 17
+        },
+        {
+          "caller": "writeFilteredTactileSummary",
+          "callee": "tactileAxisMagnitude",
+          "lineNumber": 26
+        },
+        {
+          "caller": "begin",
+          "callee": "TWAI_GENERAL_CONFIG_DEFAULT",
+          "lineNumber": 76
+        },
+        {
+          "caller": "begin",
+          "callee": "TWAI_FILTER_CONFIG_ACCEPT_ALL",
+          "lineNumber": 85
+        },
+        {
+          "caller": "begin",
+          "callee": "twai_driver_install",
+          "lineNumber": 87
+        },
+        {
+          "caller": "begin",
+          "callee": "twai_start",
+          "lineNumber": 90
+        },
+        {
+          "caller": "sendFrame",
+          "callee": "memcpy",
+          "lineNumber": 107
+        },
+        {
+          "caller": "sendFrame",
+          "callee": "twai_transmit",
+          "lineNumber": 109
+        },
+        {
+          "caller": "sendFrame",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 109
+        },
+        {
+          "caller": "sendEncoderData",
+          "callee": "memset",
+          "lineNumber": 124
+        },
+        {
+          "caller": "sendEncoderData",
+          "callee": "sendFrame",
+          "lineNumber": 134
+        },
+        {
+          "caller": "sendEncoderData",
+          "callee": "crc16Ccitt",
+          "lineNumber": 140
+        },
+        {
+          "caller": "sendEncoderData",
+          "callee": "memset",
+          "lineNumber": 141
+        },
+        {
+          "caller": "sendEncoderData",
+          "callee": "sendFrame",
+          "lineNumber": 147
+        },
+        {
+          "caller": "sendTactileSummary",
+          "callee": "writeFilteredTactileSummary",
+          "lineNumber": 166
+        },
+        {
+          "caller": "sendTactileSummary",
+          "callee": "crc16Ccitt",
+          "lineNumber": 171
+        },
+        {
+          "caller": "sendTactileSummary",
+          "callee": "sendFrame",
+          "lineNumber": 184
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "memset",
+          "lineNumber": 195
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "sendFrame",
+          "lineNumber": 200
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "delay",
+          "lineNumber": 204
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "beginFrame",
+          "lineNumber": 210
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "flushFrame",
+          "lineNumber": 215
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "pushByte",
+          "lineNumber": 221
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "pushBlock",
+          "lineNumber": 227
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "pushBlock",
+          "lineNumber": 228
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "pushBlock",
+          "lineNumber": 229
+        },
+        {
+          "caller": "sendTactileFullDump",
+          "callee": "flushFrame",
+          "lineNumber": 233
+        },
+        {
+          "caller": "sendTactileRawDiag",
+          "callee": "abs",
+          "lineNumber": 250
+        },
+        {
+          "caller": "sendTactileRawDiag",
+          "callee": "sendFrame",
+          "lineNumber": 271
+        },
+        {
+          "caller": "sendTactileRawDiag",
+          "callee": "sendSensorStats",
+          "lineNumber": 276
+        },
+        {
+          "caller": "sendTactileRawDiag",
+          "callee": "sendSensorStats",
+          "lineNumber": 277
+        },
+        {
+          "caller": "sendTactileRawDiag",
+          "callee": "sendSensorStats",
+          "lineNumber": 278
+        },
+        {
+          "caller": "sendCalibrationAck",
+          "callee": "twai_transmit",
+          "lineNumber": 292
+        },
+        {
+          "caller": "receiveMonitor",
+          "callee": "twai_receive",
+          "lineNumber": 299
+        },
+        {
+          "caller": "sendErrorStatus",
+          "callee": "encodeFaultCode",
+          "lineNumber": 391
+        },
+        {
+          "caller": "sendErrorStatus",
+          "callee": "sendFrame",
+          "lineNumber": 396
+        },
+        {
+          "caller": "maintain",
+          "callee": "twai_get_status_info",
+          "lineNumber": 405
+        },
+        {
+          "caller": "maintain",
+          "callee": "twai_initiate_recovery",
+          "lineNumber": 410
+        },
+        {
+          "caller": "maintain",
+          "callee": "twai_start",
+          "lineNumber": 417
+        },
+        {
+          "caller": "maintain",
+          "callee": "printf",
+          "lineNumber": 424
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 15,
+        "functionCount": 15,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalTWAI.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 48,
+      "nonEmptyLines": 41,
+      "classes": [
+        {
+          "name": "HalTWAI",
+          "startLine": 27,
+          "endLine": 46,
+          "methods": [
+            "begin",
+            "sendEncoderData",
+            "sendTactileSummary",
+            "sendTactileFullDump",
+            "sendTactileRawDiag",
+            "sendErrorStatus",
+            "sendCalibrationAck",
+            "receiveMonitor",
+            "maintain",
+            "sendFrame",
+            "encodeFaultCode"
+          ],
+          "properties": [
+            "_is_initialized"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "begin",
+          "line": 30,
+          "isDefault": false
+        },
+        {
+          "name": "sendEncoderData",
+          "line": 32,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileSummary",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileFullDump",
+          "line": 34,
+          "isDefault": false
+        },
+        {
+          "name": "sendTactileRawDiag",
+          "line": 35,
+          "isDefault": false
+        },
+        {
+          "name": "sendErrorStatus",
+          "line": 36,
+          "isDefault": false
+        },
+        {
+          "name": "sendCalibrationAck",
+          "line": 37,
+          "isDefault": false
+        },
+        {
+          "name": "receiveMonitor",
+          "line": 39,
+          "isDefault": false
+        },
+        {
+          "name": "maintain",
+          "line": 40,
+          "isDefault": false
+        },
+        {
+          "name": "HalTWAI",
+          "line": 27,
+          "isDefault": false
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 10,
+        "functionCount": 0,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalTactile.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 488,
+      "nonEmptyLines": 433,
+      "functions": [
+        {
+          "name": "makeSelectorPattern",
+          "startLine": 27,
+          "endLine": 29,
+          "params": [
+            "group",
+            "sensorBits"
+          ]
+        },
+        {
+          "name": "configureSelectPinHighWithPullup",
+          "startLine": 45,
+          "endLine": 56,
+          "params": [
+            "pin"
+          ]
+        },
+        {
+          "name": "axisMagnitude",
+          "startLine": 58,
+          "endLine": 70,
+          "params": [
+            "axes"
+          ]
+        },
+        {
+          "name": "sensorForceLen",
+          "startLine": 72,
+          "endLine": 83,
+          "params": [
+            "sensor"
+          ]
+        },
+        {
+          "name": "deriveGlobalFromForces",
+          "startLine": 85,
+          "endLine": 124,
+          "params": [
+            "forces",
+            "forceLen",
+            "globalOut",
+            "rawOut"
+          ]
+        },
+        {
+          "name": "sensorPointers",
+          "startLine": 126,
+          "endLine": 163,
+          "params": [
+            "data",
+            "group",
+            "sensor",
+            "global",
+            "rawSummary"
+          ]
+        },
+        {
+          "name": "HalTactile",
+          "startLine": 187,
+          "endLine": 189,
+          "params": []
+        },
+        {
+          "name": "prepareBootSelectPins",
+          "startLine": 191,
+          "endLine": 205,
+          "params": []
+        },
+        {
+          "name": "begin",
+          "startLine": 207,
+          "endLine": 213,
+          "params": []
+        },
+        {
+          "name": "setupSPI",
+          "startLine": 215,
+          "endLine": 219,
+          "params": []
+        },
+        {
+          "name": "crc8",
+          "startLine": 221,
+          "endLine": 227,
+          "params": [
+            "data",
+            "len"
+          ]
+        },
+        {
+          "name": "setAllSelectPinsHigh",
+          "startLine": 229,
+          "endLine": 240,
+          "params": []
+        },
+        {
+          "name": "setSelectorPattern",
+          "startLine": 242,
+          "endLine": 252,
+          "params": [
+            "pattern"
+          ]
+        },
+        {
+          "name": "readRegisters",
+          "startLine": 254,
+          "endLine": 331,
+          "params": [
+            "selectorPattern",
+            "startAddr",
+            "payload",
+            "payloadLen"
+          ]
+        },
+        {
+          "name": "readSensorSummary",
+          "startLine": 333,
+          "endLine": 374,
+          "params": [
+            "groupIndex",
+            "sensorIndex",
+            "globalOut",
+            "rawOut"
+          ]
+        },
+        {
+          "name": "readSensorForces",
+          "startLine": 376,
+          "endLine": 406,
+          "params": [
+            "groupIndex",
+            "sensorIndex",
+            "forcesOut",
+            "forcesLen"
+          ]
+        },
+        {
+          "name": "update",
+          "startLine": 408,
+          "endLine": 469,
+          "params": []
+        },
+        {
+          "name": "getData",
+          "startLine": 471,
+          "endLine": 479,
+          "params": []
+        },
+        {
+          "name": "getDiagnostics",
+          "startLine": 481,
+          "endLine": 488,
+          "params": []
+        }
+      ],
+      "classes": [
+        {
+          "name": "SensorPattern",
+          "startLine": 22,
+          "endLine": 25,
+          "methods": [],
+          "properties": [
+            "enabled",
+            "pattern"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "SensorPattern",
+          "line": 22,
+          "isDefault": false
+        },
+        {
+          "name": "makeSelectorPattern",
+          "line": 27,
+          "isDefault": false
+        },
+        {
+          "name": "configureSelectPinHighWithPullup",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "axisMagnitude",
+          "line": 58,
+          "isDefault": false
+        },
+        {
+          "name": "sensorForceLen",
+          "line": 72,
+          "isDefault": false
+        },
+        {
+          "name": "deriveGlobalFromForces",
+          "line": 85,
+          "isDefault": false
+        },
+        {
+          "name": "sensorPointers",
+          "line": 126,
+          "isDefault": false
+        },
+        {
+          "name": "HalTactile",
+          "line": 187,
+          "isDefault": false
+        },
+        {
+          "name": "prepareBootSelectPins",
+          "line": 191,
+          "isDefault": false
+        },
+        {
+          "name": "begin",
+          "line": 207,
+          "isDefault": false
+        },
+        {
+          "name": "setupSPI",
+          "line": 215,
+          "isDefault": false
+        },
+        {
+          "name": "crc8",
+          "line": 221,
+          "isDefault": false
+        },
+        {
+          "name": "setAllSelectPinsHigh",
+          "line": 229,
+          "isDefault": false
+        },
+        {
+          "name": "setSelectorPattern",
+          "line": 242,
+          "isDefault": false
+        },
+        {
+          "name": "readRegisters",
+          "line": 254,
+          "isDefault": false
+        },
+        {
+          "name": "readSensorSummary",
+          "line": 333,
+          "isDefault": false
+        },
+        {
+          "name": "readSensorForces",
+          "line": 376,
+          "isDefault": false
+        },
+        {
+          "name": "update",
+          "line": 408,
+          "isDefault": false
+        },
+        {
+          "name": "getData",
+          "line": 471,
+          "isDefault": false
+        },
+        {
+          "name": "getDiagnostics",
+          "line": 481,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "pinMode",
+          "lineNumber": 50
+        },
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "digitalWrite",
+          "lineNumber": 51
+        },
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "pinMode",
+          "lineNumber": 52
+        },
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "digitalWrite",
+          "lineNumber": 53
+        },
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "gpio_pulldown_dis",
+          "lineNumber": 54
+        },
+        {
+          "caller": "configureSelectPinHighWithPullup",
+          "callee": "gpio_pullup_en",
+          "lineNumber": 55
+        },
+        {
+          "caller": "axisMagnitude",
+          "callee": "abs",
+          "lineNumber": 59
+        },
+        {
+          "caller": "axisMagnitude",
+          "callee": "abs",
+          "lineNumber": 60
+        },
+        {
+          "caller": "deriveGlobalFromForces",
+          "callee": "abs",
+          "lineNumber": 100
+        },
+        {
+          "caller": "deriveGlobalFromForces",
+          "callee": "abs",
+          "lineNumber": 101
+        },
+        {
+          "caller": "sensorPointers",
+          "callee": "sensorForceLen",
+          "lineNumber": 161
+        },
+        {
+          "caller": "HalTactile",
+          "callee": "xSemaphoreCreateMutex",
+          "lineNumber": 187
+        },
+        {
+          "caller": "HalTactile",
+          "callee": "memset",
+          "lineNumber": 188
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 192
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 194
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 195
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 197
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 198
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 199
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "configureSelectPinHighWithPullup",
+          "lineNumber": 202
+        },
+        {
+          "caller": "prepareBootSelectPins",
+          "callee": "setAllSelectPinsHigh",
+          "lineNumber": 204
+        },
+        {
+          "caller": "begin",
+          "callee": "prepareBootSelectPins",
+          "lineNumber": 208
+        },
+        {
+          "caller": "begin",
+          "callee": "setupSPI",
+          "lineNumber": 209
+        },
+        {
+          "caller": "begin",
+          "callee": "println",
+          "lineNumber": 211
+        },
+        {
+          "caller": "setupSPI",
+          "callee": "beginTactileSensorSpi",
+          "lineNumber": 216
+        },
+        {
+          "caller": "setupSPI",
+          "callee": "setAllSelectPinsHigh",
+          "lineNumber": 217
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 230
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 231
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 232
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 233
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 234
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 235
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "digitalWrite",
+          "lineNumber": 237
+        },
+        {
+          "caller": "setAllSelectPinsHigh",
+          "callee": "delayMicroseconds",
+          "lineNumber": 239
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 243
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 244
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 245
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 246
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 247
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "digitalWrite",
+          "lineNumber": 249
+        },
+        {
+          "caller": "setSelectorPattern",
+          "callee": "delayMicroseconds",
+          "lineNumber": 251
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 261
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 261
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "memset",
+          "lineNumber": 263
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "aligned",
+          "lineNumber": 267
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "aligned",
+          "lineNumber": 268
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "aligned",
+          "lineNumber": 269
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "setAllSelectPinsHigh",
+          "lineNumber": 279
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "setSelectorPattern",
+          "lineNumber": 280
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "delayMicroseconds",
+          "lineNumber": 281
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "spi_device_transmit",
+          "lineNumber": 286
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "delayMicroseconds",
+          "lineNumber": 288
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "spi_device_transmit",
+          "lineNumber": 294
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "delayMicroseconds",
+          "lineNumber": 296
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "setAllSelectPinsHigh",
+          "lineNumber": 297
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "memset",
+          "lineNumber": 300
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 302
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "memcpy",
+          "lineNumber": 306
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "crc8",
+          "lineNumber": 309
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "memset",
+          "lineNumber": 319
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 321
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "memcpy",
+          "lineNumber": 326
+        },
+        {
+          "caller": "readRegisters",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 328
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "memset",
+          "lineNumber": 340
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "memset",
+          "lineNumber": 342
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "readRegisters",
+          "lineNumber": 352
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "delay",
+          "lineNumber": 356
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "memcpy",
+          "lineNumber": 363
+        },
+        {
+          "caller": "readSensorSummary",
+          "callee": "memset",
+          "lineNumber": 370
+        },
+        {
+          "caller": "readSensorForces",
+          "callee": "memset",
+          "lineNumber": 389
+        },
+        {
+          "caller": "readSensorForces",
+          "callee": "readRegisters",
+          "lineNumber": 396
+        },
+        {
+          "caller": "readSensorForces",
+          "callee": "delay",
+          "lineNumber": 400
+        },
+        {
+          "caller": "readSensorForces",
+          "callee": "memset",
+          "lineNumber": 403
+        },
+        {
+          "caller": "update",
+          "callee": "sensorForceLen",
+          "lineNumber": 436
+        },
+        {
+          "caller": "update",
+          "callee": "memset",
+          "lineNumber": 438
+        },
+        {
+          "caller": "update",
+          "callee": "memset",
+          "lineNumber": 439
+        },
+        {
+          "caller": "update",
+          "callee": "memset",
+          "lineNumber": 440
+        },
+        {
+          "caller": "update",
+          "callee": "readSensorSummary",
+          "lineNumber": 445
+        },
+        {
+          "caller": "update",
+          "callee": "readSensorForces",
+          "lineNumber": 446
+        },
+        {
+          "caller": "update",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 460
+        },
+        {
+          "caller": "update",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 460
+        },
+        {
+          "caller": "update",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 467
+        },
+        {
+          "caller": "getData",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 474
+        },
+        {
+          "caller": "getData",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 474
+        },
+        {
+          "caller": "getData",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 476
+        },
+        {
+          "caller": "getDiagnostics",
+          "callee": "xSemaphoreTake",
+          "lineNumber": 483
+        },
+        {
+          "caller": "getDiagnostics",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 483
+        },
+        {
+          "caller": "getDiagnostics",
+          "callee": "xSemaphoreGive",
+          "lineNumber": 485
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 20,
+        "functionCount": 19,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/hal/HalTactile.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 47,
+      "nonEmptyLines": 41,
+      "classes": [
+        {
+          "name": "TactileReadDiag",
+          "startLine": 7,
+          "endLine": 20,
+          "methods": [],
+          "properties": [
+            "frameCount",
+            "enabledMask",
+            "okReads",
+            "failedReads",
+            "okMask",
+            "lastStatus",
+            "lastRecvCrc",
+            "lastCalcCrc",
+            "lastFailedPattern",
+            "lastFailStatus",
+            "lastFailRecvCrc",
+            "lastFailCalcCrc"
+          ]
+        },
+        {
+          "name": "HalTactile",
+          "startLine": 22,
+          "endLine": 45,
+          "methods": [
+            "prepareBootSelectPins",
+            "begin",
+            "update",
+            "getData",
+            "getDiagnostics",
+            "setupSPI",
+            "setAllSelectPinsHigh",
+            "setSelectorPattern",
+            "readRegisters",
+            "readSensorSummary",
+            "readSensorForces",
+            "crc8"
+          ],
+          "properties": [
+            "_mutex",
+            "_data",
+            "_spi",
+            "_spiReady",
+            "_diag"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "TactileReadDiag",
+          "line": 7,
+          "isDefault": false
+        },
+        {
+          "name": "prepareBootSelectPins",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "begin",
+          "line": 26,
+          "isDefault": false
+        },
+        {
+          "name": "update",
+          "line": 27,
+          "isDefault": false
+        },
+        {
+          "name": "getData",
+          "line": 28,
+          "isDefault": false
+        },
+        {
+          "name": "getDiagnostics",
+          "line": 29,
+          "isDefault": false
+        },
+        {
+          "name": "HalTactile",
+          "line": 22,
+          "isDefault": false
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 7,
+        "functionCount": 0,
+        "classCount": 2
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/system/FirmwareLog.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 41,
+      "nonEmptyLines": 33,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/system/SystemTasks.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 65,
+      "nonEmptyLines": 56,
+      "functions": [
+        {
+          "name": "startSystemTasks",
+          "startLine": 17,
+          "endLine": 65,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "startSystemTasks",
+          "line": 17,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "startSystemTasks",
+          "callee": "xQueueCreate",
+          "lineNumber": 19
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "println",
+          "lineNumber": 21
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "vTaskDelay",
+          "lineNumber": 23
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "println",
+          "lineNumber": 27
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "xSemaphoreCreateMutex",
+          "lineNumber": 30
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "println",
+          "lineNumber": 32
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "vTaskDelay",
+          "lineNumber": 34
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "xTaskCreatePinnedToCore",
+          "lineNumber": 40
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "xTaskCreatePinnedToCore",
+          "lineNumber": 46
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "println",
+          "lineNumber": 51
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "xTaskCreatePinnedToCore",
+          "lineNumber": 55
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "xTaskCreatePinnedToCore",
+          "lineNumber": 60
+        },
+        {
+          "caller": "startSystemTasks",
+          "callee": "println",
+          "lineNumber": 64
+        }
+      ],
+      "metrics": {
+        "importCount": 6,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/system/SystemTasks.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 15,
+      "nonEmptyLines": 11,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/CanTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 97,
+      "nonEmptyLines": 82,
+      "functions": [
+        {
+          "name": "Task_CanBus",
+          "startLine": 16,
+          "endLine": 97,
+          "params": [
+            "pvParameters"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Task_CanBus",
+          "line": 16,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Task_CanBus",
+          "callee": "millis",
+          "lineNumber": 22
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 28
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 29
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "println",
+          "lineNumber": 31
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "maintain",
+          "lineNumber": 34
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "xQueueReceive",
+          "lineNumber": 37
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "sendEncoderData",
+          "lineNumber": 39
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "sendErrorStatus",
+          "lineNumber": 58
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "twai_receive",
+          "lineNumber": 64
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "println",
+          "lineNumber": 69
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "vTaskDelay",
+          "lineNumber": 76
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 76
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "millis",
+          "lineNumber": 79
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "FW_LOG_DEBUG_PRINTF",
+          "lineNumber": 81
+        },
+        {
+          "caller": "Task_CanBus",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 95
+        }
+      ],
+      "metrics": {
+        "importCount": 4,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/CanTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/EncodersTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 81,
+      "nonEmptyLines": 67,
+      "functions": [
+        {
+          "name": "Task_Encoders",
+          "startLine": 23,
+          "endLine": 81,
+          "params": [
+            "pvParameters"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Task_Encoders",
+          "line": 23,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Task_Encoders",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 24
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 25
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "println",
+          "lineNumber": 30
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "getData",
+          "lineNumber": 33
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "println",
+          "lineNumber": 39
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "printf",
+          "lineNumber": 42
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "println",
+          "lineNumber": 44
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "println",
+          "lineNumber": 48
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "xQueueOverwrite",
+          "lineNumber": 61
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "millis",
+          "lineNumber": 65
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "millis",
+          "lineNumber": 67
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "millis",
+          "lineNumber": 72
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "println",
+          "lineNumber": 73
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "millis",
+          "lineNumber": 74
+        },
+        {
+          "caller": "Task_Encoders",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 79
+        }
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/EncodersTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/SysMgrTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 65,
+      "nonEmptyLines": 53,
+      "functions": [
+        {
+          "name": "Task_SysMgr",
+          "startLine": 19,
+          "endLine": 65,
+          "params": [
+            "pvParameters"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Task_SysMgr",
+          "line": 19,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Task_SysMgr",
+          "callee": "println",
+          "lineNumber": 20
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "ulTaskNotifyTake",
+          "lineNumber": 24
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "println",
+          "lineNumber": 26
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "getData",
+          "lineNumber": 29
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskSuspend",
+          "lineNumber": 33
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskSuspend",
+          "lineNumber": 36
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskSuspend",
+          "lineNumber": 39
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "esp_task_wdt_reset",
+          "lineNumber": 43
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "esp_task_wdt_reset",
+          "lineNumber": 46
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskResume",
+          "lineNumber": 50
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskResume",
+          "lineNumber": 53
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskResume",
+          "lineNumber": 56
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "println",
+          "lineNumber": 59
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "vTaskDelay",
+          "lineNumber": 62
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 62
+        },
+        {
+          "caller": "Task_SysMgr",
+          "callee": "sendCalibrationAck",
+          "lineNumber": 63
+        }
+      ],
+      "metrics": {
+        "importCount": 4,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/SysMgrTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/TactileTask.cpp",
+      "language": "cpp",
+      "fileCategory": "code",
+      "totalLines": 241,
+      "nonEmptyLines": 217,
+      "functions": [
+        {
+          "name": "axisMagnitude",
+          "startLine": 23,
+          "endLine": 31,
+          "params": [
+            "axes"
+          ]
+        },
+        {
+          "name": "printForceZStats",
+          "startLine": 33,
+          "endLine": 54,
+          "params": [
+            "label",
+            "forces",
+            "forceLen"
+          ]
+        },
+        {
+          "name": "writeFilteredSummaryAxes",
+          "startLine": 56,
+          "endLine": 67,
+          "params": [
+            "dst",
+            "src"
+          ]
+        },
+        {
+          "name": "crc16Ccitt",
+          "startLine": 69,
+          "endLine": 82,
+          "params": [
+            "data",
+            "len"
+          ]
+        },
+        {
+          "name": "flattenTactileSummary",
+          "startLine": 84,
+          "endLine": 99,
+          "params": [
+            "data",
+            "out",
+            "outLen"
+          ]
+        },
+        {
+          "name": "flattenTactileFull",
+          "startLine": 101,
+          "endLine": 117,
+          "params": [
+            "data",
+            "out",
+            "outLen"
+          ]
+        },
+        {
+          "name": "sendSerialTactileSummary",
+          "startLine": 119,
+          "endLine": 134,
+          "params": [
+            "data",
+            "seq"
+          ]
+        },
+        {
+          "name": "sendSerialTactileFullDump",
+          "startLine": 136,
+          "endLine": 170,
+          "params": [
+            "data",
+            "seq"
+          ]
+        },
+        {
+          "name": "Task_Tactile",
+          "startLine": 173,
+          "endLine": 241,
+          "params": [
+            "pvParameters"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "axisMagnitude",
+          "line": 23,
+          "isDefault": false
+        },
+        {
+          "name": "printForceZStats",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "writeFilteredSummaryAxes",
+          "line": 56,
+          "isDefault": false
+        },
+        {
+          "name": "crc16Ccitt",
+          "line": 69,
+          "isDefault": false
+        },
+        {
+          "name": "flattenTactileSummary",
+          "line": 84,
+          "isDefault": false
+        },
+        {
+          "name": "flattenTactileFull",
+          "line": 101,
+          "isDefault": false
+        },
+        {
+          "name": "sendSerialTactileSummary",
+          "line": 119,
+          "isDefault": false
+        },
+        {
+          "name": "sendSerialTactileFullDump",
+          "line": 136,
+          "isDefault": false
+        },
+        {
+          "name": "Task_Tactile",
+          "line": 173,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "axisMagnitude",
+          "callee": "abs",
+          "lineNumber": 24
+        },
+        {
+          "caller": "axisMagnitude",
+          "callee": "abs",
+          "lineNumber": 25
+        },
+        {
+          "caller": "printForceZStats",
+          "callee": "abs",
+          "lineNumber": 42
+        },
+        {
+          "caller": "printForceZStats",
+          "callee": "printf",
+          "lineNumber": 47
+        },
+        {
+          "caller": "writeFilteredSummaryAxes",
+          "callee": "axisMagnitude",
+          "lineNumber": 58
+        },
+        {
+          "caller": "flattenTactileSummary",
+          "callee": "writeFilteredSummaryAxes",
+          "lineNumber": 95
+        },
+        {
+          "caller": "flattenTactileFull",
+          "callee": "memcpy",
+          "lineNumber": 107
+        },
+        {
+          "caller": "flattenTactileFull",
+          "callee": "pushBlock",
+          "lineNumber": 113
+        },
+        {
+          "caller": "flattenTactileFull",
+          "callee": "pushBlock",
+          "lineNumber": 114
+        },
+        {
+          "caller": "flattenTactileFull",
+          "callee": "pushBlock",
+          "lineNumber": 115
+        },
+        {
+          "caller": "sendSerialTactileSummary",
+          "callee": "flattenTactileSummary",
+          "lineNumber": 121
+        },
+        {
+          "caller": "sendSerialTactileSummary",
+          "callee": "memcpy",
+          "lineNumber": 129
+        },
+        {
+          "caller": "sendSerialTactileSummary",
+          "callee": "write",
+          "lineNumber": 133
+        },
+        {
+          "caller": "sendSerialTactileFullDump",
+          "callee": "flattenTactileFull",
+          "lineNumber": 138
+        },
+        {
+          "caller": "sendSerialTactileFullDump",
+          "callee": "crc16Ccitt",
+          "lineNumber": 142
+        },
+        {
+          "caller": "sendSerialTactileFullDump",
+          "callee": "memcpy",
+          "lineNumber": 164
+        },
+        {
+          "caller": "sendSerialTactileFullDump",
+          "callee": "write",
+          "lineNumber": 168
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "pdMS_TO_TICKS",
+          "lineNumber": 175
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "xTaskGetTickCount",
+          "lineNumber": 176
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "println",
+          "lineNumber": 178
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "update",
+          "lineNumber": 181
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "getData",
+          "lineNumber": 182
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "sendTactileSummary",
+          "lineNumber": 185
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "sendSerialTactileSummary",
+          "lineNumber": 191
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "sendTactileFullDump",
+          "lineNumber": 198
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "sendSerialTactileFullDump",
+          "lineNumber": 200
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "FW_LOG_ENABLED",
+          "lineNumber": 205
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "millis",
+          "lineNumber": 206
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "millis",
+          "lineNumber": 207
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "getDiagnostics",
+          "lineNumber": 208
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "FW_LOG_DEBUG_PRINTF",
+          "lineNumber": 209
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "print",
+          "lineNumber": 222
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "snprintf",
+          "lineNumber": 226
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "printForceZStats",
+          "lineNumber": 227
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "snprintf",
+          "lineNumber": 228
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "printForceZStats",
+          "lineNumber": 229
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "snprintf",
+          "lineNumber": 230
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "printForceZStats",
+          "lineNumber": 231
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "println",
+          "lineNumber": 233
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "sendTactileRawDiag",
+          "lineNumber": 235
+        },
+        {
+          "caller": "Task_Tactile",
+          "callee": "vTaskDelayUntil",
+          "lineNumber": 239
+        }
+      ],
+      "metrics": {
+        "importCount": 5,
+        "exportCount": 9,
+        "functionCount": 9,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "ESP32-S3/System/src/tasks/TactileTask.h",
+      "language": "c",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 10,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    }
+  ]
+}

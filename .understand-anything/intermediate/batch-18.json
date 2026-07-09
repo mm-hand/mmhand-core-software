@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "id": "file:tools/capture_dist_scan.ps1",
+      "type": "file",
+      "name": "capture_dist_scan.ps1",
+      "filePath": "tools/capture_dist_scan.ps1",
+      "summary": "capture_dist_scan.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "can"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:tools/capture_manual_cs_scan.ps1",
+      "type": "file",
+      "name": "capture_manual_cs_scan.ps1",
+      "filePath": "tools/capture_manual_cs_scan.ps1",
+      "summary": "capture_manual_cs_scan.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "can"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:tools/capture_tactile_map.ps1",
+      "type": "file",
+      "name": "capture_tactile_map.ps1",
+      "filePath": "tools/capture_tactile_map.ps1",
+      "summary": "capture_tactile_map.ps1 是 powershell script 文件，参与项目的源码、配置、文档或资源结构。",
+      "tags": [
+        "source-code",
+        "powershell",
+        "tactile"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": []
+}

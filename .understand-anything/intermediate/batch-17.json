@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "id": "document:desktop/resources/hku_hand_v2_urdf/CMakeLists.txt",
+      "type": "document",
+      "name": "CMakeLists.txt",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/CMakeLists.txt",
+      "summary": "CMakeLists.txt 是项目文档，解释当前模块、协议、硬件或调试流程。",
+      "tags": [
+        "documentation",
+        "architecture",
+        "project"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:desktop/resources/hku_hand_v2_urdf/hku_hand.xml",
+      "type": "config",
+      "name": "hku_hand.xml",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/hku_hand.xml",
+      "summary": "hku_hand.xml 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:desktop/resources/hku_hand_v2_urdf/package.xml",
+      "type": "config",
+      "name": "package.xml",
+      "filePath": "desktop/resources/hku_hand_v2_urdf/package.xml",
+      "summary": "package.xml 是配置文件，保存运行、构建、标定或资源参数。",
+      "tags": [
+        "configuration",
+        "settings",
+        "project"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": []
+}
