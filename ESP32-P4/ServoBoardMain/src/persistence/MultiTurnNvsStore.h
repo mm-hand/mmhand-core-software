@@ -26,7 +26,9 @@ bool multiTurnNvsLoadLatest(MultiTurnNvsSnapshot* outSnapshot);
 bool multiTurnNvsSaveSnapshot(uint32_t validMask,
                               const int32_t* motorAbs,
                               const int16_t* motorRaw,
-                              uint32_t* outSequence);
+                              uint32_t* outSequence,
+                              uint32_t* outStoredValidMask = NULL,
+                              MultiTurnNvsSnapshot* outStoredSnapshot = NULL);
 // Persistent user switch. Disabled means do not boot-restore and do not save.
 bool multiTurnNvsLoadEnabled(bool* outEnabled);
 bool multiTurnNvsSetEnabled(bool enabled);

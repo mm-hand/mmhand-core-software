@@ -23,6 +23,8 @@ from .protocol import (
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     CMD_SIDE_SWAY_ADJUST,
+    DUAL_TENDON_JOINT_INDICES,
+    DUAL_TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
     MOTOR_COUNT,
     ControlMode,
@@ -55,6 +57,34 @@ MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S = 2.0
 MULTITURN_CACHE_PATH = PACKAGE_DIR / "multiturn_cache.json"
 MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 HOST_MULTITURN_CACHE_ENABLE = False
+
+
+def _joint_calib_result_has_valid_dual_lut(item: Optional[dict]) -> bool:
+    if not isinstance(item, dict) or not bool(item.get("success", False)):
+        return False
+    if not bool(item.get("dualTendonLutValid", False)):
+        return False
+    try:
+        count = int(item.get("dualTendonLutCount", 0))
+    except (TypeError, ValueError):
+        return False
+    if count < 3 or count > DUAL_TENDON_LUT_MAX_SAMPLES:
+        return False
+    motors = item.get("dualTendonLutMotor", [])
+    if not isinstance(motors, list) or len(motors) < 2:
+        return False
+    try:
+        if any(int(motors[i]) < 0 or int(motors[i]) >= MOTOR_COUNT for i in range(2)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    motor_abs = item.get("dualTendonLutMotorAbs", [])
+    if not isinstance(motor_abs, list) or len(motor_abs) < 2:
+        return False
+    for row in motor_abs[:2]:
+        if not isinstance(row, list) or len(row) < count:
+            return False
+    return True
 
 
 class HandController:
@@ -868,24 +898,57 @@ class HandController:
             return False, "serial not connected"
         try:
             valid_bitmap = int(str(snapshot.get("motor_abs_limit_valid_bitmap", "0")), 0)
+            active_joint_mask = int(str(snapshot.get("active_joint_mask", "0")), 0)
             mins = [int(v) for v in snapshot.get("motor_abs_limit_min", [])]
             maxs = [int(v) for v in snapshot.get("motor_abs_limit_max", [])]
+            schema_version = int(snapshot.get("schema_version", 1) or 1)
+            if schema_version >= 2:
+                locked_bitmap = int(str(snapshot.get("motor_abs_limit_locked_bitmap", "0")), 0)
+            else:
+                locked_bitmap = 0
         except (TypeError, ValueError) as exc:
             return False, f"invalid motor ABS limits: {exc}"
         if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
             return False, f"invalid motor ABS limit count: {len(mins)}/{len(maxs)}"
 
-        locked_bitmap = valid_bitmap
+        joint_results = snapshot.get("joint_calib_results", [])
+        if len(joint_results) != ENCODER_COUNT:
+            return False, f"invalid joint calibration count: {len(joint_results)}"
+        active_joint_mask &= (1 << ENCODER_COUNT) - 1
+        if active_joint_mask == 0:
+            for joint_idx, result in enumerate(joint_results):
+                if isinstance(result, dict) and bool(result.get("success", False)):
+                    active_joint_mask |= (1 << joint_idx)
+        missing_joints = [
+            joint_idx for joint_idx in range(ENCODER_COUNT)
+            if (active_joint_mask & (1 << joint_idx)) and (
+                not isinstance(joint_results[joint_idx], dict) or
+                not bool(joint_results[joint_idx].get("success", False))
+            )
+        ]
+        if missing_joints:
+            missing_text = ",".join(f"J{idx:02d}" for idx in missing_joints)
+            return False, f"snapshot missing active joint calibration: {missing_text}"
+        missing_dual_lut = [
+            joint_idx for joint_idx in range(ENCODER_COUNT)
+            if (active_joint_mask & (1 << joint_idx)) and
+            joint_idx in DUAL_TENDON_JOINT_INDICES and
+            not _joint_calib_result_has_valid_dual_lut(joint_results[joint_idx])
+        ]
+        if missing_dual_lut:
+            missing_text = ",".join(f"J{idx:02d}" for idx in missing_dual_lut)
+            return False, f"snapshot missing dual tendon LUT: {missing_text}"
+
+        locked_bitmap &= valid_bitmap
         self.comm.send_command(("calib_load_limits", valid_bitmap, locked_bitmap, mins, maxs))
         ack = self.comm.wait_for_ack(CMD_CALIB_LOAD_LIMITS, CALIB_LOAD_ACK_TIMEOUT_S)
         if not ack or int(ack[2]) != 0:
             return False, "motor ABS limit load ACK timeout/reject"
 
-        joint_results = snapshot.get("joint_calib_results", [])
-        if len(joint_results) != ENCODER_COUNT:
-            return False, f"invalid joint calibration count: {len(joint_results)}"
         loaded = 0
         for joint_idx, result in enumerate(joint_results):
+            if (active_joint_mask & (1 << joint_idx)) == 0:
+                continue
             if not isinstance(result, dict) or not bool(result.get("success", False)):
                 continue
             payload = dict(result)

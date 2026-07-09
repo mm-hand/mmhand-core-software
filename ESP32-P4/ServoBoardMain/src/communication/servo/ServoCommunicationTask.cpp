@@ -35,7 +35,7 @@ static const uint32_t kNvsRestoreWaitWindowMs = 3000;
 static const uint32_t kHostHeartbeatOfflineMs = 1000;
 static const uint32_t kNvsSaveMinIntervalMs = 500;
 static const uint32_t kNvsOfflinePeriodicSaveMs = 2000;
-static const uint16_t kNvsRestoreRawToleranceCounts = 96;
+static const uint16_t kNvsRestoreRawToleranceCounts = 256;
 static const int16_t kNvsTurnEdgeRawMargin = 256;
 static const int32_t kNvsMoveAbsThreshold = 64;
 #endif

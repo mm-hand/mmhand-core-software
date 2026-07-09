@@ -92,6 +92,14 @@ static void requestMultiTurnNvsSave(TaskSharedData_t* sharedData, uint8_t reason
 #endif
 }
 
+static bool shouldSaveMultiTurnOnInterrupt(uint8_t state)
+{
+    return state == SYSTEM_STATE_RUN_DIRECT ||
+           state == SYSTEM_STATE_RUN_FEEDBACK ||
+           state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+           state == SYSTEM_STATE_PAUSED;
+}
+
 static void setSystemState(TaskSharedData_t* sharedData, uint8_t state)
 {
     if (!sharedData) {
@@ -692,6 +700,9 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
         case SYSTEM_EVENT_STOP:
             // Discard motion events queued before STOP. New commands must be
             // issued after the state has visibly returned to UNCONTROLLABLE.
+            if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
+                requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            }
             if (sharedData->stateEventQueue) {
                 xQueueReset(sharedData->stateEventQueue);
             }
@@ -705,6 +716,9 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_RESET:
+            if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
+                requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            }
             resetCommandState(sharedData);
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
@@ -812,6 +826,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->paused_resume_state = sharedData->system_state;
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;

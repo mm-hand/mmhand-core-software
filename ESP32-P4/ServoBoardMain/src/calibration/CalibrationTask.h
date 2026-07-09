@@ -11,6 +11,9 @@
 #define CALIB_STATUS_SUCCESS   2
 #define CALIB_STATUS_FAILED    3
 
+#define DUAL_TENDON_LUT_ACTUATOR_COUNT 2
+#define DUAL_TENDON_LUT_MAX_SAMPLES 24
+
 // Per-joint calibration config:
 // - angleScope/bottomReserved/topReserved/angleReserved are all degrees.
 // - Manual RANGE100 start/tight points overwrite the usable control range.
@@ -54,6 +57,13 @@ struct JointCalibrationResult {
     float tightDeg;
     float totalDeg;
     bool scaled;
+
+    uint8_t dualTendonLutValid;
+    uint8_t dualTendonLutCount;
+    uint8_t dualTendonLutMotor[DUAL_TENDON_LUT_ACTUATOR_COUNT];
+    float dualTendonLutAngleStartDeg;
+    float dualTendonLutAngleStepDeg;
+    int32_t dualTendonLutMotorAbs[DUAL_TENDON_LUT_ACTUATOR_COUNT][DUAL_TENDON_LUT_MAX_SAMPLES];
 };
 
 extern JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];

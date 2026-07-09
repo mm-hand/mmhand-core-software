@@ -366,7 +366,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     }
 
     const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
-    uint8_t buffer[72];
+    uint8_t buffer[180];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -389,6 +389,19 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
     buffer[idx++] = result.scaled ? 1 : 0;
     buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
+    buffer[idx++] = result.dualTendonLutValid ? 1 : 0;
+    buffer[idx++] = result.dualTendonLutCount;
+    buffer[idx++] = result.dualTendonLutMotor[0];
+    buffer[idx++] = result.dualTendonLutMotor[1];
+    appendFloatBigEndian(buffer, &idx, result.dualTendonLutAngleStartDeg);
+    appendFloatBigEndian(buffer, &idx, result.dualTendonLutAngleStepDeg);
+    for (uint8_t actuator = 0; actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+        for (uint8_t sample = 0; sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
+            appendI16BigEndian(buffer,
+                               &idx,
+                               clampI16Local(result.dualTendonLutMotorAbs[actuator][sample]));
+        }
+    }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -1162,7 +1175,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIB_LOAD_JOINT)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kCalibLoadJointPayloadBytes) {
+        if (frameLen < 1 + kCalibLoadJointLegacyPayloadBytes) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
@@ -1193,10 +1206,32 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 result.totalDeg = readFloatBigEndian(p); p += 4;
                 result.scaled = (*p++ != 0);
                 const int8_t direction = ((int8_t)(*p++)) < 0 ? (int8_t)-1 : (int8_t)1;
+                if (frameLen >= 1 + kCalibLoadJointPayloadBytes) {
+                    result.dualTendonLutValid = (*p++ != 0) ? 1 : 0;
+                    result.dualTendonLutCount = *p++;
+                    result.dualTendonLutMotor[0] = *p++;
+                    result.dualTendonLutMotor[1] = *p++;
+                    result.dualTendonLutAngleStartDeg = readFloatBigEndian(p); p += 4;
+                    result.dualTendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
+                    for (uint8_t actuator = 0; actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+                        for (uint8_t sample = 0; sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
+                            result.dualTendonLutMotorAbs[actuator][sample] = readI16BigEndian(p);
+                            p += 2;
+                        }
+                    }
+                }
                 if (result.success &&
                     (!isfinite(result.angleMax) || !isfinite(result.startDeg) ||
                      !isfinite(result.tightDeg) || !isfinite(result.totalDeg) ||
-                     result.encoderSpan <= 0 || result.totalDeg <= 0.0f)) {
+                     result.encoderSpan <= 0 || result.totalDeg <= 0.0f ||
+                     (result.dualTendonLutValid != 0 &&
+                      (!isfinite(result.dualTendonLutAngleStartDeg) ||
+                       !isfinite(result.dualTendonLutAngleStepDeg) ||
+                       result.dualTendonLutAngleStepDeg <= 0.0f ||
+                       result.dualTendonLutCount < 3 ||
+                       result.dualTendonLutCount > DUAL_TENDON_LUT_MAX_SAMPLES ||
+                       result.dualTendonLutMotor[0] >= SERVO_TOTAL_NUM ||
+                       result.dualTendonLutMotor[1] >= SERVO_TOTAL_NUM)))) {
                     status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
                 } else {
                     g_jointCalibResult[jointIndex] = result;
@@ -1426,7 +1461,13 @@ void upperCommunicationTask(void* parameter)
             const uint8_t cmd = rxBuffer[parseOffset + 2];
             const size_t payloadLen = (size_t)wireLen - 2; // CMD + payload + tail
             const size_t expectedPayloadLen = getCommandPayloadLength(cmd);
-            if (expectedPayloadLen == (size_t)-1 || expectedPayloadLen != payloadLen)
+            if (cmd == CMD_CALIB_LOAD_JOINT) {
+                if (payloadLen != kCalibLoadJointLegacyPayloadBytes &&
+                    payloadLen != kCalibLoadJointPayloadBytes) {
+                    parseOffset += frameLen;
+                    continue;
+                }
+            } else if (expectedPayloadLen == (size_t)-1 || expectedPayloadLen != payloadLen)
             {
                 parseOffset += frameLen;
                 continue;

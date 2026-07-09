@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import csv
+import os
+import threading
+from typing import Dict, Iterable, Optional
+
+from .topic_schema import TOPIC_FIELDNAMES
+
+
+class CsvTopicWriter:
+    def __init__(self, path: str, fieldnames: Iterable[str], flush_every: int = 10):
+        self.path = path
+        self.fieldnames = list(fieldnames)
+        self.flush_every = max(1, int(flush_every))
+        self._file = open(path, "w", newline="", encoding="utf-8-sig")
+        self._writer = csv.DictWriter(self._file, fieldnames=self.fieldnames, extrasaction="ignore")
+        self._writer.writeheader()
+        self._pending = 0
+
+    def write_row(self, row: Dict[str, object]) -> None:
+        self._writer.writerow(row)
+        self._pending += 1
+        if self._pending >= self.flush_every:
+            self.flush()
+
+    def flush(self) -> None:
+        try:
+            self._file.flush()
+        finally:
+            self._pending = 0
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        finally:
+            self._file.close()
+
+
+class CsvSessionExporter:
+    def __init__(self, flush_every: int = 10):
+        self.flush_every = max(1, int(flush_every))
+        self.session_dir = ""
+        self._writers: Dict[str, CsvTopicWriter] = {}
+        self._fieldnames: Dict[str, list[str]] = {}
+        self._topic_filenames: Dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def start(
+        self,
+        session_dir: str,
+        topic_fieldnames: Dict[str, Iterable[str]],
+        topic_filenames: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.stop()
+        os.makedirs(session_dir, exist_ok=True)
+        self.session_dir = session_dir
+        self._fieldnames = {name: list(fields) for name, fields in topic_fieldnames.items()}
+        self._topic_filenames = dict(topic_filenames or {})
+        with self._lock:
+            for topic, fields in self._fieldnames.items():
+                path = self._path_for_topic(topic)
+                self._writers[topic] = CsvTopicWriter(path, fields, flush_every=self.flush_every)
+
+    def stop(self) -> None:
+        with self._lock:
+            writers = list(self._writers.values())
+            self._writers = {}
+            self._fieldnames = {}
+            self._topic_filenames = {}
+            self.session_dir = ""
+        for writer in writers:
+            writer.close()
+
+    def write_row(self, topic: str, row: Dict[str, object]) -> None:
+        with self._lock:
+            writer: Optional[CsvTopicWriter] = self._writers.get(topic)
+            if writer is None:
+                fields = self._fieldnames.get(topic) or TOPIC_FIELDNAMES.get(topic) or list(row.keys())
+                path = self._path_for_topic(topic)
+                writer = CsvTopicWriter(path, fields, flush_every=self.flush_every)
+                self._writers[topic] = writer
+            writer.write_row(row)
+
+    def _path_for_topic(self, topic: str) -> str:
+        filename = self._topic_filenames.get(topic) or f"{topic}.csv"
+        return os.path.join(self.session_dir, filename)

@@ -382,6 +382,8 @@ class JointEncoder:
     zero_raw: int = 0         # 矫正的零点值（来自 calib_deg.json / 下位机）
     target_angle_deg: float = 0.0   # 目标角度（度）
     error: bool = False       # 传感器/读数异常
+    angle_error: bool = True  # mapped angle packet validity; not overwritten by health status
+    raw_error: bool = True    # raw encoder packet validity; not overwritten by health status
 
     @property
     def current_angle_deg(self) -> float:
@@ -549,6 +551,8 @@ class HandModel:
                 e.raw = other.encoders[i].raw
                 e.raw_sensor = getattr(other.encoders[i], "raw_sensor", other.encoders[i].raw)
                 e.error = other.encoders[i].error
+                e.angle_error = bool(getattr(other.encoders[i], "angle_error", e.error))
+                e.raw_error = bool(getattr(other.encoders[i], "raw_error", e.error))
         for i, m in enumerate(self.motors):
             if i < len(other.motors):
                 m.error = other.motors[i].error

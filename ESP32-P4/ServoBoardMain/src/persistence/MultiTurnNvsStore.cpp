@@ -257,7 +257,9 @@ int32_t multiTurnSnapshotAbsForChannel(const MultiTurnNvsSnapshot& snapshot, uin
 bool multiTurnNvsSaveSnapshot(uint32_t validMask,
                               const int32_t* motorAbs,
                               const int16_t* motorRaw,
-                              uint32_t* outSequence)
+                              uint32_t* outSequence,
+                              uint32_t* outStoredValidMask,
+                              MultiTurnNvsSnapshot* outStoredSnapshot)
 {
     if (!motorAbs || !motorRaw) {
         return false;
@@ -285,6 +287,9 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
     snapshot.validMask = validMask |
         (hasPrevious ? (previous.validMask & validMotorChannelMask()) : 0);
     snapshot.mappingSignature = mappingSignature();
+    if (outStoredValidMask) {
+        *outStoredValidMask = snapshot.validMask;
+    }
 
     // Only update trusted motors; reuse old values for channels not sampled this cycle.
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
@@ -319,6 +324,9 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
     const bool ok = (err == ESP_OK);
     if (ok && outSequence) {
         *outSequence = snapshot.sequence;
+    }
+    if (ok && outStoredSnapshot) {
+        *outStoredSnapshot = snapshot;
     }
     return ok;
 }

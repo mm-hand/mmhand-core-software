@@ -71,7 +71,9 @@ static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5;
 static const size_t kMultiTurnNvsControlPayloadBytes = 1;
-static const size_t kCalibLoadJointPayloadBytes = 54;
+static const size_t kCalibLoadJointLegacyPayloadBytes = 54;
+static const size_t kCalibLoadJointPayloadBytes =
+    kCalibLoadJointLegacyPayloadBytes + 108;
 static const size_t kCalibLoadLimitsPayloadBytes = 8 + SERVO_TOTAL_NUM * 4;
 static const size_t kLocalTestParamsPayloadBytes = 2 * sizeof(float);
 static const size_t kSerialRxBufferSize = 512;

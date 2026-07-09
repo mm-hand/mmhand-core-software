@@ -53,8 +53,27 @@ void multiTurnNvsPersistenceTask(void* parameter)
         memcpy(result.motorTurn, job.motorTurn, sizeof(result.motorTurn));
 
         uint32_t sequence = 0;
-        result.success = multiTurnNvsSaveSnapshot(job.validMask, job.motorAbs, job.motorRaw, &sequence) ? 1U : 0U;
+        uint32_t storedValidMask = job.validMask;
+        MultiTurnNvsSnapshot storedSnapshot;
+        memset(&storedSnapshot, 0, sizeof(storedSnapshot));
+        result.success = multiTurnNvsSaveSnapshot(job.validMask,
+                                                  job.motorAbs,
+                                                  job.motorRaw,
+                                                  &sequence,
+                                                  &storedValidMask,
+                                                  &storedSnapshot) ? 1U : 0U;
         result.sequence = sequence;
+        if (result.success) {
+            result.validMask = storedValidMask;
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                if ((storedValidMask & (1UL << ch)) == 0) {
+                    continue;
+                }
+                result.motorRaw[ch] = storedSnapshot.raw[ch];
+                result.motorTurn[ch] = storedSnapshot.turns[ch];
+                result.motorAbs[ch] = multiTurnSnapshotAbsForChannel(storedSnapshot, ch);
+            }
+        }
         result.completedAtMs = millis();
         publishNvsSaveResult(sharedData, &result);
     }

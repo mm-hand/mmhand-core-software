@@ -1,10 +1,21 @@
 import os
+import json
 import time
-from datetime import datetime
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from desktop.paths import POSE_FIST_PATH, PROJECT_ROOT
+from desktop.paths import (
+    CALIB_DEG_PATH,
+    CALIB_LOAD_SNAPSHOT_PATH,
+    HAND_GEO_PATH,
+    MANUS_CALIBRATION_PATH,
+    MOTOR_MID_CALIB_PATH,
+    POSE_FIST_PATH,
+    PROJECT_ROOT,
+    RAW_IK_Q_TARGET_PATH,
+    TENDON_MANUAL_CALIB_PATH,
+)
 from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
+from desktop.core.data_recording import DataSessionRecorder
 from desktop.core.data_models import HandModel
 from desktop.core.hand_backend import HandBackend, list_ports
 from desktop.core.protocol import (
@@ -60,7 +71,7 @@ from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
-from .ui_services import AsyncRunDataLogger as RunDataLogger, LatestStateBuffer, clone_hand_model
+from .ui_services import LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
 from .ui_task_runtime import TaskRuntimeWindow
 from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
@@ -72,6 +83,7 @@ DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
 SYSTEM_STATUS_STALE_AFTER_S = 1.0
 FAULT_STATUS_STALE_AFTER_S = 1.0
+FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
 
 
 class HandGUI(QtWidgets.QMainWindow):
@@ -106,10 +118,12 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state: Optional[HandModel] = None
         self._state_buffer = LatestStateBuffer()
         self._state_buffer_version = 0
-        self._data_logger = RunDataLogger(flush_every=10)
+        self._data_logger = DataSessionRecorder(flush_every=10)
         self._recording_status_note = ""
         self._recording_csv_path = ""
         self._joint_debug_csv_path = ""
+        self._recording_format_options = {"csv": True, "hdf5": True, "rosbag": False, "tactile_full": False}
+        self._record_tactile_full = False
         self._last_draw = 0.0
         self._draw_interval = 0.033
         self._last_status_refresh = 0.0
@@ -125,6 +139,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.tendon_guard = self.backend.tendon_guard
 
         self.backend.register_update_callback(self._on_state_update)
+        self.backend.register_joint_target_callback(self._on_joint_target_command)
         self.setWindowTitle(f"{ENCODER_COUNT}-DOF Dexterous Hand Control System" + (f" - {title_suffix}" if title_suffix else ""))
         apply_main_window_defaults(self)
         self._build_ui()
@@ -146,8 +161,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._camera_timer.start(CAMERA_UI_POLL_MS)
         if self.tactile_port:
             self._start_tactile_port(self.tactile_port)
-        QtCore.QTimer.singleShot(200, self._display_windows.open_pose)
-        QtCore.QTimer.singleShot(320, self._display_windows.open_tactile)
         QtCore.QTimer.singleShot(250, self._clear_live_displays)
 
     def _build_ui(self) -> None:
@@ -1234,6 +1247,42 @@ class HandGUI(QtWidgets.QMainWindow):
         if source and not result.blocked:
             self.emit_action(source)
 
+    def _on_joint_target_command(self, payload: Dict[str, object]) -> None:
+        if not self._data_logger.is_running():
+            return
+        host_time = time.time()
+        source = str(payload.get("source", ""))
+        device_timestamp = payload.get("device_timestamp", "")
+        input_targets = payload.get("input_targets", [])
+        output_targets = payload.get("output_targets", [])
+        blocked = payload.get("blocked", [])
+        blocked_list = list(blocked) if isinstance(blocked, (list, tuple)) else []
+        self._data_logger.write(
+            "teleop_input",
+            {
+                "host_time": host_time,
+                "device_timestamp": device_timestamp,
+                "source": source,
+                "frame_id": "",
+                "valid": 1,
+                "latency_ms": "",
+                "joint_targets_json": json.dumps(input_targets, ensure_ascii=False, default=str),
+            },
+        )
+        self._data_logger.write(
+            "teleop_output",
+            {
+                "host_time": host_time,
+                "device_timestamp": device_timestamp,
+                "source": source,
+                "live_enabled": 1 if payload.get("live", False) else 0,
+                "blocked": 1 if blocked_list else 0,
+                "block_reason": payload.get("message", ""),
+                "sent_to_backend": 1 if payload.get("sent", False) else 0,
+                "joint_targets_json": json.dumps(output_targets, ensure_ascii=False, default=str),
+            },
+        )
+
     def draw_pose_angles(self, angles: List[float]) -> None:
         self._display_windows.open_pose()
         comp = self._display_windows.components.get("pose")
@@ -1250,26 +1299,77 @@ class HandGUI(QtWidgets.QMainWindow):
         else:
             self._set_status("Calibration blocked: serial port is not connected")
 
-    def _start_data_recording(self) -> None:
-        path = self._build_run_data_csv_path()
-        self._data_logger.start(path, fieldnames=self._build_run_data_fieldnames())
+    def _start_data_recording(self, options: Optional[Dict[str, bool]] = None) -> None:
+        options = dict(options or self._recording_format_options)
+        self._record_tactile_full = bool(options.get("tactile_full", False))
+        meta = {
+            "format_version": 1,
+            "app_mode": self.current_mode,
+            "port": self.current_port,
+            "ros2_enabled": self.ros2_enabled,
+            "ros_topic": self.ros_topic,
+            "recording_formats": options,
+            "csv_layout_version": 2,
+            "wide_csv_enabled": True,
+            "encoder_count": ENCODER_COUNT,
+            "motor_count": MOTOR_COUNT,
+            "finger_order": FINGER_NAMES,
+            "human_readable_csv": {
+                "time_columns": [
+                    "sample_index",
+                    "host_time_iso",
+                    "host_time_unix_s",
+                    "elapsed_s",
+                    "device_timestamp",
+                    "device_elapsed_s",
+                ],
+                "wide_tables": [
+                    "joint_wide",
+                    "servo_wide",
+                    "tactile_summary_wide",
+                    "tactile_full_*_wide",
+                ],
+            },
+            "calibration_snapshot": self._read_json_config(CALIB_LOAD_SNAPSHOT_PATH),
+            "config_files": self._recording_config_snapshot(),
+        }
+        self._data_logger.start(
+            self._run_data_root_dir(),
+            meta=meta,
+            enable_csv=bool(options.get("csv", True)),
+            enable_hdf5=bool(options.get("hdf5", True)),
+            enable_rosbag=bool(options.get("rosbag", False)),
+        )
+        path = self._data_logger.path
         self._recording_status_note = path
         self._recording_csv_path = path
-        self._start_joint_debug_packet_log(path)
-        self._set_status(f"Recording: {path}")
+        if bool(options.get("csv", True)):
+            self._start_joint_debug_packet_log(path, enable_csv=True)
+        else:
+            self._start_joint_debug_packet_log(path, enable_csv=False)
+        notes = []
+        if bool(options.get("csv", True)):
+            notes.append("CSV: on")
+        else:
+            notes.append("CSV: off")
+        h5_note = f"HDF5: {self._data_logger.hdf5_path}" if self._data_logger.hdf5_enabled else ""
+        if self._data_logger.hdf5_error:
+            h5_note = f"HDF5 disabled: {self._data_logger.hdf5_error}"
+        if h5_note:
+            notes.append(h5_note)
+        bag_note = f"ROS2 bag: {self._data_logger.rosbag_path}" if self._data_logger.rosbag_enabled else ""
+        if self._data_logger.rosbag_error and bool(options.get("rosbag", False)):
+            bag_note = f"ROS2 bag disabled: {self._data_logger.rosbag_error}"
+        if bag_note:
+            notes.append(bag_note)
+        self._set_status(f"Recording: {path}" + (f" | {' | '.join(notes)}" if notes else ""))
 
     def _stop_data_recording(self, reason: str = "stopped") -> None:
         if self._data_logger.is_running():
             path = self._data_logger.path
+            self._record_event("save_data_stop", detail=reason, source="recorder")
             self._data_logger.stop()
-            debug_path = self._joint_debug_csv_path
             self._stop_joint_debug_packet_log()
-            try:
-                self.joint_plot.save_snapshot(path, reason=reason)
-                if debug_path:
-                    self.joint_plot.save_debug_packet_snapshot(debug_path, reason=reason)
-            except Exception as exc:
-                self._set_status(f"Plot snapshot failed: {exc}")
             self._set_status(f"Recording {reason}: {path}")
         else:
             self._stop_joint_debug_packet_log()
@@ -1281,7 +1381,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self.save_data_check.blockSignals(True)
             self.save_data_check.setChecked(True)
             self.save_data_check.blockSignals(False)
-        self._start_data_recording()
+        self._start_data_recording(self._recording_format_options)
 
     def stop_recording_for_test(self, reason: str = "test stopped") -> None:
         self._stop_data_recording(reason)
@@ -1291,100 +1391,243 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _on_toggle_save_data(self, checked: bool) -> None:
         if checked:
+            options = self._choose_recording_formats()
+            if options is None:
+                self.save_data_check.blockSignals(True)
+                self.save_data_check.setChecked(False)
+                self.save_data_check.blockSignals(False)
+                return
+            self._recording_format_options = options
             if self.is_comm_connected():
-                self._start_data_recording()
+                self._start_data_recording(options)
             else:
                 self._set_status("Recording waits for an active serial connection")
         else:
             self._stop_data_recording()
 
+    def _choose_recording_formats(self) -> Optional[Dict[str, bool]]:
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Save Data Format")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        label = QtWidgets.QLabel("选择本次保存格式：")
+        layout.addWidget(label)
+
+        csv_check = QtWidgets.QCheckBox("CSV 多文件（方便直接查看）")
+        csv_check.setChecked(bool(self._recording_format_options.get("csv", True)))
+        hdf5_check = QtWidgets.QCheckBox("HDF5 session.h5（训练/分析）")
+        hdf5_check.setChecked(bool(self._recording_format_options.get("hdf5", True)))
+        rosbag_check = QtWidgets.QCheckBox("ROS2 bag（Linux/ROS2 环境，可选）")
+        rosbag_check.setChecked(bool(self._recording_format_options.get("rosbag", False)))
+        tactile_full_check = QtWidgets.QCheckBox("触觉全量数据（数据量大，需要时勾选）")
+        tactile_full_check.setChecked(bool(self._recording_format_options.get("tactile_full", False)))
+        layout.addWidget(csv_check)
+        layout.addWidget(hdf5_check)
+        layout.addWidget(rosbag_check)
+        layout.addWidget(tactile_full_check)
+
+        hint = QtWidgets.QLabel("ROS2 bag 需要系统已安装 ROS2 的 rosbag2_py、rclpy 和 std_msgs。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        ok_button = getattr(QtWidgets.QDialogButtonBox, "Ok", None)
+        cancel_button = getattr(QtWidgets.QDialogButtonBox, "Cancel", None)
+        if ok_button is None:
+            ok_button = QtWidgets.QDialogButtonBox.StandardButton.Ok
+        if cancel_button is None:
+            cancel_button = QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        buttons = QtWidgets.QDialogButtonBox(ok_button | cancel_button)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        exec_dialog = getattr(dialog, "exec", None) or getattr(dialog, "exec_")
+        accepted = getattr(QtWidgets.QDialog, "Accepted", None)
+        if accepted is None:
+            accepted = QtWidgets.QDialog.DialogCode.Accepted
+        if exec_dialog() != accepted:
+            return None
+        options = {
+            "csv": csv_check.isChecked(),
+            "hdf5": hdf5_check.isChecked(),
+            "rosbag": rosbag_check.isChecked(),
+            "tactile_full": tactile_full_check.isChecked(),
+        }
+        if not any(options.get(name, False) for name in ("csv", "hdf5", "rosbag")):
+            QtWidgets.QMessageBox.warning(self, "Save Data Format", "至少选择一种保存格式。")
+            return None
+        return options
+
     def _write_run_data_row(self, state: HandModel) -> None:
         scope_label, active_motor_mask, active_joint_mask, active_require_can = self._current_scope_record_fields()
-        row = {
-            "host_time": time.time(),
-            "device_timestamp": getattr(state, "timestamp", 0.0),
+        host_time = time.time()
+        device_timestamp = getattr(state, "timestamp", 0.0)
+        core_row = {
+            "host_time": host_time,
+            "device_timestamp": device_timestamp,
             "mode": self.current_mode,
             "controller_started": 1 if self.backend.is_started() else 0,
             "calib_status": getattr(state, "calib_status", ""),
+            "system_state": int(getattr(state, "system_state", 0) or 0),
+            "system_fault_bitmap": f"0x{int(getattr(state, 'system_fault_bitmap', 0) or 0):08X}",
             "active_scope_label": scope_label,
-            "active_motor_mask_hex": active_motor_mask,
-            "active_joint_mask_hex": active_joint_mask,
+            "active_motor_mask": active_motor_mask,
+            "active_joint_mask": active_joint_mask,
             "active_require_can": active_require_can,
-            "multi_turn_unknown_mask_hex": f"0x{int(getattr(state, 'multi_turn_unknown_bitmap', 0)):08X}",
+            "multi_turn_unknown_mask": f"0x{int(getattr(state, 'multi_turn_unknown_bitmap', 0) or 0):08X}",
             "has_sensor_data": 1 if getattr(state, "has_sensor_data", False) else 0,
             "has_servo_angle_data": 1 if getattr(state, "has_servo_angle_data", False) else 0,
             "has_servo_raw_data": 1 if getattr(state, "has_servo_raw_data", False) else 0,
+            "has_system_status_data": 1 if getattr(state, "has_system_status_data", False) else 0,
+            "has_fault_status_data": 1 if getattr(state, "has_fault_status_data", False) else 0,
         }
-        for i in range(ENCODER_COUNT):
-            row[f"joint_deg_j{i:02d}"] = state.angles[i] if i < len(state.angles) else ""
-            row[f"joint_encoder_raw_j{i:02d}"] = getattr(state.encoders[i], "raw_sensor", state.encoders[i].raw) if i < len(state.encoders) else ""
-            row[f"joint_reverse_release_fault_j{i:02d}"] = (
-                1 if i < len(getattr(state, "joint_reverse_release_fault", [])) and state.joint_reverse_release_fault[i] else 0
-            )
-            row[f"joint_debug_valid_j{i:02d}"] = (
-                1 if i < len(getattr(state, "joint_debug_valid", [])) and state.joint_debug_valid[i] else 0
-            )
-            row[f"joint_debug_target_deg_j{i:02d}"] = self._seq_value(getattr(state, "joint_debug_target_deg", []), i)
-            row[f"joint_debug_actual_deg_j{i:02d}"] = self._seq_value(getattr(state, "joint_debug_actual_deg", []), i)
-            row[f"joint_debug_cmd_target_pos_j{i:02d}"] = self._seq_value(getattr(state, "joint_debug_cmd_target_pos", []), i)
-            row[f"joint_debug_timestamp_ms_j{i:02d}"] = self._seq_value(getattr(state, "joint_debug_timestamp_ms", []), i)
+        self._data_logger.write("core_state", core_row)
+
         targets = self.control_panel.resolved_joint_targets()
         for i in range(ENCODER_COUNT):
-            row[f"joint_target_deg_j{i:02d}"] = targets[i] if i < len(targets) else ""
+            encoder = state.encoders[i] if i < len(state.encoders) else None
+            self._data_logger.write(
+                "joint_state",
+                {
+                    "host_time": host_time,
+                    "device_timestamp": device_timestamp,
+                    "joint_index": i,
+                    "is_active_joint": 1 if self._mask_has_bit(active_joint_mask, i) else 0,
+                    "joint_deg": state.angles[i] if i < len(state.angles) else "",
+                    "joint_target_deg": targets[i] if i < len(targets) else "",
+                    "joint_encoder_raw": (
+                        getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
+                    ),
+                    "joint_reverse_release_fault": (
+                        1 if i < len(getattr(state, "joint_reverse_release_fault", [])) and state.joint_reverse_release_fault[i] else 0
+                    ),
+                    "joint_debug_valid": (
+                        1 if i < len(getattr(state, "joint_debug_valid", [])) and state.joint_debug_valid[i] else 0
+                    ),
+                    "joint_debug_actual_deg": self._seq_value(getattr(state, "joint_debug_actual_deg", []), i),
+                    "joint_debug_target_deg": self._seq_value(getattr(state, "joint_debug_target_deg", []), i),
+                    "joint_debug_cmd_target_pos": self._seq_value(getattr(state, "joint_debug_cmd_target_pos", []), i),
+                    "joint_debug_timestamp_ms": self._seq_value(getattr(state, "joint_debug_timestamp_ms", []), i),
+                },
+            )
+        self._write_joint_wide_row(state, host_time, device_timestamp, active_joint_mask, targets)
+
         motor_targets = self.control_panel.resolved_motor_targets()
         for i in range(MOTOR_COUNT):
-            row[f"motor_target_abs_m{i:02d}"] = motor_targets[i] if i < len(motor_targets) else ""
-            row[f"servo_angle_m{i:02d}"] = self._seq_value(getattr(state, "servo_angles", []), i)
-            row[f"servo_online_m{i:02d}"] = 1 if i < len(getattr(state, "servo_online", [])) and state.servo_online[i] else 0
-            row[f"servo_raw_m{i:02d}"] = self._seq_value(getattr(state, "servo_raw_positions", []), i)
-            row[f"servo_raw_online_m{i:02d}"] = (
+            joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
+            load_value = self._seq_value(getattr(state, "servo_load", []), i)
+            self._data_logger.write(
+                "servo_state",
+                {
+                    "host_time": host_time,
+                    "device_timestamp": device_timestamp,
+                    "motor_index": i,
+                    "joint_index": joint_idx,
+                    "is_active_motor": 1 if self._mask_has_bit(active_motor_mask, i) else 0,
+                    "is_active_joint": 1 if joint_idx >= 0 and self._mask_has_bit(active_joint_mask, joint_idx) else 0,
+                    "motor_target_abs": motor_targets[i] if i < len(motor_targets) else "",
+                    "servo_raw": self._seq_value(getattr(state, "servo_raw_positions", []), i),
+                    "servo_abs": self._seq_value(getattr(state, "servo_angles", []), i),
+                    "servo_hardware_pos": self._seq_value(getattr(state, "servo_hardware_positions", []), i),
+                    "online": 1 if i < len(getattr(state, "servo_online", [])) and state.servo_online[i] else 0,
+                    "raw_online": (
+                        1 if i < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[i] else 0
+                    ),
+                    "telem_online": (
+                        1 if i < len(getattr(state, "servo_telem_online", [])) and state.servo_telem_online[i] else 0
+                    ),
+                    "speed": self._seq_value(getattr(state, "servo_speed", []), i),
+                    "load": load_value,
+                    "load_mag": self._servo_load_mag(load_value),
+                    "load_dir": self._servo_load_dir(load_value),
+                    "voltage": self._seq_value(getattr(state, "servo_voltage", []), i),
+                    "temperature": self._seq_value(getattr(state, "servo_temperature", []), i),
+                    "overload_fault": (
+                        1 if i < len(getattr(state, "servo_overload_fault", [])) and state.servo_overload_fault[i] else 0
+                    ),
+                },
+            )
+        self._write_servo_wide_row(
+            state,
+            host_time,
+            device_timestamp,
+            active_motor_mask,
+            active_joint_mask,
+            motor_targets,
+        )
+
+        self._write_tactile_summary_rows(state, host_time, device_timestamp)
+        if self._record_tactile_full:
+            self._write_tactile_full_rows(state, host_time, device_timestamp)
+
+    def _write_joint_wide_row(
+        self,
+        state: HandModel,
+        host_time: float,
+        device_timestamp,
+        active_joint_mask,
+        targets: List[float],
+    ) -> None:
+        row: Dict[str, object] = {
+            "host_time": host_time,
+            "device_timestamp": device_timestamp,
+        }
+        for i in range(ENCODER_COUNT):
+            label = f"J{i:02d}"
+            encoder = state.encoders[i] if i < len(state.encoders) else None
+            row[f"{label}_deg"] = state.angles[i] if i < len(state.angles) else ""
+            row[f"{label}_target_deg"] = targets[i] if i < len(targets) else ""
+            row[f"{label}_encoder_raw"] = (
+                getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
+            )
+            row[f"{label}_active"] = 1 if self._mask_has_bit(active_joint_mask, i) else 0
+            row[f"{label}_debug_actual_deg"] = self._seq_value(getattr(state, "joint_debug_actual_deg", []), i)
+            row[f"{label}_debug_target_deg"] = self._seq_value(getattr(state, "joint_debug_target_deg", []), i)
+            row[f"{label}_debug_cmd_target_pos"] = self._seq_value(
+                getattr(state, "joint_debug_cmd_target_pos", []), i
+            )
+        self._data_logger.write("joint_wide", row)
+
+    def _write_servo_wide_row(
+        self,
+        state: HandModel,
+        host_time: float,
+        device_timestamp,
+        active_motor_mask,
+        active_joint_mask,
+        motor_targets: List[int],
+    ) -> None:
+        row: Dict[str, object] = {
+            "host_time": host_time,
+            "device_timestamp": device_timestamp,
+        }
+        for i in range(MOTOR_COUNT):
+            label = f"M{i:02d}"
+            joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
+            load_value = self._seq_value(getattr(state, "servo_load", []), i)
+            row[f"{label}_joint_index"] = joint_idx
+            row[f"{label}_target_abs"] = motor_targets[i] if i < len(motor_targets) else ""
+            row[f"{label}_raw"] = self._seq_value(getattr(state, "servo_raw_positions", []), i)
+            row[f"{label}_abs"] = self._seq_value(getattr(state, "servo_angles", []), i)
+            row[f"{label}_hardware_pos"] = self._seq_value(getattr(state, "servo_hardware_positions", []), i)
+            row[f"{label}_load"] = load_value
+            row[f"{label}_load_mag"] = self._servo_load_mag(load_value)
+            row[f"{label}_load_dir"] = self._servo_load_dir(load_value)
+            row[f"{label}_speed"] = self._seq_value(getattr(state, "servo_speed", []), i)
+            row[f"{label}_voltage"] = self._seq_value(getattr(state, "servo_voltage", []), i)
+            row[f"{label}_temperature"] = self._seq_value(getattr(state, "servo_temperature", []), i)
+            row[f"{label}_online"] = (
+                1 if i < len(getattr(state, "servo_online", [])) and state.servo_online[i] else 0
+            )
+            row[f"{label}_raw_online"] = (
                 1 if i < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[i] else 0
             )
-            row[f"servo_speed_m{i:02d}"] = self._seq_value(getattr(state, "servo_speed", []), i)
-            load_value = self._seq_value(getattr(state, "servo_load", []), i)
-            row[f"servo_load_m{i:02d}"] = load_value
-            row[f"servo_load_mag_m{i:02d}"] = self._servo_load_mag(load_value)
-            row[f"servo_load_dir_m{i:02d}"] = self._servo_load_dir(load_value)
-            row[f"servo_voltage_m{i:02d}"] = self._seq_value(getattr(state, "servo_voltage", []), i)
-            row[f"servo_temperature_m{i:02d}"] = self._seq_value(getattr(state, "servo_temperature", []), i)
-            row[f"servo_overload_fault_m{i:02d}"] = (
-                1 if i < len(getattr(state, "servo_overload_fault", [])) and state.servo_overload_fault[i] else 0
+            row[f"{label}_telem_online"] = (
+                1 if i < len(getattr(state, "servo_telem_online", [])) and state.servo_telem_online[i] else 0
             )
-        tactile = getattr(state, "tactile_data", []) or []
-        row["tactile_fingers"] = len(tactile)
-        row["tactile_max_force"] = self._tactile_max_force(tactile)
-        self._data_logger.write_row(row)
-
-    def _build_run_data_fieldnames(self) -> List[str]:
-        fields = [
-            "host_time", "device_timestamp", "mode", "controller_started", "calib_status",
-            "active_scope_label", "active_motor_mask_hex", "active_joint_mask_hex",
-            "active_require_can", "multi_turn_unknown_mask_hex",
-            "has_sensor_data", "has_servo_angle_data", "has_servo_raw_data",
-        ]
-        fields += [f"joint_deg_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_encoder_raw_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_reverse_release_fault_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_debug_valid_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_debug_target_deg_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_debug_actual_deg_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_debug_cmd_target_pos_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_debug_timestamp_ms_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"joint_target_deg_j{i:02d}" for i in range(ENCODER_COUNT)]
-        fields += [f"motor_target_abs_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_angle_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_online_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_raw_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_raw_online_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_speed_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_load_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_load_mag_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_load_dir_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_voltage_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_temperature_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += [f"servo_overload_fault_m{i:02d}" for i in range(MOTOR_COUNT)]
-        fields += ["tactile_fingers", "tactile_max_force"]
-        return fields
+            row[f"{label}_active"] = 1 if self._mask_has_bit(active_motor_mask, i) else 0
+            if joint_idx >= 0 and self._mask_has_bit(active_joint_mask, joint_idx):
+                row[f"{label}_active"] = 1
+        self._data_logger.write("servo_wide", row)
 
     def _current_scope_record_fields(self):
         panel = getattr(self, "control_panel", None)
@@ -1421,13 +1664,14 @@ class HandGUI(QtWidgets.QMainWindow):
             return -1
         return 0
 
-    def _start_joint_debug_packet_log(self, csv_path: str) -> None:
-        path = self._build_joint_debug_packet_csv_path(csv_path)
+    def _start_joint_debug_packet_log(self, session_dir: str, *, enable_csv: bool = True) -> None:
+        path = self._build_joint_debug_packet_csv_path(session_dir)
         try:
-            if not self.backend.start_joint_debug_packet_log(path):
+            csv_path = path if enable_csv else ""
+            if not self.backend.start_joint_debug_packet_log(csv_path, row_callback=self._write_joint_debug_packet_row):
                 self._joint_debug_csv_path = ""
                 return
-            self._joint_debug_csv_path = path
+            self._joint_debug_csv_path = path if enable_csv else ""
         except Exception:
             self._joint_debug_csv_path = ""
 
@@ -1437,17 +1681,34 @@ class HandGUI(QtWidgets.QMainWindow):
         finally:
             pass
 
+    def _write_joint_debug_packet_row(self, row: Dict[str, object]) -> None:
+        if not self._data_logger.is_running():
+            return
+        host_time = time.time()
+        self._data_logger.write(
+            "joint_debug_packets",
+            {
+                "host_time": host_time,
+                "device_timestamp": row.get("device_ts_ms", ""),
+                "device_ts_ms": row.get("device_ts_ms", ""),
+                "joint_index": row.get("joint_index", ""),
+                "valid": row.get("valid", ""),
+                "target_deg": row.get("target_deg", ""),
+                "actual_deg": row.get("actual_deg", ""),
+                "loop1_output": row.get("loop1_output", ""),
+                "loop2_actual": row.get("loop2_actual", ""),
+                "loop2_output": row.get("loop2_output", ""),
+                "cmd_valid": row.get("cmd_valid", ""),
+                "cmd_target_pos": row.get("cmd_target_pos", ""),
+            },
+        )
+
     @staticmethod
-    def _build_joint_debug_packet_csv_path(csv_path: str) -> str:
-        base, _ext = os.path.splitext(os.path.abspath(csv_path))
-        return f"{base}_joint_debug_packets.csv"
+    def _build_joint_debug_packet_csv_path(session_dir: str) -> str:
+        return os.path.join(os.path.abspath(session_dir), "joint_debug_packets.csv")
 
     def _run_data_root_dir(self) -> str:
         return os.path.join(PROJECT_ROOT_DIR, "run_data")
-
-    def _build_run_data_csv_path(self) -> str:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return os.path.join(self._run_data_root_dir(), f"hand_run_{ts}.csv")
 
     @staticmethod
     def _seq_value(values, idx: int):
@@ -1455,6 +1716,12 @@ class HandGUI(QtWidgets.QMainWindow):
             return values[idx]
         except Exception:
             return ""
+
+    @staticmethod
+    def _finger_name(idx: int) -> str:
+        if 0 <= int(idx) < len(FINGER_NAMES):
+            return FINGER_NAMES[int(idx)]
+        return f"finger{idx}"
 
     @staticmethod
     def _tactile_max_force(tactile) -> float:
@@ -1466,6 +1733,192 @@ class HandGUI(QtWidgets.QMainWindow):
                 except Exception:
                     pass
         return max(vals) if vals else 0.0
+
+    def _write_tactile_summary_rows(self, state: HandModel, host_time: float, device_timestamp) -> None:
+        tactile = getattr(state, "tactile_data", []) or []
+        if not tactile:
+            self._data_logger.write(
+                "tactile_summary",
+                {
+                    "host_time": host_time,
+                    "device_timestamp": device_timestamp,
+                    "finger_index": -1,
+                    "finger_name": "",
+                    "sensor_count": 0,
+                    "max_force": 0.0,
+                    "mean_force": 0.0,
+                    "contact_count": 0,
+                    "tactile_online": 1 if getattr(state, "tactile_online", False) else 0,
+                    "tactile_summary_seq": self._none_to_empty(getattr(state, "tactile_summary_seq", "")),
+                    "tactile_full_seq": self._none_to_empty(getattr(state, "tactile_full_seq", "")),
+                    "tactile_full_crc": self._none_to_empty(getattr(state, "tactile_full_crc", "")),
+                    "tactile_full_crc_errors": int(getattr(state, "tactile_full_crc_errors", 0) or 0),
+                    "tactile_full_seq_mismatches": int(getattr(state, "tactile_full_seq_mismatches", 0) or 0),
+                    "tactile_full_dropped": int(getattr(state, "tactile_full_dropped", 0) or 0),
+                },
+            )
+            self._write_tactile_summary_wide_row(state, host_time, device_timestamp)
+            return
+
+        for finger_index, finger in enumerate(tactile):
+            mags: List[float] = []
+            for sensor in getattr(finger, "sensors", []) or []:
+                try:
+                    mags.append(float(getattr(sensor, "magnitude", 0.0)))
+                except Exception:
+                    pass
+            self._data_logger.write(
+                "tactile_summary",
+                {
+                    "host_time": host_time,
+                    "device_timestamp": device_timestamp,
+                    "finger_index": finger_index,
+                    "finger_name": self._finger_name(finger_index),
+                    "sensor_count": len(mags),
+                    "max_force": max(mags) if mags else 0.0,
+                    "mean_force": (sum(mags) / len(mags)) if mags else 0.0,
+                    "contact_count": sum(1 for value in mags if value > 0.0),
+                    "tactile_online": 1 if getattr(state, "tactile_online", False) else 0,
+                    "tactile_summary_seq": self._none_to_empty(getattr(state, "tactile_summary_seq", "")),
+                    "tactile_full_seq": self._none_to_empty(getattr(state, "tactile_full_seq", "")),
+                    "tactile_full_crc": self._none_to_empty(getattr(state, "tactile_full_crc", "")),
+                    "tactile_full_crc_errors": int(getattr(state, "tactile_full_crc_errors", 0) or 0),
+                    "tactile_full_seq_mismatches": int(getattr(state, "tactile_full_seq_mismatches", 0) or 0),
+                    "tactile_full_dropped": int(getattr(state, "tactile_full_dropped", 0) or 0),
+                },
+            )
+        self._write_tactile_summary_wide_row(state, host_time, device_timestamp)
+
+    def _write_tactile_summary_wide_row(self, state: HandModel, host_time: float, device_timestamp) -> None:
+        tactile = getattr(state, "tactile_data", []) or []
+        row: Dict[str, object] = {
+            "host_time": host_time,
+            "device_timestamp": device_timestamp,
+            "tactile_online": 1 if getattr(state, "tactile_online", False) else 0,
+            "tactile_summary_seq": self._none_to_empty(getattr(state, "tactile_summary_seq", "")),
+            "tactile_full_seq": self._none_to_empty(getattr(state, "tactile_full_seq", "")),
+            "tactile_full_crc": self._none_to_empty(getattr(state, "tactile_full_crc", "")),
+            "tactile_full_crc_errors": int(getattr(state, "tactile_full_crc_errors", 0) or 0),
+            "tactile_full_seq_mismatches": int(getattr(state, "tactile_full_seq_mismatches", 0) or 0),
+            "tactile_full_dropped": int(getattr(state, "tactile_full_dropped", 0) or 0),
+        }
+        for finger_index, name in enumerate(FINGER_NAMES):
+            finger = tactile[finger_index] if finger_index < len(tactile) else None
+            mags: List[float] = []
+            for sensor in getattr(finger, "sensors", []) or []:
+                try:
+                    mags.append(float(getattr(sensor, "magnitude", 0.0)))
+                except Exception:
+                    pass
+            row[f"{name}_sensor_count"] = len(mags)
+            row[f"{name}_max_force"] = max(mags) if mags else 0.0
+            row[f"{name}_mean_force"] = (sum(mags) / len(mags)) if mags else 0.0
+            row[f"{name}_contact_count"] = sum(1 for value in mags if value > 0.0)
+        self._data_logger.write("tactile_summary_wide", row)
+
+    def _write_tactile_full_rows(self, state: HandModel, host_time: float, device_timestamp) -> None:
+        tactile = getattr(state, "tactile_data", []) or []
+        for finger_index, finger in enumerate(tactile):
+            finger_wide_row: Dict[str, object] = {
+                "host_time": host_time,
+                "device_timestamp": device_timestamp,
+                "finger_index": finger_index,
+                "finger_name": self._finger_name(finger_index),
+            }
+            finger_has_full = False
+            for sensor_index, sensor in enumerate(getattr(finger, "sensors", []) or []):
+                forces = getattr(sensor, "contact_forces", None)
+                if forces is None:
+                    continue
+                try:
+                    rows = int(forces.shape[0])
+                    cols = int(forces.shape[1])
+                except Exception:
+                    continue
+                for row_idx in range(rows):
+                    for col_idx in range(cols):
+                        try:
+                            fx = float(forces[row_idx][col_idx][0])
+                            fy = float(forces[row_idx][col_idx][1])
+                            fz = float(forces[row_idx][col_idx][2])
+                            force_mag = (fx * fx + fy * fy + fz * fz) ** 0.5
+                        except Exception:
+                            continue
+                        self._data_logger.write(
+                            "tactile_full",
+                            {
+                                "host_time": host_time,
+                                "device_timestamp": device_timestamp,
+                                "finger_index": finger_index,
+                                "finger_name": self._finger_name(finger_index),
+                                "sensor_index": sensor_index,
+                                "row": row_idx,
+                                "col": col_idx,
+                                "fx": fx,
+                                "fy": fy,
+                                "fz": fz,
+                                "force_mag": force_mag,
+                            },
+                        )
+                        prefix = f"S{sensor_index}_R{row_idx}_C{col_idx}"
+                        finger_wide_row[f"{prefix}_fx"] = fx
+                        finger_wide_row[f"{prefix}_fy"] = fy
+                        finger_wide_row[f"{prefix}_fz"] = fz
+                        finger_wide_row[f"{prefix}_mag"] = force_mag
+                        finger_has_full = True
+            if finger_has_full:
+                topic = f"tactile_full_{self._finger_name(finger_index)}_wide"
+                self._data_logger.write(topic, finger_wide_row)
+
+    def _record_event(self, event_type: str, detail: str = "", source: str = "ui") -> None:
+        if not self._data_logger.is_running():
+            return
+        scope_label, active_motor_mask, active_joint_mask, _active_require_can = self._current_scope_record_fields()
+        device_timestamp = getattr(self._state, "timestamp", "") if self._state is not None else ""
+        self._data_logger.event(
+            event_type,
+            source=source,
+            detail=detail,
+            device_timestamp=device_timestamp,
+            active_scope_label=scope_label,
+            active_motor_mask=active_motor_mask,
+            active_joint_mask=active_joint_mask,
+        )
+
+    @staticmethod
+    def _mask_has_bit(mask_hex, idx: int) -> bool:
+        try:
+            if isinstance(mask_hex, str):
+                mask = int(mask_hex, 16) if mask_hex else 0
+            else:
+                mask = int(mask_hex or 0)
+        except Exception:
+            mask = 0
+        return bool(mask & (1 << int(idx)))
+
+    @staticmethod
+    def _none_to_empty(value):
+        return "" if value is None else value
+
+    @staticmethod
+    def _read_json_config(path) -> object:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as exc:
+            return {"error": str(exc), "path": str(path)}
+
+    def _recording_config_snapshot(self) -> dict:
+        paths = {
+            "calib_load_snapshot": CALIB_LOAD_SNAPSHOT_PATH,
+            "calib_deg": CALIB_DEG_PATH,
+            "hand_geo": HAND_GEO_PATH,
+            "tendon_manual_calib": TENDON_MANUAL_CALIB_PATH,
+            "motor_mid_calib": MOTOR_MID_CALIB_PATH,
+            "manus_calibration": MANUS_CALIBRATION_PATH,
+            "raw_ik_q_target": RAW_IK_Q_TARGET_PATH,
+        }
+        return {name: self._read_json_config(path) for name, path in paths.items()}
 
     def show_servo_status_dialog(self) -> None:
         state = self._state or self.backend.get_current_state()
@@ -1501,12 +1954,43 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def emit_action(self, msg: str) -> None:
         log_session("UI", msg)
+        self._record_event(self._event_type_from_message(msg), detail=msg, source="ui")
         if self._action_callback:
             try:
                 self._action_callback(msg)
             except Exception:
                 pass
         self._set_status(msg)
+
+    @staticmethod
+    def _event_type_from_message(msg: str) -> str:
+        text = str(msg or "").strip()
+        lower = text.lower()
+        if lower.startswith("start"):
+            return "start"
+        if lower.startswith("stop"):
+            return "stop"
+        if lower.startswith("pause"):
+            return "pause"
+        if lower.startswith("resume"):
+            return "resume"
+        if "clear fault" in lower:
+            return "clear_fault"
+        if "side adjust" in lower:
+            return "side_adjust"
+        if "new device reset" in lower:
+            return "new_device_reset"
+        if "calib" in lower or "calibration" in lower:
+            return "calibrate"
+        if "rope" in lower:
+            return "rope_init"
+        if "ros2" in lower:
+            return "ros2"
+        if "manus" in lower or "teleop" in lower:
+            return "teleop"
+        if "fault" in lower:
+            return "fault"
+        return "action"
 
     def get_state(self) -> Optional[HandModel]:
         return self._state
@@ -1601,6 +2085,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 pass
             self.backend.shutdown(stop_lower=True)
             self.backend.unregister_update_callback(self._on_state_update)
+            self.backend.unregister_joint_target_callback(self._on_joint_target_command)
             if self._on_close_extra:
                 self._on_close_extra()
         finally:

@@ -69,13 +69,18 @@ static const uint32_t kAutoTightClampHoldMs = 120;
 static const int32_t kDualAutoSlackCounts = 3200;
 static const int32_t kDualSecondaryPreloadTargetLeadCounts = 4096 * 5;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
-static const int32_t kAutoCalibrationMaxReverseReleaseCounts = 4096 * 3;
+static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;
+static const int32_t kAutoCalibrationMaxReverseReleaseCounts = 4096 * 2;
 static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
 static const int16_t kDualPrimaryTightLoadThreshold = 190;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
+static const int16_t kDualSecondaryFinalLoadThreshold = 230;
 static const int16_t kSideSwayAdjustLoadThreshold = 190;
 static const int32_t kSideSwaySecondaryPreReleaseCounts = 3200;
 static const float kReverseMinFollowDeg = 12.0f;
+static const float kDualTendonFitSampleStepDeg = 5.0f;
+static const uint8_t kDualTendonRawSampleCapacity =
+    DUAL_TENDON_LUT_MAX_SAMPLES * 3;
 static const uint8_t kAngleStallStableSamples = 2;
 static const float kReleaseMinDirectionDeg = 3.0f;
 static const float kReleaseWrongWindowDeg = 1.0f;
@@ -87,6 +92,18 @@ static const int32_t kReleaseServoWrongDirectionCounts = 120;
 static const int32_t kSideSwayMaxCommandLeadCounts = 400;
 static const float kAutoZeroMappedToleranceDeg = 6.0f;
 static const float kAutoZeroCrossMaxAbsDeg = 160.0f;
+
+struct DualTendonRawFitSample {
+    int32_t encoder;
+    int32_t primaryAbs;
+    int32_t secondaryAbs;
+};
+
+struct DualTendonRawFitBuffer {
+    uint8_t count;
+    float nextTravelDeg;
+    DualTendonRawFitSample samples[kDualTendonRawSampleCapacity];
+};
 
 static int32_t abs32(int32_t value)
 {
@@ -124,24 +141,26 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
     const int32_t slackClamped = clampToServoAbsRangeLocal(
         motorApplyTendonDelta(motorChannel, tightClamped, -kCalibratedMotorAbsWindowCounts));
     const int32_t minAbs = (slackClamped < tightClamped) ? slackClamped : tightClamped;
-    const int32_t maxAbs = (slackClamped > tightClamped) ? slackClamped : tightClamped;
+    const int32_t baseMaxAbs = (slackClamped > tightClamped) ? slackClamped : tightClamped;
+    const int32_t maxAbs = clampToServoAbsRangeLocal(
+        baseMaxAbs + kCalibratedMotorAbsMaxMarginCounts);
     {
         SharedSafetyGuard guard;
         sharedData->motor_abs_limit_min[motorChannel] = minAbs;
         sharedData->motor_abs_limit_max[motorChannel] = maxAbs;
         sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap,
                             (uint32_t)(1UL << motorChannel));
-        sharedAtomicFetchOr(&sharedData->motor_abs_limit_locked_bitmap,
-                            (uint32_t)(1UL << motorChannel));
     }
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld tight=%ld slack=%ld shortenSign=%d window=%ld\r\n",
-                  (unsigned)motorChannel,
-                  (long)minAbs,
-                  (long)maxAbs,
-                  (long)tightClamped,
-                  (long)slackClamped,
-                  (int)getMotorTendonShortenAbsSign(motorChannel),
-                  (long)kCalibratedMotorAbsWindowCounts);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld baseMax=%ld tight=%ld slack=%ld shortenSign=%d window=%ld maxMargin=%ld\r\n",
+                   (unsigned)motorChannel,
+                   (long)minAbs,
+                   (long)maxAbs,
+                   (long)baseMaxAbs,
+                   (long)tightClamped,
+                   (long)slackClamped,
+                   (int)getMotorTendonShortenAbsSign(motorChannel),
+                   (long)kCalibratedMotorAbsWindowCounts,
+                   (long)kCalibratedMotorAbsMaxMarginCounts);
 }
 
 static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
@@ -636,6 +655,201 @@ static int32_t encoderForPositiveTravelResult(int32_t encoder, int8_t travelSign
         return calibrationWrapEncoderCount(encoder);
     }
     return calibrationWrapEncoderCount(kCalibrationEncoderModulo - encoder);
+}
+
+static void resetDualTendonRawFitBuffer(DualTendonRawFitBuffer* buffer)
+{
+    if (!buffer) {
+        return;
+    }
+    memset(buffer, 0, sizeof(*buffer));
+}
+
+static bool appendDualTendonRawFitSample(DualTendonRawFitBuffer* buffer,
+                                         int32_t encoder,
+                                         int32_t primaryAbs,
+                                         int32_t secondaryAbs)
+{
+    if (!buffer || buffer->count >= kDualTendonRawSampleCapacity) {
+        return false;
+    }
+    if (buffer->count > 0) {
+        DualTendonRawFitSample& prev = buffer->samples[buffer->count - 1];
+        if (prev.encoder == encoder &&
+            prev.primaryAbs == primaryAbs &&
+            prev.secondaryAbs == secondaryAbs) {
+            return true;
+        }
+    }
+    DualTendonRawFitSample& sample = buffer->samples[buffer->count++];
+    sample.encoder = calibrationWrapEncoderCount(encoder);
+    sample.primaryAbs = primaryAbs;
+    sample.secondaryAbs = secondaryAbs;
+    return true;
+}
+
+static void maybeAppendDualTendonTravelFitSample(DualTendonRawFitBuffer* buffer,
+                                                 float travelDeg,
+                                                 int32_t encoder,
+                                                 int32_t primaryAbs,
+                                                 int32_t secondaryAbs)
+{
+    if (!buffer || !isfinite(travelDeg)) {
+        return;
+    }
+    if (travelDeg + 0.1f < buffer->nextTravelDeg) {
+        return;
+    }
+    while (travelDeg + 0.1f >= buffer->nextTravelDeg) {
+        buffer->nextTravelDeg += kDualTendonFitSampleStepDeg;
+    }
+    appendDualTendonRawFitSample(buffer, encoder, primaryAbs, secondaryAbs);
+}
+
+static float dualFitSampleAngleDeg(const JointCalibrationResult& result,
+                                   int32_t encoder)
+{
+    if (result.encoderSpan <= 0 || result.totalDeg <= 0.0f) {
+        return NAN;
+    }
+    const int32_t delta =
+        calibrationForwardEncoderDelta(result.startEncoder,
+                                       calibrationWrapEncoderCount(encoder));
+    return result.startDeg +
+        ((float)delta / (float)result.encoderSpan) * result.totalDeg;
+}
+
+static bool interpolateDualFitAbs(float targetDeg,
+                                  const float* sampleDeg,
+                                  const int32_t* sampleAbs,
+                                  uint8_t sampleCount,
+                                  int32_t* outAbs)
+{
+    if (!sampleDeg || !sampleAbs || !outAbs || sampleCount == 0) {
+        return false;
+    }
+    if (targetDeg <= sampleDeg[0]) {
+        *outAbs = sampleAbs[0];
+        return true;
+    }
+    for (uint8_t i = 1; i < sampleCount; i++) {
+        if (targetDeg <= sampleDeg[i]) {
+            const float span = sampleDeg[i] - sampleDeg[i - 1];
+            if (span <= 0.0f) {
+                return false;
+            }
+            const float t = (targetDeg - sampleDeg[i - 1]) / span;
+            const float value =
+                (float)sampleAbs[i - 1] +
+                ((float)sampleAbs[i] - (float)sampleAbs[i - 1]) * t;
+            *outAbs = roundToInt32Local(value);
+            return true;
+        }
+    }
+    *outAbs = sampleAbs[sampleCount - 1];
+    return true;
+}
+
+static bool buildDualTendonLutFromRawSamples(JointCalibrationResult* result,
+                                             uint8_t primaryMotor,
+                                             uint8_t secondaryMotor,
+                                             const DualTendonRawFitBuffer& raw)
+{
+    if (!result) {
+        return false;
+    }
+    result->dualTendonLutValid = 0;
+    result->dualTendonLutCount = 0;
+    memset(result->dualTendonLutMotor, 0xFF, sizeof(result->dualTendonLutMotor));
+    memset(result->dualTendonLutMotorAbs, 0, sizeof(result->dualTendonLutMotorAbs));
+    result->dualTendonLutAngleStartDeg = result->startDeg;
+    result->dualTendonLutAngleStepDeg = kDualTendonFitSampleStepDeg;
+
+    if (!result->success || !result->scaled ||
+        result->encoderSpan <= 0 ||
+        result->totalDeg <= 0.0f ||
+        raw.count < 3) {
+        return false;
+    }
+
+    float sampleDeg[kDualTendonRawSampleCapacity];
+    int32_t primaryAbs[kDualTendonRawSampleCapacity];
+    int32_t secondaryAbs[kDualTendonRawSampleCapacity];
+    uint8_t sampleCount = 0;
+
+    for (uint8_t i = 0; i < raw.count; i++) {
+        const float angleDeg =
+            dualFitSampleAngleDeg(*result, raw.samples[i].encoder);
+        if (!isfinite(angleDeg) ||
+            angleDeg < result->startDeg - kDualTendonFitSampleStepDeg ||
+            angleDeg > result->tightDeg + kDualTendonFitSampleStepDeg) {
+            continue;
+        }
+        if (sampleCount >= kDualTendonRawSampleCapacity) {
+            continue;
+        }
+
+        uint8_t insertAt = sampleCount;
+        while (insertAt > 0 && sampleDeg[insertAt - 1] > angleDeg) {
+            sampleDeg[insertAt] = sampleDeg[insertAt - 1];
+            primaryAbs[insertAt] = primaryAbs[insertAt - 1];
+            secondaryAbs[insertAt] = secondaryAbs[insertAt - 1];
+            insertAt--;
+        }
+        if (insertAt > 0 && fabsf(sampleDeg[insertAt - 1] - angleDeg) < 0.2f) {
+            sampleDeg[insertAt - 1] = angleDeg;
+            primaryAbs[insertAt - 1] = raw.samples[i].primaryAbs;
+            secondaryAbs[insertAt - 1] = raw.samples[i].secondaryAbs;
+            continue;
+        }
+        sampleDeg[insertAt] = angleDeg;
+        primaryAbs[insertAt] = raw.samples[i].primaryAbs;
+        secondaryAbs[insertAt] = raw.samples[i].secondaryAbs;
+        sampleCount++;
+    }
+
+    if (sampleCount < 3 ||
+        sampleDeg[sampleCount - 1] - sampleDeg[0] < kDualTendonFitSampleStepDeg * 2.0f ||
+        sampleDeg[0] > result->startDeg + kDualTendonFitSampleStepDeg ||
+        sampleDeg[sampleCount - 1] < result->tightDeg - kDualTendonFitSampleStepDeg) {
+        return false;
+    }
+
+    uint8_t lutCount =
+        (uint8_t)ceilf(result->totalDeg / kDualTendonFitSampleStepDeg) + 1;
+    if (lutCount > DUAL_TENDON_LUT_MAX_SAMPLES) {
+        lutCount = DUAL_TENDON_LUT_MAX_SAMPLES;
+    }
+    if (lutCount < 3) {
+        return false;
+    }
+
+    result->dualTendonLutMotor[0] = primaryMotor;
+    result->dualTendonLutMotor[1] = secondaryMotor;
+    result->dualTendonLutAngleStartDeg = result->startDeg;
+    result->dualTendonLutAngleStepDeg = kDualTendonFitSampleStepDeg;
+    for (uint8_t i = 0; i < lutCount; i++) {
+        const float targetDeg =
+            result->dualTendonLutAngleStartDeg +
+            result->dualTendonLutAngleStepDeg * (float)i;
+        if (!interpolateDualFitAbs(targetDeg,
+                                   sampleDeg,
+                                   primaryAbs,
+                                   sampleCount,
+                                   &result->dualTendonLutMotorAbs[0][i]) ||
+            !interpolateDualFitAbs(targetDeg,
+                                   sampleDeg,
+                                   secondaryAbs,
+                                   sampleCount,
+                                   &result->dualTendonLutMotorAbs[1][i])) {
+            result->dualTendonLutValid = 0;
+            result->dualTendonLutCount = 0;
+            return false;
+        }
+    }
+    result->dualTendonLutCount = lutCount;
+    result->dualTendonLutValid = 1;
+    return true;
 }
 
 static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
@@ -1972,12 +2186,14 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                        int8_t primaryShortenSign,
                                        int32_t primaryStartAbs,
                                        int32_t startEncoder,
+                                       int16_t finalLoadThreshold,
                                        const AutoCalibrationParams& params,
                                        int32_t* outSecondaryLimitAbs,
                                        int32_t* outPrimaryFinalAbs,
                                        uint16_t* outLimitRaw,
                                        int32_t* outLimitEncoder,
-                                       int16_t* outSecondaryLoad)
+                                       int16_t* outSecondaryLoad,
+                                       DualTendonRawFitBuffer* fitBuffer)
 {
     int32_t secondaryCommandAbs = secondaryStartAbs;
     int32_t primaryCommandAbs = primaryStartAbs;
@@ -1990,8 +2206,9 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
     int32_t windowStartSecondaryAbs = secondaryStartAbs;
     int32_t windowStartPrimaryAbs = primaryStartAbs;
     uint8_t angleStallStable = 0;
+    uint8_t angleWrongDirectionStable = 0;
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_EXCHANGE_NEG3_BEGIN J%02u secondary=M%02u secondaryAbs=%ld secondaryShortenSign=%d primary=M%02u primaryAbs=%ld primaryShortenSign=%d requiredTravelDeg=%.3f\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_EXCHANGE_NEG3_BEGIN J%02u secondary=M%02u secondaryAbs=%ld secondaryShortenSign=%d primary=M%02u primaryAbs=%ld primaryShortenSign=%d requiredTravelDeg=%.3f finalLoadThreshold=%d\r\n",
                   jointIndex,
                   secondaryMotor,
                   (long)secondaryStartAbs,
@@ -1999,7 +2216,8 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                   primaryMotor,
                   (long)primaryStartAbs,
                   (int)primaryShortenSign,
-                  kReverseMinFollowDeg);
+                  kReverseMinFollowDeg,
+                  finalLoadThreshold);
 
     while (autoCalibrationStillOwnsControl(sharedData)) {
         const uint32_t nowMs = millis();
@@ -2021,10 +2239,56 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
         const bool hasLoad =
             readLatestMotorServoLoad(sharedData, secondaryMotor, &loadRaw);
         const int16_t loadMag = hasLoad ? servoLoadMagnitude(loadRaw) : 0;
+        const bool secondaryLoadHigh = hasLoad && loadMag >= finalLoadThreshold;
         const int32_t totalEncoderDelta =
             calibrationWrapEncoderDelta(currentEncoder, startEncoder);
         const float totalAngleDeltaDeg =
             fabsf(calibrationEncoderCountToDeg(totalEncoderDelta));
+        maybeAppendDualTendonTravelFitSample(fitBuffer,
+                                             totalAngleDeltaDeg,
+                                             currentEncoder,
+                                             currentPrimaryAbs,
+                                             currentSecondaryAbs);
+        const int32_t actualPrimaryReleaseTendonDelta =
+            motorRawAbsToTendonAbs(primaryMotor, currentPrimaryAbs) -
+            motorRawAbsToTendonAbs(primaryMotor, primaryStartAbs);
+        const int32_t commandPrimaryReleaseTendonDelta =
+            motorRawAbsToTendonAbs(primaryMotor, primaryCommandAbs) -
+            motorRawAbsToTendonAbs(primaryMotor, primaryStartAbs);
+        const int32_t actualPrimarySlackCounts =
+            (actualPrimaryReleaseTendonDelta < 0) ? -actualPrimaryReleaseTendonDelta : 0;
+        const int32_t commandPrimarySlackCounts =
+            (commandPrimaryReleaseTendonDelta < 0) ? -commandPrimaryReleaseTendonDelta : 0;
+        const int32_t maxPrimarySlackCounts =
+            (actualPrimarySlackCounts > commandPrimarySlackCounts)
+                ? actualPrimarySlackCounts
+                : commandPrimarySlackCounts;
+        if (maxPrimarySlackCounts > kAutoCalibrationMaxReverseReleaseCounts) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_EXCHANGE_NEG3 over-release J%02u primary=M%02u slack=%ld/%ld actualSlack=%ld commandSlack=%ld actualTendon=%ld commandTendon=%ld startAbs=%ld currentAbs=%ld cmd=%ld secondary=M%02u secondaryAbs=%ld\r\n",
+                          jointIndex,
+                          primaryMotor,
+                          (long)maxPrimarySlackCounts,
+                          (long)kAutoCalibrationMaxReverseReleaseCounts,
+                          (long)actualPrimarySlackCounts,
+                          (long)commandPrimarySlackCounts,
+                          (long)actualPrimaryReleaseTendonDelta,
+                          (long)commandPrimaryReleaseTendonDelta,
+                          (long)primaryStartAbs,
+                          (long)currentPrimaryAbs,
+                          (long)primaryCommandAbs,
+                          secondaryMotor,
+                          (long)currentSecondaryAbs);
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_OVER_RELEASE,
+                               CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                               jointIndex,
+                               primaryMotor,
+                               maxPrimarySlackCounts,
+                               kAutoCalibrationMaxReverseReleaseCounts,
+                               actualPrimarySlackCounts,
+                               (uint32_t)commandPrimarySlackCounts);
+            return false;
+        }
         bool limitFound = false;
 
         if ((uint32_t)(nowMs - windowStartMs) >= params.windowMs) {
@@ -2044,6 +2308,18 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                 windowSecondaryAbsDelta >= params.windowServoDeltaCounts;
             const bool primaryStillPaying =
                 windowPrimaryAbsDelta >= params.windowServoDeltaCounts;
+            const int32_t directionThresholdCount =
+                calibrationDegToEncoderCount(kReleaseMinDirectionDeg);
+            const int32_t wrongWindowThresholdCount =
+                calibrationDegToEncoderCount(kReleaseWrongWindowDeg);
+            const bool wrongDirectionCheckArmed =
+                (uint32_t)(nowMs - startMs) >= kReleaseWrongIgnoreMs;
+            const bool exchangeWrongDirection =
+                wrongDirectionCheckArmed &&
+                secondaryStillReeling &&
+                primaryStillPaying &&
+                totalEncoderDelta >= directionThresholdCount &&
+                windowEncoderDelta >= wrongWindowThresholdCount;
             if (angleStalled) {
                 if (angleStallStable < 255) {
                     angleStallStable++;
@@ -2051,8 +2327,15 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
             } else {
                 angleStallStable = 0;
             }
+            if (exchangeWrongDirection) {
+                if (angleWrongDirectionStable < 255) {
+                    angleWrongDirectionStable++;
+                }
+            } else {
+                angleWrongDirectionStable = 0;
+            }
 
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u abs=%ld primary=M%02u abs=%ld raw=%u oriented=%ld dCount=%ld winCount=%ld winSecAbs=%ld/%ld winPriAbs=%ld/%ld winDeg=%.3f/%.3f totalDeg=%.3f/%.3f load=%d ignored cond sec=%u pri=%u angle=%u angleStable=%u/%u travel=%u\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u abs=%ld primary=M%02u abs=%ld raw=%u oriented=%ld dCount=%ld winCount=%ld winSecAbs=%ld/%ld winPriAbs=%ld/%ld winDeg=%.3f/%.3f totalDeg=%.3f/%.3f load=%d/%d cond load=%u sec=%u pri=%u angle=%u angleStable=%u/%u travel=%u wrong=%u wrongArmed=%u wrongStable=%u/%u\r\n",
                           jointIndex,
                           secondaryMotor,
                           (long)currentSecondaryAbs,
@@ -2071,16 +2354,45 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                           totalAngleDeltaDeg,
                           kReverseMinFollowDeg,
                           loadMag,
+                          finalLoadThreshold,
+                          secondaryLoadHigh ? 1 : 0,
                           secondaryStillReeling ? 1 : 0,
                           primaryStillPaying ? 1 : 0,
                           angleStalled ? 1 : 0,
                           (unsigned)angleStallStable,
                           (unsigned)kAngleStallStableSamples,
-                          enoughEncoderTravel ? 1 : 0);
+                          enoughEncoderTravel ? 1 : 0,
+                          exchangeWrongDirection ? 1 : 0,
+                          wrongDirectionCheckArmed ? 1 : 0,
+                          (unsigned)angleWrongDirectionStable,
+                          (unsigned)kReleaseWrongDirectionStableSamples);
+
+            if (angleWrongDirectionStable >= kReleaseWrongDirectionStableSamples) {
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_EXCHANGE_NEG3 wrong direction J%02u totalCount=%ld windowCount=%ld threshold=%ld windowThreshold=%ld stable=%u/%u start=%ld current=%ld\r\n",
+                              jointIndex,
+                              (long)totalEncoderDelta,
+                              (long)windowEncoderDelta,
+                              (long)directionThresholdCount,
+                              (long)wrongWindowThresholdCount,
+                              (unsigned)angleWrongDirectionStable,
+                              (unsigned)kReleaseWrongDirectionStableSamples,
+                              (long)startEncoder,
+                              (long)currentEncoder);
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_WRONG_DIRECTION,
+                                   CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                                   jointIndex,
+                                   0xFF,
+                                   totalEncoderDelta,
+                                   directionThresholdCount,
+                                   windowEncoderDelta,
+                                   (uint32_t)(1UL << jointIndex));
+                return false;
+            }
 
             limitFound =
+                secondaryLoadHigh &&
                 enoughEncoderTravel &&
-                angleStallStable >= kAngleStallStableSamples &&
                 secondaryStillReeling &&
                 primaryStillPaying;
             windowStartEncoder = currentEncoder;
@@ -2105,7 +2417,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
             if (outSecondaryLoad) {
                 *outSecondaryLoad = loadMag;
             }
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_EXCHANGE_NEG3_FOUND J%02u secondary=M%02u raw=%u oriented=%ld secondaryAbs=%ld primaryAbs=%ld totalDeg=%.3f load=%d ignored\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_EXCHANGE_NEG3_FOUND J%02u secondary=M%02u raw=%u oriented=%ld secondaryAbs=%ld primaryAbs=%ld totalDeg=%.3f load=%d/%d\r\n",
                           jointIndex,
                           secondaryMotor,
                           (unsigned)currentRaw,
@@ -2113,7 +2425,8 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                           (long)currentSecondaryAbs,
                           (long)currentPrimaryAbs,
                           totalAngleDeltaDeg,
-                          loadMag);
+                          loadMag,
+                          finalLoadThreshold);
             return publishDualMotorCalibrationTargets(sharedData,
                                                       secondaryMotor,
                                                       currentSecondaryAbs,
@@ -2149,7 +2462,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
 
         if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
             lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u cmd=%ld abs=%ld primary=M%02u cmd=%ld abs=%ld raw=%u oriented=%ld totalDeg=%.3f load=%d ignored\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u cmd=%ld abs=%ld primary=M%02u cmd=%ld abs=%ld raw=%u oriented=%ld totalDeg=%.3f load=%d/%d\r\n",
                           jointIndex,
                           secondaryMotor,
                           (long)secondaryCommandAbs,
@@ -2160,7 +2473,8 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                           (unsigned)currentRaw,
                           (long)currentEncoder,
                           totalAngleDeltaDeg,
-                          loadMag);
+                          loadMag,
+                          finalLoadThreshold);
         }
 
         vTaskDelay(pdMS_TO_TICKS(params.loopMs));
@@ -2192,6 +2506,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     const int8_t secondaryShortenSign = getMotorTendonShortenAbsSign(secondaryMotor);
     const int16_t primaryTightLoadThreshold = kDualPrimaryTightLoadThreshold;
     const int16_t secondaryPreloadLoadThreshold = kDualSecondaryPreloadLoadThreshold;
+    const int16_t secondaryFinalLoadThreshold = kDualSecondaryFinalLoadThreshold;
 
     uint16_t initialRaw = 0;
     int32_t initialEncoder = 0;
@@ -2213,7 +2528,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         return false;
     }
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_BEGIN J%02u primary=M%02u primaryShortenSign=%d secondary=M%02u secondaryShortenSign=%d slack=%ld primaryLoad=%d secondaryLoad=%d startDeg=%.3f tightDeg=dynamic initialEncoder=%ld primaryAbs=%ld secondaryAbs=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_BEGIN J%02u primary=M%02u primaryShortenSign=%d secondary=M%02u secondaryShortenSign=%d slack=%ld primaryLoad=%d secondaryPreloadLoad=%d secondaryFinalLoad=%d startDeg=%.3f tightDeg=dynamic initialEncoder=%ld primaryAbs=%ld secondaryAbs=%ld\r\n",
                   jointIndex,
                   primaryMotor,
                   (int)primaryShortenSign,
@@ -2222,6 +2537,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (long)kDualAutoSlackCounts,
                   primaryTightLoadThreshold,
                   secondaryPreloadLoadThreshold,
+                  secondaryFinalLoadThreshold,
                   kAutoCalibrationStartDeg,
                   (long)initialEncoder,
                   (long)primaryAbs,
@@ -2292,6 +2608,8 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     uint16_t secondaryPreloadRaw = 0;
     int32_t secondaryPreloadEncoder = secondaryStartEncoder;
     int16_t secondaryPreloadLoad = 0;
+    DualTendonRawFitBuffer fitSamples;
+    resetDualTendonRawFitBuffer(&fitSamples);
     if (!findDualSecondaryPreloadPoint(sharedData,
                                        jointIndex,
                                        secondaryMotor,
@@ -2314,6 +2632,11 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                       jointIndex);
         return false;
     }
+    appendDualTendonRawFitSample(&fitSamples,
+                                 exchangeStartEncoder,
+                                 primary80Abs,
+                                 secondaryPreloadAbs);
+    fitSamples.nextTravelDeg = kDualTendonFitSampleStepDeg;
 
     if (!findDualExchangeLimitPoint(sharedData,
                                     jointIndex,
@@ -2324,14 +2647,20 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                     primaryShortenSign,
                                     primary80Abs,
                                     exchangeStartEncoder,
+                                    secondaryFinalLoadThreshold,
                                     params,
                                     &secondaryNeg3Abs,
                                     &primaryNeg3Abs,
                                     &neg3Raw,
                                     &neg3Encoder,
-                                    &neg3Load)) {
+                                    &neg3Load,
+                                    &fitSamples)) {
         return false;
     }
+    appendDualTendonRawFitSample(&fitSamples,
+                                 neg3Encoder,
+                                 primaryNeg3Abs,
+                                 secondaryNeg3Abs);
 
     const int32_t signedSpan = signedEncoderDeltaLocal(neg3Encoder, primary80Encoder);
     const int8_t encoderTravelSign = 1;
@@ -2391,6 +2720,11 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_RESULT_BUILD J%02u\r\n", jointIndex);
         return false;
     }
+    const bool lutBuilt =
+        buildDualTendonLutFromRawSamples(&result,
+                                         primaryMotor,
+                                         secondaryMotor,
+                                         fitSamples);
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_ENCODER_DIR_FIXED J%02u defaultDir=%d runtimeDir=%d signed=%ld resultStart=%ld resultZero=%ld resultTight=%ld\r\n",
                   jointIndex,
@@ -2400,6 +2734,15 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (long)result.startEncoder,
                   (long)result.zeroEncoder,
                   (long)result.tightEncoder);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_LUT J%02u built=%u rawSamples=%u lutSamples=%u startDeg=%.3f stepDeg=%.3f primary=M%02u secondary=M%02u\r\n",
+                  jointIndex,
+                  lutBuilt ? 1U : 0U,
+                  (unsigned)fitSamples.count,
+                  (unsigned)result.dualTendonLutCount,
+                  result.dualTendonLutAngleStartDeg,
+                  result.dualTendonLutAngleStepDeg,
+                  primaryMotor,
+                  secondaryMotor);
 
     applyDynamicAutoCalibrationConfig(&g_jointCalibConfig[jointIndex], result);
     g_jointCalibResult[jointIndex] = result;
@@ -3575,33 +3918,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                               ctx->zeroMappedCaptured ? (long)ctx->zeroMappedCaptureAbs : 0L);
             }
 
-            if ((uint32_t)(nowMs - ctx->stateBeginMs) >= params.zeroReturnTimeoutMs) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_TIMEOUT J%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld returnTravel=%ld/%ld mappedDeg=%.3f/%.3f absReached=%u travelReached=%u mappedReached=%u captured=%u captureAbs=%ld\r\n",
-                              ctx->jointIndex,
-                              (long)ctx->targetAbs,
-                              absFeedbackValid ? (long)currentAbs : 0L,
-                              absFeedbackValid ? (long)absError : -1L,
-                              (long)returnZeroTolerance,
-                              absFeedbackValid ? (long)returnTravel : 0L,
-                              (long)requiredReturnTravel,
-                              encoderMappedValid ? zeroMappedDeg : NAN,
-                              kAutoZeroMappedToleranceDeg,
-                              (absFeedbackValid && absError <= returnZeroTolerance) ? 1 : 0,
-                              returnTravelReached ? 1 : 0,
-                              mappedZeroReached ? 1 : 0,
-                              ctx->zeroMappedCaptured ? 1 : 0,
-                              ctx->zeroMappedCaptured ? (long)ctx->zeroMappedCaptureAbs : 0L);
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "zero return timeout",
-                                             CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             absFeedbackValid ? absError : -1,
-                                             requiredReturnTravel,
-                                             encoderMappedValid ? (int32_t)lroundf(zeroMappedDeg * 100.0f) : 0,
-                                             0);
-            }
             return;
         }
 

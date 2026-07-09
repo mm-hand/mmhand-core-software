@@ -29,6 +29,9 @@
 #endif
 
 static ControlSolver g_controlSolver;
+static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
+static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
+static uint32_t g_dualReleaseAnchorValidBitmap = 0;
 
 static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
@@ -243,18 +246,52 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
         const uint8_t motorChannel = tendonTargets.motorChannel[i];
         if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
-            continue;
+            return 0;
         }
         const MotorMapItem& motor = motorMap[motorChannel];
-        const int16_t clampedTarget = clampServoPosByMotorAbsLimit(sharedData,
-                                                                   motorChannel,
-                                                                   tendonTargets.targetAbs[i]);
+        const uint32_t bit = (1UL << motorChannel);
+        uint32_t validBitmap = 0;
+        uint32_t lockedBitmap = 0;
+        int32_t limitMin = 0;
+        int32_t limitMax = 0;
+        {
+            SharedSafetyGuard guard;
+            validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+            lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+            limitMin = sharedData->motor_abs_limit_min[motorChannel];
+            limitMax = sharedData->motor_abs_limit_max[motorChannel];
+        }
+        if ((validBitmap & bit) == 0 || (lockedBitmap & bit) == 0) {
+            return 0;
+        }
+        if (limitMin > limitMax) {
+            const int32_t tmp = limitMin;
+            limitMin = limitMax;
+            limitMax = tmp;
+        }
+
+        const int32_t calibratedTightAbs =
+            (getMotorTendonShortenAbsSign(motorChannel) > 0) ? limitMax : limitMin;
+        const int32_t currentRawAbs = servoData.servoAngles[motorChannel];
+        if ((g_dualReleaseAnchorValidBitmap & bit) == 0 ||
+            g_dualReleaseAnchorCalibSignature[motorChannel] != calibratedTightAbs) {
+            g_dualReleaseAnchorRawAbs[motorChannel] = currentRawAbs;
+            g_dualReleaseAnchorCalibSignature[motorChannel] = calibratedTightAbs;
+            g_dualReleaseAnchorValidBitmap |= bit;
+        }
+
+        const int32_t releaseLimitedTarget = clampDualTendonReleaseFromCalib(
+            jointIndex,
+            motorChannel,
+            g_dualReleaseAnchorRawAbs[motorChannel],
+            currentRawAbs,
+            tendonTargets.targetAbs[i]);
         JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
         target.motorChannel = motorChannel;
         target.busIndex = motor.busIndex;
         target.servoId = motor.servoID;
         target.sign = 1;
-        target.targetAbs = clampedTarget;
+        target.targetAbs = clampServoPos(releaseLimitedTarget);
     }
 
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
@@ -603,6 +640,9 @@ void controlTask(void* parameter)
 
         sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
         overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
+
+        g_dualReleaseAnchorValidBitmap &=
+            sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
 
         memset(absolutePositionRaw, 0, sizeof(absolutePositionRaw));
         memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));

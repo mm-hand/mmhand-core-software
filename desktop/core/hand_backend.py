@@ -20,6 +20,7 @@ from .tendon_guard import TendonGuard
 
 
 StateCallback = Callable[[HandModel], None]
+JointTargetCallback = Callable[[dict], None]
 
 
 def list_ports() -> List[tuple]:
@@ -96,6 +97,8 @@ class HandBackend:
         self._next_tactile_reconnect_ts = 0.0
         self._state_callbacks: List[StateCallback] = []
         self._callback_lock = threading.Lock()
+        self._joint_target_callbacks: List[JointTargetCallback] = []
+        self._joint_target_callback_lock = threading.Lock()
         self._ensure_controller_callback_registered()
 
     @property
@@ -144,6 +147,24 @@ class HandBackend:
     def unregister_update_callback(self, callback: StateCallback) -> None:
         with self._callback_lock:
             self._state_callbacks = [cb for cb in self._state_callbacks if cb != callback]
+
+    def register_joint_target_callback(self, callback: JointTargetCallback) -> None:
+        with self._joint_target_callback_lock:
+            if callback not in self._joint_target_callbacks:
+                self._joint_target_callbacks.append(callback)
+
+    def unregister_joint_target_callback(self, callback: JointTargetCallback) -> None:
+        with self._joint_target_callback_lock:
+            self._joint_target_callbacks = [cb for cb in self._joint_target_callbacks if cb != callback]
+
+    def _notify_joint_target_callbacks(self, payload: dict) -> None:
+        with self._joint_target_callback_lock:
+            callbacks = list(self._joint_target_callbacks)
+        for callback in callbacks:
+            try:
+                callback(dict(payload))
+            except Exception:
+                pass
 
     def get_state_snapshot(self) -> HandModel:
         with self._controller.state_lock:
@@ -238,20 +259,37 @@ class HandBackend:
     ) -> JointCommandResult:
         self.sync_tendon_guard(force=False)
         state = self.get_current_state()
-        guarded, blocked, message = self.tendon_guard.apply(state, list(angles), source=source)
+        input_targets = list(angles)
+        guarded, blocked, message = self.tendon_guard.apply(state, input_targets, source=source)
         if live:
             self._controller.set_target_angles_live(guarded)
         else:
             self._controller.set_target_angles(guarded)
         if source and not blocked and not str(source).startswith("Hold"):
             self._controller.request_run_feedback()
-        return JointCommandResult(sent=True, blocked=list(blocked), message=message, targets=guarded)
+        result = JointCommandResult(sent=True, blocked=list(blocked), message=message, targets=guarded)
+        self._notify_joint_target_callbacks(
+            {
+                "source": source,
+                "live": bool(live),
+                "input_targets": input_targets,
+                "output_targets": guarded,
+                "blocked": list(blocked),
+                "message": message,
+                "sent": bool(result.sent),
+                "device_timestamp": getattr(state, "timestamp", ""),
+            }
+        )
+        return result
 
-    def start_joint_debug_packet_log(self, path: str) -> bool:
+    def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> bool:
         starter = getattr(self.comm, "start_joint_debug_packet_log", None)
         if starter is None:
             return False
-        starter(path)
+        try:
+            starter(path, row_callback=row_callback)
+        except TypeError:
+            starter(path)
         return True
 
     def stop_joint_debug_packet_log(self) -> None:

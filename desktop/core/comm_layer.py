@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 import time
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 try:
@@ -895,6 +895,7 @@ class LowerComputerComm:
         self._heartbeat_enabled = False
         self._offline_reported = False
         self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
+        self._joint_debug_packet_callback: Optional[Callable[[dict], None]] = None
         self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
         self._tactile_zero_counts: List[List[int]] = [
@@ -1056,7 +1057,7 @@ class LowerComputerComm:
             self.serial = None
             self._push_rx_model(self._build_offline_model())
 
-    def start_joint_debug_packet_log(self, path: str) -> None:
+    def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> None:
         fieldnames = [
             "host_ts_wall",
             "device_ts_ms",
@@ -1070,10 +1071,13 @@ class LowerComputerComm:
             "cmd_valid",
             "cmd_target_pos",
         ]
-        self._joint_debug_packet_logger.start(path, fieldnames=fieldnames)
+        self._joint_debug_packet_callback = row_callback
+        if path:
+            self._joint_debug_packet_logger.start(path, fieldnames=fieldnames)
 
     def stop_joint_debug_packet_log(self) -> None:
         self._joint_debug_packet_logger.stop()
+        self._joint_debug_packet_callback = None
 
     def _log_joint_debug_packet(
         self,
@@ -1089,23 +1093,27 @@ class LowerComputerComm:
         cmd_target_pos: int,
         device_timestamp_ms: int,
     ) -> None:
-        if not self._joint_debug_packet_logger.is_running():
-            return
-        self._joint_debug_packet_logger.write_row(
-            {
-                "host_ts_wall": f"{float(host_ts_wall):.6f}",
-                "device_ts_ms": int(device_timestamp_ms),
-                "joint_index": int(joint_index),
-                "valid": 1 if valid else 0,
-                "target_deg": float(target_deg),
-                "actual_deg": float(actual_deg),
-                "loop1_output": float(loop1_out),
-                "loop2_actual": float(loop2_act),
-                "loop2_output": float(loop2_out),
-                "cmd_valid": 1 if cmd_valid else 0,
-                "cmd_target_pos": int(cmd_target_pos),
-            }
-        )
+        row = {
+            "host_ts_wall": f"{float(host_ts_wall):.6f}",
+            "device_ts_ms": int(device_timestamp_ms),
+            "joint_index": int(joint_index),
+            "valid": 1 if valid else 0,
+            "target_deg": float(target_deg),
+            "actual_deg": float(actual_deg),
+            "loop1_output": float(loop1_out),
+            "loop2_actual": float(loop2_act),
+            "loop2_output": float(loop2_out),
+            "cmd_valid": 1 if cmd_valid else 0,
+            "cmd_target_pos": int(cmd_target_pos),
+        }
+        if self._joint_debug_packet_logger.is_running():
+            self._joint_debug_packet_logger.write_row(row)
+        callback = self._joint_debug_packet_callback
+        if callback is not None:
+            try:
+                callback(dict(row))
+            except Exception:
+                pass
 
     def _reset_rx_diag(self) -> None:
         self._rx_diag_last_print = time.time()
@@ -1407,10 +1415,12 @@ class LowerComputerComm:
                 if angles:
                     for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
                         model.encoders[i].encoder_id = i
-                        if self._mapped_angle_count_plausible(i, int(angles[i]), model):
+                        angle_error = errors[i] if i < len(errors) else False
+                        model.encoders[i].angle_error = angle_error
+                        if not angle_error and self._mapped_angle_count_plausible(i, int(angles[i]), model):
                             model.encoders[i].raw = angles[i]
                         model.encoders[i].zero_raw = 0
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
+                        model.encoders[i].error = angle_error
 
                     for i in range(min(ENCODER_COUNT, len(model.motors))):
                         model.motors[i].motor_id = i
@@ -1426,8 +1436,11 @@ class LowerComputerComm:
                 raw_values, errors = parse_sensor_packet(payload)
                 if raw_values:
                     for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
-                        model.encoders[i].raw_sensor = raw_values[i]
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
+                        raw_error = errors[i] if i < len(errors) else False
+                        model.encoders[i].raw_error = raw_error
+                        if not raw_error:
+                            model.encoders[i].raw_sensor = raw_values[i]
+                        model.encoders[i].error = raw_error
                     emitted = True
 
             elif pkt_type == 0x02:
