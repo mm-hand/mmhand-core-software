@@ -24,7 +24,8 @@ MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
 // Motor channel -> tendon shortening direction in servo absolute counts.
 // +1: increasing ABS shortens the tendon.
 // -1: decreasing ABS shortens the tendon.
-static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
+static constexpr int8_t kMotorTendonShortenAbsSign[] = {
+    1, 1, 1, 1,
     1, 1, 1, 1,
     1, 1, 1, 1,
     1, 1, 1, 1,
@@ -32,6 +33,11 @@ static const int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {
     1, 1, 1, 1,
     1, 1, 1
 };
+
+static_assert(
+    sizeof(kMotorTendonShortenAbsSign) / sizeof(kMotorTendonShortenAbsSign[0]) == SERVO_TOTAL_NUM,
+    "motor tendon sign count must match SERVO_TOTAL_NUM"
+);
 
 #define ACT_NONE {0xFF, 1, 0, 0}
 #define ACT_PRIMARY(ch) {ch, 1, 0, 0}

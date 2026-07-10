@@ -4218,7 +4218,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _joint_raw_feedback_valid(self, idx: int, state=None) -> bool:
         state = self._state if state is None else state
-        if state is None or not bool(getattr(state, "has_sensor_data", False)):
+        if state is None or not bool(getattr(state, "has_encoder_raw_data", False)):
             return False
         encoders = getattr(state, "encoders", []) or []
         if idx < 0 or idx >= len(encoders):
@@ -4373,7 +4373,6 @@ class ControlPanel(QtWidgets.QWidget):
                 if (
                     display_valid and
                     angle_feedback_valid and
-                    raw_feedback_valid and
                     joint_has_data and
                     i < len(getattr(state, "angles", []))
                 ):
@@ -4385,9 +4384,7 @@ class ControlPanel(QtWidgets.QWidget):
                     self._set_item_text_if_changed(self.joint_current_items[i], "-")
                 if (
                     display_valid and
-                    angle_feedback_valid and
                     raw_feedback_valid and
-                    joint_has_data and
                     i < len(getattr(state, "encoders", []))
                 ):
                     self._set_item_text_if_changed(

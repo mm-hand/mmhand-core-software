@@ -1403,6 +1403,10 @@ class LowerComputerComm:
             model.copy_state_from(self._last_model)
             model.calib_status = self._last_model.calib_status
             model.has_sensor_data = bool(self._last_model.has_sensor_data)
+            model.has_encoder_raw_data = bool(getattr(self._last_model, "has_encoder_raw_data", False))
+            model.encoder_raw_last_rx_ts = float(
+                getattr(self._last_model, "encoder_raw_last_rx_ts", 0.0) or 0.0
+            )
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
             model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
 
@@ -1441,6 +1445,9 @@ class LowerComputerComm:
                         if not raw_error:
                             model.encoders[i].raw_sensor = raw_values[i]
                         model.encoders[i].error = raw_error
+                    # Raw CAN magnetic encoder data remains meaningful before joint calibration.
+                    model.has_encoder_raw_data = True
+                    model.encoder_raw_last_rx_ts = time.time()
                     emitted = True
 
             elif pkt_type == 0x02:

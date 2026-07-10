@@ -70,7 +70,6 @@ static const int32_t kDualAutoSlackCounts = 3200;
 static const int32_t kDualSecondaryPreloadTargetLeadCounts = 4096 * 5;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
 static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;
-static const int32_t kAutoCalibrationMaxReverseReleaseCounts = 4096 * 2;
 static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
 static const int16_t kDualPrimaryTightLoadThreshold = 190;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
@@ -82,14 +81,13 @@ static const float kDualTendonFitSampleStepDeg = 5.0f;
 static const uint8_t kDualTendonRawSampleCapacity =
     DUAL_TENDON_LUT_MAX_SAMPLES * 3;
 static const uint8_t kAngleStallStableSamples = 2;
-static const float kReleaseMinDirectionDeg = 3.0f;
-static const float kReleaseWrongWindowDeg = 1.0f;
-static const uint32_t kReleaseWrongIgnoreMs = 600;
-static const uint32_t kReleasePreHoldMs = 500;
-static const uint8_t kReleaseDirectionStableSamples = 2;
-static const uint8_t kReleaseWrongDirectionStableSamples = 3;
-static const int32_t kReleaseServoWrongDirectionCounts = 120;
-static const int32_t kSideSwayMaxCommandLeadCounts = 400;
+// Calibration commands must stay near the measured servo ABS.  A target that
+// runs far ahead while a servo is stalled or still reversing becomes stale by
+// the time the mechanics respond.
+static const int32_t kAutoCalibMaxCommandLeadCounts = 400;
+static const int32_t kPreReleaseSyncTargetToleranceCounts = 40;
+static const int32_t kPreReleaseSyncSettleDeltaCounts = 20;
+static const uint8_t kPreReleaseSyncStableSamples = 2;
 static const float kAutoZeroMappedToleranceDeg = 6.0f;
 static const float kAutoZeroCrossMaxAbsDeg = 160.0f;
 
@@ -305,6 +303,42 @@ static bool autoCalibrationStillOwnsControl(TaskSharedData_t* sharedData)
 static bool isServoCommandInsideLimit(int32_t commandAbs)
 {
     return commandAbs >= -30719 && commandAbs <= 30719;
+}
+
+// Keep the command inside a symmetric tendon-space window around feedback.
+// This works for both raw-ABS signs and for tighten/release directions.
+static int32_t clampAutoCalibTargetLead(uint8_t motorChannel,
+                                        int32_t desiredAbs,
+                                        int32_t currentAbs,
+                                        bool* outLimited = NULL)
+{
+    if (outLimited) {
+        *outLimited = false;
+    }
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
+    if (shortenSign == 0) {
+        return desiredAbs;
+    }
+
+    const int32_t tendonDelta =
+        (int32_t)shortenSign * (desiredAbs - currentAbs);
+    if (tendonDelta > kAutoCalibMaxCommandLeadCounts) {
+        if (outLimited) {
+            *outLimited = true;
+        }
+        return motorApplyTendonDelta(motorChannel,
+                                     currentAbs,
+                                     kAutoCalibMaxCommandLeadCounts);
+    }
+    if (tendonDelta < -kAutoCalibMaxCommandLeadCounts) {
+        if (outLimited) {
+            *outLimited = true;
+        }
+        return motorApplyTendonDelta(motorChannel,
+                                     currentAbs,
+                                     -kAutoCalibMaxCommandLeadCounts);
+    }
+    return desiredAbs;
 }
 
 static int findMotorChannel(uint8_t bus, uint8_t id)
@@ -1161,6 +1195,7 @@ enum AutoCalibState {
     AUTO_CALIB_STATE_IDLE = 0,
     AUTO_CALIB_STATE_INIT,
     AUTO_CALIB_STATE_TIGHTEN,
+    AUTO_CALIB_STATE_PRE_RELEASE_SYNC,
     AUTO_CALIB_STATE_CLAMP_TIGHT,
     AUTO_CALIB_STATE_RETURN_ZERO,
     AUTO_CALIB_STATE_DONE,
@@ -1175,7 +1210,6 @@ struct JointCalibContext {
     uint8_t motorChannel;
     int32_t directionSign;
     int8_t encoderTravelSign;
-    int8_t tightenEncoderSign;
     JointCalibrationConfig motionCfg;
     uint32_t stateBeginMs;
     uint32_t lastCommandMs;
@@ -1202,11 +1236,11 @@ struct JointCalibContext {
     bool resultValid;
     bool initStarted;
     bool releaseCommandStarted;
-    uint32_t releaseStartMs;
-    uint32_t preReleaseHoldStartMs;
+    int32_t preReleaseSyncTargetAbs;
+    int32_t preReleaseSyncWindowStartAbs;
+    uint32_t preReleaseSyncWindowStartMs;
+    uint8_t preReleaseSyncStableSamples;
     uint8_t releaseAngleStallStable;
-    uint8_t releaseReverseStable;
-    uint8_t releaseWrongDirectionStable;
     bool zeroMappedCaptured;
     int32_t zeroMappedCaptureAbs;
     float zeroMappedCaptureDeg;
@@ -1427,6 +1461,38 @@ static bool publishMotorCalibrationTarget(TaskSharedData_t* sharedData,
         return false;
     }
 
+    int32_t currentAbs = 0;
+    if (readLatestMotorServoAbs(sharedData, motorChannel, &currentAbs)) {
+        targetAbs = clampAutoCalibTargetLead(motorChannel,
+                                             targetAbs,
+                                             currentAbs);
+    }
+
+    ServoTargetBatch_t batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.source = SERVO_TARGET_OWNER_CALIBRATION;
+    batch.timestamp = millis();
+    if (!appendMotorCalibrationTargetToBatch(&batch, motorChannel, targetAbs, params)) {
+        return false;
+    }
+    return publishCalibrationBatch(sharedData, &batch);
+}
+
+// Dual-tendon release/preload has an explicit finite travel target. It must
+// not pause at the generic 400-count feedback guard, otherwise the command
+// freezes exactly when a long release is still required.
+static bool publishMotorCalibrationTargetWithoutLeadClamp(TaskSharedData_t* sharedData,
+                                                          uint8_t motorChannel,
+                                                          int32_t targetAbs,
+                                                          const AutoCalibrationParams& params)
+{
+    if (!isServoCommandInsideLimit(targetAbs)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL motor target outside limit M%02u target=%ld\r\n",
+                      motorChannel,
+                      (long)targetAbs);
+        return false;
+    }
+
     ServoTargetBatch_t batch;
     memset(&batch, 0, sizeof(batch));
     batch.source = SERVO_TARGET_OWNER_CALIBRATION;
@@ -1443,6 +1509,14 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                uint8_t holdMotor,
                                                int32_t holdTargetAbs,
                                                const AutoCalibrationParams& params);
+
+static bool publishDualMotorCalibrationTargetsWithoutLeadClamp(
+    TaskSharedData_t* sharedData,
+    uint8_t movingMotor,
+    int32_t movingTargetAbs,
+    uint8_t holdMotor,
+    int32_t holdTargetAbs,
+    const AutoCalibrationParams& params);
 
 static bool releaseSideSwaySecondaryByPresetCounts(TaskSharedData_t* sharedData,
                                                    uint8_t jointIndex,
@@ -1500,15 +1574,6 @@ static bool releaseSideSwaySecondaryByPresetCounts(TaskSharedData_t* sharedData,
 
     uint32_t lastTraceMs = 0;
     while (autoCalibrationStillOwnsControl(sharedData)) {
-        if (!publishDualMotorCalibrationTargets(sharedData,
-                                                secondaryMotor,
-                                                secondaryReleaseAbs,
-                                                primaryMotor,
-                                                primaryHoldAbs,
-                                                params)) {
-            return false;
-        }
-
         int32_t secondaryAbs = 0;
         if (!readLatestMotorServoAbs(sharedData, secondaryMotor, &secondaryAbs)) {
             setCalibrationDiag(sharedData,
@@ -1520,6 +1585,21 @@ static bool releaseSideSwaySecondaryByPresetCounts(TaskSharedData_t* sharedData,
                                0,
                                0,
                                1UL << secondaryMotor);
+            return false;
+        }
+
+        bool leadLimited = false;
+        const int32_t secondaryCommandAbs = clampAutoCalibTargetLead(
+            secondaryMotor,
+            secondaryReleaseAbs,
+            secondaryAbs,
+            &leadLimited);
+        if (!publishDualMotorCalibrationTargets(sharedData,
+                                                secondaryMotor,
+                                                secondaryCommandAbs,
+                                                primaryMotor,
+                                                primaryHoldAbs,
+                                                params)) {
             return false;
         }
 
@@ -1537,10 +1617,12 @@ static bool releaseSideSwaySecondaryByPresetCounts(TaskSharedData_t* sharedData,
         const uint32_t nowMs = millis();
         if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
             lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST secondary release wait J%02u M%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST secondary release wait J%02u M%02u targetAbs=%ld sentAbs=%ld leadLimited=%u currentAbs=%ld absErr=%ld/%ld\r\n",
                           (unsigned)jointIndex,
                           (unsigned)secondaryMotor,
                           (long)secondaryReleaseAbs,
+                          (long)secondaryCommandAbs,
+                          leadLimited ? 1 : 0,
                           (long)secondaryAbs,
                           (long)absErr,
                           (long)params.zeroReachAbsTolerance);
@@ -1681,13 +1763,12 @@ static bool adjustSideSwayJointToLoad(TaskSharedData_t* sharedData,
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
                 commandAbs = motorApplyTendonDelta(primaryMotor, commandAbs, stepCounts);
-                const int8_t shortenSign = getMotorTendonShortenAbsSign(primaryMotor);
-                const int32_t commandLead =
-                    (int32_t)shortenSign * (commandAbs - currentAbs);
-                if (commandLead > kSideSwayMaxCommandLeadCounts) {
-                    commandAbs = motorApplyTendonDelta(primaryMotor,
-                                                       currentAbs,
-                                                       kSideSwayMaxCommandLeadCounts);
+                bool leadLimited = false;
+                commandAbs = clampAutoCalibTargetLead(primaryMotor,
+                                                      commandAbs,
+                                                      currentAbs,
+                                                      &leadLimited);
+                if (leadLimited) {
                     commandRemainder = 0;
                 }
                 if (!isServoCommandInsideLimit(commandAbs)) {
@@ -1766,6 +1847,64 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
         return false;
     }
 
+    int32_t movingCurrentAbs = 0;
+    if (readLatestMotorServoAbs(sharedData, movingMotor, &movingCurrentAbs)) {
+        movingTargetAbs = clampAutoCalibTargetLead(movingMotor,
+                                                    movingTargetAbs,
+                                                    movingCurrentAbs);
+    }
+    if (holdMotor != movingMotor) {
+        int32_t holdCurrentAbs = 0;
+        if (readLatestMotorServoAbs(sharedData, holdMotor, &holdCurrentAbs)) {
+            holdTargetAbs = clampAutoCalibTargetLead(holdMotor,
+                                                     holdTargetAbs,
+                                                     holdCurrentAbs);
+        }
+    }
+
+    ServoTargetBatch_t batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.source = SERVO_TARGET_OWNER_CALIBRATION;
+    batch.timestamp = millis();
+    if (!appendMotorCalibrationTargetToBatch(&batch, movingMotor, movingTargetAbs, params)) {
+        return false;
+    }
+    if (holdMotor != movingMotor &&
+        !appendMotorCalibrationTargetToBatch(&batch, holdMotor, holdTargetAbs, params)) {
+        return false;
+    }
+    return publishCalibrationBatch(sharedData, &batch);
+}
+
+static bool publishDualMotorCalibrationTargetsWithoutLeadClamp(
+    TaskSharedData_t* sharedData,
+    uint8_t movingMotor,
+    int32_t movingTargetAbs,
+    uint8_t holdMotor,
+    int32_t holdTargetAbs,
+    const AutoCalibrationParams& params)
+{
+    if (!isServoCommandInsideLimit(movingTargetAbs) ||
+        !isServoCommandInsideLimit(holdTargetAbs)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL dual target outside limit moving=M%02u target=%ld hold=M%02u target=%ld\r\n",
+                      movingMotor,
+                      (long)movingTargetAbs,
+                      holdMotor,
+                      (long)holdTargetAbs);
+        return false;
+    }
+
+    // Only the travelling secondary motor bypasses the 400-count guard. The
+    // primary hold target keeps the normal near-feedback protection.
+    if (holdMotor != movingMotor) {
+        int32_t holdCurrentAbs = 0;
+        if (readLatestMotorServoAbs(sharedData, holdMotor, &holdCurrentAbs)) {
+            holdTargetAbs = clampAutoCalibTargetLead(holdMotor,
+                                                     holdTargetAbs,
+                                                     holdCurrentAbs);
+        }
+    }
+
     ServoTargetBatch_t batch;
     memset(&batch, 0, sizeof(batch));
     batch.source = SERVO_TARGET_OWNER_CALIBRATION;
@@ -1789,12 +1928,19 @@ static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
 {
     uint32_t lastTraceMs = 0;
     while (autoCalibrationStillOwnsControl(sharedData)) {
-        if (!publishMotorCalibrationTarget(sharedData, motorChannel, targetAbs, params)) {
+        // This helper is only used by DUAL_SLACK_SECONDARY. The 3200-count
+        // release is an explicitly bounded trajectory, so do not stop it at
+        // the generic 400-count feedback guard.
+        if (!publishMotorCalibrationTargetWithoutLeadClamp(sharedData,
+                                                            motorChannel,
+                                                            targetAbs,
+                                                            params)) {
             return false;
         }
 
         int32_t currentAbs = 0;
         if (readLatestMotorServoAbs(sharedData, motorChannel, &currentAbs)) {
+            const uint32_t nowMs = millis();
             const int32_t absErr = abs32(currentAbs - targetAbs);
             if (absErr <= params.zeroReachAbsTolerance) {
                 FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_REACHED J%02u M%02u targetAbs=%ld currentAbs=%ld absErr=%ld\r\n",
@@ -1807,7 +1953,6 @@ static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
                 return true;
             }
 
-            const uint32_t nowMs = millis();
             if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
                 lastTraceMs = nowMs;
                 FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_WAIT J%02u M%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld\r\n",
@@ -2015,6 +2160,14 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
             commandRemainder = numerator % 1000;
             if (stepCounts > 0) {
                 commandAbs = motorApplyTendonDelta(motorChannel, commandAbs, stepCounts);
+                bool leadLimited = false;
+                commandAbs = clampAutoCalibTargetLead(motorChannel,
+                                                      commandAbs,
+                                                      currentAbs,
+                                                      &leadLimited);
+                if (leadLimited) {
+                    commandRemainder = 0;
+                }
                 if (holdOtherMotor) {
                     if (!publishDualMotorCalibrationTargets(sharedData,
                                                             motorChannel,
@@ -2078,9 +2231,12 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
 {
     const int32_t preloadTargetAbs = clampToServoAbsRangeLocal(
         motorApplyTendonDelta(secondaryMotor,
-                              secondaryStartAbs,
-                              kDualSecondaryPreloadTargetLeadCounts));
+                               secondaryStartAbs,
+                               kDualSecondaryPreloadTargetLeadCounts));
     uint32_t lastTraceMs = 0;
+    int32_t preloadCommandAbs = secondaryStartAbs;
+    int32_t preloadCommandRemainder = 0;
+    uint32_t lastCommandMs = millis();
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_PRELOAD_SECONDARY_BEGIN J%02u secondary=M%02u startAbs=%ld targetAbs=%ld lead=%ld shortenSign=%d primaryHold=M%02u holdAbs=%ld loadThreshold=%d\r\n",
                   jointIndex,
@@ -2140,21 +2296,46 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
                                                       params);
         }
 
-        if (!publishDualMotorCalibrationTargets(sharedData,
-                                                secondaryMotor,
-                                                preloadTargetAbs,
-                                                primaryMotor,
-                                                primaryHoldAbs,
-                                                params)) {
-            return false;
+        const uint32_t dtMs = nowMs - lastCommandMs;
+        if (dtMs >= params.loopMs) {
+            const int32_t numerator =
+                (int32_t)dtMs * params.tightenSpeedCountsPerSec + preloadCommandRemainder;
+            const int32_t stepCounts = numerator / 1000;
+            preloadCommandRemainder = numerator % 1000;
+            if (stepCounts > 0) {
+                const int32_t remainingTendon =
+                    (int32_t)secondaryShortenSign *
+                    (preloadTargetAbs - preloadCommandAbs);
+                if (remainingTendon != 0) {
+                    const int32_t limitedStep =
+                        (abs32(remainingTendon) < stepCounts)
+                            ? abs32(remainingTendon)
+                            : stepCounts;
+                    preloadCommandAbs = motorApplyTendonDelta(
+                        secondaryMotor,
+                        preloadCommandAbs,
+                        (remainingTendon > 0) ? limitedStep : -limitedStep);
+                    if (!publishDualMotorCalibrationTargetsWithoutLeadClamp(
+                            sharedData,
+                            secondaryMotor,
+                            preloadCommandAbs,
+                            primaryMotor,
+                            primaryHoldAbs,
+                            params)) {
+                        return false;
+                    }
+                }
+            }
+            lastCommandMs = nowMs;
         }
 
         if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
             lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_PRELOAD_SECONDARY J%02u M%02u target=%ld abs=%ld raw=%u oriented=%ld load=%d/%d primaryHoldAbs=%ld\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_PRELOAD_SECONDARY J%02u M%02u target=%ld command=%ld abs=%ld raw=%u oriented=%ld load=%d/%d primaryHoldAbs=%ld\r\n",
                           jointIndex,
                           secondaryMotor,
                           (long)preloadTargetAbs,
+                          (long)preloadCommandAbs,
                           (long)currentAbs,
                           (unsigned)currentRaw,
                           (long)currentEncoder,
@@ -2206,7 +2387,6 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
     int32_t windowStartSecondaryAbs = secondaryStartAbs;
     int32_t windowStartPrimaryAbs = primaryStartAbs;
     uint8_t angleStallStable = 0;
-    uint8_t angleWrongDirectionStable = 0;
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_EXCHANGE_NEG3_BEGIN J%02u secondary=M%02u secondaryAbs=%ld secondaryShortenSign=%d primary=M%02u primaryAbs=%ld primaryShortenSign=%d requiredTravelDeg=%.3f finalLoadThreshold=%d\r\n",
                   jointIndex,
@@ -2249,46 +2429,6 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                              currentEncoder,
                                              currentPrimaryAbs,
                                              currentSecondaryAbs);
-        const int32_t actualPrimaryReleaseTendonDelta =
-            motorRawAbsToTendonAbs(primaryMotor, currentPrimaryAbs) -
-            motorRawAbsToTendonAbs(primaryMotor, primaryStartAbs);
-        const int32_t commandPrimaryReleaseTendonDelta =
-            motorRawAbsToTendonAbs(primaryMotor, primaryCommandAbs) -
-            motorRawAbsToTendonAbs(primaryMotor, primaryStartAbs);
-        const int32_t actualPrimarySlackCounts =
-            (actualPrimaryReleaseTendonDelta < 0) ? -actualPrimaryReleaseTendonDelta : 0;
-        const int32_t commandPrimarySlackCounts =
-            (commandPrimaryReleaseTendonDelta < 0) ? -commandPrimaryReleaseTendonDelta : 0;
-        const int32_t maxPrimarySlackCounts =
-            (actualPrimarySlackCounts > commandPrimarySlackCounts)
-                ? actualPrimarySlackCounts
-                : commandPrimarySlackCounts;
-        if (maxPrimarySlackCounts > kAutoCalibrationMaxReverseReleaseCounts) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_EXCHANGE_NEG3 over-release J%02u primary=M%02u slack=%ld/%ld actualSlack=%ld commandSlack=%ld actualTendon=%ld commandTendon=%ld startAbs=%ld currentAbs=%ld cmd=%ld secondary=M%02u secondaryAbs=%ld\r\n",
-                          jointIndex,
-                          primaryMotor,
-                          (long)maxPrimarySlackCounts,
-                          (long)kAutoCalibrationMaxReverseReleaseCounts,
-                          (long)actualPrimarySlackCounts,
-                          (long)commandPrimarySlackCounts,
-                          (long)actualPrimaryReleaseTendonDelta,
-                          (long)commandPrimaryReleaseTendonDelta,
-                          (long)primaryStartAbs,
-                          (long)currentPrimaryAbs,
-                          (long)primaryCommandAbs,
-                          secondaryMotor,
-                          (long)currentSecondaryAbs);
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_OVER_RELEASE,
-                               CALIB_DIAG_PHASE_DUAL_EXCHANGE,
-                               jointIndex,
-                               primaryMotor,
-                               maxPrimarySlackCounts,
-                               kAutoCalibrationMaxReverseReleaseCounts,
-                               actualPrimarySlackCounts,
-                               (uint32_t)commandPrimarySlackCounts);
-            return false;
-        }
         bool limitFound = false;
 
         if ((uint32_t)(nowMs - windowStartMs) >= params.windowMs) {
@@ -2308,18 +2448,6 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                 windowSecondaryAbsDelta >= params.windowServoDeltaCounts;
             const bool primaryStillPaying =
                 windowPrimaryAbsDelta >= params.windowServoDeltaCounts;
-            const int32_t directionThresholdCount =
-                calibrationDegToEncoderCount(kReleaseMinDirectionDeg);
-            const int32_t wrongWindowThresholdCount =
-                calibrationDegToEncoderCount(kReleaseWrongWindowDeg);
-            const bool wrongDirectionCheckArmed =
-                (uint32_t)(nowMs - startMs) >= kReleaseWrongIgnoreMs;
-            const bool exchangeWrongDirection =
-                wrongDirectionCheckArmed &&
-                secondaryStillReeling &&
-                primaryStillPaying &&
-                totalEncoderDelta >= directionThresholdCount &&
-                windowEncoderDelta >= wrongWindowThresholdCount;
             if (angleStalled) {
                 if (angleStallStable < 255) {
                     angleStallStable++;
@@ -2327,15 +2455,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
             } else {
                 angleStallStable = 0;
             }
-            if (exchangeWrongDirection) {
-                if (angleWrongDirectionStable < 255) {
-                    angleWrongDirectionStable++;
-                }
-            } else {
-                angleWrongDirectionStable = 0;
-            }
-
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u abs=%ld primary=M%02u abs=%ld raw=%u oriented=%ld dCount=%ld winCount=%ld winSecAbs=%ld/%ld winPriAbs=%ld/%ld winDeg=%.3f/%.3f totalDeg=%.3f/%.3f load=%d/%d cond load=%u sec=%u pri=%u angle=%u angleStable=%u/%u travel=%u wrong=%u wrongArmed=%u wrongStable=%u/%u\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_DUAL_EXCHANGE_NEG3 J%02u secondary=M%02u abs=%ld primary=M%02u abs=%ld raw=%u oriented=%ld dCount=%ld winCount=%ld winSecAbs=%ld/%ld winPriAbs=%ld/%ld winDeg=%.3f/%.3f totalDeg=%.3f/%.3f load=%d/%d cond load=%u sec=%u pri=%u angle=%u angleStable=%u/%u travel=%u\r\n",
                           jointIndex,
                           secondaryMotor,
                           (long)currentSecondaryAbs,
@@ -2361,34 +2481,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                           angleStalled ? 1 : 0,
                           (unsigned)angleStallStable,
                           (unsigned)kAngleStallStableSamples,
-                          enoughEncoderTravel ? 1 : 0,
-                          exchangeWrongDirection ? 1 : 0,
-                          wrongDirectionCheckArmed ? 1 : 0,
-                          (unsigned)angleWrongDirectionStable,
-                          (unsigned)kReleaseWrongDirectionStableSamples);
-
-            if (angleWrongDirectionStable >= kReleaseWrongDirectionStableSamples) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_EXCHANGE_NEG3 wrong direction J%02u totalCount=%ld windowCount=%ld threshold=%ld windowThreshold=%ld stable=%u/%u start=%ld current=%ld\r\n",
-                              jointIndex,
-                              (long)totalEncoderDelta,
-                              (long)windowEncoderDelta,
-                              (long)directionThresholdCount,
-                              (long)wrongWindowThresholdCount,
-                              (unsigned)angleWrongDirectionStable,
-                              (unsigned)kReleaseWrongDirectionStableSamples,
-                              (long)startEncoder,
-                              (long)currentEncoder);
-                setCalibrationDiag(sharedData,
-                                   CALIB_DIAG_REASON_WRONG_DIRECTION,
-                                   CALIB_DIAG_PHASE_DUAL_EXCHANGE,
-                                   jointIndex,
-                                   0xFF,
-                                   totalEncoderDelta,
-                                   directionThresholdCount,
-                                   windowEncoderDelta,
-                                   (uint32_t)(1UL << jointIndex));
-                return false;
-            }
+                          enoughEncoderTravel ? 1 : 0);
 
             limitFound =
                 secondaryLoadHigh &&
@@ -2448,6 +2541,19 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                 primaryCommandAbs = motorApplyTendonDelta(primaryMotor,
                                                           primaryCommandAbs,
                                                           -stepCounts);
+                bool secondaryLeadLimited = false;
+                bool primaryLeadLimited = false;
+                secondaryCommandAbs = clampAutoCalibTargetLead(secondaryMotor,
+                                                                 secondaryCommandAbs,
+                                                                 currentSecondaryAbs,
+                                                                 &secondaryLeadLimited);
+                primaryCommandAbs = clampAutoCalibTargetLead(primaryMotor,
+                                                               primaryCommandAbs,
+                                                               currentPrimaryAbs,
+                                                               &primaryLeadLimited);
+                if (secondaryLeadLimited || primaryLeadLimited) {
+                    commandRemainder = 0;
+                }
                 if (!publishDualMotorCalibrationTargets(sharedData,
                                                         secondaryMotor,
                                                         secondaryCommandAbs,
@@ -2664,25 +2770,6 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
 
     const int32_t signedSpan = signedEncoderDeltaLocal(neg3Encoder, primary80Encoder);
     const int8_t encoderTravelSign = 1;
-    if (signedSpan <= 0) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_FIXED_DIR J%02u defaultDir=%d runtimeDir=%d neg3=%ld pos80=%ld signed=%ld; check encoder direction table\r\n",
-                      jointIndex,
-                      (int)kDefaultEncoderDirection[jointIndex],
-                      (int)g_encoderDirection[jointIndex],
-                      (long)neg3Encoder,
-                      (long)primary80Encoder,
-                      (long)signedSpan);
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_WRONG_DIRECTION,
-                           CALIB_DIAG_PHASE_DUAL_EXCHANGE,
-                           jointIndex,
-                           0xFF,
-                           signedSpan,
-                           kDefaultEncoderDirection[jointIndex],
-                           g_encoderDirection[jointIndex],
-                           (uint32_t)(1UL << jointIndex));
-        return false;
-    }
     const int32_t resultStartEncoder =
         encoderForPositiveTravelResult(neg3Encoder, encoderTravelSign);
     const int32_t resultTightEncoder =
@@ -2726,7 +2813,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                          secondaryMotor,
                                          fitSamples);
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_ENCODER_DIR_FIXED J%02u defaultDir=%d runtimeDir=%d signed=%ld resultStart=%ld resultZero=%ld resultTight=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_ENCODER_RESULT J%02u defaultDir=%d runtimeDir=%d signed=%ld resultStart=%ld resultZero=%ld resultTight=%ld\r\n",
                   jointIndex,
                   (int)kDefaultEncoderDirection[jointIndex],
                   (int)g_encoderDirection[jointIndex],
@@ -3111,7 +3198,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
                 if (maxFoundByStall) {
                     ctx->encoderTravelSign = 1;
-                    ctx->tightenEncoderSign = 1;
                     ctx->startFound = true;
                     ctx->startEncoder = currentEncoder;
                     ctx->startServoAbs = currentAbs;
@@ -3122,22 +3208,23 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     ctx->commandAbs = currentAbs;
                     ctx->commandRemainder = 0;
                     ctx->releaseCommandStarted = false;
-                    ctx->releaseStartMs = 0;
-                    ctx->preReleaseHoldStartMs = nowMs;
+                    ctx->preReleaseSyncTargetAbs = currentAbs;
+                    ctx->preReleaseSyncWindowStartAbs = currentAbs;
+                    ctx->preReleaseSyncWindowStartMs = nowMs;
+                    ctx->preReleaseSyncStableSamples = 0;
                     ctx->releaseAngleStallStable = 0;
-                    ctx->releaseReverseStable = 0;
-                    ctx->releaseWrongDirectionStable = 0;
+                    ctx->state = AUTO_CALIB_STATE_PRE_RELEASE_SYNC;
                     if (!appendJointCalibrationTargetToBatch(batch,
                                                              ctx->jointIndex,
-                                                             clampToServoPosLocal(ctx->commandAbs),
+                                                             clampToServoPosLocal(ctx->preReleaseSyncTargetAbs),
                                                              ctx->motionCfg)) {
                         failAutoCalibContextWithDiag(ctx,
                                                      sharedData,
-                                                     "pre-release hold target append failed",
+                                                     "pre-release sync target append failed",
                                                      CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                                                      CALIB_DIAG_PHASE_RELEASE,
                                                      ctx->motorChannel,
-                                                     ctx->commandAbs,
+                                                     ctx->preReleaseSyncTargetAbs,
                                                      0,
                                                      0,
                                                      0);
@@ -3154,10 +3241,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   totalAngleDeltaDeg,
                                   params.tightLoadHigh,
                                   (int)ctx->encoderTravelSign);
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_HOLD J%02u holdAbs=%ld holdMs=%lu\r\n",
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_SYNC_BEGIN J%02u targetAbs=%ld tolerance=%ld settleDelta=%ld stable=%u\r\n",
                                   ctx->jointIndex,
-                                  (long)ctx->commandAbs,
-                                  (unsigned long)kReleasePreHoldMs);
+                                  (long)ctx->preReleaseSyncTargetAbs,
+                                  (long)kPreReleaseSyncTargetToleranceCounts,
+                                  (long)kPreReleaseSyncSettleDeltaCounts,
+                                  (unsigned)kPreReleaseSyncStableSamples);
                     return;
                 }
 
@@ -3171,6 +3260,14 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
                                                                 ctx->commandAbs,
                                                                 stepCounts);
+                        bool leadLimited = false;
+                        ctx->commandAbs = clampAutoCalibTargetLead(ctx->motorChannel,
+                                                                     ctx->commandAbs,
+                                                                     currentAbs,
+                                                                     &leadLimited);
+                        if (leadLimited) {
+                            ctx->commandRemainder = 0;
+                        }
                         if (!isServoCommandInsideLimit(ctx->commandAbs)) {
                             appendJointCalibrationTargetToBatch(batch,
                                                                 ctx->jointIndex,
@@ -3209,56 +3306,24 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 }
                 return;
             }
-
-            if (ctx->preReleaseHoldStartMs != 0) {
-                const uint32_t holdElapsedMs = nowMs - ctx->preReleaseHoldStartMs;
-                if (holdElapsedMs < kReleasePreHoldMs) {
-                    const uint32_t holdDtMs = nowMs - ctx->lastCommandMs;
-                    if (holdDtMs >= params.loopMs) {
-                        if (!appendJointCalibrationTargetToBatch(batch,
-                                                                 ctx->jointIndex,
-                                                                 clampToServoPosLocal(ctx->commandAbs),
-                                                                 ctx->motionCfg)) {
-                            failAutoCalibContextWithDiag(ctx,
-                                                         sharedData,
-                                                         "pre-release hold target append failed",
-                                                         CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                                         CALIB_DIAG_PHASE_RELEASE,
-                                                         ctx->motorChannel,
-                                                         ctx->commandAbs,
-                                                         0,
-                                                         0,
-                                                         0);
-                            return;
-                        }
-                        ctx->lastCommandMs = nowMs;
-                    }
-                    return;
-                }
-
-                ctx->preReleaseHoldStartMs = 0;
-                ctx->windowStartEncoder = currentEncoder;
-                ctx->windowStartAbs = currentAbs;
-                ctx->windowStartMs = nowMs;
-                ctx->lastCommandMs = nowMs;
-                ctx->commandRemainder = 0;
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] END_PRE_RELEASE_HOLD J%02u holdAbs=%ld currentAbs=%ld elapsed=%lu\r\n",
-                              ctx->jointIndex,
-                              (long)ctx->commandAbs,
-                              (long)currentAbs,
-                              (unsigned long)holdElapsedMs);
-                return;
-            }
             const uint32_t dtMs = nowMs - ctx->lastCommandMs;
             if (dtMs >= params.loopMs) {
                 const int32_t numerator =
                     (int32_t)dtMs * params.tightenSpeedCountsPerSec + ctx->commandRemainder;
                 const int32_t stepCounts = numerator / 1000;
-                ctx->commandRemainder = numerator % 1000;
-                if (stepCounts > 0) {
-                    ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
+                    ctx->commandRemainder = numerator % 1000;
+                    if (stepCounts > 0) {
+                        ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
                                                             ctx->commandAbs,
                                                             -stepCounts);
+                    bool leadLimited = false;
+                    ctx->commandAbs = clampAutoCalibTargetLead(ctx->motorChannel,
+                                                                 ctx->commandAbs,
+                                                                 currentAbs,
+                                                                 &leadLimited);
+                    if (leadLimited) {
+                        ctx->commandRemainder = 0;
+                    }
                     if (!isServoCommandInsideLimit(ctx->commandAbs)) {
                         appendJointCalibrationTargetToBatch(batch,
                                                             ctx->jointIndex,
@@ -3294,7 +3359,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     }
                     if (!ctx->releaseCommandStarted) {
                         ctx->releaseCommandStarted = true;
-                        ctx->releaseStartMs = nowMs;
                         FW_LOG_INFO_PRINTF("[AUTO CALIB] BEGIN_RELEASE J%02u fromMaxAbs=%ld firstTargetAbs=%ld step=%ld directionSign=%ld targetDeg=%.3f\r\n",
                                       ctx->jointIndex,
                                       (long)ctx->startServoAbs,
@@ -3305,47 +3369,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     }
                 }
                 ctx->lastCommandMs = nowMs;
-            }
-
-            const int32_t actualReleaseTendonDelta =
-                motorRawAbsToTendonAbs(ctx->motorChannel, currentAbs) -
-                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
-            const int32_t commandReleaseTendonDelta =
-                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->commandAbs) -
-                motorRawAbsToTendonAbs(ctx->motorChannel, ctx->startServoAbs);
-            const int32_t actualReleaseSlackCounts =
-                (actualReleaseTendonDelta < 0) ? -actualReleaseTendonDelta : 0;
-            const int32_t commandReleaseSlackCounts =
-                (commandReleaseTendonDelta < 0) ? -commandReleaseTendonDelta : 0;
-            const int32_t maxReleaseSlackCounts =
-                (actualReleaseSlackCounts > commandReleaseSlackCounts)
-                    ? actualReleaseSlackCounts
-                    : commandReleaseSlackCounts;
-            if (ctx->releaseCommandStarted &&
-                maxReleaseSlackCounts > kAutoCalibrationMaxReverseReleaseCounts) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u over-release after max load slack=%ld/%ld actualSlack=%ld commandSlack=%ld actualTendon=%ld commandTendon=%ld startAbs=%ld currentAbs=%ld cmd=%ld loadThreshold=%d\r\n",
-                              ctx->jointIndex,
-                              (long)maxReleaseSlackCounts,
-                              (long)kAutoCalibrationMaxReverseReleaseCounts,
-                              (long)actualReleaseSlackCounts,
-                              (long)commandReleaseSlackCounts,
-                              (long)actualReleaseTendonDelta,
-                              (long)commandReleaseTendonDelta,
-                              (long)ctx->startServoAbs,
-                              (long)currentAbs,
-                              (long)ctx->commandAbs,
-                              params.tightLoadHigh);
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "over-release after max load",
-                                             CALIB_DIAG_REASON_OVER_RELEASE,
-                                             CALIB_DIAG_PHASE_RELEASE,
-                                             ctx->motorChannel,
-                                             maxReleaseSlackCounts,
-                                             kAutoCalibrationMaxReverseReleaseCounts,
-                                             actualReleaseSlackCounts,
-                                             (uint32_t)commandReleaseSlackCounts);
-                return;
             }
 
             if ((nowMs - ctx->windowStartMs) >= params.windowMs) {
@@ -3369,52 +3392,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     calibrationWrapEncoderDelta(currentEncoder, ctx->startEncoder);
                 const float releaseFromMaxDeg =
                     fabsf(calibrationEncoderCountToDeg(releaseFromMaxCount));
-                const int8_t tightenSign =
-                    (ctx->tightenEncoderSign < 0) ? -1 : 1;
-                const int32_t signedReleaseAlongTighten =
-                    releaseFromMaxCount * (int32_t)tightenSign;
-                const float signedReleaseAlongTightenDeg =
-                    calibrationEncoderCountToDeg(signedReleaseAlongTighten);
-                const int32_t releaseDirectionThresholdCount =
-                    calibrationDegToEncoderCount(kReleaseMinDirectionDeg);
-                const int32_t releaseWrongWindowThresholdCount =
-                    calibrationDegToEncoderCount(kReleaseWrongWindowDeg);
-                const int32_t windowAlongTighten =
-                    windowEncoderDelta * (int32_t)tightenSign;
-                const float windowAlongTightenDeg =
-                    calibrationEncoderCountToDeg(windowAlongTighten);
-                const bool releaseOppositeEnough =
-                    signedReleaseAlongTighten <= -releaseDirectionThresholdCount;
-                const bool releaseWrongCheckArmed =
-                    ctx->releaseCommandStarted &&
-                    ((uint32_t)(nowMs - ctx->releaseStartMs) >= kReleaseWrongIgnoreMs);
-                const bool releaseServoWrongDirection =
-                    releaseWrongCheckArmed &&
-                    commandReleaseTendonDelta <= -kReleaseServoWrongDirectionCounts &&
-                    actualReleaseTendonDelta >= kReleaseServoWrongDirectionCounts;
-                const bool releaseWrongDirection =
-                    releaseWrongCheckArmed &&
-                    servoStillReleasing &&
-                    signedReleaseAlongTighten >= releaseDirectionThresholdCount &&
-                    windowAlongTighten >= releaseWrongWindowThresholdCount;
                 const bool enoughReleaseTravel =
                     releaseFromMaxDeg >= kReverseMinFollowDeg;
-                if (releaseOppositeEnough) {
-                    if (ctx->releaseReverseStable < 255) {
-                        ctx->releaseReverseStable++;
-                    }
-                } else {
-                    ctx->releaseReverseStable = 0;
-                }
-                if (releaseWrongDirection) {
-                    if (ctx->releaseWrongDirectionStable < 255) {
-                        ctx->releaseWrongDirectionStable++;
-                    }
-                } else {
-                    ctx->releaseWrongDirectionStable = 0;
-                }
 
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_RELEASE J%02u abs=%ld raw=%u oriented=%ld releaseCount=%ld releaseDeg=%.3f/%.3f tightenSign=%d alongTighten=%ld alongDeg=%.3f slack=%ld/%ld actualSlack=%ld commandSlack=%ld winCount=%ld winAlong=%ld winAlongDeg=%.3f/%.3f winAbs=%ld/%ld winDeg=%.3f/%.3f load=%d cond servo=%u angle=%u angleStable=%u/%u travel=%u reverse=%u reverseStable=%u/%u wrong=%u wrongArmed=%u wrongStable=%u/%u\r\n",
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] CHECK_RELEASE J%02u abs=%ld raw=%u oriented=%ld releaseCount=%ld releaseDeg=%.3f/%.3f winCount=%ld winAbs=%ld/%ld winDeg=%.3f/%.3f load=%d cond servo=%u angle=%u angleStable=%u/%u travel=%u\r\n",
                               ctx->jointIndex,
                               (long)currentAbs,
                               (unsigned)currentRaw,
@@ -3422,17 +3403,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                               (long)releaseFromMaxCount,
                               releaseFromMaxDeg,
                               kReverseMinFollowDeg,
-                              (int)tightenSign,
-                              (long)signedReleaseAlongTighten,
-                              signedReleaseAlongTightenDeg,
-                              (long)maxReleaseSlackCounts,
-                              (long)kAutoCalibrationMaxReverseReleaseCounts,
-                              (long)actualReleaseSlackCounts,
-                              (long)commandReleaseSlackCounts,
                               (long)windowEncoderDelta,
-                              (long)windowAlongTighten,
-                              windowAlongTightenDeg,
-                              kReleaseWrongWindowDeg,
                               (long)windowAbsDelta,
                               (long)params.windowServoDeltaCounts,
                               windowAngleDeltaDeg,
@@ -3442,89 +3413,17 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                               angleStalled ? 1 : 0,
                               (unsigned)ctx->releaseAngleStallStable,
                               (unsigned)kAngleStallStableSamples,
-                              enoughReleaseTravel ? 1 : 0,
-                              releaseOppositeEnough ? 1 : 0,
-                              (unsigned)ctx->releaseReverseStable,
-                              (unsigned)kReleaseDirectionStableSamples,
-                              releaseWrongDirection ? 1 : 0,
-                              releaseWrongCheckArmed ? 1 : 0,
-                              (unsigned)ctx->releaseWrongDirectionStable,
-                              (unsigned)kReleaseWrongDirectionStableSamples);
-
-                if (releaseServoWrongDirection) {
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u release servo moved with tighten direction actualTendon=%ld commandTendon=%ld threshold=%ld currentAbs=%ld startAbs=%ld cmd=%ld shortenSign=%d\r\n",
-                                  ctx->jointIndex,
-                                  (long)actualReleaseTendonDelta,
-                                  (long)commandReleaseTendonDelta,
-                                  (long)kReleaseServoWrongDirectionCounts,
-                                  (long)currentAbs,
-                                  (long)ctx->startServoAbs,
-                                  (long)ctx->commandAbs,
-                                  (int)ctx->directionSign);
-                    failAutoCalibContextWithDiag(ctx,
-                                                 sharedData,
-                                                 "release servo moved with tighten direction",
-                                                 CALIB_DIAG_REASON_WRONG_DIRECTION,
-                                                 CALIB_DIAG_PHASE_RELEASE,
-                                                 ctx->motorChannel,
-                                                 actualReleaseTendonDelta,
-                                                 commandReleaseTendonDelta,
-                                                 kReleaseServoWrongDirectionCounts,
-                                                 0);
-                    return;
-                }
-
-                if (ctx->releaseWrongDirectionStable >= kReleaseWrongDirectionStableSamples) {
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u release moved with tighten direction count=%ld deg=%.3f tightenSign=%d stable=%u/%u\r\n",
-                                  ctx->jointIndex,
-                                  (long)signedReleaseAlongTighten,
-                                  signedReleaseAlongTightenDeg,
-                                  (int)tightenSign,
-                                  (unsigned)ctx->releaseWrongDirectionStable,
-                                  (unsigned)kReleaseWrongDirectionStableSamples);
-                    failAutoCalibContextWithDiag(ctx,
-                                                 sharedData,
-                                                 "release moved with tighten direction",
-                                                 CALIB_DIAG_REASON_WRONG_DIRECTION,
-                                                 CALIB_DIAG_PHASE_RELEASE,
-                                                 ctx->motorChannel,
-                                                 signedReleaseAlongTighten,
-                                                 releaseDirectionThresholdCount,
-                                                 ctx->releaseWrongDirectionStable,
-                                                 0);
-                    return;
-                }
+                              enoughReleaseTravel ? 1 : 0);
 
                 if (servoStillReleasing &&
                     ctx->releaseAngleStallStable >= kAngleStallStableSamples &&
-                    enoughReleaseTravel &&
-                    releaseOppositeEnough &&
-                    ctx->releaseReverseStable >= kReleaseDirectionStableSamples) {
+                    enoughReleaseTravel) {
                     ctx->zeroFound = true;
                     ctx->zeroEncoder = currentEncoder;
                     ctx->zeroServoAbs = currentAbs;
                     const int32_t signedTightToMax =
                         signedEncoderDeltaLocal(ctx->zeroEncoder, ctx->startEncoder);
                     ctx->encoderTravelSign = 1;
-                    if (signedTightToMax <= 0) {
-                        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u fixed encoder direction result reversed tightToMax=%ld defaultDir=%d taut=%ld tight=%ld\r\n",
-                                      ctx->jointIndex,
-                                      (long)signedTightToMax,
-                                      (int)kDefaultEncoderDirection[ctx->jointIndex],
-                                      (long)ctx->zeroEncoder,
-                                      (long)ctx->startEncoder);
-                        failAutoCalibContextWithDiag(ctx,
-                                                     sharedData,
-                                                     "fixed encoder direction result reversed",
-                                                     CALIB_DIAG_REASON_WRONG_DIRECTION,
-                                                     CALIB_DIAG_PHASE_RELEASE,
-                                                     ctx->motorChannel,
-                                                     signedTightToMax,
-                                                     kDefaultEncoderDirection[ctx->jointIndex],
-                                                     ctx->startEncoder,
-                                                     0);
-                        return;
-                    }
 
                     const int32_t maxEncoder = ctx->startEncoder;
                     const int32_t maxServoAbs = ctx->startServoAbs;
@@ -3577,7 +3476,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         return;
                     }
                     if (result.encoderSpan >= kAutoCalibrationRejectNearFullWrapSpan) {
-                        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u rejected wrap-like span=%ld start=%ld tight=%ld; check servo tighten direction\r\n",
+                        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u rejected wrap-like span=%ld start=%ld tight=%ld; endpoint span is invalid\r\n",
                                       ctx->jointIndex,
                                       (long)result.encoderSpan,
                                       (long)tightEncoder,
@@ -3595,7 +3494,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         return;
                     }
 
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] ENCODER_DIR_FIXED J%02u defaultDir=%d runtimeDir=%d tightToMax=%ld resultTaut=%ld resultZero=%ld resultTight=%ld\r\n",
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] ENCODER_RESULT J%02u defaultDir=%d runtimeDir=%d tightToMax=%ld resultTaut=%ld resultZero=%ld resultTight=%ld\r\n",
                                   ctx->jointIndex,
                                   (int)kDefaultEncoderDirection[ctx->jointIndex],
                                   (int)g_encoderDirection[ctx->jointIndex],
@@ -3676,6 +3575,100 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             return;
         }
 
+        case AUTO_CALIB_STATE_PRE_RELEASE_SYNC:
+        {
+            int32_t currentAbs = 0;
+            if (!readLatestMotorServoAbs(sharedData, ctx->motorChannel, &currentAbs)) {
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "pre-release sync lost servo feedback",
+                                             CALIB_DIAG_REASON_FEEDBACK_LOST,
+                                             CALIB_DIAG_PHASE_RELEASE,
+                                             ctx->motorChannel,
+                                             0,
+                                             0,
+                                             0,
+                                             0);
+                return;
+            }
+
+            const int32_t targetError =
+                abs32(currentAbs - ctx->preReleaseSyncTargetAbs);
+            if (targetError > kPreReleaseSyncTargetToleranceCounts) {
+                // A previous tighten trajectory is still being executed.  Replace
+                // the hold target with the measured ABS and restart settling.
+                ctx->preReleaseSyncTargetAbs = currentAbs;
+                ctx->preReleaseSyncWindowStartAbs = currentAbs;
+                ctx->preReleaseSyncWindowStartMs = nowMs;
+                ctx->preReleaseSyncStableSamples = 0;
+            }
+
+            if (!appendJointCalibrationTargetToBatch(batch,
+                                                     ctx->jointIndex,
+                                                     clampToServoPosLocal(ctx->preReleaseSyncTargetAbs),
+                                                     ctx->motionCfg)) {
+                failAutoCalibContextWithDiag(ctx,
+                                             sharedData,
+                                             "pre-release sync target append failed",
+                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                             CALIB_DIAG_PHASE_RELEASE,
+                                             ctx->motorChannel,
+                                             ctx->preReleaseSyncTargetAbs,
+                                             0,
+                                             0,
+                                             0);
+                return;
+            }
+
+            if ((uint32_t)(nowMs - ctx->preReleaseSyncWindowStartMs) < params.windowMs) {
+                return;
+            }
+
+            const int32_t windowAbsDelta =
+                abs32(currentAbs - ctx->preReleaseSyncWindowStartAbs);
+            const bool targetReached =
+                abs32(currentAbs - ctx->preReleaseSyncTargetAbs) <=
+                kPreReleaseSyncTargetToleranceCounts;
+            const bool absSettled =
+                windowAbsDelta <= kPreReleaseSyncSettleDeltaCounts;
+            if (targetReached && absSettled) {
+                if (ctx->preReleaseSyncStableSamples < 255) {
+                    ctx->preReleaseSyncStableSamples++;
+                }
+            } else {
+                ctx->preReleaseSyncStableSamples = 0;
+            }
+
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_SYNC J%02u targetAbs=%ld currentAbs=%ld err=%ld/%ld windowAbs=%ld/%ld stable=%u/%u\r\n",
+                          ctx->jointIndex,
+                          (long)ctx->preReleaseSyncTargetAbs,
+                          (long)currentAbs,
+                          (long)abs32(currentAbs - ctx->preReleaseSyncTargetAbs),
+                          (long)kPreReleaseSyncTargetToleranceCounts,
+                          (long)windowAbsDelta,
+                          (long)kPreReleaseSyncSettleDeltaCounts,
+                          (unsigned)ctx->preReleaseSyncStableSamples,
+                          (unsigned)kPreReleaseSyncStableSamples);
+
+            if (ctx->preReleaseSyncStableSamples < kPreReleaseSyncStableSamples) {
+                ctx->preReleaseSyncWindowStartAbs = currentAbs;
+                ctx->preReleaseSyncWindowStartMs = nowMs;
+                return;
+            }
+
+            ctx->commandAbs = currentAbs;
+            ctx->commandRemainder = 0;
+            ctx->windowStartAbs = currentAbs;
+            ctx->windowStartMs = nowMs;
+            ctx->lastCommandMs = nowMs;
+            ctx->releaseAngleStallStable = 0;
+            ctx->state = AUTO_CALIB_STATE_TIGHTEN;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_SYNC_READY J%02u releaseStartAbs=%ld\r\n",
+                          ctx->jointIndex,
+                          (long)currentAbs);
+            return;
+        }
+
         case AUTO_CALIB_STATE_CLAMP_TIGHT:
         {
             if (!ctx->resultValid) {
@@ -3691,23 +3684,22 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                              0);
                 return;
             }
-            if (!appendJointCalibrationTargetToBatch(batch,
-                                                     ctx->jointIndex,
-                                                     clampToServoPosLocal(ctx->targetAbs),
-                                                     ctx->motionCfg)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "clamp tight target append failed",
-                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             ctx->targetAbs,
-                                             0,
-                                             0,
-                                             0);
-                return;
-            }
             if ((uint32_t)(nowMs - ctx->stateBeginMs) < kAutoTightClampHoldMs) {
+                if (!appendJointCalibrationTargetToBatch(batch,
+                                                         ctx->jointIndex,
+                                                         clampToServoPosLocal(ctx->targetAbs),
+                                                         ctx->motionCfg)) {
+                    failAutoCalibContextWithDiag(ctx,
+                                                 sharedData,
+                                                 "clamp tight target append failed",
+                                                 CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                                 CALIB_DIAG_PHASE_RETURN_ZERO,
+                                                 ctx->motorChannel,
+                                                 ctx->targetAbs,
+                                                 0,
+                                                 0,
+                                                 0);
+                }
                 return;
             }
 
@@ -3723,6 +3715,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             ctx->state = AUTO_CALIB_STATE_RETURN_ZERO;
             ctx->stateBeginMs = nowMs;
             ctx->lastTraceMs = nowMs;
+            bool returnLeadLimited = false;
+            const int32_t firstReturnCommandAbs = clampAutoCalibTargetLead(
+                ctx->motorChannel,
+                ctx->targetAbs,
+                clampCurrentAbs,
+                &returnLeadLimited);
             FW_LOG_INFO_PRINTF("[AUTO CALIB] RETURN_ZERO J%02u targetAbs=%ld speed=%u acc=%u\r\n",
                           ctx->jointIndex,
                           (long)ctx->targetAbs,
@@ -3735,7 +3733,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                           (long)(ctx->targetAbs - ctx->returnZeroStartAbs));
             if (!appendJointCalibrationTargetToBatch(batch,
                                                      ctx->jointIndex,
-                                                     clampToServoPosLocal(ctx->targetAbs),
+                                                     clampToServoPosLocal(firstReturnCommandAbs),
                                                      ctx->motionCfg)) {
                 failAutoCalibContextWithDiag(ctx,
                                              sharedData,
@@ -3747,6 +3745,14 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                              0,
                                              0,
                                              0);
+            }
+            if (returnLeadLimited) {
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] RETURN_ZERO_LEAD_LIMIT J%02u plannedAbs=%ld sentAbs=%ld currentAbs=%ld limit=%ld\r\n",
+                              ctx->jointIndex,
+                              (long)ctx->targetAbs,
+                              (long)firstReturnCommandAbs,
+                              (long)clampCurrentAbs,
+                              (long)kAutoCalibMaxCommandLeadCounts);
             }
             return;
         }
@@ -3765,9 +3771,19 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                              0);
                 return;
             }
+            int32_t currentAbs = 0;
+            const bool absFeedbackValid =
+                readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &currentAbs);
+            bool returnLeadLimited = false;
+            const int32_t returnCommandAbs = absFeedbackValid
+                ? clampAutoCalibTargetLead(ctx->motorChannel,
+                                            ctx->targetAbs,
+                                            currentAbs,
+                                            &returnLeadLimited)
+                : ctx->targetAbs;
             if (!appendJointCalibrationTargetToBatch(batch,
                                                      ctx->jointIndex,
-                                                     clampToServoPosLocal(ctx->targetAbs),
+                                                     clampToServoPosLocal(returnCommandAbs),
                                                      ctx->motionCfg)) {
                 failAutoCalibContextWithDiag(ctx,
                                              sharedData,
@@ -3775,16 +3791,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                              CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                                              CALIB_DIAG_PHASE_RETURN_ZERO,
                                              ctx->motorChannel,
-                                             ctx->targetAbs,
+                                             returnCommandAbs,
                                              0,
                                              0,
                                              0);
                 return;
             }
-
-            int32_t currentAbs = 0;
-            const bool absFeedbackValid =
-                readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &currentAbs);
             const int32_t absError = absFeedbackValid
                 ? abs32(currentAbs - ctx->targetAbs)
                 : 0;
@@ -3901,9 +3913,11 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
             if ((nowMs - ctx->lastTraceMs) >= params.traceMs) {
                 ctx->lastTraceMs = nowMs;
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_WAIT_SERVO J%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld returnTravel=%ld/%ld mappedDeg=%.3f/%.3f absReached=%u travelReached=%u mappedReached=%u captured=%u captureAbs=%ld\r\n",
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_WAIT_SERVO J%02u targetAbs=%ld sentAbs=%ld leadLimited=%u currentAbs=%ld absErr=%ld/%ld returnTravel=%ld/%ld mappedDeg=%.3f/%.3f absReached=%u travelReached=%u mappedReached=%u captured=%u captureAbs=%ld\r\n",
                               ctx->jointIndex,
                               (long)ctx->targetAbs,
+                              (long)returnCommandAbs,
+                              returnLeadLimited ? 1 : 0,
                               absFeedbackValid ? (long)currentAbs : 0L,
                               absFeedbackValid ? (long)absError : -1L,
                               (long)returnZeroTolerance,

@@ -436,6 +436,9 @@ class HandModel:
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
+    # 原始磁编包（PACKET_TYPE_ENCODER_RAW）与映射角包独立：未标定时 raw 仍应可见。
+    has_encoder_raw_data: bool = False
+    encoder_raw_last_rx_ts: float = 0.0
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
     has_servo_hardware_data: bool = False
@@ -583,6 +586,8 @@ class HandModel:
         self.joint_debug_timestamp_ms = list(other.joint_debug_timestamp_ms)
         # 复制数据有效性标志
         self.has_sensor_data = bool(other.has_sensor_data)
+        self.has_encoder_raw_data = bool(getattr(other, "has_encoder_raw_data", False))
+        self.encoder_raw_last_rx_ts = float(getattr(other, "encoder_raw_last_rx_ts", 0.0) or 0.0)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
         self.has_servo_hardware_data = bool(getattr(other, "has_servo_hardware_data", False))
