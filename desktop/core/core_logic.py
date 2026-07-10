@@ -669,8 +669,9 @@ class HandController:
             state = int(getattr(self.current_state, "system_state", -1))
         if state == SYSTEM_STATE_RUN_FEEDBACK:
             return True
-        if state != SYSTEM_STATE_READY:
-            return False
+        # ACTIVE_SCOPE can already have queued P4's READY transition while the
+        # desktop status cache is still one packet behind. P4 owns final
+        # RUN_FEEDBACK admission and keeps all firmware-side safety checks.
         self.comm.send_command("run_feedback")
         return True
 

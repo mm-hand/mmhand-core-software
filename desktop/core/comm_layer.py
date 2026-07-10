@@ -1288,7 +1288,11 @@ class LowerComputerComm:
         stripped = text.strip()
         if stripped:
             log_session("FW", stripped)
-            if "[AUTO CALIB]" in stripped or "[BOOT CALIB]" in stripped:
+            if (
+                "[AUTO CALIB]" in stripped
+                or "[BOOT CALIB]" in stripped
+                or "[CALIB_TX_APPLY]" in stripped
+            ):
                 self._auto_calib_logger.log("FW", stripped)
         if "<<<SYS_READY>>>" in stripped:
             # P4 may reboot after the first frame was sent; negotiate again

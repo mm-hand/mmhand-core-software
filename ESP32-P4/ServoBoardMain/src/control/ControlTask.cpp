@@ -251,17 +251,18 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         const MotorMapItem& motor = motorMap[motorChannel];
         const uint32_t bit = (1UL << motorChannel);
         uint32_t validBitmap = 0;
-        uint32_t lockedBitmap = 0;
         int32_t limitMin = 0;
         int32_t limitMax = 0;
         {
             SharedSafetyGuard guard;
             validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-            lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
             limitMin = sharedData->motor_abs_limit_min[motorChannel];
             limitMax = sharedData->motor_abs_limit_max[motorChannel];
         }
-        if ((validBitmap & bit) == 0 || (lockedBitmap & bit) == 0) {
+        // Calibration validity is required to establish the tendon release anchor.
+        // LOCK only enables the ABS min/max output clamp; it must not disable
+        // feedback control for an otherwise calibrated dual-tendon joint.
+        if ((validBitmap & bit) == 0) {
             return 0;
         }
         if (limitMin > limitMax) {
@@ -291,7 +292,12 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         target.busIndex = motor.busIndex;
         target.servoId = motor.servoID;
         target.sign = 1;
-        target.targetAbs = clampServoPos(releaseLimitedTarget);
+        // Apply the same LOCK semantics as single-motor feedback: locked
+        // channels are clamped to their calibrated ABS range, while unlocked
+        // channels keep feedback control and may move beyond that range.
+        target.targetAbs = clampServoPosByMotorAbsLimit(sharedData,
+                                                        motorChannel,
+                                                        releaseLimitedTarget);
     }
 
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
@@ -862,13 +868,21 @@ void controlTask(void* parameter)
             feedbackRunTimeoutEventQueued = false;
         }
 
-        // PID uses tendon-space ABS so a positive correction has the same "shorten tendon"
-        // meaning on motors with opposite raw ABS directions. Single-motor output converts
-        // the final tendon-space target back to raw motor ABS before sending.
-        g_controlSolver.compute(localTargets, magAngles, absolutePositionTendon, outPulsesTendon);
-        if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
-        {
-            if (controlEnabled) {
+        // Only the CONTROL owner may construct servo targets. Angle mapping,
+        // telemetry and debug publication above continue during calibration,
+        // but they must not compete with the calibration producer for the
+        // single-slot servoTargetQueue.
+        const bool controlTargetBuildAllowed = controlEnabled;
+        if (controlTargetBuildAllowed) {
+            // PID uses tendon-space ABS so a positive correction has the same
+            // "shorten tendon" meaning on motors with opposite raw ABS directions.
+            // Single-motor output converts the final tendon-space target back to raw.
+            g_controlSolver.compute(localTargets,
+                                    magAngles,
+                                    absolutePositionTendon,
+                                    outPulsesTendon);
+            if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
+            {
                 const uint32_t activeMotorMask =
                     sharedAtomicLoad(&sharedData->active_motor_mask) &
                     validMotorChannelMask();
@@ -880,16 +894,6 @@ void controlTask(void* parameter)
                     const uint8_t bus = motorMap[ch].busIndex;
                     const uint8_t id = motorMap[ch].servoID;
                     if (bus >= NUM_BUSES) {
-                        continue;
-                    }
-
-                    if (!normalOutputAllowed)
-                    {
-                        if (servoData.onlineStatus[ch] != 0) {
-                            const int16_t holdPos = clampServoPos(servoData.servoAngles[ch]);
-                            appendServoTarget(&targetBatch, bus, id, holdPos,
-                                              SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-                        }
                         continue;
                     }
 
@@ -928,9 +932,8 @@ void controlTask(void* parameter)
                                       SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 }
             }
-        }
-        else
-        {
+            else
+            {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
                 const uint8_t bus = jointMap[jointIndex].busIndex;
@@ -995,11 +998,6 @@ void controlTask(void* parameter)
 
                 if (bus >= NUM_BUSES) {
                     continue;
-                }
-
-                if (!controlEnabled)
-                {
-                    // 鐘舵€佹満鏈巿鏉?START/RUN 鏃讹紝涓嶅悜鑸垫満杩藉姞鏂扮殑鎺у埗鐩爣銆?                    continue;
                 }
 
                 if (!jointActive)
@@ -1077,6 +1075,7 @@ void controlTask(void* parameter)
                 jointCmdPos[jointIndex] = targetPos;
                 jointCmdValid[jointIndex] = 1;
             }
+            }
         }
 
         const uint32_t releaseFaultBitmap =
@@ -1144,7 +1143,24 @@ void controlTask(void* parameter)
         }
 #endif
 
-        if (sharedData->servoTargetQueue && targetBatch.count > 0) {
+        const uint8_t publishOwner =
+            sharedAtomicLoad(&sharedData->servo_target_owner);
+        const uint8_t publishState =
+            sharedAtomicLoad(&sharedData->system_state);
+        const bool publishControlEnabled =
+            sharedAtomicLoad(&sharedData->control_enabled) != 0;
+        const bool publishStateMatchesMode =
+            (publishState == SYSTEM_STATE_RUN_FEEDBACK &&
+             commandSnapshot.controlMode == CONTROL_MODE_JOINT) ||
+            (publishState == SYSTEM_STATE_RUN_DIRECT &&
+             commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR);
+        const bool controlTargetPublishAllowed =
+            publishControlEnabled &&
+            publishOwner == SERVO_TARGET_OWNER_CONTROL &&
+            publishStateMatchesMode;
+        if (sharedData->servoTargetQueue &&
+            targetBatch.count > 0 &&
+            controlTargetPublishAllowed) {
             xQueueOverwrite(sharedData->servoTargetQueue, &targetBatch);
         }
 

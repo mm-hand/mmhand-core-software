@@ -4,7 +4,14 @@ import pytest
 from unittest.mock import MagicMock
 
 from desktop.core.core_logic import HandController
-from desktop.core.protocol import ControlMode, MOTOR_COUNT, MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX
+from desktop.core.protocol import (
+    ControlMode,
+    MOTOR_COUNT,
+    MOTOR_ABS_CMD_MIN,
+    MOTOR_ABS_CMD_MAX,
+    SYSTEM_STATE_IDLE,
+    SYSTEM_STATE_RUN_FEEDBACK,
+)
 
 
 class TestSetMotorPositionsAbsolute:
@@ -227,3 +234,27 @@ class TestSetMotorPositionsAbsolute:
         motor_abs = [1000] * MOTOR_COUNT
         # Should not raise
         controller.set_motor_positions_absolute(motor_abs)
+
+
+class TestRequestRunFeedback:
+    """Test suite for HandController.request_run_feedback."""
+
+    @pytest.fixture
+    def controller(self):
+        return HandController()
+
+    def test_sends_when_cached_state_is_idle_after_scope_change(self, controller):
+        controller.comm = MagicMock()
+        controller._paused = False
+        controller.current_state.system_state = SYSTEM_STATE_IDLE
+
+        assert controller.request_run_feedback() is True
+        controller.comm.send_command.assert_called_once_with("run_feedback")
+
+    def test_does_not_duplicate_when_feedback_is_already_running(self, controller):
+        controller.comm = MagicMock()
+        controller._paused = False
+        controller.current_state.system_state = SYSTEM_STATE_RUN_FEEDBACK
+
+        assert controller.request_run_feedback() is True
+        controller.comm.send_command.assert_not_called()

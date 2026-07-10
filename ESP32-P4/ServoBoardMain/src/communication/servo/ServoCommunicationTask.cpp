@@ -30,6 +30,23 @@ static const uint32_t kBootRecoverLimitToRawWindowMs = 8000;
 static const uint8_t kServoOfflineInvalidateMisses = 3;
 static const uint8_t kServoOnlineConfirmReads = 2;
 static const uint32_t kServoOfflineProbeIntervalMs = 50;
+
+#ifndef SERVO_CALIB_TX_APPLY_LOG_ENABLE
+#define SERVO_CALIB_TX_APPLY_LOG_ENABLE 0
+#endif
+
+// Test mode: while calibration owns the servo targets, keep the communication
+// loop close to the proven CUI path and defer current-only background work.
+#ifndef SERVO_CALIB_CUI_ISOLATION_TEST
+#define SERVO_CALIB_CUI_ISOLATION_TEST 0
+#endif
+
+#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
+static const uint32_t kCalibrationTxApplyLogIntervalMs = 200;
+#endif
+static const uint32_t kServoLoopGapLogThresholdMs = 50;
+static const uint32_t kServoApplyStallLogThresholdMs = 50;
+static const uint32_t kServoQueueDropLogIntervalMs = 200;
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 static const uint32_t kNvsRestoreWaitWindowMs = 3000;
 static const uint32_t kHostHeartbeatOfflineMs = 1000;
@@ -521,6 +538,72 @@ static ServoBusDriver* getBusByIndex(uint8_t busIndex)
     return &g_servoBuses[busIndex];
 }
 
+#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
+static int8_t findMotorChannelByBusServo(uint8_t busIndex, uint8_t servoId)
+{
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        if (motorMap[ch].busIndex == busIndex && motorMap[ch].servoID == servoId) {
+            return (int8_t)ch;
+        }
+    }
+    return -1;
+}
+
+static void logCalibrationTxApplyBatch(const ServoTargetBatch_t& batch)
+{
+    if (batch.source != SERVO_TARGET_OWNER_CALIBRATION) {
+        return;
+    }
+
+    const uint32_t nowMs = millis();
+    static uint32_t lastLogMs = 0;
+    if ((uint32_t)(nowMs - lastLogMs) < kCalibrationTxApplyLogIntervalMs) {
+        return;
+    }
+    lastLogMs = nowMs;
+
+    const uint32_t ageMs = nowMs - batch.timestamp;
+    for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
+        const ServoTargetCommand_t& cmd = batch.commands[i];
+        const int8_t motorChannel = findMotorChannelByBusServo(cmd.busIndex, cmd.servoId);
+        ServoBusDriver* bus = getBusByIndex(cmd.busIndex);
+        if (!bus) {
+            FW_LOG_INFO_PRINTF("[CALIB_TX_APPLY] idx=%u M%02d bus=%u id=%u target=%d hwTarget=NA currentAbs=NA raw=NA load=NA online=0 speed=%u acc=%u ageMs=%lu count=%u\r\n",
+                               (unsigned)i,
+                               (int)motorChannel,
+                               (unsigned)cmd.busIndex,
+                               (unsigned)cmd.servoId,
+                               (int)cmd.position,
+                               (unsigned)cmd.speed,
+                               (unsigned)cmd.acc,
+                               (unsigned long)ageMs,
+                               (unsigned)batch.count);
+            continue;
+        }
+
+        const ServoFeedbackInternal& fb = bus->getFeedback(cmd.servoId);
+        const int32_t currentAbs = fb.absolutePosition + fb.logicalOffset;
+        const int16_t hwTarget = clampServoAbsLocal((int32_t)cmd.position - fb.logicalOffset);
+        FW_LOG_INFO_PRINTF("[CALIB_TX_APPLY] idx=%u M%02d bus=%u id=%u target=%d hwTarget=%d currentAbs=%ld raw=%d load=%d online=%u speed=%u acc=%u offset=%ld ageMs=%lu count=%u\r\n",
+                           (unsigned)i,
+                           (int)motorChannel,
+                           (unsigned)cmd.busIndex,
+                           (unsigned)cmd.servoId,
+                           (int)cmd.position,
+                           (int)hwTarget,
+                           (long)currentAbs,
+                           (int)fb.rawPosition,
+                           (int)fb.load,
+                           fb.online ? 1U : 0U,
+                           (unsigned)cmd.speed,
+                           (unsigned)cmd.acc,
+                           (long)fb.logicalOffset,
+                           (unsigned long)ageMs,
+                           (unsigned)batch.count);
+    }
+}
+#endif
+
 static void probeOneOfflineMappedServo(uint32_t nowMs)
 {
     static uint32_t lastProbeMs = 0;
@@ -668,6 +751,9 @@ static void configureMappedServosForMultiTurn()
 static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
 {
     bool busWritePending[NUM_BUSES] = {false};
+#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
+    logCalibrationTxApplyBatch(batch);
+#endif
 
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
         const ServoTargetCommand_t& cmd = batch.commands[i];
@@ -939,6 +1025,9 @@ struct MultiTurnNvsRuntimeState {
     bool initialized;
     bool hostWasOnline;
     bool saveQueued;
+    bool motionWasActive;
+    bool deferredSavePending;
+    uint8_t lastMotionState;
     uint32_t lastSaveMs;
     uint32_t lastValidMask;
     uint32_t pendingRequestToken;
@@ -953,7 +1042,29 @@ struct MultiTurnNvsRuntimeState {
     uint8_t pendingReason;
     uint8_t pendingTurnChanged;
     uint8_t pendingEdgeChanged;
+    uint32_t deferredRequestToken;
+    uint32_t deferredValidMask;
+    int32_t deferredAbs[SERVO_TOTAL_NUM];
+    int16_t deferredRaw[SERVO_TOTAL_NUM];
+    int16_t deferredTurn[SERVO_TOTAL_NUM];
+    uint8_t deferredReason;
+    uint8_t deferredTurnChanged;
+    uint8_t deferredEdgeChanged;
 };
+
+static bool isMultiTurnMotionState(uint8_t state)
+{
+    return state == SYSTEM_STATE_RUN_FEEDBACK ||
+           state == SYSTEM_STATE_RUN_DIRECT ||
+           state == SYSTEM_STATE_CALIBRATION_RUNNING;
+}
+
+static uint8_t completedMotionSaveReason(uint8_t state)
+{
+    return state == SYSTEM_STATE_CALIBRATION_RUNNING
+               ? MULTITURN_NVS_SAVE_REASON_CALIB_DONE
+               : MULTITURN_NVS_SAVE_REASON_RUN_DONE;
+}
 
 static bool isRawNearTurnEdge(int16_t raw)
 {
@@ -1140,6 +1251,124 @@ static void queueLatestMultiTurnNvsJob(QueueHandle_t queue, const MultiTurnNvsSa
     xQueueOverwrite(queue, job);
 }
 
+static void cacheDeferredMultiTurnSnapshot(MultiTurnNvsRuntimeState* state,
+                                           uint32_t validMask,
+                                           const int32_t* motorAbs,
+                                           const int16_t* motorRaw,
+                                           const int16_t* motorTurn,
+                                           uint8_t reason,
+                                           uint32_t requestToken,
+                                           bool turnChanged,
+                                           bool edgeChanged)
+{
+    if (!state || !motorAbs || !motorRaw || !motorTurn || validMask == 0) {
+        return;
+    }
+
+    state->deferredSavePending = true;
+    state->deferredValidMask = validMask;
+    memcpy(state->deferredAbs, motorAbs, sizeof(state->deferredAbs));
+    memcpy(state->deferredRaw, motorRaw, sizeof(state->deferredRaw));
+    memcpy(state->deferredTurn, motorTurn, sizeof(state->deferredTurn));
+    state->deferredTurnChanged =
+        (state->deferredTurnChanged || turnChanged) ? 1U : 0U;
+    state->deferredEdgeChanged =
+        (state->deferredEdgeChanged || edgeChanged) ? 1U : 0U;
+
+    // An explicit state-machine request owns the final reason/token. Automatic
+    // RAM refreshes may update the snapshot but must not overwrite that request.
+    if (requestToken != 0 || state->deferredRequestToken == 0) {
+        state->deferredReason = reason;
+        state->deferredRequestToken = requestToken;
+    }
+}
+
+static bool enqueueMultiTurnNvsSnapshot(TaskSharedData_t* sharedData,
+                                        MultiTurnNvsRuntimeState* state,
+                                        uint32_t validMask,
+                                        const int32_t* motorAbs,
+                                        const int16_t* motorRaw,
+                                        const int16_t* motorTurn,
+                                        uint8_t reason,
+                                        uint32_t requestToken,
+                                        bool turnChanged,
+                                        bool edgeChanged)
+{
+    if (!sharedData || !state || !motorAbs || !motorRaw || !motorTurn ||
+        validMask == 0 || !sharedData->multiturn_nvs_enabled ||
+        !sharedData->multiturnNvsSaveQueue) {
+        return false;
+    }
+    if (snapshotMatchesPending(*state, validMask, motorAbs, motorRaw, motorTurn) &&
+        (requestToken == 0 || requestToken == state->pendingRequestToken)) {
+        return false;
+    }
+
+    MultiTurnNvsSaveJob_t job;
+    memset(&job, 0, sizeof(job));
+    job.requestToken = requestToken;
+    job.validMask = validMask;
+    job.queuedAtMs = millis();
+    job.reason = reason;
+    job.turnChanged = turnChanged ? 1U : 0U;
+    job.edgeChanged = edgeChanged ? 1U : 0U;
+    memcpy(job.motorAbs, motorAbs, sizeof(job.motorAbs));
+    memcpy(job.motorRaw, motorRaw, sizeof(job.motorRaw));
+    memcpy(job.motorTurn, motorTurn, sizeof(job.motorTurn));
+
+    queueLatestMultiTurnNvsJob(sharedData->multiturnNvsSaveQueue, &job);
+    state->saveQueued = true;
+    state->pendingRequestToken = requestToken;
+    state->pendingQueuedAtMs = job.queuedAtMs;
+    state->pendingValidMask = validMask;
+    state->pendingReason = reason;
+    state->pendingTurnChanged = job.turnChanged;
+    state->pendingEdgeChanged = job.edgeChanged;
+    memcpy(state->pendingAbs, motorAbs, sizeof(state->pendingAbs));
+    memcpy(state->pendingRaw, motorRaw, sizeof(state->pendingRaw));
+    memcpy(state->pendingTurn, motorTurn, sizeof(state->pendingTurn));
+    return true;
+}
+
+static bool flushDeferredMultiTurnSnapshot(TaskSharedData_t* sharedData,
+                                           MultiTurnNvsRuntimeState* state)
+{
+    if (!sharedData || !state || !state->deferredSavePending) {
+        return false;
+    }
+
+    const bool alreadyPending =
+        snapshotMatchesPending(*state,
+                               state->deferredValidMask,
+                               state->deferredAbs,
+                               state->deferredRaw,
+                               state->deferredTurn) &&
+        (state->deferredRequestToken == 0 ||
+         state->deferredRequestToken == state->pendingRequestToken);
+    const bool accepted = alreadyPending ||
+        enqueueMultiTurnNvsSnapshot(sharedData,
+                                    state,
+                                    state->deferredValidMask,
+                                    state->deferredAbs,
+                                    state->deferredRaw,
+                                    state->deferredTurn,
+                                    state->deferredReason,
+                                    state->deferredRequestToken,
+                                    state->deferredTurnChanged != 0,
+                                    state->deferredEdgeChanged != 0);
+    if (!accepted) {
+        return false;
+    }
+
+    state->deferredSavePending = false;
+    state->deferredRequestToken = 0;
+    state->deferredValidMask = 0;
+    state->deferredReason = 0;
+    state->deferredTurnChanged = 0;
+    state->deferredEdgeChanged = 0;
+    return true;
+}
+
 static void applyCompletedNvsSave(MultiTurnNvsRuntimeState* state,
                                   const MultiTurnNvsSaveResult_t& result)
 {
@@ -1223,63 +1452,16 @@ static bool saveCurrentMultiTurnSnapshot(TaskSharedData_t* sharedData,
         return false;
     }
 
-    if (snapshotMatchesPending(*state, validMask, motorAbs, motorRaw, motorTurn) &&
-        (requestToken == 0 || requestToken == state->pendingRequestToken)) {
-        return false;
-    }
-
-    MultiTurnNvsSaveJob_t job;
-    memset(&job, 0, sizeof(job));
-    job.requestToken = requestToken;
-    job.validMask = validMask;
-    job.queuedAtMs = nowMs;
-    job.reason = reason;
-    job.turnChanged = turnChanged ? 1U : 0U;
-    job.edgeChanged = edgeChanged ? 1U : 0U;
-    memcpy(job.motorAbs, motorAbs, sizeof(job.motorAbs));
-    memcpy(job.motorRaw, motorRaw, sizeof(job.motorRaw));
-    memcpy(job.motorTurn, motorTurn, sizeof(job.motorTurn));
-
-    queueLatestMultiTurnNvsJob(sharedData->multiturnNvsSaveQueue, &job);
-    state->saveQueued = true;
-    state->pendingRequestToken = requestToken;
-    state->pendingQueuedAtMs = nowMs;
-    state->pendingValidMask = validMask;
-    state->pendingReason = reason;
-    state->pendingTurnChanged = job.turnChanged;
-    state->pendingEdgeChanged = job.edgeChanged;
-    memcpy(state->pendingAbs, motorAbs, sizeof(state->pendingAbs));
-    memcpy(state->pendingRaw, motorRaw, sizeof(state->pendingRaw));
-    memcpy(state->pendingTurn, motorTurn, sizeof(state->pendingTurn));
-    return true;
-
-#if 0
-    uint32_t sequence = 0;
-    if (!multiTurnNvsSaveSnapshot(validMask, motorAbs, motorRaw, &sequence)) {
-        sharedData->multiturn_nvs_save_fail_count++;
-        FW_LOG_INFO_PRINTF("[NVS MULTITURN] save failed reason=%u mask=0x%08lX fail=%lu\r\n",
-                      (unsigned)reason,
-                      (unsigned long)validMask,
-                      (unsigned long)sharedData->multiturn_nvs_save_fail_count);
-        return false;
-    }
-
-    state->initialized = true;
-    state->lastSaveMs = nowMs;
-    state->lastValidMask = validMask;
-    memcpy(state->lastAbs, motorAbs, sizeof(state->lastAbs));
-    memcpy(state->lastRaw, motorRaw, sizeof(state->lastRaw));
-    memcpy(state->lastTurn, motorTurn, sizeof(state->lastTurn));
-    sharedData->multiturn_nvs_save_valid_mask = validMask;
-    sharedData->multiturn_nvs_snapshot_valid = 1;
-    FW_LOG_INFO_PRINTF("[NVS MULTITURN] saved seq=%lu reason=%u mask=0x%08lX turnChanged=%u edge=%u\r\n",
-                  (unsigned long)sequence,
-                  (unsigned)reason,
-                  (unsigned long)validMask,
-                  turnChanged ? 1U : 0U,
-                  edgeChanged ? 1U : 0U);
-    return true;
-#endif
+    return enqueueMultiTurnNvsSnapshot(sharedData,
+                                       state,
+                                       validMask,
+                                       motorAbs,
+                                       motorRaw,
+                                       motorTurn,
+                                       reason,
+                                       requestToken,
+                                       turnChanged,
+                                       edgeChanged);
 }
 
 static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
@@ -1296,63 +1478,165 @@ static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
     const uint32_t hostHeartbeatMs = sharedData->host_rx_heartbeat_ms;
     const bool hostOnline = hostHeartbeatMs != 0 &&
         (uint32_t)(nowMs - hostHeartbeatMs) <= kHostHeartbeatOfflineMs;
-
-    if (state->hostWasOnline && !hostOnline) {
-        saveCurrentMultiTurnSnapshot(sharedData,
-                                     state,
-                                     MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE,
-                                     true,
-                                     0);
-    }
+    const bool hostJustWentOffline = state->hostWasOnline && !hostOnline;
     state->hostWasOnline = hostOnline;
 
     const uint32_t token =
         sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token);
-    if (token != *lastSaveToken) {
+    const bool tokenChanged = token != *lastSaveToken;
+    uint8_t requestedReason = 0;
+    if (tokenChanged) {
         *lastSaveToken = token;
-        const uint8_t reason = sharedData->multiturn_nvs_save_reason;
-        saveCurrentMultiTurnSnapshot(sharedData, state, reason, true, token);
+        requestedReason = sharedData->multiturn_nvs_save_reason;
     }
 
     int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
     int16_t motorRaw[SERVO_TOTAL_NUM] = {0};
     int16_t motorTurn[SERVO_TOTAL_NUM] = {0};
     uint32_t validMask = 0;
-    if (!collectTrustedMultiTurnSnapshot(sharedData, motorAbs, motorRaw, motorTurn, &validMask)) {
-        return;
-    }
+    const bool hasSnapshot =
+        collectTrustedMultiTurnSnapshot(sharedData,
+                                        motorAbs,
+                                        motorRaw,
+                                        motorTurn,
+                                        &validMask);
 
     bool turnChanged = false;
     bool edgeChanged = false;
-    const bool changed = snapshotChanged(*state,
-                                         validMask,
-                                         motorAbs,
-                                         motorRaw,
-                                         motorTurn,
-                                         &turnChanged,
-                                         &edgeChanged);
+    const bool changed = hasSnapshot &&
+        snapshotChanged(*state,
+                        validMask,
+                        motorAbs,
+                        motorRaw,
+                        motorTurn,
+                        &turnChanged,
+                        &edgeChanged);
+
+    const uint8_t systemState = sharedData->system_state;
+    const bool motionActive = isMultiTurnMotionState(systemState);
+    const bool motionJustEnded = state->motionWasActive && !motionActive;
+    if (motionActive) {
+        state->motionWasActive = true;
+        state->lastMotionState = systemState;
+
+        // During control/calibration motion only refresh the latest trusted RAM
+        // snapshot. Flash/NVS is deliberately deferred until motion ownership ends.
+        if (changed) {
+            cacheDeferredMultiTurnSnapshot(state,
+                                           validMask,
+                                           motorAbs,
+                                           motorRaw,
+                                           motorTurn,
+                                           completedMotionSaveReason(systemState),
+                                           0,
+                                           turnChanged,
+                                           edgeChanged);
+        }
+        if (tokenChanged) {
+            if (hasSnapshot) {
+                cacheDeferredMultiTurnSnapshot(state,
+                                               validMask,
+                                               motorAbs,
+                                               motorRaw,
+                                               motorTurn,
+                                               requestedReason,
+                                               token,
+                                               turnChanged,
+                                               edgeChanged);
+            } else if (state->deferredSavePending) {
+                state->deferredReason = requestedReason;
+                state->deferredRequestToken = token;
+            }
+        }
+        if (hostJustWentOffline && !tokenChanged) {
+            if (hasSnapshot) {
+                cacheDeferredMultiTurnSnapshot(state,
+                                               validMask,
+                                               motorAbs,
+                                               motorRaw,
+                                               motorTurn,
+                                               MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE,
+                                               0,
+                                               turnChanged,
+                                               edgeChanged);
+            } else if (state->deferredSavePending &&
+                       state->deferredRequestToken == 0) {
+                state->deferredReason = MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE;
+            }
+        }
+        return;
+    }
+
+    const uint8_t completedState = state->lastMotionState;
+    state->motionWasActive = false;
+
+    if (motionJustEnded && changed) {
+        cacheDeferredMultiTurnSnapshot(state,
+                                       validMask,
+                                       motorAbs,
+                                       motorRaw,
+                                       motorTurn,
+                                       completedMotionSaveReason(completedState),
+                                       0,
+                                       turnChanged,
+                                       edgeChanged);
+    }
+    if (tokenChanged) {
+        if (hasSnapshot) {
+            cacheDeferredMultiTurnSnapshot(state,
+                                           validMask,
+                                           motorAbs,
+                                           motorRaw,
+                                           motorTurn,
+                                           requestedReason,
+                                           token,
+                                           turnChanged,
+                                           edgeChanged);
+        } else if (state->deferredSavePending) {
+            state->deferredReason = requestedReason;
+            state->deferredRequestToken = token;
+        }
+    }
+    if (hostJustWentOffline && !tokenChanged) {
+        if (hasSnapshot) {
+            cacheDeferredMultiTurnSnapshot(state,
+                                           validMask,
+                                           motorAbs,
+                                           motorRaw,
+                                           motorTurn,
+                                           MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE,
+                                           0,
+                                           turnChanged,
+                                           edgeChanged);
+        } else if (state->deferredSavePending &&
+                   state->deferredRequestToken == 0) {
+            state->deferredReason = MULTITURN_NVS_SAVE_REASON_HOST_OFFLINE;
+        }
+    }
+
+    if (state->deferredSavePending) {
+        flushDeferredMultiTurnSnapshot(sharedData, state);
+        return;
+    }
+
+    if (hostOnline) {
+        return;
+    }
     if (!changed) {
         return;
     }
 
-    const uint32_t elapsed = state->initialized ? (uint32_t)(nowMs - state->lastSaveMs) : 0xFFFFFFFFUL;
-    // Keep turn/edge anchors fresh even while the desktop host is online. Without
-    // this, a servo power cycle after crossing a turn boundary can only see a stale
-    // NVS raw/turn pair and the hotplug restore will correctly reject it.
-    if (turnChanged || edgeChanged) {
-        if (turnChanged || elapsed >= kNvsSaveMinIntervalMs) {
-            saveCurrentMultiTurnSnapshot(sharedData,
-                                         state,
-                                         MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE,
-                                         true,
-                                         0);
-        }
-        return;
-    }
-    if (hostOnline) {
-        return;
-    }
-    if (elapsed >= kNvsOfflinePeriodicSaveMs) {
+    const uint32_t elapsed = state->initialized
+        ? (uint32_t)(nowMs - state->lastSaveMs)
+        : 0xFFFFFFFFUL;
+    if ((turnChanged || edgeChanged) && elapsed >= kNvsSaveMinIntervalMs) {
+        saveCurrentMultiTurnSnapshot(sharedData,
+                                     state,
+                                     MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE,
+                                     true,
+                                     0);
+    } else if (!turnChanged && !edgeChanged &&
+               elapsed >= kNvsOfflinePeriodicSaveMs) {
         saveCurrentMultiTurnSnapshot(sharedData,
                                      state,
                                      MULTITURN_NVS_SAVE_REASON_OFFLINE_MOVE,
@@ -1458,8 +1742,29 @@ void servoCommunicationTask(void* parameter)
     FW_LOG_INFO_PRINTLN("[NVS MULTITURN] persistence disabled");
 #endif
 
+    bool calibrationIsolationWasActive = false;
+    uint32_t lastLoopStartMs = 0;
+    uint32_t queueDropTotal = 0;
+    uint32_t lastQueueDropLogMs = 0;
+
     for (;;)
     {
+        const uint32_t loopStartMs = millis();
+        if (lastLoopStartMs != 0) {
+            const uint32_t loopGapMs = loopStartMs - lastLoopStartMs;
+            if (loopGapMs > kServoLoopGapLogThresholdMs) {
+                const UBaseType_t queueDepth = sharedData->servoTargetQueue
+                    ? uxQueueMessagesWaiting(sharedData->servoTargetQueue)
+                    : 0;
+                FW_LOG_WARN_PRINTF("[SERVO LOOP GAP] gapMs=%lu state=%u owner=%u queueDepth=%u activeMotor=0x%08lX\r\n",
+                                   (unsigned long)loopGapMs,
+                                   (unsigned)sharedData->system_state,
+                                   (unsigned)sharedData->servo_target_owner,
+                                   (unsigned)queueDepth,
+                                   (unsigned long)sharedAtomicLoad(&sharedData->active_motor_mask));
+            }
+        }
+        lastLoopStartMs = loopStartMs;
         taskRuntimeMarkLoopStart(TASK_RUNTIME_SERVO_COMM);
         const uint32_t emergencyStopToken =
             sharedAtomicLoad(&sharedData->servo_emergency_stop_token);
@@ -1470,19 +1775,66 @@ void servoCommunicationTask(void* parameter)
         }
 
         processHostMultiTurnRestore(sharedData, &lastRestoreToken);
+        const bool calibrationMotionActive =
+            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING &&
+            sharedData->servo_target_owner == SERVO_TARGET_OWNER_CALIBRATION;
+#if SERVO_CALIB_CUI_ISOLATION_TEST
+        const bool calibrationIsolationActive = calibrationMotionActive;
+#else
+        const bool calibrationIsolationActive = false;
+#endif
+        if (calibrationIsolationActive != calibrationIsolationWasActive) {
+            calibrationIsolationWasActive = calibrationIsolationActive;
+            FW_LOG_INFO_PRINTF("[CALIB CUI ISOLATION] active=%u state=%u owner=%u\r\n",
+                               calibrationIsolationActive ? 1U : 0U,
+                               (unsigned)sharedData->system_state,
+                               (unsigned)sharedData->servo_target_owner);
+        }
 
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {
             const uint8_t owner = sharedData->servo_target_owner;
             if (owner != SERVO_TARGET_OWNER_NONE && batch.source == owner) {
+                const uint32_t applyBeginMs = millis();
                 applyServoTargetBatch(batch);
+                const uint32_t applyElapsedMs = millis() - applyBeginMs;
+                if (applyElapsedMs > kServoApplyStallLogThresholdMs) {
+                    FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=apply_target elapsedMs=%lu source=%u owner=%u ageMs=%lu count=%u\r\n",
+                                       (unsigned long)applyElapsedMs,
+                                       (unsigned)batch.source,
+                                       (unsigned)owner,
+                                       (unsigned long)(millis() - batch.timestamp),
+                                       (unsigned)batch.count);
+                }
+            } else {
+                queueDropTotal++;
+                const uint32_t nowMs = millis();
+                if ((uint32_t)(nowMs - lastQueueDropLogMs) >=
+                    kServoQueueDropLogIntervalMs) {
+                    lastQueueDropLogMs = nowMs;
+                    FW_LOG_WARN_PRINTF("[SERVO QUEUE DROP] source=%u owner=%u ageMs=%lu count=%u droppedTotal=%lu state=%u\r\n",
+                                       (unsigned)batch.source,
+                                       (unsigned)owner,
+                                       (unsigned long)(nowMs - batch.timestamp),
+                                       (unsigned)batch.count,
+                                       (unsigned long)queueDropTotal,
+                                       (unsigned)sharedData->system_state);
+                }
             }
         }
 
         uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
         uint8_t readCounts[NUM_BUSES] = {0};
+        const uint32_t calibrationReadMask = calibrationMotionActive
+            ? sharedAtomicLoad(&sharedData->active_motor_mask)
+            : 0;
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+            if (calibrationMotionActive &&
+                calibrationReadMask != 0 &&
+                (calibrationReadMask & (1UL << ch)) == 0) {
+                continue;
+            }
             addReadTarget(readIds, readCounts, motorMap[ch].busIndex, motorMap[ch].servoID);
         }
 
@@ -1492,29 +1844,54 @@ void servoCommunicationTask(void* parameter)
             if (busIndex >= NUM_BUSES || readCounts[busIndex] == 0) {
                 continue;
             }
-            g_servoBuses[busIndex].syncReadPositions(readIds[busIndex], readCounts[busIndex]);
+            const uint32_t readBeginMs = millis();
+            const int readSuccess =
+                g_servoBuses[busIndex].syncReadPositions(readIds[busIndex], readCounts[busIndex]);
+            const uint32_t readElapsedMs = millis() - readBeginMs;
+            if (readElapsedMs > 50) {
+                FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=sync_read bus=%u elapsedMs=%lu requested=%u success=%d calibration=%u activeMask=0x%08lX\r\n",
+                                   (unsigned)busIndex,
+                                   (unsigned long)readElapsedMs,
+                                   (unsigned)readCounts[busIndex],
+                                   readSuccess,
+                                   calibrationMotionActive ? 1U : 0U,
+                                   (unsigned long)calibrationReadMask);
+            }
         }
         readBusPhase ^= 1;
-        probeOneOfflineMappedServo(millis());
+        // Keep regular synchronised feedback active. Defer extra single-servo
+        // probes and hotplug recovery transactions while calibration owns the
+        // targets, so they cannot interrupt a dual-tendon move on the bus.
+        if (!calibrationMotionActive) {
+            probeOneOfflineMappedServo(millis());
+        }
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
-        processBootNvsRestore(sharedData,
-                              hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
-                              &bootNvsRestoreDone,
-                              nvsRestoreDeadlineMs);
-        processServoOnlineTransitions(sharedData, &nvsSaveState, nvsEnabled);
+        if (!calibrationIsolationActive) {
+            processBootNvsRestore(sharedData,
+                                  hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
+                                  &bootNvsRestoreDone,
+                                  nvsRestoreDeadlineMs);
+        }
+        if (!calibrationMotionActive) {
+            processServoOnlineTransitions(sharedData, &nvsSaveState, nvsEnabled);
+        }
 #endif
-        bootRecoverLimitServosToRaw(bootRecoverDeadlineMs);
+        if (!calibrationIsolationActive) {
+            bootRecoverLimitServosToRaw(bootRecoverDeadlineMs);
+        }
         publishServoFeedback(sharedData);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
-        processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
+        if (!calibrationIsolationActive) {
+            processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
+        }
 #endif
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_COMM);
         const TickType_t nextWakeTime = lastWakeTime + taskPeriodTicks;
         const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
         taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_COMM, periodOverrun);
         vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
-        if (periodOverrun) {
+        if (periodOverrun && !calibrationIsolationActive) {
             // Offline bus scans can overrun the 10 ms period. Force one blocked
             // tick so lower-priority status/desktop communication still runs.
             vTaskDelay(1);

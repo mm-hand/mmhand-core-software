@@ -4,6 +4,49 @@
 
 #include <string.h>
 
+static bool flashSaveBlockedByMotion(const TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+    const uint8_t state = sharedData->system_state;
+    return state == SYSTEM_STATE_RUN_FEEDBACK ||
+           state == SYSTEM_STATE_RUN_DIRECT ||
+           state == SYSTEM_STATE_CALIBRATION_RUNNING;
+}
+
+static void waitForMotionCompleteAndKeepLatestJob(TaskSharedData_t* sharedData,
+                                                  MultiTurnNvsSaveJob_t* job)
+{
+    if (!sharedData || !job || !sharedData->multiturnNvsSaveQueue) {
+        return;
+    }
+
+    MultiTurnNvsSaveJob_t newerJob;
+    for (;;) {
+        while (flashSaveBlockedByMotion(sharedData)) {
+            if (xQueueReceive(sharedData->multiturnNvsSaveQueue,
+                              &newerJob,
+                              pdMS_TO_TICKS(20)) == pdTRUE) {
+                *job = newerJob;
+            }
+        }
+
+        // Let the servo task publish the completion snapshot after the state
+        // transition, then collapse all waiting requests to the newest one.
+        vTaskDelay(pdMS_TO_TICKS(20));
+        if (flashSaveBlockedByMotion(sharedData)) {
+            continue;
+        }
+        while (xQueueReceive(sharedData->multiturnNvsSaveQueue,
+                             &newerJob,
+                             0) == pdTRUE) {
+            *job = newerJob;
+        }
+        return;
+    }
+}
+
 static void publishNvsSaveResult(TaskSharedData_t* sharedData,
                                  const MultiTurnNvsSaveResult_t* result)
 {
@@ -40,6 +83,8 @@ void multiTurnNvsPersistenceTask(void* parameter)
         if (xQueueReceive(sharedData->multiturnNvsSaveQueue, &job, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+
+        waitForMotionCompleteAndKeepLatestJob(sharedData, &job);
 
         memset(&result, 0, sizeof(result));
         result.requestToken = job.requestToken;

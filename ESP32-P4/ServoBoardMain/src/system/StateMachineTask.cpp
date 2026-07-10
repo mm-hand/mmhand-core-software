@@ -747,7 +747,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 1;
             setCommandModeDirect(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_START);
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK:
@@ -769,7 +768,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedData->control_enabled = 1;
             setCommandModeJoint(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_FEEDBACK);
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_START);
             break;
 
         case SYSTEM_EVENT_RUN_DIRECT_DONE:

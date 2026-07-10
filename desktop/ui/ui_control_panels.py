@@ -3721,11 +3721,17 @@ class ControlPanel(QtWidgets.QWidget):
                 return False
         if not self.feedback_command_allowed(show_status=True):
             return False
-        if system_state not in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK):
+        # ACTIVE_SCOPE may have just moved P4 from IDLE to READY, but this UI
+        # callback still holds the preceding status packet. Let P4 validate
+        # RUN_FEEDBACK instead of falsely requiring a later UI action to
+        # refresh the desktop-side state cache.
+        if system_state not in (
+            SYSTEM_STATE_IDLE,
+            SYSTEM_STATE_READY,
+            SYSTEM_STATE_RUN_FEEDBACK,
+        ):
             if self._estop_latched:
                 self._set_status("Command blocked: press ENABLE after E-STOP")
-            elif system_state == SYSTEM_STATE_IDLE:
-                self._set_status("Joint command blocked: P4 is still IDLE; check firmware READY reject log")
             else:
                 self._set_status("Joint command blocked: controller is not READY")
             return False
