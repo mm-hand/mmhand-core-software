@@ -372,9 +372,6 @@ class HandBackend:
     def request_firmware_calibration(self) -> bool:
         return self._controller.request_firmware_calibration()
 
-    def request_side_sway_adjust(self) -> bool:
-        return self._controller.request_side_sway_adjust()
-
     def request_run_feedback(self) -> bool:
         return self._controller.request_run_feedback()
 

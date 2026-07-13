@@ -43,7 +43,7 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_OVERLOAD,
     CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
-    CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
+    CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_TASK_START_FAILED,
     CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
@@ -817,7 +817,7 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_HOLD_TARGET_FAILED: "保持其他关节失败",
             CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
             CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
-            CALIB_DIAG_REASON_SIDE_ADJUST_FAILED: "侧摆预调整失败",
+            CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: "标定工作空间准备失败",
             CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
             CALIB_DIAG_REASON_OVER_RELEASE: "过度松绳",
         }
@@ -910,9 +910,24 @@ class HandGUI(QtWidgets.QMainWindow):
             elif reason == CALIB_DIAG_REASON_DUPLICATE_JOINT:
                 lines.append(f"数据：duplicate_index={value_a}, joint_count={value_b}, seen_mask=0x{bitmap:08X}")
                 suggestions.append("同一个关节被重复加入标定序列。重新勾选关节后再标定；如果还出现，检查 active scope 到标定列表的构造逻辑。")
-            elif reason == CALIB_DIAG_REASON_SIDE_ADJUST_FAILED:
-                lines.append(f"数据：selected_mask=0x{value_a:08X}, required_mask=0x{value_b:08X}, matched_mask=0x{bitmap:08X}")
-                suggestions.append("自动标定前的侧摆预调整失败。先单独点击 Side Adjust 检查是否能完成；重点检查四指侧摆双电机关节的副电机是否先松绳、主电机负载是否能到 190、Turn 是否 known。")
+            elif reason == CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED:
+                workspace_stage_names = {
+                    101: "动作前反馈预检查",
+                    102: "辅助关节/目标关节姿态执行",
+                    103: "目标标定完成后的让位姿态",
+                }
+                if value_c in workspace_stage_names:
+                    helper_text = f"J{value_a:02d}" if 0 <= value_a < ENCODER_COUNT else "J?"
+                    pose_text = {1: "POSE_A（主松、副紧）", 2: "POSE_B（副松、主紧）"}.get(value_b, f"pose={value_b}")
+                    lines.append(
+                        f"工作空间：标定目标={joint_text}，失败关节={helper_text}，"
+                        f"姿态={pose_text}，阶段={workspace_stage_names[value_c]}，"
+                        f"相关电机=0x{bitmap:08X}"
+                    )
+                    suggestions.append("工作空间准备会先处理辅助关节、最后处理标定目标。检查失败关节的舵机在线状态、ABS/load 反馈和 Turn 是否 known；多圈未知时先执行 New Device Reset，再 Rope Init/标定。")
+                else:
+                    lines.append(f"数据：value_a={value_a}, value_b={value_b}, value_c={value_c}, motor_mask=0x{bitmap:08X}")
+                    suggestions.append("自动标定无法安全安排四指侧摆关节的工作空间。检查相关电机是否在线、Turn 是否 known；若出现多圈未知，先执行 New Device Reset 后重新 Rope Init/标定。")
             elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
                 lines.append(
                     f"数据：completed_mask=0x{value_a:08X}, failed_mask=0x{value_b:08X}, "

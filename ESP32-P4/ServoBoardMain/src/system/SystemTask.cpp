@@ -101,6 +101,7 @@ void System_Init() {
     sharedData.state_transition_count = 0;
     const uint32_t validMotorMask = validMotorChannelMask();
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
+    sharedData.calibration_aux_motor_mask = 0;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     sharedData.servo_online_bitmap = 0;

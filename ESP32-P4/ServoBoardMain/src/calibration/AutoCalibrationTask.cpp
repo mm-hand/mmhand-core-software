@@ -1,6 +1,7 @@
 #include "AutoCalibrationTask.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "CalibrationMath.h"
@@ -12,12 +13,6 @@
 #include "../system/TaskRuntimeMonitor.h"
 
 static TaskHandle_t g_autoCalibrationTaskHandle = NULL;
-static volatile uint8_t g_autoCalibrationTaskMode = 0;
-
-enum AutoCalibrationTaskMode {
-    AUTO_CAL_TASK_MODE_SEQUENCE = 0,
-    AUTO_CAL_TASK_MODE_SIDE_SWAY_ADJUST = 1
-};
 
 const uint8_t kDefaultAutoCalibrationJoints[] = {
     0, 1, 2, 3,
@@ -27,8 +22,12 @@ const uint8_t kDefaultAutoCalibrationJoints[] = {
     20, 16, 17, 18, 19
 };
 const uint8_t kDefaultAutoCalibrationJointsCount = sizeof(kDefaultAutoCalibrationJoints) / sizeof(kDefaultAutoCalibrationJoints[0]);
-static const uint8_t kSideSwayAdjustJoints[] = {12, 8, 4, 0};
-static const uint8_t kSideSwayAdjustJointsCount = sizeof(kSideSwayAdjustJoints) / sizeof(kSideSwayAdjustJoints[0]);
+// The thumb is mechanically independent of the four side-sway dual joints.
+// Only these joints participate in automatic calibration workspace planning.
+static const uint8_t kWorkspaceDualJoints[] = {0, 4, 8, 12};
+static const uint8_t kWorkspaceDualJointsCount =
+    sizeof(kWorkspaceDualJoints) / sizeof(kWorkspaceDualJoints[0]);
+static const uint8_t kWorkspaceDualHelperCount = kWorkspaceDualJointsCount - 1;
 
 // Keep the four fingers in joint order, then calibrate the thumb as:
 // J20 -> J16 -> J17 -> J18 -> J19.
@@ -73,8 +72,9 @@ static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
 static const int16_t kDualPrimaryTightLoadThreshold = 190;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
 static const int16_t kDualSecondaryFinalLoadThreshold = 250;
-static const int16_t kSideSwayAdjustLoadThreshold = 190;
-static const int32_t kSideSwaySecondaryPreReleaseCounts = 3200;
+static const int16_t kWorkspaceTightLoadThreshold = 190;
+static const int32_t kWorkspaceReleaseCounts = 3200;
+static const int32_t kWorkspaceTargetToleranceCounts = 60;
 static const float kReverseMinFollowDeg = 12.0f;
 static const float kDualTendonFitSampleStepDeg = 5.0f;
 static const uint8_t kDualTendonRawSampleCapacity =
@@ -97,6 +97,39 @@ struct DualTendonRawFitBuffer {
     float nextTravelDeg;
     DualTendonRawFitSample samples[kDualTendonRawSampleCapacity];
 };
+
+enum DualWorkspacePose : uint8_t {
+    DUAL_WORKSPACE_POSE_NONE = 0,
+    // Primary released by 3200 counts; secondary tightened to load 190.
+    DUAL_WORKSPACE_POSE_A = 1,
+    // Secondary released by 3200 counts; primary tightened to load 190.
+    DUAL_WORKSPACE_POSE_B = 2,
+};
+
+struct DualWorkspaceCacheEntry {
+    uint8_t valid;
+    uint8_t currentPose;
+    uint8_t primaryMotor;
+    uint8_t secondaryMotor;
+    int32_t primaryTightAbs;
+    int32_t primaryReleaseAbs;
+    int32_t secondaryTightAbs;
+    int32_t secondaryReleaseAbs;
+};
+
+struct DualWorkspacePlanStep {
+    uint8_t jointIndex;
+    DualWorkspacePose pose;
+};
+
+enum DualWorkspacePlanStage : int32_t {
+    DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT = 101,
+    DUAL_WORKSPACE_PLAN_STAGE_EXECUTE = 102,
+};
+
+// Deliberately RAM-only. A position established in one calibration sequence
+// must never be trusted after a reset, power cycle, or manual motion.
+static DualWorkspaceCacheEntry g_dualWorkspaceCache[kWorkspaceDualJointsCount];
 
 static int32_t abs32(int32_t value)
 {
@@ -274,6 +307,17 @@ static bool hasCalibrationDiag(TaskSharedData_t* sharedData)
     }
     SharedSafetyGuard guard;
     return sharedData->calibration_diag.valid != 0;
+}
+
+static uint8_t calibrationDiagReason(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return CALIB_DIAG_REASON_NONE;
+    }
+    SharedSafetyGuard guard;
+    return sharedData->calibration_diag.valid
+        ? sharedData->calibration_diag.reason
+        : CALIB_DIAG_REASON_NONE;
 }
 
 static bool encoderOnlineAndHealthy(TaskSharedData_t* sharedData, uint32_t bit)
@@ -1461,302 +1505,6 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                int32_t holdTargetAbs,
                                                const AutoCalibrationParams& params);
 
-static bool releaseSideSwaySecondaryByPresetCounts(TaskSharedData_t* sharedData,
-                                                   uint8_t jointIndex,
-                                                   uint8_t primaryMotor,
-                                                   uint8_t secondaryMotor,
-                                                   int32_t primaryHoldAbs,
-                                                   const AutoCalibrationParams& params)
-{
-    int32_t secondaryStartAbs = 0;
-    if (!readLatestMotorServoAbs(sharedData, secondaryMotor, &secondaryStartAbs)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
-                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                           jointIndex,
-                           secondaryMotor,
-                           0,
-                           0,
-                           0,
-                           1UL << secondaryMotor);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST fail no secondary ABS J%02u M%02u\r\n",
-                      (unsigned)jointIndex,
-                      (unsigned)secondaryMotor);
-        return false;
-    }
-
-    const int32_t secondaryReleaseAbs =
-        motorApplyTendonDelta(secondaryMotor,
-                              secondaryStartAbs,
-                              -kSideSwaySecondaryPreReleaseCounts);
-    if (!isServoCommandInsideLimit(secondaryReleaseAbs)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
-                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                           jointIndex,
-                           secondaryMotor,
-                           secondaryReleaseAbs,
-                           -30719,
-                           30719,
-                           1UL << secondaryMotor);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST secondary release outside limit J%02u M%02u target=%ld\r\n",
-                      (unsigned)jointIndex,
-                      (unsigned)secondaryMotor,
-                      (long)secondaryReleaseAbs);
-        return false;
-    }
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST release secondary J%02u secondary=M%02u startAbs=%ld targetAbs=%ld counts=%ld primaryHold=M%02u holdAbs=%ld\r\n",
-                  (unsigned)jointIndex,
-                  (unsigned)secondaryMotor,
-                  (long)secondaryStartAbs,
-                  (long)secondaryReleaseAbs,
-                  (long)kSideSwaySecondaryPreReleaseCounts,
-                  (unsigned)primaryMotor,
-                  (long)primaryHoldAbs);
-
-    uint32_t lastTraceMs = 0;
-    while (autoCalibrationStillOwnsControl(sharedData)) {
-        int32_t secondaryAbs = 0;
-        if (!readLatestMotorServoAbs(sharedData, secondaryMotor, &secondaryAbs)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
-                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                               jointIndex,
-                               secondaryMotor,
-                               0,
-                               0,
-                               0,
-                               1UL << secondaryMotor);
-            return false;
-        }
-
-        if (!publishDualMotorCalibrationTargets(sharedData,
-                                                secondaryMotor,
-                                                secondaryReleaseAbs,
-                                                primaryMotor,
-                                                primaryHoldAbs,
-                                                params)) {
-            return false;
-        }
-
-        const int32_t absErr = abs32(secondaryAbs - secondaryReleaseAbs);
-        if (absErr <= params.zeroReachAbsTolerance) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST secondary released J%02u M%02u targetAbs=%ld currentAbs=%ld absErr=%ld\r\n",
-                          (unsigned)jointIndex,
-                          (unsigned)secondaryMotor,
-                          (long)secondaryReleaseAbs,
-                          (long)secondaryAbs,
-                          (long)absErr);
-            return true;
-        }
-
-        const uint32_t nowMs = millis();
-        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
-            lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST secondary release wait J%02u M%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld\r\n",
-                          (unsigned)jointIndex,
-                          (unsigned)secondaryMotor,
-                          (long)secondaryReleaseAbs,
-                          (long)secondaryAbs,
-                          (long)absErr,
-                          (long)params.zeroReachAbsTolerance);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
-    }
-
-    return false;
-}
-
-static bool adjustSideSwayJointToLoad(TaskSharedData_t* sharedData,
-                                      uint8_t jointIndex,
-                                      const AutoCalibrationParams& params)
-{
-    uint8_t primaryMotor = 0;
-    uint8_t secondaryMotor = 0;
-    if (!getDualAntagonistAutoCalibrationMotors(jointIndex, &primaryMotor, &secondaryMotor)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST skip J%02u not dual side-sway\r\n",
-                      (unsigned)jointIndex);
-        return true;
-    }
-    const uint32_t sideSwayMotorMask = (1UL << primaryMotor) | (1UL << secondaryMotor);
-    const uint32_t unknownMask = sharedData
-        ? sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap)
-        : sideSwayMotorMask;
-    const uint32_t sideSwayUnknownMask = unknownMask & sideSwayMotorMask;
-    if (sideSwayUnknownMask != 0) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_TURN_UNKNOWN,
-                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                           jointIndex,
-                           (sideSwayUnknownMask & (1UL << primaryMotor)) ? primaryMotor : secondaryMotor,
-                           (int32_t)unknownMask,
-                           0,
-                           0,
-                           sideSwayUnknownMask);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST fail Turn UNKNOWN J%02u mask=0x%08lX primary=M%02u secondary=M%02u\r\n",
-                      (unsigned)jointIndex,
-                      (unsigned long)sideSwayUnknownMask,
-                      (unsigned)primaryMotor,
-                      (unsigned)secondaryMotor);
-        return false;
-    }
-
-    int32_t startAbs = 0;
-    if (!readLatestMotorServoAbs(sharedData, primaryMotor, &startAbs)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
-                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                           jointIndex,
-                           primaryMotor,
-                           0,
-                           0,
-                           0,
-                           1UL << primaryMotor);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST fail no ABS J%02u M%02u\r\n",
-                      (unsigned)jointIndex,
-                      (unsigned)primaryMotor);
-        return false;
-    }
-    if (!releaseSideSwaySecondaryByPresetCounts(sharedData,
-                                                jointIndex,
-                                                primaryMotor,
-                                                secondaryMotor,
-                                                startAbs,
-                                                params)) {
-        return false;
-    }
-
-    int32_t commandAbs = startAbs;
-    int32_t commandRemainder = 0;
-    uint32_t lastCommandMs = millis();
-    uint32_t lastTraceMs = 0;
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST begin J%02u primary=M%02u secondary=M%02u startAbs=%ld shortenSign=%d loadThreshold=%d\r\n",
-                  (unsigned)jointIndex,
-                  (unsigned)primaryMotor,
-                  (unsigned)secondaryMotor,
-                  (long)startAbs,
-                  (int)getMotorTendonShortenAbsSign(primaryMotor),
-                  (int)kSideSwayAdjustLoadThreshold);
-
-    while (autoCalibrationStillOwnsControl(sharedData)) {
-        const uint32_t nowMs = millis();
-        int32_t currentAbs = 0;
-        if (!readLatestMotorServoAbs(sharedData, primaryMotor, &currentAbs)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
-                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                               jointIndex,
-                               primaryMotor,
-                               0,
-                               0,
-                               0,
-                               1UL << primaryMotor);
-            return false;
-        }
-
-        int16_t loadRaw = 0;
-        if (!readLatestMotorServoLoad(sharedData, primaryMotor, &loadRaw)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
-                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                               jointIndex,
-                               primaryMotor,
-                               0,
-                               0,
-                               0,
-                               1UL << primaryMotor);
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST fail no load J%02u M%02u\r\n",
-                          (unsigned)jointIndex,
-                          (unsigned)primaryMotor);
-            return false;
-        }
-
-        const int16_t loadMag = servoLoadMagnitude(loadRaw);
-        if (loadMag >= kSideSwayAdjustLoadThreshold) {
-            if (!publishMotorCalibrationTarget(sharedData, primaryMotor, currentAbs, params)) {
-                return false;
-            }
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST reached J%02u M%02u abs=%ld load=%d rawLoad=%d travel=%ld\r\n",
-                          (unsigned)jointIndex,
-                          (unsigned)primaryMotor,
-                          (long)currentAbs,
-                          (int)loadMag,
-                          (int)loadRaw,
-                          (long)abs32(currentAbs - startAbs));
-            return true;
-        }
-
-        const int32_t travelAbs = abs32(currentAbs - startAbs);
-        const uint32_t dtMs = nowMs - lastCommandMs;
-        if (dtMs >= params.loopMs) {
-            const int32_t numerator =
-                (int32_t)dtMs * params.tightenSpeedCountsPerSec + commandRemainder;
-            const int32_t stepCounts = numerator / 1000;
-            commandRemainder = numerator % 1000;
-            if (stepCounts > 0) {
-                commandAbs = motorApplyTendonDelta(primaryMotor, commandAbs, stepCounts);
-                if (!isServoCommandInsideLimit(commandAbs)) {
-                    setCalibrationDiag(sharedData,
-                                       CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
-                                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                                       jointIndex,
-                                       primaryMotor,
-                                       commandAbs,
-                                       -30719,
-                                       30719,
-                                       1UL << primaryMotor);
-                    return false;
-                }
-                if (!publishMotorCalibrationTarget(sharedData, primaryMotor, commandAbs, params)) {
-                    return false;
-                }
-            }
-            lastCommandMs = nowMs;
-        }
-
-        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
-            lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST trace J%02u M%02u cmd=%ld abs=%ld load=%d/%d travel=%ld\r\n",
-                          (unsigned)jointIndex,
-                          (unsigned)primaryMotor,
-                          (long)commandAbs,
-                          (long)currentAbs,
-                          (int)loadMag,
-                          (int)kSideSwayAdjustLoadThreshold,
-                          (long)travelAbs);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
-    }
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST cancelled J%02u M%02u\r\n",
-                  (unsigned)jointIndex,
-                  (unsigned)primaryMotor);
-    return false;
-}
-
-static bool runSideSwayPreAdjust(TaskSharedData_t* sharedData,
-                                 const AutoCalibrationParams& params)
-{
-    if (!sharedData) {
-        return false;
-    }
-    FW_LOG_INFO_PRINTLN("[AUTO CALIB] SIDE_ADJUST sequence begin");
-    for (uint8_t i = 0; i < kSideSwayAdjustJointsCount; i++) {
-        const uint8_t jointIndex = kSideSwayAdjustJoints[i];
-        if (!adjustSideSwayJointToLoad(sharedData, jointIndex, params)) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] SIDE_ADJUST sequence failed J%02u\r\n",
-                          (unsigned)jointIndex);
-            return false;
-        }
-    }
-    FW_LOG_INFO_PRINTLN("[AUTO CALIB] SIDE_ADJUST sequence complete");
-    return true;
-}
-
 static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                uint8_t movingMotor,
                                                int32_t movingTargetAbs,
@@ -2074,6 +1822,763 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
                   sharedData ? (unsigned)sharedData->servo_target_owner : 255,
                   sharedData ? (unsigned)sharedData->control_enabled : 255);
     return false;
+}
+
+static int8_t workspaceCacheIndex(uint8_t jointIndex)
+{
+    for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
+        if (kWorkspaceDualJoints[i] == jointIndex) {
+            return (int8_t)i;
+        }
+    }
+    return -1;
+}
+
+static bool isWorkspaceDualJoint(uint8_t jointIndex)
+{
+    return workspaceCacheIndex(jointIndex) >= 0;
+}
+
+static void clearDualWorkspaceCache(void)
+{
+    memset(g_dualWorkspaceCache, 0, sizeof(g_dualWorkspaceCache));
+}
+
+static uint32_t workspaceDualMotorMask(void)
+{
+    uint32_t mask = 0;
+    for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
+        uint8_t primaryMotor = 0;
+        uint8_t secondaryMotor = 0;
+        if (getDualAntagonistAutoCalibrationMotors(kWorkspaceDualJoints[i],
+                                                   &primaryMotor,
+                                                   &secondaryMotor)) {
+            mask |= (1UL << primaryMotor) | (1UL << secondaryMotor);
+        }
+    }
+    return mask;
+}
+
+static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
+                                            uint32_t motorMask)
+{
+    if (!sharedData) {
+        return;
+    }
+    SharedSafetyGuard guard;
+    sharedAtomicStore(&sharedData->calibration_aux_motor_mask,
+                      motorMask & validMotorChannelMask());
+}
+
+static uint8_t buildDualWorkspacePlan(uint8_t targetJoint,
+                                      DualWorkspacePlanStep* steps,
+                                      uint8_t capacity)
+{
+    if (!steps || capacity < kWorkspaceDualHelperCount ||
+        !isWorkspaceDualJoint(targetJoint)) {
+        return 0;
+    }
+
+    uint8_t count = 0;
+    // Establish all non-target fingers first. Lower-index fingers move from
+    // low to high into A; higher-index fingers move from high to low into B.
+    // The target is deliberately excluded: its calibration routine performs
+    // the required slack/primary-tight sequence itself, or reuses an existing
+    // B cache established earlier as a helper.
+    for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
+        const uint8_t jointIndex = kWorkspaceDualJoints[i];
+        if (jointIndex >= targetJoint) {
+            continue;
+        }
+        steps[count].jointIndex = jointIndex;
+        steps[count].pose = DUAL_WORKSPACE_POSE_A;
+        ++count;
+    }
+
+    for (int8_t i = (int8_t)kWorkspaceDualJointsCount - 1; i >= 0; --i) {
+        const uint8_t jointIndex = kWorkspaceDualJoints[(uint8_t)i];
+        if (jointIndex <= targetJoint) {
+            continue;
+        }
+        steps[count].jointIndex = jointIndex;
+        steps[count].pose = DUAL_WORKSPACE_POSE_B;
+        ++count;
+    }
+
+    return count;
+}
+
+static void setWorkspacePlanFailureDiag(TaskSharedData_t* sharedData,
+                                        uint8_t targetJoint,
+                                        uint8_t helperJoint,
+                                        DualWorkspacePose pose,
+                                        DualWorkspacePlanStage stage)
+{
+    const uint8_t existingReason = calibrationDiagReason(sharedData);
+    if (existingReason != CALIB_DIAG_REASON_NONE &&
+        existingReason != CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED) {
+        return;
+    }
+
+    uint8_t primaryMotor = 0xFF;
+    uint8_t secondaryMotor = 0xFF;
+    uint32_t motorMask = 0;
+    if (getDualAntagonistAutoCalibrationMotors(helperJoint,
+                                               &primaryMotor,
+                                               &secondaryMotor)) {
+        motorMask = (1UL << primaryMotor) | (1UL << secondaryMotor);
+    }
+    setCalibrationDiag(sharedData,
+                       CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                       targetJoint,
+                       primaryMotor,
+                       helperJoint,
+                       (int32_t)pose,
+                       (int32_t)stage,
+                       motorMask);
+}
+
+static void logDualWorkspacePlan(uint8_t targetJoint,
+                                 const DualWorkspacePlanStep* steps,
+                                 uint8_t count)
+{
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN target=J%02u helpers=%u\r\n",
+                       (unsigned)targetJoint,
+                       (unsigned)count);
+    for (uint8_t i = 0; i < count; ++i) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_HELPER target=J%02u joint=J%02u pose=%c\r\n",
+                           (unsigned)targetJoint,
+                           (unsigned)steps[i].jointIndex,
+                           steps[i].pose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B');
+    }
+}
+
+static bool waitDualWorkspaceTargets(TaskSharedData_t* sharedData,
+                                     uint8_t jointIndex,
+                                     const char* phase,
+                                     uint8_t primaryMotor,
+                                     int32_t primaryTargetAbs,
+                                     uint8_t secondaryMotor,
+                                     int32_t secondaryTargetAbs,
+                                     const AutoCalibrationParams& params)
+{
+    uint32_t lastTraceMs = 0;
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        int32_t primaryAbs = 0;
+        int32_t secondaryAbs = 0;
+        if (!readLatestMotorServoAbs(sharedData, primaryMotor, &primaryAbs) ||
+            !readLatestMotorServoAbs(sharedData, secondaryMotor, &secondaryAbs)) {
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               jointIndex,
+                               primaryMotor,
+                               primaryMotor,
+                               secondaryMotor,
+                               0,
+                               (1UL << primaryMotor) | (1UL << secondaryMotor));
+            return false;
+        }
+        if (!publishDualMotorCalibrationTargets(sharedData,
+                                                primaryMotor,
+                                                primaryTargetAbs,
+                                                secondaryMotor,
+                                                secondaryTargetAbs,
+                                                params)) {
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               jointIndex,
+                               primaryMotor,
+                               primaryTargetAbs,
+                               secondaryTargetAbs,
+                               0,
+                               (1UL << primaryMotor) | (1UL << secondaryMotor));
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_%s publish failed J%02u M%02u/M%02u\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (unsigned)secondaryMotor);
+            return false;
+        }
+
+        const int32_t primaryErr = abs32(primaryAbs - primaryTargetAbs);
+        const int32_t secondaryErr = abs32(secondaryAbs - secondaryTargetAbs);
+        if (primaryErr <= kWorkspaceTargetToleranceCounts &&
+            secondaryErr <= kWorkspaceTargetToleranceCounts) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_%s_REACHED J%02u M%02u=%ld/%ld M%02u=%ld/%ld\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (long)primaryAbs,
+                               (long)primaryTargetAbs,
+                               (unsigned)secondaryMotor,
+                               (long)secondaryAbs,
+                               (long)secondaryTargetAbs);
+            return true;
+        }
+
+        const uint32_t nowMs = millis();
+        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
+            lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_%s_WAIT J%02u M%02u err=%ld M%02u err=%ld\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (long)primaryErr,
+                               (unsigned)secondaryMotor,
+                               (long)secondaryErr);
+        }
+        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
+    }
+    setCalibrationDiag(sharedData,
+                       CALIB_DIAG_REASON_CONTROL_LOST,
+                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                       jointIndex,
+                       primaryMotor,
+                       sharedData ? sharedData->system_state : -1,
+                       sharedData ? sharedData->servo_target_owner : -1,
+                       sharedData ? sharedData->control_enabled : -1,
+                       sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_%s cancel J%02u state=%u owner=%u enabled=%u\r\n",
+                       phase,
+                       (unsigned)jointIndex,
+                       sharedData ? (unsigned)sharedData->system_state : 255U,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
+    return false;
+}
+
+static bool waitWorkspaceFeedbackKnown(TaskSharedData_t* sharedData,
+                                       uint8_t jointIndex,
+                                       uint8_t primaryMotor,
+                                       uint8_t secondaryMotor,
+                                       int32_t* primaryAbs,
+                                       int32_t* secondaryAbs)
+{
+    const uint32_t motorMask = (1UL << primaryMotor) | (1UL << secondaryMotor);
+    const uint32_t startMs = millis();
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        const uint32_t unknownMask =
+            sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & motorMask;
+        if (unknownMask != 0) {
+            const uint8_t firstUnknown = (unknownMask & (1UL << primaryMotor))
+                ? primaryMotor : secondaryMotor;
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               jointIndex,
+                               firstUnknown,
+                               (int32_t)unknownMask,
+                               0,
+                               0,
+                               unknownMask);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail Turn UNKNOWN J%02u mask=0x%08lX; New Device Reset required\r\n",
+                               (unsigned)jointIndex,
+                               (unsigned long)unknownMask);
+            return false;
+        }
+
+        const bool primaryOk = readLatestMotorServoAbs(sharedData, primaryMotor, primaryAbs);
+        const bool secondaryOk = readLatestMotorServoAbs(sharedData, secondaryMotor, secondaryAbs);
+        int16_t primaryLoad = 0;
+        int16_t secondaryLoad = 0;
+        const bool primaryLoadOk = readLatestMotorServoLoad(sharedData, primaryMotor, &primaryLoad);
+        const bool secondaryLoadOk = readLatestMotorServoLoad(sharedData, secondaryMotor, &secondaryLoad);
+        if (primaryOk && secondaryOk && primaryLoadOk && secondaryLoadOk) {
+            return true;
+        }
+
+        if ((uint32_t)(millis() - startMs) >= kAutoInitialFeedbackWaitMs) {
+            const uint32_t missingMask =
+                (primaryOk && primaryLoadOk ? 0UL : (1UL << primaryMotor)) |
+                (secondaryOk && secondaryLoadOk ? 0UL : (1UL << secondaryMotor));
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               jointIndex,
+                               primaryOk && primaryLoadOk ? secondaryMotor : primaryMotor,
+                               primaryOk ? 1 : 0,
+                               secondaryOk ? 1 : 0,
+                               0,
+                               missingMask);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail feedback J%02u primary=%u secondary=%u load=%u/%u\r\n",
+                               (unsigned)jointIndex,
+                               primaryOk ? 1U : 0U,
+                               secondaryOk ? 1U : 0U,
+                               primaryLoadOk ? 1U : 0U,
+                               secondaryLoadOk ? 1U : 0U);
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    setCalibrationDiag(sharedData,
+                       CALIB_DIAG_REASON_CONTROL_LOST,
+                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                       jointIndex,
+                       primaryMotor,
+                       sharedData ? sharedData->system_state : -1,
+                       sharedData ? sharedData->servo_target_owner : -1,
+                       sharedData ? sharedData->control_enabled : -1,
+                       sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE feedback cancel J%02u M%02u/M%02u state=%u owner=%u enabled=%u\r\n",
+                       (unsigned)jointIndex,
+                       (unsigned)primaryMotor,
+                       (unsigned)secondaryMotor,
+                       sharedData ? (unsigned)sharedData->system_state : 255U,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
+    return false;
+}
+
+static bool preflightDualWorkspacePlan(TaskSharedData_t* sharedData,
+                                       uint8_t targetJoint,
+                                       const DualWorkspacePlanStep* steps,
+                                       uint8_t count)
+{
+    for (uint8_t i = 0; i < count; ++i) {
+        const DualWorkspacePlanStep& step = steps[i];
+        uint8_t primaryMotor = 0;
+        uint8_t secondaryMotor = 0;
+        if (!getDualAntagonistAutoCalibrationMotors(step.jointIndex,
+                                                    &primaryMotor,
+                                                    &secondaryMotor)) {
+            setWorkspacePlanFailureDiag(sharedData,
+                                        targetJoint,
+                                        step.jointIndex,
+                                        step.pose,
+                                        DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PREFLIGHT fail target=J%02u helper=J%02u no dual map\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)step.jointIndex);
+            return false;
+        }
+
+        int32_t primaryAbs = 0;
+        int32_t secondaryAbs = 0;
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PREFLIGHT target=J%02u role=HELPER joint=J%02u M%02u/M%02u\r\n",
+                           (unsigned)targetJoint,
+                           (unsigned)step.jointIndex,
+                           (unsigned)primaryMotor,
+                           (unsigned)secondaryMotor);
+        if (!waitWorkspaceFeedbackKnown(sharedData,
+                                        step.jointIndex,
+                                        primaryMotor,
+                                        secondaryMotor,
+                                        &primaryAbs,
+                                        &secondaryAbs)) {
+            setWorkspacePlanFailureDiag(sharedData,
+                                        targetJoint,
+                                        step.jointIndex,
+                                        step.pose,
+                                        DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PREFLIGHT fail target=J%02u helper=J%02u pose=%c\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)step.jointIndex,
+                               step.pose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B');
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool tightenWorkspaceMotor(TaskSharedData_t* sharedData,
+                                  uint8_t jointIndex,
+                                  const char* phase,
+                                  uint8_t motor,
+                                  uint8_t holdMotor,
+                                  int32_t holdAbs,
+                                  const AutoCalibrationParams& params,
+                                  int32_t* outTightAbs)
+{
+    int32_t startAbs = 0;
+    if (!readLatestMotorServoAbs(sharedData, motor, &startAbs)) {
+        return false;
+    }
+    int32_t commandAbs = startAbs;
+    int32_t commandRemainder = 0;
+    uint32_t lastCommandMs = millis();
+    uint32_t lastTraceMs = 0;
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        int32_t currentAbs = 0;
+        int16_t loadRaw = 0;
+        if (!readLatestMotorServoAbs(sharedData, motor, &currentAbs) ||
+            !readLatestMotorServoLoad(sharedData, motor, &loadRaw)) {
+            return false;
+        }
+        const int16_t loadMag = servoLoadMagnitude(loadRaw);
+        if (loadMag >= kWorkspaceTightLoadThreshold) {
+            if (!publishDualMotorCalibrationTargets(sharedData,
+                                                    motor,
+                                                    currentAbs,
+                                                    holdMotor,
+                                                    holdAbs,
+                                                    params)) {
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                   CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                                   jointIndex,
+                                   motor,
+                                   currentAbs,
+                                   holdAbs,
+                                   0,
+                                   (1UL << motor) | (1UL << holdMotor));
+                return false;
+            }
+            if (outTightAbs) {
+                *outTightAbs = currentAbs;
+            }
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_FOUND J%02u M%02u abs=%ld load=%d/%d hold=M%02u abs=%ld\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)motor,
+                               (long)currentAbs,
+                               (int)loadMag,
+                               (int)kWorkspaceTightLoadThreshold,
+                               (unsigned)holdMotor,
+                               (long)holdAbs);
+            return true;
+        }
+        const uint32_t nowMs = millis();
+        const uint32_t dtMs = nowMs - lastCommandMs;
+        if (dtMs >= params.loopMs) {
+            const int32_t numerator =
+                (int32_t)dtMs * params.tightenSpeedCountsPerSec + commandRemainder;
+            const int32_t stepCounts = numerator / 1000;
+            commandRemainder = numerator % 1000;
+            if (stepCounts > 0) {
+                commandAbs = motorApplyTendonDelta(motor, commandAbs, stepCounts);
+                if (!publishDualMotorCalibrationTargets(sharedData,
+                                                        motor,
+                                                        commandAbs,
+                                                        holdMotor,
+                                                        holdAbs,
+                                                        params)) {
+                    setCalibrationDiag(sharedData,
+                                       CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                                       jointIndex,
+                                       motor,
+                                       commandAbs,
+                                       holdAbs,
+                                       0,
+                                       (1UL << motor) | (1UL << holdMotor));
+                    return false;
+                }
+            }
+            lastCommandMs = nowMs;
+        }
+        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
+            lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_%s J%02u M%02u cmd=%ld abs=%ld load=%d/%d\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)motor,
+                               (long)commandAbs,
+                               (long)currentAbs,
+                               (int)loadMag,
+                               (int)kWorkspaceTightLoadThreshold);
+        }
+        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
+    }
+    setCalibrationDiag(sharedData,
+                       CALIB_DIAG_REASON_CONTROL_LOST,
+                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                       jointIndex,
+                       motor,
+                       sharedData ? sharedData->system_state : -1,
+                       sharedData ? sharedData->servo_target_owner : -1,
+                       sharedData ? sharedData->control_enabled : -1,
+                       sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] %s cancel J%02u M%02u state=%u owner=%u enabled=%u\r\n",
+                       phase,
+                       (unsigned)jointIndex,
+                       (unsigned)motor,
+                       sharedData ? (unsigned)sharedData->system_state : 255U,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
+    return false;
+}
+
+static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
+                                    uint8_t jointIndex,
+                                    DualWorkspacePose desiredPose,
+                                    const AutoCalibrationParams& params)
+{
+    const int8_t cacheIndex = workspaceCacheIndex(jointIndex);
+    if (cacheIndex < 0 || desiredPose == DUAL_WORKSPACE_POSE_NONE) {
+        return false;
+    }
+
+    uint8_t primaryMotor = 0;
+    uint8_t secondaryMotor = 0;
+    if (!getDualAntagonistAutoCalibrationMotors(jointIndex, &primaryMotor, &secondaryMotor)) {
+        return false;
+    }
+    int32_t primaryAbs = 0;
+    int32_t secondaryAbs = 0;
+    if (!waitWorkspaceFeedbackKnown(sharedData,
+                                    jointIndex,
+                                    primaryMotor,
+                                    secondaryMotor,
+                                    &primaryAbs,
+                                    &secondaryAbs)) {
+        return false;
+    }
+
+    DualWorkspaceCacheEntry* entry = &g_dualWorkspaceCache[(uint8_t)cacheIndex];
+    if (entry->valid &&
+        (entry->primaryMotor != primaryMotor || entry->secondaryMotor != secondaryMotor)) {
+        memset(entry, 0, sizeof(*entry));
+    }
+    entry->primaryMotor = primaryMotor;
+    entry->secondaryMotor = secondaryMotor;
+
+    if (entry->valid && entry->currentPose == desiredPose) {
+        const int32_t primaryTarget = desiredPose == DUAL_WORKSPACE_POSE_A
+            ? entry->primaryReleaseAbs : entry->primaryTightAbs;
+        const int32_t secondaryTarget = desiredPose == DUAL_WORKSPACE_POSE_A
+            ? entry->secondaryTightAbs : entry->secondaryReleaseAbs;
+        const int32_t primaryError = abs32(primaryAbs - primaryTarget);
+        const int32_t secondaryError = abs32(secondaryAbs - secondaryTarget);
+        if (primaryError <= kWorkspaceTargetToleranceCounts &&
+            secondaryError <= kWorkspaceTargetToleranceCounts) {
+            // The pose was already reached by an earlier workspace step or a
+            // completed calibration. Reuse it without issuing servo targets.
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_REUSE_NO_COMMAND J%02u pose=%c M%02u=%ld/%ld err=%ld M%02u=%ld/%ld err=%ld\r\n",
+                               (unsigned)jointIndex,
+                               desiredPose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B',
+                               (unsigned)primaryMotor,
+                               (long)primaryAbs,
+                               (long)primaryTarget,
+                               (long)primaryError,
+                               (unsigned)secondaryMotor,
+                               (long)secondaryAbs,
+                               (long)secondaryTarget,
+                               (long)secondaryError);
+            return true;
+        }
+
+        // The RAM cache cannot describe the current mechanical pose anymore.
+        // Rebuild the requested pose from measured feedback instead of issuing
+        // targets from stale cached ABS values.
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_REUSE_INVALIDATE J%02u pose=%c M%02u err=%ld M%02u err=%ld tolerance=%ld\r\n",
+                           (unsigned)jointIndex,
+                           desiredPose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B',
+                           (unsigned)primaryMotor,
+                           (long)primaryError,
+                           (unsigned)secondaryMotor,
+                           (long)secondaryError,
+                           (long)kWorkspaceTargetToleranceCounts);
+        memset(entry, 0, sizeof(*entry));
+        entry->primaryMotor = primaryMotor;
+        entry->secondaryMotor = secondaryMotor;
+    }
+
+    if (entry->valid && entry->currentPose == DUAL_WORKSPACE_POSE_A &&
+        desiredPose == DUAL_WORKSPACE_POSE_B) {
+        entry->secondaryReleaseAbs = motorApplyTendonDelta(secondaryMotor,
+                                                            entry->secondaryTightAbs,
+                                                            -kWorkspaceReleaseCounts);
+        if (!waitDualWorkspaceTargets(sharedData, jointIndex, "A_TO_B_RELEASE",
+                                      primaryMotor, entry->primaryReleaseAbs,
+                                      secondaryMotor, entry->secondaryReleaseAbs, params) ||
+            !tightenWorkspaceMotor(sharedData, jointIndex, "WORKSPACE_B_TIGHT",
+                                   primaryMotor, secondaryMotor, entry->secondaryReleaseAbs,
+                                   params, &entry->primaryTightAbs)) {
+            return false;
+        }
+        entry->currentPose = DUAL_WORKSPACE_POSE_B;
+        entry->valid = 1;
+        return true;
+    }
+
+    if (entry->valid && entry->currentPose == DUAL_WORKSPACE_POSE_B &&
+        desiredPose == DUAL_WORKSPACE_POSE_A) {
+        entry->primaryReleaseAbs = motorApplyTendonDelta(primaryMotor,
+                                                          entry->primaryTightAbs,
+                                                          -kWorkspaceReleaseCounts);
+        if (!waitDualWorkspaceTargets(sharedData, jointIndex, "B_TO_A_RELEASE",
+                                      primaryMotor, entry->primaryReleaseAbs,
+                                      secondaryMotor, entry->secondaryReleaseAbs, params) ||
+            !tightenWorkspaceMotor(sharedData, jointIndex, "WORKSPACE_A_TIGHT",
+                                   secondaryMotor, primaryMotor, entry->primaryReleaseAbs,
+                                   params, &entry->secondaryTightAbs)) {
+            return false;
+        }
+        entry->currentPose = DUAL_WORKSPACE_POSE_A;
+        entry->valid = 1;
+        return true;
+    }
+
+    // No trusted in-sequence cache exists. Establish the requested workspace
+    // directly from the measured pose: release one tendon by 3200 counts
+    // first, keep its antagonist fixed, then tighten that antagonist to the
+    // workspace load threshold. This keeps the physical sequence consistent
+    // with the requested A/B pose and avoids an unintended pre-tighten of the
+    // tendon that is supposed to be released.
+    const uint8_t releaseMotor = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? primaryMotor : secondaryMotor;
+    const uint8_t tightenMotor = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? secondaryMotor : primaryMotor;
+    const int32_t releaseStartAbs = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? primaryAbs : secondaryAbs;
+    const int32_t holdAbs = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? secondaryAbs : primaryAbs;
+    const int32_t releaseTargetAbs = motorApplyTendonDelta(releaseMotor,
+                                                            releaseStartAbs,
+                                                            -kWorkspaceReleaseCounts);
+    if (!isServoCommandInsideLimit(releaseTargetAbs)) {
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
+                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                           jointIndex,
+                           releaseMotor,
+                           releaseTargetAbs,
+                           -30719,
+                           30719,
+                           1UL << releaseMotor);
+        return false;
+    }
+
+    const int32_t primaryReleaseTarget = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? releaseTargetAbs : holdAbs;
+    const int32_t secondaryReleaseTarget = desiredPose == DUAL_WORKSPACE_POSE_A
+        ? holdAbs : releaseTargetAbs;
+    if (!waitDualWorkspaceTargets(sharedData,
+                                  jointIndex,
+                                  "DIRECT_RELEASE",
+                                  primaryMotor,
+                                  primaryReleaseTarget,
+                                  secondaryMotor,
+                                  secondaryReleaseTarget,
+                                  params)) {
+        return false;
+    }
+
+    int32_t tightenAbs = 0;
+    if (!tightenWorkspaceMotor(sharedData,
+                               jointIndex,
+                               desiredPose == DUAL_WORKSPACE_POSE_A
+                                   ? "WORKSPACE_A_TIGHT" : "WORKSPACE_B_TIGHT",
+                               tightenMotor,
+                               releaseMotor,
+                               releaseTargetAbs,
+                               params,
+                               &tightenAbs)) {
+        return false;
+    }
+
+    if (desiredPose == DUAL_WORKSPACE_POSE_A) {
+        entry->primaryReleaseAbs = releaseTargetAbs;
+        entry->secondaryTightAbs = tightenAbs;
+    } else {
+        entry->primaryTightAbs = tightenAbs;
+        entry->secondaryReleaseAbs = releaseTargetAbs;
+    }
+    entry->currentPose = desiredPose;
+    entry->valid = 1;
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE established J%02u pose=%c release=M%02u start=%ld target=%ld tight=M%02u abs=%ld load=%d\r\n",
+                       (unsigned)jointIndex,
+                       desiredPose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B',
+                       (unsigned)releaseMotor,
+                       (long)releaseStartAbs,
+                       (long)releaseTargetAbs,
+                       (unsigned)tightenMotor,
+                       (long)tightenAbs,
+                       (int)kWorkspaceTightLoadThreshold);
+    return true;
+}
+
+static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
+                                               uint8_t targetJoint,
+                                               const AutoCalibrationParams& params)
+{
+    if (!isWorkspaceDualJoint(targetJoint)) {
+        return true;
+    }
+
+    uint8_t targetPrimaryMotor = 0;
+    uint8_t targetSecondaryMotor = 0;
+    int32_t targetPrimaryAbs = 0;
+    int32_t targetSecondaryAbs = 0;
+    if (!getDualAntagonistAutoCalibrationMotors(targetJoint,
+                                                &targetPrimaryMotor,
+                                                &targetSecondaryMotor) ||
+        !waitWorkspaceFeedbackKnown(sharedData,
+                                    targetJoint,
+                                    targetPrimaryMotor,
+                                    targetSecondaryMotor,
+                                    &targetPrimaryAbs,
+                                    &targetSecondaryAbs)) {
+        setWorkspacePlanFailureDiag(sharedData,
+                                    targetJoint,
+                                    targetJoint,
+                                    DUAL_WORKSPACE_POSE_NONE,
+                                    DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT);
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_TARGET_PREFLIGHT fail target=J%02u\r\n",
+                           (unsigned)targetJoint);
+        return false;
+    }
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_TARGET_PREFLIGHT ok target=J%02u M%02u=%ld M%02u=%ld; no target pose command\r\n",
+                       (unsigned)targetJoint,
+                       (unsigned)targetPrimaryMotor,
+                       (long)targetPrimaryAbs,
+                       (unsigned)targetSecondaryMotor,
+                       (long)targetSecondaryAbs);
+
+    DualWorkspacePlanStep steps[kWorkspaceDualHelperCount] = {};
+    const uint8_t stepCount = buildDualWorkspacePlan(targetJoint,
+                                                      steps,
+                                                      kWorkspaceDualHelperCount);
+    if (stepCount != kWorkspaceDualHelperCount) {
+        setWorkspacePlanFailureDiag(sharedData,
+                                    targetJoint,
+                                    targetJoint,
+                                    DUAL_WORKSPACE_POSE_B,
+                                    DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT);
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN invalid target=J%02u count=%u\r\n",
+                           (unsigned)targetJoint,
+                           (unsigned)stepCount);
+        return false;
+    }
+
+    logDualWorkspacePlan(targetJoint, steps, stepCount);
+    // Do not move a helper until target and all helper pairs have known,
+    // readable ABS/load feedback. A missing channel must not leave a partial
+    // workspace arrangement behind.
+    if (!preflightDualWorkspacePlan(sharedData, targetJoint, steps, stepCount)) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < stepCount; ++i) {
+        const DualWorkspacePlanStep& step = steps[i];
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_HELPER_BEGIN target=J%02u joint=J%02u pose=%c\r\n",
+                           (unsigned)targetJoint,
+                           (unsigned)step.jointIndex,
+                           step.pose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B');
+        if (!ensureWorkspaceDualPose(sharedData,
+                                     step.jointIndex,
+                                     step.pose,
+                                     params)) {
+            setWorkspacePlanFailureDiag(sharedData,
+                                        targetJoint,
+                                        step.jointIndex,
+                                        step.pose,
+                                        DUAL_WORKSPACE_PLAN_STAGE_EXECUTE);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_HELPER_FAIL target=J%02u joint=J%02u pose=%c\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)step.jointIndex,
+                               step.pose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B');
+            return false;
+        }
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_HELPER_DONE target=J%02u joint=J%02u pose=%c\r\n",
+                           (unsigned)targetJoint,
+                           (unsigned)step.jointIndex,
+                           step.pose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B');
+    }
+    return true;
 }
 
 static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
@@ -2432,7 +2937,8 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
 
 static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                                   uint8_t jointIndex,
-                                                  const AutoCalibrationParams& params)
+                                                  const AutoCalibrationParams& params,
+                                                  DualWorkspaceCacheEntry* workspaceState)
 {
     uint8_t primaryMotor = 0;
     uint8_t secondaryMotor = 0;
@@ -2482,51 +2988,95 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (long)primaryAbs,
                   (long)secondaryAbs);
 
-    const int32_t secondarySlackTarget =
-        motorApplyTendonDelta(secondaryMotor, secondaryAbs, -kDualAutoSlackCounts);
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_SLACK_SECONDARY_BEGIN J%02u M%02u targetAbs=%ld from=%ld shortenSign=%d\r\n",
-                  jointIndex,
-                  secondaryMotor,
-                  (long)secondarySlackTarget,
-                  (long)secondaryAbs,
-                  (int)secondaryShortenSign);
-    if (!waitMotorTargetReached(sharedData,
-                                jointIndex,
-                                "DUAL_SLACK_SECONDARY",
-                                secondaryMotor,
-                                secondarySlackTarget,
-                                params)) {
-        return false;
-    }
-
-    if (!readLatestEncoderOriented(sharedData, jointIndex, &initialEncoder) ||
-        !readLatestMotorServoAbs(sharedData, primaryMotor, &primaryAbs)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_PRIMARY_START J%02u missing feedback\r\n",
-                      jointIndex);
-        return false;
-    }
-
     int32_t primary80Encoder = 0;
     int32_t primary80Abs = 0;
     uint16_t primary80Raw = 0;
     int16_t primary80Load = 0;
-    if (!findDualTightPoint(sharedData,
-                            jointIndex,
-                            "POS80",
-                            primaryMotor,
-                            primaryShortenSign,
-                            primaryAbs,
-                            initialEncoder,
-                            primaryTightLoadThreshold,
-                            false,
-                            0,
-                            0,
-                            params,
-                            &primary80Abs,
-                            &primary80Raw,
-                            &primary80Encoder,
-                            &primary80Load)) {
-        return false;
+    const bool workspaceBMatchesMotors = workspaceState && workspaceState->valid &&
+        workspaceState->currentPose == DUAL_WORKSPACE_POSE_B &&
+        workspaceState->primaryMotor == primaryMotor &&
+        workspaceState->secondaryMotor == secondaryMotor;
+    bool reuseWorkspaceStart = false;
+    if (workspaceBMatchesMotors) {
+        const int32_t primaryWorkspaceError =
+            abs32(primaryAbs - workspaceState->primaryTightAbs);
+        const int32_t secondaryWorkspaceError =
+            abs32(secondaryAbs - workspaceState->secondaryReleaseAbs);
+        if (primaryWorkspaceError <= kWorkspaceTargetToleranceCounts &&
+            secondaryWorkspaceError <= kWorkspaceTargetToleranceCounts) {
+            reuseWorkspaceStart = true;
+        } else {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_TARGET_B_INVALIDATE J%02u M%02u err=%ld M%02u err=%ld tolerance=%ld\r\n",
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (long)primaryWorkspaceError,
+                               (unsigned)secondaryMotor,
+                               (long)secondaryWorkspaceError,
+                               (long)kWorkspaceTargetToleranceCounts);
+            workspaceState->valid = 0;
+        }
+    }
+    if (reuseWorkspaceStart) {
+        int16_t primaryLoadRaw = 0;
+        const bool primaryLoadAvailable =
+            readLatestMotorServoLoad(sharedData, primaryMotor, &primaryLoadRaw);
+        primary80Abs = primaryAbs;
+        primary80Raw = initialRaw;
+        primary80Encoder = initialEncoder;
+        // B is a position cache. The servo's instantaneous load commonly
+        // returns to zero after the prior tightening command has settled, so
+        // only the verified ABS pose decides whether it can be reused.
+        primary80Load = primaryLoadAvailable ? servoLoadMagnitude(primaryLoadRaw) : 0;
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_WORKSPACE_B_REUSE J%02u primary=M%02u abs=%ld load=%d available=%u secondary=M%02u abs=%ld; ABS matched, skip duplicate slack/POS80\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)primaryMotor,
+                           (long)primary80Abs,
+                           (int)primary80Load,
+                           primaryLoadAvailable ? 1U : 0U,
+                           (unsigned)secondaryMotor,
+                           (long)secondaryAbs);
+    } else {
+        const int32_t secondarySlackTarget =
+            motorApplyTendonDelta(secondaryMotor, secondaryAbs, -kDualAutoSlackCounts);
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_SLACK_SECONDARY_BEGIN J%02u M%02u targetAbs=%ld from=%ld shortenSign=%d\r\n",
+                      jointIndex,
+                      secondaryMotor,
+                      (long)secondarySlackTarget,
+                      (long)secondaryAbs,
+                      (int)secondaryShortenSign);
+        if (!waitMotorTargetReached(sharedData,
+                                    jointIndex,
+                                    "DUAL_SLACK_SECONDARY",
+                                    secondaryMotor,
+                                    secondarySlackTarget,
+                                    params)) {
+            return false;
+        }
+
+        if (!readLatestEncoderOriented(sharedData, jointIndex, &initialEncoder) ||
+            !readLatestMotorServoAbs(sharedData, primaryMotor, &primaryAbs)) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_PRIMARY_START J%02u missing feedback\r\n",
+                          jointIndex);
+            return false;
+        }
+        if (!findDualTightPoint(sharedData,
+                                jointIndex,
+                                "POS80",
+                                primaryMotor,
+                                primaryShortenSign,
+                                primaryAbs,
+                                initialEncoder,
+                                primaryTightLoadThreshold,
+                                false,
+                                0,
+                                0,
+                                params,
+                                &primary80Abs,
+                                &primary80Raw,
+                                &primary80Encoder,
+                                &primary80Load)) {
+            return false;
+        }
     }
 
     int32_t secondaryStartAbs = 0;
@@ -2671,6 +3221,24 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     clearJointServoMultiTurnUnknown(sharedData, jointIndex);
     setCalibratedMotorAbsLimit(sharedData, primaryMotor, primary80Abs);
     setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryNeg3Abs);
+
+    if (workspaceState) {
+        // The exchange finishes with primary released and secondary tightened
+        // to the final load threshold. This is the physical POSE_A for all
+        // later workspace planning in the same calibration sequence.
+        workspaceState->primaryMotor = primaryMotor;
+        workspaceState->secondaryMotor = secondaryMotor;
+        workspaceState->primaryReleaseAbs = primaryNeg3Abs;
+        workspaceState->secondaryTightAbs = secondaryNeg3Abs;
+        workspaceState->currentPose = DUAL_WORKSPACE_POSE_A;
+        workspaceState->valid = 1;
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE J%02u pose=A primaryRelease=M%02u:%ld secondaryTight=M%02u:%ld\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)primaryMotor,
+                           (long)primaryNeg3Abs,
+                           (unsigned)secondaryMotor,
+                           (long)secondaryNeg3Abs);
+    }
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_RESULT J%02u neg3Raw=%u neg3=%ld pos80Raw=%u pos80=%ld span=%ld zero=%ld primary80Abs=%ld primaryNeg3Abs=%ld secondaryPreloadRaw=%u secondaryPreloadEncoder=%ld secondaryPreloadAbs=%ld secondaryNeg3Abs=%ld loadPrimary=%d loadSecondaryPreload=%d loadSecondaryNeg3=%d\r\n",
                   jointIndex,
@@ -3760,6 +4328,8 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
         return false;
     }
 
+    clearDualWorkspaceCache();
+
     uint32_t seenJoints = 0;
     uint8_t orderedJoints[ENCODER_TOTAL_NUM] = {0};
     for (uint8_t i = 0; i < jointCount; i++) {
@@ -3805,29 +4375,6 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
         }
     }
 
-    uint32_t sideSwayRequiredMask = 0;
-    for (uint8_t i = 0; i < kSideSwayAdjustJointsCount; i++) {
-        sideSwayRequiredMask |= (1UL << kSideSwayAdjustJoints[i]);
-    }
-    if ((seenJoints & sideSwayRequiredMask) == sideSwayRequiredMask) {
-        FW_LOG_INFO_PRINTLN("[AUTO CALIB] all side-sway dual joints selected; running side-sway pre-adjust");
-        if (!runSideSwayPreAdjust(sharedData, params)) {
-            FW_LOG_INFO_PRINTLN("[AUTO CALIB] side-sway pre-adjust failed");
-            if (!hasCalibrationDiag(sharedData)) {
-                setCalibrationDiag(sharedData,
-                                   CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
-                                   CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                                   0xFF,
-                                   0xFF,
-                                   seenJoints,
-                                   sideSwayRequiredMask,
-                                   0,
-                                   seenJoints & sideSwayRequiredMask);
-            }
-            return false;
-        }
-    }
-
     // Serial calibration is intentional: tightening one tendon changes the
     // mechanical load and encoder angle of neighboring joints, so parallel
     // calibration can bias the detected zero/tight points. Keep the per-joint
@@ -3844,6 +4391,47 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
         if (getDualAntagonistAutoCalibrationMotors(orderedJoints[i],
                                                    &dualPrimaryMotor,
                                                    &dualSecondaryMotor)) {
+            const bool isWorkspaceTarget = isWorkspaceDualJoint(orderedJoints[i]);
+            DualWorkspaceCacheEntry* workspaceState = NULL;
+            if (isWorkspaceTarget) {
+                if (!prepareWorkspaceForDualCalibration(sharedData,
+                                                        orderedJoints[i],
+                                                        params)) {
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL workspace failed J%02u; stop remaining sequence\r\n",
+                                       orderedJoints[i]);
+                    failedJointMask |= currentJointBit;
+                    if (firstFailedJoint == 0xFF) {
+                        firstFailedJoint = orderedJoints[i];
+                    }
+                    break;
+                }
+                const int8_t cacheIndex = workspaceCacheIndex(orderedJoints[i]);
+                if (cacheIndex < 0) {
+                    setWorkspacePlanFailureDiag(sharedData,
+                                                orderedJoints[i],
+                                                orderedJoints[i],
+                                                DUAL_WORKSPACE_POSE_NONE,
+                                                DUAL_WORKSPACE_PLAN_STAGE_EXECUTE);
+                    failedJointMask |= currentJointBit;
+                    if (firstFailedJoint == 0xFF) {
+                        firstFailedJoint = orderedJoints[i];
+                    }
+                    break;
+                }
+                workspaceState = &g_dualWorkspaceCache[(uint8_t)cacheIndex];
+                if (workspaceState->valid &&
+                    workspaceState->currentPose == DUAL_WORKSPACE_POSE_B) {
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_TARGET_B_CANDIDATE J%02u M%02u/M%02u; verify ABS before reuse\r\n",
+                                       (unsigned)orderedJoints[i],
+                                       (unsigned)dualPrimaryMotor,
+                                       (unsigned)dualSecondaryMotor);
+                } else {
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_TARGET_DIRECT J%02u M%02u/M%02u; no target B preset\r\n",
+                                       (unsigned)orderedJoints[i],
+                                       (unsigned)dualPrimaryMotor,
+                                       (unsigned)dualSecondaryMotor);
+                }
+            }
             FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL begin J%02u (%u/%u) dual M%02u/M%02u\r\n",
                           orderedJoints[i],
                           (unsigned)(i + 1),
@@ -3852,7 +4440,8 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                           dualSecondaryMotor);
             if (!runDualAntagonistAutoCalibrationJoint(sharedData,
                                                        orderedJoints[i],
-                                                       params)) {
+                                                       params,
+                                                       workspaceState)) {
                 FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL failed J%02u dual\r\n",
                               orderedJoints[i]);
                 if (!hasCalibrationDiag(sharedData)) {
@@ -3996,8 +4585,7 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
     return true;
 }
 
-static bool startAutoCalibrationTaskWithMode(TaskSharedData_t* sharedData,
-                                             uint8_t mode)
+static bool startAutoCalibrationTaskInternal(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
         return false;
@@ -4007,7 +4595,6 @@ static bool startAutoCalibrationTaskWithMode(TaskSharedData_t* sharedData,
         return true;
     }
     clearCalibrationDiag(sharedData);
-    g_autoCalibrationTaskMode = mode;
 
     const BaseType_t ok = xTaskCreate(autoCalibrationTask,
                                       "autoCalibrationTask",
@@ -4027,40 +4614,13 @@ static bool startAutoCalibrationTaskWithMode(TaskSharedData_t* sharedData,
 
 bool startAutoCalibrationTask(TaskSharedData_t* sharedData)
 {
-    return startAutoCalibrationTaskWithMode(sharedData, AUTO_CAL_TASK_MODE_SEQUENCE);
-}
-
-bool startSideSwayAdjustTask(TaskSharedData_t* sharedData)
-{
-    return startAutoCalibrationTaskWithMode(sharedData, AUTO_CAL_TASK_MODE_SIDE_SWAY_ADJUST);
+    return startAutoCalibrationTaskInternal(sharedData);
 }
 
 void autoCalibrationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     const AutoCalibrationParams params = defaultAutoCalibrationParams();
-    const uint8_t taskMode = g_autoCalibrationTaskMode;
-
-    if (taskMode == AUTO_CAL_TASK_MODE_SIDE_SWAY_ADJUST) {
-        const bool ok = runSideSwayPreAdjust(sharedData, params);
-        if (!ok && sharedData && !hasCalibrationDiag(sharedData)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_SIDE_ADJUST_FAILED,
-                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                               0xFF,
-                               0xFF,
-                               0,
-                               0,
-                               0,
-                               0);
-        }
-        postSystemEvent(sharedData, ok ? SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE : SYSTEM_EVENT_CALIBRATION_FAILED);
-        taskRuntimeUnregister(TASK_RUNTIME_AUTO_CALIB);
-        g_autoCalibrationTaskHandle = NULL;
-        g_autoCalibrationTaskMode = AUTO_CAL_TASK_MODE_SEQUENCE;
-        vTaskDelete(NULL);
-        return;
-    }
 
     uint8_t activeJoints[ENCODER_TOTAL_NUM] = {0};
     const uint8_t activeJointCount =
@@ -4083,18 +4643,55 @@ void autoCalibrationTask(void* parameter)
                            0,
                            0);
     } else {
-        FW_LOG_INFO_PRINT("[AUTO CALIB] ACTIVE_SCOPE joints=");
-        for (uint8_t i = 0; i < activeJointCount; i++) {
-            FW_LOG_INFO_PRINTF("%sJ%02u", (i == 0) ? "" : ",", activeJoints[i]);
+        char activeScopeLog[128] = {0};
+        size_t used = 0;
+        int written = snprintf(activeScopeLog,
+                               sizeof(activeScopeLog),
+                               "[AUTO CALIB] ACTIVE_SCOPE joints=");
+        if (written > 0) {
+            used = (size_t)written;
+            if (used >= sizeof(activeScopeLog)) {
+                used = sizeof(activeScopeLog) - 1;
+            }
         }
-        FW_LOG_INFO_PRINTLN("");
+        for (uint8_t i = 0; i < activeJointCount; i++) {
+            if (used >= sizeof(activeScopeLog) - 1) {
+                break;
+            }
+            written = snprintf(activeScopeLog + used,
+                               sizeof(activeScopeLog) - used,
+                               "%sJ%02u",
+                               (i == 0) ? "" : ",",
+                               activeJoints[i]);
+            if (written <= 0) {
+                break;
+            }
+            const size_t appended = (size_t)written;
+            used += appended;
+            if (used >= sizeof(activeScopeLog)) {
+                used = sizeof(activeScopeLog) - 1;
+                break;
+            }
+        }
+        activeScopeLog[used] = '\0';
+        FW_LOG_INFO_PRINTLN(activeScopeLog);
     }
 
+    bool needsWorkspaceReadMask = false;
+    for (uint8_t i = 0; i < activeJointCount; ++i) {
+        if (isWorkspaceDualJoint(activeJoints[i])) {
+            needsWorkspaceReadMask = true;
+            break;
+        }
+    }
+    setCalibrationWorkspaceReadMask(sharedData,
+                                    needsWorkspaceReadMask ? workspaceDualMotorMask() : 0);
     const bool ok = (activeJointCount > 0) &&
                     runAutoCalibrationSequence(sharedData,
                                                activeJoints,
                                                activeJointCount,
                                                params);
+    setCalibrationWorkspaceReadMask(sharedData, 0);
 
     if (!ok && sharedData && !hasCalibrationDiag(sharedData)) {
         setCalibrationDiag(sharedData,

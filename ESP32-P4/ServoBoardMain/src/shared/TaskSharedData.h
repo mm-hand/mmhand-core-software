@@ -52,8 +52,6 @@
 #define SYSTEM_EVENT_RUN_FEEDBACK 9
 #define SYSTEM_EVENT_RUN_FEEDBACK_DONE 10
 #define SYSTEM_EVENT_PAUSE 11
-#define SYSTEM_EVENT_SIDE_SWAY_ADJUST 12
-#define SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE 13
 #define SYSTEM_EVENT_REEVALUATE_READY 14
 #define SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT 15
 
@@ -106,7 +104,7 @@
 #define CALIB_DIAG_REASON_HOLD_TARGET_FAILED 21
 #define CALIB_DIAG_REASON_JOINT_LIST_INVALID 22
 #define CALIB_DIAG_REASON_DUPLICATE_JOINT 23
-#define CALIB_DIAG_REASON_SIDE_ADJUST_FAILED 24
+#define CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED 24
 #define CALIB_DIAG_REASON_JOINT_STEP_FAILED 25
 #define CALIB_DIAG_REASON_OVER_RELEASE 26
 
@@ -396,6 +394,9 @@ typedef struct {
     volatile uint32_t system_fault_latched_bitmap;
     volatile uint32_t state_transition_count;
     volatile uint32_t active_motor_mask;
+    // Calibration-only read expansion. It never changes the host-selected
+    // active scope and is cleared when the calibration task exits.
+    volatile uint32_t calibration_aux_motor_mask;
     volatile uint32_t active_joint_mask;
     volatile uint32_t multi_turn_unknown_bitmap;
     volatile uint32_t servo_online_bitmap;

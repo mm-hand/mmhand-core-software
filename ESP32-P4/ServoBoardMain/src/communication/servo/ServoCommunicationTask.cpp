@@ -1827,7 +1827,9 @@ void servoCommunicationTask(void* parameter)
         uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
         uint8_t readCounts[NUM_BUSES] = {0};
         const uint32_t calibrationReadMask = calibrationMotionActive
-            ? sharedAtomicLoad(&sharedData->active_motor_mask)
+            ? (sharedAtomicLoad(&sharedData->active_motor_mask) |
+               sharedAtomicLoad(&sharedData->calibration_aux_motor_mask)) &
+                  validMotorChannelMask()
             : 0;
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
             if (calibrationMotionActive &&

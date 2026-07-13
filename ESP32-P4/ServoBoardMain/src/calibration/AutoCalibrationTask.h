@@ -38,7 +38,6 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                 const AutoCalibrationParams& params);
 
 bool startAutoCalibrationTask(TaskSharedData_t* sharedData);
-bool startSideSwayAdjustTask(TaskSharedData_t* sharedData);
 bool isAutoCalibrationFeedbackReady(TaskSharedData_t* sharedData);
 void autoCalibrationTask(void* parameter);
 

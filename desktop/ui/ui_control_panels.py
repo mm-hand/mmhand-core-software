@@ -102,7 +102,6 @@ def _load_default_auto_calibration_joint_indices() -> List[int]:
 
 
 AUTO_CALIBRATION_JOINT_INDICES = _load_default_auto_calibration_joint_indices()
-SIDE_SWAY_ADJUST_JOINT_INDICES = {12, 8, 4, 0}
 
 
 def _motor_channel_valid(idx: int) -> bool:
@@ -281,7 +280,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._last_calib_status: Optional[str] = None
         self._last_calib_snapshot_signature: Optional[str] = None
         self._last_joint_calib_valid_mask: Optional[int] = None
-        self._side_sway_adjust_pending = False
         self._pending_calib_joint_mask = 0
         self._pending_calib_motor_mask = 0
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
@@ -604,7 +602,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.manual_check = None
         self.send_all_btn = None
         self.new_device_reset_btn = None
-        self.side_sway_adjust_btn = None
         self.calib_load_btn = None
         self.open_btn = None
         self.release_half_turn_btn = None
@@ -699,10 +696,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.new_device_reset_btn.setToolTip(
             "Clear saved multi-turn data and set each online motor's current raw position as turn0"
         )
-        self.side_sway_adjust_btn = QtWidgets.QPushButton("Side Adjust")
-        self.side_sway_adjust_btn.setToolTip(
-            "Move index, middle, ring, and pinky side-sway joints to one side before full-hand calibration"
-        )
         self.calib_load_btn = QtWidgets.QPushButton("Calib Load")
         self.calib_load_btn.setToolTip("Load the last saved calibration snapshot when mechanics have not changed")
         self.open_btn = QtWidgets.QPushButton("Open Pose")
@@ -714,7 +707,6 @@ class ControlPanel(QtWidgets.QWidget):
         wf_layout.addStretch(1)
         for btn in [
             self.new_device_reset_btn,
-            self.side_sway_adjust_btn,
             self.calib_load_btn,
             self.open_btn,
             self.release_half_turn_btn,
@@ -729,7 +721,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.manual_check.toggled.connect(self._apply_interaction_enabled)
         self.send_all_btn.clicked.connect(lambda _checked=False: self.send_all())
         self.new_device_reset_btn.clicked.connect(lambda _checked=False: self.new_device_reset())
-        self.side_sway_adjust_btn.clicked.connect(lambda _checked=False: self.side_sway_adjust())
         self.calib_load_btn.clicked.connect(lambda _checked=False: self.load_calibration_snapshot())
         self.open_btn.clicked.connect(lambda _checked=False: self.apply_open_pose())
         self.release_half_turn_btn.clicked.connect(lambda _checked=False: self.release_all_motors_half_turn())
@@ -1512,17 +1503,6 @@ class ControlPanel(QtWidgets.QWidget):
                 system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
             )
             self.new_device_reset_btn.setEnabled(can_reset_device)
-        if getattr(self, "side_sway_adjust_btn", None) is not None:
-            self.side_sway_adjust_btn.setEnabled(
-                bool(self.context.is_comm_connected()) and
-                system_state in (
-                    SYSTEM_STATE_IDLE,
-                    SYSTEM_STATE_READY,
-                    SYSTEM_STATE_RUN_DIRECT,
-                    SYSTEM_STATE_RUN_FEEDBACK,
-                    SYSTEM_STATE_PAUSED,
-                )
-            )
         for btn in [getattr(self, "fist_btn", None), getattr(self, "zero_btn", None)]:
             if btn is not None:
                 btn.setVisible(mode in ("joint", "test"))
@@ -2014,23 +1994,6 @@ class ControlPanel(QtWidgets.QWidget):
             return None
         return motors[0], motors[1]
 
-    def _active_scope_side_sway_joint_indices(self) -> List[int]:
-        return [
-            joint_idx for joint_idx in self._active_scope_joint_indices()
-            if (
-                joint_idx in SIDE_SWAY_ADJUST_JOINT_INDICES and
-                self._dual_rope_init_motors_for_joint(joint_idx) is not None
-            )
-        ]
-
-    def _active_scope_has_all_side_sway_adjust_joints(self) -> bool:
-        active = set(self._active_scope_side_sway_joint_indices())
-        required = {
-            joint_idx for joint_idx in SIDE_SWAY_ADJUST_JOINT_INDICES
-            if self._dual_rope_init_motors_for_joint(joint_idx) is not None
-        }
-        return bool(required) and required.issubset(active)
-
     def _build_rope_init_tasks(self) -> Tuple[List[dict], List[str], List[str]]:
         state = self._state
         if state is None or not bool(getattr(state, "has_sensor_data", False)):
@@ -2375,33 +2338,9 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Calibrate blocked: active scope was not accepted by lower controller")
             return
-        if not self._confirm_calibration_side_adjust_notice():
-            self._set_status("Calibrate cancelled: run Side Adjust first if this is the first calibration after power-on")
-            return
         self._start_calibration_now()
 
-    def _confirm_calibration_side_adjust_notice(self) -> bool:
-        box = QtWidgets.QMessageBox(self)
-        box.setIcon(QtWidgets.QMessageBox.Warning)
-        box.setWindowTitle("Calibrate")
-        box.setText(
-            "\u5373\u5c06\u5f00\u59cb\u81ea\u52a8\u6807\u5b9a\u3002\n\n"
-            "\u8bf7\u5148\u68c0\u67e5\u662f\u5426\u5df2\u7ecf\u6267\u884c Side Adjust\u3002\n"
-            "Side Adjust \u7528\u4e8e\u7ed9\u4fa7\u6446\u5173\u8282\u7559\u51fa\u5145\u5206\u7684\u6807\u5b9a\u7a7a\u95f4\u3002\n\n"
-            "\u5982\u679c\u662f\u672c\u6b21\u4e0a\u7535\u540e\u7b2c\u4e00\u6b21\u8fdb\u884c\u6807\u5b9a\uff0c"
-            "\u8bf7\u5148\u6267\u884c Side Adjust\u3002\n\n"
-            "\u70b9\u51fb\u201c\u7ee7\u7eed\u6807\u5b9a\u201d\u540e\u4f1a\u76f4\u63a5\u4e0b\u53d1 Calibrate\uff0c"
-            "\u4e0d\u4f1a\u81ea\u52a8\u6267\u884c Side Adjust\u3002"
-        )
-        continue_button = box.addButton("\u7ee7\u7eed\u6807\u5b9a", QtWidgets.QMessageBox.AcceptRole)
-        cancel_button = box.addButton("\u53d6\u6d88", QtWidgets.QMessageBox.RejectRole)
-        box.setDefaultButton(cancel_button)
-        exec_fn = getattr(box, "exec", None) or getattr(box, "exec_")
-        exec_fn()
-        return box.clickedButton() is continue_button
-
     def _start_calibration_now(self) -> None:
-        self._side_sway_adjust_pending = False
         self._abs_limit_warning_unlocked_mask = 0
         active_joint_mask = int(self._active_joint_mask_from_ui()) & ((1 << ENCODER_COUNT) - 1)
         active_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
@@ -2412,33 +2351,6 @@ class ControlPanel(QtWidgets.QWidget):
                 self._joint_target_user_set[joint_idx] = False
         self._joint_target_initialized = False
         self.context.start_calibration()
-
-    def side_sway_adjust(self) -> None:
-        self._request_side_sway_adjust()
-
-    def _request_side_sway_adjust(self) -> bool:
-        if not self.context.is_comm_connected():
-            self._set_status("Side Adjust blocked: serial port is not connected")
-            return False
-        system_state = getattr(self._state, "system_state", None) if self._state is not None else None
-        if system_state not in (
-            SYSTEM_STATE_IDLE,
-            SYSTEM_STATE_READY,
-            SYSTEM_STATE_RUN_DIRECT,
-            SYSTEM_STATE_RUN_FEEDBACK,
-            SYSTEM_STATE_PAUSED,
-        ):
-            self._set_status("Side Adjust blocked: wait for IDLE/READY or an enabled run state")
-            return False
-        if self.backend.request_side_sway_adjust():
-            self._side_sway_adjust_pending = True
-            self.context.emit_action("Side Adjust requested: J12,J08,J04,J00 to load 190")
-            self._set_status("Side Adjust running: index -> middle -> ring -> pinky")
-            return True
-        else:
-            self._side_sway_adjust_pending = False
-            self._set_status("Side Adjust failed: serial port is not connected")
-            return False
 
     def _active_scope_abs_limit_valid_mask(self) -> int:
         state = self._state
@@ -2522,7 +2434,7 @@ class ControlPanel(QtWidgets.QWidget):
             "3. 点击 New Device Reset，将当前在线舵机 raw 作为新的 turn0。\n"
             "4. New Device Reset 会清旧 ABS limit、旧关节标定，并归档旧 Calib Load。\n"
             "5. 若仍有故障锁存，再点击 Clear Fault。\n"
-            "6. 重新 ENABLE，然后执行 Rope Init / Side Adjust / Calibrate。\n"
+            "6. 重新 ENABLE，然后执行 Rope Init / Calibrate。\n"
             "7. 确认 TURN KNOWN、CALIB SUCCESS、OL OK 后再控制。"
         )
 
@@ -3507,14 +3419,6 @@ class ControlPanel(QtWidgets.QWidget):
             if joint_calib_valid_mask == 0:
                 self._joint_target_user_set = [False] * ENCODER_COUNT
         self._last_joint_calib_valid_mask = joint_calib_valid_mask
-        skip_calib_snapshot = False
-        if self._side_sway_adjust_pending and self._last_calib_status in active_calib_statuses:
-            if calib_status == "SUCCESS":
-                skip_calib_snapshot = True
-                self._side_sway_adjust_pending = False
-                self.context.emit_action("Side Adjust complete")
-            elif calib_status in {"FAILED", "IDLE"}:
-                self._side_sway_adjust_pending = False
         if calib_status in {"FAILED", "IDLE"} and self._last_calib_status in active_calib_statuses:
             self._pending_calib_joint_mask = 0
             self._pending_calib_motor_mask = 0
@@ -3522,8 +3426,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._update_connection_lights()
         self._refresh_nvs_control_button()
         self._check_feedback_abs_limit_violation()
-        if not skip_calib_snapshot:
-            self._maybe_save_calibration_snapshot(state)
+        self._maybe_save_calibration_snapshot(state)
         if self._app_mode != "manual":
             updater = getattr(self._body_widget, "update_state", None)
             if callable(updater):
@@ -3663,7 +3566,6 @@ class ControlPanel(QtWidgets.QWidget):
         self._joint_target_initialized = False
         self._motor_target_initialized = False
         self._last_calib_status = None
-        self._side_sway_adjust_pending = False
         self._motor_abs_pos = [None] * MOTOR_COUNT
         self._motor_session_origin_abs = [None] * MOTOR_COUNT
         self._motor_dir_hint = [0] * MOTOR_COUNT
@@ -4383,11 +4285,32 @@ class ControlPanel(QtWidgets.QWidget):
                     i < len(getattr(state, "angles", []))
                 ):
                     if angle_calibrated and not suspicious_zero_angles:
-                        self._set_item_text_if_changed(self.joint_current_items[i], f"{float(state.angles[i]):.2f}")
+                        current_item = self.joint_current_items[i]
+                        current_deg = float(state.angles[i])
+                        self._set_item_text_if_changed(current_item, f"{current_deg:.2f}")
+                        out_of_workspace = bool(
+                            i < len(getattr(state, "encoders", [])) and
+                            getattr(state.encoders[i], "angle_out_of_workspace", False)
+                        )
+                        if out_of_workspace:
+                            current_item.setForeground(QtGui.QBrush(QtGui.QColor("#d89b00")))
+                            self._set_item_tooltip_if_changed(
+                                current_item,
+                                "Live joint angle is outside the calibrated [0, Max] workspace.",
+                            )
+                        else:
+                            current_item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
+                            self._set_item_tooltip_if_changed(current_item, "Live calibrated joint angle")
                     elif not angle_calibrated:
-                        self._set_item_text_if_changed(self.joint_current_items[i], "0.00")
+                        current_item = self.joint_current_items[i]
+                        self._set_item_text_if_changed(current_item, "0.00")
+                        current_item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+                        self._set_item_tooltip_if_changed(current_item, "Joint is not calibrated")
                 else:
-                    self._set_item_text_if_changed(self.joint_current_items[i], "-")
+                    current_item = self.joint_current_items[i]
+                    self._set_item_text_if_changed(current_item, "-")
+                    current_item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+                    self._set_item_tooltip_if_changed(current_item, "No valid mapped-angle feedback")
                 if (
                     display_valid and
                     raw_feedback_valid and

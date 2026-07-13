@@ -222,15 +222,6 @@ static bool canAcceptCalibrate(uint8_t state)
            state == SYSTEM_STATE_READY;
 }
 
-static bool canAcceptSideSwayAdjust(uint8_t state)
-{
-    return state == SYSTEM_STATE_IDLE ||
-           state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RUN_DIRECT ||
-           state == SYSTEM_STATE_RUN_FEEDBACK ||
-           state == SYSTEM_STATE_PAUSED;
-}
-
 static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -865,42 +856,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
         }
 
-        case SYSTEM_EVENT_SIDE_SWAY_ADJUST:
-        {
-            if (!canAcceptSideSwayAdjust(sharedData->system_state)) {
-                FW_LOG_INFO_PRINTF("[STATE] reject SIDE_SWAY_ADJUST in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            resetServoTargetQueue(sharedData);
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
-            sharedData->control_enabled = 0;
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
-            setCommandModeJoint(sharedData);
-            setCalibrationStatus(CALIB_STATUS_RUNNING, true);
-            setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
-            if (!startSideSwayAdjustTask(sharedData)) {
-                CalibrationDiagData_t diag;
-                memset(&diag, 0, sizeof(diag));
-                diag.valid = 1;
-                diag.reason = CALIB_DIAG_REASON_TASK_START_FAILED;
-                diag.phase = CALIB_DIAG_PHASE_DUAL_PRELOAD;
-                diag.joint = 0xFF;
-                diag.motor = 0xFF;
-                diag.timestamp = millis();
-                {
-                    SharedSafetyGuard guard;
-                    diag.sequence = sharedData->calibration_diag.sequence + 1;
-                    sharedData->calibration_diag = diag;
-                }
-                setCalibrationStatus(CALIB_STATUS_FAILED, true);
-                sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
-                requestServoEmergencyTorqueOff(sharedData);
-                setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
-            }
-            break;
-        }
-
         case SYSTEM_EVENT_CALIBRATION_DONE:
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_DONE in state=%u\r\n",
@@ -915,20 +870,6 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
-            break;
-
-        case SYSTEM_EVENT_SIDE_SWAY_ADJUST_DONE:
-            if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore SIDE_SWAY_DONE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            sharedData->control_enabled = 0;
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
-            setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
-            setSystemState(sharedData, idleOrReadyState(sharedData));
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
         case SYSTEM_EVENT_REEVALUATE_READY:

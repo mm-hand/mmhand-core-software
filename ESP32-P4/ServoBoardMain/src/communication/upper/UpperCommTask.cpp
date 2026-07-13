@@ -831,8 +831,10 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_SIDE_SWAY_ADJUST)
     {
-        postSystemEvent(sharedData, SYSTEM_EVENT_SIDE_SWAY_ADJUST);
-        sendProtoAckPacket(CMD_SIDE_SWAY_ADJUST, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        // Reserved for legacy desktop builds. Workspace setup now runs only inside CMD_CALIBRATE.
+        sendProtoAckPacket(CMD_SIDE_SWAY_ADJUST,
+                           sharedData->system_state,
+                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
 

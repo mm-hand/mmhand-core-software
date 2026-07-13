@@ -58,7 +58,6 @@ from .protocol import (
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
-    build_side_sway_adjust_cmd,
     build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
@@ -74,7 +73,6 @@ from .protocol import (
     CMD_STOP,
     CMD_RESET,
     CMD_RUN_FEEDBACK,
-    CMD_SIDE_SWAY_ADJUST,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     CMD_MOTOR_ABS_LIMIT_LOCK,
@@ -173,7 +171,6 @@ FIRMWARE_LOG_ERROR_MARKERS = (
 # The UI/model order is also thumb, index, middle, ring, pinky.
 TACTILE_UI_GROUP_FROM_RAW = (0, 1, 2, 3, 4)
 TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
-MAPPED_ANGLE_COUNT_MARGIN = 512
 MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
 
 
@@ -1425,8 +1422,16 @@ class LowerComputerComm:
                         model.encoders[i].encoder_id = i
                         angle_error = errors[i] if i < len(errors) else False
                         model.encoders[i].angle_error = angle_error
-                        if not angle_error and self._mapped_angle_count_plausible(i, int(angles[i]), model):
+                        if not angle_error:
+                            # P4 validFlags is authoritative for mapped-angle validity.
+                            # Values outside the calibrated workspace are still real
+                            # feedback and must not leave a stale angle frozen in the UI.
                             model.encoders[i].raw = angles[i]
+                            model.encoders[i].angle_out_of_workspace = (
+                                self._mapped_angle_out_of_workspace(i, int(angles[i]), model)
+                            )
+                        else:
+                            model.encoders[i].angle_out_of_workspace = False
                         model.encoders[i].zero_raw = 0
                         model.encoders[i].error = angle_error
 
@@ -1654,7 +1659,16 @@ class LowerComputerComm:
                 if parsed is not None:
                     joint_idx = int(parsed.get("joint", -1))
                     if 0 <= joint_idx < ENCODER_COUNT:
-                        model.joint_calib_results[joint_idx] = dict(parsed)
+                        new_result = dict(parsed)
+                        old_result = model.joint_calib_results[joint_idx]
+                        if old_result != new_result:
+                            # The cached mapped count may have been produced by the
+                            # previous calibration. Wait for one fresh P4 angle frame
+                            # before showing Current again.
+                            model.encoders[joint_idx].raw = 0
+                            model.encoders[joint_idx].angle_error = True
+                            model.encoders[joint_idx].angle_out_of_workspace = False
+                        model.joint_calib_results[joint_idx] = new_result
                         emitted = True
 
             elif pkt_type == PACKET_TYPE_CALIB_DIAG:
@@ -1752,7 +1766,7 @@ class LowerComputerComm:
                 parsed = parse_proto_ack(payload)
                 if parsed is not None:
                     ack_cmd, applied_mode, status = parsed
-                    if ack_cmd in (CMD_CALIBRATE, CMD_SIDE_SWAY_ADJUST, CMD_CLEAR_CALIBRATION):
+                    if ack_cmd in (CMD_CALIBRATE, CMD_CLEAR_CALIBRATION):
                         self._auto_calib_logger.log(
                             "ACK",
                             f"cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
@@ -1831,6 +1845,10 @@ class LowerComputerComm:
                             model.motor_abs_limit_valid_bitmap = 0
                             model.motor_abs_limit_locked_bitmap = 0
                             model.joint_calib_results = [None] * ENCODER_COUNT
+                            for encoder in model.encoders:
+                                encoder.raw = 0
+                                encoder.angle_error = True
+                                encoder.angle_out_of_workspace = False
                     emitted = True
 
         self._apply_connectivity_visibility(model)
@@ -1838,11 +1856,9 @@ class LowerComputerComm:
         return model if emitted else None
 
     @staticmethod
-    def _mapped_angle_count_plausible(joint_idx: int, value: int, model: HandModel) -> bool:
+    def _mapped_angle_out_of_workspace(joint_idx: int, value: int, model: HandModel) -> bool:
         if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
             return False
-        if value == 0:
-            return True
         results = getattr(model, "joint_calib_results", []) or []
         if joint_idx >= len(results):
             return False
@@ -1856,7 +1872,7 @@ class LowerComputerComm:
         if not np.isfinite(angle_max) or angle_max <= 0.0:
             return False
         max_count = int(round(angle_max * MAPPED_ANGLE_COUNTS_PER_DEG))
-        return -MAPPED_ANGLE_COUNT_MARGIN <= int(value) <= (max_count + MAPPED_ANGLE_COUNT_MARGIN)
+        return int(value) < 0 or int(value) > max_count
 
     @staticmethod
     def _apply_connectivity_visibility(model: HandModel) -> None:
@@ -1885,7 +1901,7 @@ class LowerComputerComm:
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
             return
-        if cmd in ("calibrate", "side_sway_adjust", "clear_calibration"):
+        if cmd in ("calibrate", "clear_calibration"):
             self._auto_calib_logger.log("TX", str(cmd))
         elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
             "active_scope",
@@ -2046,8 +2062,6 @@ class LowerComputerComm:
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":
             return build_calibrate_cmd()
-        if cmd == "side_sway_adjust":
-            return build_side_sway_adjust_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_data":
             return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":

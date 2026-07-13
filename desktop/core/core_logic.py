@@ -22,7 +22,6 @@ from .protocol import (
     CMD_MULTITURN_NVS_CONTROL,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
-    CMD_SIDE_SWAY_ADJUST,
     DUAL_TENDON_JOINT_INDICES,
     DUAL_TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
@@ -652,13 +651,6 @@ class HandController:
         if not self.comm:
             return False
         self.comm.send_command("calibrate")
-        self._started = False
-        return True
-
-    def request_side_sway_adjust(self) -> bool:
-        if not self.comm:
-            return False
-        self.comm.send_command("side_sway_adjust")
         self._started = False
         return True
 

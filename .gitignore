@@ -12,6 +12,7 @@ desktop/teleop/Posture/.vscode/
 run_data/
 desktop/logs/
 desktop/multiturn_cache.json
+ESP32-P4ID/
 
 # ROSexample/colcon generated artifacts
 ROSexample/**/build/
