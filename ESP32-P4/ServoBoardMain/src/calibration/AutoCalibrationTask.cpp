@@ -7,6 +7,7 @@
 #include "CalibrationMath.h"
 #include "CalibrationTask.h"
 #include "../hardware/HardwareMap.h"
+#include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
@@ -63,8 +64,6 @@ static const int32_t kAutoCalibrationRejectNearFullWrapSpan = kCalibrationEncode
 static const float kAutoCalibrationStartDeg = -5.0f;
 static const float kAutoCalibrationZeroDeg = 0.0f;
 static const int32_t kAutoServoZeroPullCounts = 500;
-static const int32_t kAutoServoZeroPullToleranceCounts = 40;
-static const uint32_t kAutoTightClampHoldMs = 120;
 static const int32_t kDualAutoSlackCounts = 3200;
 static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
 static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;
@@ -83,8 +82,6 @@ static const uint8_t kAngleStallStableSamples = 2;
 static const int32_t kPreReleaseSyncTargetToleranceCounts = 40;
 static const int32_t kPreReleaseSyncSettleDeltaCounts = 20;
 static const uint8_t kPreReleaseSyncStableSamples = 2;
-static const float kAutoZeroMappedToleranceDeg = 6.0f;
-static const float kAutoZeroCrossMaxAbsDeg = 160.0f;
 
 struct DualTendonRawFitSample {
     int32_t encoder;
@@ -899,7 +896,6 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
                                                          float startDeg,
                                                          JointCalibrationResult* out)
 {
-    (void)jointIndex;
     (void)zeroEncoder;
     if (!out) {
         return false;
@@ -945,7 +941,30 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     out->tightDeg = tightDeg;
     out->totalDeg = totalDeg;
     out->scaled = true;
-    return out->encoderSpan > 0;
+
+    // The legacy calibration fields above use direction-oriented encoder
+    // coordinates. V3 autoMinRaw/autoMaxRaw are a wire/NVS contract and must
+    // contain the physical 14-bit raw values. calibrationOrientEncoderRaw()
+    // is self-inverse for direction=-1, so applying it here converts the
+    // oriented endpoints back to raw without changing direction=+1 joints.
+    const int8_t encoderDirection = g_encoderDirection[jointIndex];
+    const uint16_t autoMinRaw = (uint16_t)calibrationOrientEncoderRaw(
+        (uint16_t)calibrationWrapEncoderCount(tautEncoder), encoderDirection);
+    const uint16_t autoMaxRaw = (uint16_t)calibrationOrientEncoderRaw(
+        (uint16_t)calibrationWrapEncoderCount(tightEncoder), encoderDirection);
+    if (!applyManualScaledUrdfMappingToCalibration(
+            jointIndex,
+            g_manualEncoderReference[jointIndex],
+            autoMinRaw,
+            autoMaxRaw,
+            encoderDirection,
+            manualEncoderReferenceEntryCrc(
+                jointIndex, g_manualEncoderReference[jointIndex]),
+            out)) {
+        memset(out, 0, sizeof(*out));
+        return false;
+    }
+    return true;
 }
 
 static bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
@@ -1124,7 +1143,9 @@ bool isAutoCalibrationFeedbackReady(TaskSharedData_t* sharedData)
     return true;
 }
 
-static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointIndex)
+static void syncJointTargetToDeg(TaskSharedData_t* sharedData,
+                                 uint8_t jointIndex,
+                                 float targetDeg)
 {
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
         return;
@@ -1135,7 +1156,7 @@ static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointInd
         return;
     }
 
-    sharedData->targetAngles[jointIndex] = 0.0f;
+    sharedData->targetAngles[jointIndex] = targetDeg;
     sharedData->joint_command_token++;
 
     if (lock) {
@@ -1143,33 +1164,9 @@ static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointInd
     }
 }
 
-static bool readJointMappedDegFromCalibration(TaskSharedData_t* sharedData,
-                                              uint8_t jointIndex,
-                                              const JointCalibrationResult& result,
-                                              float* outMappedDeg)
+static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointIndex)
 {
-    if (!result.success ||
-        !result.scaled ||
-        result.encoderSpan <= 0 ||
-        result.totalDeg <= 0.0f ||
-        !outMappedDeg) {
-        return false;
-    }
-
-    int32_t currentEncoder = 0;
-    if (!readLatestEncoderOriented(sharedData, jointIndex, &currentEncoder)) {
-        return false;
-    }
-
-    int32_t delta = calibrationForwardEncoderDelta(result.startEncoder, currentEncoder);
-    const int32_t marginCounts = calibrationDegToEncoderCount(10.0f);
-    if (delta > result.encoderSpan + marginCounts) {
-        delta -= kCalibrationEncoderModulo;
-    }
-
-    *outMappedDeg =
-        ((float)delta / (float)result.encoderSpan) * result.totalDeg + result.startDeg;
-    return true;
+    syncJointTargetToDeg(sharedData, jointIndex, 0.0f);
 }
 
 AutoCalibrationParams defaultAutoCalibrationParams(void)
@@ -1181,13 +1178,9 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
     params.loopMs = 20;
     params.windowMs = 200;
     params.traceMs = 200;
-    params.zeroReturnTimeoutMs = 30000;
     params.windowServoDeltaCounts = 50;
     params.zeroReachAbsTolerance = 200;
-    params.followArmDeg = 3.3f;
-    params.zeroFollowDeg = 5.0f;
     params.stallActualDeg = 0.75f;
-    params.minTightTravelDeg = 5.0f;
     params.startLoadDelta = 25;
     params.tightLoadHigh = 250;
     params.startLoadStableSamples = 3;
@@ -1199,8 +1192,6 @@ enum AutoCalibState {
     AUTO_CALIB_STATE_INIT,
     AUTO_CALIB_STATE_TIGHTEN,
     AUTO_CALIB_STATE_PRE_RELEASE_SYNC,
-    AUTO_CALIB_STATE_CLAMP_TIGHT,
-    AUTO_CALIB_STATE_RETURN_ZERO,
     AUTO_CALIB_STATE_DONE,
     AUTO_CALIB_STATE_FAILED
 };
@@ -1231,7 +1222,6 @@ struct JointCalibContext {
     int32_t startServoAbs;
     int32_t zeroEncoder;
     int32_t zeroServoAbs;
-    int32_t returnZeroStartAbs;
     int32_t windowStartEncoder;
     int32_t windowStartAbs;
     uint32_t windowStartMs;
@@ -1244,13 +1234,6 @@ struct JointCalibContext {
     uint32_t preReleaseSyncWindowStartMs;
     uint8_t preReleaseSyncStableSamples;
     uint8_t releaseAngleStallStable;
-    bool zeroMappedCaptured;
-    int32_t zeroMappedCaptureAbs;
-    float zeroMappedCaptureDeg;
-    bool zeroMappedLastValid;
-    int32_t zeroMappedLastAbs;
-    int32_t zeroMappedLastReturnTravel;
-    float zeroMappedLastDeg;
 };
 
 static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
@@ -1844,19 +1827,132 @@ static void clearDualWorkspaceCache(void)
     memset(g_dualWorkspaceCache, 0, sizeof(g_dualWorkspaceCache));
 }
 
-static uint32_t workspaceDualMotorMask(void)
+enum DualWorkspacePairAvailability : uint8_t {
+    DUAL_WORKSPACE_PAIR_READY = 0,
+    DUAL_WORKSPACE_PAIR_ALL_OFFLINE,
+    DUAL_WORKSPACE_PAIR_PARTIAL_ONLINE,
+    DUAL_WORKSPACE_PAIR_TURN_UNKNOWN,
+    DUAL_WORKSPACE_PAIR_FEEDBACK_STALE,
+    DUAL_WORKSPACE_PAIR_MAP_INVALID,
+};
+
+static DualWorkspacePairAvailability classifyDualWorkspacePair(
+    TaskSharedData_t* sharedData,
+    uint8_t jointIndex,
+    uint8_t* outPrimaryMotor,
+    uint8_t* outSecondaryMotor,
+    uint32_t* outMotorMask)
 {
-    uint32_t mask = 0;
-    for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
-        uint8_t primaryMotor = 0;
-        uint8_t secondaryMotor = 0;
-        if (getDualAntagonistAutoCalibrationMotors(kWorkspaceDualJoints[i],
-                                                   &primaryMotor,
-                                                   &secondaryMotor)) {
-            mask |= (1UL << primaryMotor) | (1UL << secondaryMotor);
+    uint8_t primaryMotor = 0;
+    uint8_t secondaryMotor = 0;
+    if (!sharedData ||
+        !getDualAntagonistAutoCalibrationMotors(jointIndex,
+                                                &primaryMotor,
+                                                &secondaryMotor)) {
+        return DUAL_WORKSPACE_PAIR_MAP_INVALID;
+    }
+    const uint32_t motorMask =
+        (1UL << primaryMotor) | (1UL << secondaryMotor);
+    if (outPrimaryMotor) *outPrimaryMotor = primaryMotor;
+    if (outSecondaryMotor) *outSecondaryMotor = secondaryMotor;
+    if (outMotorMask) *outMotorMask = motorMask;
+
+    ServoAngleData_t servoData;
+    if (!sharedData->servoFeedbackQueue ||
+        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
+        (uint32_t)(millis() - servoData.timestamp) >
+            kAutoFeedbackReadyServoTimeoutMs) {
+        return DUAL_WORKSPACE_PAIR_FEEDBACK_STALE;
+    }
+
+    const bool primaryOnline = servoData.onlineStatus[primaryMotor] != 0;
+    const bool secondaryOnline = servoData.onlineStatus[secondaryMotor] != 0;
+    if (!primaryOnline && !secondaryOnline) {
+        return DUAL_WORKSPACE_PAIR_ALL_OFFLINE;
+    }
+    if (primaryOnline != secondaryOnline) {
+        return DUAL_WORKSPACE_PAIR_PARTIAL_ONLINE;
+    }
+    if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & motorMask) != 0) {
+        return DUAL_WORKSPACE_PAIR_TURN_UNKNOWN;
+    }
+    return DUAL_WORKSPACE_PAIR_READY;
+}
+
+static const char* workspacePairAvailabilityText(
+    DualWorkspacePairAvailability availability)
+{
+    switch (availability) {
+        case DUAL_WORKSPACE_PAIR_READY: return "ready";
+        case DUAL_WORKSPACE_PAIR_ALL_OFFLINE: return "all-offline";
+        case DUAL_WORKSPACE_PAIR_PARTIAL_ONLINE: return "partial-online";
+        case DUAL_WORKSPACE_PAIR_TURN_UNKNOWN: return "turn-unknown";
+        case DUAL_WORKSPACE_PAIR_FEEDBACK_STALE: return "feedback-stale";
+        default: return "map-invalid";
+    }
+}
+
+static bool buildDynamicWorkspaceMotorMask(
+    TaskSharedData_t* sharedData,
+    const uint8_t* activeJoints,
+    uint8_t activeJointCount,
+    uint32_t* outMotorMask)
+{
+    if (!sharedData || !activeJoints || !outMotorMask) return false;
+    uint32_t motorMask = 0;
+    for (uint8_t active = 0; active < activeJointCount; ++active) {
+        const uint8_t targetJoint = activeJoints[active];
+        if (!isWorkspaceDualJoint(targetJoint)) continue;
+        for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
+            const uint8_t candidateJoint = kWorkspaceDualJoints[i];
+            uint8_t primaryMotor = 0;
+            uint8_t secondaryMotor = 0;
+            uint32_t pairMask = 0;
+            const DualWorkspacePairAvailability availability =
+                classifyDualWorkspacePair(sharedData,
+                                          candidateJoint,
+                                          &primaryMotor,
+                                          &secondaryMotor,
+                                          &pairMask);
+            if (availability == DUAL_WORKSPACE_PAIR_READY) {
+                motorMask |= pairMask;
+                continue;
+            }
+            if (candidateJoint != targetJoint &&
+                availability == DUAL_WORKSPACE_PAIR_ALL_OFFLINE) {
+                FW_LOG_INFO_PRINTF(
+                    "[AUTO CALIB] WORKSPACE_MASK_SKIP target=J%02u helper=J%02u "
+                    "M%02u/M%02u reason=all-offline\r\n",
+                    (unsigned)targetJoint,
+                    (unsigned)candidateJoint,
+                    (unsigned)primaryMotor,
+                    (unsigned)secondaryMotor);
+                continue;
+            }
+            FW_LOG_WARN_PRINTF(
+                "[AUTO CALIB] WORKSPACE_MASK_REJECT target=J%02u joint=J%02u "
+                "M%02u/M%02u reason=%s unknown=0x%08lX\r\n",
+                (unsigned)targetJoint,
+                (unsigned)candidateJoint,
+                (unsigned)primaryMotor,
+                (unsigned)secondaryMotor,
+                workspacePairAvailabilityText(availability),
+                (unsigned long)(sharedAtomicLoad(
+                    &sharedData->multi_turn_unknown_bitmap) & pairMask));
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               targetJoint,
+                               primaryMotor,
+                               candidateJoint,
+                               (int32_t)availability,
+                               secondaryMotor,
+                               pairMask);
+            return false;
         }
     }
-    return mask;
+    *outMotorMask = motorMask & validMotorChannelMask();
+    return true;
 }
 
 static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
@@ -1870,7 +1966,8 @@ static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
                       motorMask & validMotorChannelMask());
 }
 
-static uint8_t buildDualWorkspacePlan(uint8_t targetJoint,
+static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
+                                      uint8_t targetJoint,
                                       DualWorkspacePlanStep* steps,
                                       uint8_t capacity)
 {
@@ -1890,9 +1987,22 @@ static uint8_t buildDualWorkspacePlan(uint8_t targetJoint,
         if (jointIndex >= targetJoint) {
             continue;
         }
-        steps[count].jointIndex = jointIndex;
-        steps[count].pose = DUAL_WORKSPACE_POSE_A;
-        ++count;
+        const DualWorkspacePairAvailability availability =
+            classifyDualWorkspacePair(sharedData, jointIndex, NULL, NULL, NULL);
+        if (availability == DUAL_WORKSPACE_PAIR_ALL_OFFLINE) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=all-offline\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex);
+            continue;
+        }
+        if (availability != DUAL_WORKSPACE_PAIR_READY || count >= capacity) {
+            FW_LOG_WARN_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_REJECT target=J%02u helper=J%02u reason=%s\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex,
+                               workspacePairAvailabilityText(availability));
+            return 0xFF;
+        }
+        steps[count++] = {jointIndex, DUAL_WORKSPACE_POSE_A};
     }
 
     for (int8_t i = (int8_t)kWorkspaceDualJointsCount - 1; i >= 0; --i) {
@@ -1900,9 +2010,22 @@ static uint8_t buildDualWorkspacePlan(uint8_t targetJoint,
         if (jointIndex <= targetJoint) {
             continue;
         }
-        steps[count].jointIndex = jointIndex;
-        steps[count].pose = DUAL_WORKSPACE_POSE_B;
-        ++count;
+        const DualWorkspacePairAvailability availability =
+            classifyDualWorkspacePair(sharedData, jointIndex, NULL, NULL, NULL);
+        if (availability == DUAL_WORKSPACE_PAIR_ALL_OFFLINE) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=all-offline\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex);
+            continue;
+        }
+        if (availability != DUAL_WORKSPACE_PAIR_READY || count >= capacity) {
+            FW_LOG_WARN_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_REJECT target=J%02u helper=J%02u reason=%s\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex,
+                               workspacePairAvailabilityText(availability));
+            return 0xFF;
+        }
+        steps[count++] = {jointIndex, DUAL_WORKSPACE_POSE_B};
     }
 
     return count;
@@ -2529,10 +2652,11 @@ static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
                        (long)targetSecondaryAbs);
 
     DualWorkspacePlanStep steps[kWorkspaceDualHelperCount] = {};
-    const uint8_t stepCount = buildDualWorkspacePlan(targetJoint,
+    const uint8_t stepCount = buildDualWorkspacePlan(sharedData,
+                                                      targetJoint,
                                                       steps,
                                                       kWorkspaceDualHelperCount);
-    if (stepCount != kWorkspaceDualHelperCount) {
+    if (stepCount == 0xFF) {
         setWorkspacePlanFailureDiag(sharedData,
                                     targetJoint,
                                     targetJoint,
@@ -3216,6 +3340,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
 
     applyDynamicAutoCalibrationConfig(&g_jointCalibConfig[jointIndex], result);
     g_jointCalibResult[jointIndex] = result;
+    updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
     g_encoderOffsetManual[jointIndex] = result.offset;
     syncJointTargetToZero(sharedData, jointIndex);
     clearJointServoMultiTurnUnknown(sharedData, jointIndex);
@@ -3346,10 +3471,9 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     ctx->stateBeginMs = millis();
     ctx->state = AUTO_CALIB_STATE_TIGHTEN;
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC_BEGIN J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=dynamic totalDeg=dynamic zeroFollowDeg=%.3f angleMax=dynamic\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC_BEGIN J%02u startDeg=%.3f tightDeg=dynamic totalDeg=dynamic angleMax=dynamic\r\n",
                   ctx->jointIndex,
-                  kAutoCalibrationStartDeg,
-                  params.zeroFollowDeg);
+                  kAutoCalibrationStartDeg);
     FW_LOG_INFO_PRINTF("[AUTO CALIB] START J%02u bus%u id%u abs=%ld raw=%u oriented=%ld dir=%d baselineLoad=%d speedCps=%ld\r\n",
                   ctx->jointIndex,
                   ctx->bus,
@@ -3890,19 +4014,21 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
                     applyDynamicAutoCalibrationConfig(&g_jointCalibConfig[ctx->jointIndex], result);
                     g_jointCalibResult[ctx->jointIndex] = result;
+                    updateCalibrationAssemblyWarning(sharedData,
+                                                     ctx->jointIndex,
+                                                     result);
                     g_encoderOffsetManual[ctx->jointIndex] = result.offset;
                     ctx->result = result;
                     ctx->resultValid = true;
                     ctx->targetAbs = currentAbs;
-                    ctx->returnZeroStartAbs = tightServoAbs;
-                    ctx->zeroMappedCaptured = false;
-                    ctx->zeroMappedCaptureAbs = 0;
-                    ctx->zeroMappedCaptureDeg = NAN;
-                    ctx->zeroMappedLastValid = false;
-                    ctx->zeroMappedLastAbs = 0;
-                    ctx->zeroMappedLastReturnTravel = 0;
-                    ctx->zeroMappedLastDeg = NAN;
-                    ctx->state = AUTO_CALIB_STATE_CLAMP_TIGHT;
+                    syncJointTargetToDeg(sharedData,
+                                         ctx->jointIndex,
+                                         result.currentMinDeg);
+                    clearJointServoMultiTurnUnknown(sharedData, ctx->jointIndex);
+                    setCalibratedMotorAbsLimit(sharedData,
+                                               ctx->motorChannel,
+                                               result.tightServoAbs);
+                    ctx->state = AUTO_CALIB_STATE_DONE;
                     ctx->stateBeginMs = nowMs;
                     ctx->lastTraceMs = nowMs;
 
@@ -3938,18 +4064,28 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   (long)result.startServoAbs,
                                   (long)result.zeroServoAbs,
                                   (long)result.tightServoAbs);
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] CLAMP_TIGHT J%02u targetAbs=%ld zeroTargetAbs=%ld holdMs=%lu speed=%u acc=%u\r\n",
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] SINGLE_DONE_AT_AUTO_MIN J%02u holdAbs=%ld currentMinDeg=%.3f; no return motion\r\n",
                                   ctx->jointIndex,
                                   (long)ctx->targetAbs,
-                                  (long)result.zeroServoAbs,
-                                  (unsigned long)kAutoTightClampHoldMs,
-                                  ctx->motionCfg.tightenSpeed,
-                                  ctx->motionCfg.tightenAcc);
+                                  result.currentMinDeg);
 
-                    appendJointCalibrationTargetToBatch(batch,
-                                                        ctx->jointIndex,
-                                                        clampToServoPosLocal(ctx->targetAbs),
-                                                        ctx->motionCfg);
+                    if (!appendJointCalibrationTargetToBatch(
+                            batch,
+                            ctx->jointIndex,
+                            clampToServoPosLocal(ctx->targetAbs),
+                            ctx->motionCfg)) {
+                        failAutoCalibContextWithDiag(
+                            ctx,
+                            sharedData,
+                            "auto-min hold target append failed",
+                            CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                            CALIB_DIAG_PHASE_RELEASE,
+                            ctx->motorChannel,
+                            ctx->targetAbs,
+                            0,
+                            0,
+                            0);
+                    }
                     return;
                 }
 
@@ -4051,250 +4187,6 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_SYNC_READY J%02u releaseStartAbs=%ld\r\n",
                           ctx->jointIndex,
                           (long)currentAbs);
-            return;
-        }
-
-        case AUTO_CALIB_STATE_CLAMP_TIGHT:
-        {
-            if (!ctx->resultValid) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "clamp tight without result",
-                                             CALIB_DIAG_REASON_INTERNAL_ERROR,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             0,
-                                             0,
-                                             0,
-                                             0);
-                return;
-            }
-            if ((uint32_t)(nowMs - ctx->stateBeginMs) < kAutoTightClampHoldMs) {
-                if (!appendJointCalibrationTargetToBatch(batch,
-                                                         ctx->jointIndex,
-                                                         clampToServoPosLocal(ctx->targetAbs),
-                                                         ctx->motionCfg)) {
-                    failAutoCalibContextWithDiag(ctx,
-                                                 sharedData,
-                                                 "clamp tight target append failed",
-                                                 CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                                 CALIB_DIAG_PHASE_RETURN_ZERO,
-                                                 ctx->motorChannel,
-                                                 ctx->targetAbs,
-                                                 0,
-                                                 0,
-                                                 0);
-                }
-                return;
-            }
-
-            int32_t clampCurrentAbs = ctx->returnZeroStartAbs;
-            if (readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &clampCurrentAbs)) {
-                ctx->returnZeroStartAbs = clampCurrentAbs;
-            }
-            ctx->targetAbs = ctx->result.zeroServoAbs;
-            ctx->zeroMappedLastValid = false;
-            ctx->zeroMappedLastAbs = 0;
-            ctx->zeroMappedLastReturnTravel = 0;
-            ctx->zeroMappedLastDeg = NAN;
-            ctx->state = AUTO_CALIB_STATE_RETURN_ZERO;
-            ctx->stateBeginMs = nowMs;
-            ctx->lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] RETURN_ZERO J%02u targetAbs=%ld speed=%u acc=%u\r\n",
-                          ctx->jointIndex,
-                          (long)ctx->targetAbs,
-                          ctx->motionCfg.tightenSpeed,
-                          ctx->motionCfg.tightenAcc);
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] BEGIN_RETURN_ZERO J%02u fromClampAbs=%ld targetZeroAbs=%ld delta=%ld\r\n",
-                          ctx->jointIndex,
-                          (long)ctx->returnZeroStartAbs,
-                          (long)ctx->targetAbs,
-                          (long)(ctx->targetAbs - ctx->returnZeroStartAbs));
-            if (!appendJointCalibrationTargetToBatch(batch,
-                                                     ctx->jointIndex,
-                                                     clampToServoPosLocal(ctx->targetAbs),
-                                                     ctx->motionCfg)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "return zero target append failed",
-                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             ctx->targetAbs,
-                                             0,
-                                             0,
-                                             0);
-            }
-            return;
-        }
-        case AUTO_CALIB_STATE_RETURN_ZERO:
-        {
-            if (!ctx->resultValid) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "return zero without result",
-                                             CALIB_DIAG_REASON_INTERNAL_ERROR,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             0,
-                                             0,
-                                             0,
-                                             0);
-                return;
-            }
-            int32_t currentAbs = 0;
-            const bool absFeedbackValid =
-                readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &currentAbs);
-            const int32_t returnCommandAbs = ctx->targetAbs;
-            if (!appendJointCalibrationTargetToBatch(batch,
-                                                     ctx->jointIndex,
-                                                     clampToServoPosLocal(returnCommandAbs),
-                                                     ctx->motionCfg)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "return zero target append failed",
-                                             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                             CALIB_DIAG_PHASE_RETURN_ZERO,
-                                             ctx->motorChannel,
-                                             returnCommandAbs,
-                                             0,
-                                             0,
-                                             0);
-                return;
-            }
-            const int32_t absError = absFeedbackValid
-                ? abs32(currentAbs - ctx->targetAbs)
-                : 0;
-            const int32_t returnTravel = absFeedbackValid
-                ? (motorRawAbsToTendonAbs(ctx->motorChannel, currentAbs) -
-                   motorRawAbsToTendonAbs(ctx->motorChannel, ctx->returnZeroStartAbs))
-                : 0;
-            const int32_t requiredReturnTravel =
-                kAutoServoZeroPullCounts - kAutoServoZeroPullToleranceCounts;
-            const bool returnTravelReached =
-                absFeedbackValid && returnTravel >= requiredReturnTravel;
-            const int32_t returnZeroTolerance =
-                (params.zeroReachAbsTolerance < kAutoServoZeroPullToleranceCounts)
-                    ? params.zeroReachAbsTolerance
-                    : kAutoServoZeroPullToleranceCounts;
-            float zeroMappedDeg = 0.0f;
-            const bool encoderMappedValid =
-                readJointMappedDegFromCalibration(sharedData,
-                                                  ctx->jointIndex,
-                                                  ctx->result,
-                                                  &zeroMappedDeg);
-            const bool mappedZeroReached =
-                encoderMappedValid &&
-                fabsf(zeroMappedDeg) <= kAutoZeroMappedToleranceDeg;
-            bool mappedZeroSeen = false;
-            int32_t zeroCaptureAbs = currentAbs;
-            int32_t zeroCaptureReturnTravel = returnTravel;
-            float zeroCaptureDeg = zeroMappedDeg;
-            const char* zeroCaptureReason = "window";
-            if (!ctx->zeroMappedCaptured &&
-                absFeedbackValid &&
-                encoderMappedValid) {
-                if (mappedZeroReached) {
-                    mappedZeroSeen = true;
-                } else if (ctx->zeroMappedLastValid) {
-                    const float lastDeg = ctx->zeroMappedLastDeg;
-                    const bool signsCrossed =
-                        (lastDeg < 0.0f && zeroMappedDeg > 0.0f) ||
-                        (lastDeg > 0.0f && zeroMappedDeg < 0.0f);
-                    const bool crossingNearZero =
-                        fabsf(lastDeg) <= kAutoZeroCrossMaxAbsDeg &&
-                        fabsf(zeroMappedDeg) <= kAutoZeroCrossMaxAbsDeg;
-                    const float degDelta = zeroMappedDeg - lastDeg;
-                    if (signsCrossed && crossingNearZero && fabsf(degDelta) > 0.001f) {
-                        float fraction = -lastDeg / degDelta;
-                        if (fraction < 0.0f) {
-                            fraction = 0.0f;
-                        } else if (fraction > 1.0f) {
-                            fraction = 1.0f;
-                        }
-                        zeroCaptureAbs = ctx->zeroMappedLastAbs +
-                            (int32_t)lroundf((float)(currentAbs - ctx->zeroMappedLastAbs) * fraction);
-                        zeroCaptureReturnTravel = ctx->zeroMappedLastReturnTravel +
-                            (int32_t)lroundf((float)(returnTravel - ctx->zeroMappedLastReturnTravel) * fraction);
-                        zeroCaptureDeg = 0.0f;
-                        zeroCaptureReason = "cross";
-                        mappedZeroSeen = true;
-                    }
-                }
-            }
-            if (!ctx->zeroMappedCaptured &&
-                absFeedbackValid &&
-                mappedZeroSeen) {
-                const int32_t plannedZeroAbs = ctx->targetAbs;
-                ctx->zeroMappedCaptured = true;
-                ctx->zeroMappedCaptureAbs = zeroCaptureAbs;
-                ctx->zeroMappedCaptureDeg = zeroCaptureDeg;
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_CAPTURED J%02u reason=%s captureAbs=%ld currentAbs=%ld mappedDeg=%.3f captureDeg=%.3f tol=%.3f returnTravel=%ld targetWas=%ld lastAbs=%ld lastDeg=%.3f\r\n",
-                              ctx->jointIndex,
-                              zeroCaptureReason,
-                              (long)zeroCaptureAbs,
-                              (long)currentAbs,
-                              zeroMappedDeg,
-                              zeroCaptureDeg,
-                              kAutoZeroMappedToleranceDeg,
-                              (long)zeroCaptureReturnTravel,
-                              (long)plannedZeroAbs,
-                              ctx->zeroMappedLastValid ? (long)ctx->zeroMappedLastAbs : 0L,
-                              ctx->zeroMappedLastValid ? ctx->zeroMappedLastDeg : NAN);
-            }
-            const bool zeroReached =
-                ctx->zeroMappedCaptured &&
-                (returnTravelReached ||
-                 (absFeedbackValid && absError <= returnZeroTolerance));
-
-            if (zeroReached) {
-                syncJointTargetToZero(sharedData, ctx->jointIndex);
-                clearJointServoMultiTurnUnknown(sharedData, ctx->jointIndex);
-                const int primaryMotorCh = findMotorChannel(ctx->bus, ctx->servoId);
-                if (primaryMotorCh >= 0 && primaryMotorCh < SERVO_TOTAL_NUM) {
-                    setCalibratedMotorAbsLimit(sharedData,
-                                               (uint8_t)primaryMotorCh,
-                                               ctx->result.tightServoAbs);
-                }
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_REACHED J%02u capturedAbs=%ld currentAbs=%ld absErr=%ld mappedDeg=%.3f mappedTol=%.3f absReached=%u travelReached=%u\r\n",
-                              ctx->jointIndex,
-                              (long)ctx->zeroMappedCaptureAbs,
-                              (long)currentAbs,
-                              (long)absError,
-                              ctx->zeroMappedCaptureDeg,
-                              kAutoZeroMappedToleranceDeg,
-                              (absFeedbackValid && absError <= returnZeroTolerance) ? 1 : 0,
-                              returnTravelReached ? 1 : 0);
-                ctx->state = AUTO_CALIB_STATE_DONE;
-                return;
-            }
-
-            if (absFeedbackValid && encoderMappedValid) {
-                ctx->zeroMappedLastValid = true;
-                ctx->zeroMappedLastAbs = currentAbs;
-                ctx->zeroMappedLastReturnTravel = returnTravel;
-                ctx->zeroMappedLastDeg = zeroMappedDeg;
-            }
-
-            if ((nowMs - ctx->lastTraceMs) >= params.traceMs) {
-                ctx->lastTraceMs = nowMs;
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_WAIT_SERVO J%02u targetAbs=%ld currentAbs=%ld absErr=%ld/%ld returnTravel=%ld/%ld mappedDeg=%.3f/%.3f absReached=%u travelReached=%u mappedReached=%u captured=%u captureAbs=%ld\r\n",
-                              ctx->jointIndex,
-                              (long)ctx->targetAbs,
-                              absFeedbackValid ? (long)currentAbs : 0L,
-                              absFeedbackValid ? (long)absError : -1L,
-                              (long)returnZeroTolerance,
-                              absFeedbackValid ? (long)returnTravel : 0L,
-                              (long)requiredReturnTravel,
-                              encoderMappedValid ? zeroMappedDeg : NAN,
-                              kAutoZeroMappedToleranceDeg,
-                              (absFeedbackValid && absError <= returnZeroTolerance) ? 1 : 0,
-                              returnTravelReached ? 1 : 0,
-                              mappedZeroReached ? 1 : 0,
-                              ctx->zeroMappedCaptured ? 1 : 0,
-                              ctx->zeroMappedCaptured ? (long)ctx->zeroMappedCaptureAbs : 0L);
-            }
-
             return;
         }
 
@@ -4684,9 +4576,17 @@ void autoCalibrationTask(void* parameter)
             break;
         }
     }
+    uint32_t workspaceReadMask = 0;
+    const bool workspaceReady =
+        !needsWorkspaceReadMask ||
+        buildDynamicWorkspaceMotorMask(sharedData,
+                                       activeJoints,
+                                       activeJointCount,
+                                       &workspaceReadMask);
     setCalibrationWorkspaceReadMask(sharedData,
-                                    needsWorkspaceReadMask ? workspaceDualMotorMask() : 0);
+                                    workspaceReady ? workspaceReadMask : 0);
     const bool ok = (activeJointCount > 0) &&
+                    workspaceReady &&
                     runAutoCalibrationSequence(sharedData,
                                                activeJoints,
                                                activeJointCount,

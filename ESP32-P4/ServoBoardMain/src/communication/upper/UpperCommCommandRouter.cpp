@@ -42,69 +42,106 @@ void upperClearTargetAngles(TaskSharedData_t* sharedData)
     upperApplyTargetAngles(sharedData, zeroAngles, ENCODER_TOTAL_NUM);
 }
 
-void upperApplyMotorTargets(TaskSharedData_t* sharedData,
+static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
+                                      uint32_t generation,
+                                      uint8_t reason)
+{
+    if (!sharedData) {
+        return;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    if (sharedData->pending_direct_valid != 0 &&
+        sharedData->pending_direct_generation == generation) {
+        sharedData->pending_direct_valid = 0;
+        sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+        sharedData->pending_direct_motor_mask = 0;
+        sharedData->pending_direct_joint_mask = 0;
+        sharedData->pending_direct_require_can = 0;
+        sharedData->direct_reject_reason = reason;
+    }
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
+bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
                             const int32_t* targets,
                             uint8_t count,
                             uint8_t source)
 {
     if (!sharedData || !targets) {
-        return;
+        return false;
     }
     if (count > SERVO_TOTAL_NUM) {
         count = SERVO_TOTAL_NUM;
     }
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
+        return false;
     }
-    // Store direct motor targets in motorMap channel order.
+    memcpy(sharedData->pendingMotorTargetRaw,
+           sharedData->motorTargetRaw,
+           sizeof(sharedData->pendingMotorTargetRaw));
     for (uint8_t i = 0; i < count; i++) {
-        sharedData->motorTargetRaw[i] = targets[i];
+        sharedData->pendingMotorTargetRaw[i] = clampServoAbsCommand(targets[i]);
     }
-    sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
-    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedData->motor_command_token++;
-    sharedData->motor_direct_command_generation++;
-    sharedData->motor_direct_command_source = source;
+    const uint32_t generation = sharedData->pending_direct_generation + 1U;
+    sharedData->pending_direct_generation = generation;
+    sharedData->pending_direct_source = source;
+    sharedData->pending_direct_motor_mask =
+        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+    sharedData->pending_direct_joint_mask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    sharedData->pending_direct_require_can = 0;
+    sharedData->pending_direct_valid = 1;
+    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
     if (lock) {
         xSemaphoreGive(lock);
     }
-    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
+    if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
+        cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
+        return false;
+    }
+    return true;
 }
 
-void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
+bool upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
                                  uint8_t motorIndex,
                                  int32_t target,
                                  uint8_t source)
 {
     if (!sharedData || motorIndex >= SERVO_TOTAL_NUM) {
-        return;
+        return false;
     }
     const uint32_t motorMask = (1UL << motorIndex) & validMotorChannelMask();
     if (motorMask == 0) {
-        return;
+        return false;
     }
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
+        return false;
     }
-    sharedData->motorTargetRaw[motorIndex] = clampServoAbsCommand(target);
-    {
-        SharedSafetyGuard safetyGuard;
-        sharedAtomicStore(&sharedData->active_motor_mask, motorMask);
-        sharedAtomicStore(&sharedData->active_joint_mask, (uint32_t)0);
-        sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
+    if (sharedData->pending_direct_valid != 0 &&
+        sharedData->pending_direct_source != MOTOR_DIRECT_SOURCE_SWEEP) {
+        // Keep other edits from the newest not-yet-applied direct packet.
+    } else {
+        memcpy(sharedData->pendingMotorTargetRaw,
+               sharedData->motorTargetRaw,
+               sizeof(sharedData->pendingMotorTargetRaw));
     }
-    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedData->motor_command_token++;
-    sharedData->motor_direct_command_generation++;
-    sharedData->motor_direct_command_source = source;
+    sharedData->pendingMotorTargetRaw[motorIndex] = clampServoAbsCommand(target);
+    const uint32_t generation = sharedData->pending_direct_generation + 1U;
+    sharedData->pending_direct_generation = generation;
+    sharedData->pending_direct_source = source;
+    sharedData->pending_direct_motor_mask = motorMask;
+    sharedData->pending_direct_joint_mask = 0;
+    sharedData->pending_direct_require_can = 0;
+    sharedData->pending_direct_valid = 1;
+    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
     if (lock) {
         xSemaphoreGive(lock);
     }
@@ -112,64 +149,50 @@ void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
                   (unsigned)motorIndex,
                   (long)clampServoAbsCommand(target),
                   (unsigned long)motorMask);
-    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
+    if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
+        cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
+        return false;
+    }
+    return true;
 }
 
-void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
+bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
 {
     if (!sharedData || !targets) {
-        return;
+        return false;
     }
     if (count > SERVO_TOTAL_NUM) {
         count = SERVO_TOTAL_NUM;
     }
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
+        return false;
     }
-    // Store sweep targets as single-turn raw positions in motorMap order.
+    memcpy(sharedData->pendingMotorSweepTargetRaw,
+           sharedData->motorSweepTargetRaw,
+           sizeof(sharedData->pendingMotorSweepTargetRaw));
     for (uint8_t i = 0; i < count; i++) {
-        sharedData->motorSweepTargetRaw[i] = targets[i];
+        sharedData->pendingMotorSweepTargetRaw[i] = targets[i];
     }
-    sharedAtomicStore(&sharedData->require_can_feedback, (uint8_t)0);
-    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CAN_OFFLINE);
-    sharedData->motor_sweep_command_token++;
-    sharedData->motor_direct_command_generation++;
-    sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_SWEEP;
+    const uint32_t generation = sharedData->pending_direct_generation + 1U;
+    sharedData->pending_direct_generation = generation;
+    sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_SWEEP;
+    sharedData->pending_direct_motor_mask =
+        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+    sharedData->pending_direct_joint_mask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    sharedData->pending_direct_require_can = 0;
+    sharedData->pending_direct_valid = 1;
+    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
     if (lock) {
         xSemaphoreGive(lock);
     }
-    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT);
-}
-
-void upperApplyTendonGuardConfig(TaskSharedData_t* sharedData,
-                                 const uint8_t* enabled,
-                                 const int8_t* sign,
-                                 const int16_t* x1Abs,
-                                 uint8_t count)
-{
-    if (!sharedData || !enabled || !sign || !x1Abs) {
-        return;
+    if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
+        cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
+        return false;
     }
-    if (count > ENCODER_TOTAL_NUM) {
-        count = ENCODER_TOTAL_NUM;
-    }
-    SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
-    }
-    // Store tendon guard config in joint order.
-    for (uint8_t i = 0; i < count; i++) {
-        sharedData->tendon_guard_enabled[i] = enabled[i] ? 1 : 0;
-        sharedData->tendon_guard_sign[i] = (sign[i] < 0) ? -1 : 1;
-        sharedData->tendon_guard_x1_abs[i] = clampServoAbsCommand(x1Abs[i]);
-    }
-    if (lock) {
-        xSemaphoreGive(lock);
-    }
+    return true;
 }
 
 void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count)

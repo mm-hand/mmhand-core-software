@@ -1,5 +1,4 @@
 import math
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
 from desktop.core import angle_mapping
 from desktop.core.protocol import ENCODER_COUNT
 
@@ -19,7 +17,6 @@ from desktop.teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandMode
 from .manus_calibration import (
     DEFAULT_MANUS_SIDE,
     FINGER_TO_ROBOT_JOINTS,
-    ROBOT_JOINT_LIMITS_DEG,
     ROBOT_JOINT_ROLE_BY_INDEX,
 )
 from .manus_receiver import ManusFrame
@@ -211,182 +208,29 @@ def _clamp_joint_deg(joint_idx: int, value: float) -> float:
     return max(lo, min(hi, float(value)))
 
 
-def _encoder_index_uses_negative_urdf_flexion(joint_idx: int) -> bool:
-    role = ROBOT_JOINT_ROLE_BY_INDEX.get(joint_idx, "")
-    return any(token in role for token in ("MCP", "PIP", "DIP"))
-
-
-def _encoder_index_is_signed_root(joint_idx: int) -> bool:
-    role = ROBOT_JOINT_ROLE_BY_INDEX.get(joint_idx, "")
-    return any(token in role for token in ("root", "AA", "CMC"))
-
-
-ROOT_URDF_LIMIT_DEG_BY_INDEX = {
-    0: (-45.0, 11.0),
-    4: (-51.0, 21.0),
-    8: (-24.0, 23.0),
-    12: (-11.0, 30.0),
-    16: (-29.0, 30.0),
-    20: (-80.0, 1.0),
-}
-ROOT_TARGET_LIMIT_DEG_BY_INDEX = {
-    0: (-45.0, 11.0),
-    4: (-51.0, 21.0),
-    8: (-24.0, 23.0),
-    12: (-11.0, 30.0),
-    16: (-29.0, 30.0),
-    20: (-80.0, 1.0),
-}
-_CALIB_TARGET_RANGE_CACHE: tuple[float, Dict[int, Tuple[float, float]]] | None = None
-
-
-def _map_between_ranges(value: float, source: tuple[float, float], target: tuple[float, float]) -> float:
-    source_lower, source_upper = source
-    target_lower, target_upper = target
-    denom = source_upper - source_lower
-    if abs(denom) < 1e-8:
-        return target_lower
-    ratio = (float(value) - source_lower) / denom
-    return target_lower + ratio * (target_upper - target_lower)
-
-
-def _calibrated_target_ranges_deg() -> Dict[int, Tuple[float, float]]:
-    global _CALIB_TARGET_RANGE_CACHE
-    try:
-        mtime = CALIB_LOAD_SNAPSHOT_PATH.stat().st_mtime
-    except OSError:
-        _CALIB_TARGET_RANGE_CACHE = None
-        return {}
-    if _CALIB_TARGET_RANGE_CACHE is not None and _CALIB_TARGET_RANGE_CACHE[0] == mtime:
-        return _CALIB_TARGET_RANGE_CACHE[1]
-
-    ranges: Dict[int, Tuple[float, float]] = {}
-    try:
-        data = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        results = data.get("joint_calib_results", [])
-    except Exception:
-        _CALIB_TARGET_RANGE_CACHE = (mtime, ranges)
-        return ranges
-
-    if not isinstance(results, list):
-        _CALIB_TARGET_RANGE_CACHE = (mtime, ranges)
-        return ranges
-
-    for idx, item in enumerate(results[:ENCODER_COUNT]):
-        if not isinstance(item, dict) or not item.get("success"):
-            continue
-        try:
-            angle_max = float(item.get("angleMax", 0.0))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(angle_max) and angle_max > 0.0:
-            ranges[idx] = (0.0, angle_max)
-
-    _CALIB_TARGET_RANGE_CACHE = (mtime, ranges)
-    return ranges
-
-
-def _calibrated_target_range_deg(joint_idx: int) -> Optional[Tuple[float, float]]:
-    if not 0 <= int(joint_idx) < ENCODER_COUNT:
-        return None
-    return _calibrated_target_ranges_deg().get(int(joint_idx))
-
-
-def _root_urdf_deg_to_target_deg(joint_idx: int, urdf_deg: float) -> float:
-    source = ROOT_URDF_LIMIT_DEG_BY_INDEX.get(joint_idx)
-    target = ROOT_TARGET_LIMIT_DEG_BY_INDEX.get(joint_idx)
-    if source is None or target is None:
-        return float(urdf_deg)
-    return _map_between_ranges(float(urdf_deg), source, target)
-
-
-def _root_target_deg_to_urdf_deg(joint_idx: int, target_deg: float) -> float:
-    source = ROOT_TARGET_LIMIT_DEG_BY_INDEX.get(joint_idx)
-    target = ROOT_URDF_LIMIT_DEG_BY_INDEX.get(joint_idx)
-    if source is None or target is None:
-        return float(target_deg)
-    return _map_between_ranges(float(target_deg), source, target)
-
-
 def _raw_encoder_limit_deg(joint_idx: int) -> tuple[float, float]:
-    return _default_encoder_limit_deg(joint_idx)
-
-
-def _legacy_raw_encoder_limit_deg(joint_idx: int) -> tuple[float, float]:
-    calibrated = _calibrated_target_range_deg(joint_idx)
-    if calibrated is not None:
-        return (min(calibrated), max(calibrated))
-    # MCP/PIP/DIP 是单向屈曲幅值，仍然使用硬件给定的 [0, max]。
-    # root/AA/CMC 是双向侧摆/旋转角，raw IK 显示和发送阶段保留正负号；
-    # 这里先用 URDF 运动范围作为 signed q_target 范围，避免负角被 clamp 成 0。
-    if _encoder_index_is_signed_root(joint_idx):
-        target_limits = ROOT_TARGET_LIMIT_DEG_BY_INDEX.get(joint_idx)
-        if target_limits is not None:
-            return (min(target_limits), max(target_limits))
-    return ROBOT_JOINT_LIMITS_DEG[joint_idx]
-
-
-def _default_encoder_limit_deg(joint_idx: int) -> tuple[float, float]:
-    if _encoder_index_is_signed_root(joint_idx):
-        target_limits = ROOT_TARGET_LIMIT_DEG_BY_INDEX.get(joint_idx)
-        if target_limits is not None:
-            return (min(target_limits), max(target_limits))
-    return ROBOT_JOINT_LIMITS_DEG[joint_idx]
-
-
-def _scale_default_target_to_calibrated(joint_idx: int, value_deg: float) -> float:
-    calibrated = _calibrated_target_range_deg(joint_idx)
-    if calibrated is None:
-        return float(value_deg)
-    return _map_between_ranges(float(value_deg), _default_encoder_limit_deg(joint_idx), calibrated)
-
-
-def _scale_calibrated_target_to_default(joint_idx: int, value_deg: float) -> float:
-    calibrated = _calibrated_target_range_deg(joint_idx)
-    if calibrated is None:
-        return float(value_deg)
-    return _map_between_ranges(float(value_deg), calibrated, _default_encoder_limit_deg(joint_idx))
+    rng = angle_mapping.effective_calibrated_range_deg(joint_idx, allow_default=True)
+    if rng is None:
+        raise ValueError(f"J{joint_idx:02d} has no calibrated command range")
+    return (min(rng), max(rng))
 
 
 def _urdf_angle_to_encoder_degrees(joint_idx: int, angle_rad: float) -> float:
-    value_deg = math.degrees(float(angle_rad))
-    if _encoder_index_is_signed_root(joint_idx):
-        value_deg = _root_urdf_deg_to_target_deg(joint_idx, value_deg)
-    elif _encoder_index_uses_negative_urdf_flexion(joint_idx):
-        value_deg = -value_deg
-    return value_deg
-
-
-def _legacy_urdf_angle_to_encoder_degrees(joint_idx: int, angle_rad: float) -> float:
-    value_deg = math.degrees(float(angle_rad))
-    if _encoder_index_is_signed_root(joint_idx):
-        value_deg = _root_urdf_deg_to_target_deg(joint_idx, value_deg)
-    elif _encoder_index_uses_negative_urdf_flexion(joint_idx):
-        # URDF 里这些屈伸关节是负角弯曲，J 编号目标以 0 deg 作为开手。
-        # 因此只把弯曲方向翻成正值：URDF 0 -> J 0，URDF -max -> J +max。
-        value_deg = -value_deg
-    return _scale_default_target_to_calibrated(joint_idx, value_deg)
+    return angle_mapping.urdf_to_calibrated(
+        joint_idx,
+        float(angle_rad),
+        allow_default=True,
+        clamp=True,
+    )
 
 
 def _encoder_degrees_to_urdf_angle(joint_idx: int, value_deg: float) -> float:
-    lo, hi = _default_encoder_limit_deg(joint_idx)
-    value_deg = max(lo, min(hi, float(value_deg)))
-    if _encoder_index_is_signed_root(joint_idx):
-        value_deg = _root_target_deg_to_urdf_deg(joint_idx, value_deg)
-    elif _encoder_index_uses_negative_urdf_flexion(joint_idx):
-        value_deg = -abs(value_deg)
-    return math.radians(value_deg)
-
-
-def _legacy_encoder_degrees_to_urdf_angle(joint_idx: int, value_deg: float) -> float:
-    value_deg = _clamp_joint_deg(joint_idx, float(value_deg))
-    value_deg = _scale_calibrated_target_to_default(joint_idx, value_deg)
-    if _encoder_index_is_signed_root(joint_idx):
-        value_deg = _root_target_deg_to_urdf_deg(joint_idx, value_deg)
-    elif _encoder_index_uses_negative_urdf_flexion(joint_idx):
-        # J 正角弯曲转回 URDF 负角弯曲。
-        value_deg = -value_deg
-    return math.radians(value_deg)
+    return angle_mapping.calibrated_to_urdf(
+        joint_idx,
+        float(value_deg),
+        allow_default=True,
+        clamp=True,
+    )
 
 
 def _xyz_text(vec: Optional[np.ndarray]) -> str:
@@ -1921,12 +1765,7 @@ class FullRawSkeletonRetargeter:
                     allow_default=True,
                     prefix="[RAW_IK_ANGLE]",
                 )
-                angles[item.joint_index] = angle_mapping.urdf_to_calibrated(
-                    item.joint_index,
-                    math.radians(float(item.robot_q_urdf_preview)),
-                    allow_default=True,
-                    clamp=True,
-                )
+                angles[item.joint_index] = float(item.robot_q_urdf_preview)
         return angles
 
 

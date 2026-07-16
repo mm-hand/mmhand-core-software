@@ -2,11 +2,14 @@
 #include "../can/CanCommTask.h"
 #include "../../shared/TaskSharedData.h"
 #include "../../shared/SharedSafetyState.h"
+#include "../../calibration/CalibrationMath.h"
 #include "../../calibration/CalibrationTask.h"
+#include "../../generated/UrdfJointLimits.generated.h"
 #include "../../hardware/HardwareMap.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
 #include "../../system/TaskRuntimeMonitor.h"
+#include "../../persistence/ManualCalibrationNvsStore.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../persistence/MultiTurnNvsStore.h"
 #endif
@@ -75,6 +78,34 @@ static int16_t clampI16Local(int32_t value)
     if (value > 32767) return 32767;
     if (value < -32768) return -32768;
     return (int16_t)value;
+}
+static uint32_t autoCalibrationValidMask(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) return 0;
+    uint32_t mask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        const JointCalibrationResult& result = g_jointCalibResult[joint];
+        const uint32_t manualEntryCrc =
+            manualEncoderReferenceEntryCrc(
+                joint, g_manualEncoderReference[joint]);
+        if (g_manualEncoderReference[joint].valid &&
+            result.success &&
+            result.mappingVersion == kManualScaledUrdfFeedbackMappingVersion &&
+            result.urdfConfigCrc == kManualScaledUrdfConfigCrc &&
+            result.manualReferenceCrc == manualEntryCrc) {
+            mask |= (1UL << joint);
+        }
+    }
+    return mask;
+}
+
+static bool activeManualReferencesReady(TaskSharedData_t* sharedData)
+{
+    if (!sharedData || !sharedData->manual_reference_nvs_valid) return false;
+    const uint32_t activeMask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        kManualEncoderReferenceFullMask;
+    return manualEncoderReferencesCoverActiveMask(activeMask);
 }
 
 // Encode raw CAN magnetic encoder values for the sensor packet.
@@ -150,7 +181,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[72];
+    uint8_t buffer[160];
     size_t idx = 0;
     uint32_t faultBitmap = 0;
     uint32_t unknownBitmap = 0;
@@ -229,11 +260,85 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
     appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_result_token));
     appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_valid_mask));
     appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_fail_count));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_crc));
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_nvs_sequence));
+    buffer[idx++] = sharedData->manual_reference_nvs_valid ? 1 : 0;
+    appendU32BigEndian(buffer, &idx, autoCalibrationValidMask(sharedData));
+    buffer[idx++] = sharedData->manual_reference_save_status;
+    buffer[idx++] = sharedData->rope_init_status;
+    buffer[idx++] = sharedData->rope_init_reason;
+    appendU32BigEndian(buffer, &idx, sharedData->rope_init_sequence);
+    appendU32BigEndian(buffer, &idx, sharedData->rope_init_joint_mask);
+    appendU32BigEndian(buffer, &idx, sharedData->rope_init_timestamp);
+    appendU32BigEndian(buffer, &idx, sharedData->pending_direct_generation);
+    appendU32BigEndian(buffer, &idx, sharedData->applied_direct_generation);
+    buffer[idx++] = sharedData->direct_reject_reason;
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->calibration_warning_bitmap));
+    {
+        SharedSafetyGuard guard;
+        for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+            appendI16BigEndian(
+                buffer,
+                &idx,
+                sharedData->calibration_auto_min_offset_counts[joint]);
+        }
+    }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
+static bool sendManualEncoderReferencePacket(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+
+    uint8_t buffer[140];
+    size_t idx = 0;
+    ManualEncoderReference references[ENCODER_TOTAL_NUM];
+    uint32_t validMask = 0;
+    uint32_t referenceCrc = 0;
+    uint32_t nvsSequence = 0;
+    uint8_t nvsValid = 0;
+    {
+        SharedSafetyGuard guard;
+        memcpy(references,
+               g_manualEncoderReference,
+               sizeof(references));
+        validMask = sharedAtomicLoad(
+            &sharedData->manual_reference_valid_bitmap);
+        referenceCrc = sharedAtomicLoad(
+            &sharedData->manual_reference_crc);
+        nvsSequence = sharedAtomicLoad(
+            &sharedData->manual_reference_nvs_sequence);
+        nvsValid = sharedData->manual_reference_nvs_valid ? 1 : 0;
+    }
+
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_MANUAL_ENCODER_REFERENCE;
+    buffer[idx++] = 3; // Payload version: v3 appends P4 encoder directions.
+    appendU32BigEndian(buffer, &idx, validMask);
+    appendU32BigEndian(buffer, &idx, referenceCrc);
+    appendU32BigEndian(buffer, &idx, nvsSequence);
+    buffer[idx++] = nvsValid;
+    appendU32BigEndian(buffer, &idx, autoCalibrationValidMask(sharedData));
+    buffer[idx++] = sharedData->manual_reference_save_status;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        appendU16BigEndian(buffer, &idx, references[joint].minRaw);
+        appendU16BigEndian(buffer, &idx, references[joint].maxRaw);
+    }
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        buffer[idx++] = (g_encoderDirection[joint] < 0) ? 0xFF : 0x01;
+    }
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
 static void sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
 {
     uint8_t buffer[64];
@@ -297,23 +402,6 @@ static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloa
     FW_SERIAL_WRITE(buffer, idx);
 }
 
-// Send the joint reverse-release fault bitmap.
-static void sendReleaseFaultPacket(uint32_t releaseFaultBitmap)
-{
-    uint8_t buffer[8];
-    size_t idx = 0;
-
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0x00;
-    buffer[idx++] = PACKET_TYPE_RELEASE_FAULT;
-    buffer[idx++] = (uint8_t)((releaseFaultBitmap >> 24) & 0xFF);
-    buffer[idx++] = (uint8_t)((releaseFaultBitmap >> 16) & 0xFF);
-    buffer[idx++] = (uint8_t)((releaseFaultBitmap >> 8) & 0xFF);
-    buffer[idx++] = (uint8_t)(releaseFaultBitmap & 0xFF);
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2);
-    FW_SERIAL_WRITE(buffer, idx);
-}
 
 static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
 {
@@ -366,7 +454,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     }
 
     const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
-    uint8_t buffer[180];
+    uint8_t buffer[216];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -402,6 +490,28 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
                                clampI16Local(result.dualTendonLutMotorAbs[actuator][sample]));
         }
     }
+    buffer[idx++] = result.mappingVersion;
+    appendI32BigEndian(buffer, &idx, result.encoderAtUrdfMin);
+    appendI32BigEndian(buffer, &idx, result.encoderAtUrdfMax);
+    appendFloatBigEndian(buffer, &idx, result.angleMin);
+    appendU32BigEndian(buffer, &idx, result.urdfConfigCrc);
+    appendU16BigEndian(buffer, &idx, result.autoMinRaw);
+    appendU16BigEndian(buffer, &idx, result.autoMaxRaw);
+    appendU32BigEndian(buffer, &idx, result.manualReferenceCrc);
+    appendFloatBigEndian(buffer, &idx, result.currentMinDeg);
+    appendFloatBigEndian(buffer, &idx, result.currentMaxDeg);
+    CalibrationAssemblyWarningInfo warningInfo;
+    if (!evaluateCalibrationAssemblyWarning(
+            jointIndex, result, &warningInfo)) {
+        memset(&warningInfo, 0, sizeof(warningInfo));
+    }
+    buffer[idx++] = warningInfo.reasonMask;
+    appendI16BigEndian(
+        buffer, &idx, warningInfo.autoMinOffsetCounts);
+    appendI16BigEndian(
+        buffer, &idx, warningInfo.autoMaxShortfallCounts);
+    appendU16BigEndian(
+        buffer, &idx, warningInfo.autoSpanCounts);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -691,28 +801,6 @@ static bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, 
     return true;
 }
 
-static bool parseTendonGuardPayload(const uint8_t* payload,
-                                    size_t payloadLen,
-                                    uint8_t* enabled,
-                                    int8_t* sign,
-                                    int16_t* x1Abs)
-{
-    if (!payload || !enabled || !sign || !x1Abs) {
-        return false;
-    }
-    if (payloadLen < kTendonGuardPayloadBytes) {
-        return false;
-    }
-    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++)
-    {
-        const size_t base = (size_t)i * 4;
-        enabled[i] = (payload[base] != 0) ? 1 : 0;
-        sign[i] = (((int8_t)payload[base + 1]) < 0) ? (int8_t)-1 : (int8_t)1;
-        const uint16_t raw = ((uint16_t)payload[base + 2] << 8) | payload[base + 3];
-        x1Abs[i] = clampServoAbsCommand((int16_t)raw);
-    }
-    return true;
-}
 
 static uint32_t readU32BigEndian(const uint8_t* p)
 {
@@ -731,6 +819,11 @@ static int16_t readI16BigEndian(const uint8_t* p)
 {
     const uint16_t raw = ((uint16_t)p[0] << 8) | (uint16_t)p[1];
     return (int16_t)raw;
+}
+
+static uint16_t readU16BigEndian(const uint8_t* p)
+{
+    return ((uint16_t)p[0] << 8) | (uint16_t)p[1];
 }
 
 static float readFloatBigEndian(const uint8_t* p)
@@ -755,9 +848,16 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_HOST_HEARTBEAT:
         case CMD_SIDE_SWAY_ADJUST:
         case CMD_CLEAR_CALIBRATION:
+        case CMD_MANUAL_ENCODER_QUERY:
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
+        case CMD_MANUAL_ENCODER_REFERENCE:
+            return kManualEncoderReferencePayloadBytes;
+        case CMD_MANUAL_ENCODER_SINGLE:
+            return kManualEncoderSinglePayloadBytes;
+        case CMD_ROPE_INIT:
+            return kRopeInitPayloadBytes;
         case CMD_ANGLE_CTRL:
             return kFloatPayloadBytes;
         case CMD_CALIB_DATA:
@@ -770,8 +870,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kMotorPosPayloadBytes;
         case CMD_MOTOR_POS_ABS_ONE:
             return kMotorPosAbsOnePayloadBytes;
-        case CMD_TENDON_GUARD:
-            return kTendonGuardPayloadBytes;
+
         case CMD_ACTIVE_SCOPE:
             return kActiveScopePayloadBytes;
         case CMD_RESTORE_MULTITURN:
@@ -779,7 +878,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_MOTOR_ABS_LIMIT_LOCK:
             return kMotorAbsLimitLockPayloadBytes;
         case CMD_CALIB_LOAD_JOINT:
-            return kCalibLoadJointPayloadBytes;
+            return kCalibLoadJointV3PayloadBytes;
         case CMD_CALIB_LOAD_LIMITS:
             return kCalibLoadLimitsPayloadBytes;
         case CMD_LOCAL_TEST_PARAMS:
@@ -806,6 +905,148 @@ static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t 
     }
 }
 
+static bool commandRequiresManualReference(uint8_t cmd)
+{
+    switch (cmd) {
+        case CMD_CALIBRATE:
+        case CMD_RUN_FEEDBACK:
+        case CMD_ANGLE_CTRL:
+        case CMD_LOCAL_TEST_START:
+            return true;
+        default:
+            return false;
+    }
+}
+static bool manualUpdateMotionActive(TaskSharedData_t* sharedData)
+{
+    return !sharedData ||
+           sharedData->control_enabled != 0 ||
+           sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+           sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+           sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+           sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+           sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
+           sharedData->system_state == SYSTEM_STATE_PAUSED;
+}
+
+static uint32_t changedManualReferenceMask(
+    const ManualEncoderReference before[ENCODER_TOTAL_NUM],
+    const ManualEncoderReference after[ENCODER_TOTAL_NUM])
+{
+    uint32_t changedMask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        if (before[joint].valid != after[joint].valid ||
+            before[joint].minRaw != after[joint].minRaw ||
+            before[joint].maxRaw != after[joint].maxRaw) {
+            changedMask |= (1UL << joint);
+        }
+    }
+    return changedMask & kManualEncoderReferenceFullMask;
+}
+
+static uint32_t motorMaskForJoint(uint8_t jointIndex)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM) return 0;
+    uint32_t motorMask = 0;
+    JointActuatorGroup group;
+    if (getJointActuatorGroup(jointIndex, &group)) {
+        for (uint8_t actuator = 0; actuator < group.count; actuator++) {
+            const uint8_t motorChannel = group.actuators[actuator].motorChannel;
+            if (motorChannel < SERVO_TOTAL_NUM &&
+                isMotorChannelValid(motorChannel)) {
+                motorMask |= (1UL << motorChannel);
+            }
+        }
+    } else {
+        const int primaryMotor = findPrimaryMotorChannelForJoint(jointIndex);
+        if (primaryMotor >= 0 && primaryMotor < SERVO_TOTAL_NUM) {
+            motorMask |= (1UL << (uint8_t)primaryMotor);
+        }
+    }
+    return motorMask;
+}
+
+static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
+                                           uint32_t jointMask)
+{
+    if (!sharedData) return;
+    jointMask &= kManualEncoderReferenceFullMask;
+    uint32_t motorMask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        if ((jointMask & (1UL << joint)) == 0) continue;
+        memset(&g_jointCalibResult[joint], 0,
+               sizeof(g_jointCalibResult[joint]));
+        g_encoderOffsetManual[joint] = 0;
+        motorMask |= motorMaskForJoint(joint);
+    }
+
+    if (motorMask != 0) {
+        SharedSafetyGuard guard;
+        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_valid_bitmap,
+                             ~motorMask);
+        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap,
+                             ~motorMask);
+        for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; motor++) {
+            if ((motorMask & (1UL << motor)) == 0) continue;
+            sharedData->motor_abs_limit_min[motor] = 0;
+            sharedData->motor_abs_limit_max[motor] = 0;
+        }
+    }
+
+    clearCalibrationAssemblyWarnings(sharedData, jointMask);
+    const bool anyAutoValid = autoCalibrationValidMask(sharedData) != 0;
+    g_calibrationStatus = anyAutoValid
+        ? (sharedAtomicLoad(&sharedData->calibration_warning_bitmap) != 0
+               ? CALIB_STATUS_WARN
+               : CALIB_STATUS_SUCCESS)
+        : CALIB_STATUS_IDLE;
+    g_calibrationAckStatus = g_calibrationStatus;
+    g_calibrationAckRepeatRemaining = 0;
+    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                         (uint32_t)~SYSTEM_FAULT_CALIBRATION);
+    FW_LOG_INFO_PRINTF(
+        "[NVS MANUAL] AUTO_INVALIDATE joints=0x%08lX motors=0x%08lX remaining=0x%08lX\r\n",
+        (unsigned long)jointMask,
+        (unsigned long)motorMask,
+        (unsigned long)autoCalibrationValidMask(sharedData));
+}
+
+static uint8_t commitManualReferences(
+    TaskSharedData_t* sharedData,
+    const ManualEncoderReference references[ENCODER_TOTAL_NUM])
+{
+    uint32_t validMask = 0;
+    manualEncoderReferencesValidate(references, &validMask);
+    if (!sharedData || validMask == 0) {
+        return PROTO_ACK_STATUS_INVALID_DATA;
+    }
+
+    ManualEncoderReference previous[ENCODER_TOTAL_NUM];
+    {
+        SharedSafetyGuard guard;
+        memcpy(previous, g_manualEncoderReference, sizeof(previous));
+    }
+    const uint32_t changedMask =
+        changedManualReferenceMask(previous, references);
+
+    uint32_t sequence = 0;
+    uint32_t referenceCrc = 0;
+    if (!manualCalibrationNvsSave(references, &sequence, &referenceCrc)) {
+        sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_FAILED;
+        return PROTO_ACK_STATUS_NVS_FAILURE;
+    }
+
+    sharedData->manual_reference_nvs_valid = 0;
+    manualEncoderReferencesApplyRam(references);
+    sharedAtomicStore(&sharedData->manual_reference_valid_bitmap, validMask);
+    sharedAtomicStore(&sharedData->manual_reference_crc, referenceCrc);
+    sharedAtomicStore(&sharedData->manual_reference_nvs_sequence, sequence);
+    invalidateAutomaticCalibration(sharedData, changedMask);
+    sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
+    sharedData->manual_reference_nvs_valid = 1;
+    postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+    return PROTO_ACK_STATUS_OK;
+}
 // Apply a parsed downstream command frame.
 static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* frame, size_t frameLen)
 {
@@ -821,11 +1062,62 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         return;
     }
+    if (cmd == CMD_MANUAL_ENCODER_QUERY)
+    {
+        const bool sent = sendManualEncoderReferencePacket(sharedData);
+        sendProtoAckPacket(CMD_MANUAL_ENCODER_QUERY,
+                           sharedData->system_state,
+                           sent ? PROTO_ACK_STATUS_OK
+                                : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
+
+    if (cmd == CMD_ROPE_INIT)
+    {
+        const uint32_t requestedMask =
+            readU32BigEndian(frame + 1) & kManualEncoderReferenceFullMask;
+        const uint32_t activeMask =
+            sharedAtomicLoad(&sharedData->active_joint_mask) &
+            kManualEncoderReferenceFullMask;
+        uint8_t status = PROTO_ACK_STATUS_QUEUED;
+        if (requestedMask == 0 || requestedMask != activeMask) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+        } else if (!activeManualReferencesReady(sharedData)) {
+            status = PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED;
+        } else if ((autoCalibrationValidMask(sharedData) & requestedMask) !=
+                   requestedMask) {
+            status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
+        } else if (sharedData->system_state != SYSTEM_STATE_IDLE &&
+                   sharedData->system_state != SYSTEM_STATE_READY) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (!postSystemEvent(sharedData, SYSTEM_EVENT_ROPE_INIT)) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        }
+        sendProtoAckPacket(CMD_ROPE_INIT, sharedData->system_state, status);
+        return;
+    }
+
+    if (commandRequiresManualReference(cmd) &&
+        !activeManualReferencesReady(sharedData)) {
+        sendProtoAckPacket(cmd,
+                           sharedData->system_state,
+                           PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED);
+        return;
+    }
 
     if (cmd == CMD_CALIBRATE)
     {
-        postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-        sendProtoAckPacket(CMD_CALIBRATE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        if (!activeManualReferencesReady(sharedData)) {
+            sendProtoAckPacket(
+                CMD_CALIBRATE,
+                sharedData->system_state,
+                PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED);
+        } else {
+            postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
+            sendProtoAckPacket(CMD_CALIBRATE,
+                               sharedData->system_state,
+                               PROTO_ACK_STATUS_QUEUED);
+        }
         return;
     }
 
@@ -847,8 +1139,17 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_RUN_FEEDBACK)
     {
-        postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
-        sendProtoAckPacket(CMD_RUN_FEEDBACK, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
+        if (!activeManualReferencesReady(sharedData)) {
+            sendProtoAckPacket(
+                CMD_RUN_FEEDBACK,
+                sharedData->system_state,
+                PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED);
+        } else {
+            postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
+            sendProtoAckPacket(CMD_RUN_FEEDBACK,
+                               sharedData->system_state,
+                               PROTO_ACK_STATUS_QUEUED);
+        }
         return;
     }
 
@@ -942,19 +1243,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
-    if (cmd == CMD_TENDON_GUARD)
-    {
-        uint8_t enabled[ENCODER_TOTAL_NUM] = {0};
-        int8_t sign[ENCODER_TOTAL_NUM] = {0};
-        int16_t x1Abs[ENCODER_TOTAL_NUM] = {0};
-        uint8_t status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        if (parseTendonGuardPayload(frame + 1, frameLen - 1, enabled, sign, x1Abs)) {
-            upperApplyTendonGuardConfig(sharedData, enabled, sign, x1Abs, ENCODER_TOTAL_NUM);
-            status = PROTO_ACK_STATUS_OK;
-        }
-        sendProtoAckPacket(CMD_TENDON_GUARD, sharedData->system_state, status);
-        return;
-    }
 
     if (cmd == CMD_LOCAL_TEST_PARAMS)
     {
@@ -1071,6 +1359,11 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (frameLen < 1 + kRestoreMultiTurnPayloadBytes) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
+                    validMotorChannelMask()) == 0) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            FW_LOG_INFO_PRINTLN(
+                "[UPPER] RESTORE_MULTITURN rejected: all motor turns are already trusted");
         } else {
             const uint32_t motorMask = readU32BigEndian(frame + 1);
             int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
@@ -1143,7 +1436,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+                   sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint32_t validMask = readU32BigEndian(frame + 1) & validMotorChannelMask();
@@ -1177,17 +1471,18 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIB_LOAD_JOINT)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kCalibLoadJointLegacyPayloadBytes) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        if (frameLen < 1 + kCalibLoadJointV3PayloadBytes) {
+            status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+                   sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             const uint8_t* p = frame + 1;
             const uint8_t jointIndex = *p++;
             if (jointIndex >= ENCODER_TOTAL_NUM) {
-                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                status = PROTO_ACK_STATUS_INVALID_DATA;
             } else {
                 JointCalibrationResult result;
                 memset(&result, 0, sizeof(result));
@@ -1207,65 +1502,271 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 result.tightDeg = readFloatBigEndian(p); p += 4;
                 result.totalDeg = readFloatBigEndian(p); p += 4;
                 result.scaled = (*p++ != 0);
-                const int8_t direction = ((int8_t)(*p++)) < 0 ? (int8_t)-1 : (int8_t)1;
-                if (frameLen >= 1 + kCalibLoadJointPayloadBytes) {
-                    result.dualTendonLutValid = (*p++ != 0) ? 1 : 0;
-                    result.dualTendonLutCount = *p++;
-                    result.dualTendonLutMotor[0] = *p++;
-                    result.dualTendonLutMotor[1] = *p++;
-                    result.dualTendonLutAngleStartDeg = readFloatBigEndian(p); p += 4;
-                    result.dualTendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
-                    for (uint8_t actuator = 0; actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
-                        for (uint8_t sample = 0; sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
-                            result.dualTendonLutMotorAbs[actuator][sample] = readI16BigEndian(p);
-                            p += 2;
-                        }
+                const int8_t direction = ((int8_t)(*p++)) < 0 ? -1 : 1;
+                result.dualTendonLutValid = (*p++ != 0) ? 1 : 0;
+                result.dualTendonLutCount = *p++;
+                result.dualTendonLutMotor[0] = *p++;
+                result.dualTendonLutMotor[1] = *p++;
+                result.dualTendonLutAngleStartDeg = readFloatBigEndian(p); p += 4;
+                result.dualTendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
+                for (uint8_t actuator = 0;
+                     actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+                    for (uint8_t sample = 0;
+                         sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
+                        result.dualTendonLutMotorAbs[actuator][sample] =
+                            readI16BigEndian(p);
+                        p += 2;
                     }
                 }
-                if (result.success &&
-                    (!isfinite(result.angleMax) || !isfinite(result.startDeg) ||
-                     !isfinite(result.tightDeg) || !isfinite(result.totalDeg) ||
-                     result.encoderSpan <= 0 || result.totalDeg <= 0.0f ||
-                     (result.dualTendonLutValid != 0 &&
-                      (!isfinite(result.dualTendonLutAngleStartDeg) ||
-                       !isfinite(result.dualTendonLutAngleStepDeg) ||
-                       result.dualTendonLutAngleStepDeg <= 0.0f ||
-                       result.dualTendonLutCount < 3 ||
-                       result.dualTendonLutCount > DUAL_TENDON_LUT_MAX_SAMPLES ||
-                       result.dualTendonLutMotor[0] >= SERVO_TOTAL_NUM ||
-                       result.dualTendonLutMotor[1] >= SERVO_TOTAL_NUM)))) {
-                    status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                const uint8_t incomingMappingVersion = *p++;
+                result.encoderAtUrdfMin = readI32BigEndian(p); p += 4;
+                result.encoderAtUrdfMax = readI32BigEndian(p); p += 4;
+                result.angleMin = readFloatBigEndian(p); p += 4;
+                const uint32_t incomingUrdfCrc = readU32BigEndian(p); p += 4;
+                const uint16_t autoMinRaw = readU16BigEndian(p); p += 2;
+                const uint16_t autoMaxRaw = readU16BigEndian(p); p += 2;
+                const uint32_t incomingManualCrc = readU32BigEndian(p); p += 4;
+                const float incomingCurrentMin = readFloatBigEndian(p); p += 4;
+                const float incomingCurrentMax = readFloatBigEndian(p); p += 4;
+                (void)incomingCurrentMin;
+                (void)incomingCurrentMax;
+
+                const uint32_t localManualEntryCrc =
+                    manualEncoderReferenceEntryCrc(
+                        jointIndex, g_manualEncoderReference[jointIndex]);
+                const uint32_t localValidMask =
+                    sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
+                // Legacy calibration coordinates are direction-oriented, while
+                // V3 auto endpoints must be physical 14-bit raw samples. Older
+                // firmware copied oriented values into these fields for
+                // direction=-1 joints and produced a false complement span.
+                const uint16_t expectedAutoMinRaw =
+                    (uint16_t)calibrationOrientEncoderRaw(
+                        (uint16_t)calibrationWrapEncoderCount(
+                            result.startEncoder),
+                        direction);
+                const uint16_t expectedAutoMaxRaw =
+                    (uint16_t)calibrationOrientEncoderRaw(
+                        (uint16_t)calibrationWrapEncoderCount(
+                            result.tightEncoder),
+                        direction);
+                if (incomingMappingVersion !=
+                        kManualScaledUrdfFeedbackMappingVersion ||
+                    incomingUrdfCrc != kManualScaledUrdfConfigCrc) {
+                    status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
+                } else if (incomingManualCrc != localManualEntryCrc) {
+                    status = PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH;
+                } else if ((localValidMask & (1UL << jointIndex)) == 0) {
+                    status = PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED;
+                } else if (autoMinRaw != expectedAutoMinRaw ||
+                           autoMaxRaw != expectedAutoMaxRaw) {
+                    FW_LOG_WARN_PRINTF(
+                        "[UPPER] CALIB_LOAD_V3 reject J%02u raw endpoint "
+                        "contract: incoming=%u->%u expected=%u->%u dir=%d; "
+                        "recalibration required\r\n",
+                        (unsigned)jointIndex,
+                        (unsigned)autoMinRaw,
+                        (unsigned)autoMaxRaw,
+                        (unsigned)expectedAutoMinRaw,
+                        (unsigned)expectedAutoMaxRaw,
+                        (int)direction);
+                    status = PROTO_ACK_STATUS_INVALID_DATA;
+                } else if (!applyManualScaledUrdfMappingToCalibration(
+                               jointIndex,
+                               g_manualEncoderReference[jointIndex],
+                               autoMinRaw,
+                               autoMaxRaw,
+                               direction,
+                               localManualEntryCrc,
+                               &result)) {
+                    status = PROTO_ACK_STATUS_INVALID_DATA;
+                } else if (result.success &&
+                           (!isfinite(result.startDeg) ||
+                            !isfinite(result.tightDeg) ||
+                            !isfinite(result.totalDeg) ||
+                            result.encoderSpan <= 0 || result.totalDeg <= 0.0f ||
+                            (result.dualTendonLutValid != 0 &&
+                             (!isfinite(result.dualTendonLutAngleStartDeg) ||
+                              !isfinite(result.dualTendonLutAngleStepDeg) ||
+                              result.dualTendonLutAngleStepDeg <= 0.0f ||
+                              result.dualTendonLutCount < 3 ||
+                              result.dualTendonLutCount >
+                                  DUAL_TENDON_LUT_MAX_SAMPLES ||
+                              result.dualTendonLutMotor[0] >= SERVO_TOTAL_NUM ||
+                              result.dualTendonLutMotor[1] >= SERVO_TOTAL_NUM)))) {
+                    status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else {
                     g_jointCalibResult[jointIndex] = result;
-                    g_encoderOffsetManual[jointIndex] = result.success ? result.offset : 0;
+                    g_encoderOffsetManual[jointIndex] =
+                        result.success ? result.offset : 0;
                     setRuntimeEncoderDirection(jointIndex, direction);
                     if (result.success) {
-                        g_calibrationStatus = CALIB_STATUS_SUCCESS;
-                        g_calibrationAckStatus = CALIB_STATUS_SUCCESS;
+                        updateCalibrationAssemblyWarning(
+                            sharedData, jointIndex, result);
+                        const uint8_t loadedStatus =
+                            sharedAtomicLoad(
+                                &sharedData->calibration_warning_bitmap) != 0
+                                ? CALIB_STATUS_WARN
+                                : CALIB_STATUS_SUCCESS;
+                        g_calibrationStatus = loadedStatus;
+                        g_calibrationAckStatus = loadedStatus;
                         g_calibrationAckRepeatRemaining = 5;
-                        sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                                             (uint32_t)~SYSTEM_FAULT_CALIBRATION);
+                        sharedAtomicFetchAnd(
+                            &sharedData->system_fault_bitmap,
+                            (uint32_t)~SYSTEM_FAULT_CALIBRATION);
                     }
-                    FW_LOG_INFO_PRINTF("[UPPER] CALIB_LOAD_JOINT J%02u success=%u start=%ld tight=%ld span=%ld dir=%d\r\n",
-                                  jointIndex,
-                                  result.success ? 1U : 0U,
-                                  (long)result.startEncoder,
-                                  (long)result.tightEncoder,
-                                  (long)result.encoderSpan,
-                                  (int)direction);
+                    FW_LOG_INFO_PRINTF(
+                        "[UPPER] CALIB_LOAD_V3 J%02u auto=%u->%u manualCrc=0x%08lX current=%.3f..%.3f\r\n",
+                        (unsigned)jointIndex,
+                        (unsigned)result.autoMinRaw,
+                        (unsigned)result.autoMaxRaw,
+                        (unsigned long)result.manualReferenceCrc,
+                        result.currentMinDeg,
+                        result.currentMaxDeg);
                 }
             }
         }
-        sendProtoAckPacket(CMD_CALIB_LOAD_JOINT, sharedData->system_state, status);
+        sendProtoAckPacket(CMD_CALIB_LOAD_JOINT,
+                           sharedData->system_state,
+                           status);
+        if (status == PROTO_ACK_STATUS_OK) {
+            postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+        }
         return;
     }
+    if (cmd == CMD_MANUAL_ENCODER_SINGLE)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        const uint8_t joint = frame[1];
+        const uint16_t minRaw = readU16BigEndian(frame + 2);
+        const uint16_t maxRaw = readU16BigEndian(frame + 4);
+        if (manualUpdateMotionActive(sharedData)) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            if (joint >= ENCODER_TOTAL_NUM ||
+                minRaw >= kEncoderModulo || maxRaw >= kEncoderModulo) {
+                status = PROTO_ACK_STATUS_INVALID_DATA;
+            } else {
+                ManualEncoderReference references[ENCODER_TOTAL_NUM];
+                {
+                    SharedSafetyGuard guard;
+                    memcpy(references, g_manualEncoderReference,
+                           sizeof(references));
+                }
+                references[joint].valid = 1;
+                references[joint].minRaw = minRaw;
+                references[joint].maxRaw = maxRaw;
+                if (!manualEncoderReferencesCoverMask(
+                        references, (1UL << joint), NULL)) {
+                    status = PROTO_ACK_STATUS_INVALID_DATA;
+                } else {
+                    status = commitManualReferences(sharedData, references);
+                }
+            }
+        }
+        sendProtoAckPacket(CMD_MANUAL_ENCODER_SINGLE,
+                           sharedData->system_state,
+                           status);
+        if (status == PROTO_ACK_STATUS_OK) {
+            sendManualEncoderReferencePacket(sharedData);
+        }
+        FW_LOG_INFO_PRINTF(
+            "[NVS MANUAL] single J%02u min=%u max=%u status=%u "
+            "nvs=%u save=%u valid=0x%08lX crc=0x%08lX seq=%lu\r\n",
+            (unsigned)joint,
+            (unsigned)minRaw,
+            (unsigned)maxRaw,
+            (unsigned)status,
+            (unsigned)sharedData->manual_reference_nvs_valid,
+            (unsigned)sharedData->manual_reference_save_status,
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_valid_bitmap),
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_crc),
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_nvs_sequence));
+        return;
+    }
+    if (cmd == CMD_MANUAL_ENCODER_REFERENCE)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        const uint8_t action = frame[1];
+        const bool motionActive =
+            sharedData->control_enabled != 0 ||
+            sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+            sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
+            sharedData->system_state == SYSTEM_STATE_PAUSED;
 
+        if (motionActive) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (action == 0) {
+            if (!manualCalibrationNvsClear()) {
+                status = PROTO_ACK_STATUS_NVS_FAILURE;
+                sharedData->manual_reference_save_status =
+                    MANUAL_SAVE_STATUS_FAILED;
+            } else {
+                sharedData->manual_reference_nvs_valid = 0;
+                manualEncoderReferencesClearRam();
+                sharedAtomicStore(&sharedData->manual_reference_valid_bitmap,
+                                  (uint32_t)0);
+                sharedAtomicStore(&sharedData->manual_reference_crc,
+                                  (uint32_t)0);
+                sharedAtomicStore(&sharedData->manual_reference_nvs_sequence,
+                                  (uint32_t)0);
+                sharedData->manual_reference_save_status =
+                    MANUAL_SAVE_STATUS_NONE;
+                invalidateAutomaticCalibration(
+                    sharedData, kManualEncoderReferenceFullMask);
+                postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+            }
+        } else if (action == 1) {
+            ManualEncoderReference references[ENCODER_TOTAL_NUM];
+            const uint8_t* p = frame + 2;
+            for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+                references[joint].valid = 1;
+                references[joint].minRaw = readU16BigEndian(p);
+                p += 2;
+                references[joint].maxRaw = readU16BigEndian(p);
+                p += 2;
+            }
+
+            uint32_t validMask = 0;
+            if (!manualEncoderReferencesValidate(references, &validMask)) {
+                status = PROTO_ACK_STATUS_INVALID_DATA;
+            } else {
+                status = commitManualReferences(sharedData, references);
+            }
+        } else {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+        }
+        FW_LOG_INFO_PRINTF(
+            "[NVS MANUAL] action=%u status=%u valid=0x%08lX "
+            "crc=0x%08lX seq=%lu nvs=%u save=%u\r\n",
+            (unsigned)action,
+            (unsigned)status,
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_valid_bitmap),
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_crc),
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->manual_reference_nvs_sequence),
+            (unsigned)sharedData->manual_reference_nvs_valid,
+            (unsigned)sharedData->manual_reference_save_status);
+        sendProtoAckPacket(CMD_MANUAL_ENCODER_REFERENCE,
+                           sharedData->system_state,
+                           status);
+        return;
+    }
     if (cmd == CMD_CLEAR_CALIBRATION)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             {
@@ -1277,6 +1778,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             }
             memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
             memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
+            clearCalibrationAssemblyWarnings(
+                sharedData, kManualEncoderReferenceFullMask);
             g_calibrationStatus = CALIB_STATUS_IDLE;
             g_calibrationAckStatus = CALIB_STATUS_IDLE;
             g_calibrationAckRepeatRemaining = 0;
@@ -1379,12 +1882,14 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastFaultStatusSent = 0;
     uint32_t lastFaultStatusSentMs = 0;
     bool faultStatusSentInitialized = false;
-    uint32_t lastReleaseFaultSent = 0;
-    uint32_t lastReleaseFaultSentMs = 0;
-    bool releaseFaultSentInitialized = false;
+
     uint32_t lastSystemStatusTransitionSent = 0;
     uint32_t lastSystemStatusSentMs = 0;
     bool systemStatusSentInitialized = false;
+    uint32_t lastManualReferenceSentMs = 0;
+    uint32_t lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
+    uint32_t lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
+    uint8_t lastManualReferenceNvsValidSent = 0xFF;
     uint32_t lastMotorAbsLimitSentMs = 0;
     uint32_t lastMotorAbsLimitValidSent = 0xFFFFFFFFUL;
     uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
@@ -1465,7 +1970,9 @@ void upperCommunicationTask(void* parameter)
             const size_t expectedPayloadLen = getCommandPayloadLength(cmd);
             if (cmd == CMD_CALIB_LOAD_JOINT) {
                 if (payloadLen != kCalibLoadJointLegacyPayloadBytes &&
-                    payloadLen != kCalibLoadJointPayloadBytes) {
+                    payloadLen != kCalibLoadJointPayloadBytes &&
+                    payloadLen != kCalibLoadJointV2PayloadBytes &&
+                    payloadLen != kCalibLoadJointV3PayloadBytes) {
                     parseOffset += frameLen;
                     continue;
                 }
@@ -1567,18 +2074,6 @@ void upperCommunicationTask(void* parameter)
             faultStatusSentInitialized = true;
         }
 
-        const uint32_t releaseFaultBitmap =
-            sharedAtomicLoad(&sharedData->reverse_release_fault_bitmap);
-        const bool releaseBitmapChanged =
-            (!releaseFaultSentInitialized) || (releaseFaultBitmap != lastReleaseFaultSent);
-        const bool releaseHeartbeatDue =
-            (!releaseFaultSentInitialized) || ((nowMs - lastReleaseFaultSentMs) >= kFaultStatusHeartbeatMs);
-        if (releaseBitmapChanged || releaseHeartbeatDue) {
-            sendReleaseFaultPacket(releaseFaultBitmap);
-            lastReleaseFaultSent = releaseFaultBitmap;
-            lastReleaseFaultSentMs = nowMs;
-            releaseFaultSentInitialized = true;
-        }
 
         const uint32_t stateTransitionCount = sharedData->state_transition_count;
         const bool systemStatusChanged =
@@ -1596,6 +2091,27 @@ void upperCommunicationTask(void* parameter)
             }
         }
 
+        const uint32_t manualReferenceSequence =
+            sharedAtomicLoad(&sharedData->manual_reference_nvs_sequence);
+        const uint32_t manualReferenceValidMask =
+            sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
+        const uint8_t manualReferenceNvsValid =
+            sharedData->manual_reference_nvs_valid ? 1 : 0;
+        const bool manualReferenceChanged =
+            manualReferenceSequence != lastManualReferenceSequenceSent ||
+            manualReferenceValidMask != lastManualReferenceValidMaskSent ||
+            manualReferenceNvsValid != lastManualReferenceNvsValidSent;
+        const bool manualReferenceHeartbeatDue =
+            (uint32_t)(nowMs - lastManualReferenceSentMs) >=
+            kManualEncoderReferenceHeartbeatMs;
+        if (manualReferenceChanged || manualReferenceHeartbeatDue) {
+            if (sendManualEncoderReferencePacket(sharedData)) {
+                lastManualReferenceSequenceSent = manualReferenceSequence;
+                lastManualReferenceValidMaskSent = manualReferenceValidMask;
+                lastManualReferenceNvsValidSent = manualReferenceNvsValid;
+                lastManualReferenceSentMs = nowMs;
+            }
+        }
         if ((uint32_t)(nowMs - lastTaskDiagSentMs) >= kTaskDiagHeartbeatMs) {
             TaskRuntimeSnapshot runtimeDiag;
             if (taskRuntimeGetSnapshot(nextTaskDiagId, &runtimeDiag)) {
@@ -1618,7 +2134,7 @@ void upperCommunicationTask(void* parameter)
             lastMotorAbsLimitSentMs = nowMs;
         }
 
-        if (g_calibrationStatus == CALIB_STATUS_SUCCESS &&
+        if (calibrationStatusHasUsableResult(g_calibrationStatus) &&
             (uint32_t)(nowMs - lastJointCalibSnapshotSentMs) >= kJointCalibSnapshotHeartbeatMs) {
             for (uint8_t n = 0; n < ENCODER_TOTAL_NUM; n++) {
                 const uint8_t jointIndex = (uint8_t)((nextJointCalibSnapshotIndex + n) % ENCODER_TOTAL_NUM);

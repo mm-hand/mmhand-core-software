@@ -39,7 +39,6 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_JOINT_LIST_INVALID,
     CALIB_DIAG_REASON_JOINT_STEP_FAILED,
     CALIB_DIAG_REASON_LOAD_NOT_REACHED,
-    CALIB_DIAG_REASON_OVER_RELEASE,
     CALIB_DIAG_REASON_OVERLOAD,
     CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
@@ -60,9 +59,9 @@ from desktop.core.protocol import (
     SYSTEM_FAULT_JOINT16_DUAL,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
     SYSTEM_FAULT_OVERLOAD,
-    SYSTEM_FAULT_RELEASE_GUARD,
     SYSTEM_FAULT_SERVO_OFFLINE,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
@@ -129,8 +128,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_status_refresh = 0.0
         self._pending_status_text = ""
         self._last_overload_popup_mask = 0
-        self._last_fault_popup_key = ""
-        self._last_fault_popup_time = 0.0
+        self._fault_popup_episode_active = False
         self._fault_dialog_active = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
@@ -452,6 +450,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self.current_port = ""
         self._state = None
         self._state_buffer_version = 0
+        self._fault_popup_episode_active = False
+        self._fault_stop_sent = False
+        self._fault_previous_runtime_active = False
         self.control_panel.clear_live_state()
         self._display_windows.update_views(HandModel())
         if clear_selection:
@@ -501,7 +502,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self.control_panel._on_active_scope_changed()
         except Exception:
             pass
-        self.backend.sync_tendon_guard(force=True)
+        self.control_panel.begin_startup_device_check()
         if self.save_data_check.isChecked() and not self._data_logger.is_running():
             self._start_data_recording()
 
@@ -688,6 +689,8 @@ class HandGUI(QtWidgets.QMainWindow):
         text = str(calib or "").upper()
         if text in {"SUCCESS", "DONE"}:
             return "ok"
+        if text == "WARN":
+            return "warn"
         if text in {"PENDING", "RUNNING", "SYNCING"}:
             return "lag"
         if text in {"FAILED", "NO_CALIB", "DISCONNECTED"}:
@@ -723,11 +726,6 @@ class HandGUI(QtWidgets.QMainWindow):
             if faulted:
                 mask |= (1 << i)
         return mask
-
-    @staticmethod
-    def _release_guard_detail_lines(state: HandModel) -> List[str]:
-        release_flags = getattr(state, "joint_reverse_release_fault", []) or []
-        return [f"J{i:02d}" for i, faulted in enumerate(release_flags) if faulted]
 
     def _format_overload_summary(self, state: HandModel, now: Optional[float] = None) -> tuple[str, str, bool]:
         fault_status_fresh = self._packet_status_fresh(
@@ -819,7 +817,6 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
             CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: "标定工作空间准备失败",
             CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
-            CALIB_DIAG_REASON_OVER_RELEASE: "过度松绳",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -873,11 +870,6 @@ class HandGUI(QtWidgets.QMainWindow):
                 else:
                     lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
                     suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
-            elif reason == CALIB_DIAG_REASON_OVER_RELEASE:
-                lines.append(
-                    f"数据：release={value_a}, limit={value_b}, actual_release={value_c}, command_release={bitmap}"
-                )
-                suggestions.append("到达 220 最大负载后反向松绳超过 3 圈，已作为标定故障停止。检查负反馈方向、舵机 ABS 方向、绳路是否反绕或打滑；手动回收到安全位置后 Clear Fault 并重新标定。")
             elif reason == CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT:
                 lines.append(f"数据：abs_error={value_a}, required_travel={value_b}, zero_deg_x100={value_c}")
                 suggestions.append("检查回零目标是否被机械限位阻挡、绳索是否太紧、zero pull 参数是否过大；释放机构后重试。")
@@ -953,6 +945,15 @@ class HandGUI(QtWidgets.QMainWindow):
         }
 
     def _calib_tooltip(self, state: HandModel, calib: str) -> str:
+        if str(calib or "").upper() == "WARN":
+            mask = int(getattr(state, "calibration_warning_bitmap", 0) or 0)
+            joints = [f"J{i:02d}" for i in range(21) if mask & (1 << i)]
+            suffix = ", ".join(joints) if joints else "unknown joint"
+            return (
+                "Calibration: WARN\n"
+                f"Assembly endpoint offset detected: {suffix}. "
+                "Calibration remains usable."
+            )
         diag = self._calib_diag_summary(state)
         if diag.get("active"):
             return "Calibration: " + str(calib) + "\n\n" + self._fault_body_text(diag)
@@ -962,12 +963,6 @@ class HandGUI(QtWidgets.QMainWindow):
         bitmap = self._fault_bitmap_value(state)
         overload_items = self._overload_detail_items(state)
         overload_mask = self._overload_mask_from_state(state)
-        release_joints = self._release_guard_detail_lines(state)
-        release_mask = 0
-        release_flags = getattr(state, "joint_reverse_release_fault", []) or []
-        for i, faulted in enumerate(release_flags):
-            if faulted:
-                release_mask |= (1 << i)
         try:
             unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & VALID_MOTOR_MASK
         except Exception:
@@ -986,14 +981,6 @@ class HandGUI(QtWidgets.QMainWindow):
             else:
                 lines.append("舵机过载：触发电机未知")
             suggestions.append("检查机构是否卡住、绳索是否过紧、目标角度是否过大，以及是否误加载了旧标定。")
-
-        if (bitmap & SYSTEM_FAULT_RELEASE_GUARD) or release_joints:
-            titles.append("反向松绳保护")
-            if release_joints:
-                lines.append("反向松绳保护：" + ", ".join(release_joints))
-            else:
-                lines.append("反向松绳保护：触发关节未知")
-            suggestions.append("检查 tendon 方向、标定方向、磁编码器方向和绳路，确认松绳时关节角度没有反向异常。")
 
         if bitmap & SYSTEM_FAULT_SERVO_OFFLINE:
             titles.append("舵机离线")
@@ -1039,11 +1026,18 @@ class HandGUI(QtWidgets.QMainWindow):
 
         active = bool(lines or bitmap != 0)
         offline_bits = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE
-        offline_only = active and (bitmap & ~offline_bits) == 0 and not overload_items and not release_joints
+        offline_only = active and (bitmap & ~offline_bits) == 0 and not overload_items
+        only_turn_unknown = bool(
+            active and
+            (bitmap & SYSTEM_FAULT_MULTITURN_UNKNOWN) and
+            (bitmap & ~SYSTEM_FAULT_MULTITURN_UNKNOWN) == 0 and
+            not overload_items and
+            not calib_diag.get("active")
+        )
         title = " / ".join(titles[:2]) if titles else "系统状态正常"
         if len(titles) > 2:
             title += f" 等 {len(titles)} 项"
-        key = f"{bitmap:08X}:{overload_mask:08X}:{release_mask:08X}:{unknown_mask:08X}:{calib_diag.get('key', '')}"
+        key = f"{bitmap:08X}:{overload_mask:08X}:{unknown_mask:08X}:{calib_diag.get('key', '')}"
         return {
             "active": active,
             "title": title,
@@ -1052,6 +1046,8 @@ class HandGUI(QtWidgets.QMainWindow):
             "key": key,
             "offline_only": offline_only,
             "bitmap": bitmap,
+            "unknown_mask": unknown_mask,
+            "only_turn_unknown": only_turn_unknown,
         }
 
     @staticmethod
@@ -1093,7 +1089,7 @@ class HandGUI(QtWidgets.QMainWindow):
         summary = self._build_fault_summary(state)
         if not summary.get("active"):
             self._last_overload_popup_mask = 0
-            self._last_fault_popup_key = ""
+            self._fault_popup_episode_active = False
             self._fault_stop_sent = False
             self._fault_previous_runtime_active = bool(runtime_state)
             return
@@ -1113,16 +1109,20 @@ class HandGUI(QtWidgets.QMainWindow):
 
         if not self._fault_popup_allowed(summary, state):
             return
-
-        key = str(summary.get("key") or "")
-        now = time.time()
-        if key == self._last_fault_popup_key:
+        if self._fault_popup_episode_active:
             return
-        if self._fault_dialog_active or (now - self._last_fault_popup_time) < 1.0:
+        if self._fault_dialog_active:
             return
 
-        self._last_fault_popup_key = key
-        self._last_fault_popup_time = now
+        unknown_mask = int(summary.get("unknown_mask", 0) or 0)
+        turn_popup_seen = bool(
+            unknown_mask and self.control_panel.turn_unknown_popup_seen()
+        )
+        self._fault_popup_episode_active = True
+        if summary.get("only_turn_unknown") and turn_popup_seen:
+            return
+        if unknown_mask:
+            self.control_panel.mark_turn_unknown_popup_seen(unknown_mask)
         self._fault_dialog_active = True
         try:
             log_session("FAULT", self._fault_body_text(summary).replace("\n", " | "))
@@ -1138,8 +1138,6 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _on_clear_fault_confirmed(self) -> None:
         self._last_overload_popup_mask = 0
-        self._last_fault_popup_key = ""
-        self._last_fault_popup_time = 0.0
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
 
@@ -1163,12 +1161,6 @@ class HandGUI(QtWidgets.QMainWindow):
             lines.extend(overload_lines)
         elif "OVERLOAD" in sys_faults:
             lines.append("Overload motors: unknown")
-
-        release_lines = self._release_guard_detail_lines(state)
-        if release_lines:
-            lines.append("Release guard joints: " + ", ".join(release_lines))
-        elif "RELEASE" in sys_faults:
-            lines.append("Release guard joints: unknown")
 
         summary = self._build_fault_summary(state)
         if summary.get("active"):
@@ -1215,6 +1207,7 @@ class HandGUI(QtWidgets.QMainWindow):
             5: "READY",
             6: "RUN_DIRECT",
             7: "PAUSED",
+            SYSTEM_STATE_ROPE_INIT_RUNNING: "ROPE_INIT",
         }
         try:
             return names.get(int(value), str(value))
@@ -1233,7 +1226,6 @@ class HandGUI(QtWidgets.QMainWindow):
             (SYSTEM_FAULT_CALIBRATION, "CALIB"),
             (SYSTEM_FAULT_MULTITURN_UNKNOWN, "MULTITURN"),
             (SYSTEM_FAULT_OVERLOAD, "OVERLOAD"),
-            (SYSTEM_FAULT_RELEASE_GUARD, "RELEASE"),
             (SYSTEM_FAULT_JOINT16_DUAL, "J16"),
         ]
         return [name for bit, name in names if (value & bit) != 0]
@@ -1248,19 +1240,33 @@ class HandGUI(QtWidgets.QMainWindow):
         self.joint_plot.raise_()
         self.joint_plot.activateWindow()
 
-    def send_joint_targets(self, angles: List[float], source: str = "", live: bool = False) -> None:
+    def send_joint_targets(
+        self,
+        angles: List[float],
+        source: str = "",
+        live: bool = False,
+        input_space: str = "urdf_deg",
+        raw_targets=None,
+    ):
         guard = getattr(self.control_panel, "feedback_command_allowed", None)
         if callable(guard) and not guard(source=source, show_status=True):
-            return
+            return False
         try:
             self.control_panel._refresh_tendon_guard_from_ui()
         except Exception:
             pass
-        result = self.backend.send_joint_targets(angles, source=source, live=live)
+        result = self.backend.send_joint_targets(
+            angles,
+            source=source,
+            live=live,
+            input_space=input_space,
+            raw_targets=raw_targets,
+        )
         if result.message:
             self._set_status(result.message)
-        if source and not result.blocked:
+        if source and result.sent:
             self.emit_action(source)
+        return result
 
     def _on_joint_target_command(self, payload: Dict[str, object]) -> None:
         if not self._data_logger.is_running():
@@ -1269,9 +1275,12 @@ class HandGUI(QtWidgets.QMainWindow):
         source = str(payload.get("source", ""))
         device_timestamp = payload.get("device_timestamp", "")
         input_targets = payload.get("input_targets", [])
+        raw_input_targets = payload.get("raw_input_targets", input_targets)
         output_targets = payload.get("output_targets", [])
         blocked = payload.get("blocked", [])
         blocked_list = list(blocked) if isinstance(blocked, (list, tuple)) else []
+        clamped = payload.get("clamped", [])
+        clamped_list = list(clamped) if isinstance(clamped, (list, tuple)) else []
         self._data_logger.write(
             "teleop_input",
             {
@@ -1281,6 +1290,11 @@ class HandGUI(QtWidgets.QMainWindow):
                 "frame_id": "",
                 "valid": 1,
                 "latency_ms": "",
+                "input_space": payload.get("input_space", "urdf_deg"),
+                "mapping_id": payload.get("mapping_id", ""),
+                "mapping_version": payload.get("mapping_version", ""),
+                "urdf_config_crc": payload.get("urdf_config_crc", ""),
+                "raw_joint_targets_json": json.dumps(raw_input_targets, ensure_ascii=False, default=str),
                 "joint_targets_json": json.dumps(input_targets, ensure_ascii=False, default=str),
             },
         )
@@ -1294,6 +1308,8 @@ class HandGUI(QtWidgets.QMainWindow):
                 "blocked": 1 if blocked_list else 0,
                 "block_reason": payload.get("message", ""),
                 "sent_to_backend": 1 if payload.get("sent", False) else 0,
+                "output_space": payload.get("output_space", "urdf_deg"),
+                "clamped_joints_json": json.dumps(clamped_list, ensure_ascii=False, default=str),
                 "joint_targets_json": json.dumps(output_targets, ensure_ascii=False, default=str),
             },
         )
@@ -1489,6 +1505,16 @@ class HandGUI(QtWidgets.QMainWindow):
             "active_joint_mask": active_joint_mask,
             "active_require_can": active_require_can,
             "multi_turn_unknown_mask": f"0x{int(getattr(state, 'multi_turn_unknown_bitmap', 0) or 0):08X}",
+            "manual_reference_valid_mask": f"0x{int(getattr(state, 'manual_reference_valid_bitmap', 0) or 0):08X}",
+            "manual_reference_crc": f"0x{int(getattr(state, 'manual_reference_crc', 0) or 0):08X}",
+            "manual_reference_nvs_sequence": int(getattr(state, "manual_reference_nvs_sequence", 0) or 0),
+            "manual_reference_nvs_valid": 1 if getattr(state, "manual_reference_nvs_valid", False) else 0,
+            "manual_reference_save_status": int(
+                getattr(state, "manual_reference_save_status", 0) or 0
+            ),
+            "auto_calibration_valid_mask": (
+                f"0x{int(getattr(state, 'auto_calibration_valid_bitmap', 0) or 0):08X}"
+            ),
             "has_sensor_data": 1 if getattr(state, "has_sensor_data", False) else 0,
             "has_servo_angle_data": 1 if getattr(state, "has_servo_angle_data", False) else 0,
             "has_servo_raw_data": 1 if getattr(state, "has_servo_raw_data", False) else 0,
@@ -1511,9 +1537,6 @@ class HandGUI(QtWidgets.QMainWindow):
                     "joint_target_deg": targets[i] if i < len(targets) else "",
                     "joint_encoder_raw": (
                         getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
-                    ),
-                    "joint_reverse_release_fault": (
-                        1 if i < len(getattr(state, "joint_reverse_release_fault", [])) and state.joint_reverse_release_fault[i] else 0
                     ),
                     "joint_debug_valid": (
                         1 if i < len(getattr(state, "joint_debug_valid", [])) and state.joint_debug_valid[i] else 0
@@ -1995,6 +2018,12 @@ class HandGUI(QtWidgets.QMainWindow):
             return "side_adjust"
         if "new device reset" in lower:
             return "new_device_reset"
+        if "manual" in lower:
+            if "clear" in lower:
+                return "manual_reference_clear"
+            if "refresh" in lower or "read back" in lower:
+                return "manual_reference_refresh"
+            return "manual_reference_write"
         if "calib" in lower or "calibration" in lower:
             return "calibrate"
         if "rope" in lower:

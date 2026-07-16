@@ -3,6 +3,7 @@ import traceback
 from typing import Callable, Optional
 
 from desktop.core.protocol import ENCODER_COUNT
+from desktop.teleop.joint_target_adapter import URDF_DEG
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
@@ -392,8 +393,18 @@ class VisualRetargetingView(QtWidgets.QWidget):
                 else:
                     self._on_status_changed("Teleop send blocked: no joint selected")
                 return
+            result = self.context.send_joint_targets(
+                selected_targets,
+                source="Visual Retargeting",
+                live=True,
+                input_space=URDF_DEG,
+                raw_targets=visual_targets,
+            )
+            if result is False or not bool(getattr(result, "sent", True)):
+                message = str(getattr(result, "message", "") or "")
+                self._on_status_changed(message or "Teleop send blocked by workspace guard")
+                return
             self._last_sent_targets = list(selected_targets)
-            self.context.send_joint_targets(selected_targets, source="Visual Retargeting", live=True)
 
     def _refresh_preview(self) -> None:
         if self._last_frame is None:

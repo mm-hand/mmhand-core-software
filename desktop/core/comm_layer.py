@@ -22,9 +22,9 @@ from .protocol import (
     PACKET_TYPE_CALIB_DIAG,
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_JOINT_DEBUG,
-    PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
+    PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
@@ -55,6 +55,11 @@ from .protocol import (
     build_motor_pos_abs_one_cmd,
     build_motor_pos_sweep_cmd,
     build_multiturn_nvs_control_cmd,
+    build_manual_encoder_reference_cmd,
+    build_clear_manual_encoder_reference_cmd,
+    build_manual_encoder_query_cmd,
+    build_manual_encoder_single_cmd,
+    build_rope_init_cmd,
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
@@ -62,7 +67,6 @@ from .protocol import (
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
-    build_tendon_guard_cmd,
     CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION,
     CMD_CALIB_LOAD_JOINT,
@@ -77,6 +81,10 @@ from .protocol import (
     CMD_RESTORE_MULTITURN,
     CMD_MOTOR_ABS_LIMIT_LOCK,
     CMD_MULTITURN_NVS_CONTROL,
+    CMD_MANUAL_ENCODER_REFERENCE,
+    CMD_MANUAL_ENCODER_QUERY,
+    CMD_MANUAL_ENCODER_SINGLE,
+    CMD_ROPE_INIT,
     CMD_SENSOR_STREAM_MODE,
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_RUN_FEEDBACK,
@@ -88,9 +96,9 @@ from .protocol import (
     parse_calib_diag_packet,
     parse_calib_ack,
     parse_fault_status_packet,
-    parse_release_fault_packet,
     parse_joint_debug_packet,
     parse_joint_calib_snapshot_packet,
+    parse_manual_encoder_reference_packet,
     parse_motor_abs_limit_packet,
     parse_proto_ack,
     parse_sensor_packet,
@@ -1467,6 +1475,8 @@ class LowerComputerComm:
                     model.calib_status = "SUCCESS"
                 elif code == 3:
                     model.calib_status = "FAILED"
+                elif code == 4:
+                    model.calib_status = "WARN"
                 emitted = True
 
             elif pkt_type == 0x03:
@@ -1557,13 +1567,6 @@ class LowerComputerComm:
                     model.fault_status_last_rx_ts = time.time()
                     emitted = True
 
-            elif pkt_type == PACKET_TYPE_RELEASE_FAULT:
-                release_fault_bitmap = parse_release_fault_packet(payload)
-                if release_fault_bitmap is not None:
-                    for i in range(ENCODER_COUNT):
-                        model.joint_reverse_release_fault[i] = ((release_fault_bitmap >> i) & 0x01) != 0
-                    emitted = True
-
             elif pkt_type == PACKET_TYPE_SYSTEM_STATUS:
                 parsed = parse_system_status_packet(payload)
                 if parsed is not None:
@@ -1594,6 +1597,26 @@ class LowerComputerComm:
                         multiturn_nvs_save_valid_mask,
                         multiturn_nvs_save_fail_count,
                         has_multiturn_nvs_status,
+                        manual_reference_valid_bitmap,
+                        manual_reference_crc,
+                        manual_reference_nvs_sequence,
+                        manual_reference_nvs_valid,
+                        has_manual_reference_status,
+                        auto_calibration_valid_bitmap,
+                        manual_reference_save_status,
+                        has_manual_v2_status,
+                        rope_init_status,
+                        rope_init_reason,
+                        rope_init_sequence,
+                        rope_init_joint_mask,
+                        rope_init_timestamp_ms,
+                        pending_direct_generation,
+                        applied_direct_generation,
+                        direct_reject_reason,
+                        has_motion_result_status,
+                        calibration_warning_bitmap,
+                        calibration_auto_min_offset_counts,
+                        has_calibration_warning_status,
                     ) = parsed
                     model.system_state = int(system_state)
                     model.control_enabled = bool(control_enabled)
@@ -1609,6 +1632,28 @@ class LowerComputerComm:
                     model.multiturn_nvs_save_valid_mask = int(multiturn_nvs_save_valid_mask)
                     model.multiturn_nvs_save_fail_count = int(multiturn_nvs_save_fail_count)
                     model.has_multiturn_nvs_status = bool(has_multiturn_nvs_status)
+                    model.manual_reference_valid_bitmap = int(manual_reference_valid_bitmap)
+                    model.manual_reference_crc = int(manual_reference_crc)
+                    model.manual_reference_nvs_sequence = int(manual_reference_nvs_sequence)
+                    model.manual_reference_nvs_valid = bool(manual_reference_nvs_valid)
+                    model.has_manual_reference_status = bool(has_manual_reference_status)
+                    if has_manual_v2_status:
+                        model.auto_calibration_valid_bitmap = int(
+                            auto_calibration_valid_bitmap
+                        )
+                        model.manual_reference_save_status = int(
+                            manual_reference_save_status
+                        )
+                    if has_motion_result_status:
+                        model.rope_init_status = int(rope_init_status)
+                        model.rope_init_reason = int(rope_init_reason)
+                        model.rope_init_sequence = int(rope_init_sequence)
+                        model.rope_init_joint_mask = int(rope_init_joint_mask)
+                        model.rope_init_timestamp_ms = int(rope_init_timestamp_ms)
+                        model.pending_direct_generation = int(pending_direct_generation)
+                        model.applied_direct_generation = int(applied_direct_generation)
+                        model.direct_reject_reason = int(direct_reject_reason)
+                        model.has_motion_result_status = True
                     model.active_motor_mask = int(active_motor_mask)
                     model.active_joint_mask = int(active_joint_mask)
                     model.require_can_feedback = bool(require_can_feedback)
@@ -1620,6 +1665,15 @@ class LowerComputerComm:
                     model.can_link_online = bool(can_link_online)
                     model.has_connectivity_status = bool(has_connectivity_status)
                     model.has_encoder_health_status = bool(has_encoder_health_status)
+                    model.calibration_warning_bitmap = int(
+                        calibration_warning_bitmap
+                    )
+                    model.calibration_auto_min_offset_counts = list(
+                        calibration_auto_min_offset_counts
+                    )
+                    model.has_calibration_warning_status = bool(
+                        has_calibration_warning_status
+                    )
                     model.has_system_status_data = True
                     model.system_status_last_rx_ts = time.time()
                     if calib_status == 0:
@@ -1641,6 +1695,8 @@ class LowerComputerComm:
                         model.calib_status = "SUCCESS"
                     elif calib_status == 3:
                         model.calib_status = "FAILED"
+                    elif calib_status == 4:
+                        model.calib_status = "WARN"
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_MOTOR_ABS_LIMIT:
@@ -1652,6 +1708,31 @@ class LowerComputerComm:
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.motor_abs_limit_min[i] = int(mins[i])
                         model.motor_abs_limit_max[i] = int(maxs[i])
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_MANUAL_ENCODER_REFERENCE:
+                parsed = parse_manual_encoder_reference_packet(payload)
+                if parsed is not None:
+                    model.manual_reference_valid_bitmap = int(parsed["valid_bitmap"])
+                    model.manual_reference_crc = int(parsed["reference_crc"])
+                    model.manual_reference_nvs_sequence = int(parsed["nvs_sequence"])
+                    model.manual_reference_nvs_valid = bool(parsed["nvs_valid"])
+                    model.auto_calibration_valid_bitmap = int(
+                        parsed.get("auto_valid_bitmap", 0)
+                    )
+                    model.manual_reference_save_status = int(
+                        parsed.get("save_status", 0)
+                    )
+                    model.manual_reference_last_rx_time = time.time()
+                    model.has_manual_reference_status = True
+                    model.manual_reference_min_raw = list(parsed["min_raw"])
+                    model.manual_reference_max_raw = list(parsed["max_raw"])
+                    model.manual_reference_encoder_directions = list(
+                        parsed.get("encoder_directions", [0] * ENCODER_COUNT)
+                    )
+                    model.has_manual_reference_encoder_directions = bool(
+                        parsed.get("has_encoder_directions", False)
+                    )
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_JOINT_CALIB_SNAPSHOT:
@@ -1807,6 +1888,8 @@ class LowerComputerComm:
                         CMD_RESTORE_MULTITURN,
                         CMD_MOTOR_ABS_LIMIT_LOCK,
                         CMD_MULTITURN_NVS_CONTROL,
+                        CMD_MANUAL_ENCODER_REFERENCE,
+                        CMD_MANUAL_ENCODER_SINGLE,
                         CMD_CLEAR_CALIBRATION,
                     ) and status == PROTO_ACK_STATUS_OK:
                         model.system_state = int(applied_mode)
@@ -1840,6 +1923,14 @@ class LowerComputerComm:
                             pass
                         elif ack_cmd == CMD_MULTITURN_NVS_CONTROL:
                             pass
+                        elif ack_cmd in (
+                            CMD_MANUAL_ENCODER_REFERENCE,
+                            CMD_MANUAL_ENCODER_SINGLE,
+                        ):
+                            model.calib_status = "IDLE"
+                            model.motor_abs_limit_valid_bitmap = 0
+                            model.motor_abs_limit_locked_bitmap = 0
+                            model.joint_calib_results = [None] * ENCODER_COUNT
                         elif ack_cmd == CMD_CLEAR_CALIBRATION:
                             model.calib_status = "IDLE"
                             model.motor_abs_limit_valid_bitmap = 0
@@ -1866,13 +1957,15 @@ class LowerComputerComm:
         if not isinstance(result, dict) or not bool(result.get("success", False)):
             return False
         try:
+            angle_min = float(result.get("angleMin", 0.0) or 0.0)
             angle_max = float(result.get("angleMax", 0.0) or 0.0)
         except (TypeError, ValueError):
             return False
-        if not np.isfinite(angle_max) or angle_max <= 0.0:
+        if not np.isfinite(angle_min) or not np.isfinite(angle_max) or angle_min >= angle_max:
             return False
+        min_count = int(round(angle_min * MAPPED_ANGLE_COUNTS_PER_DEG))
         max_count = int(round(angle_max * MAPPED_ANGLE_COUNTS_PER_DEG))
-        return int(value) < 0 or int(value) > max_count
+        return int(value) < min_count or int(value) > max_count
 
     @staticmethod
     def _apply_connectivity_visibility(model: HandModel) -> None:
@@ -2078,6 +2171,16 @@ class LowerComputerComm:
             return build_clear_calibration_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":
+            return build_manual_encoder_reference_cmd(cmd[1], cmd[2])
+        if cmd == "clear_manual_encoder_reference":
+            return build_clear_manual_encoder_reference_cmd()
+        if cmd == "query_manual_encoder_reference":
+            return build_manual_encoder_query_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
+            return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":
+            return build_rope_init_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
             return build_motor_pos_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":
@@ -2092,8 +2195,6 @@ class LowerComputerComm:
             return build_stream_mode_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "local_test_params":
             return build_local_test_params_cmd(cmd[1], cmd[2])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "tendon_guard":
-            return build_tendon_guard_cmd(cmd[1])
         if cmd == "local_test_start":
             return build_local_test_start_cmd()
         if cmd == "local_test_stop":

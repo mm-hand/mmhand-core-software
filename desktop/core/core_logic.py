@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 from desktop.paths import PACKAGE_DIR
 
+from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .comm_layer import LowerComputerComm, list_ports
 from .data_models import HandModel
 from .hand_geometry import load_calib_zero_raw
@@ -20,6 +21,10 @@ from .protocol import (
     CMD_CALIB_LOAD_LIMITS,
     CMD_MOTOR_ABS_LIMIT_LOCK,
     CMD_MULTITURN_NVS_CONTROL,
+    CMD_MANUAL_ENCODER_REFERENCE,
+    CMD_MANUAL_ENCODER_QUERY,
+    CMD_MANUAL_ENCODER_SINGLE,
+    CMD_ROPE_INIT,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     DUAL_TENDON_JOINT_INDICES,
@@ -34,6 +39,8 @@ from .protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_PAUSED,
+    manual_encoder_reference_crc,
+    manual_encoder_reference_entry_crc,
 )
 from .session_log import log_session
 
@@ -50,6 +57,7 @@ NEW_DEVICE_RESET_SETTLE_S = 0.30
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
+MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
 MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S = 2.0
@@ -621,10 +629,6 @@ class HandController:
         if self.comm:
             self.comm.send_command(("local_test_params", freq_hz, amplitude_deg))
 
-    def set_tendon_guard_config(self, config: List[Tuple[bool, int, int]]) -> None:
-        if self.comm:
-            self.comm.send_command(("tendon_guard", config))
-
     def start_local_test(self):
         """开始本地测试模式"""
         if self.comm:
@@ -666,6 +670,201 @@ class HandController:
         # RUN_FEEDBACK admission and keeps all firmware-side safety checks.
         self.comm.send_command("run_feedback")
         return True
+
+    def set_manual_encoder_references(
+        self,
+        manual_min_raw: List[int],
+        manual_max_raw: List[int],
+    ) -> bool:
+        """Persist all 21 Manual endpoint pairs and verify the P4 readback."""
+        if not self.comm:
+            return False
+        sent_at = time.time()
+        self.comm.send_command((
+            "manual_encoder_reference",
+            list(manual_min_raw),
+            list(manual_max_raw),
+        ))
+        ack = self.comm.wait_for_ack(
+            CMD_MANUAL_ENCODER_REFERENCE,
+            MANUAL_REFERENCE_ACK_TIMEOUT_S,
+            received_after=sent_at,
+        )
+        if ack is None or int(ack[2]) != 0:
+            return False
+        expected_mask = (1 << ENCODER_COUNT) - 1
+        expected_crc = manual_encoder_reference_crc(
+            manual_min_raw, manual_max_raw
+        )
+        return self._verify_manual_encoder_readback(
+            expected_mask,
+            list(manual_min_raw),
+            list(manual_max_raw),
+            expected_crc,
+        )
+
+    def query_manual_encoder_references(self, timeout_s: float = 2.0) -> bool:
+        if not self.comm:
+            return False
+        sent_at = time.time()
+        self.comm.send_command("query_manual_encoder_reference")
+        ack = self.comm.wait_for_ack(
+            CMD_MANUAL_ENCODER_QUERY,
+            timeout_s,
+            received_after=sent_at,
+        )
+        if ack is None or int(ack[2]) != 0:
+            return False
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            with self.state_lock:
+                received_at = float(
+                    getattr(
+                        self.current_state,
+                        "manual_reference_last_rx_time",
+                        0.0,
+                    )
+                    or 0.0
+                )
+            if received_at >= sent_at:
+                return True
+            time.sleep(0.01)
+        return False
+
+    def _verify_manual_encoder_readback(
+        self,
+        expected_mask: int,
+        expected_min: List[int],
+        expected_max: List[int],
+        expected_crc: int,
+    ) -> bool:
+        if not self.query_manual_encoder_references(
+            MANUAL_REFERENCE_ACK_TIMEOUT_S
+        ):
+            return False
+        with self.state_lock:
+            state = self.current_state
+            actual_mask = int(
+                getattr(state, "manual_reference_valid_bitmap", 0) or 0
+            )
+            actual_crc = int(
+                getattr(state, "manual_reference_crc", 0) or 0
+            )
+            actual_min = list(
+                getattr(state, "manual_reference_min_raw", []) or []
+            )
+            actual_max = list(
+                getattr(state, "manual_reference_max_raw", []) or []
+            )
+            nvs_valid = bool(
+                getattr(state, "manual_reference_nvs_valid", False)
+            )
+            save_status = int(
+                getattr(state, "manual_reference_save_status", 0) or 0
+            )
+        if actual_mask != (int(expected_mask) & ((1 << ENCODER_COUNT) - 1)):
+            return False
+        if actual_crc != (int(expected_crc) & 0xFFFFFFFF):
+            return False
+        if not nvs_valid or save_status != 1:
+            return False
+        if len(actual_min) != ENCODER_COUNT or len(actual_max) != ENCODER_COUNT:
+            return False
+        for joint in range(ENCODER_COUNT):
+            if (actual_mask & (1 << joint)) == 0:
+                continue
+            if int(actual_min[joint]) != int(expected_min[joint]):
+                return False
+            if int(actual_max[joint]) != int(expected_max[joint]):
+                return False
+        return True
+
+    def set_manual_encoder_reference(
+        self, joint: int, manual_min_raw: int, manual_max_raw: int
+    ) -> bool:
+        """Write one joint while preserving all existing Manual entries."""
+        joint = int(joint)
+        if not 0 <= joint < ENCODER_COUNT or not self.comm:
+            return False
+        if not self.query_manual_encoder_references(
+            MANUAL_REFERENCE_ACK_TIMEOUT_S
+        ):
+            return False
+        with self.state_lock:
+            state = self.current_state
+            expected_mask = int(
+                getattr(state, "manual_reference_valid_bitmap", 0) or 0
+            ) | (1 << joint)
+            expected_min = list(
+                getattr(state, "manual_reference_min_raw", [0] * ENCODER_COUNT)
+            )
+            expected_max = list(
+                getattr(state, "manual_reference_max_raw", [0] * ENCODER_COUNT)
+            )
+        if len(expected_min) != ENCODER_COUNT or len(expected_max) != ENCODER_COUNT:
+            return False
+        expected_min[joint] = int(manual_min_raw)
+        expected_max[joint] = int(manual_max_raw)
+        sent_at = time.time()
+        self.comm.send_command((
+            "manual_encoder_single",
+            joint,
+            int(manual_min_raw),
+            int(manual_max_raw),
+        ))
+        ack = self.comm.wait_for_ack(
+            CMD_MANUAL_ENCODER_SINGLE,
+            MANUAL_REFERENCE_ACK_TIMEOUT_S,
+            received_after=sent_at,
+        )
+        if ack is None or int(ack[2]) != 0:
+            return False
+        expected_crc = manual_encoder_reference_crc(expected_min, expected_max)
+        return self._verify_manual_encoder_readback(
+            expected_mask,
+            expected_min,
+            expected_max,
+            expected_crc,
+        )
+
+    def rope_init(self, active_joint_mask: int) -> bool:
+        if not self.comm:
+            return False
+        sent_at = time.time()
+        self.comm.send_command(("rope_init", int(active_joint_mask)))
+        ack = self.comm.wait_for_ack(
+            CMD_ROPE_INIT,
+            MANUAL_REFERENCE_ACK_TIMEOUT_S,
+            received_after=sent_at,
+        )
+        return bool(ack is not None and int(ack[2]) in (0, 2))
+
+    def clear_manual_encoder_references(self) -> bool:
+        """Clear both Manual NVS slots and close the firmware motion gate."""
+        if not self.comm:
+            return False
+        sent_at = time.time()
+        self.comm.send_command("clear_manual_encoder_reference")
+        ack = self.comm.wait_for_ack(
+            CMD_MANUAL_ENCODER_REFERENCE,
+            MANUAL_REFERENCE_ACK_TIMEOUT_S,
+            received_after=sent_at,
+        )
+        if ack is None or int(ack[2]) != 0:
+            return False
+        if not self.query_manual_encoder_references(
+            MANUAL_REFERENCE_ACK_TIMEOUT_S
+        ):
+            return False
+        with self.state_lock:
+            state = self.current_state
+            return (
+                int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
+                == 0
+                and not bool(
+                    getattr(state, "manual_reference_nvs_valid", False)
+                )
+            )
 
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
         if not self.comm:
@@ -776,6 +975,13 @@ class HandController:
             raw_positions = list(getattr(state, "servo_raw_positions", []) or [])
             raw_online = list(getattr(state, "servo_raw_online", []) or [])
             flash_was_enabled = bool(getattr(state, "multiturn_nvs_enabled", True))
+            unknown_mask = (
+                int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+                & ((1 << MOTOR_COUNT) - 1)
+            )
+
+        if unknown_mask == 0:
+            return False, "all motor turns are already trusted; New Device Reset is not allowed"
 
         if not has_raw:
             return False, "waiting for servo raw feedback"
@@ -922,6 +1128,79 @@ class HandController:
         if missing_joints:
             missing_text = ",".join(f"J{idx:02d}" for idx in missing_joints)
             return False, f"snapshot missing active joint calibration: {missing_text}"
+        try:
+            expected_mapping_version, expected_urdf_crc = (
+                urdf_manual_scaled_mapping_metadata()
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return False, f"current URDF mapping is invalid: {exc}"
+        incompatible_mapping = [
+            joint_idx for joint_idx in range(ENCODER_COUNT)
+            if (active_joint_mask & (1 << joint_idx)) and (
+                int(joint_results[joint_idx].get("mappingVersion", 0) or 0)
+                != expected_mapping_version
+                or int(joint_results[joint_idx].get("urdfConfigCrc", 0) or 0)
+                != expected_urdf_crc
+            )
+        ]
+        if incompatible_mapping:
+            mapping_text = ",".join(f"J{idx:02d}" for idx in incompatible_mapping)
+            return False, (
+                f"snapshot URDF mapping mismatch: {mapping_text}; "
+                f"expected v{expected_mapping_version}/0x{expected_urdf_crc:08X}"
+            )
+
+        if not self.query_manual_encoder_references(
+            MANUAL_REFERENCE_ACK_TIMEOUT_S
+        ):
+            return False, "failed to read current Manual references from P4"
+        with self.state_lock:
+            local_manual_mask = int(
+                getattr(self.current_state, "manual_reference_valid_bitmap", 0)
+                or 0
+            )
+            local_manual_min = list(
+                getattr(self.current_state, "manual_reference_min_raw", []) or []
+            )
+            local_manual_max = list(
+                getattr(self.current_state, "manual_reference_max_raw", []) or []
+            )
+            local_manual_nvs_valid = bool(
+                getattr(self.current_state, "manual_reference_nvs_valid", False)
+            )
+        if not local_manual_nvs_valid:
+            return False, "P4 Manual references are not persisted"
+        if (local_manual_mask & active_joint_mask) != active_joint_mask:
+            missing_mask = active_joint_mask & ~local_manual_mask
+            missing_text = ",".join(
+                f"J{idx:02d}"
+                for idx in range(ENCODER_COUNT)
+                if missing_mask & (1 << idx)
+            )
+            return False, f"P4 Manual references missing active joints: {missing_text}"
+        if (
+            len(local_manual_min) < ENCODER_COUNT
+            or len(local_manual_max) < ENCODER_COUNT
+        ):
+            return False, "P4 Manual endpoint readback is incomplete"
+        mismatched_manual_crc = [
+            joint_idx for joint_idx in range(ENCODER_COUNT)
+            if (active_joint_mask & (1 << joint_idx)) and
+            int(joint_results[joint_idx].get("manualReferenceCrc", 0) or 0)
+            != manual_encoder_reference_entry_crc(
+                joint_idx,
+                local_manual_min[joint_idx],
+                local_manual_max[joint_idx],
+            )
+        ]
+        if mismatched_manual_crc:
+            mismatch_text = ",".join(
+                f"J{idx:02d}" for idx in mismatched_manual_crc
+            )
+            return False, (
+                f"snapshot Manual CRC mismatch: {mismatch_text}; "
+                "re-run automatic calibration for these joints"
+            )
         missing_dual_lut = [
             joint_idx for joint_idx in range(ENCODER_COUNT)
             if (active_joint_mask & (1 << joint_idx)) and

@@ -1,11 +1,16 @@
 # data_models.py - 灵巧手数据模型（状态与控制合一）
 
 from dataclasses import dataclass, field
+import math
 from typing import List, Optional, Tuple, NamedTuple
 import numpy as np
 from enum import Enum
 
-from .protocol import ENCODER_COUNT, MOTOR_COUNT
+from .protocol import (
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    manual_encoder_reference_entry_crc,
+)
 
 # 角度 → 度 转换因子 (14 位编码器 16384 = 360°)
 RAW_TO_DEG = 360.0 / 16384.0
@@ -384,7 +389,7 @@ class JointEncoder:
     error: bool = False       # 传感器/读数异常
     angle_error: bool = True  # mapped angle packet validity; not overwritten by health status
     raw_error: bool = True    # raw encoder packet validity; not overwritten by health status
-    angle_out_of_workspace: bool = False  # mapped angle is live but outside calibrated [0, angleMax]
+    angle_out_of_workspace: bool = False  # live mapped angle is outside calibrated URDF interval
 
     @property
     def current_angle_deg(self) -> float:
@@ -411,6 +416,134 @@ def _default_motors() -> List[MotorSlot]:
     return [MotorSlot(motor_id=i) for i in range(MOTOR_COUNT)]
 
 
+@dataclass(frozen=True)
+class JointWorkspaceRange:
+    """Validated host-side view of one joint's v3 control workspace."""
+
+    joint_index: int
+    urdf_min_deg: float
+    urdf_max_deg: float
+    current_min_deg: Optional[float]
+    current_max_deg: float
+    manual_valid: bool
+    auto_valid: bool
+    manual_crc_match: bool
+    mapping_valid: bool
+    ready: bool
+    reason: str = ""
+
+    def clamp(self, value: float) -> float:
+        if not self.ready or self.current_min_deg is None:
+            raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
+        target = float(value)
+        if not math.isfinite(target):
+            target = self.current_min_deg
+        return max(self.current_min_deg, min(self.current_max_deg, target))
+
+
+def resolve_joint_workspace_range(
+    model: Optional["HandModel"],
+    joint_index: int,
+    urdf_min_deg: float,
+    urdf_max_deg: float,
+    expected_mapping_version: int,
+    expected_urdf_crc: int,
+) -> JointWorkspaceRange:
+    """Resolve dynamic Min and static URDF Max without accepting legacy mappings."""
+
+    idx = int(joint_index)
+    urdf_min = float(urdf_min_deg)
+    urdf_max = float(urdf_max_deg)
+    base = dict(
+        joint_index=idx,
+        urdf_min_deg=urdf_min,
+        urdf_max_deg=urdf_max,
+        current_min_deg=None,
+        current_max_deg=urdf_max,
+        manual_valid=False,
+        auto_valid=False,
+        manual_crc_match=False,
+        mapping_valid=False,
+        ready=False,
+    )
+    if model is None or idx < 0 or idx >= ENCODER_COUNT:
+        return JointWorkspaceRange(**base, reason="state unavailable")
+    if not math.isfinite(urdf_min) or not math.isfinite(urdf_max) or urdf_min >= urdf_max:
+        return JointWorkspaceRange(**base, reason="invalid URDF range")
+
+    bit = 1 << idx
+    manual_valid = bool(
+        getattr(model, "manual_reference_nvs_valid", False)
+        and (int(getattr(model, "manual_reference_valid_bitmap", 0) or 0) & bit)
+    )
+    auto_valid = bool(int(getattr(model, "auto_calibration_valid_bitmap", 0) or 0) & bit)
+    base["manual_valid"] = manual_valid
+    base["auto_valid"] = auto_valid
+    if not manual_valid:
+        return JointWorkspaceRange(**base, reason="Manual reference missing")
+    if not auto_valid:
+        return JointWorkspaceRange(**base, reason="Auto calibration missing")
+
+    results = list(getattr(model, "joint_calib_results", []) or [])
+    result = results[idx] if idx < len(results) else None
+    if not isinstance(result, dict) or not bool(result.get("success", False)):
+        return JointWorkspaceRange(**base, reason="v3 calibration result missing")
+    if not bool(result.get("hasManualScaledV3Fields", False)):
+        return JointWorkspaceRange(**base, reason="v3 calibration fields missing")
+    try:
+        mapping_version = int(result.get("mappingVersion", 0) or 0)
+        mapping_crc = int(result.get("urdfConfigCrc", 0) or 0)
+        result_manual_crc = int(result.get("manualReferenceCrc", 0) or 0)
+        current_min = float(result.get("currentMinDeg"))
+        reported_current_max = float(result.get("currentMaxDeg"))
+        angle_min = float(result.get("angleMin"))
+        angle_max = float(result.get("angleMax"))
+    except (TypeError, ValueError):
+        return JointWorkspaceRange(**base, reason="invalid v3 calibration fields")
+
+    manual_min_values = list(
+        getattr(model, "manual_reference_min_raw", []) or []
+    )
+    manual_max_values = list(
+        getattr(model, "manual_reference_max_raw", []) or []
+    )
+    try:
+        manual_entry_crc = manual_encoder_reference_entry_crc(
+            idx,
+            manual_min_values[idx],
+            manual_max_values[idx],
+        )
+    except (IndexError, TypeError, ValueError):
+        return JointWorkspaceRange(**base, reason="Manual endpoint data missing")
+    manual_crc_match = result_manual_crc == manual_entry_crc
+    mapping_valid = (
+        int(expected_mapping_version) == 3
+        and mapping_version == 3
+        and mapping_crc == (int(expected_urdf_crc) & 0xFFFFFFFF)
+    )
+    base["manual_crc_match"] = manual_crc_match
+    base["mapping_valid"] = mapping_valid
+    if not mapping_valid:
+        return JointWorkspaceRange(**base, reason="URDF mapping version/CRC mismatch")
+    if not manual_crc_match:
+        return JointWorkspaceRange(**base, reason="Manual CRC mismatch")
+    if (
+        not math.isfinite(current_min)
+        or not math.isfinite(reported_current_max)
+        or not math.isfinite(angle_min)
+        or not math.isfinite(angle_max)
+        or current_min >= urdf_max
+        or abs(reported_current_max - urdf_max) > 0.01
+        or abs(angle_min - current_min) > 0.01
+        or abs(angle_max - urdf_max) > 0.01
+    ):
+        return JointWorkspaceRange(**base, reason="invalid dynamic Min or non-static Max")
+
+    base["current_min_deg"] = current_min
+    base["ready"] = True
+    return JointWorkspaceRange(**base)
+
+
 @dataclass
 class HandModel:
     """
@@ -433,7 +566,7 @@ class HandModel:
     tactile_last_rx_ts: float = 0.0
     tactile_module_online: List[bool] = field(default_factory=lambda: [False] * (5 * TACTILE_SENSORS_PER_FINGER))
     tactile_module_last_rx_ts: List[float] = field(default_factory=lambda: [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
-    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, FAILED
+    calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, WARN, FAILED
     timestamp: float = 0.0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
@@ -459,6 +592,27 @@ class HandModel:
     multiturn_nvs_save_valid_mask: int = 0
     multiturn_nvs_save_fail_count: int = 0
     has_multiturn_nvs_status: bool = False
+    manual_reference_valid_bitmap: int = 0
+    manual_reference_crc: int = 0
+    manual_reference_nvs_sequence: int = 0
+    manual_reference_nvs_valid: bool = False
+    manual_reference_save_status: int = 0
+    auto_calibration_valid_bitmap: int = 0
+    rope_init_status: int = 0
+    rope_init_reason: int = 0
+    rope_init_sequence: int = 0
+    rope_init_joint_mask: int = 0
+    rope_init_timestamp_ms: int = 0
+    pending_direct_generation: int = 0
+    applied_direct_generation: int = 0
+    direct_reject_reason: int = 0
+    has_motion_result_status: bool = False
+    manual_reference_last_rx_time: float = 0.0
+    has_manual_reference_status: bool = False
+    manual_reference_min_raw: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
+    manual_reference_max_raw: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
+    manual_reference_encoder_directions: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
+    has_manual_reference_encoder_directions: bool = False
     has_active_scope_status: bool = False
     active_motor_mask: int = 0
     active_joint_mask: int = 0
@@ -469,6 +623,11 @@ class HandModel:
     encoder_warn_bitmap: int = 0
     encoder_fault_bitmap: int = 0
     has_encoder_health_status: bool = False
+    calibration_warning_bitmap: int = 0
+    calibration_auto_min_offset_counts: List[int] = field(
+        default_factory=lambda: [0] * ENCODER_COUNT
+    )
+    has_calibration_warning_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
@@ -507,8 +666,6 @@ class HandModel:
     # 伺服过载保护锁存状态（来自 PACKET_TYPE_FAULT_STATUS，按 motor channel 位图映射）
     servo_overload_fault: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     servo_overload_trigger_load: List[Optional[int]] = field(default_factory=lambda: [None] * MOTOR_COUNT)
-    # 关节反绕保护锁存状态（来自 PACKET_TYPE_RELEASE_FAULT，按 joint index 位图映射）
-    joint_reverse_release_fault: List[bool] = field(default_factory=lambda: [False] * ENCODER_COUNT)
 
     # 关节调试信息（来自 PACKET_TYPE_JOINT_DEBUG）
     joint_debug_valid: List[bool] = field(default_factory=lambda: [False] * ENCODER_COUNT)
@@ -577,7 +734,6 @@ class HandModel:
         self.servo_telem_online = list(other.servo_telem_online)
         self.servo_overload_fault = list(other.servo_overload_fault)
         self.servo_overload_trigger_load = list(getattr(other, "servo_overload_trigger_load", [None] * MOTOR_COUNT))
-        self.joint_reverse_release_fault = list(other.joint_reverse_release_fault)
         # 复制关节调试信息
         self.joint_debug_valid = list(other.joint_debug_valid)
         self.joint_debug_target_deg = list(other.joint_debug_target_deg)
@@ -611,6 +767,49 @@ class HandModel:
         self.multiturn_nvs_save_valid_mask = int(getattr(other, "multiturn_nvs_save_valid_mask", 0) or 0)
         self.multiturn_nvs_save_fail_count = int(getattr(other, "multiturn_nvs_save_fail_count", 0) or 0)
         self.has_multiturn_nvs_status = bool(getattr(other, "has_multiturn_nvs_status", False))
+        self.manual_reference_valid_bitmap = int(getattr(other, "manual_reference_valid_bitmap", 0) or 0)
+        self.manual_reference_crc = int(getattr(other, "manual_reference_crc", 0) or 0)
+        self.manual_reference_nvs_sequence = int(getattr(other, "manual_reference_nvs_sequence", 0) or 0)
+        self.manual_reference_nvs_valid = bool(getattr(other, "manual_reference_nvs_valid", False))
+        self.manual_reference_save_status = int(
+            getattr(other, "manual_reference_save_status", 0) or 0
+        )
+        self.auto_calibration_valid_bitmap = int(
+            getattr(other, "auto_calibration_valid_bitmap", 0) or 0
+        )
+        self.rope_init_status = int(getattr(other, "rope_init_status", 0) or 0)
+        self.rope_init_reason = int(getattr(other, "rope_init_reason", 0) or 0)
+        self.rope_init_sequence = int(getattr(other, "rope_init_sequence", 0) or 0)
+        self.rope_init_joint_mask = int(getattr(other, "rope_init_joint_mask", 0) or 0)
+        self.rope_init_timestamp_ms = int(
+            getattr(other, "rope_init_timestamp_ms", 0) or 0
+        )
+        self.pending_direct_generation = int(
+            getattr(other, "pending_direct_generation", 0) or 0
+        )
+        self.applied_direct_generation = int(
+            getattr(other, "applied_direct_generation", 0) or 0
+        )
+        self.direct_reject_reason = int(getattr(other, "direct_reject_reason", 0) or 0)
+        self.has_motion_result_status = bool(
+            getattr(other, "has_motion_result_status", False)
+        )
+        self.manual_reference_last_rx_time = float(
+            getattr(other, "manual_reference_last_rx_time", 0.0) or 0.0
+        )
+        self.has_manual_reference_status = bool(getattr(other, "has_manual_reference_status", False))
+        self.manual_reference_min_raw = list(
+            getattr(other, "manual_reference_min_raw", [0] * ENCODER_COUNT)
+        )
+        self.manual_reference_max_raw = list(
+            getattr(other, "manual_reference_max_raw", [0] * ENCODER_COUNT)
+        )
+        self.manual_reference_encoder_directions = list(
+            getattr(other, "manual_reference_encoder_directions", [0] * ENCODER_COUNT)
+        )
+        self.has_manual_reference_encoder_directions = bool(
+            getattr(other, "has_manual_reference_encoder_directions", False)
+        )
         self.has_active_scope_status = bool(getattr(other, "has_active_scope_status", False))
         self.active_motor_mask = int(getattr(other, "active_motor_mask", 0) or 0)
         self.active_joint_mask = int(getattr(other, "active_joint_mask", 0) or 0)
@@ -621,6 +820,15 @@ class HandModel:
         self.encoder_warn_bitmap = int(getattr(other, "encoder_warn_bitmap", 0) or 0)
         self.encoder_fault_bitmap = int(getattr(other, "encoder_fault_bitmap", 0) or 0)
         self.has_encoder_health_status = bool(getattr(other, "has_encoder_health_status", False))
+        self.calibration_warning_bitmap = int(
+            getattr(other, "calibration_warning_bitmap", 0) or 0
+        )
+        self.calibration_auto_min_offset_counts = list(
+            getattr(other, "calibration_auto_min_offset_counts", [0] * ENCODER_COUNT)
+        )
+        self.has_calibration_warning_status = bool(
+            getattr(other, "has_calibration_warning_status", False)
+        )
         self.can_link_online = bool(getattr(other, "can_link_online", False))
         self.has_fault_status_data = bool(getattr(other, "has_fault_status_data", False))
         self.fault_status_last_rx_ts = float(getattr(other, "fault_status_last_rx_ts", 0.0) or 0.0)

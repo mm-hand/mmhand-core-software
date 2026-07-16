@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 import threading
 import time
 from typing import Callable, Iterable, Optional
 
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import ControlMode, ENCODER_COUNT
+from desktop.core.protocol import ControlMode
+from desktop.teleop.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 
@@ -18,6 +18,7 @@ DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 class Ros2JointTargetConfig:
     topic: str = DEFAULT_JOINT_TARGET_TOPIC
     auto_start: bool = False
+    input_space: str = URDF_DEG
 
 
 class JointTargetCommandHandler:
@@ -29,12 +30,14 @@ class JointTargetCommandHandler:
         *,
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
+        input_space: str = URDF_DEG,
         warning_sink: Optional[Callable[[str], None]] = None,
         warn_interval_s: float = 1.0,
     ) -> None:
         self.backend = backend
         self.topic = topic
         self.auto_start = bool(auto_start)
+        self.input_space = str(input_space)
         self.warning_sink = warning_sink or print
         self.warn_interval_s = float(warn_interval_s)
         self._last_warn_ts = 0.0
@@ -45,29 +48,29 @@ class JointTargetCommandHandler:
 
     def handle_values(self, values: Iterable[float]) -> bool:
         try:
-            targets = [float(v) for v in values]
-        except (TypeError, ValueError):
-            self._warn("ignored ROS2 joint target: data must be numeric")
-            return False
-        if len(targets) != ENCODER_COUNT:
-            self._warn(
-                f"ignored ROS2 joint target: expected {ENCODER_COUNT} values, got {len(targets)}"
-            )
-            return False
-        if not all(math.isfinite(v) for v in targets):
-            self._warn("ignored ROS2 joint target: values must be finite")
+            adaptation = adapt_joint_targets(values, source_space=self.input_space)
+        except (TypeError, ValueError) as exc:
+            self._warn(f"ignored ROS2 joint target: {exc}")
             return False
 
         self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-        if self.auto_start and not self._auto_started:
-            self.backend.start()
-            self._auto_started = True
-        self.backend.send_joint_targets(
-            targets,
+        result = self.backend.send_joint_targets(
+            adaptation.urdf_targets_deg,
             source=f"ROS2:{self.topic}",
             live=True,
+            input_space=adaptation.source_space,
+            raw_targets=adaptation.source_targets,
         )
-        return True
+        sent = bool(getattr(result, "sent", True))
+        message = str(getattr(result, "message", "") or "")
+        if message:
+            self._warn(message)
+        if not sent and not message:
+            self._warn(f"ignored ROS2 joint target on {self.topic}: backend rejected frame")
+        if sent and self.auto_start and not self._auto_started:
+            self.backend.start()
+            self._auto_started = True
+        return sent
 
     def _warn(self, text: str) -> None:
         now = time.time()
@@ -87,11 +90,12 @@ class Ros2JointTargetBridge:
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
     ) -> None:
-        self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start)
+        self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=URDF_DEG)
         self.handler = JointTargetCommandHandler(
             backend,
             topic=self.config.topic,
             auto_start=self.config.auto_start,
+            input_space=self.config.input_space,
             warning_sink=self._warn,
         )
         self._thread: Optional[threading.Thread] = None

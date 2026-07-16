@@ -59,8 +59,21 @@ class HandGuiContext:
     def set_state(self, state: Optional[HandModel]) -> None:
         self._app.set_state(state)
 
-    def send_joint_targets(self, angles, source: str = "", live: bool = False) -> None:
-        self._app.send_joint_targets(angles, source=source, live=live)
+    def send_joint_targets(
+        self,
+        angles,
+        source: str = "",
+        live: bool = False,
+        input_space: str = "urdf_deg",
+        raw_targets=None,
+    ):
+        return self._app.send_joint_targets(
+            angles,
+            source=source,
+            live=live,
+            input_space=input_space,
+            raw_targets=raw_targets,
+        )
 
     def start_recording_for_test(self, reason: str = "test") -> None:
         self._app.start_recording_for_test(reason)

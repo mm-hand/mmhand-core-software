@@ -19,6 +19,12 @@ try:
 except Exception:
     ManusSdkReceiver = None
 from desktop.core.protocol import ControlMode, ENCODER_COUNT
+from desktop.teleop.joint_target_adapter import (
+    LEGACY_CALIBRATED_DEG,
+    URDF_DEG,
+    active_mapping_identity,
+    adapt_joint_targets,
+)
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -174,9 +180,9 @@ class ManusUdpView(QtWidgets.QWidget):
         self._fit_table_header(self.table)
         preview_tabs.addTab(self.table, "Typed Ergonomics")
 
-        self.preview_table = QtWidgets.QTableWidget(0, 8)
+        self.preview_table = QtWidgets.QTableWidget(0, 9)
         self.preview_table.setHorizontalHeaderLabels([
-            "Robot Joint", "Human -> Robot Mapping", "Human Delta", "Gain", "Joint Limit", "Limit Source", "robot_q_target_preview", "Over Limit",
+            "Robot Joint", "Human -> Robot Mapping", "Human Delta", "Gain", "Legacy Limit", "Limit Source", "Legacy q_target", "URDF Target", "Over Limit",
         ])
         self.preview_table.verticalHeader().setVisible(False)
         self._fit_table_header(self.preview_table)
@@ -207,7 +213,7 @@ class ManusUdpView(QtWidgets.QWidget):
         urdf_viewer_row.addStretch(1)
         urdf_viewer_layout.addLayout(urdf_viewer_row)
         self.urdf_viewer_status_label = QtWidgets.QLabel(
-            f"q_target stream: {self._urdf_preview_stream_path()}"
+            f"active-URDF target stream: {self._urdf_preview_stream_path()}"
         )
         self.urdf_viewer_status_label.setWordWrap(True)
         urdf_viewer_layout.addWidget(self.urdf_viewer_status_label)
@@ -405,7 +411,8 @@ class ManusUdpView(QtWidgets.QWidget):
             self._set_item(self.preview_table, row, 4, item.joint_limit_deg)
             self._set_item(self.preview_table, row, 5, item.joint_limit_source)
             self._set_item(self.preview_table, row, 6, f"{item.robot_q_target_preview:.3f}")
-            self._set_item(self.preview_table, row, 7, "yes" if item.over_limit else "no")
+            self._set_item(self.preview_table, row, 7, f"{item.robot_urdf_target_preview:.3f}")
+            self._set_item(self.preview_table, row, 8, "yes" if item.over_limit else "no")
         return preview
 
     def _update_raw_skeleton_preview(self, frame: ManusFrame):
@@ -426,14 +433,14 @@ class ManusUdpView(QtWidgets.QWidget):
         raw_angles = [0.0] * ENCODER_COUNT
         for item in preview:
             if item.valid and 0 <= item.joint_index < ENCODER_COUNT:
-                raw_angles[item.joint_index] = float(item.robot_q_target_preview)
+                raw_angles[item.joint_index] = float(item.robot_q_urdf_preview)
         if self._retarget_mode() == "raw_pinky":
             self._update_urdf_preview_angles(raw_angles)
         return preview
 
     def _update_urdf_preview_angles(self, angles: list[float]) -> None:
-        # Match the legacy new/mmhand viewer path: stream q_target and let the
-        # standalone URDF viewer convert q_target back to URDF angles.
+        # Stream canonical active-URDF degrees; the viewer performs no legacy
+        # sign or range conversion.
         now = time.monotonic()
         if now - self._last_urdf_preview_t < 0.030:
             return
@@ -457,8 +464,17 @@ class ManusUdpView(QtWidgets.QWidget):
         payload = {
             "timestamp": time.time(),
             "angles_deg": values,
-            "source": "raw_ik_q_target",
+            "angle_space": URDF_DEG,
+            "source": "raw_ik_urdf_target",
         }
+        mapping = active_mapping_identity()
+        payload.update(
+            {
+                "mapping_id": mapping.mapping_id,
+                "mapping_version": mapping.mapping_version,
+                "urdf_config_crc": mapping.urdf_config_crc,
+            }
+        )
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
@@ -479,7 +495,7 @@ class ManusUdpView(QtWidgets.QWidget):
             self._set_status("URDF viewer launched")
             if self.urdf_viewer_status_label is not None:
                 self.urdf_viewer_status_label.setText(
-                    f"URDF viewer running. q_target stream: {self._urdf_preview_stream_path()}"
+                    f"URDF viewer running. active-URDF target stream: {self._urdf_preview_stream_path()}"
                 )
         except Exception as exc:
             self._set_status(f"URDF viewer launch failed: {exc}")
@@ -652,12 +668,21 @@ class ManusUdpView(QtWidgets.QWidget):
                 return
             angles = self.raw_skeleton_retargeter.target_angles(raw_preview)
             source_name = "MANUS full raw skeleton IK"
+            source_space = URDF_DEG
+            raw_source_targets = list(angles)
         else:
-            angles = [0.0] * ENCODER_COUNT
+            legacy_angles = [0.0] * ENCODER_COUNT
             for item in preview:
-                if 0 <= item.joint_index < len(angles):
-                    angles[item.joint_index] = float(item.robot_q_target_preview)
+                if 0 <= item.joint_index < len(legacy_angles):
+                    legacy_angles[item.joint_index] = float(item.robot_q_target_preview)
+            adaptation = adapt_joint_targets(
+                legacy_angles,
+                source_space=LEGACY_CALIBRATED_DEG,
+            )
+            angles = list(adaptation.urdf_targets_deg)
             source_name = "MANUS ergonomics joint send"
+            source_space = LEGACY_CALIBRATED_DEG
+            raw_source_targets = legacy_angles
         selected_targets, missing_feedback = self._targets_for_selected_joints(angles)
         if selected_targets is None:
             if missing_feedback:
@@ -669,7 +694,17 @@ class ManusUdpView(QtWidgets.QWidget):
         try:
             self.context.backend.set_control_mode(ControlMode.JOINT_ANGLE)
             self.context.backend.set_pid_control(True)
-            self.context.send_joint_targets(selected_targets, source=source_name, live=True)
+            result = self.context.send_joint_targets(
+                selected_targets,
+                source=source_name,
+                live=True,
+                input_space=source_space,
+                raw_targets=raw_source_targets,
+            )
+            if result is False or not bool(getattr(result, "sent", True)):
+                message = str(getattr(result, "message", "") or "")
+                self._set_status(message or "MANUS joint send blocked by workspace guard")
+                return
             self._last_sent_targets = list(selected_targets)
             self._last_sent_seq = frame.seq
             self._sent_count += 1

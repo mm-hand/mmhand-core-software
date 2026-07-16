@@ -1,4 +1,4 @@
-﻿#include "StateMachineTask.h"
+#include "StateMachineTask.h"
 
 #include <math.h>
 #include <string.h>
@@ -6,7 +6,10 @@
 #include "../calibration/AutoCalibrationTask.h"
 #include "../calibration/CalibrationMath.h"
 #include "../calibration/CalibrationTask.h"
+#include "../calibration/RopeInitTask.h"
+#include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
+#include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "FirmwareLog.h"
 #include "TaskRuntimeMonitor.h"
@@ -17,7 +20,8 @@ extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
 static const uint32_t kStateCanOfflineTimeoutMs = 1000;
 static const uint32_t kStateServoFeedbackTimeoutMs = 500;
-static const float kWorkspaceToleranceDeg = 1.0f;
+static const int32_t kReadyEnterOutsideToleranceCounts = 24;
+static const int32_t kReadyExitOutsideToleranceCounts = 48;
 static const uint8_t kCalibrationAckRepeatCount = 20;
 #ifndef BOOT_AUTO_CALIBRATION_ENABLE
 #define BOOT_AUTO_CALIBRATION_ENABLE 0
@@ -27,6 +31,51 @@ static const uint32_t kBootAutoCalibrationDelayMs = 1500;
 static uint32_t collectSystemFaults(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData);
 static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData);
+
+static bool manualReferenceGateReady(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+    const uint32_t activeMask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        kManualEncoderReferenceFullMask;
+    const uint32_t validMask =
+        sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap) &
+        kManualEncoderReferenceFullMask;
+    return activeMask != 0 &&
+           sharedData->manual_reference_nvs_valid != 0 &&
+           (validMask & activeMask) == activeMask &&
+           manualEncoderReferencesCoverActiveMask(activeMask);
+}
+
+static void logManualReferenceReject(TaskSharedData_t* sharedData,
+                                     const char* eventName)
+{
+    static uint32_t s_lastLogMs = 0;
+    static uint32_t s_lastMask = 0;
+    const uint32_t nowMs = millis();
+    const uint32_t validMask = sharedData
+        ? sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap) : 0;
+    if (validMask == s_lastMask &&
+        (uint32_t)(nowMs - s_lastLogMs) <= 1000) {
+        return;
+    }
+    s_lastMask = validMask;
+    s_lastLogMs = nowMs;
+    const uint32_t requiredMask = sharedData
+        ? (sharedAtomicLoad(&sharedData->active_joint_mask) &
+           kManualEncoderReferenceFullMask)
+        : 0;
+    FW_LOG_INFO_PRINTF(
+        "[STATE] reject %s: Manual encoder reference incomplete "
+        "required=0x%08lX valid=0x%08lX missing=0x%08lX nvs=%u\r\n",
+        eventName ? eventName : "MOTION",
+        (unsigned long)requiredMask,
+        (unsigned long)validMask,
+        (unsigned long)(requiredMask & ~validMask),
+        sharedData && sharedData->manual_reference_nvs_valid ? 1U : 0U);
+}
 
 static void setCalibrationStatus(uint8_t status, bool emitAck)
 {
@@ -97,6 +146,7 @@ static bool shouldSaveMultiTurnOnInterrupt(uint8_t state)
     return state == SYSTEM_STATE_RUN_DIRECT ||
            state == SYSTEM_STATE_RUN_FEEDBACK ||
            state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+           state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
            state == SYSTEM_STATE_PAUSED;
 }
 
@@ -128,12 +178,22 @@ static void resetCommandState(TaskSharedData_t* sharedData)
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
         sharedData->motorTargetRaw[i] = 0;
         sharedData->motorSweepTargetRaw[i] = 0;
+        sharedData->pendingMotorTargetRaw[i] = 0;
+        sharedData->pendingMotorSweepTargetRaw[i] = 0;
     }
     sharedData->motor_command_token++;
     sharedData->motor_sweep_command_token++;
     sharedData->joint_command_token++;
     sharedData->motor_direct_command_generation++;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData->pending_direct_generation = sharedData->motor_direct_command_generation;
+    sharedData->applied_direct_generation = sharedData->motor_direct_command_generation;
+    sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData->pending_direct_valid = 0;
+    sharedData->pending_direct_motor_mask = 0;
+    sharedData->pending_direct_joint_mask = 0;
+    sharedData->pending_direct_require_can = 0;
+    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
     sharedData->control_mode = CONTROL_MODE_JOINT;
     sharedData->sine_test_enabled = 0;
     sharedData->sine_test_request_token++;
@@ -183,6 +243,148 @@ static void setCommandModeDirect(TaskSharedData_t* sharedData)
     }
 }
 
+static void clearPendingDirectCommand(TaskSharedData_t* sharedData,
+                                      uint8_t rejectReason)
+{
+    if (!sharedData) {
+        return;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    sharedData->pending_direct_valid = 0;
+    sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData->pending_direct_motor_mask = 0;
+    sharedData->pending_direct_joint_mask = 0;
+    sharedData->pending_direct_require_can = 0;
+    sharedData->direct_reject_reason = rejectReason;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
+static bool pendingDirectCommandMatches(TaskSharedData_t* sharedData,
+                                        uint32_t generation)
+{
+    if (!sharedData) {
+        return false;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    const bool matches =
+        sharedData->pending_direct_valid != 0 &&
+        sharedData->pending_direct_generation == generation;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+    return matches;
+}
+
+static uint32_t pendingDirectMotorMask(TaskSharedData_t* sharedData,
+                                       uint32_t generation)
+{
+    if (!sharedData) {
+        return 0;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return 0;
+    }
+    const uint32_t motorMask =
+        (sharedData->pending_direct_valid != 0 &&
+         sharedData->pending_direct_generation == generation)
+            ? sharedData->pending_direct_motor_mask
+            : 0;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+    return motorMask & validMotorChannelMask();
+}
+
+static void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
+                                       uint32_t generation,
+                                       uint8_t rejectReason)
+{
+    if (!sharedData) {
+        return;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    if (sharedData->pending_direct_valid != 0 &&
+        sharedData->pending_direct_generation == generation) {
+        sharedData->pending_direct_valid = 0;
+        sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+        sharedData->pending_direct_motor_mask = 0;
+        sharedData->pending_direct_joint_mask = 0;
+        sharedData->pending_direct_require_can = 0;
+        sharedData->direct_reject_reason = rejectReason;
+    }
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
+static bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
+                                        uint32_t generation)
+{
+    if (!sharedData) {
+        return false;
+    }
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    if (sharedData->pending_direct_valid == 0 ||
+        sharedData->pending_direct_generation != generation) {
+        if (lock) {
+            xSemaphoreGive(lock);
+        }
+        return false;
+    }
+
+    const uint8_t source = sharedData->pending_direct_source;
+    if (source == MOTOR_DIRECT_SOURCE_SWEEP) {
+        memcpy(sharedData->motorSweepTargetRaw,
+               sharedData->pendingMotorSweepTargetRaw,
+               sizeof(sharedData->motorSweepTargetRaw));
+        sharedData->motor_sweep_command_token++;
+    } else {
+        memcpy(sharedData->motorTargetRaw,
+               sharedData->pendingMotorTargetRaw,
+               sizeof(sharedData->motorTargetRaw));
+        sharedData->motor_command_token++;
+    }
+    sharedData->motor_direct_command_generation = generation;
+    sharedData->motor_direct_command_source = source;
+    sharedData->applied_direct_generation = generation;
+    {
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->active_motor_mask,
+                          sharedData->pending_direct_motor_mask & validMotorChannelMask());
+        sharedAtomicStore(&sharedData->active_joint_mask,
+                          sharedData->pending_direct_joint_mask &
+                          ((1UL << ENCODER_TOTAL_NUM) - 1UL));
+        sharedAtomicStore(&sharedData->require_can_feedback,
+                          (uint8_t)(sharedData->pending_direct_require_can ? 1U : 0U));
+    }
+    sharedData->pending_direct_valid = 0;
+    sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData->pending_direct_motor_mask = 0;
+    sharedData->pending_direct_joint_mask = 0;
+    sharedData->pending_direct_require_can = 0;
+    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
+    sharedData->control_mode = CONTROL_MODE_DIRECT_MOTOR;
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+    return true;
+}
+
 static void resetServoTargetQueue(TaskSharedData_t* sharedData)
 {
     if (sharedData && sharedData->servoTargetQueue) {
@@ -208,7 +410,8 @@ static bool canAcceptStart(uint8_t state)
 static bool canAcceptRunDirect(uint8_t state)
 {
     return state == SYSTEM_STATE_IDLE ||
-           state == SYSTEM_STATE_READY;
+           state == SYSTEM_STATE_READY ||
+           state == SYSTEM_STATE_RUN_DIRECT;
 }
 
 static bool canAcceptRunFeedback(uint8_t state)
@@ -218,7 +421,11 @@ static bool canAcceptRunFeedback(uint8_t state)
 
 static bool canAcceptCalibrate(uint8_t state)
 {
-    return state == SYSTEM_STATE_IDLE ||
+    // Before the selected joints have Auto results, the feedback state can
+    // legitimately remain UNCONTROLLABLE. Manual coverage is checked before
+    // this state gate, so calibration must be allowed to create those results.
+    return state == SYSTEM_STATE_UNCONTROLLABLE ||
+           state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY;
 }
 
@@ -325,11 +532,29 @@ static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
                           (unsigned long)b);
             break;
         case 7:
-            FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: joint outside workspace J%02lu angle=%ld min=%ld max=%ld\r\n",
+            FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: joint below workspace J%02lu preserve=%ld outside=%ld tolerance=%ld\r\n",
                           (unsigned long)a,
                           (long)((int32_t)b),
                           (long)c,
                           (long)d);
+            break;
+        case 8:
+            FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: calibration/manual mismatch J%02lu mapping=%lu urdf_crc=0x%08lX manual_entry_crc=0x%08lX\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b,
+                          (unsigned long)(uint32_t)c,
+                          (unsigned long)(uint32_t)d);
+            break;
+        case 9:
+            FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: encoder/CAN unavailable offline=0x%08lX fault=0x%08lX sensor_fresh=%ld can_link=%ld\r\n",
+                          (unsigned long)a,
+                          (unsigned long)b,
+                          (long)c,
+                          (long)d);
+            break;
+        case 10:
+            FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: system fault=0x%08lX\r\n",
+                          (unsigned long)a);
             break;
         default:
             FW_LOG_INFO_PRINTLN("[STATE] feedback ready rejected: unknown reason");
@@ -353,6 +578,8 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     if (!sharedData) {
         return;
     }
+    const uint8_t interruptedState = sharedData->system_state;
+    clearPendingDirectCommand(sharedData, DIRECT_REJECT_FAULT);
     resetServoTargetQueue(sharedData);
     sharedAtomicFetchOr(&sharedData->system_fault_latched_bitmap, faultBits);
     const uint32_t latchedFaults =
@@ -360,6 +587,15 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     sharedAtomicFetchOr(&sharedData->system_fault_bitmap, latchedFaults);
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
+    if (interruptedState == SYSTEM_STATE_CALIBRATION_RUNNING) {
+        setCalibrationStatus(CALIB_STATUS_FAILED, true);
+        sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
+    }
+    if (interruptedState == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+        sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+        sharedData->rope_init_reason = ROPE_INIT_REASON_SYSTEM_FAULT;
+        sharedData->rope_init_timestamp = millis();
+    }
     requestServoEmergencyTorqueOff(sharedData);
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
 }
@@ -378,7 +614,7 @@ static void resetControlProtectionFaults(TaskSharedData_t* sharedData)
         }
     }
     sharedAtomicAddFetch(&sharedData->overload_fault_reset_token, (uint32_t)1);
-    sharedAtomicAddFetch(&sharedData->reverse_release_fault_reset_token, (uint32_t)1);
+
 }
 
 static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData)
@@ -386,7 +622,11 @@ static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return 0;
     }
-    return sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+    uint32_t requiredMask = sharedAtomicLoad(&sharedData->active_motor_mask);
+    if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
+        requiredMask |= sharedAtomicLoad(&sharedData->calibration_aux_motor_mask);
+    }
+    return requiredMask & validMotorChannelMask();
 }
 
 static bool readyRequiresCan(TaskSharedData_t* sharedData)
@@ -437,73 +677,69 @@ static bool requiredServosOnline(TaskSharedData_t* sharedData, const ServoAngleD
     return false;
 }
 
+static bool directMotorMaskReady(TaskSharedData_t* sharedData,
+                                 uint32_t requiredMask)
+{
+    if (!sharedData) {
+        return false;
+    }
+    requiredMask &= validMotorChannelMask();
+    if (requiredMask == 0) {
+        return false;
+    }
+
+    ServoAngleData_t servoSnapshot;
+    const uint32_t nowMs = millis();
+    if (!sharedData->servoFeedbackQueue ||
+        xQueuePeek(sharedData->servoFeedbackQueue, &servoSnapshot, 0) != pdTRUE ||
+        (uint32_t)(nowMs - servoSnapshot.timestamp) > kStateServoFeedbackTimeoutMs) {
+        return false;
+    }
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; motor++) {
+        const uint32_t bit = (1UL << motor);
+        if ((requiredMask & bit) != 0 && servoSnapshot.onlineStatus[motor] == 0) {
+            return false;
+        }
+    }
+    if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & requiredMask) != 0) {
+        return false;
+    }
+
+    // Servo/CAN/multi-turn readiness is evaluated against the pending scope
+    // above. Keep only faults that are independent of the previous scope.
+    const uint32_t scopeDependentFaults =
+        SYSTEM_FAULT_CAN_OFFLINE |
+        SYSTEM_FAULT_SERVO_OFFLINE |
+        SYSTEM_FAULT_MULTITURN_UNKNOWN;
+    const uint32_t blockingFaults =
+        (sharedAtomicLoad(&sharedData->system_fault_bitmap) |
+         sharedAtomicLoad(&sharedData->system_fault_latched_bitmap)) &
+        ~scopeDependentFaults;
+    return blockingFaults == 0;
+}
+
 static bool isControllableEntryReady(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
         return false;
     }
 
-    const uint32_t nowMs = millis();
-
-    uint32_t activeJointMaskSnapshot = 0;
-    uint32_t encoderOnlineMaskSnapshot = 0;
-    uint32_t encoderFaultMaskSnapshot = 0;
-    uint8_t canLinkOnlineSnapshot = 0;
-    {
-        SharedSafetyGuard guard;
-        activeJointMaskSnapshot = sharedAtomicLoad(&sharedData->active_joint_mask);
-        encoderOnlineMaskSnapshot = sharedAtomicLoad(&sharedData->encoder_online_bitmap);
-        encoderFaultMaskSnapshot = sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
-        canLinkOnlineSnapshot = sharedAtomicLoad(&sharedData->can_link_online);
-    }
-
-    RemoteSensorData_t sensorData;
-    bool canReady =
-        sharedData->canRxQueue &&
-        xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE &&
-        sensorData.isValid &&
-        (uint32_t)(nowMs - sensorData.timestamp) <= kStateCanOfflineTimeoutMs &&
-        canLinkOnlineSnapshot != 0;
-    if (canReady && readyRequiresCan(sharedData)) {
-        const uint32_t activeJointMask =
-            activeJointMaskSnapshot &
-            ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-        const uint32_t offlineMask =
-            activeJointMask & ~encoderOnlineMaskSnapshot;
-        const uint32_t faultMask =
-            activeJointMask & encoderFaultMaskSnapshot;
-        if (offlineMask != 0 || faultMask != 0) {
-            canReady = false;
-        }
-    }
-    if (!readyRequiresCan(sharedData)) {
-        canReady = true;
-    }
-
-    ServoAngleData_t servoSnapshot;
-    bool servoReady =
-        sharedData->servoFeedbackQueue &&
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoSnapshot, 0) == pdTRUE &&
-        (uint32_t)(nowMs - servoSnapshot.timestamp) <= kStateServoFeedbackTimeoutMs;
-    if (servoReady) {
-        servoReady = requiredServosOnline(sharedData, servoSnapshot);
-    }
-
-    // This is the gate from UNCONTROLLABLE to IDLE(controllable). READY is
-    // reserved as a later pre-feedback state and is not entered automatically.
-    return canReady &&
-           servoReady &&
-           sharedAtomicLoad(&sharedData->system_fault_bitmap) == 0 &&
-           sharedAtomicLoad(&sharedData->system_fault_latched_bitmap) == 0;
+    // IDLE means direct-motor hardware is usable. Manual/Auto/CAN belong to
+    // the feedback READY gate and must not block recovery or direct control.
+    return directMotorMaskReady(sharedData, readyServoRequiredMask(sharedData));
 }
 
 // ============================================================================
-// activeJointsInControlWorkspace - 鍏宠妭宸ヤ綔绌洪棿鍑嗗叆鏍￠獙
+// activeJointsInControlWorkspace - 关节工作空间准入校验
 // ============================================================================
-// 璇ュ嚱鏁版槸鍒ゆ柇绯荤粺鑳藉惁浠?IDLE 鑷姩鏅嬪崌鍒?READY 鐘舵€佺殑鍏抽敭锛?// 1) 閬嶅巻褰撳墠鍚敤鐨?active_joint_mask锛堟敮鎸佸姩鎬佷换鎰忔暟閲忕殑鍏宠妭锛夈€?// 2) 妫€鏌ヨ繖浜涜閫変腑鐨勫叧鑺傛槸鍚﹂兘宸茬粡鎴愬姛瀹屾垚杩囨爣瀹氾紙g_jointCalibResult[i].success == true锛夈€?// 3) 璇诲彇纾佺紪鐮佸櫒褰撳墠鐨勮搴﹀€硷紝鏍￠獙鍏舵槸鍚﹁惤鍦ㄥ瀹瑰害鑼冨洿鍐?(-0.8掳 鍒?max+0.8掳)銆?// 鍙湁褰撴墍鏈夐€変腑鍏宠妭閮藉浜庘€滃畨鍏ㄥ彲鎺ц寖鍥村唴鈥濇椂锛岀郴缁熸墠鍏佽杩涘叆 READY銆?// ============================================================================
+// 该函数是判断系统能否�?IDLE 自动晋升�?READY 状态的关键�?// 1) 遍历当前启用�?active_joint_mask（支持动态任意数量的关节）�?// 2) 检查这些被选中的关节是否都已经成功完成过标定（g_jointCalibResult[i].success == true）�?// 3) 读取磁编码器当前的角度值，校验其是否落在宽容度范围�?(-0.8° �?max+0.8°)�?// 只有当所有选中关节都处于“安全可控范围内”时，系统才允许进入 READY�?// ============================================================================
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
+        return false;
+    }
+    if (!manualReferenceGateReady(sharedData)) {
+        logManualReferenceReject(sharedData, "READY");
         return false;
     }
     if (!readyRequiresCan(sharedData)) {
@@ -541,8 +777,37 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
         return false;
     }
 
-    MappedAngleData_t mappedData;
+    RemoteSensorData_t sensorData;
+    const uint32_t encoderOnlineMask =
+        sharedAtomicLoad(&sharedData->encoder_online_bitmap);
+    const uint32_t encoderFaultMask =
+        sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
+    const uint8_t canLinkOnline =
+        sharedAtomicLoad(&sharedData->can_link_online);
     const uint32_t nowMs = millis();
+    const bool sensorFresh =
+        sharedData->canRxQueue &&
+        xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE &&
+        sensorData.isValid &&
+        (uint32_t)(nowMs - sensorData.timestamp) <= kStateCanOfflineTimeoutMs;
+    if (!sensorFresh || canLinkOnline == 0 ||
+        (activeMask & ~encoderOnlineMask) != 0 ||
+        (activeMask & encoderFaultMask) != 0) {
+        logFeedbackReadyReject(sharedData,
+                               9,
+                               activeMask & ~encoderOnlineMask,
+                               activeMask & encoderFaultMask,
+                               sensorFresh ? 1 : 0,
+                               canLinkOnline);
+        return false;
+    }
+    const uint32_t feedbackFaults = collectSystemFaults(sharedData);
+    if (feedbackFaults != 0) {
+        logFeedbackReadyReject(sharedData, 10, feedbackFaults, 0, 0, 0);
+        return false;
+    }
+
+    MappedAngleData_t mappedData;
     if (!sharedData->mappedAngleQueue) {
         logFeedbackReadyReject(sharedData, 4, 0, 0, 0, 0);
         return false;
@@ -561,6 +826,16 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
         return false;
     }
 
+    const uint8_t currentState = sharedData->system_state;
+    const bool preserveReady =
+        currentState == SYSTEM_STATE_READY ||
+        currentState == SYSTEM_STATE_RUN_FEEDBACK ||
+        (currentState == SYSTEM_STATE_PAUSED &&
+         sharedData->paused_resume_state == SYSTEM_STATE_RUN_FEEDBACK);
+    const int32_t outsideToleranceCounts = preserveReady
+        ? kReadyExitOutsideToleranceCounts
+        : kReadyEnterOutsideToleranceCounts;
+
     for (uint8_t calibJoint = 0; calibJoint < ENCODER_TOTAL_NUM; calibJoint++) {
         if ((activeMask & (1UL << calibJoint)) == 0) {
             continue;
@@ -568,6 +843,20 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
         const JointCalibrationResult& calib = g_jointCalibResult[calibJoint];
         if (!calib.success) {
             logFeedbackReadyReject(sharedData, 5, calibJoint, activeMask, 0, 0);
+            return false;
+        }
+        const uint32_t manualEntryCrc =
+            manualEncoderReferenceEntryCrc(
+                calibJoint, g_manualEncoderReference[calibJoint]);
+        if (calib.mappingVersion != kManualScaledUrdfFeedbackMappingVersion ||
+            calib.urdfConfigCrc != kManualScaledUrdfConfigCrc ||
+            calib.manualReferenceCrc != manualEntryCrc) {
+            logFeedbackReadyReject(sharedData,
+                                   8,
+                                   calibJoint,
+                                   calib.mappingVersion,
+                                   (int32_t)calib.urdfConfigCrc,
+                                   (int32_t)manualEntryCrc);
             return false;
         }
         if (mappedData.validFlags[calibJoint] == 0) {
@@ -580,19 +869,14 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData)
             logFeedbackReadyReject(sharedData, 6, calibJoint, validMask, 0, 0);
             return false;
         }
-        const int32_t angleCount = mappedData.angleValues[calibJoint];
-        const float maxDeg = (isfinite(calib.angleMax) && calib.angleMax > 0.0f)
-            ? calib.angleMax
-            : kRange100ControlMaxDeg;
-        const int32_t maxCount = calibrationDegToEncoderCount(maxDeg);
-        const int32_t toleranceCount = calibrationDegToEncoderCount(kWorkspaceToleranceDeg);
-        if (angleCount < -toleranceCount || angleCount > maxCount + toleranceCount) {
+        const int32_t outsideCounts = mappedData.outsideCounts[calibJoint];
+        if (outsideCounts < -outsideToleranceCounts) {
             logFeedbackReadyReject(sharedData,
                                    7,
                                    calibJoint,
-                                   (uint32_t)angleCount,
-                                   -toleranceCount,
-                                   maxCount + toleranceCount);
+                                   preserveReady ? 1U : 0U,
+                                   outsideCounts,
+                                   outsideToleranceCounts);
             return false;
         }
     }
@@ -661,12 +945,18 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
 
             if (sharedData->system_state == SYSTEM_STATE_PAUSED) {
                 const uint8_t resumeState = sharedData->paused_resume_state;
-                if (resumeState == SYSTEM_STATE_RUN_FEEDBACK && !activeJointsInControlWorkspace(sharedData)) {
+                const bool resumeReady =
+                    (resumeState == SYSTEM_STATE_RUN_DIRECT)
+                        ? isControllableEntryReady(sharedData)
+                        : ((resumeState == SYSTEM_STATE_RUN_FEEDBACK) &&
+                           activeJointsInControlWorkspace(sharedData));
+                if (!resumeReady) {
                     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
                     sharedData->control_enabled = 0;
                     setSystemState(sharedData, idleOrReadyState(sharedData));
                     break;
                 }
+                resetServoTargetQueue(sharedData);
                 sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
                 sharedData->control_enabled = 1;
                 if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
@@ -697,9 +987,15 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             if (sharedData->stateEventQueue) {
                 xQueueReset(sharedData->stateEventQueue);
             }
+            clearPendingDirectCommand(sharedData, DIRECT_REJECT_STATE);
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
+            if (sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
+                sharedData->rope_init_timestamp = millis();
+            }
             if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
                 setCalibrationStatus(CALIB_STATUS_IDLE, false);
             }
@@ -724,26 +1020,79 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_RUN_DIRECT:
+            if (!pendingDirectCommandMatches(sharedData, event.token)) {
+                FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_DIRECT generation=%lu pending=%lu valid=%u\r\n",
+                                   (unsigned long)event.token,
+                                   (unsigned long)sharedData->pending_direct_generation,
+                                   (unsigned)sharedData->pending_direct_valid);
+                break;
+            }
             if (!canAcceptRunDirect(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT in state=%u\r\n",
                               (unsigned)sharedData->system_state);
+                rejectPendingDirectCommand(sharedData,
+                                           event.token,
+                                           DIRECT_REJECT_STATE);
                 break;
             }
-            if (!activeMotorsMultiTurnKnown(sharedData)) {
-                logMultiTurnUnknownReject(sharedData, "RUN_DIRECT");
+            {
+                const uint32_t pendingMotorMask =
+                    pendingDirectMotorMask(sharedData, event.token);
+                if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
+                     pendingMotorMask) != 0) {
+                    FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT generation=%lu: multi-turn unknown motor=0x%08lX unknown=0x%08lX\r\n",
+                                       (unsigned long)event.token,
+                                       (unsigned long)pendingMotorMask,
+                                       (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
+                    rejectPendingDirectCommand(sharedData,
+                                               event.token,
+                                               DIRECT_REJECT_MULTITURN);
+                    break;
+                }
+                if (!directMotorMaskReady(sharedData, pendingMotorMask)) {
+                    FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT generation=%lu: pending hardware not ready motor=0x%08lX\r\n",
+                                       (unsigned long)event.token,
+                                       (unsigned long)pendingMotorMask);
+                    rejectPendingDirectCommand(sharedData,
+                                               event.token,
+                                               DIRECT_REJECT_HARDWARE);
+                    break;
+                }
+            }
+            if (!promotePendingDirectCommand(sharedData, event.token)) {
+                rejectPendingDirectCommand(sharedData,
+                                           event.token,
+                                           DIRECT_REJECT_STALE);
                 break;
             }
-            resetServoTargetQueue(sharedData);
+            sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
+                                 (uint32_t)~(SYSTEM_FAULT_CAN_OFFLINE |
+                                             SYSTEM_FAULT_SERVO_OFFLINE |
+                                             SYSTEM_FAULT_MULTITURN_UNKNOWN));
+            sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
+                                 (uint32_t)~(SYSTEM_FAULT_CAN_OFFLINE |
+                                             SYSTEM_FAULT_SERVO_OFFLINE |
+                                             SYSTEM_FAULT_MULTITURN_UNKNOWN));
+            if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT) {
+                resetServoTargetQueue(sharedData);
+            }
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            setCommandModeDirect(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK:
+            if (!manualReferenceGateReady(sharedData)) {
+                logManualReferenceReject(sharedData, "RUN_FEEDBACK");
+                break;
+            }
             if (!canAcceptRunFeedback(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
                               (unsigned)sharedData->system_state);
+                break;
+            }
+            if (!activeJointsInControlWorkspace(sharedData)) {
+                FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: feedback gate changed");
                 break;
             }
             if (!activeMotorsMultiTurnKnown(sharedData)) {
@@ -765,6 +1114,12 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore RUN_DIRECT_DONE in state=%u\r\n",
                               (unsigned)sharedData->system_state);
+                break;
+            }
+            if (event.token != sharedData->applied_direct_generation) {
+                FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_DIRECT_DONE generation=%lu applied=%lu\r\n",
+                                   (unsigned long)event.token,
+                                   (unsigned long)sharedData->applied_direct_generation);
                 break;
             }
             sharedData->control_enabled = 0;
@@ -822,6 +1177,11 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
 
         case SYSTEM_EVENT_CALIBRATE:
         {
+            if (!manualReferenceGateReady(sharedData)) {
+                logManualReferenceReject(sharedData, "CALIBRATE");
+                setCalibrationStatus(CALIB_STATUS_FAILED, true);
+                break;
+            }
             if (!canAcceptCalibrate(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject CALIBRATE in state=%u\r\n",
                               (unsigned)sharedData->system_state);
@@ -856,6 +1216,96 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
         }
 
+        case SYSTEM_EVENT_ROPE_INIT:
+        {
+            sharedData->rope_init_sequence++;
+            sharedData->rope_init_joint_mask =
+                sharedAtomicLoad(&sharedData->active_joint_mask) &
+                kManualEncoderReferenceFullMask;
+            sharedData->rope_init_timestamp = millis();
+            const uint8_t preflightReason =
+                ropeInitActiveScopeRejectReason(sharedData);
+            if (preflightReason != ROPE_INIT_REASON_NONE) {
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = preflightReason;
+                sharedData->rope_init_timestamp = millis();
+                if (preflightReason == ROPE_INIT_REASON_MANUAL_REQUIRED) {
+                    logManualReferenceReject(sharedData, "ROPE_INIT");
+                } else {
+                    FW_LOG_INFO_PRINTF("[STATE] reject ROPE_INIT preflight reason=%u\r\n",
+                                       (unsigned)preflightReason);
+                }
+                break;
+            }
+            if (sharedData->system_state != SYSTEM_STATE_IDLE &&
+                sharedData->system_state != SYSTEM_STATE_READY) {
+                FW_LOG_INFO_PRINTF("[STATE] reject ROPE_INIT in state=%u\r\n",
+                                   (unsigned)sharedData->system_state);
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
+                sharedData->rope_init_timestamp = millis();
+                break;
+            }
+            if (!activeMotorsMultiTurnKnown(sharedData)) {
+                logMultiTurnUnknownReject(sharedData, "ROPE_INIT");
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_MULTITURN_UNKNOWN;
+                sharedData->rope_init_timestamp = millis();
+                break;
+            }
+            resetServoTargetQueue(sharedData);
+            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
+            sharedData->control_enabled = 0;
+            sharedData->rope_init_status = ROPE_INIT_STATUS_RUNNING;
+            sharedData->rope_init_reason = ROPE_INIT_REASON_NONE;
+            sharedData->rope_init_timestamp = millis();
+            setCommandModeDirect(sharedData);
+            setSystemState(sharedData, SYSTEM_STATE_ROPE_INIT_RUNNING);
+            if (!startRopeInitTask(sharedData)) {
+                sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_TASK_START_FAILED;
+                sharedData->rope_init_timestamp = millis();
+                setSystemState(sharedData, idleOrReadyState(sharedData));
+            }
+            break;
+        }
+
+        case SYSTEM_EVENT_ROPE_INIT_DONE:
+            if (sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING) {
+                break;
+            }
+            resetServoTargetQueue(sharedData);
+            sharedData->control_enabled = 0;
+            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            setCommandModeJoint(sharedData);
+            sharedData->rope_init_status = ROPE_INIT_STATUS_SUCCESS;
+            sharedData->rope_init_reason = ROPE_INIT_REASON_NONE;
+            sharedData->rope_init_timestamp = millis();
+            setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData,
+                                    MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            break;
+
+        case SYSTEM_EVENT_ROPE_INIT_FAILED:
+            if (sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING) {
+                break;
+            }
+            resetServoTargetQueue(sharedData);
+            sharedData->control_enabled = 0;
+            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            setCommandModeJoint(sharedData);
+            if (sharedData->rope_init_status != ROPE_INIT_STATUS_FAILED) {
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
+                sharedData->rope_init_timestamp = millis();
+            }
+            requestServoEmergencyTorqueOff(sharedData);
+            setSystemState(sharedData, idleOrReadyState(sharedData));
+            requestMultiTurnNvsSave(sharedData,
+                                    MULTITURN_NVS_SAVE_REASON_RUN_DONE);
+            break;
+
         case SYSTEM_EVENT_CALIBRATION_DONE:
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_DONE in state=%u\r\n",
@@ -867,7 +1317,11 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
             sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
                                  ~readyServoRequiredMask(sharedData));
-            setCalibrationStatus(CALIB_STATUS_SUCCESS, true);
+            setCalibrationStatus(
+                sharedAtomicLoad(&sharedData->calibration_warning_bitmap) != 0
+                    ? CALIB_STATUS_WARN
+                    : CALIB_STATUS_SUCCESS,
+                true);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
             break;
@@ -931,7 +1385,10 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     }
 
     RemoteSensorData_t sensorData;
-    if (readyRequiresCan(sharedData) &&
+    const bool motionRequiresCan =
+        readyRequiresCan(sharedData) ||
+        sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+    if (motionRequiresCan &&
         (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE ||
         !sensorData.isValid ||
         (uint32_t)(nowMs - sensorData.timestamp) > kStateCanOfflineTimeoutMs ||
@@ -961,9 +1418,7 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     if (sharedAtomicLoad(&sharedData->overload_fault_bitmap) != 0) {
         faults |= SYSTEM_FAULT_OVERLOAD;
     }
-    if (sharedAtomicLoad(&sharedData->reverse_release_fault_bitmap) != 0) {
-        faults |= SYSTEM_FAULT_RELEASE_GUARD;
-    }
+
     if (sharedAtomicLoad(&sharedData->calibration_fault_latched) != 0) {
         faults |= SYSTEM_FAULT_CALIBRATION;
     }
@@ -976,12 +1431,42 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     return faults;
 }
 
+static uint32_t blockingFaultsForState(uint8_t state, uint32_t faults)
+{
+    switch (state) {
+        case SYSTEM_STATE_RUN_DIRECT:
+            return faults & ~SYSTEM_FAULT_CAN_OFFLINE;
+        case SYSTEM_STATE_RUN_FEEDBACK:
+        case SYSTEM_STATE_ROPE_INIT_RUNNING:
+            return faults;
+        case SYSTEM_STATE_CALIBRATION_RUNNING:
+            // Auto calibration intentionally reconstructs the multi-turn
+            // reference, so unknown turns are not an abort condition here.
+            return faults & ~SYSTEM_FAULT_MULTITURN_UNKNOWN;
+        default:
+            return 0;
+    }
+}
+
+static bool stateOwnsMotionResources(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+    return sharedData->control_enabled != 0 ||
+           sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+           sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+           sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+           sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+           sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+}
+
 // ============================================================================
-// StateMachineTask - 绯荤粺椤跺眰澶х姸鎬佹満浠诲姟
+// StateMachineTask - 系统顶层大状态机任务
 // ============================================================================
-// 杩愯棰戠巼锛氶€氬父涓?100Hz (10ms 鍛ㄦ湡)
-// 鑱岃矗锛?// 1) 璐熻矗鍏ㄥ眬瀹夊叏鐘舵€佹祦杞細UNCONTROLLABLE (涓嶅彲鎺?寮傚父) -> IDLE (绌洪棽鍙敤)
-//    -> READY (鍚勫叧鑺傚湪鏈夋晥宸ヤ綔绌洪棿鍐咃紝鍑嗗灏辩华) -> RUN_FEEDBACK / RUN_DIRECT銆?// 2) 澶勭悊澶栭儴鍙戞潵鐨勬寚浠や簨浠讹紙濡?SYSTEM_EVENT_START銆丼YSTEM_EVENT_CALIBRATE锛夈€?// 3) 涓嶆柇鏀堕泦搴曞眰鐨勯敊璇姸鎬?(collectSystemFaults)锛屼竴鏃﹀彂鐜版柇鑱斻€佽繃杞界瓑鑷村懡閿欒锛?//    绔嬪嵆寮哄埗閫€鍥?UNCONTROLLABLE 鐘舵€佸苟瑙﹀彂绱ф€ユ€ュ仠 (Emergency Hold)銆?// ============================================================================
+// 运行频率：通常�?100Hz (10ms 周期)
+// 职责�?// 1) 负责全局安全状态流转：UNCONTROLLABLE (不可�?异常) -> IDLE (空闲可用)
+//    -> READY (各关节在有效工作空间内，准备就绪) -> RUN_FEEDBACK / RUN_DIRECT�?// 2) 处理外部发来的指令事件（�?SYSTEM_EVENT_START、SYSTEM_EVENT_CALIBRATE）�?// 3) 不断收集底层的错误状�?(collectSystemFaults)，一旦发现断联、过载等致命错误�?//    立即强制退�?UNCONTROLLABLE 状态并触发紧急急停 (Emergency Hold)�?// ============================================================================
 void stateMachineTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -1032,11 +1517,11 @@ void stateMachineTask(void* parameter)
         }
 #endif
 
-        if (sharedData->control_enabled != 0) {
-            if (faults != 0) {
-                enterFaultHold(sharedData, faults);
-            }
-        } else {
+        const uint32_t blockingFaults =
+            blockingFaultsForState(sharedData->system_state, faults);
+        if (stateOwnsMotionResources(sharedData) && blockingFaults != 0) {
+            enterFaultHold(sharedData, blockingFaults);
+        } else if (!stateOwnsMotionResources(sharedData)) {
             updateReadyStateIfIdle(sharedData);
         }
 

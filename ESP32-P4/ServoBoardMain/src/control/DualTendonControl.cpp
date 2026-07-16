@@ -257,12 +257,26 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
         return false;
     }
 
+    float lutRefDeg = qRefDeg;
+    float lutFbDeg = qFbDeg;
+    if (calib.mappingVersion >= 2) {
+        const float urdfSpan = calib.angleMax - calib.angleMin;
+        if (!isfinite(urdfSpan) || urdfSpan <= 0.0f ||
+            !isfinite(calib.totalDeg) || calib.totalDeg <= 0.0f) {
+            return false;
+        }
+        lutRefDeg = calib.startDeg +
+            ((qRefDeg - calib.angleMin) / urdfSpan) * calib.totalDeg;
+        lutFbDeg = calib.startDeg +
+            ((qFbDeg - calib.angleMin) / urdfSpan) * calib.totalDeg;
+    }
+
     for (uint8_t i = 0; i < 2; i++) {
         if (calib.dualTendonLutMotor[i] != actuators[i].motorChannel) {
             return false;
         }
-        if (!interpolateDualTendonLutMotorAbs(calib, i, qRefDeg, &outRef[i]) ||
-            !interpolateDualTendonLutMotorAbs(calib, i, qFbDeg, &outFb[i])) {
+        if (!interpolateDualTendonLutMotorAbs(calib, i, lutRefDeg, &outRef[i]) ||
+            !interpolateDualTendonLutMotorAbs(calib, i, lutFbDeg, &outFb[i])) {
             return false;
         }
     }

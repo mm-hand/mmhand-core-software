@@ -155,7 +155,6 @@ desktop/
   paths.py                    # 资源路径 helper
   requirements.txt            # desktop 依赖说明
   serial_log_filter.py        # 串口日志过滤工具
-  hand_visualizer_ui.py       # 手部可视化辅助入口/工具
 
   app/
     entry.py                  # argparse 子命令：ui、cli
@@ -177,7 +176,6 @@ desktop/
 
   ui/
     ui_app.py                 # HandGUI 主窗口
-    ui_launcher.py            # Qt 启动选择窗口
     ui_context.py             # UI component context
     ui_control_panels.py      # 控制面板
     ui_pose_view.py           # 手姿态视图

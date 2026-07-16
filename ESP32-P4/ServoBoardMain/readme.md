@@ -126,7 +126,6 @@ Direct motor 模式用于上位机滑条、绝对位置或扫动命令直接控�
 - `SYSTEM_FAULT_SERVO_OFFLINE`：舵机反馈超时或部分舵机未上报。
 - `SYSTEM_FAULT_JOINT16_DUAL`：joint16 双舵机同步保护。
 - `SYSTEM_FAULT_OVERLOAD`：负载异常保护。
-- `SYSTEM_FAULT_RELEASE_GUARD`：反绕释放保护或肌腱保护触发。
 
 `FAULT_HOLD` 下普通 PID 不继续生成新的运动目标，只保持当前位置或进入安全保持逻辑。
 
@@ -154,7 +153,6 @@ Direct motor 模式用于上位机滑条、绝对位置或扫动命令直接控�
 | `CMD_SENSOR_STREAM_MODE` | `0xD1` | 切换传感器流格式 |
 | `CMD_MOTOR_POS_SWEEP` | `0xD2` | 下发滑条 sweep 目标 |
 | `CMD_MOTOR_POS_ABS` | `0xD3` | 下发绝对舵机位置 |
-| `CMD_TENDON_GUARD` | `0xD4` | 配置肌腱保护 |
 
 ### 固件上报
 

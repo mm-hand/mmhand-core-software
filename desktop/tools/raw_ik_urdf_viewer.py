@@ -18,46 +18,24 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from desktop.core.protocol import ENCODER_COUNT  # noqa: E402
+from desktop.teleop.joint_target_adapter import (  # noqa: E402
+    URDF_DEG,
+    active_mapping_identity,
+    joint_index_for_urdf_name,
+)
 from desktop.teleop.Posture.hand_retargeting.constants import DEFAULT_URDF_PATH  # noqa: E402
 from desktop.teleop.Posture.hand_retargeting.math_utils import make_transform, parse_xyz, rpy_to_rotation  # noqa: E402
 from desktop.teleop.Posture.hand_retargeting.urdf_model import URDFRobotHandModel  # noqa: E402
 from desktop.ui.ui_qt_compat import QtCore, QtGui, QtWidgets  # noqa: E402
 
 
-SEMANTIC_JOINT_TO_ENCODER_INDEX = {
-    "little_aa_joint": 0,
-    "mmhand_finger_4_proximal_phalanx_1_mcp_fe_joint": 1,
-    "mmhand_finger_4_distal_phalanx_1_pip_joint": 2,
-    "mmhand_finger_4_fingertip_1_dip_joint": 3,
-    "ring_aa_joint": 4,
-    "mmhand_finger_3_proximal_phalanx_1_mcp_fe_joint": 5,
-    "mmhand_finger_3_distal_phalanx_1_pip_joint": 6,
-    "mmhand_finger_3_fingertip_1_dip_joint": 7,
-    "middle_aa_joint": 8,
-    "mmhand_finger_2_proximal_phalanx_1_mcp_fe_joint": 9,
-    "mmhand_finger_2_distal_phalanx_1_pip_joint": 10,
-    "mmhand_finger_2_fingertip_1_dip_joint": 11,
-    "index_aa_joint": 12,
-    "mmhand_finger_1_proximal_phalanx_1_mcp_fe_joint": 13,
-    "mmhand_finger_1_distal_phalanx_1_pip_joint": 14,
-    "mmhand_finger_1_fingertip_1_dip_joint": 15,
-    "thumb_aa_joint": 16,
-    "mmhand_thumb_1_mmhand_finger_5_proximal_phalanx_1_mcp_fe_joint": 17,
-    "mmhand_thumb_1_mmhand_finger_5_distal_phalanx_1_pip_joint": 18,
-    "mmhand_thumb_1_mmhand_finger_5_fingertip_1_dip_joint": 19,
-    "thumb_cmc1_joint": 20,
-}
-
-
 def _encoder_index_for_joint(joint_name: str) -> Optional[int]:
-    return SEMANTIC_JOINT_TO_ENCODER_INDEX.get(str(joint_name))
+    return joint_index_for_urdf_name(str(joint_name))
 
 
 def _encoder_degrees_to_urdf_angle(joint_idx: int, value_deg: float) -> float:
-    value_rad = math.radians(float(value_deg))
-    if joint_idx in {1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19}:
-        return -abs(value_rad)
-    return value_rad
+    _ = joint_idx
+    return math.radians(float(value_deg))
 
 
 FINGER_COLORS = {
@@ -684,7 +662,7 @@ class RawIkUrdfViewer(QtWidgets.QWidget):
         self._last_timestamp: Optional[float] = None
         self._last_mtime: Optional[float] = None
 
-        self.setWindowTitle("Raw IK URDF q_target Viewer")
+        self.setWindowTitle("Raw IK Active-URDF Target Viewer")
         self.resize(760, 620)
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -718,6 +696,26 @@ class RawIkUrdfViewer(QtWidgets.QWidget):
         try:
             with open(self.stream_path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
+            if str(payload.get("angle_space", "")) != URDF_DEG:
+                raise ValueError(
+                    f"angle_space={payload.get('angle_space')!r}, expected {URDF_DEG!r}"
+                )
+            expected = active_mapping_identity()
+            stream_identity = (
+                str(payload.get("mapping_id", "")),
+                int(payload.get("mapping_version", -1)),
+                int(payload.get("urdf_config_crc", -1)) & 0xFFFFFFFF,
+            )
+            expected_identity = (
+                expected.mapping_id,
+                expected.mapping_version,
+                expected.urdf_config_crc,
+            )
+            if stream_identity != expected_identity:
+                raise ValueError(
+                    "URDF mapping mismatch: "
+                    f"stream={stream_identity}, active={expected_identity}"
+                )
             angles = list(payload.get("angles_deg", []))
             while len(angles) < ENCODER_COUNT:
                 angles.append(0.0)
@@ -738,11 +736,11 @@ class RawIkUrdfViewer(QtWidgets.QWidget):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Standalone Raw IK URDF q_target viewer.")
+    parser = argparse.ArgumentParser(description="Standalone active-URDF joint-target viewer.")
     parser.add_argument(
         "--stream",
         default=os.path.join(DESKTOP_ROOT, "config", "raw_ik_q_target.json"),
-        help="Path to q_target JSON stream written by the main UI.",
+        help="Path to active-URDF target JSON stream written by the main UI.",
     )
     args = parser.parse_args()
 

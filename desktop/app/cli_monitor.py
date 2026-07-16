@@ -82,6 +82,8 @@ def _render_calib_status(calib_status: str) -> str:
         return f"{Fore.YELLOW}Sending calibration request...{Style.RESET_ALL}"
     if calib_status == "SUCCESS":
         return f"{Back.GREEN}{Fore.WHITE} Calibration SUCCESS {Style.RESET_ALL}"
+    if calib_status == "WARN":
+        return f"{Back.YELLOW}{Fore.BLACK} Calibration WARN {Style.RESET_ALL}"
     if calib_status == "FAILED":
         return f"{Back.RED}{Fore.WHITE} Calibration FAILED {Style.RESET_ALL}"
     if calib_status == "NO_CALIB":
@@ -296,9 +298,15 @@ def _make_ros2_bridge(
     ros2_input: str,
     ros_topic: str,
     auto_start: bool,
+    raw_ik_space: str = "legacy_calibrated_deg",
 ):
     if ros2_input == "raw_ik":
-        return RawIkTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+        return RawIkTargetBridge(
+            backend,
+            topic=ros_topic,
+            auto_start=auto_start,
+            input_space=raw_ik_space,
+        )
     return Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
 
 
@@ -311,6 +319,7 @@ def run_cli_monitor(
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
+    ros2_raw_ik_space: str = "legacy_calibrated_deg",
     backend: Optional[HandBackend] = None,
     key_reader_factory: Callable[[], _KeyReader] = _KeyReader,
     max_iterations: Optional[int] = None,
@@ -354,6 +363,7 @@ def run_cli_monitor(
             ros2_input=ros2_input,
             ros_topic=ros_topic,
             auto_start=auto_start,
+            raw_ik_space=ros2_raw_ik_space,
         )
         try:
             ros_bridge.start()

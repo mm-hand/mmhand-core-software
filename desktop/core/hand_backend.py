@@ -6,16 +6,18 @@ into HandController or LowerComputerComm directly.
 """
 
 from dataclasses import dataclass, field
+import math
 import threading
 import time
 from typing import Callable, Iterable, List, Optional, Tuple
 
 from desktop.paths import TENDON_MANUAL_CALIB_PATH
 
+from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController
-from .data_models import HandModel
-from .protocol import ControlMode
+from .data_models import HandModel, resolve_joint_workspace_range
+from .protocol import ControlMode, ENCODER_COUNT
 from .tendon_guard import TendonGuard
 
 
@@ -69,6 +71,7 @@ def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
 class JointCommandResult:
     sent: bool
     blocked: List[int] = field(default_factory=list)
+    clamped: List[int] = field(default_factory=list)
     message: str = ""
     targets: List[float] = field(default_factory=list)
 
@@ -98,6 +101,13 @@ class HandBackend:
         self._state_callbacks: List[StateCallback] = []
         self._callback_lock = threading.Lock()
         self._joint_target_callbacks: List[JointTargetCallback] = []
+        self._requested_active_joint_mask: Optional[int] = None
+        try:
+            self._workspace_mapping_version, self._workspace_urdf_crc = (
+                urdf_manual_scaled_mapping_metadata()
+            )
+        except (OSError, TypeError, ValueError):
+            self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
         self._ensure_controller_callback_registered()
 
@@ -175,12 +185,14 @@ class HandBackend:
 
     def connect(self, port: str) -> bool:
         self._ensure_controller_callback_registered()
+        self._requested_active_joint_mask = None
         return bool(self._controller.initialize(str(port)))
 
     def initialize(self, port: str) -> bool:
         return self.connect(port)
 
     def shutdown(self, stop_lower: bool = True) -> None:
+        self._requested_active_joint_mask = None
         self._controller.shutdown(stop_lower=stop_lower)
 
     def disconnect(self, stop_lower: bool = False) -> None:
@@ -247,8 +259,73 @@ class HandBackend:
         merge_tactile_state(target, latest)
         return True, target
 
-    def sync_tendon_guard(self, *, force: bool = False) -> None:
-        self.tendon_guard.sync_to_controller(self, force=force)
+    def _joint_workspace_active_mask(self, state: Optional[HandModel]) -> int:
+        valid_mask = (1 << ENCODER_COUNT) - 1
+        if self._requested_active_joint_mask is not None:
+            return int(self._requested_active_joint_mask) & valid_mask
+        return int(getattr(state, "active_joint_mask", 0) or 0) & valid_mask
+
+    def _apply_joint_workspace_guard(
+        self,
+        state: Optional[HandModel],
+        targets: Iterable[float],
+        *,
+        source: str,
+    ) -> Tuple[List[float], List[int], List[int], str]:
+        values = list(targets)
+        if len(values) != ENCODER_COUNT:
+            blocked = list(range(ENCODER_COUNT))
+            return [], blocked, [], f"Joint command blocked: expected {ENCODER_COUNT} targets"
+        try:
+            guarded = [float(value) for value in values]
+        except (TypeError, ValueError):
+            blocked = list(range(ENCODER_COUNT))
+            return [], blocked, [], "Joint command blocked: targets must be numeric"
+        non_finite = [idx for idx, value in enumerate(guarded) if not math.isfinite(value)]
+        if non_finite:
+            return [], non_finite, [], "Joint command blocked: targets must be finite"
+
+        active_mask = self._joint_workspace_active_mask(state)
+        if active_mask == 0:
+            blocked = list(range(ENCODER_COUNT))
+            return [], blocked, [], "Joint command blocked: active joint scope is empty"
+
+        blocked: List[int] = []
+        clamped: List[int] = []
+        reasons: List[str] = []
+        for joint_idx in range(ENCODER_COUNT):
+            if (active_mask & (1 << joint_idx)) == 0:
+                continue
+            spec = get_spec(joint_idx)
+            workspace = resolve_joint_workspace_range(
+                state,
+                joint_idx,
+                spec.urdf_range_deg[0],
+                spec.urdf_range_deg[1],
+                self._workspace_mapping_version,
+                self._workspace_urdf_crc,
+            )
+            if not workspace.ready:
+                blocked.append(joint_idx)
+                reasons.append(f"J{joint_idx:02d} {workspace.reason}")
+                continue
+            bounded = workspace.clamp(guarded[joint_idx])
+            if abs(bounded - guarded[joint_idx]) > 1e-6:
+                guarded[joint_idx] = bounded
+                clamped.append(joint_idx)
+
+        if blocked:
+            detail = "; ".join(reasons[:4])
+            if len(reasons) > 4:
+                detail += f"; +{len(reasons) - 4} more"
+            return [], blocked, clamped, f"Joint command blocked: {detail}"
+
+        message = ""
+        if clamped:
+            joints = ", ".join(f"J{idx:02d}" for idx in clamped)
+            suffix = f" ({source})" if source else ""
+            message = f"Joint targets clamped to [Current Min, URDF Max]: {joints}{suffix}"
+        return guarded, blocked, clamped, message
 
     def send_joint_targets(
         self,
@@ -256,28 +333,79 @@ class HandBackend:
         *,
         source: str = "",
         live: bool = False,
+        input_space: str = "urdf_deg",
+        raw_targets: Optional[Iterable[float]] = None,
     ) -> JointCommandResult:
-        self.sync_tendon_guard(force=False)
+        from desktop.teleop.joint_target_adapter import active_mapping_identity
+
         state = self.get_current_state()
         input_targets = list(angles)
-        guarded, blocked, message = self.tendon_guard.apply(state, input_targets, source=source)
+        raw_input_targets = list(raw_targets) if raw_targets is not None else list(input_targets)
+        mapping = active_mapping_identity()
+        command_metadata = {
+            "input_space": str(input_space or "urdf_deg"),
+            "output_space": "urdf_deg",
+            "raw_input_targets": raw_input_targets,
+            "mapping_id": mapping.mapping_id,
+            "mapping_version": mapping.mapping_version,
+            "urdf_config_crc": mapping.urdf_config_crc,
+        }
+        guarded, workspace_blocked, clamped, workspace_message = self._apply_joint_workspace_guard(
+            state,
+            input_targets,
+            source=source,
+        )
+        if workspace_blocked:
+            result = JointCommandResult(
+                sent=False,
+                blocked=workspace_blocked,
+                clamped=clamped,
+                message=workspace_message,
+                targets=list(input_targets),
+            )
+            self._notify_joint_target_callbacks(
+                {
+                    "source": source,
+                    "live": bool(live),
+                    "input_targets": input_targets,
+                    "output_targets": list(input_targets),
+                    "blocked": list(workspace_blocked),
+                    "clamped": list(clamped),
+                    "message": workspace_message,
+                    "sent": False,
+                    "device_timestamp": getattr(state, "timestamp", ""),
+                    **command_metadata,
+                }
+            )
+            return result
+
+        guarded, tendon_blocked, tendon_message = self.tendon_guard.apply(state, guarded, source=source)
         if live:
             self._controller.set_target_angles_live(guarded)
         else:
             self._controller.set_target_angles(guarded)
-        if source and not blocked and not str(source).startswith("Hold"):
+        if source and not tendon_blocked and not str(source).startswith("Hold"):
             self._controller.request_run_feedback()
-        result = JointCommandResult(sent=True, blocked=list(blocked), message=message, targets=guarded)
+        message = tendon_message or workspace_message
+        result = JointCommandResult(
+            sent=True,
+            blocked=list(tendon_blocked),
+            clamped=list(clamped),
+            message=message,
+            targets=guarded,
+        )
         self._notify_joint_target_callbacks(
             {
                 "source": source,
                 "live": bool(live),
                 "input_targets": input_targets,
                 "output_targets": guarded,
-                "blocked": list(blocked),
+                "blocked": list(tendon_blocked),
+                "clamped": list(clamped),
                 "message": message,
                 "sent": bool(result.sent),
                 "device_timestamp": getattr(state, "timestamp", ""),
+                **command_metadata,
             }
         )
         return result
@@ -339,11 +467,11 @@ class HandBackend:
     def resume(self) -> None:
         self._controller.resume()
 
-    def set_target_angles(self, angles: List[float]) -> None:
-        self._controller.set_target_angles(angles)
+    def set_target_angles(self, angles: List[float]) -> JointCommandResult:
+        return self.send_joint_targets(angles, source="Backend set_target_angles", live=False)
 
-    def set_target_angles_live(self, angles: List[float]) -> None:
-        self._controller.set_target_angles_live(angles)
+    def set_target_angles_live(self, angles: List[float]) -> JointCommandResult:
+        return self.send_joint_targets(angles, source="Backend set_target_angles_live", live=True)
 
     def set_motor_positions_raw(self, motor_pos_raw: List[int]) -> None:
         self._controller.set_motor_positions_raw(motor_pos_raw)
@@ -360,9 +488,6 @@ class HandBackend:
     def set_local_test_params(self, freq_hz: float, amplitude_deg: float) -> None:
         self._controller.set_local_test_params(freq_hz, amplitude_deg)
 
-    def set_tendon_guard_config(self, config: List[Tuple[bool, int, int]]) -> None:
-        self._controller.set_tendon_guard_config(config)
-
     def start_local_test(self) -> None:
         self._controller.start_local_test()
 
@@ -376,7 +501,31 @@ class HandBackend:
         return self._controller.request_run_feedback()
 
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
-        return self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
+        ok = self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
+        if ok:
+            self._requested_active_joint_mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+        return ok
+
+    def set_manual_encoder_references(self, manual_min_raw, manual_max_raw) -> bool:
+        return self._controller.set_manual_encoder_references(
+            list(manual_min_raw), list(manual_max_raw)
+        )
+
+    def set_manual_encoder_reference(
+        self, joint: int, manual_min_raw: int, manual_max_raw: int
+    ) -> bool:
+        return self._controller.set_manual_encoder_reference(
+            joint, manual_min_raw, manual_max_raw
+        )
+
+    def query_manual_encoder_references(self) -> bool:
+        return self._controller.query_manual_encoder_references()
+
+    def clear_manual_encoder_references(self) -> bool:
+        return self._controller.clear_manual_encoder_references()
+
+    def rope_init(self, active_joint_mask: int) -> bool:
+        return self._controller.rope_init(active_joint_mask)
 
     def set_motor_abs_limit_lock(self, active_motor_mask: int, locked: bool) -> bool:
         return self._controller.set_motor_abs_limit_lock(active_motor_mask, locked)

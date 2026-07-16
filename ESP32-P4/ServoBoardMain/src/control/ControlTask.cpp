@@ -3,8 +3,10 @@
 #include <math.h>
 #include <string.h>
 
+#include "../calibration/CalibrationMath.h"
 #include "../calibration/CalibrationTask.h"
 #include "../hardware/HardwareMap.h"
+#include "../generated/UrdfJointLimits.generated.h"
 #include "../shared/SharedSafetyState.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
@@ -20,12 +22,6 @@
 
 #ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
 #define FEEDBACK_SERIAL_DEBUG_ENABLE 0
-#endif
-
-// Match the legacy RoboticHand protection policy: keep reverse/release guard
-// disabled during wiring and manual bring-up unless explicitly enabled.
-#ifndef REVERSE_GUARD_ENABLE
-#define REVERSE_GUARD_ENABLE 0
 #endif
 
 static ControlSolver g_controlSolver;
@@ -54,6 +50,8 @@ static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 1.0f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
 static const uint32_t kFeedbackRunTimeoutMs = 8000;
+static const int32_t kUpperWorkspaceWarningCounts = 48;
+static const uint8_t kUpperWorkspaceWarningStableFrames = 3;
 static const float kLocalTestTwoPi = 6.28318530717958647692f;
 static const float kLocalTestMinFreqHz = 0.001f;
 static const float kLocalTestMaxFreqHz = 100.0f;
@@ -156,9 +154,14 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
         return 0.0f;
     }
 
+    float minDeg = 0.0f;
     float maxDeg = 0.0f;
     if (g_jointCalibResult[jointIndex].success) {
-        maxDeg = g_jointCalibResult[jointIndex].angleMax;
+        const JointCalibrationResult& calibration = g_jointCalibResult[jointIndex];
+        if (calibration.mappingVersion >= 2) {
+            minDeg = calibration.angleMin;
+        }
+        maxDeg = calibration.angleMax;
     } else {
         maxDeg =
             g_jointCalibConfig[jointIndex].angleScope -
@@ -169,8 +172,11 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
     if (!isfinite(maxDeg) || maxDeg <= 0.0f) {
         return 0.0f;
     }
-    if (targetDeg < 0.0f) {
+    if (!isfinite(minDeg) || minDeg >= maxDeg) {
         return 0.0f;
+    }
+    if (targetDeg < minDeg) {
+        return minDeg;
     }
     if (targetDeg > maxDeg) {
         return maxDeg;
@@ -459,10 +465,6 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     memcpy(out->sineTestAmpDeg, sharedData->sine_test_amp_deg, sizeof(out->sineTestAmpDeg));
     memcpy(out->sineTestFreqHz, sharedData->sine_test_freq_hz, sizeof(out->sineTestFreqHz));
     memcpy(out->sineTestPhaseRad, sharedData->sine_test_phase_rad, sizeof(out->sineTestPhaseRad));
-    memcpy(out->tendonGuardEnabled, (const void*)sharedData->tendon_guard_enabled, sizeof(out->tendonGuardEnabled));
-    memcpy(out->tendonGuardSign, (const void*)sharedData->tendon_guard_sign, sizeof(out->tendonGuardSign));
-    memcpy(out->tendonGuardX1Abs, (const void*)sharedData->tendon_guard_x1_abs, sizeof(out->tendonGuardX1Abs));
-
     if (lock) {
         xSemaphoreGive(lock);
     }
@@ -492,13 +494,10 @@ void controlTask(void* parameter)
 
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
-    ReleaseGuardState releaseGuards[ENCODER_TOTAL_NUM];
-    resetAllReleaseGuardStates(releaseGuards);
-    uint32_t lastReleaseFaultResetToken =
-        sharedAtomicLoad(&sharedData->reverse_release_fault_reset_token);
-    sharedAtomicStore(&sharedData->reverse_release_fault_bitmap, (uint32_t)0);
     uint32_t overloadFaultLatched = 0;
     uint8_t overloadHighCount[SERVO_TOTAL_NUM] = {0};
+    uint8_t upperWorkspaceHighCount[ENCODER_TOTAL_NUM] = {0};
+    uint32_t upperWorkspaceWarningBitmap = 0;
     uint32_t lastOverloadFaultResetToken =
         sharedAtomicLoad(&sharedData->overload_fault_reset_token);
     {
@@ -580,15 +579,6 @@ void controlTask(void* parameter)
         {
             memset(sweepAnchorValid, 0, sizeof(sweepAnchorValid));
             lastMotorDirectSource = motorDirectSource;
-        }
-
-        const uint32_t releaseFaultResetToken =
-            sharedAtomicLoad(&sharedData->reverse_release_fault_reset_token);
-        if (releaseFaultResetToken != lastReleaseFaultResetToken)
-        {
-            resetAllReleaseGuardStates(releaseGuards);
-            sharedAtomicStore(&sharedData->reverse_release_fault_bitmap, (uint32_t)0);
-            lastReleaseFaultResetToken = releaseFaultResetToken;
         }
 
         const uint32_t overloadFaultResetToken =
@@ -704,6 +694,8 @@ void controlTask(void* parameter)
                     sensorData.encoderValues[i] == kEncoderDisconnectRaw) {
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
+                    upperWorkspaceHighCount[i] = 0;
+                    upperWorkspaceWarningBitmap &= ~bit;
                     continue;
                 }
 
@@ -712,11 +704,74 @@ void controlTask(void* parameter)
                     mappedData.angleValues[i] = 0;
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
+                    upperWorkspaceHighCount[i] = 0;
+                    upperWorkspaceWarningBitmap &= ~bit;
                     continue;
                 }
 
                 const JointCalibrationResult& calib = g_jointCalibResult[i];
-                const float mappedDeg = mapCalibratedEncoderToDeg(calib, orientedRaw);
+                float mappedDeg = 0.0f;
+                if (calib.mappingVersion >= 2) {
+                    EncoderUrdfMapResult mapping;
+                    const bool mapped =
+                        calib.mappingVersion == kManualScaledUrdfFeedbackMappingVersion
+                        ? mapManualScaledEncoderToUrdf(
+                              (uint8_t)i,
+                              calib,
+                              g_manualEncoderReference[i],
+                              sensorData.encoderValues[i],
+                              g_encoderDirection[i],
+                              &mapping)
+                        : mapJointCalibrationEncoderToUrdf(
+                              (uint8_t)i,
+                              calib,
+                              orientedRaw,
+                              &mapping);
+                    if (!mapped) {
+                        mappedData.angleValues[i] = 0;
+                        mappedData.outsideCounts[i] = 0;
+                        mappedData.validFlags[i] = 0;
+                        magAngles[i] = 0.0f;
+                        upperWorkspaceHighCount[i] = 0;
+                        upperWorkspaceWarningBitmap &= ~bit;
+                        continue;
+                    }
+                    mappedDeg = mapping.urdfDeg;
+                    int32_t outsideCounts = mapping.outsideCounts;
+                    if (outsideCounts > 32767) outsideCounts = 32767;
+                    if (outsideCounts < -32768) outsideCounts = -32768;
+                    mappedData.outsideCounts[i] = (int16_t)outsideCounts;
+                    if (outsideCounts > kUpperWorkspaceWarningCounts) {
+                        if (upperWorkspaceHighCount[i] < 255) {
+                            upperWorkspaceHighCount[i]++;
+                        }
+                        if (upperWorkspaceHighCount[i] >=
+                                kUpperWorkspaceWarningStableFrames &&
+                            (upperWorkspaceWarningBitmap & bit) == 0) {
+                            upperWorkspaceWarningBitmap |= bit;
+                            FW_LOG_WARN_PRINTF(
+                                "[CONTROL] UPPER_WORKSPACE_WARN J%02u outside=%ld threshold=%ld raw=%u mapped=%.3f max=%.3f\r\n",
+                                (unsigned)i,
+                                (long)outsideCounts,
+                                (long)kUpperWorkspaceWarningCounts,
+                                (unsigned)sensorData.encoderValues[i],
+                                mappedDeg,
+                                calib.currentMaxDeg);
+                        }
+                    } else {
+                        if ((upperWorkspaceWarningBitmap & bit) != 0) {
+                            FW_LOG_INFO_PRINTF(
+                                "[CONTROL] UPPER_WORKSPACE_RECOVER J%02u outside=%ld\r\n",
+                                (unsigned)i,
+                                (long)outsideCounts);
+                        }
+                        upperWorkspaceHighCount[i] = 0;
+                        upperWorkspaceWarningBitmap &= ~bit;
+                    }
+                } else {
+                    mappedDeg = mapCalibratedEncoderToDeg(calib, orientedRaw);
+                    mappedData.outsideCounts[i] = 0;
+                }
                 const int32_t mappedCount = degToEncoderCount(mappedDeg);
                 mappedData.angleValues[i] = clampMappedCountForProtocol(mappedCount);
                 mappedData.validFlags[i] = 1;
@@ -940,37 +995,7 @@ void controlTask(void* parameter)
                 const uint8_t id = jointMap[jointIndex].servoID;
                 const int jointMotorCh = findMotorChannel(bus, id);
                 const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
-                const bool mappedValid = canBusOnline && (mappedData.validFlags[jointIndex] != 0);
-                const bool guardInputsValid = servoOnline && mappedValid;
-                bool releaseFaultActive = false;
-                bool holdByTendonGuard = false;
                 bool overloadFaultActive = jointHasOverloadFault(jointIndex, overloadFaultLatched);
-
-                if (jointIndex != kJoint16Index)
-                {
-                    const int32_t servoPos =
-                        (jointMotorCh >= 0) ? servoData.servoAngles[jointMotorCh] : absolutePositionRaw[jointIndex];
-#if REVERSE_GUARD_ENABLE
-                    const bool reverseGuardCalibrationReady = g_jointCalibResult[jointIndex].success;
-                    if (controlEnabled && reverseGuardCalibrationReady) {
-                        releaseFaultActive = updateReleaseGuardState(&releaseGuards[jointIndex],
-                                                                     localTargets[jointIndex],
-                                                                     magAngles[jointIndex],
-                                                                     servoPos,
-                                                                     guardInputsValid);
-                        holdByTendonGuard = shouldBlockReleaseByTendonGuard(
-                            &commandSnapshot,
-                            jointIndex,
-                            localTargets[jointIndex],
-                            magAngles[jointIndex],
-                            absolutePositionRaw[jointIndex],
-                            guardInputsValid
-                        );
-                    }
-#else
-                    (void)servoPos;
-#endif
-                }
 
                 bool emergency =
                     (!normalOutputAllowed) ||
@@ -980,14 +1005,7 @@ void controlTask(void* parameter)
                                         jointIndex,
                                         ((sharedAtomicLoad(&sharedData->encoder_fault_bitmap) &
                                           (1UL << jointIndex)) != 0));
-                if (jointIndex == kJoint16Index) {
-                    emergency = emergency || overloadFaultActive;
-                } else {
-                    // Tendon boundary hits are advisory; release risk is latched only
-                    // after the joint fails to return during sustained release motion.
-                    (void)holdByTendonGuard;
-                    emergency = emergency || releaseFaultActive || overloadFaultActive;
-                }
+                emergency = emergency || overloadFaultActive;
                 const bool hotplugHoldActive =
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
@@ -1078,15 +1096,6 @@ void controlTask(void* parameter)
             }
         }
 
-        const uint32_t releaseFaultBitmap =
-#if REVERSE_GUARD_ENABLE
-            buildReleaseFaultBitmap(releaseGuards);
-#else
-            0;
-#endif
-        sharedAtomicStore(&sharedData->reverse_release_fault_bitmap,
-                          releaseFaultBitmap);
-
         if (sharedData->jointDebugQueue)
         {
             for (uint8_t di = 0; di < kDebugJointCount; di++)
@@ -1172,7 +1181,10 @@ void controlTask(void* parameter)
                     directRunDoneStableCount++;
                 }
                 if (directRunDoneStableCount >= kDirectRunDoneStableCycles) {
-                    postSystemEvent(sharedData, SYSTEM_EVENT_RUN_DIRECT_DONE);
+                    postSystemEventForToken(
+                        sharedData,
+                        SYSTEM_EVENT_RUN_DIRECT_DONE,
+                        commandSnapshot.motorDirectCommandGeneration);
                     directRunDoneStableCount = 0;
                 }
             } else {

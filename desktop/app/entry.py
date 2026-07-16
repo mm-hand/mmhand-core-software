@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
+RAW_IK_SPACES = ["legacy_calibrated_deg", "urdf_deg", "urdf_rad"]
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -32,6 +33,15 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--ros2-raw-ik-topic",
         default=DEFAULT_RAW_IK_TARGET_TOPIC,
         help=f"ROS2 Float32MultiArray topic for external MANUS/IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
+    )
+    parser.add_argument(
+        "--ros2-raw-ik-space",
+        choices=RAW_IK_SPACES,
+        default="legacy_calibrated_deg",
+        help=(
+            "Coordinate space used by /raw_ik_target. The compatibility default is "
+            "legacy_calibrated_deg; use urdf_deg for new active-URDF publishers."
+        ),
     )
     parser.add_argument(
         "--ros-topic",
@@ -89,6 +99,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
             ros_topic=_resolve_ros_topic(args),
+            ros2_raw_ik_space=args.ros2_raw_ik_space,
             auto_start=bool(args.auto_start),
         )
     if args.command == "cli":
@@ -101,6 +112,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
             ros_topic=_resolve_ros_topic(args),
+            ros2_raw_ik_space=args.ros2_raw_ik_space,
             auto_start=bool(args.auto_start),
         )
     parser.error(f"unknown command: {args.command}")

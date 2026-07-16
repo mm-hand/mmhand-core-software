@@ -19,7 +19,6 @@ PACKET_TYPE_JOINT_DEBUG = 0x04
 PACKET_TYPE_SERVO_TELEM = 0x05
 PACKET_TYPE_PROTO_ACK = 0x06
 PACKET_TYPE_FAULT_STATUS = 0x07
-PACKET_TYPE_RELEASE_FAULT = 0x08
 PACKET_TYPE_SERVO_RAW = 0x09
 PACKET_TYPE_TACTILE = 0x0A
 PACKET_TYPE_ENCODER_RAW = 0x0B
@@ -29,6 +28,12 @@ PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
 PACKET_TYPE_TACTILE_FULL = 0x0F
 PACKET_TYPE_CALIB_DIAG = 0x10
 PACKET_TYPE_TASK_DIAG = 0x11
+PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12
+
+CALIB_WARN_NONE = 0x00
+CALIB_WARN_AUTO_MIN_OFFSET = 0x01
+CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02
+CALIB_WARN_AUTO_SPAN_RANGE = 0x04
 
 TASK_RUNTIME_UPPER_COMM = 0
 TASK_RUNTIME_STATE_MACHINE = 1
@@ -59,7 +64,6 @@ CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
 CMD_MOTOR_POS_ABS_ONE = 0xDE
-CMD_TENDON_GUARD = 0xD4
 CMD_ACTIVE_SCOPE = 0xD7
 CMD_RUN_FEEDBACK = 0xD8
 CMD_PAUSE = 0xD9
@@ -74,6 +78,10 @@ CMD_LOCAL_TEST_PARAMS = 0xE1
 CMD_LOCAL_TEST_START = 0xE2
 CMD_LOCAL_TEST_STOP = 0xE3
 CMD_CLEAR_CALIBRATION = 0xE5
+CMD_MANUAL_ENCODER_REFERENCE = 0xE6
+CMD_MANUAL_ENCODER_QUERY = 0xE7
+CMD_MANUAL_ENCODER_SINGLE = 0xE8
+CMD_ROPE_INIT = 0xE9
 
 SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
 SENSOR_STREAM_MODE_SIGNED_I16 = 1
@@ -81,6 +89,11 @@ SENSOR_STREAM_MODE_SIGNED_I16 = 1
 PROTO_ACK_STATUS_OK = 0
 PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
 PROTO_ACK_STATUS_QUEUED = 2
+PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED = 3
+PROTO_ACK_STATUS_INVALID_DATA = 4
+PROTO_ACK_STATUS_NVS_FAILURE = 5
+PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6
+PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED = 7
 
 SYSTEM_STATE_UNCONTROLLABLE = 0
 SYSTEM_STATE_IDLE = 1
@@ -89,11 +102,29 @@ SYSTEM_STATE_CALIBRATION_RUNNING = 4
 SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
 SYSTEM_STATE_PAUSED = 7
+SYSTEM_STATE_ROPE_INIT_RUNNING = 8
+
+ROPE_INIT_STATUS_IDLE = 0
+ROPE_INIT_STATUS_RUNNING = 1
+ROPE_INIT_STATUS_SUCCESS = 2
+ROPE_INIT_STATUS_FAILED = 3
+
+ROPE_INIT_REASON_NONE = 0
+ROPE_INIT_REASON_TIMEOUT = 1
+ROPE_INIT_REASON_FEEDBACK_STALE = 2
+ROPE_INIT_REASON_SERVO_OFFLINE = 3
+ROPE_INIT_REASON_MULTITURN_UNKNOWN = 4
+ROPE_INIT_REASON_MANUAL_REQUIRED = 5
+ROPE_INIT_REASON_AUTO_REQUIRED = 6
+ROPE_INIT_REASON_TARGET_PUBLISH_FAILED = 7
+ROPE_INIT_REASON_SYSTEM_FAULT = 8
+ROPE_INIT_REASON_CANCELLED = 9
+ROPE_INIT_REASON_TASK_START_FAILED = 10
 
 SYSTEM_FAULT_CAN_OFFLINE = 1 << 0
 SYSTEM_FAULT_JOINT16_DUAL = 1 << 1
 SYSTEM_FAULT_OVERLOAD = 1 << 2
-SYSTEM_FAULT_RELEASE_GUARD = 1 << 3
+# Fault bitmap bit 3 is reserved by the P4 protocol.
 SYSTEM_FAULT_SERVO_OFFLINE = 1 << 4
 SYSTEM_FAULT_CALIBRATION = 1 << 5
 SYSTEM_FAULT_MULTITURN_UNKNOWN = 1 << 6
@@ -124,7 +155,6 @@ CALIB_DIAG_REASON_JOINT_LIST_INVALID = 22
 CALIB_DIAG_REASON_DUPLICATE_JOINT = 23
 CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED = 24
 CALIB_DIAG_REASON_JOINT_STEP_FAILED = 25
-CALIB_DIAG_REASON_OVER_RELEASE = 26
 
 CALIB_DIAG_PHASE_NONE = 0
 CALIB_DIAG_PHASE_INIT = 1
@@ -142,6 +172,7 @@ SERVO_TARGET_OWNER_CALIBRATION = 2
 # Decoupled dimensions
 ENCODER_COUNT = 21
 MOTOR_COUNT = 27
+ENCODER_RAW_MODULO = 16384
 DUAL_TENDON_JOINT_INDICES = (0, 4, 8, 12, 16, 20)
 DUAL_TENDON_LUT_ACTUATOR_COUNT = 2
 DUAL_TENDON_LUT_MAX_SAMPLES = 24
@@ -159,6 +190,17 @@ VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
 VALID_MOTOR_MASK_V2 = (1 << MOTOR_COUNT) - 1
 VALID_MOTOR_MASK = VALID_MOTOR_MASK_V2 if HAND_PROFILE.lower() == "v2" else VALID_MOTOR_MASK_V1
+
+
+def directed_encoder_delta(from_raw: int, to_raw: int, direction: int) -> Optional[int]:
+    """Mirror P4 calibrationDirectedEncoderDelta for raw 14-bit endpoints."""
+    if int(direction) not in (-1, 1):
+        return None
+    start = int(from_raw) & (ENCODER_RAW_MODULO - 1)
+    end = int(to_raw) & (ENCODER_RAW_MODULO - 1)
+    if int(direction) > 0:
+        return (end - start) % ENCODER_RAW_MODULO
+    return (start - end) % ENCODER_RAW_MODULO
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
@@ -242,6 +284,55 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     multiturn_nvs_save_fail_count = (
         struct.unpack(">I", payload[57:61])[0] if has_multiturn_nvs_status else 0
     )
+    has_manual_reference_status = len(payload) >= 74
+    manual_reference_valid_bitmap = (
+        struct.unpack(">I", payload[61:65])[0] if has_manual_reference_status else 0
+    )
+    manual_reference_crc = (
+        struct.unpack(">I", payload[65:69])[0] if has_manual_reference_status else 0
+    )
+    manual_reference_nvs_sequence = (
+        struct.unpack(">I", payload[69:73])[0] if has_manual_reference_status else 0
+    )
+    manual_reference_nvs_valid = (
+        payload[73] if has_manual_reference_status else 0
+    )
+    has_manual_v2_status = len(payload) >= 79
+    auto_calibration_valid_bitmap = (
+        struct.unpack(">I", payload[74:78])[0] if has_manual_v2_status else 0
+    )
+    manual_reference_save_status = payload[78] if has_manual_v2_status else 0
+    has_motion_result_status = len(payload) >= 102
+    rope_init_status = payload[79] if has_motion_result_status else ROPE_INIT_STATUS_IDLE
+    rope_init_reason = payload[80] if has_motion_result_status else ROPE_INIT_REASON_NONE
+    rope_init_sequence = (
+        struct.unpack(">I", payload[81:85])[0] if has_motion_result_status else 0
+    )
+    rope_init_joint_mask = (
+        struct.unpack(">I", payload[85:89])[0] if has_motion_result_status else 0
+    )
+    rope_init_timestamp_ms = (
+        struct.unpack(">I", payload[89:93])[0] if has_motion_result_status else 0
+    )
+    pending_direct_generation = (
+        struct.unpack(">I", payload[93:97])[0] if has_motion_result_status else 0
+    )
+    applied_direct_generation = (
+        struct.unpack(">I", payload[97:101])[0] if has_motion_result_status else 0
+    )
+    direct_reject_reason = payload[101] if has_motion_result_status else 0
+    has_calibration_warning_status = len(payload) >= 148
+    calibration_warning_bitmap = (
+        struct.unpack(">I", payload[102:106])[0]
+        if has_calibration_warning_status else 0
+    )
+    calibration_auto_min_offset_counts = (
+        [
+            struct.unpack(">h", payload[106 + 2 * i:108 + 2 * i])[0]
+            for i in range(ENCODER_COUNT)
+        ]
+        if has_calibration_warning_status else [0] * ENCODER_COUNT
+    )
     return (
         system_state,
         control_enabled,
@@ -269,6 +360,26 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         multiturn_nvs_save_valid_mask,
         multiturn_nvs_save_fail_count,
         has_multiturn_nvs_status,
+        manual_reference_valid_bitmap,
+        manual_reference_crc,
+        manual_reference_nvs_sequence,
+        manual_reference_nvs_valid,
+        has_manual_reference_status,
+        auto_calibration_valid_bitmap,
+        manual_reference_save_status,
+        has_manual_v2_status,
+        rope_init_status,
+        rope_init_reason,
+        rope_init_sequence,
+        rope_init_joint_mask,
+        rope_init_timestamp_ms,
+        pending_direct_generation,
+        applied_direct_generation,
+        direct_reject_reason,
+        has_motion_result_status,
+        calibration_warning_bitmap,
+        calibration_auto_min_offset_counts,
+        has_calibration_warning_status,
     )
 
 
@@ -291,6 +402,58 @@ def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, Lis
         maxs.append(struct.unpack(">h", payload[offset + 2:offset + 4])[0])
         offset += 4
     return valid_bitmap, locked_bitmap, mins, maxs
+
+
+def parse_manual_encoder_reference_packet(payload: bytes) -> Optional[dict]:
+    """Parse a full or partial Manual Min/Max snapshot stored by P4."""
+    if not payload or payload[0] not in (1, 2, 3):
+        return None
+    version = int(payload[0])
+    required = 1 + 4 + 4 + 4 + 1 + ENCODER_COUNT * 4
+    if version >= 2:
+        required += 5
+    if version >= 3:
+        required += ENCODER_COUNT
+    if len(payload) < required:
+        return None
+
+    valid_bitmap = struct.unpack(">I", payload[1:5])[0]
+    reference_crc = struct.unpack(">I", payload[5:9])[0]
+    nvs_sequence = struct.unpack(">I", payload[9:13])[0]
+    nvs_valid = bool(payload[13])
+    offset = 14
+    auto_valid_bitmap = 0
+    save_status = 0
+    if version >= 2:
+        auto_valid_bitmap = struct.unpack(">I", payload[offset:offset + 4])[0]
+        offset += 4
+        save_status = int(payload[offset])
+        offset += 1
+    min_raw: List[int] = []
+    max_raw: List[int] = []
+    for _ in range(ENCODER_COUNT):
+        min_raw.append(struct.unpack(">H", payload[offset:offset + 2])[0])
+        max_raw.append(struct.unpack(">H", payload[offset + 2:offset + 4])[0])
+        offset += 4
+    encoder_directions: List[int] = [0] * ENCODER_COUNT
+    if version >= 3:
+        encoder_directions = [
+            -1 if struct.unpack(">b", payload[offset + joint:offset + joint + 1])[0] < 0 else 1
+            for joint in range(ENCODER_COUNT)
+        ]
+    return {
+        "version": version,
+        "valid_bitmap": valid_bitmap,
+        "reference_crc": reference_crc,
+        "nvs_sequence": nvs_sequence,
+        "nvs_valid": nvs_valid,
+        "auto_valid_bitmap": auto_valid_bitmap,
+        "save_status": save_status,
+        "min_raw": min_raw,
+        "max_raw": max_raw,
+        "encoder_directions": encoder_directions,
+        "has_encoder_directions": version >= 3,
+    }
 
 
 def _unpack_float_be(data: bytes) -> float:
@@ -339,6 +502,22 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
         [0] * DUAL_TENDON_LUT_MAX_SAMPLES
         for _ in range(DUAL_TENDON_LUT_ACTUATOR_COUNT)
     ]
+    result["mappingVersion"] = 0
+    result["encoderAtUrdfMin"] = 0
+    result["encoderAtUrdfMax"] = 0
+    result["angleMin"] = 0.0
+    result["urdfConfigCrc"] = 0
+    result["autoMinRaw"] = 0
+    result["autoMaxRaw"] = 0
+    result["manualReferenceCrc"] = 0
+    result["currentMinDeg"] = 0.0
+    result["currentMaxDeg"] = 0.0
+    result["hasManualScaledV3Fields"] = False
+    result["assemblyWarningReason"] = CALIB_WARN_NONE
+    result["autoMinOffsetCounts"] = 0
+    result["autoMaxShortfallCounts"] = 0
+    result["assemblyAutoSpanCounts"] = 0
+    result["hasAssemblyWarningFields"] = False
     extended_len = 54 + 1 + 1 + 2 + 4 + 4 + (
         DUAL_TENDON_LUT_ACTUATOR_COUNT * DUAL_TENDON_LUT_MAX_SAMPLES * 2
     )
@@ -361,6 +540,48 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
                 idx += 2
             motor_abs.append(row)
         result["dualTendonLutMotorAbs"] = motor_abs
+        v2_len = extended_len + 17
+        if len(payload) >= v2_len:
+            result["mappingVersion"] = int(payload[idx])
+            idx += 1
+            result["encoderAtUrdfMin"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+            idx += 4
+            result["encoderAtUrdfMax"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+            idx += 4
+            result["angleMin"] = _unpack_float_be(payload[idx:idx + 4])
+            idx += 4
+            result["urdfConfigCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+            idx += 4
+            v3_len = v2_len + 16
+            if len(payload) >= v3_len:
+                result["autoMinRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+                idx += 2
+                result["autoMaxRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+                idx += 2
+                result["manualReferenceCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+                idx += 4
+                result["currentMinDeg"] = _unpack_float_be(payload[idx:idx + 4])
+                idx += 4
+                result["currentMaxDeg"] = _unpack_float_be(payload[idx:idx + 4])
+                idx += 4
+                result["hasManualScaledV3Fields"] = True
+                warning_len = v3_len + 7
+                if len(payload) >= warning_len:
+                    result["assemblyWarningReason"] = int(payload[idx])
+                    idx += 1
+                    result["autoMinOffsetCounts"] = struct.unpack(
+                        ">h", payload[idx:idx + 2]
+                    )[0]
+                    idx += 2
+                    result["autoMaxShortfallCounts"] = struct.unpack(
+                        ">h", payload[idx:idx + 2]
+                    )[0]
+                    idx += 2
+                    result["assemblyAutoSpanCounts"] = struct.unpack(
+                        ">H", payload[idx:idx + 2]
+                    )[0]
+                    idx += 2
+                    result["hasAssemblyWarningFields"] = True
     return result
 
 
@@ -549,12 +770,6 @@ def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Option
             trigger_loads[i] = struct.unpack(">h", payload[offset:offset + 2])[0]
             offset += 2
     return fault_bitmap, trigger_loads
-
-
-def parse_release_fault_packet(payload: bytes) -> Optional[int]:
-    if len(payload) != 4:
-        return None
-    return struct.unpack(">I", payload)[0]
 
 
 def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
@@ -799,6 +1014,10 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     joint = int(result.get("joint", -1))
     if joint < 0 or joint >= ENCODER_COUNT:
         raise ValueError(f"invalid joint index {joint}")
+    if int(result.get("mappingVersion", 0)) != 3:
+        raise ValueError(
+            f"J{joint:02d} legacy calibration snapshot is view-only; v3 is required"
+        )
     payload = bytearray()
     payload.append(joint & 0xFF)
     payload.append(1 if bool(result.get("success", False)) else 0)
@@ -829,6 +1048,38 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
         for sample in range(DUAL_TENDON_LUT_MAX_SAMPLES):
             value = row[sample] if sample < len(row) else 0
             payload.extend(struct.pack(">h", _clamp_i16(value)))
+    payload.append(int(result.get("mappingVersion", 0)) & 0xFF)
+    payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMin", 0))))
+    payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMax", 0))))
+    payload.extend(_pack_float_be(float(result.get("angleMin", 0.0))))
+    payload.extend(struct.pack(">I", int(result.get("urdfConfigCrc", 0)) & 0xFFFFFFFF))
+    auto_min_raw = int(result.get("autoMinRaw", -1))
+    auto_max_raw = int(result.get("autoMaxRaw", -1))
+    if not 0 <= auto_min_raw < 16384 or not 0 <= auto_max_raw < 16384:
+        raise ValueError(f"J{joint:02d} Auto raw must be in [0, 16383]")
+    start_oriented = int(result.get("startEncoder", 0)) % 16384
+    tight_oriented = int(result.get("tightEncoder", 0)) % 16384
+    expected_auto_min_raw = (
+        (-start_oriented) % 16384 if direction < 0 else start_oriented
+    )
+    expected_auto_max_raw = (
+        (-tight_oriented) % 16384 if direction < 0 else tight_oriented
+    )
+    if (
+        auto_min_raw != expected_auto_min_raw
+        or auto_max_raw != expected_auto_max_raw
+    ):
+        raise ValueError(
+            f"J{joint:02d} Auto raw endpoint contract mismatch: "
+            f"snapshot={auto_min_raw}->{auto_max_raw}, "
+            f"expected={expected_auto_min_raw}->{expected_auto_max_raw}; "
+            "recalibration required"
+        )
+    payload.extend(struct.pack(">H", auto_min_raw))
+    payload.extend(struct.pack(">H", auto_max_raw))
+    payload.extend(struct.pack(">I", int(result.get("manualReferenceCrc", 0)) & 0xFFFFFFFF))
+    payload.extend(_pack_float_be(float(result.get("currentMinDeg", 0.0))))
+    payload.extend(_pack_float_be(float(result.get("currentMaxDeg", 0.0))))
     return _build_command_frame(CMD_CALIB_LOAD_JOINT, bytes(payload))
 
 
@@ -844,6 +1095,108 @@ def build_multiturn_nvs_control_cmd(enabled: bool) -> bytes:
 
 def build_clear_calibration_cmd() -> bytes:
     return _build_command_frame(CMD_CLEAR_CALIBRATION, b"")
+
+
+def build_manual_encoder_reference_cmd(
+    manual_min_raw: Sequence[int],
+    manual_max_raw: Sequence[int],
+) -> bytes:
+    if len(manual_min_raw) != ENCODER_COUNT or len(manual_max_raw) != ENCODER_COUNT:
+        raise ValueError(f"need exactly {ENCODER_COUNT} Manual Min/Max pairs")
+    payload = bytearray([1])
+    for joint in range(ENCODER_COUNT):
+        min_raw = int(manual_min_raw[joint])
+        max_raw = int(manual_max_raw[joint])
+        if not 0 <= min_raw < 16384 or not 0 <= max_raw < 16384:
+            raise ValueError(f"J{joint:02d} Manual raw must be in [0, 16383]")
+        payload.extend(struct.pack(">HH", min_raw, max_raw))
+    return _build_command_frame(CMD_MANUAL_ENCODER_REFERENCE, bytes(payload))
+
+
+def build_clear_manual_encoder_reference_cmd() -> bytes:
+    # Firmware uses one fixed command length, so clear carries zero-filled pairs.
+    payload = bytes([0]) + bytes(ENCODER_COUNT * 4)
+    return _build_command_frame(CMD_MANUAL_ENCODER_REFERENCE, payload)
+
+
+def build_manual_encoder_query_cmd() -> bytes:
+    return _build_command_frame(CMD_MANUAL_ENCODER_QUERY, b"")
+
+
+def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> bytes:
+    joint = int(joint)
+    min_raw = int(min_raw)
+    max_raw = int(max_raw)
+    if not 0 <= joint < ENCODER_COUNT:
+        raise ValueError(f"invalid joint index {joint}")
+    if not 0 <= min_raw < 16384 or not 0 <= max_raw < 16384:
+        raise ValueError(f"J{joint:02d} Manual raw must be in [0, 16383]")
+    return _build_command_frame(
+        CMD_MANUAL_ENCODER_SINGLE,
+        struct.pack(">BHH", joint, min_raw, max_raw),
+    )
+
+
+def build_rope_init_cmd(active_joint_mask: int) -> bytes:
+    mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+    if mask == 0:
+        raise ValueError("Rope Init requires a non-zero active joint mask")
+    return _build_command_frame(CMD_ROPE_INIT, struct.pack(">I", mask))
+
+
+def manual_encoder_reference_crc(
+    manual_min_raw: Sequence[int],
+    manual_max_raw: Sequence[int],
+) -> int:
+    """Match P4's segmented IEEE CRC32 over all 21 endpoint pairs."""
+    if len(manual_min_raw) != ENCODER_COUNT or len(manual_max_raw) != ENCODER_COUNT:
+        raise ValueError(f"need exactly {ENCODER_COUNT} Manual Min/Max pairs")
+    crc = 0
+    for joint in range(ENCODER_COUNT):
+        data = bytes((
+            joint,
+            (int(manual_min_raw[joint]) >> 8) & 0xFF,
+            int(manual_min_raw[joint]) & 0xFF,
+            (int(manual_max_raw[joint]) >> 8) & 0xFF,
+            int(manual_max_raw[joint]) & 0xFF,
+        ))
+        value = (~crc) & 0xFFFFFFFF
+        for byte in data:
+            value ^= byte
+            for _ in range(8):
+                value = (value >> 1) ^ (0xEDB88320 if value & 1 else 0)
+        crc = (~value) & 0xFFFFFFFF
+    return crc
+
+
+def manual_encoder_reference_entry_crc(
+    joint: int,
+    manual_min_raw: int,
+    manual_max_raw: int,
+) -> int:
+    """Match P4's per-joint IEEE CRC32 binding for one Manual pair."""
+    joint = int(joint)
+    min_raw = int(manual_min_raw)
+    max_raw = int(manual_max_raw)
+    if not 0 <= joint < ENCODER_COUNT:
+        raise ValueError(f"joint must be in [0, {ENCODER_COUNT - 1}]")
+    if not 0 <= min_raw < ENCODER_RAW_MODULO:
+        raise ValueError("Manual Min must be in [0, 16383]")
+    if not 0 <= max_raw < ENCODER_RAW_MODULO:
+        raise ValueError("Manual Max must be in [0, 16383]")
+    data = bytes((
+        joint,
+        (min_raw >> 8) & 0xFF,
+        min_raw & 0xFF,
+        (max_raw >> 8) & 0xFF,
+        max_raw & 0xFF,
+    ))
+    value = 0xFFFFFFFF
+    for byte in data:
+        value ^= byte
+        for _ in range(8):
+            value = (value >> 1) ^ (0xEDB88320 if value & 1 else 0)
+    return (~value) & 0xFFFFFFFF
 
 
 def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:
@@ -898,24 +1251,6 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
         v = MOTOR_ABS_CMD_MAX
     payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
-
-
-def build_tendon_guard_cmd(config: Sequence[Tuple[bool, int, int]]) -> bytes:
-    payload = bytearray()
-    for idx in range(ENCODER_COUNT):
-        if idx < len(config):
-            enabled, pull_sign, x1_abs = config[idx]
-        else:
-            enabled, pull_sign, x1_abs = False, 1, 0
-        sign_byte = 0xFF if int(pull_sign) < 0 else 0x01
-        x1 = int(x1_abs)
-        if x1 < MOTOR_ABS_CMD_MIN:
-            x1 = MOTOR_ABS_CMD_MIN
-        elif x1 > MOTOR_ABS_CMD_MAX:
-            x1 = MOTOR_ABS_CMD_MAX
-        payload.extend(bytes([1 if enabled else 0, sign_byte]))
-        payload.extend(struct.pack(">h", x1))
-    return _build_command_frame(CMD_TENDON_GUARD, bytes(payload))
 
 
 def build_stream_mode_cmd(mode: int) -> bytes:

@@ -113,9 +113,15 @@ def _make_ros2_bridge(
     ros2_input: str,
     ros_topic: str,
     auto_start: bool,
+    raw_ik_space: str = "legacy_calibrated_deg",
 ):
     if ros2_input == "raw_ik":
-        return RawIkTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+        return RawIkTargetBridge(
+            backend,
+            topic=ros_topic,
+            auto_start=auto_start,
+            input_space=raw_ik_space,
+        )
     return Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
 
 
@@ -161,6 +167,7 @@ def run_ui(
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
+    ros2_raw_ik_space: str = "legacy_calibrated_deg",
     backend: Optional[HandBackend] = None,
 ) -> int:
     backend = backend or HandBackend()
@@ -179,6 +186,7 @@ def run_ui(
             ros2_input=ros2_input,
             ros_topic=ros_topic,
             auto_start=auto_start,
+            raw_ik_space=ros2_raw_ik_space,
         )
         try:
             bridge.start()

@@ -21,7 +21,121 @@
 // 全局标定配置与结果（按关节索�?0~ENCODER_TOTAL_NUM-1）�?
 JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
+ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
+int32_t calibrationAutoMinManualOffsetCounts(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM ||
+        !result.success ||
+        !g_manualEncoderReference[jointIndex].valid) {
+        return 0;
+    }
+    return calibrationSignedDirectedEncoderDelta(
+        g_manualEncoderReference[jointIndex].minRaw,
+        result.autoMinRaw,
+        g_encoderDirection[jointIndex]);
+}
+
+bool evaluateCalibrationAssemblyWarning(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result,
+    CalibrationAssemblyWarningInfo* out)
+{
+    if (!out) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    if (jointIndex >= ENCODER_TOTAL_NUM ||
+        !result.success ||
+        !g_manualEncoderReference[jointIndex].valid) {
+        return false;
+    }
+
+    const ManualEncoderReference& manual =
+        g_manualEncoderReference[jointIndex];
+    const int8_t direction = g_encoderDirection[jointIndex];
+    const int32_t minOffset = calibrationSignedDirectedEncoderDelta(
+        manual.minRaw, result.autoMinRaw, direction);
+    const int32_t maxShortfall = calibrationSignedDirectedEncoderDelta(
+        result.autoMaxRaw, manual.maxRaw, direction);
+    const int32_t autoSpan = calibrationDirectedEncoderDelta(
+        result.autoMinRaw, result.autoMaxRaw, direction);
+    if (autoSpan < 0) {
+        return false;
+    }
+
+    out->autoMinOffsetCounts = (int16_t)minOffset;
+    out->autoMaxShortfallCounts = (int16_t)maxShortfall;
+    out->autoSpanCounts = (uint16_t)autoSpan;
+    out->reasonMask = calibrationAssemblyWarningReasonForMetrics(
+        minOffset, maxShortfall, autoSpan);
+    return true;
+}
+
+void clearCalibrationAssemblyWarnings(TaskSharedData_t* sharedData,
+                                      uint32_t jointMask)
+{
+    if (!sharedData) {
+        return;
+    }
+    jointMask &= ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    SharedSafetyGuard guard;
+    sharedAtomicFetchAnd(&sharedData->calibration_warning_bitmap, ~jointMask);
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        if ((jointMask & (1UL << joint)) != 0) {
+            sharedData->calibration_auto_min_offset_counts[joint] = 0;
+        }
+    }
+}
+
+bool updateCalibrationAssemblyWarning(
+    TaskSharedData_t* sharedData,
+    uint8_t jointIndex,
+    const JointCalibrationResult& result)
+{
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
+        return false;
+    }
+
+    CalibrationAssemblyWarningInfo info;
+    const bool valid = evaluateCalibrationAssemblyWarning(
+        jointIndex, result, &info);
+    const uint32_t bit = 1UL << jointIndex;
+    const bool warning = valid && info.reasonMask != CALIB_WARN_NONE;
+    {
+        SharedSafetyGuard guard;
+        sharedData->calibration_auto_min_offset_counts[jointIndex] =
+            info.autoMinOffsetCounts;
+        if (warning) {
+            sharedAtomicFetchOr(&sharedData->calibration_warning_bitmap, bit);
+        } else {
+            sharedAtomicFetchAnd(&sharedData->calibration_warning_bitmap, ~bit);
+        }
+    }
+
+    FW_LOG_INFO_PRINTF(
+        "[CALIB ASSEMBLY] J%02u manual=%u->%u auto=%u->%u dir=%d "
+        "minOffset=%d/%ld maxShortfall=%d/%ld autoSpan=%u/%ld..%ld "
+        "reason=0x%02X warning=%u\r\n",
+        (unsigned)jointIndex,
+        (unsigned)g_manualEncoderReference[jointIndex].minRaw,
+        (unsigned)g_manualEncoderReference[jointIndex].maxRaw,
+        (unsigned)result.autoMinRaw,
+        (unsigned)result.autoMaxRaw,
+        (int)g_encoderDirection[jointIndex],
+        (int)info.autoMinOffsetCounts,
+        (long)kCalibrationAutoMinAssemblyWarnCounts,
+        (int)info.autoMaxShortfallCounts,
+        (long)kCalibrationAutoMaxShortfallWarnCounts,
+        (unsigned)info.autoSpanCounts,
+        (long)kCalibrationAutoSpanWarnMinCounts,
+        (long)kCalibrationAutoSpanWarnMaxCounts,
+        (unsigned)info.reasonMask,
+        warning ? 1U : 0U);
+    return warning;
+}
 extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
     -1, -1, -1,  1,
     -1, -1, -1,  1,
@@ -379,6 +493,7 @@ void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count) {
 void initManualCalibrationForTest(void) {
     initDefaultCalibrationConfig(g_jointCalibConfig, ENCODER_TOTAL_NUM);
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
+    memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));
     memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
     FW_LOG_INFO_PRINTF("[BOOT CALIB] default profile loaded; calibration results pending auto calibration controlMax=%.3f topGuard=%.3f\r\n",

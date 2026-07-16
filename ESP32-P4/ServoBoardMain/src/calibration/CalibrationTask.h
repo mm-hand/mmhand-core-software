@@ -10,6 +10,55 @@
 #define CALIB_STATUS_RUNNING   1
 #define CALIB_STATUS_SUCCESS   2
 #define CALIB_STATUS_FAILED    3
+#define CALIB_STATUS_WARN      4
+
+static inline bool calibrationStatusHasUsableResult(uint8_t status)
+{
+    return status == CALIB_STATUS_SUCCESS || status == CALIB_STATUS_WARN;
+}
+
+// Auto Min may legitimately differ slightly from the operator-entered
+// Manual Min. A larger positive offset indicates an assembly warning, but the
+// calibration remains usable and must not enter the fault path.
+static const int32_t kCalibrationAutoMinAssemblyWarnCounts = 350;
+static const int32_t kCalibrationAutoMaxShortfallWarnCounts = 300;
+static const int32_t kCalibrationAutoSpanWarnMinCounts = 2300;
+static const int32_t kCalibrationAutoSpanWarnMaxCounts = 6300;
+
+static const uint8_t CALIB_WARN_NONE = 0x00;
+static const uint8_t CALIB_WARN_AUTO_MIN_OFFSET = 0x01;
+static const uint8_t CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02;
+static const uint8_t CALIB_WARN_AUTO_SPAN_RANGE = 0x04;
+
+static constexpr uint8_t calibrationAssemblyWarningReasonForMetrics(
+    int32_t autoMinOffsetCounts,
+    int32_t autoMaxShortfallCounts,
+    int32_t autoSpanCounts)
+{
+    return
+        (autoMinOffsetCounts >= kCalibrationAutoMinAssemblyWarnCounts
+             ? CALIB_WARN_AUTO_MIN_OFFSET : CALIB_WARN_NONE) |
+        (autoMaxShortfallCounts >= kCalibrationAutoMaxShortfallWarnCounts
+             ? CALIB_WARN_AUTO_MAX_SHORTFALL : CALIB_WARN_NONE) |
+        (autoSpanCounts < kCalibrationAutoSpanWarnMinCounts ||
+         autoSpanCounts > kCalibrationAutoSpanWarnMaxCounts
+             ? CALIB_WARN_AUTO_SPAN_RANGE : CALIB_WARN_NONE);
+}
+
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 2300) ==
+                  CALIB_WARN_NONE,
+              "Assembly warning lower boundaries changed");
+static_assert(calibrationAssemblyWarningReasonForMetrics(350, 299, 2300) ==
+                  CALIB_WARN_AUTO_MIN_OFFSET,
+              "Auto Min warning threshold must be inclusive");
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 300, 6300) ==
+                  CALIB_WARN_AUTO_MAX_SHORTFALL,
+              "Auto Max warning threshold must be inclusive");
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 2299) ==
+                  CALIB_WARN_AUTO_SPAN_RANGE &&
+              calibrationAssemblyWarningReasonForMetrics(349, 299, 6301) ==
+                  CALIB_WARN_AUTO_SPAN_RANGE,
+              "Auto Span warning range must remain 2300..6300 inclusive");
 
 #define DUAL_TENDON_LUT_ACTUATOR_COUNT 2
 #define DUAL_TENDON_LUT_MAX_SAMPLES 24
@@ -33,15 +82,56 @@ struct JointCalibrationConfig {
     uint32_t maxSearchMs;
 };
 
+// Device-specific magnetic encoder reference entered by the operator.
+// Min means the fully released tendon endpoint and max means the fully
+// tightened endpoint; the raw numeric values may cross 0/16383.
+// Direction comes from g_encoderDirection and is not stored twice.
+struct ManualEncoderReference {
+    uint8_t valid;
+    uint16_t minRaw;
+    uint16_t maxRaw;
+};
+
+struct CalibrationAssemblyWarningInfo {
+    uint8_t reasonMask;
+    int16_t autoMinOffsetCounts;
+    int16_t autoMaxShortfallCounts;
+    uint16_t autoSpanCounts;
+};
+
 // Per-joint calibration result:
-// - encoderMin/encoderMax/offset are encoder counts.
-// - angleMax is the usable control range in degrees.
+// - encoderMin/encoderMax/offset and the legacy RANGE100 fields are retained
+//   so old Calib Load snapshots can still be parsed.
+// - Feedback mapping v2 uses encoderAtUrdfMin/encoderAtUrdfMax as the two
+//   measured, direction-oriented magnetic encoder endpoints. The interval
+//   maps linearly to [angleMin, angleMax] in URDF degrees without assuming
+//   that the calibrated encoder span represents any fixed mechanical angle.
 struct JointCalibrationResult {
     bool success;
     int32_t encoderMin;
     int32_t encoderMax;
     int32_t offset;
     float angleMax;
+
+    // Feedback mapping v2. Retained while the current controller and Calib
+    // Load protocol still consume full-URDF endpoint mapping.
+    uint8_t mappingVersion;
+    int32_t encoderAtUrdfMin;
+    int32_t encoderAtUrdfMax;
+    float angleMin;
+    uint32_t urdfConfigCrc;
+
+    // Manual-scaled feedback mapping v3. Manual endpoints live in
+    // g_manualEncoderReference. manualReferenceCrc is the CRC of this joint's
+    // endpoint pair, so editing one joint invalidates only that joint's Auto
+    // result. The full-table CRC remains reserved for NVS/readback integrity.
+    uint16_t autoMinRaw;
+    uint16_t autoMaxRaw;
+    int32_t manualSpanCounts;
+    int32_t autoSpanCounts;
+    uint32_t manualReferenceCrc;
+    float currentMinDeg;
+    float currentMaxDeg;
 
     // RANGE100 manual/boot calibration fields:
     // startEncoder maps to startDeg, tightEncoder maps to tightDeg, and
@@ -68,6 +158,7 @@ struct JointCalibrationResult {
 
 extern JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
+extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
 // Default encoder direction table, runtime encoder direction table, and
 // fallback offset table. Automatic calibration may update the runtime table.
@@ -107,5 +198,19 @@ bool queueJointCalibrationTarget(TaskSharedData_t* sharedData,
                                  uint8_t jointIndex,
                                  int16_t primaryTarget,
                                  const JointCalibrationConfig& cfg);
+
+int32_t calibrationAutoMinManualOffsetCounts(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result);
+bool evaluateCalibrationAssemblyWarning(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result,
+    CalibrationAssemblyWarningInfo* out);
+bool updateCalibrationAssemblyWarning(
+    TaskSharedData_t* sharedData,
+    uint8_t jointIndex,
+    const JointCalibrationResult& result);
+void clearCalibrationAssemblyWarnings(TaskSharedData_t* sharedData,
+                                      uint32_t jointMask);
 
 #endif // CALIBRATION_TASK_H

@@ -8,6 +8,7 @@ from typing import Optional
 
 from desktop.core.hand_backend import HandBackend
 from desktop.ros2.joint_targets import JointTargetCommandHandler
+from desktop.teleop.joint_target_adapter import LEGACY_CALIBRATED_DEG
 
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 
@@ -16,6 +17,7 @@ DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 class Ros2RawIkTargetConfig:
     topic: str = DEFAULT_RAW_IK_TARGET_TOPIC
     auto_start: bool = False
+    input_space: str = LEGACY_CALIBRATED_DEG
 
 
 class RawIkTargetBridge:
@@ -27,12 +29,18 @@ class RawIkTargetBridge:
         *,
         topic: str = DEFAULT_RAW_IK_TARGET_TOPIC,
         auto_start: bool = False,
+        input_space: str = LEGACY_CALIBRATED_DEG,
     ) -> None:
-        self.config = Ros2RawIkTargetConfig(topic=topic, auto_start=auto_start)
+        self.config = Ros2RawIkTargetConfig(
+            topic=topic,
+            auto_start=auto_start,
+            input_space=input_space,
+        )
         self.handler = JointTargetCommandHandler(
             backend,
             topic=self.config.topic,
             auto_start=self.config.auto_start,
+            input_space=self.config.input_space,
             warning_sink=self._warn,
         )
         self._thread: Optional[threading.Thread] = None

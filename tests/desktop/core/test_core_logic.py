@@ -258,3 +258,19 @@ class TestRequestRunFeedback:
 
         assert controller.request_run_feedback() is True
         controller.comm.send_command.assert_not_called()
+
+
+class TestResetMultiturnBaselineForNewDevice:
+    def test_rejects_when_all_motor_turns_are_trusted_before_any_command(self):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.current_state.multi_turn_unknown_bitmap = 0
+        controller.current_state.has_servo_raw_data = True
+        controller.current_state.servo_raw_positions = [1000] * MOTOR_COUNT
+        controller.current_state.servo_raw_online = [True] * MOTOR_COUNT
+
+        ok, message = controller.reset_multiturn_baseline_for_new_device()
+
+        assert ok is False
+        assert "already trusted" in message
+        controller.comm.send_command.assert_not_called()

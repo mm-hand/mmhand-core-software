@@ -51,7 +51,6 @@ class TendonGuard:
         self.release_angle_eps_deg = 0.0
         self.warn_interval_s = 0.5
         self._last_warn_ts = 0.0
-        self._last_synced_fingerprint = None
         self.config = self.load()
 
     @staticmethod
@@ -102,28 +101,6 @@ class TendonGuard:
             "x1_abs": clamp_motor_abs(int(x1_abs)),
         }
         return self.save()
-
-    def payload(self) -> List[Tuple[bool, int, int]]:
-        out: List[Tuple[bool, int, int]] = []
-        for idx in range(ENCODER_COUNT):
-            item = self.config[idx] if idx < len(self.config) else {}
-            cfg = self._normalize_item(item)
-            out.append((bool(cfg["enabled"]), int(cfg["pull_sign"]), int(cfg["x1_abs"])))
-        return out
-
-    def sync_to_controller(self, controller, *, force: bool = False) -> None:
-        sender = getattr(controller, "set_tendon_guard_config", None)
-        if sender is None:
-            return
-        payload = self.payload()
-        fingerprint = tuple((1 if e else 0, int(s), int(x)) for e, s, x in payload)
-        if not force and fingerprint == self._last_synced_fingerprint:
-            return
-        try:
-            sender(payload)
-            self._last_synced_fingerprint = fingerprint
-        except Exception:
-            pass
 
     def apply(
         self,

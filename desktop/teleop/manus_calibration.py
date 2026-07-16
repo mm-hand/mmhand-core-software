@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import statistics
 import time
@@ -8,8 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from desktop.core import angle_mapping
 from desktop.paths import MANUS_CALIBRATION_PATH
 from desktop.core.protocol import ENCODER_COUNT
+from desktop.teleop.joint_target_adapter import LEGACY_CALIBRATED_DEG, adapt_joint_targets
 
 from .manus_receiver import ManusFrame, ManusReceiver
 
@@ -61,29 +64,12 @@ THUMB_PINKY_ROOT_FLEX_Q_TARGET_DEG = {
     19: 24.2,
 }
 DUAL_AUTO_JOINT_INDICES = {0, 4, 8, 12, 16, 20}
-ROBOT_JOINT_LIMIT_SOURCE = "URDF limit"
+ROBOT_JOINT_LIMIT_SOURCE = "central angle mapping calibrated command range"
+# These are physical q_cmd limits for MANUS preview/output, not URDF limits.
+# The mapping module converts them to the active structure URDF coordinates.
 ROBOT_JOINT_LIMITS_DEG = [
-    (-45.0, 11.0),
-    (0.0, float(np.degrees(1.570796))),
-    (0.0, float(np.degrees(1.53589))),
-    (0.0, float(np.degrees(1.570796))),
-    (-51.0, 21.0),
-    (0.0, float(np.degrees(1.570796))),
-    (0.0, float(np.degrees(1.53589))),
-    (0.0, float(np.degrees(1.570796))),
-    (-24.0, 23.0),
-    (0.0, float(np.degrees(1.570796))),
-    (0.0, float(np.degrees(1.53589))),
-    (0.0, float(np.degrees(1.570796))),
-    (-11.0, 30.0),
-    (0.0, float(np.degrees(1.570796))),
-    (0.0, float(np.degrees(1.53589))),
-    (0.0, float(np.degrees(1.570796))),
-    (-29.0, 30.0),
-    (0.0, float(np.degrees(1.570796))),
-    (0.0, float(np.degrees(1.53589))),
-    (0.0, float(np.degrees(1.570796))),
-    (-80.0, 1.0),
+    angle_mapping.default_calibrated_range_deg(idx)
+    for idx in range(ENCODER_COUNT)
 ]
 ROBOT_JOINT_ROLE_BY_INDEX = {
     0: "Pinky root",
@@ -127,6 +113,7 @@ class RobotPreviewJoint:
     human_joint_mapping: str
     gain_deg_per_human_deg: float
     robot_q_target_preview: float
+    robot_urdf_target_preview: float
     human_delta_deg: float
     joint_limit_deg: str
     joint_limit_source: str
@@ -635,6 +622,9 @@ class ManusCalibrationManager:
                     human_joint_mapping=mapping[idx] or "-",
                     gain_deg_per_human_deg=gains[idx],
                     robot_q_target_preview=float(clamped),
+                    robot_urdf_target_preview=math.degrees(
+                        angle_mapping.legacy_calibrated_to_urdf(idx, clamped, clamp=True)
+                    ),
                     human_delta_deg=human_angles[idx],
                     joint_limit_deg=f"[{lo:.2f}, {hi:.2f}] deg",
                     joint_limit_source=source_text,
@@ -648,11 +638,16 @@ class ManusCalibrationManager:
 
     def robot_q_target_angles(self, frame: ManusFrame, side: str = DEFAULT_MANUS_SIDE) -> List[float]:
         preview = self.robot_q_target_preview(frame, side=side)
-        angles = [0.0] * ENCODER_COUNT
+        legacy_angles = [0.0] * ENCODER_COUNT
         for item in preview:
             if 0 <= item.joint_index < ENCODER_COUNT:
-                angles[item.joint_index] = float(item.robot_q_target_preview)
-        return angles
+                legacy_angles[item.joint_index] = float(item.robot_q_target_preview)
+        return list(
+            adapt_joint_targets(
+                legacy_angles,
+                source_space=LEGACY_CALIBRATED_DEG,
+            ).urdf_targets_deg
+        )
 
     @staticmethod
     def _feature_name(frame: ManusFrame, finger: str, joint: str, motion: str, side: str = DEFAULT_MANUS_SIDE) -> str:

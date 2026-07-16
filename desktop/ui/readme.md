@@ -11,7 +11,6 @@ python -m desktop ui
 - `desktop.core.hand_backend` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, and the command API that Qt/ROS/teleop/algorithm code should share.
 - `ui_qt_compat.py` selects the Qt binding. It tries `PySide6` first, then falls back to `PyQt5`, and sets `PYQTGRAPH_QT_LIB` before pyqtgraph is imported.
 - `ui_app.py` defines `HandGUI(QMainWindow)`. It owns the Qt window, top toolbar, main splitter, state polling timers, display updates, and UI logging. Hardware lifecycle and command orchestration go through `HandBackend`.
-- `ui_launcher.py` defines the Qt startup dialog for port and mode selection.
 - `ui_windows.py` manages the `View` menu and the singleton popout windows: hand pose, tactile, and cameras.
 - `ui_context.py` exposes a small component-facing facade around `HandGUI` and its `HandBackend`.
 
@@ -48,7 +47,7 @@ python -m desktop ui
 
 ## Import Notes
 
-- Import `HandGUI` from `desktop.ui.ui_app` and `LauncherWindow` from `desktop.ui.ui_launcher`.
+- Import `HandGUI` from `desktop.ui.ui_app`.
 - `HandGUI` accepts a `HandBackend`; passing a legacy `HandController` still works because it is wrapped in a backend at construction time.
 - Hardware protocol, calibration files, and `HandController` command methods are not changed by the UI migration.
 - If `PySide6.QtWidgets` fails to import because of a DLL issue, the UI falls back to installed `PyQt5`.

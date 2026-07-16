@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import threading
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -8,8 +9,19 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MOTOR_MID_CALIB_PATH, PROJECT_ROOT
-from desktop.core.data_models import HandModel
+from desktop.core.angle_mapping import (
+    get_spec,
+    urdf_manual_scaled_mapping_metadata,
+)
+from desktop.core.data_models import (
+    HandModel,
+    JointWorkspaceRange,
+    resolve_joint_workspace_range,
+)
 from desktop.core.protocol import (
+    CALIB_WARN_AUTO_MAX_SHORTFALL,
+    CALIB_WARN_AUTO_MIN_OFFSET,
+    CALIB_WARN_AUTO_SPAN_RANGE,
     ENCODER_COUNT,
     HAND_PROFILE,
     MOTOR_COUNT,
@@ -25,11 +37,27 @@ from desktop.core.protocol import (
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
+    SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_READY,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
-    SERVO_TARGET_OWNER_NONE,
+    ROPE_INIT_STATUS_RUNNING,
+    ROPE_INIT_STATUS_SUCCESS,
+    ROPE_INIT_STATUS_FAILED,
+    ROPE_INIT_REASON_NONE,
+    ROPE_INIT_REASON_TIMEOUT,
+    ROPE_INIT_REASON_FEEDBACK_STALE,
+    ROPE_INIT_REASON_SERVO_OFFLINE,
+    ROPE_INIT_REASON_MULTITURN_UNKNOWN,
+    ROPE_INIT_REASON_MANUAL_REQUIRED,
+    ROPE_INIT_REASON_AUTO_REQUIRED,
+    ROPE_INIT_REASON_TARGET_PUBLISH_FAILED,
+    ROPE_INIT_REASON_SYSTEM_FAULT,
+    ROPE_INIT_REASON_CANCELLED,
+    ROPE_INIT_REASON_TASK_START_FAILED,
+    manual_encoder_reference_entry_crc,
 )
-from .ui_qt_compat import QtCore, QtGui, QtWidgets
+from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
+from .ui_device_check_view import DeviceCheckView
 from .ui_tendon_guard import (
     MOTOR_TO_JOINT_INDEX,
     TendonGuard,
@@ -53,14 +81,20 @@ MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
 MOTOR_ABS_LIMIT_RECOVER_MARGIN = 16
-ROPE_INIT_TIGHTEN_STEP_COUNTS = 60
-ROPE_INIT_RELEASE_STEP_COUNTS = 30
-ROPE_INIT_STEP_COUNTS = ROPE_INIT_TIGHTEN_STEP_COUNTS
-ROPE_INIT_TIMER_MS = 50
-ROPE_INIT_TIMEOUT_S = 8.0
-ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG = 0.0
-ROPE_INIT_READY_RECHECK_INTERVAL_MS = 250
-ROPE_INIT_READY_RECHECK_TIMEOUT_MS = 4000
+ROPE_INIT_START_TIMEOUT_S = 3.0
+ROPE_INIT_REASON_LABELS = {
+    ROPE_INIT_REASON_NONE: "no error",
+    ROPE_INIT_REASON_TIMEOUT: "timeout",
+    ROPE_INIT_REASON_FEEDBACK_STALE: "feedback stale",
+    ROPE_INIT_REASON_SERVO_OFFLINE: "servo offline",
+    ROPE_INIT_REASON_MULTITURN_UNKNOWN: "multi-turn unknown",
+    ROPE_INIT_REASON_MANUAL_REQUIRED: "Manual endpoints required",
+    ROPE_INIT_REASON_AUTO_REQUIRED: "Auto v3 calibration required",
+    ROPE_INIT_REASON_TARGET_PUBLISH_FAILED: "target publish failed",
+    ROPE_INIT_REASON_SYSTEM_FAULT: "system fault",
+    ROPE_INIT_REASON_CANCELLED: "cancelled",
+    ROPE_INIT_REASON_TASK_START_FAILED: "task start failed",
+}
 TEST_ROW_COUNT = 5
 TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
@@ -69,12 +103,14 @@ TEST_DEFAULT_HOLD_S = 0.0
 FF_TEST_DEFAULT_TARGETS_DEG = "20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40"
 FF_TEST_DEFAULT_STEP_S = 1.0
 TRI_TEST_DEFAULT_FREQ_HZ = 0.20
-JOINT_TARGET_MIN_DEG_BY_INDEX = [0.0] * ENCODER_COUNT
-JOINT_TARGET_MAX_DEG_BY_INDEX = [
-    83.98, 83.98, 88.00, 82.99, 84.99, 84.99, 88.00, 82.99,
-    83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98, 83.98,
-    83.98, 83.98, 83.98, 83.98, 83.98,
-]
+JOINT_TARGET_MIN_DEG_BY_INDEX = [get_spec(i).urdf_range_deg[0] for i in range(ENCODER_COUNT)]
+JOINT_TARGET_MAX_DEG_BY_INDEX = [get_spec(i).urdf_range_deg[1] for i in range(ENCODER_COUNT)]
+try:
+    WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = urdf_manual_scaled_mapping_metadata()
+except (OSError, TypeError, ValueError):
+    WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = 0, 0
+
+
 def _load_default_auto_calibration_joint_indices() -> List[int]:
     fallback = [
         0, 1, 2, 3,
@@ -253,6 +289,8 @@ class _ModeBody(QtWidgets.QWidget):
         super().close()
 
 class ControlPanel(QtWidgets.QWidget):
+    startup_device_check_finished = Signal(int, str, bool, str)
+
     def __init__(self, context, parent=None):
         super().__init__(parent)
         self.context = context
@@ -267,6 +305,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_abs_limit_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_status_items: List[QtWidgets.QTableWidgetItem] = []
+        self.joint_min_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_max_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_target_spins: List[QtWidgets.QDoubleSpinBox] = []
         self.joint_sliders: List[QtWidgets.QSlider] = []
@@ -278,8 +317,12 @@ class ControlPanel(QtWidgets.QWidget):
         self._joint_run_states = [False] * ENCODER_COUNT
         self._motors_by_joint = _motors_by_joint_index()
         self._last_calib_status: Optional[str] = None
+        self._calibration_warning_popup_mask = 0
         self._last_calib_snapshot_signature: Optional[str] = None
         self._last_joint_calib_valid_mask: Optional[int] = None
+        self._startup_device_check_epoch = 0
+        self._startup_device_check_running = False
+        self._startup_missing_warning_shown = False
         self._pending_calib_joint_mask = 0
         self._pending_calib_motor_mask = 0
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
@@ -321,13 +364,13 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_run_states = [False] * MOTOR_COUNT
         self._last_state_transition_count: Optional[int] = None
         self._last_multi_turn_unknown_bitmap: Optional[int] = None
-        self._last_turn_recovery_guide_mask: int = 0
-        self._last_turn_recovery_guide_ts: float = 0.0
+        self._turn_recovery_popup_episode_active = False
+        self._turn_recovery_popup_episode_mask = 0
         self._last_servo_online_bitmap: Optional[int] = None
         self._last_encoder_online_bitmap: Optional[int] = None
         self._last_encoder_warn_bitmap: Optional[int] = None
         self._last_encoder_fault_bitmap: Optional[int] = None
-        self._last_feedback_abs_limit_warning_ts = 0.0
+        self._feedback_abs_limit_popup_episode_active = False
         self._abs_limit_warning_unlocked_mask = 0
 
         self._test_running = False
@@ -343,14 +386,11 @@ class ControlPanel(QtWidgets.QWidget):
         self._tri_test_timer = QtCore.QTimer(self)
         self._tri_test_timer.setInterval(TEST_TICK_MS)
         self._tri_test_timer.timeout.connect(self._tri_test_tick)
-        self._rope_init_timer = QtCore.QTimer(self)
-        self._rope_init_timer.setInterval(ROPE_INIT_TIMER_MS)
-        self._rope_init_timer.timeout.connect(self._rope_init_tick)
-        self._rope_init_tasks: List[dict] = []
-        self._rope_init_started_at = 0.0
-        self._rope_init_ready_recheck_pending = False
-        self._rope_init_ready_recheck_remaining = 0
-        self._rope_init_ready_recheck_deadline = 0.0
+        self._p4_rope_init_phase = "idle"
+        self._p4_rope_init_joint_mask = 0
+        self._p4_rope_init_requested_at = 0.0
+        self._p4_rope_init_transition_base = 0
+        self._p4_rope_init_sequence_base = 0
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
         self._test_t0 = 0.0
         self._test_hold_s = float(TEST_DEFAULT_HOLD_S)
@@ -374,6 +414,9 @@ class ControlPanel(QtWidgets.QWidget):
         self._last_manual_tab_index = 0
 
         self._build()
+        self.startup_device_check_finished.connect(
+            self._on_startup_device_check_finished
+        )
         self._apply_interaction_enabled(False)
         self._apply_control_mode_policy()
 
@@ -393,7 +436,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.calib_btn = QtWidgets.QPushButton("Calibrate")
         self.rope_init_btn = QtWidgets.QPushButton("Rope Init")
         self.rope_init_btn.setToolTip(
-            "Single motors pull into the workspace; dual motors move antagonistically to 40 deg"
+            "Ask the P4 Rope Init task to move selected IDLE joints into their calibrated workspace"
         )
         self.nvs_control_btn = QtWidgets.QPushButton("Flash ON")
         self.nvs_control_btn.setToolTip("Toggle P4 Flash/NVS multi-turn persistence. P4 NVS is the only restore source.")
@@ -609,6 +652,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.fist_btn = None
         self.zero_btn = None
         self.tabs = None
+        self.device_check_view = None
         self.joint_table = None
         self.motor_table = None
         self.test_panel = None
@@ -639,6 +683,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_encoder_items = []
         self.joint_abs_limit_items = []
         self.joint_status_items = []
+        self.joint_min_items = []
         self.joint_max_items = []
         self.joint_target_spins = []
         self.joint_sliders = []
@@ -729,6 +774,14 @@ class ControlPanel(QtWidgets.QWidget):
         self.zero_btn.clicked.connect(lambda _checked=False: self.apply_preset([0.0] * ENCODER_COUNT))
 
         self.tabs = QtWidgets.QTabWidget()
+        self.device_check_view = DeviceCheckView(
+            self.context,
+            mapping_version=WORKSPACE_MAPPING_VERSION,
+            urdf_crc=WORKSPACE_URDF_CRC,
+        )
+        self.device_check_view.operation_finished.connect(
+            self._on_device_check_operation_finished
+        )
         self.joint_table = self._build_joint_table()
         self.motor_table = self._build_motor_table()
         joint_page = QtWidgets.QWidget()
@@ -750,6 +803,7 @@ class ControlPanel(QtWidgets.QWidget):
         joint_page_layout.addWidget(self.joint_table, 1)
         self._sync_scope_group_checks()
         self.test_panel = self._build_test_panel()
+        self.tabs.addTab(self.device_check_view, "Device Check")
         self.tabs.addTab(joint_page, "Joint Channels")
         self.tabs.addTab(self.motor_table, "Motor Channels")
         self.tabs.addTab(self.test_panel, "Test")
@@ -921,6 +975,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_encoder_items = [None] * ENCODER_COUNT
         self.joint_abs_limit_items = [None] * ENCODER_COUNT
         self.joint_status_items = [None] * ENCODER_COUNT
+        self.joint_min_items = [None] * ENCODER_COUNT
         self.joint_max_items = [None] * ENCODER_COUNT
         self.joint_target_spins = [None] * ENCODER_COUNT
         self.joint_sliders = [None] * ENCODER_COUNT
@@ -1000,6 +1055,7 @@ class ControlPanel(QtWidgets.QWidget):
             self.joint_current_items[i] = cur
             self.joint_encoder_items[i] = enc
             self.joint_abs_limit_items[i] = abs_limit
+            self.joint_min_items[i] = min_item
             self.joint_max_items[i] = max_item
             table.setItem(row, 3, status)
             table.setItem(row, 4, cur)
@@ -1325,6 +1381,9 @@ class ControlPanel(QtWidgets.QWidget):
         layout = QtWidgets.QGridLayout(group)
         self.ff_joint_combo = QtWidgets.QComboBox()
         self.ff_joint_combo.addItems(self._joint_choices())
+        self.ff_joint_combo.currentTextChanged.connect(
+            lambda _text: self._refresh_single_test_workspace("feedforward")
+        )
         self.ff_targets_edit = QtWidgets.QLineEdit(FF_TEST_DEFAULT_TARGETS_DEG)
         self.ff_step_spin = self._make_float_spin(0.001, 60.0, FF_TEST_DEFAULT_STEP_S, 3)
         self.ff_start_btn = QtWidgets.QPushButton("Start Feedforward Test")
@@ -1351,6 +1410,9 @@ class ControlPanel(QtWidgets.QWidget):
         layout = QtWidgets.QGridLayout(group)
         self.tri_joint_combo = QtWidgets.QComboBox()
         self.tri_joint_combo.addItems(self._joint_choices())
+        self.tri_joint_combo.currentTextChanged.connect(
+            lambda _text: self._refresh_single_test_workspace("triangle")
+        )
         self.tri_min_spin = self._make_float_spin(0.0, 120.0, 0.0, 2)
         self.tri_max_spin = self._make_float_spin(0.0, 120.0, 10.0, 2)
         self.tri_freq_spin = self._make_float_spin(0.001, 100.0, TRI_TEST_DEFAULT_FREQ_HZ, 4)
@@ -1415,6 +1477,8 @@ class ControlPanel(QtWidgets.QWidget):
         if self.tabs is None:
             return "joint"
         widget = self.tabs.currentWidget()
+        if widget is getattr(self, "device_check_view", None):
+            return "device_check"
         if widget is getattr(self, "motor_table", None):
             return "motor"
         if widget is getattr(self, "test_panel", None):
@@ -1438,11 +1502,27 @@ class ControlPanel(QtWidgets.QWidget):
             self._refresh_motor_feedback_view(sync_target=True)
         elif current == "test":
             pass
+        elif current == "device_check":
+            if self.device_check_view is not None:
+                self.device_check_view.update_state(self._state)
         else:
             self._refresh_joint_feedback_view(sync_target=True)
         self._last_control_mode = current
         self._apply_control_mode_policy()
         self._apply_active_scope_for_current_mode()
+        self._update_manual_action_buttons()
+
+    def _on_device_check_operation_finished(
+        self, _name: str, _ok: bool, _message: str
+    ) -> None:
+        """Publish Device Check readback into the parent panel immediately."""
+        try:
+            state = self.backend.get_state_snapshot()
+        except Exception:
+            return
+        if state is None:
+            return
+        self._state = state
         self._update_manual_action_buttons()
 
     def _apply_interaction_enabled(self, enabled: bool) -> None:
@@ -1456,6 +1536,9 @@ class ControlPanel(QtWidgets.QWidget):
                 widget.setEnabled(self._interaction_enabled)
             except Exception:
                 pass
+        if getattr(self, "joint_target_spins", None):
+            for idx in range(min(ENCODER_COUNT, len(self.joint_target_spins))):
+                self._refresh_joint_target_range(idx, self._state)
         self._update_manual_action_buttons()
         self._apply_control_mode_policy()
         self._set_status(f"Control Enable: {'ON' if self._interaction_enabled else 'OFF'}")
@@ -1464,7 +1547,9 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _apply_control_mode_policy(self) -> None:
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
-        if mode == "motor":
+        if mode == "device_check":
+            self.backend.set_pid_control(False)
+        elif mode == "motor":
             self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
             self.backend.set_pid_control(False)
         else:
@@ -1475,15 +1560,20 @@ class ControlPanel(QtWidgets.QWidget):
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         interaction = bool(self._interaction_enabled)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
+        active_joints = self._active_scope_joint_indices()
+        joint_workspace_ready = bool(active_joints) and not self._active_scope_joint_calib_missing_indices()
+        if getattr(self, "manual_check", None) is not None:
+            self.manual_check.setVisible(mode != "device_check")
+            self.manual_check.setEnabled(mode != "device_check")
         for btn in [getattr(self, "send_all_btn", None)]:
             if btn is not None:
                 btn.setVisible(mode != "motor")
                 # Keep the action reachable so its command guard can report why
                 # feedback is not ready instead of leaving a silent grey button.
-                btn.setEnabled(interaction and mode != "motor")
+                btn.setEnabled(interaction and mode != "motor" and joint_workspace_ready)
         if getattr(self, "open_btn", None) is not None:
             self.open_btn.setVisible(mode in ("joint", "test"))
-            self.open_btn.setEnabled(mode in ("joint", "test"))
+            self.open_btn.setEnabled(mode in ("joint", "test") and joint_workspace_ready)
         if getattr(self, "release_half_turn_btn", None) is not None:
             self.release_half_turn_btn.setVisible(mode == "motor")
             self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
@@ -1498,19 +1588,61 @@ class ControlPanel(QtWidgets.QWidget):
             )
             self.calib_load_btn.setEnabled(can_load)
         if getattr(self, "new_device_reset_btn", None) is not None:
+            multi_turn_unknown_mask = (
+                int(getattr(self._state, "multi_turn_unknown_bitmap", 0) or 0)
+                & VALID_MOTOR_MASK
+            )
             can_reset_device = (
                 bool(self.context.is_comm_connected()) and
+                multi_turn_unknown_mask != 0 and
                 system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
             )
             self.new_device_reset_btn.setEnabled(can_reset_device)
         for btn in [getattr(self, "fist_btn", None), getattr(self, "zero_btn", None)]:
             if btn is not None:
                 btn.setVisible(mode in ("joint", "test"))
-                btn.setEnabled(mode in ("joint", "test"))
+                btn.setEnabled(mode in ("joint", "test") and joint_workspace_ready)
         if getattr(self, "rope_init_btn", None) is not None:
-            self.rope_init_btn.setEnabled(interaction and mode == "joint")
+            self.rope_init_btn.setEnabled(
+                interaction and
+                mode == "joint" and
+                joint_workspace_ready and
+                self._p4_rope_init_phase == "idle"
+            )
         if getattr(self, "calib_btn", None) is not None:
-            self.calib_btn.setEnabled(system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY))
+            connected = bool(self.context.is_comm_connected())
+            task_busy = system_state in (
+                SYSTEM_STATE_CALIBRATION_RUNNING,
+                SYSTEM_STATE_ROPE_INIT_RUNNING,
+            )
+            # Do not permanently grey this action from a cached Manual packet.
+            # calibrate() performs a fresh P4 query and reports the exact blocker.
+            self.calib_btn.setEnabled(connected and mode == "joint" and not task_busy)
+            missing_manual = self._active_scope_manual_missing_indices()
+            if missing_manual:
+                self.calib_btn.setToolTip(
+                    "Click to refresh Manual endpoints from P4 and validate: "
+                    + self._format_joint_indices(missing_manual)
+                )
+            elif system_state not in (
+                SYSTEM_STATE_UNCONTROLLABLE,
+                SYSTEM_STATE_IDLE,
+                SYSTEM_STATE_READY,
+            ):
+                self.calib_btn.setToolTip(
+                    "Calibration requires UNCONTROLLABLE, IDLE, or READY; "
+                    "click to see the current-state blocker"
+                )
+            else:
+                self.calib_btn.setToolTip(
+                    "Start automatic calibration for the selected joints; "
+                    "Control Enable is not a calibration prerequisite"
+                )
+        if getattr(self, "enable_btn", None) is not None:
+            self.enable_btn.setEnabled(
+                mode != "device_check" and
+                (mode == "motor" or joint_workspace_ready)
+            )
         if getattr(self, "mid_calib_btn", None) is not None:
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
         has_active_motor = (self._active_motor_mask_from_ui() & VALID_MOTOR_MASK) != 0
@@ -1802,49 +1934,50 @@ class ControlPanel(QtWidgets.QWidget):
             self._error("Tighten Failed", f"{type(exc).__name__}: {exc}")
 
     def apply_preset(self, angles: List[float]) -> None:
+        clamped_angles = list(angles[:ENCODER_COUNT])
         self._updating = True
         try:
-            for i, value in enumerate(angles[:ENCODER_COUNT]):
+            for i, value in enumerate(clamped_angles):
                 value = self._clamp_joint_target_deg(i, float(value))
+                clamped_angles[i] = value
                 self.joint_target_spins[i].setValue(value)
                 self.joint_sliders[i].setValue(int(round(value * 100.0)))
                 self._joint_target_user_set[i] = True
         finally:
             self._updating = False
-        self.context.draw_pose_angles(angles)
+        self.context.draw_pose_angles(clamped_angles)
 
     def apply_open_pose(self) -> None:
         self.apply_preset([0.0] * ENCODER_COUNT)
         self._set_status("Open Pose set: all joints 0.00 deg")
 
     def apply_fist_pose(self) -> None:
-        state = self._state
         angles: List[float] = []
-        fallback_joints: List[int] = []
         for i in range(ENCODER_COUNT):
-            calibrated_max = self._joint_calibrated_target_max_deg(i, state)
-            if calibrated_max is None:
-                fallback_joints.append(i)
-                max_deg = self._joint_default_target_max_deg(i)
-            else:
-                max_deg = calibrated_max
-            target = max(self._joint_target_min_deg(i), float(max_deg) - 2.0)
+            max_deg = self._joint_target_max_deg(i)
+            target = max(self._joint_target_min_deg(i), max_deg - 2.0)
             angles.append(self._clamp_joint_target_deg(i, target))
         self.apply_preset(angles)
-        if fallback_joints:
-            self._set_status(
-                "Fist Pose set: Max-2 deg; default Max used for " +
-                self._format_joint_indices(fallback_joints)
-            )
-        else:
-            self._set_status("Fist Pose set: calibrated Max-2 deg")
+        self._set_status("Fist Pose set: URDF Max-2 deg")
 
     def start_controller(self) -> None:
+        if self._app_mode == "manual" and self._manual_submode() == "device_check":
+            self._set_status("ENABLE blocked: switch to Joint or Motor Channels after Device Check")
+            return
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
                 self._update_connection_lights()
                 return
             self._update_connection_lights()
+        if self._manual_submode() != "motor":
+            missing_workspace = self._active_scope_joint_calib_missing_indices()
+            if missing_workspace:
+                self._set_status(
+                    "ENABLE blocked: active workspace is not ready ("
+                    + self._format_joint_indices(missing_workspace)
+                    + ")"
+                )
+                return
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Enable blocked: active scope was not accepted by lower controller")
             return
@@ -1857,7 +1990,7 @@ class ControlPanel(QtWidgets.QWidget):
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
-            self._show_turn_recovery_guide(unknown_mask, "ENABLE", force=True)
+            self._show_turn_recovery_guide(unknown_mask, "ENABLE")
             return
         if not self._sync_motor_targets_to_feedback():
             self._set_status("Enable waits for fresh motor feedback")
@@ -1971,6 +2104,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def reset_controller(self) -> None:
         self._estop_latched = True
+        self._reset_p4_rope_init_progress()
         self.backend.reset()
         self._clear_run_states()
         self.context.emit_action("Clear Fault")
@@ -1982,103 +2116,14 @@ class ControlPanel(QtWidgets.QWidget):
             return _ordered_joint_indices_from_mask(int(joint_mask))
         return list(AUTO_CALIBRATION_JOINT_INDICES)
 
-    def _dual_rope_init_motors_for_joint(self, joint_idx: int) -> Optional[Tuple[int, int]]:
-        if joint_idx < 0 or joint_idx >= len(self._motors_by_joint):
-            return None
-        motors = [
-            int(motor_idx)
-            for motor_idx in self._motors_by_joint[joint_idx]
-            if _motor_channel_valid(int(motor_idx))
-        ]
-        if len(motors) < 2:
-            return None
-        return motors[0], motors[1]
-
-    def _build_rope_init_tasks(self) -> Tuple[List[dict], List[str], List[str]]:
-        state = self._state
-        if state is None or not bool(getattr(state, "has_sensor_data", False)):
-            return [], [], ["joint angle feedback"]
-        angles = getattr(state, "angles", []) or []
-        servo_online = getattr(state, "servo_online", []) or []
-        servo_angles = getattr(state, "servo_angles", []) or []
-
-        tasks: List[dict] = []
-        skipped: List[str] = []
-        missing: List[str] = []
-        seen_motors = set()
-        for joint_idx in self._active_scope_joint_indices():
-            if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
-                continue
-            if joint_idx >= len(angles) or not self._joint_angle_feedback_valid(joint_idx, state):
-                missing.append(f"J{joint_idx:02d} angle")
-                continue
-            joint_deg = float(angles[joint_idx])
-
-            dual_motors = self._dual_rope_init_motors_for_joint(joint_idx)
-            if dual_motors is not None:
-                primary_motor, secondary_motor = dual_motors
-                if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
-                    skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/workspace")
-                    continue
-                if primary_motor in seen_motors or secondary_motor in seen_motors:
-                    missing.append(f"J{joint_idx:02d} motor conflict")
-                    continue
-                for motor_idx in (primary_motor, secondary_motor):
-                    if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
-                        missing.append(f"M{motor_idx:02d} online")
-                        break
-                    if motor_idx >= len(servo_angles):
-                        missing.append(f"M{motor_idx:02d} abs")
-                        break
-                else:
-                    seen_motors.add(primary_motor)
-                    seen_motors.add(secondary_motor)
-                    tasks.append({
-                        "type": "dual",
-                        "joint": joint_idx,
-                        "primary": primary_motor,
-                        "secondary": secondary_motor,
-                        "target_deg": ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG,
-                    })
-                continue
-
-            if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
-                skipped.append(f"J{joint_idx:02d}={joint_deg:.2f}/workspace")
-                continue
-            motor_idx = TendonGuard.primary_motor_for_joint(joint_idx)
-            if motor_idx < 0 or motor_idx >= MOTOR_COUNT:
-                missing.append(f"J{joint_idx:02d} motor")
-                continue
-            if motor_idx in seen_motors:
-                missing.append(f"M{motor_idx:02d} conflict")
-                continue
-            if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
-                missing.append(f"M{motor_idx:02d} online")
-                continue
-            if motor_idx >= len(servo_angles):
-                missing.append(f"M{motor_idx:02d} abs")
-                continue
-            seen_motors.add(motor_idx)
-            tasks.append({
-                "type": "single",
-                "joint": joint_idx,
-                "motor": motor_idx,
-                "target_deg": ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG,
-            })
-        return tasks, skipped, missing
-
-    # =========================================================================
-    # rope_init_controller - 鑷姩瀵绘壘缁崇涓庡井璋冨姛�?(Rope Init)
-    # =========================================================================
-    # 鏍稿績浣滅敤锛氬湪绯荤粺宸茬粡瀹屾垚杩囦竴娆″叏闈㈣嚜鍔ㄦ爣瀹氾紝浣嗗洜闀挎湡鏈€氱數鎴栫幆澧冨彉鍖栧�?    # 閮ㄥ垎宸叉爣瀹氬叧鑺傚湪涓婄數鍚庤鍙栫殑纾佺紪鐮佸櫒瑙掑害浠嶅井灏忎簬 0 �?(�?-0.5�? 鏃朵娇鐢ㄣ€?    #
-    # 杩囨护涓庢嫤鎴€昏�?(_rope_init_joint_motor_pairs)�?    # 1. 浠呴拡瀵瑰畾涔夊湪 AUTO_CALIBRATION_JOINT_INDICES 涓殑闇€瑕佹媺浼哥殑鍏宠妭�?    # 2. 濡傛灉瑙掑害宸茬�?>= 0.0锛屽垽瀹氫负鏃犻渶鎷夌揣锛岀洿鎺ヨ烦�?(skipped)�?    # 3. 濡傛灉缂哄皯纾佺紪鐮佸櫒瑙掑害銆佽埖鏈烘帀绾跨瓑锛屽垽瀹氫负缂虹姸�?(missing)锛屼笉浜堟墽琛屻�?    #
-    # 鎵ц閫昏緫锛?    # 閽堝绛涢€夊嚭鐨勫叧鑺傚搴旂殑鑸垫満锛屽己鍒跺皢鍏跺綋鍓嶇殑缁濆浣嶇疆鍐嶁€滄鍚戞敹绱р�?ROPE_INIT_STEP_COUNTS 涓剦鍐?    # (甯镐�?+50)锛屼互閫艰揩鍏惰秺杩囨満姊版鍖恒€傝繖鏄竴绉嶅皬姝ュ揩璺戠殑杞婚噺绾ч噸鏍囧畾�?    # =========================================================================
+    # P4 owns Rope Init motion; the desktop only submits and observes it.
     def rope_init_controller(self) -> None:
+        if self._p4_rope_init_phase != "idle":
+            self._set_status("Rope Init is already queued or running on P4")
+            return
         if self._manual_submode() != "joint":
             self._set_status("Rope Init is only available in Joint Channels")
             return
-        if self._rope_init_timer.isActive():
-            self._stop_rope_init("Rope Init restarted", update_status=False)
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
                 return
@@ -2087,7 +2132,7 @@ class ControlPanel(QtWidgets.QWidget):
             return
         state = self._state
         system_state = getattr(state, "system_state", None)
-        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT):
+        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
             self._set_status("Rope Init blocked: wait for IDLE/READY")
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
@@ -2095,246 +2140,189 @@ class ControlPanel(QtWidgets.QWidget):
             self._show_turn_recovery_guide(unknown_mask, "Rope Init")
             return
 
-        tasks, skipped, missing = self._build_rope_init_tasks()
-        if not tasks:
-            detail = "; ".join(skipped[:4]) if skipped else ", ".join(missing[:4])
-            suffix = ""
-            if skipped and self._apply_active_scope_for_current_mode():
-                self._schedule_rope_init_ready_recheck()
-                suffix = "; READY recheck scheduled"
-            self._set_status(f"Rope Init no action: {detail or 'all selected joints are inside workspace'}{suffix}")
+        if not self._apply_active_scope_for_current_mode():
+            self._set_status("Rope Init blocked: active scope was not accepted")
             return
-
-        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.backend.set_pid_control(False)
-        self._rope_init_tasks = list(tasks)
-        self._rope_init_started_at = time.monotonic()
+        active_joint_mask = int(self._active_joint_mask_from_ui()) & (
+            (1 << ENCODER_COUNT) - 1
+        )
+        if active_joint_mask == 0:
+            self._set_status("Rope Init blocked: no active joint selected")
+            return
+        transition_base = int(
+            getattr(state, "state_transition_count", 0) or 0
+        )
+        sequence_base = int(getattr(state, "rope_init_sequence", 0) or 0)
+        if not self.backend.rope_init(active_joint_mask):
+            self._set_status(
+                "Rope Init rejected: check Manual/v3 calibration, state, and Turn"
+            )
+            return
+        self._p4_rope_init_phase = "queued"
+        self._p4_rope_init_joint_mask = active_joint_mask
+        self._p4_rope_init_requested_at = time.monotonic()
+        self._p4_rope_init_transition_base = transition_base
+        self._p4_rope_init_sequence_base = sequence_base
+        self.rope_init_btn.setText("Rope Init...")
         self.context.emit_action(
-            "Rope Init start: " +
-            ",".join(
-                (
-                    f"J{task['joint']:02d}/M{task['motor']:02d}->workspace"
-                    if task.get("type") == "single"
-                    else f"J{task['joint']:02d}/M{task['primary']:02d},M{task['secondary']:02d}->workspace"
+            f"Rope Init queued on P4: joint_mask=0x{active_joint_mask:08X}"
+        )
+        self._set_status(
+            f"Rope Init queued on P4: joint_mask=0x{active_joint_mask:08X}"
+        )
+        self._update_manual_action_buttons()
+
+    def _reset_p4_rope_init_progress(self) -> None:
+        self._p4_rope_init_phase = "idle"
+        self._p4_rope_init_joint_mask = 0
+        self._p4_rope_init_requested_at = 0.0
+        self._p4_rope_init_transition_base = 0
+        self._p4_rope_init_sequence_base = 0
+        button = getattr(self, "rope_init_btn", None)
+        if button is not None:
+            button.setText("Rope Init")
+
+    def _finish_p4_rope_init_progress(self, success: bool, detail: str) -> None:
+        joint_mask = self._p4_rope_init_joint_mask
+        result = "complete" if success else "failed"
+        message = (
+            f"Rope Init {result} on P4: joint_mask=0x{joint_mask:08X}; {detail}"
+        )
+        self._reset_p4_rope_init_progress()
+        self.context.emit_action(message)
+        self._update_manual_action_buttons()
+
+    def _update_p4_rope_init_progress(self, state) -> None:
+        if self._p4_rope_init_phase == "idle" or state is None:
+            return
+        system_state = int(getattr(state, "system_state", -1) or 0)
+        transition_count = int(getattr(state, "state_transition_count", 0) or 0)
+        transition_delta = max(
+            0, transition_count - self._p4_rope_init_transition_base
+        )
+        elapsed = max(0.0, time.monotonic() - self._p4_rope_init_requested_at)
+
+        if bool(getattr(state, "has_motion_result_status", False)):
+            rope_sequence = int(getattr(state, "rope_init_sequence", 0) or 0)
+            rope_status = int(getattr(state, "rope_init_status", 0) or 0)
+            rope_reason = int(getattr(state, "rope_init_reason", 0) or 0)
+            if rope_sequence > self._p4_rope_init_sequence_base:
+                if rope_status == ROPE_INIT_STATUS_RUNNING:
+                    if self._p4_rope_init_phase != "running":
+                        self._p4_rope_init_phase = "running"
+                        self.context.emit_action(
+                            "Rope Init started on P4: "
+                            f"joint_mask=0x{self._p4_rope_init_joint_mask:08X}"
+                        )
+                        self._update_manual_action_buttons()
+                    self._set_status(f"Rope Init running on P4: {elapsed:.1f} s")
+                    return
+                if rope_status == ROPE_INIT_STATUS_SUCCESS:
+                    self._finish_p4_rope_init_progress(
+                        True, "P4 reported SUCCESS"
+                    )
+                    return
+                if rope_status == ROPE_INIT_STATUS_FAILED:
+                    reason_label = ROPE_INIT_REASON_LABELS.get(
+                        rope_reason, f"unknown reason {rope_reason}"
+                    )
+                    self._finish_p4_rope_init_progress(
+                        False, f"P4 reported FAILED: {reason_label}"
+                    )
+                    return
+
+        if system_state == SYSTEM_STATE_ROPE_INIT_RUNNING:
+            if self._p4_rope_init_phase != "running":
+                self._p4_rope_init_phase = "running"
+                self.context.emit_action(
+                    "Rope Init started on P4: "
+                    f"joint_mask=0x{self._p4_rope_init_joint_mask:08X}"
                 )
-                for task in tasks
-            )
-        )
-        skipped_text = f"; skipped {', '.join(skipped[:3])}" if skipped else ""
-        self._set_status(f"Rope Init running for {len(tasks)} joint(s){skipped_text}")
-        self._rope_init_timer.start()
-        self._rope_init_tick()
-
-    def _stop_rope_init(self, reason: str = "stopped", update_status: bool = True) -> None:
-        was_running = self._rope_init_timer.isActive() or bool(self._rope_init_tasks)
-        self._rope_init_timer.stop()
-        self._rope_init_tasks = []
-        if update_status and was_running:
-            suffix = ""
-            mode = self._manual_submode() if self._app_mode == "manual" else "joint"
-            if mode in ("joint", "test") and self.context.is_comm_connected():
-                self._schedule_rope_init_ready_recheck()
-                suffix = "; waiting for direct release"
-            self._set_status(f"{reason}{suffix}")
-            self._update_manual_action_buttons()
-
-    def _schedule_rope_init_ready_recheck(self) -> None:
-        if self._rope_init_ready_recheck_pending:
-            return
-        self._rope_init_ready_recheck_pending = True
-        self._rope_init_ready_recheck_remaining = 0
-        self._rope_init_ready_recheck_deadline = (
-            time.monotonic() + float(ROPE_INIT_READY_RECHECK_TIMEOUT_MS) * 0.001
-        )
-        QtCore.QTimer.singleShot(
-            int(ROPE_INIT_READY_RECHECK_INTERVAL_MS),
-            self._rope_init_ready_recheck,
-        )
-
-    def _rope_init_ready_recheck(self) -> None:
-        if not self._rope_init_ready_recheck_pending:
-            return
-        if self._rope_init_timer.isActive() or self._rope_init_tasks:
-            QtCore.QTimer.singleShot(
-                int(ROPE_INIT_READY_RECHECK_INTERVAL_MS),
-                self._rope_init_ready_recheck,
-            )
-            return
-        if not self.context.is_comm_connected():
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            return
-        state = self._state
-        system_state = getattr(state, "system_state", None) if state is not None else None
-        if system_state == SYSTEM_STATE_READY:
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            self._set_status("Rope Init complete; READY confirmed")
+                self._update_manual_action_buttons()
+            self._set_status(f"Rope Init running on P4: {elapsed:.1f} s")
             return
 
-        direct_released = (
-            state is not None and
-            system_state != SYSTEM_STATE_RUN_DIRECT and
-            not bool(getattr(state, "control_enabled", False)) and
-            int(getattr(state, "servo_target_owner", SERVO_TARGET_OWNER_NONE) or 0) == SERVO_TARGET_OWNER_NONE
+        task_has_finished = (
+            self._p4_rope_init_phase == "running" or transition_delta >= 2
         )
-        if not direct_released:
-            if time.monotonic() < self._rope_init_ready_recheck_deadline:
-                self._set_status("Rope Init complete; waiting for direct control release")
-                QtCore.QTimer.singleShot(
-                    int(ROPE_INIT_READY_RECHECK_INTERVAL_MS),
-                    self._rope_init_ready_recheck,
+        if task_has_finished:
+            if system_state == SYSTEM_STATE_READY:
+                self._finish_p4_rope_init_progress(True, "READY confirmed")
+            elif system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_UNCONTROLLABLE):
+                self._finish_p4_rope_init_progress(
+                    False,
+                    f"final_state={system_state}; active joints did not reach READY",
                 )
-                return
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            self._set_status("Rope Init complete; direct control release timeout")
             return
 
-        if time.monotonic() >= self._rope_init_ready_recheck_deadline:
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            self._set_status("Rope Init complete; READY recheck timeout")
-            return
-
-        if system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            return
-
-        mode = self._manual_submode() if self._app_mode == "manual" else "joint"
-        if mode not in ("joint", "test"):
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-            return
-        if self._apply_active_scope_for_current_mode():
-            self._set_status("Rope Init complete; READY recheck requested")
-            QtCore.QTimer.singleShot(
-                int(ROPE_INIT_READY_RECHECK_INTERVAL_MS),
-                self._rope_init_ready_recheck,
+        if elapsed >= ROPE_INIT_START_TIMEOUT_S:
+            self._finish_p4_rope_init_progress(
+                False,
+                f"P4 did not enter ROPE_INIT within {ROPE_INIT_START_TIMEOUT_S:.1f} s",
             )
-        else:
-            self._rope_init_ready_recheck_pending = False
-            self._rope_init_ready_recheck_remaining = 0
-            self._rope_init_ready_recheck_deadline = 0.0
-
-    def _apply_rope_init_motor_target_to_ui(self, motor_idx: int, target_abs: int) -> None:
-        if motor_idx < 0 or motor_idx >= MOTOR_COUNT:
             return
-        target_abs = clamp_motor_abs(int(target_abs))
-        self._motor_session_origin_abs[motor_idx] = target_abs
-        self._motor_abs_pos[motor_idx] = 0
-        self._motor_last_slider[motor_idx] = 0
-        self._motor_target_user_set[motor_idx] = False
-        self._set_motor_target_widget(motor_idx, 0)
-
-    def _rope_init_dual_motor_delta(self, motor_idx: int, raw_direction: int) -> int:
-        direction = 1 if int(raw_direction) >= 0 else -1
-        is_tightening = direction == motor_tendon_shorten_abs_sign(motor_idx)
-        counts = ROPE_INIT_TIGHTEN_STEP_COUNTS if is_tightening else ROPE_INIT_RELEASE_STEP_COUNTS
-        return direction * counts
-
-    def _rope_init_tick(self) -> None:
-        if not self._rope_init_tasks:
-            self._stop_rope_init("Rope Init complete")
-            return
-        if (time.monotonic() - self._rope_init_started_at) > ROPE_INIT_TIMEOUT_S:
-            self._stop_rope_init("Rope Init timeout: check joint feedback")
-            return
-
-        state = self._state
-        if state is None or not bool(getattr(state, "has_sensor_data", False)):
-            self._stop_rope_init("Rope Init stopped: missing joint angle feedback")
-            return
-        system_state = getattr(state, "system_state", None)
-        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT):
-            self._stop_rope_init("Rope Init stopped: wait for IDLE/READY")
-            return
-        unknown_mask = self._active_scope_multiturn_unknown_mask()
-        if unknown_mask != 0:
-            self._stop_rope_init(f"Rope Init stopped: Turn UNKNOWN 0x{unknown_mask:08X}")
-            return
-
-        angles = getattr(state, "angles", []) or []
-        targets = self._current_motor_hold_targets_from_feedback()
-        remaining: List[dict] = []
-        moved_motors = set()
-        feedback_missing: List[str] = []
-        completed: List[str] = []
-
-        for task in self._rope_init_tasks:
-            joint_idx = int(task.get("joint", -1))
-            if (
-                joint_idx < 0 or
-                joint_idx >= ENCODER_COUNT or
-                joint_idx >= len(angles) or
-                not self._joint_angle_feedback_valid(joint_idx, state)
-            ):
-                feedback_missing.append(f"J{joint_idx:02d} angle")
-                continue
-            joint_deg = float(angles[joint_idx])
-
-            if task.get("type") == "dual":
-                primary_motor = int(task.get("primary", -1))
-                secondary_motor = int(task.get("secondary", -1))
-                target_deg = float(task.get("target_deg", ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG))
-                if joint_deg >= target_deg:
-                    completed.append(f"J{joint_idx:02d}={joint_deg:.2f}")
-                    continue
-                error_deg = target_deg - joint_deg
-                primary_abs = self._motor_feedback_abs(primary_motor)
-                secondary_abs = self._motor_feedback_abs(secondary_motor)
-                if primary_abs is None or secondary_abs is None:
-                    feedback_missing.append(f"J{joint_idx:02d} motor feedback")
-                    continue
-                step_sign = 1 if error_deg > 0.0 else -1
-                primary_delta = self._rope_init_dual_motor_delta(primary_motor, step_sign)
-                secondary_delta = self._rope_init_dual_motor_delta(secondary_motor, -step_sign)
-                targets[primary_motor] = clamp_motor_abs(int(primary_abs) + primary_delta)
-                targets[secondary_motor] = clamp_motor_abs(int(secondary_abs) + secondary_delta)
-                moved_motors.update((primary_motor, secondary_motor))
-                remaining.append(task)
-            else:
-                motor_idx = int(task.get("motor", -1))
-                if joint_deg >= ROPE_INIT_SINGLE_WORKSPACE_MIN_DEG:
-                    completed.append(f"J{joint_idx:02d}={joint_deg:.2f}")
-                    continue
-                feedback_abs = self._motor_feedback_abs(motor_idx)
-                if feedback_abs is None:
-                    feedback_missing.append(f"M{motor_idx:02d}")
-                    continue
-                targets[motor_idx] = motor_abs_after_tendon_action(
-                    int(feedback_abs),
-                    motor_idx,
-                    ROPE_INIT_STEP_COUNTS,
-                )
-                moved_motors.add(motor_idx)
-                remaining.append(task)
-
-        if feedback_missing:
-            self._stop_rope_init(f"Rope Init stopped: waiting for {','.join(feedback_missing[:4])}")
-            return
-
-        if not moved_motors:
-            done_text = f" ({', '.join(completed[:4])})" if completed else ""
-            self._stop_rope_init(f"Rope Init complete{done_text}")
-            return
-
-        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.backend.set_pid_control(False)
-        self.backend.set_motor_positions_absolute(targets)
-        self._motor_last_sent_abs = list(targets)
-        for motor_idx in sorted(moved_motors):
-            self._apply_rope_init_motor_target_to_ui(motor_idx, int(targets[motor_idx]))
-        self._rope_init_tasks = remaining
+        self._set_status(f"Rope Init queued on P4: waiting to start ({elapsed:.1f} s)")
 
     def calibrate(self) -> None:
+        if self._manual_submode() != "joint":
+            self._set_status("Calibrate is only available in Joint Channels")
+            return
+        if not bool(self.context.is_comm_connected()):
+            self._warn("Calibration unavailable", "P4 is not connected.")
+            self._set_status("Calibrate blocked: P4 is not connected")
+            return
+
+        try:
+            latest_state = self.backend.get_state_snapshot()
+        except Exception:
+            latest_state = None
+        if latest_state is not None:
+            self._state = latest_state
+
+        missing_manual = self._active_scope_manual_missing_indices()
+        if missing_manual:
+            self._set_status(
+                "Calibrate: refreshing active-scope Manual endpoints from P4..."
+            )
+            try:
+                refreshed = bool(self.backend.query_manual_encoder_references())
+            except Exception:
+                refreshed = False
+            if refreshed:
+                try:
+                    latest_state = self.backend.get_state_snapshot()
+                except Exception:
+                    latest_state = None
+                if latest_state is not None:
+                    self._state = latest_state
+                    if self.device_check_view is not None:
+                        self.device_check_view.update_state(latest_state)
+                missing_manual = self._active_scope_manual_missing_indices()
+        if missing_manual:
+            self._warn(
+                "Manual Required",
+                "Active joints are missing persisted Manual endpoints: "
+                + self._format_joint_indices(missing_manual),
+            )
+            self._set_status("Calibrate blocked: active scope Manual is incomplete")
+            self._update_manual_action_buttons()
+            return
+
+        system_state = getattr(self._state, "system_state", None)
+        if system_state not in (
+            SYSTEM_STATE_UNCONTROLLABLE,
+            SYSTEM_STATE_IDLE,
+            SYSTEM_STATE_READY,
+        ):
+            self._warn(
+                "Calibration unavailable",
+                "Stop the active motion first. Calibration requires P4 state "
+                f"UNCONTROLLABLE, IDLE, or READY; current state={system_state}.",
+            )
+            self._set_status(
+                f"Calibrate blocked: P4 system_state={system_state}"
+            )
+            return
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Calibrate blocked: active scope was not accepted by lower controller")
             return
@@ -2342,6 +2330,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _start_calibration_now(self) -> None:
         self._abs_limit_warning_unlocked_mask = 0
+        self._feedback_abs_limit_popup_episode_active = False
         active_joint_mask = int(self._active_joint_mask_from_ui()) & ((1 << ENCODER_COUNT) - 1)
         active_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
         self._pending_calib_joint_mask = active_joint_mask
@@ -2438,7 +2427,21 @@ class ControlPanel(QtWidgets.QWidget):
             "7. 确认 TURN KNOWN、CALIB SUCCESS、OL OK 后再控制。"
         )
 
-    def _show_turn_recovery_guide(self, unknown_mask: int, source: str = "", *, force: bool = False) -> None:
+    def turn_unknown_popup_seen(self) -> bool:
+        return bool(self._turn_recovery_popup_episode_active)
+
+    def mark_turn_unknown_popup_seen(self, unknown_mask: int) -> None:
+        unknown_mask = int(unknown_mask) & VALID_MOTOR_MASK
+        if unknown_mask == 0:
+            return
+        self._turn_recovery_popup_episode_active = True
+        self._turn_recovery_popup_episode_mask |= unknown_mask
+
+    def reset_turn_unknown_popup_episode(self) -> None:
+        self._turn_recovery_popup_episode_active = False
+        self._turn_recovery_popup_episode_mask = 0
+
+    def _show_turn_recovery_guide(self, unknown_mask: int, source: str = "") -> None:
         unknown_mask = int(unknown_mask) & VALID_MOTOR_MASK
         if unknown_mask == 0:
             return
@@ -2448,15 +2451,9 @@ class ControlPanel(QtWidgets.QWidget):
         self._set_status(
             f"{source or 'Command'} blocked: Turn UNKNOWN {self._format_motor_mask(unknown_mask)}; run New Device Reset first"
         )
-        now = time.monotonic()
-        if (
-            not force and
-            self._last_turn_recovery_guide_mask == unknown_mask and
-            (now - self._last_turn_recovery_guide_ts) < 3.0
-        ):
+        if self.turn_unknown_popup_seen():
             return
-        self._last_turn_recovery_guide_mask = unknown_mask
-        self._last_turn_recovery_guide_ts = now
+        self.mark_turn_unknown_popup_seen(unknown_mask)
         QtWidgets.QMessageBox.warning(
             self,
             "Turn UNKNOWN",
@@ -2473,15 +2470,22 @@ class ControlPanel(QtWidgets.QWidget):
 
     def _active_scope_joint_calib_missing_indices(self) -> List[int]:
         state = self._state
+        active_joints = self._active_scope_joint_indices()
         if state is None:
-            return []
-        results = getattr(state, "joint_calib_results", []) or []
+            return active_joints
         missing: List[int] = []
-        for joint_idx in self._active_scope_joint_indices():
-            item = results[joint_idx] if 0 <= joint_idx < len(results) else None
-            if not isinstance(item, dict) or not bool(item.get("success", False)):
+        for joint_idx in active_joints:
+            if not self._joint_workspace_range(joint_idx, state).ready:
                 missing.append(joint_idx)
         return missing
+
+    def _active_scope_manual_missing_indices(self) -> List[int]:
+        active_joints = self._active_scope_joint_indices()
+        state = self._state
+        if state is None or not bool(getattr(state, "manual_reference_nvs_valid", False)):
+            return active_joints
+        valid_mask = int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
+        return [joint for joint in active_joints if (valid_mask & (1 << joint)) == 0]
 
     def _active_scope_status_mismatch(self) -> str:
         state = self._state
@@ -2566,7 +2570,7 @@ class ControlPanel(QtWidgets.QWidget):
                 self._abs_limit_warning_unlocked_mask &= ~mask
             else:
                 self._abs_limit_warning_unlocked_mask |= mask
-                self._last_feedback_abs_limit_warning_ts = time.time()
+            self._feedback_abs_limit_popup_episode_active = False
             current = int(getattr(self._state, "motor_abs_limit_locked_bitmap", 0) or 0)
             self._state.motor_abs_limit_locked_bitmap = (current | mask) if locked else (current & ~mask)
             self._refresh_abs_limit_lock_toggle_button()
@@ -3048,7 +3052,7 @@ class ControlPanel(QtWidgets.QWidget):
         return results
 
     def _maybe_save_calibration_snapshot(self, state) -> None:
-        if state is None or str(getattr(state, "calib_status", "IDLE")) != "SUCCESS":
+        if state is None or str(getattr(state, "calib_status", "IDLE")) not in {"SUCCESS", "WARN"}:
             return
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
         if valid_bitmap == 0:
@@ -3098,15 +3102,70 @@ class ControlPanel(QtWidgets.QWidget):
             )
             return
 
+        manual_valid_mask = int(
+            getattr(state, "manual_reference_valid_bitmap", 0) or 0
+        )
+        manual_min_values = list(
+            getattr(state, "manual_reference_min_raw", []) or []
+        )
+        manual_max_values = list(
+            getattr(state, "manual_reference_max_raw", []) or []
+        )
+        if (manual_valid_mask & active_joint_mask) != active_joint_mask:
+            missing_mask = active_joint_mask & ~manual_valid_mask
+            self._set_status(
+                "Calib snapshot save blocked: Manual missing " +
+                self._format_joint_list(_ordered_joint_indices_from_mask(missing_mask))
+            )
+            return
+        if (
+            len(manual_min_values) < ENCODER_COUNT
+            or len(manual_max_values) < ENCODER_COUNT
+        ):
+            self._set_status(
+                "Calib snapshot save blocked: Manual endpoint readback incomplete"
+            )
+            return
+        incompatible_v3 = [
+            idx for idx in required_joints
+            if int(joint_results[idx].get("mappingVersion", 0) or 0) != 3 or
+            int(joint_results[idx].get("manualReferenceCrc", 0) or 0)
+            != manual_encoder_reference_entry_crc(
+                idx,
+                manual_min_values[idx],
+                manual_max_values[idx],
+            )
+        ]
+        if incompatible_v3:
+            self._set_status(
+                "Calib snapshot save blocked: v3/Manual CRC mismatch " +
+                self._format_joint_list(incompatible_v3)
+            )
+            return
+
         mins = [int(v) for v in list(getattr(state, "motor_abs_limit_min", []) or [])[:MOTOR_COUNT]]
         maxs = [int(v) for v in list(getattr(state, "motor_abs_limit_max", []) or [])[:MOTOR_COUNT]]
         if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
             return
 
+        try:
+            mapping_version, urdf_config_crc = (
+                urdf_manual_scaled_mapping_metadata()
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            self._set_status(f"Calib snapshot save blocked: invalid URDF mapping: {exc}")
+            return
+
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "saved_at_host_time": time.time(),
             "hand_profile": HAND_PROFILE,
+            "feedback_mapping_version": mapping_version,
+            "manual_scaled_mapping_version": mapping_version,
+            "urdf_config_crc": f"0x{urdf_config_crc:08X}",
+            "manual_reference_crc": (
+                f"0x{int(getattr(state, 'manual_reference_crc', 0) or 0):08X}"
+            ),
             "active_joint_mask": f"0x{active_joint_mask:08X}",
             "active_motor_mask": f"0x{active_motor_mask:08X}",
             "motor_abs_limit_valid_bitmap": f"0x{valid_bitmap:08X}",
@@ -3226,6 +3285,26 @@ class ControlPanel(QtWidgets.QWidget):
                 "snapshot missing active joint calibration: " +
                 self._format_joint_list(missing_joints)
             )
+        try:
+            expected_version, expected_crc = (
+                urdf_manual_scaled_mapping_metadata()
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return f"current manual-scaled URDF mapping is invalid: {exc}"
+        incompatible_mapping = [
+            joint_idx for joint_idx in range(ENCODER_COUNT)
+            if (snapshot_joint_mask & (1 << joint_idx)) and (
+                int(joint_results[joint_idx].get("mappingVersion", 0) or 0)
+                != expected_version or
+                int(joint_results[joint_idx].get("urdfConfigCrc", 0) or 0)
+                != expected_crc
+            )
+        ]
+        if incompatible_mapping:
+            return (
+                "legacy/v1-v2 snapshot is view-only; v3 recalibration required: " +
+                self._format_joint_list(incompatible_mapping)
+            )
         missing_dual_lut = [
             joint_idx for joint_idx in range(ENCODER_COUNT)
             if (snapshot_joint_mask & (1 << joint_idx)) and
@@ -3258,6 +3337,16 @@ class ControlPanel(QtWidgets.QWidget):
         if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
             self._warn("New Device Reset", "控制正在运行，请先 E-STOP 或 Pause 后再重置。")
             return
+        multi_turn_unknown_mask = (
+            int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+            & VALID_MOTOR_MASK
+        )
+        if multi_turn_unknown_mask == 0:
+            self._warn(
+                "New Device Reset",
+                "当前设备多圈圈数可信，禁止执行 New Device Reset。",
+            )
+            return
         if state is None or not bool(getattr(state, "has_servo_raw_data", False)):
             self._warn("New Device Reset", "尚未收到舵机 raw 反馈，无法建立 turn0 基准。")
             return
@@ -3289,8 +3378,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._clear_local_calibration_state_after_new_device()
             archive_message = self._archive_calib_load_snapshot_for_new_device()
             self._last_multi_turn_unknown_bitmap = None
-            self._last_turn_recovery_guide_mask = 0
-            self._last_turn_recovery_guide_ts = 0.0
+            self.reset_turn_unknown_popup_episode()
             final_message = f"{message}; {archive_message}; recalibrate required"
             self._set_status(f"New Device Reset success: {final_message}")
             self.context.emit_action(f"New Device Reset success: {final_message}")
@@ -3341,18 +3429,22 @@ class ControlPanel(QtWidgets.QWidget):
         if ok:
             self._joint_target_initialized = False
             self._motor_target_initialized = False
-            scope_ok = self._apply_active_scope_for_current_mode()
-            ready_recheck = False
             mode = self._manual_submode() if self._app_mode == "manual" else "joint"
+            scope_ok = False
+            if mode != "device_check":
+                scope_ok = self._apply_active_scope_for_current_mode()
+            ready_recheck = False
             current_state = getattr(self._state, "system_state", None) if self._state is not None else None
             if (
                 scope_ok and
-                mode != "motor" and
+                mode in ("joint", "test") and
                 current_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
             ):
                 self.backend.start()
                 ready_recheck = True
-            if scope_ok:
+            if mode == "device_check":
+                suffix = "; snapshot restored; switch to Joint Channels to apply active scope"
+            elif scope_ok:
                 suffix = "; active scope applied"
                 if ready_recheck:
                     suffix += "; READY recheck requested"
@@ -3365,6 +3457,9 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status(f"Calib Load failed: {message}")
 
     def _apply_active_scope_for_current_mode(self) -> bool:
+        if self._app_mode == "manual" and self._manual_submode() == "device_check":
+            self.backend.set_pid_control(False)
+            return True
         data = self._current_active_scope_tuple()
         if data is None:
             return False
@@ -3397,18 +3492,229 @@ class ControlPanel(QtWidgets.QWidget):
         self._set_status("Active scope applied" if ok else "Active scope ACK timeout")
         return bool(ok)
 
+    def begin_startup_device_check(self) -> None:
+        if self._startup_device_check_running or not self.context.is_comm_connected():
+            return
+        self._startup_device_check_running = True
+        self._startup_device_check_epoch += 1
+        epoch = self._startup_device_check_epoch
+
+        def query_worker() -> None:
+            try:
+                ok = bool(self.backend.query_manual_encoder_references())
+                message = "Manual endpoints received" if ok else "Manual query ACK/readback timeout"
+            except Exception as exc:
+                ok = False
+                message = f"{type(exc).__name__}: {exc}"
+            self.startup_device_check_finished.emit(epoch, "query", ok, message)
+
+        threading.Thread(
+            target=query_worker,
+            name="mmhand-startup-device-check",
+            daemon=True,
+        ).start()
+
+    def _on_startup_device_check_finished(
+        self,
+        epoch: int,
+        phase: str,
+        ok: bool,
+        message: str,
+    ) -> None:
+        if int(epoch) != self._startup_device_check_epoch or not self.context.is_comm_connected():
+            return
+        if phase == "load":
+            self._startup_device_check_running = False
+            if ok:
+                self._joint_target_initialized = False
+                self._motor_target_initialized = False
+                self._set_status(f"Startup Calib Load success: {message}; switch to Joint Channels to apply scope")
+                self.context.emit_action(f"Startup Calib Load success: {message}")
+            else:
+                self._set_status(f"Startup Calib Load skipped: {message}; automatic calibration required")
+            return
+
+        if not ok:
+            self._startup_device_check_running = False
+            self._set_status(f"Device Check failed: {message}")
+            return
+
+        try:
+            state = self.backend.get_state_snapshot()
+        except Exception:
+            state = self._state
+        if state is not None:
+            self._state = state
+            if self.device_check_view is not None:
+                self.device_check_view.update_state(state)
+
+        active_joint_mask = int(self._active_joint_mask_from_ui()) & ((1 << ENCODER_COUNT) - 1)
+        manual_mask = int(getattr(state, "manual_reference_valid_bitmap", 0) or 0) if state is not None else 0
+        nvs_valid = bool(getattr(state, "manual_reference_nvs_valid", False)) if state is not None else False
+        missing_mask = active_joint_mask if not nvs_valid else active_joint_mask & ~manual_mask
+        if missing_mask:
+            self._startup_device_check_running = False
+            missing = _ordered_joint_indices_from_mask(missing_mask)
+            text = self._format_joint_indices(missing)
+            self._set_status(f"Device Check: active scope Manual missing ({text})")
+            if not self._startup_missing_warning_shown:
+                self._startup_missing_warning_shown = True
+                self._warn(
+                    "Manual Required",
+                    "Current control set is missing persisted Manual Min/Max: "
+                    + text
+                    + ". Enter them in Device Check before calibration or control.",
+                )
+            return
+
+        if not CALIB_LOAD_SNAPSHOT_PATH.exists():
+            self._startup_device_check_running = False
+            self._set_status("Device Check passed: no calibration snapshot; run automatic calibration")
+            return
+        try:
+            snapshot = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._startup_device_check_running = False
+            self._set_status(f"Startup Calib Load skipped: invalid snapshot ({exc})")
+            return
+        if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
+            self._startup_device_check_running = False
+            self._set_status("Startup Calib Load skipped: hand profile mismatch")
+            return
+        snapshot_error = self._validate_calibration_snapshot_for_load(snapshot)
+        if snapshot_error:
+            self._startup_device_check_running = False
+            self._set_status(f"Startup Calib Load skipped: {snapshot_error}")
+            return
+        system_state = getattr(state, "system_state", None) if state is not None else None
+        if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_CALIBRATION_RUNNING):
+            self._startup_device_check_running = False
+            self._set_status("Startup Calib Load skipped: lower controller is moving")
+            return
+
+        def load_worker() -> None:
+            try:
+                loaded, load_message = self.backend.load_calibration_snapshot(snapshot)
+            except Exception as exc:
+                loaded = False
+                load_message = f"{type(exc).__name__}: {exc}"
+            self.startup_device_check_finished.emit(
+                int(epoch),
+                "load",
+                bool(loaded),
+                str(load_message),
+            )
+
+        threading.Thread(
+            target=load_worker,
+            name="mmhand-startup-calib-load",
+            daemon=True,
+        ).start()
+
     def append_algorithm_output(self, text: str) -> None:
         if self._algorithm_view is not None:
             self._algorithm_view.append_output(text)
 
+    def _maybe_show_calibration_assembly_warning(self, state) -> None:
+        if not bool(getattr(state, "has_calibration_warning_status", False)):
+            return
+        mask = int(getattr(state, "calibration_warning_bitmap", 0) or 0)
+        mask &= (1 << ENCODER_COUNT) - 1
+        if mask == 0:
+            self._calibration_warning_popup_mask = 0
+            return
+        if str(getattr(state, "calib_status", "IDLE") or "IDLE") != "WARN":
+            return
+        new_mask = mask & ~self._calibration_warning_popup_mask
+        if new_mask == 0:
+            return
+        min_offsets = list(
+            getattr(state, "calibration_auto_min_offset_counts", []) or []
+        )
+        results = list(getattr(state, "joint_calib_results", []) or [])
+        joint_sections = []
+        event_items = []
+        for joint in range(ENCODER_COUNT):
+            if (new_mask & (1 << joint)) == 0:
+                continue
+            result = results[joint] if joint < len(results) else None
+            if not isinstance(result, dict):
+                # SYSTEM_STATUS may arrive before this joint's snapshot.
+                return
+
+            reason = int(result.get("assemblyWarningReason", 0) or 0)
+            min_offset = (
+                int(min_offsets[joint]) if joint < len(min_offsets) else 0
+            )
+            max_shortfall = 0
+            auto_span = 0
+            details = []
+            if bool(result.get("hasAssemblyWarningFields", False)):
+                min_offset = int(result.get("autoMinOffsetCounts", 0) or 0)
+                max_shortfall = int(
+                    result.get("autoMaxShortfallCounts", 0) or 0
+                )
+                auto_span = int(result.get("assemblyAutoSpanCounts", 0) or 0)
+                if reason & CALIB_WARN_AUTO_MIN_OFFSET:
+                    details.append(
+                        f"Auto Min 比 Manual Min 正向内缩 {min_offset} counts，"
+                        "达到或超过 350 counts"
+                    )
+                if reason & CALIB_WARN_AUTO_MAX_SHORTFALL:
+                    details.append(
+                        f"Auto Max 距 Manual Max 仍差 {max_shortfall} counts，"
+                        "达到或超过 300 counts"
+                    )
+                if reason & CALIB_WARN_AUTO_SPAN_RANGE:
+                    details.append(
+                        f"Auto Span 为 {auto_span} counts，不在 2300～6300 counts 范围内"
+                    )
+            else:
+                # Compatibility with the first WARN-capable firmware, which
+                # only reported the Auto Min offset in SYSTEM_STATUS.
+                reason = CALIB_WARN_AUTO_MIN_OFFSET
+                details.append(
+                    f"Auto Min 比 Manual Min 正向内缩 {min_offset} counts，"
+                    "达到或超过 350 counts"
+                )
+
+            if not details:
+                details.append("P4 报告装配警告，但未提供可识别的原因位")
+            joint_sections.append(
+                f"J{joint:02d}：\n" + "\n".join(f"- {item}" for item in details)
+            )
+            event_items.append(
+                f"J{joint:02d}:reason=0x{reason:02X},"
+                f"minOffset={min_offset},maxShortfall={max_shortfall},"
+                f"autoSpan={auto_span}"
+            )
+
+        self._calibration_warning_popup_mask |= new_mask
+        detail = "\n\n".join(joint_sections)
+        message = (
+            "标定已成功保存，但检测到可能的手指装配偏差：\n\n"
+            f"{detail}\n\n"
+            "该提示不属于故障，不会阻止 READY 或负反馈控制。\n"
+            "建议检查对应手指的绳路、装配位置和机械端点。"
+        )
+        self.context.emit_action(
+            f"Calibration assembly warning mask=0x{new_mask:08X}: " +
+            ", ".join(event_items)
+        )
+        self._warn("标定装配警告", message)
+
     def update_state(self, state) -> None:
         self._state = state
+        unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & VALID_MOTOR_MASK
+        if unknown_bitmap == 0:
+            self.reset_turn_unknown_popup_episode()
         self._handle_firmware_epoch_change(state)
         self._handle_connectivity_transitions(state)
+        self._update_p4_rope_init_progress(state)
         calib_status = str(getattr(state, "calib_status", "IDLE"))
         active_calib_statuses = {"PENDING", "RUNNING"}
         calib_finished_success = (
-            calib_status == "SUCCESS" and
+            calib_status in {"SUCCESS", "WARN"} and
             self._last_calib_status in active_calib_statuses
         )
         if calib_finished_success:
@@ -3426,12 +3732,15 @@ class ControlPanel(QtWidgets.QWidget):
         self._update_connection_lights()
         self._refresh_nvs_control_button()
         self._check_feedback_abs_limit_violation()
+        self._maybe_show_calibration_assembly_warning(state)
         self._maybe_save_calibration_snapshot(state)
         if self._app_mode != "manual":
             updater = getattr(self._body_widget, "update_state", None)
             if callable(updater):
                 updater(state)
             return
+        if self.device_check_view is not None:
+            self.device_check_view.update_state(state)
         self._refresh_joint_feedback_view(
             sync_target=(not self._joint_target_initialized) or calib_finished_success
         )
@@ -3560,12 +3869,19 @@ class ControlPanel(QtWidgets.QWidget):
 
     def clear_live_state(self) -> None:
         self.stop_all_tests("stopped on disconnect", update_status=False)
+        self._reset_p4_rope_init_progress()
         self._state = None
+        self._startup_device_check_epoch += 1
+        self._startup_device_check_running = False
+        self._startup_missing_warning_shown = False
+        if self.device_check_view is not None:
+            self.device_check_view.clear_state()
         self._update_connection_lights()
         self._refresh_nvs_control_button()
         self._joint_target_initialized = False
         self._motor_target_initialized = False
         self._last_calib_status = None
+        self._calibration_warning_popup_mask = 0
         self._motor_abs_pos = [None] * MOTOR_COUNT
         self._motor_session_origin_abs = [None] * MOTOR_COUNT
         self._motor_dir_hint = [0] * MOTOR_COUNT
@@ -3576,8 +3892,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._motor_last_sent_abs = [None] * MOTOR_COUNT
         self._last_state_transition_count = None
         self._last_multi_turn_unknown_bitmap = None
-        self._last_turn_recovery_guide_mask = 0
-        self._last_turn_recovery_guide_ts = 0.0
+        self.reset_turn_unknown_popup_episode()
         self._last_servo_online_bitmap = None
         self._last_encoder_online_bitmap = None
         self._last_encoder_warn_bitmap = None
@@ -3608,7 +3923,6 @@ class ControlPanel(QtWidgets.QWidget):
             self._updating = False
 
     def stop_all_tests(self, reason: str = "stopped", update_status: bool = True, include_local: bool = True) -> None:
-        self._stop_rope_init(reason=reason, update_status=update_status)
         self._on_stop_test(reason=reason, update_status=update_status)
         self._on_stop_ff_test(reason=reason, update_status=update_status)
         self._on_stop_tri_test(reason=reason, update_status=update_status)
@@ -3939,6 +4253,7 @@ class ControlPanel(QtWidgets.QWidget):
     def _check_feedback_abs_limit_violation(self) -> None:
         state = self._state
         if state is None or getattr(state, "system_state", None) != SYSTEM_STATE_RUN_FEEDBACK:
+            self._feedback_abs_limit_popup_episode_active = False
             return
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
         locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", 0))
@@ -3949,6 +4264,7 @@ class ControlPanel(QtWidgets.QWidget):
         monitor_mask &= valid_bitmap & locked_bitmap
         monitor_mask &= ~int(getattr(self, "_abs_limit_warning_unlocked_mask", 0) or 0)
         if monitor_mask == 0:
+            self._feedback_abs_limit_popup_episode_active = False
             return
         mins = getattr(state, "motor_abs_limit_min", [])
         maxs = getattr(state, "motor_abs_limit_max", [])
@@ -3965,14 +4281,13 @@ class ControlPanel(QtWidgets.QWidget):
                 lo, hi = hi, lo
             if feedback_abs < lo or feedback_abs > hi:
                 hits.append((idx, int(feedback_abs), lo, hi))
-        if hits:
+        if hits and not self._feedback_abs_limit_popup_episode_active:
+            self._feedback_abs_limit_popup_episode_active = True
             self._show_feedback_abs_limit_violation(hits)
+        elif not hits:
+            self._feedback_abs_limit_popup_episode_active = False
 
     def _show_feedback_abs_limit_violation(self, hits: List[Tuple[int, int, int, int]]) -> None:
-        now = time.time()
-        if now - self._last_feedback_abs_limit_warning_ts < 5.0:
-            return
-        self._last_feedback_abs_limit_warning_ts = now
         preview = ", ".join(
             f"M{idx:02d}: abs={feedback_abs} [{lo},{hi}]"
             for idx, feedback_abs, lo, hi in hits[:4]
@@ -4046,33 +4361,37 @@ class ControlPanel(QtWidgets.QWidget):
     def _joint_default_target_max_deg(self, idx: int) -> float:
         return float(JOINT_TARGET_MAX_DEG_BY_INDEX[idx] if 0 <= idx < len(JOINT_TARGET_MAX_DEG_BY_INDEX) else JOINT_TARGET_MAX_DEG_BY_INDEX[-1])
 
-    def _joint_calibrated_target_max_deg(self, idx: int, state: Optional[HandModel] = None) -> Optional[float]:
-        state = self._state if state is None else state
-        if state is None or idx < 0 or idx >= ENCODER_COUNT:
-            return None
-        results = getattr(state, "joint_calib_results", []) or []
-        if idx >= len(results):
-            return None
-        item = results[idx]
-        if not isinstance(item, dict) or not bool(item.get("success", False)):
-            return None
-        try:
-            angle_max = float(item.get("angleMax"))
-        except (TypeError, ValueError):
-            return None
-        lo = self._joint_target_min_deg(idx)
-        if not np.isfinite(angle_max) or angle_max <= lo:
-            return None
-        return angle_max
+    def _joint_default_target_min_deg(self, idx: int) -> float:
+        return float(JOINT_TARGET_MIN_DEG_BY_INDEX[idx] if 0 <= idx < len(JOINT_TARGET_MIN_DEG_BY_INDEX) else JOINT_TARGET_MIN_DEG_BY_INDEX[-1])
 
-    def _joint_target_max_deg(self, idx: int, state: Optional[HandModel] = None) -> float:
-        calibrated = self._joint_calibrated_target_max_deg(idx, state)
-        if calibrated is not None:
-            return calibrated
+    def _joint_workspace_range(
+        self,
+        idx: int,
+        state: Optional[HandModel] = None,
+    ) -> JointWorkspaceRange:
+        state = self._state if state is None else state
+        return resolve_joint_workspace_range(
+            state,
+            idx,
+            self._joint_default_target_min_deg(idx),
+            self._joint_default_target_max_deg(idx),
+            WORKSPACE_MAPPING_VERSION,
+            WORKSPACE_URDF_CRC,
+        )
+
+    def _joint_calibrated_target_min_deg(self, idx: int, state: Optional[HandModel] = None) -> Optional[float]:
+        workspace = self._joint_workspace_range(idx, state)
+        return workspace.current_min_deg if workspace.ready else None
+
+    def _joint_target_max_deg(self, idx: int) -> float:
+        # The upper target boundary is always the static URDF Max.
         return self._joint_default_target_max_deg(idx)
 
-    def _joint_target_min_deg(self, idx: int) -> float:
-        return float(JOINT_TARGET_MIN_DEG_BY_INDEX[idx] if 0 <= idx < len(JOINT_TARGET_MIN_DEG_BY_INDEX) else JOINT_TARGET_MIN_DEG_BY_INDEX[-1])
+    def _joint_target_min_deg(self, idx: int, state: Optional[HandModel] = None) -> float:
+        calibrated = self._joint_calibrated_target_min_deg(idx, state)
+        if calibrated is not None:
+            return calibrated
+        return self._joint_default_target_min_deg(idx)
 
     def _clamp_joint_target_deg(self, idx: int, value: float) -> float:
         try:
@@ -4081,24 +4400,29 @@ class ControlPanel(QtWidgets.QWidget):
             value = self._joint_target_min_deg(idx)
         if not np.isfinite(value):
             value = self._joint_target_min_deg(idx)
-        lo = self._joint_target_min_deg(idx)
+        lo = self._joint_target_min_deg(idx, self._state)
         hi = self._joint_target_max_deg(idx)
         return max(lo, min(hi, value))
 
     def _refresh_joint_target_range(self, idx: int, state: Optional[HandModel]) -> None:
         if idx < 0 or idx >= ENCODER_COUNT:
             return
-        lo = self._joint_target_min_deg(idx)
-        hi = self._joint_target_max_deg(idx, state)
-        calibrated = self._joint_calibrated_target_max_deg(idx, state)
+        workspace = self._joint_workspace_range(idx, state)
+        lo = workspace.current_min_deg if workspace.ready else self._joint_default_target_min_deg(idx)
+        hi = self._joint_target_max_deg(idx)
+        if idx < len(self.joint_min_items):
+            item = self.joint_min_items[idx]
+            if item is not None:
+                self._set_item_text_if_changed(item, f"{lo:.2f}" if workspace.ready else "-")
+                self._set_item_tooltip_if_changed(
+                    item,
+                    "Dynamic Current Min from P4 v3 calibration" if workspace.ready else workspace.reason,
+                )
         if idx < len(self.joint_max_items):
             item = self.joint_max_items[idx]
             if item is not None:
                 self._set_item_text_if_changed(item, f"{hi:.2f}")
-                if calibrated is not None:
-                    self._set_item_tooltip_if_changed(item, "From lower-controller calibration angleMax")
-                else:
-                    self._set_item_tooltip_if_changed(item, "Default target max")
+                self._set_item_tooltip_if_changed(item, "Static URDF Max")
         if idx < len(self.joint_target_spins):
             spin = self.joint_target_spins[idx]
             if spin is not None:
@@ -4111,6 +4435,10 @@ class ControlPanel(QtWidgets.QWidget):
                     int(round(lo * 100.0)),
                     int(round(hi * 100.0)),
                 )
+        controls_enabled = bool(self._interaction_enabled and workspace.ready)
+        for widgets in (self.joint_target_spins, self.joint_sliders, self.joint_send_buttons):
+            if idx < len(widgets) and widgets[idx] is not None:
+                widgets[idx].setEnabled(controls_enabled)
 
     def _joint_angle_feedback_valid(self, idx: int, state=None) -> bool:
         state = self._state if state is None else state
@@ -4160,23 +4488,14 @@ class ControlPanel(QtWidgets.QWidget):
         return self._joint_encoder_status(idx, state) in ("ok", "warn")
 
     def _joint_angle_display_calibrated(self, idx: int, state: Optional[HandModel] = None) -> bool:
-        state = self._state if state is None else state
-        if state is None or idx < 0 or idx >= ENCODER_COUNT:
-            return False
-        results = getattr(state, "joint_calib_results", []) or []
-        if idx >= len(results):
-            return False
-        result = results[idx]
-        return isinstance(result, dict) and bool(result.get("success", False))
+        return self._joint_workspace_range(idx, state).ready
 
-    @staticmethod
-    def _joint_calib_valid_mask(state: Optional[HandModel]) -> int:
+    def _joint_calib_valid_mask(self, state: Optional[HandModel]) -> int:
         if state is None:
             return 0
         mask = 0
-        results = getattr(state, "joint_calib_results", []) or []
-        for idx, result in enumerate(results[:ENCODER_COUNT]):
-            if isinstance(result, dict) and bool(result.get("success", False)):
+        for idx in range(ENCODER_COUNT):
+            if self._joint_workspace_range(idx, state).ready:
                 mask |= (1 << idx)
         return mask
 
@@ -4238,7 +4557,6 @@ class ControlPanel(QtWidgets.QWidget):
         x1 = clamp_motor_abs(x1)
         self.joint_tie_x1_edits[joint_idx].setText(str(x1))
         saved = self.context.tendon_guard.set_joint(joint_idx, sign != 0, 1 if sign >= 0 else -1, x1)
-        self.backend.sync_tendon_guard(force=True)
         if saved:
             if sign == 0:
                 self._set_status(f"tie saved: J{joint_idx} disabled, x1={x1}")
@@ -4258,7 +4576,6 @@ class ControlPanel(QtWidgets.QWidget):
             config.append({"enabled": sign != 0, "pull_sign": 1 if sign >= 0 else -1, "x1_abs": clamp_motor_abs(x1)})
         if len(config) == ENCODER_COUNT:
             self.context.tendon_guard.config = config
-        self.backend.sync_tendon_guard(force=False)
 
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
@@ -4296,7 +4613,7 @@ class ControlPanel(QtWidgets.QWidget):
                             current_item.setForeground(QtGui.QBrush(QtGui.QColor("#d89b00")))
                             self._set_item_tooltip_if_changed(
                                 current_item,
-                                "Live joint angle is outside the calibrated [0, Max] workspace.",
+                                "Live joint angle is outside the calibrated URDF workspace.",
                             )
                         else:
                             current_item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
@@ -4340,6 +4657,7 @@ class ControlPanel(QtWidgets.QWidget):
                     if i < len(self._joint_target_user_set):
                         self._joint_target_user_set[i] = False
                 self._joint_target_initialized = True
+            self._refresh_test_workspace_ranges()
         finally:
             self._updating = False
             if table is not None:
@@ -4730,6 +5048,47 @@ class ControlPanel(QtWidgets.QWidget):
                 self.test_joint_combos[row_idx].setCurrentText("None")
                 self._set_status(f"Test config duplicate joint: {current} already selected")
                 return
+        joint_idx = int(current[1:])
+        workspace = self._joint_workspace_range(joint_idx, self._state)
+        lo = workspace.current_min_deg if workspace.ready else self._joint_default_target_min_deg(joint_idx)
+        hi = self._joint_target_max_deg(joint_idx)
+        self._set_spin_range_if_changed(self.test_min_spins[row_idx], lo, hi)
+        self._set_spin_range_if_changed(self.test_max_spins[row_idx], lo, hi)
+
+    def _refresh_single_test_workspace(self, test_kind: str) -> None:
+        if test_kind == "triangle":
+            combo = getattr(self, "tri_joint_combo", None)
+            min_spin = getattr(self, "tri_min_spin", None)
+            max_spin = getattr(self, "tri_max_spin", None)
+        else:
+            combo = getattr(self, "ff_joint_combo", None)
+            min_spin = None
+            max_spin = None
+        if combo is None:
+            return
+        joint_idx = self._joint_index_from_combo(combo)
+        if joint_idx is None:
+            return
+        workspace = self._joint_workspace_range(joint_idx, self._state)
+        if min_spin is not None and max_spin is not None:
+            lo = workspace.current_min_deg if workspace.ready else self._joint_default_target_min_deg(joint_idx)
+            hi = self._joint_target_max_deg(joint_idx)
+            self._set_spin_range_if_changed(min_spin, lo, hi)
+            self._set_spin_range_if_changed(max_spin, lo, hi)
+
+    def _refresh_test_workspace_ranges(self) -> None:
+        for row_idx in range(len(getattr(self, "test_joint_combos", []))):
+            self._on_test_joint_changed(row_idx)
+        self._refresh_single_test_workspace("feedforward")
+        self._refresh_single_test_workspace("triangle")
+
+    def _test_workspace_ready(self, joint_idx: int, title: str, show_message: bool) -> bool:
+        workspace = self._joint_workspace_range(joint_idx, self._state)
+        if workspace.ready:
+            return True
+        if show_message:
+            self._warn(title, f"J{joint_idx:02d} workspace unavailable: {workspace.reason}")
+        return False
 
     def _validate_test_rows(self, show_message: bool = True) -> Optional[List[Tuple[int, float, float, float, float]]]:
         active = []
@@ -4743,6 +5102,8 @@ class ControlPanel(QtWidgets.QWidget):
                     self._warn("Test Config", f"Test row {row + 1}: duplicated J{joint_idx:02d}")
                 return None
             seen.add(joint_idx)
+            if not self._test_workspace_ready(joint_idx, "Test Config", show_message):
+                return None
             lo = self._clamp_joint_target_deg(joint_idx, self.test_min_spins[row].value())
             hi = self._clamp_joint_target_deg(joint_idx, self.test_max_spins[row].value())
             if hi < lo:
@@ -4841,6 +5202,8 @@ class ControlPanel(QtWidgets.QWidget):
             if show_message:
                 self._warn("Feedforward Test", "Select one valid joint.")
             return None
+        if not self._test_workspace_ready(joint_idx, "Feedforward Test", show_message):
+            return None
         targets = self._parse_ff_targets_text(self.ff_targets_edit.text())
         if not targets:
             if show_message:
@@ -4899,6 +5262,8 @@ class ControlPanel(QtWidgets.QWidget):
             if show_message:
                 self._warn("Triangle Wave Test", "Select one valid joint.")
             return None
+        if not self._test_workspace_ready(joint_idx, "Triangle Wave Test", show_message):
+            return None
         lo = self._clamp_joint_target_deg(joint_idx, self.tri_min_spin.value())
         hi = self._clamp_joint_target_deg(joint_idx, self.tri_max_spin.value())
         if hi < lo:
@@ -4950,6 +5315,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.stop_all_tests("restarted by local test", update_status=False)
         if not self.context.is_comm_connected():
             self._set_status("Local Test blocked: serial port is not connected")
+            return
+        if not self.feedback_command_allowed(source="Local Test", show_status=True):
             return
         if not self._start_test_recording("local test"):
             return

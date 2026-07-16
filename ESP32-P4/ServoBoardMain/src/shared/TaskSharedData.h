@@ -54,6 +54,9 @@
 #define SYSTEM_EVENT_PAUSE 11
 #define SYSTEM_EVENT_REEVALUATE_READY 14
 #define SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT 15
+#define SYSTEM_EVENT_ROPE_INIT 16
+#define SYSTEM_EVENT_ROPE_INIT_DONE 17
+#define SYSTEM_EVENT_ROPE_INIT_FAILED 18
 
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 #define MULTITURN_NVS_SAVE_REASON_RUN_START 1
@@ -71,11 +74,37 @@
 #define SYSTEM_STATE_READY 5
 #define SYSTEM_STATE_RUN_DIRECT 6
 #define SYSTEM_STATE_PAUSED 7
+#define SYSTEM_STATE_ROPE_INIT_RUNNING 8
+
+#define ROPE_INIT_STATUS_IDLE 0
+#define ROPE_INIT_STATUS_RUNNING 1
+#define ROPE_INIT_STATUS_SUCCESS 2
+#define ROPE_INIT_STATUS_FAILED 3
+
+#define ROPE_INIT_REASON_NONE 0
+#define ROPE_INIT_REASON_TIMEOUT 1
+#define ROPE_INIT_REASON_FEEDBACK_STALE 2
+#define ROPE_INIT_REASON_SERVO_OFFLINE 3
+#define ROPE_INIT_REASON_MULTITURN_UNKNOWN 4
+#define ROPE_INIT_REASON_MANUAL_REQUIRED 5
+#define ROPE_INIT_REASON_AUTO_REQUIRED 6
+#define ROPE_INIT_REASON_TARGET_PUBLISH_FAILED 7
+#define ROPE_INIT_REASON_SYSTEM_FAULT 8
+#define ROPE_INIT_REASON_CANCELLED 9
+#define ROPE_INIT_REASON_TASK_START_FAILED 10
+
+#define DIRECT_REJECT_NONE 0
+#define DIRECT_REJECT_STATE 1
+#define DIRECT_REJECT_HARDWARE 2
+#define DIRECT_REJECT_MULTITURN 3
+#define DIRECT_REJECT_EVENT_QUEUE 4
+#define DIRECT_REJECT_STALE 5
+#define DIRECT_REJECT_FAULT 6
 
 #define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
 #define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
 #define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
-#define SYSTEM_FAULT_RELEASE_GUARD    (1UL << 3)
+// Bit 3 is reserved to keep the wire-level fault bitmap stable.
 #define SYSTEM_FAULT_SERVO_OFFLINE    (1UL << 4)
 #define SYSTEM_FAULT_CALIBRATION      (1UL << 5)
 #define SYSTEM_FAULT_MULTITURN_UNKNOWN (1UL << 6)
@@ -106,7 +135,6 @@
 #define CALIB_DIAG_REASON_DUPLICATE_JOINT 23
 #define CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED 24
 #define CALIB_DIAG_REASON_JOINT_STEP_FAILED 25
-#define CALIB_DIAG_REASON_OVER_RELEASE 26
 
 #define CALIB_DIAG_PHASE_NONE 0
 #define CALIB_DIAG_PHASE_INIT 1
@@ -191,6 +219,7 @@ typedef struct {
 
 typedef struct {
     int16_t angleValues[ENCODER_TOTAL_NUM];
+    int16_t outsideCounts[ENCODER_TOTAL_NUM];
     uint8_t validFlags[ENCODER_TOTAL_NUM];
     uint32_t timestamp;
     bool isValid;
@@ -246,9 +275,6 @@ typedef struct {
     float sineTestAmpDeg[ENCODER_TOTAL_NUM];
     float sineTestFreqHz[ENCODER_TOTAL_NUM];
     float sineTestPhaseRad[ENCODER_TOTAL_NUM];
-    uint8_t tendonGuardEnabled[ENCODER_TOTAL_NUM];
-    int8_t tendonGuardSign[ENCODER_TOTAL_NUM];
-    int16_t tendonGuardX1Abs[ENCODER_TOTAL_NUM];
 } ControlCommandSnapshot_t;
 
 typedef struct {
@@ -368,11 +394,21 @@ typedef struct {
 
     int32_t motorTargetRaw[SERVO_TOTAL_NUM];
     int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];
+    int32_t pendingMotorTargetRaw[SERVO_TOTAL_NUM];
+    int32_t pendingMotorSweepTargetRaw[SERVO_TOTAL_NUM];
     volatile uint32_t motor_command_token;
     volatile uint32_t motor_sweep_command_token;
     volatile uint32_t joint_command_token;
     volatile uint32_t motor_direct_command_generation;
     volatile uint8_t motor_direct_command_source;
+    volatile uint32_t pending_direct_generation;
+    volatile uint32_t applied_direct_generation;
+    volatile uint8_t pending_direct_source;
+    volatile uint8_t pending_direct_valid;
+    volatile uint32_t pending_direct_motor_mask;
+    volatile uint32_t pending_direct_joint_mask;
+    volatile uint8_t pending_direct_require_can;
+    volatile uint8_t direct_reject_reason;
     volatile uint8_t sine_test_enabled;
     volatile uint32_t sine_test_request_token;
     volatile uint32_t sine_test_start_ms;
@@ -393,6 +429,11 @@ typedef struct {
     volatile uint32_t system_fault_bitmap;
     volatile uint32_t system_fault_latched_bitmap;
     volatile uint32_t state_transition_count;
+    volatile uint8_t rope_init_status;
+    volatile uint8_t rope_init_reason;
+    volatile uint32_t rope_init_sequence;
+    volatile uint32_t rope_init_joint_mask;
+    volatile uint32_t rope_init_timestamp;
     volatile uint32_t active_motor_mask;
     // Calibration-only read expansion. It never changes the host-selected
     // active scope and is cleared when the calibration task exits.
@@ -420,23 +461,28 @@ typedef struct {
     volatile uint8_t multiturn_nvs_snapshot_valid;
     volatile uint32_t host_rx_heartbeat_ms;
 
+    // Manual magnetic-encoder endpoint reference restored from the dedicated
+    // NVS A/B snapshot. Motion is gated per active joint scope.
+    volatile uint32_t manual_reference_valid_bitmap;
+    volatile uint32_t manual_reference_crc;
+    volatile uint32_t manual_reference_nvs_sequence;
+    volatile uint8_t manual_reference_nvs_valid;
+    volatile uint8_t manual_reference_save_status;
+
     volatile uint32_t motor_abs_limit_valid_bitmap;
     volatile uint32_t motor_abs_limit_locked_bitmap;
     int32_t motor_abs_limit_min[SERVO_TOTAL_NUM];
     int32_t motor_abs_limit_max[SERVO_TOTAL_NUM];
     volatile uint8_t require_can_feedback;
     volatile uint8_t calibration_fault_latched;
+    volatile uint32_t calibration_warning_bitmap;
+    int16_t calibration_auto_min_offset_counts[ENCODER_TOTAL_NUM];
     volatile uint8_t joint16_dual_feedback_fault;
     CalibrationDiagData_t calibration_diag;
 
     volatile uint32_t overload_fault_bitmap;
     volatile int16_t overload_fault_load[SERVO_TOTAL_NUM];
     volatile uint32_t overload_fault_reset_token;
-    volatile uint32_t reverse_release_fault_bitmap;
-    volatile uint32_t reverse_release_fault_reset_token;
-    volatile uint8_t tendon_guard_enabled[ENCODER_TOTAL_NUM];
-    volatile int8_t tendon_guard_sign[ENCODER_TOTAL_NUM];
-    volatile int16_t tendon_guard_x1_abs[ENCODER_TOTAL_NUM];
 
     int32_t calib_zero_raw_cache[ENCODER_TOTAL_NUM];
     volatile uint8_t calib_zero_raw_valid;

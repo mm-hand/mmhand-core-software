@@ -15,7 +15,6 @@
 #define PACKET_TYPE_SERVO_TELEM 0x05
 #define PACKET_TYPE_PROTO_ACK 0x06
 #define PACKET_TYPE_FAULT_STATUS 0x07
-#define PACKET_TYPE_RELEASE_FAULT 0x08
 #define PACKET_TYPE_SERVO_RAW 0x09
 #define PACKET_TYPE_TACTILE 0x0A
 #define PACKET_TYPE_ENCODER_RAW 0x0B
@@ -25,6 +24,7 @@
 #define PACKET_TYPE_TACTILE_FULL 0x0F
 #define PACKET_TYPE_CALIB_DIAG 0x10
 #define PACKET_TYPE_TASK_DIAG 0x11
+#define PACKET_TYPE_MANUAL_ENCODER_REFERENCE 0x12
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -39,7 +39,6 @@
 #define CMD_MOTOR_POS_SWEEP 0xD2
 #define CMD_MOTOR_POS_ABS 0xD3
 #define CMD_MOTOR_POS_ABS_ONE 0xDE
-#define CMD_TENDON_GUARD 0xD4
 #define CMD_ACTIVE_SCOPE 0xD7
 #define CMD_RUN_FEEDBACK 0xD8
 #define CMD_PAUSE 0xD9
@@ -55,10 +54,23 @@
 #define CMD_LOCAL_TEST_STOP 0xE3
 #define CMD_SIDE_SWAY_ADJUST 0xE4
 #define CMD_CLEAR_CALIBRATION 0xE5
+#define CMD_MANUAL_ENCODER_REFERENCE 0xE6
+#define CMD_MANUAL_ENCODER_QUERY 0xE7
+#define CMD_MANUAL_ENCODER_SINGLE 0xE8
+#define CMD_ROPE_INIT 0xE9
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
 #define PROTO_ACK_STATUS_QUEUED 2
+#define PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED 3
+#define PROTO_ACK_STATUS_INVALID_DATA 4
+#define PROTO_ACK_STATUS_NVS_FAILURE 5
+#define PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH 6
+#define PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED 7
+
+#define MANUAL_SAVE_STATUS_NONE 0
+#define MANUAL_SAVE_STATUS_OK 1
+#define MANUAL_SAVE_STATUS_FAILED 2
 
 #define SENSOR_STREAM_MODE_LEGACY_U16_WRAP 0
 #define SENSOR_STREAM_MODE_SIGNED_I16 1
@@ -66,7 +78,6 @@
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorPosAbsOnePayloadBytes = 3;
-static const size_t kTendonGuardPayloadBytes = ENCODER_TOTAL_NUM * 4;
 static const size_t kActiveScopePayloadBytes = 9;
 static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5;
@@ -74,8 +85,16 @@ static const size_t kMultiTurnNvsControlPayloadBytes = 1;
 static const size_t kCalibLoadJointLegacyPayloadBytes = 54;
 static const size_t kCalibLoadJointPayloadBytes =
     kCalibLoadJointLegacyPayloadBytes + 108;
+static const size_t kCalibLoadJointV2PayloadBytes =
+    kCalibLoadJointPayloadBytes + 17;
+static const size_t kCalibLoadJointV3PayloadBytes =
+    kCalibLoadJointV2PayloadBytes + 16;
 static const size_t kCalibLoadLimitsPayloadBytes = 8 + SERVO_TOTAL_NUM * 4;
 static const size_t kLocalTestParamsPayloadBytes = 2 * sizeof(float);
+static const size_t kManualEncoderReferencePayloadBytes =
+    1 + ENCODER_TOTAL_NUM * 2 * sizeof(uint16_t);
+static const size_t kManualEncoderSinglePayloadBytes = 5;
+static const size_t kRopeInitPayloadBytes = sizeof(uint32_t);
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
@@ -83,5 +102,6 @@ static const uint32_t kSystemStatusHeartbeatMs = 100;
 static const uint32_t kTaskDiagHeartbeatMs = 250;
 static const uint32_t kMotorAbsLimitHeartbeatMs = 500;
 static const uint32_t kJointCalibSnapshotHeartbeatMs = 1000;
+static const uint32_t kManualEncoderReferenceHeartbeatMs = 1000;
 
 #endif // UPPER_COMM_PROTOCOL_H

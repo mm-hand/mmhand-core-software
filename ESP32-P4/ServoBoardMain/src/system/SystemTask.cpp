@@ -7,6 +7,9 @@
 #include "../communication/servo/ServoCommunicationTask.h"
 #include "../hardware/HardwareMap.h"
 #include "../persistence/MultiTurnNvsPersistenceTask.h"
+#include "../persistence/ManualCalibrationNvsStore.h"
+#include "../calibration/RopeInitTask.h"
+#include "../communication/upper/UpperCommProtocol.h"
 
 #include <string.h>
 
@@ -73,6 +76,8 @@ void System_Init() {
     memset(sharedData.targetAngles, 0, sizeof(sharedData.targetAngles));
     memset(sharedData.motorTargetRaw, 0, sizeof(sharedData.motorTargetRaw));
     memset(sharedData.motorSweepTargetRaw, 0, sizeof(sharedData.motorSweepTargetRaw));
+    memset(sharedData.pendingMotorTargetRaw, 0, sizeof(sharedData.pendingMotorTargetRaw));
+    memset(sharedData.pendingMotorSweepTargetRaw, 0, sizeof(sharedData.pendingMotorSweepTargetRaw));
     memset(sharedData.restore_multi_turn_abs, 0, sizeof(sharedData.restore_multi_turn_abs));
     memset(sharedData.calib_zero_raw_cache, 0, sizeof(sharedData.calib_zero_raw_cache));
     sharedData.motor_command_token = 0;
@@ -80,6 +85,14 @@ void System_Init() {
     sharedData.joint_command_token = 0;
     sharedData.motor_direct_command_generation = 0;
     sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData.pending_direct_generation = 0;
+    sharedData.applied_direct_generation = 0;
+    sharedData.pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+    sharedData.pending_direct_valid = 0;
+    sharedData.pending_direct_motor_mask = 0;
+    sharedData.pending_direct_joint_mask = 0;
+    sharedData.pending_direct_require_can = 0;
+    sharedData.direct_reject_reason = DIRECT_REJECT_NONE;
     sharedData.sine_test_enabled = 0;
     sharedData.sine_test_request_token = 0;
     sharedData.sine_test_start_ms = 0;
@@ -99,6 +112,11 @@ void System_Init() {
     sharedData.system_fault_bitmap = 0;
     sharedData.system_fault_latched_bitmap = 0;
     sharedData.state_transition_count = 0;
+    sharedData.rope_init_status = ROPE_INIT_STATUS_IDLE;
+    sharedData.rope_init_reason = ROPE_INIT_REASON_NONE;
+    sharedData.rope_init_sequence = 0;
+    sharedData.rope_init_joint_mask = 0;
+    sharedData.rope_init_timestamp = 0;
     const uint32_t validMotorMask = validMotorChannelMask();
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.calibration_aux_motor_mask = 0;
@@ -122,12 +140,20 @@ void System_Init() {
     sharedData.multiturn_nvs_enabled = 1;
     sharedData.multiturn_nvs_snapshot_valid = 0;
     sharedData.host_rx_heartbeat_ms = millis();
+    sharedData.manual_reference_valid_bitmap = 0;
+    sharedData.manual_reference_crc = 0;
+    sharedData.manual_reference_nvs_sequence = 0;
+    sharedData.manual_reference_nvs_valid = 0;
+    sharedData.manual_reference_save_status = MANUAL_SAVE_STATUS_NONE;
     sharedData.motor_abs_limit_valid_bitmap = 0;
     sharedData.motor_abs_limit_locked_bitmap = 0;
     memset(sharedData.motor_abs_limit_min, 0, sizeof(sharedData.motor_abs_limit_min));
     memset(sharedData.motor_abs_limit_max, 0, sizeof(sharedData.motor_abs_limit_max));
     sharedData.require_can_feedback = 1;
     sharedData.calibration_fault_latched = 0;
+    sharedData.calibration_warning_bitmap = 0;
+    memset(sharedData.calibration_auto_min_offset_counts, 0,
+           sizeof(sharedData.calibration_auto_min_offset_counts));
     sharedData.joint16_dual_feedback_fault = 0;
     memset(&sharedData.calibration_diag, 0, sizeof(sharedData.calibration_diag));
     sharedData.overload_fault_bitmap = 0;
@@ -135,17 +161,34 @@ void System_Init() {
         sharedData.overload_fault_load[i] = 0;
     }
     sharedData.overload_fault_reset_token = 0;
-    sharedData.reverse_release_fault_bitmap = 0;
-    sharedData.reverse_release_fault_reset_token = 0;
-    memset((void*)sharedData.tendon_guard_enabled, 0, sizeof(sharedData.tendon_guard_enabled));
-    memset((void*)sharedData.tendon_guard_x1_abs, 0, sizeof(sharedData.tendon_guard_x1_abs));
-    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-        sharedData.tendon_guard_sign[i] = 1;
-    }
     sharedData.calib_zero_raw_valid = 0;
 
 
         initManualCalibrationForTest();
+
+    ManualEncoderReference bootManualReferences[ENCODER_TOTAL_NUM];
+    uint32_t bootManualSequence = 0;
+    uint32_t bootManualCrc = 0;
+    if (manualCalibrationNvsLoadLatest(bootManualReferences,
+                                      &bootManualSequence,
+                                      &bootManualCrc)) {
+        manualEncoderReferencesApplyRam(bootManualReferences);
+        sharedData.manual_reference_valid_bitmap =
+            manualEncoderReferencesValidMask();
+        sharedData.manual_reference_crc = bootManualCrc;
+        sharedData.manual_reference_nvs_sequence = bootManualSequence;
+        sharedData.manual_reference_nvs_valid = 1;
+        sharedData.manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
+        FW_LOG_INFO_PRINTF(
+            "[NVS MANUAL] restored seq=%lu crc=0x%08lX mask=0x%08lX\r\n",
+            (unsigned long)bootManualSequence,
+            (unsigned long)bootManualCrc,
+            (unsigned long)sharedData.manual_reference_valid_bitmap);
+    } else {
+        manualEncoderReferencesClearRam();
+        FW_LOG_INFO_PRINTLN(
+            "[NVS MANUAL] no valid snapshot; active scopes without Manual data are gated");
+    }
 
         xTaskCreate(
         upperCommunicationTask,

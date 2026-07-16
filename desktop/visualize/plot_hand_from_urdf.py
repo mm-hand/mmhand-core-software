@@ -85,7 +85,7 @@ _FALLBACK_ANGLE_MAPPING: List[List[int]] = [
 
 
 def load_angle_mapping_for_ui() -> List[List[int]]:
-    """与 hand_visualizer_ui 相同：从 config/hand_geo.json 读取 angle_mapping。"""
+    """从 config/hand_geo.json 读取 UI 使用的 angle_mapping。"""
     try:
         from desktop.core.hand_geometry import load_hand_geo
 

@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from hand_retargeting.constants import DEFAULT_MODEL_PATH, DEFAULT_URDF_PATH, MODEL_URL
+from desktop.teleop.joint_target_adapter import named_urdf_radians_to_joint_targets
 
 
 StatusCallback = Callable[[str], None]
@@ -75,26 +76,12 @@ def open_camera(
 
 
 def joint_angle_dict_to_encoder_degrees(joint_angles: dict[str, float]) -> list[float]:
-    """Map URDF joint names to the desktop controller's J00-J20 degree order."""
-    targets = [0.0] * 21
-    prefix_to_start = {
-        "4": 0,   # pinky
-        "3": 4,   # ring
-        "2": 8,   # middle
-        "1": 12,  # index
-        "5": 16,  # thumb
-    }
-    for name, angle_rad in joint_angles.items():
-        parts = str(name).split("-")
-        if len(parts) < 2:
-            continue
-        prefix, joint_index_text = parts[0], parts[1]
-        if prefix not in prefix_to_start or not joint_index_text.isdigit():
-            continue
-        target_index = prefix_to_start[prefix] + int(joint_index_text) - 1
-        if 0 <= target_index < len(targets):
-            targets[target_index] = math.degrees(float(angle_rad))
-    return targets
+    """Map semantic or legacy URDF names to canonical J00-J20 URDF degrees."""
+    adaptation = named_urdf_radians_to_joint_targets(joint_angles)
+    if joint_angles and not adaptation.mapped_indices:
+        unknown = ", ".join(adaptation.unknown_names[:4])
+        raise ValueError(f"URDF retarget produced no recognized joint names: {unknown}")
+    return list(adaptation.urdf_targets_deg)
 
 
 def run_mocap_loop(

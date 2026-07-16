@@ -16,18 +16,13 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, u
 // 清零关节目标，保留为历史单字节 'b' 命令兼容入口。
 void upperClearTargetAngles(TaskSharedData_t* sharedData);
 // 写入 22 个舵机直控目标，source 表示 TARGET/ABSOLUTE 等直控语义。
-void upperApplyMotorTargets(TaskSharedData_t* sharedData,
+bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
                             const int32_t* targets,
                             uint8_t count,
                             uint8_t source);
 // 写入滑条 sweep 目标；ControlTask 会基于当前位置把单圈 raw 连续展开。
-void upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count);
+bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count);
 // 写入 tendon guard 配置，用于阻止指定关节继续释放到危险边界。
-void upperApplyTendonGuardConfig(TaskSharedData_t* sharedData,
-                                 const uint8_t* enabled,
-                                 const int8_t* sign,
-                                 const int16_t* x1Abs,
-                                 uint8_t count);
 // 缓存上位机下发的校准零点 raw 数据，供后续校准流程消费。
 void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count);
 
@@ -36,7 +31,7 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeJointMask,
                            uint8_t requireCanFeedback);
 
-void upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
+bool upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
                                  uint8_t motorIndex,
                                  int32_t target,
                                  uint8_t source);
