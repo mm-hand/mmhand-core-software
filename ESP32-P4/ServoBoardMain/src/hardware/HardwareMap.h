@@ -10,6 +10,11 @@
 #define HAND_PROFILE HAND_PROFILE_V2
 #endif
 
+// Shared topology index for the thumb base dual-tendon joint (J16).
+static constexpr uint8_t kThumbBaseJointIndex = 16;
+static_assert(kThumbBaseJointIndex < ENCODER_TOTAL_NUM,
+              "thumb base joint index must be within the encoder map");
+
 // HardwareMap 模块职责：
 // 1) 集中定义关节/电机到物理总线与 ID 的映射；
 // 2) 避免 SystemTask 承担硬件拓扑配置职责。

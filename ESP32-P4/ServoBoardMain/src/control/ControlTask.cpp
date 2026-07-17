@@ -662,8 +662,8 @@ void controlTask(void* parameter)
         if (nowMs - lastDiagLogMs >= 500) {
             lastDiagLogMs = nowMs;
             FW_LOG_INFO_PRINTF("[Solver] j16 qRef=%.2f qFb=%.2f\r\n",
-                          (double)localTargets[kJoint16Index],
-                          (double)magAngles[kJoint16Index]);
+                          (double)localTargets[kThumbBaseJointIndex],
+                          (double)magAngles[kThumbBaseJointIndex]);
         }
 #endif
 

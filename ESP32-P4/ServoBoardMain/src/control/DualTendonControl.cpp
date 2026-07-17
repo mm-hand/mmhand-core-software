@@ -94,7 +94,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;
             return true;
-        case kJoint16Index:
+        case kThumbBaseJointIndex:
             out->model = kDualTendonModelSharedCadGeometry;
             out->motorZero[0] = 2557.0f;
             out->motorZero[1] = 358.0f;
