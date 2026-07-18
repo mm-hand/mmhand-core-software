@@ -1759,12 +1759,6 @@ class FullRawSkeletonRetargeter:
         angles = [0.0] * ENCODER_COUNT
         for item in preview:
             if item.valid and item.joint_index in RAW_IK_JOINT_INDICES:
-                angle_mapping.debug_print_joint_command(
-                    item.joint_index,
-                    math.radians(float(item.robot_q_urdf_preview)),
-                    allow_default=True,
-                    prefix="[RAW_IK_ANGLE]",
-                )
                 angles[item.joint_index] = float(item.robot_q_urdf_preview)
         return angles
 

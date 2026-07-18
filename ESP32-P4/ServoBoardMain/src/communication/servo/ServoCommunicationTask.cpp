@@ -21,29 +21,11 @@
 #define SERVO_CONFIGURE_MULTI_TURN_ON_BOOT 1
 #endif
 
-#ifndef SERVO_BOOT_RECOVER_LIMIT_TO_RAW
-#define SERVO_BOOT_RECOVER_LIMIT_TO_RAW 0
-#endif
-
 #define SERVO_MULTI_TURN_CONFIG_DELAY_MS 5
-static const uint32_t kBootRecoverLimitToRawWindowMs = 8000;
 static const uint8_t kServoOfflineInvalidateMisses = 3;
 static const uint8_t kServoOnlineConfirmReads = 2;
 static const uint32_t kServoOfflineProbeIntervalMs = 50;
 
-#ifndef SERVO_CALIB_TX_APPLY_LOG_ENABLE
-#define SERVO_CALIB_TX_APPLY_LOG_ENABLE 0
-#endif
-
-// Test mode: while calibration owns the servo targets, keep the communication
-// loop close to the proven CUI path and defer current-only background work.
-#ifndef SERVO_CALIB_CUI_ISOLATION_TEST
-#define SERVO_CALIB_CUI_ISOLATION_TEST 0
-#endif
-
-#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
-static const uint32_t kCalibrationTxApplyLogIntervalMs = 200;
-#endif
 static const uint32_t kServoLoopGapLogThresholdMs = 50;
 static const uint32_t kServoApplyStallLogThresholdMs = 50;
 static const uint32_t kServoQueueDropLogIntervalMs = 200;
@@ -57,13 +39,6 @@ static const int16_t kNvsTurnEdgeRawMargin = 256;
 static const int32_t kNvsMoveAbsThreshold = 64;
 #endif
 static const int32_t kServoAbsLimit = 30719;
-static const int32_t kServoAbsLimitRecoverMargin = 16;
-
-static bool isServoAbsAtLimit(int32_t value)
-{
-    return value >= (kServoAbsLimit - kServoAbsLimitRecoverMargin) ||
-           value <= (-kServoAbsLimit + kServoAbsLimitRecoverMargin);
-}
 
 static int16_t clampServoAbsLocal(int32_t value)
 {
@@ -538,72 +513,6 @@ static ServoBusDriver* getBusByIndex(uint8_t busIndex)
     return &g_servoBuses[busIndex];
 }
 
-#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
-static int8_t findMotorChannelByBusServo(uint8_t busIndex, uint8_t servoId)
-{
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        if (motorMap[ch].busIndex == busIndex && motorMap[ch].servoID == servoId) {
-            return (int8_t)ch;
-        }
-    }
-    return -1;
-}
-
-static void logCalibrationTxApplyBatch(const ServoTargetBatch_t& batch)
-{
-    if (batch.source != SERVO_TARGET_OWNER_CALIBRATION) {
-        return;
-    }
-
-    const uint32_t nowMs = millis();
-    static uint32_t lastLogMs = 0;
-    if ((uint32_t)(nowMs - lastLogMs) < kCalibrationTxApplyLogIntervalMs) {
-        return;
-    }
-    lastLogMs = nowMs;
-
-    const uint32_t ageMs = nowMs - batch.timestamp;
-    for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
-        const ServoTargetCommand_t& cmd = batch.commands[i];
-        const int8_t motorChannel = findMotorChannelByBusServo(cmd.busIndex, cmd.servoId);
-        ServoBusDriver* bus = getBusByIndex(cmd.busIndex);
-        if (!bus) {
-            FW_LOG_INFO_PRINTF("[CALIB_TX_APPLY] idx=%u M%02d bus=%u id=%u target=%d hwTarget=NA currentAbs=NA raw=NA load=NA online=0 speed=%u acc=%u ageMs=%lu count=%u\r\n",
-                               (unsigned)i,
-                               (int)motorChannel,
-                               (unsigned)cmd.busIndex,
-                               (unsigned)cmd.servoId,
-                               (int)cmd.position,
-                               (unsigned)cmd.speed,
-                               (unsigned)cmd.acc,
-                               (unsigned long)ageMs,
-                               (unsigned)batch.count);
-            continue;
-        }
-
-        const ServoFeedbackInternal& fb = bus->getFeedback(cmd.servoId);
-        const int32_t currentAbs = fb.absolutePosition + fb.logicalOffset;
-        const int16_t hwTarget = clampServoAbsLocal((int32_t)cmd.position - fb.logicalOffset);
-        FW_LOG_INFO_PRINTF("[CALIB_TX_APPLY] idx=%u M%02d bus=%u id=%u target=%d hwTarget=%d currentAbs=%ld raw=%d load=%d online=%u speed=%u acc=%u offset=%ld ageMs=%lu count=%u\r\n",
-                           (unsigned)i,
-                           (int)motorChannel,
-                           (unsigned)cmd.busIndex,
-                           (unsigned)cmd.servoId,
-                           (int)cmd.position,
-                           (int)hwTarget,
-                           (long)currentAbs,
-                           (int)fb.rawPosition,
-                           (int)fb.load,
-                           fb.online ? 1U : 0U,
-                           (unsigned)cmd.speed,
-                           (unsigned)cmd.acc,
-                           (long)fb.logicalOffset,
-                           (unsigned long)ageMs,
-                           (unsigned)batch.count);
-    }
-}
-#endif
-
 static void probeOneOfflineMappedServo(uint32_t nowMs)
 {
     static uint32_t lastProbeMs = 0;
@@ -751,10 +660,6 @@ static void configureMappedServosForMultiTurn()
 static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
 {
     bool busWritePending[NUM_BUSES] = {false};
-#if SERVO_CALIB_TX_APPLY_LOG_ENABLE
-    logCalibrationTxApplyBatch(batch);
-#endif
-
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
         const ServoTargetCommand_t& cmd = batch.commands[i];
         ServoBusDriver* bus = getBusByIndex(cmd.busIndex);
@@ -827,74 +732,6 @@ static void emergencyTorqueOffMappedServos(TaskSharedData_t* sharedData)
                   (unsigned long)requestedMask,
                   (unsigned long)torqueDisabledMask,
                   (unsigned long)torqueDisableFailedMask);
-}
-
-static void bootRecoverLimitServosToRaw(uint32_t bootRecoverDeadlineMs)
-{
-#if SERVO_BOOT_RECOVER_LIMIT_TO_RAW
-    static bool attempted[NUM_BUSES][MAX_SERVO_ID + 1] = {false};
-
-    const uint32_t nowMs = millis();
-    if ((int32_t)(nowMs - bootRecoverDeadlineMs) > 0) {
-        return;
-    }
-
-    uint8_t heldIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
-    uint8_t heldCounts[NUM_BUSES] = {0};
-    bool busWritePending[NUM_BUSES] = {false};
-
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
-            continue;
-        }
-        if (attempted[busIndex][id]) {
-            continue;
-        }
-
-        bool alreadyHeld = false;
-        for (uint8_t i = 0; i < heldCounts[busIndex]; i++) {
-            if (heldIds[busIndex][i] == id) {
-                alreadyHeld = true;
-                break;
-            }
-        }
-        if (alreadyHeld || heldCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
-            continue;
-        }
-
-        ServoBusDriver* bus = getBusByIndex(busIndex);
-        if (!bus || !bus->isOnline(id)) {
-            continue;
-        }
-
-        const int32_t absPos = bus->getAbsolutePosition(id);
-        if (!isServoAbsAtLimit(absPos)) {
-            attempted[busIndex][id] = true;
-            continue;
-        }
-
-        const int16_t rawSingleTurn = normalizeServoRawSingleTurn(bus->getRawPosition(id));
-        bus->setHardwareTarget(id, rawSingleTurn, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
-        attempted[busIndex][id] = true;
-        heldIds[busIndex][heldCounts[busIndex]++] = id;
-        busWritePending[busIndex] = true;
-        FW_LOG_INFO_PRINTF("[SERVO BOOT RECOVER] bus=%u id=%u abs=%ld raw=%d\r\n",
-                      (unsigned)busIndex,
-                      (unsigned)id,
-                      (long)absPos,
-                      (int)rawSingleTurn);
-    }
-
-    for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
-        if (busWritePending[busIndex]) {
-            g_servoBuses[busIndex].syncWriteAll();
-        }
-    }
-#else
-    (void)bootRecoverDeadlineMs;
-#endif
 }
 
 static void publishServoFeedback(TaskSharedData_t* sharedData)
@@ -1712,7 +1549,6 @@ void servoCommunicationTask(void* parameter)
     uint32_t lastNvsSaveToken =
         sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token);
 #endif
-    const uint32_t bootRecoverDeadlineMs = millis() + kBootRecoverLimitToRawWindowMs;
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
     const uint32_t nvsRestoreDeadlineMs = millis() + kNvsRestoreWaitWindowMs;
     bool nvsEnabled = true;
@@ -1742,7 +1578,6 @@ void servoCommunicationTask(void* parameter)
     FW_LOG_INFO_PRINTLN("[NVS MULTITURN] persistence disabled");
 #endif
 
-    bool calibrationIsolationWasActive = false;
     uint32_t lastLoopStartMs = 0;
     uint32_t queueDropTotal = 0;
     uint32_t lastQueueDropLogMs = 0;
@@ -1778,19 +1613,6 @@ void servoCommunicationTask(void* parameter)
         const bool calibrationMotionActive =
             sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING &&
             sharedData->servo_target_owner == SERVO_TARGET_OWNER_CALIBRATION;
-#if SERVO_CALIB_CUI_ISOLATION_TEST
-        const bool calibrationIsolationActive = calibrationMotionActive;
-#else
-        const bool calibrationIsolationActive = false;
-#endif
-        if (calibrationIsolationActive != calibrationIsolationWasActive) {
-            calibrationIsolationWasActive = calibrationIsolationActive;
-            FW_LOG_INFO_PRINTF("[CALIB CUI ISOLATION] active=%u state=%u owner=%u\r\n",
-                               calibrationIsolationActive ? 1U : 0U,
-                               (unsigned)sharedData->system_state,
-                               (unsigned)sharedData->servo_target_owner);
-        }
-
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {
@@ -1869,31 +1691,24 @@ void servoCommunicationTask(void* parameter)
         }
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
-        if (!calibrationIsolationActive) {
-            processBootNvsRestore(sharedData,
-                                  hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
-                                  &bootNvsRestoreDone,
-                                  nvsRestoreDeadlineMs);
-        }
+        processBootNvsRestore(sharedData,
+                              hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
+                              &bootNvsRestoreDone,
+                              nvsRestoreDeadlineMs);
         if (!calibrationMotionActive) {
             processServoOnlineTransitions(sharedData, &nvsSaveState, nvsEnabled);
         }
 #endif
-        if (!calibrationIsolationActive) {
-            bootRecoverLimitServosToRaw(bootRecoverDeadlineMs);
-        }
         publishServoFeedback(sharedData);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
-        if (!calibrationIsolationActive) {
-            processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
-        }
+        processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
 #endif
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_COMM);
         const TickType_t nextWakeTime = lastWakeTime + taskPeriodTicks;
         const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
         taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_COMM, periodOverrun);
         vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
-        if (periodOverrun && !calibrationIsolationActive) {
+        if (periodOverrun) {
             // Offline bus scans can overrun the 10 ms period. Force one blocked
             // tick so lower-priority status/desktop communication still runs.
             vTaskDelay(1);

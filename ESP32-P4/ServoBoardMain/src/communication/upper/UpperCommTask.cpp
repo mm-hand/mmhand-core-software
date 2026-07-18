@@ -27,7 +27,7 @@ extern volatile uint8_t g_calibrationAckRepeatRemaining;
 // 1) parse host commands and update shared command state;
 // 2) publish sensor, servo, telemetry, debug, and fault packets;
 // 3) keep protocol ACK and fault heartbeat reporting synchronized.
-static uint8_t g_sensorStreamMode = SENSOR_STREAM_MODE_SIGNED_I16;
+
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 static const uint8_t kTactileFullPacketMagic0 = 0x54; // 'T'
 static const uint8_t kTactileFullPacketMagic1 = 0x32; // '2'
@@ -286,6 +286,10 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
                 sharedData->calibration_auto_min_offset_counts[joint]);
         }
     }
+    appendU32BigEndian(buffer, &idx,
+                       sharedAtomicLoad(&sharedData->feedback_admission_sequence));
+    buffer[idx++] = sharedAtomicLoad(&sharedData->feedback_admission_status);
+    buffer[idx++] = sharedAtomicLoad(&sharedData->feedback_reject_reason);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
@@ -852,7 +856,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_RUN_FEEDBACK:
         case CMD_PAUSE:
         case CMD_HOST_HEARTBEAT:
-        case CMD_SIDE_SWAY_ADJUST:
+
         case CMD_CLEAR_CALIBRATION:
         case CMD_MANUAL_ENCODER_QUERY:
             return 0;
@@ -865,8 +869,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_ROPE_INIT:
             return kRopeInitPayloadBytes;
         case CMD_ANGLE_CTRL:
-            return kFloatPayloadBytes;
-        case CMD_CALIB_DATA:
+
+
             return kFloatPayloadBytes;
         case CMD_MOTOR_POS:
             return kMotorPosPayloadBytes;
@@ -892,22 +896,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_LOCAL_TEST_START:
         case CMD_LOCAL_TEST_STOP:
             return 0;
-        case CMD_SENSOR_STREAM_MODE:
-            return 1;
         default:
             return (size_t)-1;
-    }
-}
-
-// Handle legacy single-byte commands.
-static void handleLegacySingleByteCommand(TaskSharedData_t* sharedData, uint8_t cmd)
-{
-    if (cmd == (uint8_t)'c') {
-        postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-        return;
-    }
-    if (cmd == (uint8_t)'b') {
-        upperClearTargetAngles(sharedData);
     }
 }
 
@@ -1061,7 +1051,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     }
 
     const uint8_t cmd = frame[0];
-    // 任意合法上位机帧都说�?host 在线；界面空闲时�?heartbeat 帧刷新该时间戳�?
+    // Every valid framed host command refreshes the heartbeat timestamp.
     sharedData->host_rx_heartbeat_ms = millis();
 
     if (cmd == CMD_HOST_HEARTBEAT)
@@ -1127,15 +1117,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
-    if (cmd == CMD_SIDE_SWAY_ADJUST)
-    {
-        // Reserved for legacy desktop builds. Workspace setup now runs only inside CMD_CALIBRATE.
-        sendProtoAckPacket(CMD_SIDE_SWAY_ADJUST,
-                           sharedData->system_state,
-                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
-        return;
-    }
-
     if (cmd == CMD_START)
     {
         postSystemEvent(sharedData, SYSTEM_EVENT_START);
@@ -1145,13 +1126,30 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_RUN_FEEDBACK)
     {
+        const uint32_t requestSequence =
+            sharedAtomicAddFetch(&sharedData->feedback_admission_sequence, (uint32_t)1);
+        sharedAtomicStore(&sharedData->feedback_admission_status,
+                          (uint8_t)FEEDBACK_ADMISSION_PENDING);
+        sharedAtomicStore(&sharedData->feedback_reject_reason,
+                          (uint8_t)FEEDBACK_REJECT_NONE);
         if (!activeManualReferencesReady(sharedData)) {
+            sharedAtomicStore(&sharedData->feedback_admission_status,
+                              (uint8_t)FEEDBACK_ADMISSION_REJECTED);
+            sharedAtomicStore(&sharedData->feedback_reject_reason,
+                              (uint8_t)FEEDBACK_REJECT_MANUAL_REFERENCE);
             sendProtoAckPacket(
                 CMD_RUN_FEEDBACK,
                 sharedData->system_state,
                 PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED);
         } else {
-            postSystemEvent(sharedData, SYSTEM_EVENT_RUN_FEEDBACK);
+            if (!postSystemEventForToken(sharedData,
+                                         SYSTEM_EVENT_RUN_FEEDBACK,
+                                         requestSequence)) {
+                sharedAtomicStore(&sharedData->feedback_admission_status,
+                                  (uint8_t)FEEDBACK_ADMISSION_REJECTED);
+                sharedAtomicStore(&sharedData->feedback_reject_reason,
+                                  (uint8_t)FEEDBACK_REJECT_EVENT_QUEUE);
+            }
             sendProtoAckPacket(CMD_RUN_FEEDBACK,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_QUEUED);
@@ -1192,20 +1190,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, parsedAngles, ENCODER_TOTAL_NUM)) {
             upperApplyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
         }
-        return;
-    }
-
-    if (cmd == CMD_CALIB_DATA)
-    {
-        float zeroRaw[ENCODER_TOTAL_NUM] = {0.0f};
-        bool ok = false;
-        if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, zeroRaw, ENCODER_TOTAL_NUM)) {
-            upperCacheCalibZeroRaw(sharedData, zeroRaw, ENCODER_TOTAL_NUM);
-            ok = true;
-        }
-        sendProtoAckPacket(CMD_CALIB_DATA,
-                           sharedData->system_state,
-                           ok ? PROTO_ACK_STATUS_OK : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
 
@@ -1856,22 +1840,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
-    if (cmd == CMD_SENSOR_STREAM_MODE)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 2) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            const uint8_t requestedMode = frame[1];
-            if (requestedMode == SENSOR_STREAM_MODE_LEGACY_U16_WRAP ||
-                requestedMode == SENSOR_STREAM_MODE_SIGNED_I16) {
-                g_sensorStreamMode = requestedMode;
-            } else {
-                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-            }
-        }
-        sendProtoAckPacket(CMD_SENSOR_STREAM_MODE, g_sensorStreamMode, status);
-    }
 }
 
 // Serial receive/transmit task.
@@ -1933,13 +1901,6 @@ void upperCommunicationTask(void* parameter)
         while (parseOffset < rxLen)
         {
             const uint8_t cur = rxBuffer[parseOffset];
-
-            if (cur == (uint8_t)'c' || cur == (uint8_t)'b')
-            {
-                handleLegacySingleByteCommand(sharedData, cur);
-                parseOffset += 1;
-                continue;
-            }
 
             if (cur != PROTOCOL_HEADER)
             {

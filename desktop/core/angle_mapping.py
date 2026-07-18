@@ -33,8 +33,6 @@ from desktop.paths import (
 from .protocol import ENCODER_COUNT
 
 
-DEBUG_ANGLE_MAPPING = False
-
 CALIB_LOAD_SNAPSHOT_PATH = Path(DEFAULT_CALIB_LOAD_SNAPSHOT_PATH)
 URDF_JOINT_MAPPING_PATH = Path(DEFAULT_URDF_JOINT_MAPPING_PATH)
 
@@ -621,33 +619,6 @@ def mapping_debug(
     )
 
 
-def debug_print_joint_command(
-    joint: int | str,
-    q_urdf_rad: float,
-    *,
-    allow_default: bool = True,
-    prefix: str = "[ANGLE_MAP]",
-) -> None:
-    if not DEBUG_ANGLE_MAPPING:
-        return
-    d = mapping_debug(joint, q_urdf_rad, allow_default=allow_default)
-    calib = "UNKNOWN" if d.q_calibrated_deg is None else f"{d.q_calibrated_deg:+.3f}"
-    calib_range = "UNKNOWN" if d.calibrated_range_deg is None else _range_text(d.calibrated_range_deg)
-    print(
-        f"{prefix} J{d.joint_index:02d} {d.joint_name} "
-        f"q_ik_urdf={d.q_ik_urdf_deg:+.3f}deg "
-        f"q_viewer={d.q_viewer_deg:+.3f}deg "
-        f"q_calibrated={calib}deg "
-        f"urdf_range={_range_text(d.urdf_range_deg)} "
-        f"urdf_at_calib_endpoints={_range_text(d.calibrated_urdf_endpoints_deg)} "
-        f"viewer_range={_range_text(d.viewer_range_deg)} "
-        f"calibrated_range={calib_range} "
-        f"sign={d.sign:+d} offset={d.offset_deg:+.3f} "
-        f"clamped_urdf={int(d.is_clamped_urdf)} "
-        f"clamped_calibrated={int(d.is_clamped_calibrated)} "
-        f"source={d.mapping_source} status={d.mapping_status}"
-    )
-
 
 def joint_mapping_rows() -> list[dict[str, object]]:
     calib_ranges = load_calibrated_ranges()
@@ -688,7 +659,6 @@ def _range_text(rng: tuple[float, float]) -> str:
 __all__ = [
     "AngleMappingDebug",
     "AngleMappingError",
-    "DEBUG_ANGLE_MAPPING",
     "JOINT_SPECS",
     "JointAngleSpec",
     "URDF_JOINT_MAPPING_PATH",
@@ -698,7 +668,6 @@ __all__ = [
     "calibrated_to_urdf",
     "clamp_calibrated",
     "clamp_urdf",
-    "debug_print_joint_command",
     "effective_calibrated_range_deg",
     "get_spec",
     "joint_mapping_rows",

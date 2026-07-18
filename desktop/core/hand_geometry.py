@@ -23,57 +23,6 @@ def load_hand_geo(path: Optional[str] = None) -> dict:
         return json.load(f)
 
 
-def load_calib_zero_raw(path: Optional[str] = None) -> Optional[List[int]]:
-    """
-    从 config/calib_deg.json 加载 ENCODER_COUNT 路关节在 0° 时对应的角编码器原始值。
-    文件不存在或 JSON 解析失败时返回 None（表示未校准）。
-    文件存在但 zero_encoder_raw 条目数少于 ENCODER_COUNT 时抛出 ValueError。
-    """
-    p = path or CALIB_DEG_PATH
-    if not os.path.isfile(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
-    raw = data.get("zero_encoder_raw", [])
-    if len(raw) < ENCODER_COUNT:
-        raise ValueError(
-            f"校准文件 {p} 中 zero_encoder_raw 条目数为 {len(raw)}，需要 {ENCODER_COUNT} 个"
-        )
-    try:
-        out = [int(v) for v in raw[:ENCODER_COUNT]]
-    except (TypeError, ValueError):
-        raise ValueError(f"校准文件 {p} 中 zero_encoder_raw 含有非整数或无效值") from None
-    return out[:ENCODER_COUNT]
-
-
-def has_calib_file(path: Optional[str] = None) -> bool:
-    """检查校准文件是否存在且有效（条目数足够且可解析）"""
-    try:
-        return load_calib_zero_raw(path) is not None
-    except ValueError:
-        return False
-
-
-def save_calib_zero_raw(values: List[int], path: Optional[str] = None) -> bool:
-    """将 ENCODER_COUNT 路关节 0° 编码器值保存到 calib_deg.json"""
-    if len(values) < ENCODER_COUNT:
-        return False
-    p = path or CALIB_DEG_PATH
-    try:
-        data = {
-            "comment": f"{ENCODER_COUNT} 个关节角编码器在手指 0° 时对应的编码器原始值（14 位 0~16383）。下位机将据此计算关节角度",
-            "zero_encoder_raw": [int(v) for v in values[:ENCODER_COUNT]],
-        }
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return True
-    except (OSError, TypeError):
-        return False
-
-
 def _default_hand_geo() -> dict:
     return {
         "palm": {"width_mm": 85, "length_mm": 100, "thickness_mm": 28, "center_mm": [0, 50, 0]},

@@ -12,10 +12,8 @@ from desktop.paths import PACKAGE_DIR
 from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .comm_layer import LowerComputerComm, list_ports
 from .data_models import HandModel
-from .hand_geometry import load_calib_zero_raw
 from .protocol import (
     CMD_ACTIVE_SCOPE,
-    CMD_CALIB_DATA,
     CMD_CLEAR_CALIBRATION,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
@@ -44,10 +42,8 @@ from .protocol import (
 )
 from .session_log import log_session
 
-LEGACY_CALIB_DATA_SYNC_ENABLE = False
 LOWER_SYNC_TIMEOUT_S = 2.5
 LOWER_STATUS_STALE_AFTER_S = 1.0
-LEGACY_CALIB_DATA_ACK_TIMEOUT_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
@@ -416,17 +412,11 @@ class HandController:
         self._update_thread.start()
 
         sync_ok = self._wait_for_lower_sync(LOWER_SYNC_TIMEOUT_S)
-        legacy_ok = self._sync_legacy_calib_data_if_enabled() if sync_ok else None
         with self.state_lock:
             if self.current_state.calib_status == "SYNCING":
                 self.current_state.calib_status = "IDLE"
         if sync_ok:
-            if legacy_ok is True:
-                self.last_sync_status = "Synced lower status/servo feedback; legacy calib_data ACK OK"
-            elif legacy_ok is False:
-                self.last_sync_status = "Synced lower status/servo feedback; legacy calib_data ACK timeout"
-            else:
-                self.last_sync_status = "Synced lower status/servo feedback"
+            self.last_sync_status = "Synced lower status/servo feedback"
         else:
             self.last_sync_status = "Connected, but lower status/servo feedback sync timed out"
         log_session("CTRL", self.last_sync_status)
@@ -454,24 +444,6 @@ class HandController:
                 return True
             time.sleep(0.02)
         return False
-
-    def _sync_legacy_calib_data_if_enabled(self) -> Optional[bool]:
-        if not LEGACY_CALIB_DATA_SYNC_ENABLE or not self.comm:
-            return None
-        zero_raw = load_calib_zero_raw()
-        if not zero_raw:
-            return None
-        try:
-            self.comm.send_command(("calib_data", zero_raw))
-            ack = self.comm.wait_for_ack(CMD_CALIB_DATA, LEGACY_CALIB_DATA_ACK_TIMEOUT_S)
-            if ack is None:
-                return False
-            with self.state_lock:
-                self.current_state.set_encoder_zeros(zero_raw)
-            return True
-        except Exception as exc:
-            print(f"Warning: legacy calib_data sync failed: {exc}")
-            return False
 
     def shutdown(self, stop_lower: bool = True):
         """

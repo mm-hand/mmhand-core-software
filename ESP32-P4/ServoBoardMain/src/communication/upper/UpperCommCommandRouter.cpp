@@ -16,6 +16,37 @@ int16_t clampServoAbsCommand(int32_t value)
     return (int16_t)value;
 }
 
+// A direct command is staged before the state machine accepts RUN_DIRECT.
+// If queuing that event fails, discard only the matching staged generation so
+// a later command is never cancelled accidentally.
+static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
+                                      uint32_t generation,
+                                      uint8_t rejectReason)
+{
+    if (!sharedData) {
+        return;
+    }
+
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+
+    if (sharedData->pending_direct_valid != 0 &&
+        sharedData->pending_direct_generation == generation) {
+        sharedData->pending_direct_valid = 0;
+        sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+        sharedData->pending_direct_motor_mask = 0;
+        sharedData->pending_direct_joint_mask = 0;
+        sharedData->pending_direct_require_can = 0;
+        sharedData->direct_reject_reason = rejectReason;
+    }
+
+    if (lock) {
+        xSemaphoreGive(lock);
+    }
+}
+
 void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count)
 {
     if (!sharedData || !angles) {
@@ -32,37 +63,6 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, u
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->joint_command_token++;
-        xSemaphoreGive(lock);
-    }
-}
-
-void upperClearTargetAngles(TaskSharedData_t* sharedData)
-{
-    float zeroAngles[ENCODER_TOTAL_NUM] = {0.0f};
-    upperApplyTargetAngles(sharedData, zeroAngles, ENCODER_TOTAL_NUM);
-}
-
-static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
-                                      uint32_t generation,
-                                      uint8_t reason)
-{
-    if (!sharedData) {
-        return;
-    }
-    SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
-    }
-    if (sharedData->pending_direct_valid != 0 &&
-        sharedData->pending_direct_generation == generation) {
-        sharedData->pending_direct_valid = 0;
-        sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
-        sharedData->pending_direct_motor_mask = 0;
-        sharedData->pending_direct_joint_mask = 0;
-        sharedData->pending_direct_require_can = 0;
-        sharedData->direct_reject_reason = reason;
-    }
-    if (lock) {
         xSemaphoreGive(lock);
     }
 }
@@ -193,35 +193,6 @@ bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
         return false;
     }
     return true;
-}
-
-void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count)
-{
-    if (!sharedData || !values) {
-        return;
-    }
-    if (count > ENCODER_TOTAL_NUM) {
-        count = ENCODER_TOTAL_NUM;
-    }
-    SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
-    }
-    // Cache the host-provided raw calibration values.
-    for (uint8_t i = 0; i < count; i++) {
-        float v = values[i];
-        if (!isfinite(v)) {
-            v = 0.0f;
-        }
-        sharedData->calib_zero_raw_cache[i] = (int32_t)lroundf(v);
-    }
-    for (uint8_t i = count; i < ENCODER_TOTAL_NUM; i++) {
-        sharedData->calib_zero_raw_cache[i] = 0;
-    }
-    sharedData->calib_zero_raw_valid = 1;
-    if (lock) {
-        xSemaphoreGive(lock);
-    }
 }
 
 bool upperApplyActiveScope(TaskSharedData_t* sharedData,

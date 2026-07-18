@@ -40,7 +40,6 @@ from .protocol import (
     TX_QUEUE_MAXSIZE,
     build_angle_cmd,
     build_active_scope_cmd,
-    build_calib_data_cmd,
     build_calib_load_joint_cmd,
     build_calib_load_limits_cmd,
     build_calibrate_cmd,
@@ -63,7 +62,6 @@ from .protocol import (
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
-    build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
@@ -72,7 +70,6 @@ from .protocol import (
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
-    CMD_CALIB_DATA,
     CMD_START,
     CMD_STOP,
     CMD_RESET,
@@ -85,7 +82,6 @@ from .protocol import (
     CMD_MANUAL_ENCODER_QUERY,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
-    CMD_SENSOR_STREAM_MODE,
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_IDLE,
@@ -116,7 +112,6 @@ from .protocol import (
     crc16_ccitt,
     PROTO_ACK_STATUS_OK,
     PROTO_ACK_STATUS_QUEUED,
-    SENSOR_STREAM_MODE_SIGNED_I16,
 )
 from .run_data_logger import RunDataLogger
 from .session_log import log_session
@@ -882,11 +877,6 @@ class LowerComputerComm:
         self._firmware_text_buffer = bytearray()
         self._last_model: Optional[HandModel] = None
         self._last_proto_ack: Optional[tuple] = None
-        self._stream_mode_requested = SENSOR_STREAM_MODE_SIGNED_I16
-        self._stream_mode_applied: Optional[int] = None
-        self._stream_mode_ack_pending = False
-        self._stream_mode_ack_deadline = 0.0
-        self._stream_mode_ack_warned = False
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
         self._rx_diag_joint_debug_packets = 0
@@ -959,7 +949,6 @@ class LowerComputerComm:
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
             self._tx_thread.start()
-            self._request_stream_mode_negotiation()
             return True
         except Exception as exc:
             log_session("COMM", f"serial connect failed port={self.port}: {exc}")
@@ -1050,7 +1039,6 @@ class LowerComputerComm:
             print(f"Serial offline: {detail}")
             self.running = False
             self._heartbeat_enabled = False
-            self._stream_mode_ack_pending = False
             with self._ack_lock:
                 self._last_proto_ack = None
                 self._ack_lock.notify_all()
@@ -1267,7 +1255,6 @@ class LowerComputerComm:
                             pass
                 else:
                     time.sleep(RX_POLL_SLEEP)
-                self._check_stream_mode_ack_timeout()
                 self._maybe_print_rx_diag()
             except Exception as exc:
                 log_session("COMM", f"RX error: {exc}")
@@ -1299,10 +1286,6 @@ class LowerComputerComm:
                 or "[CALIB_TX_APPLY]" in stripped
             ):
                 self._auto_calib_logger.log("FW", stripped)
-        if "<<<SYS_READY>>>" in stripped:
-            # P4 may reboot after the first frame was sent; negotiate again
-            # only after the firmware reports that its tasks are ready.
-            self._request_stream_mode_negotiation()
         if not FIRMWARE_LOG_TO_TERMINAL:
             return
         if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
@@ -1351,23 +1334,6 @@ class LowerComputerComm:
             else:
                 self._append_firmware_log_byte(buffer.pop(0))
         return packets
-
-    def _request_stream_mode_negotiation(self) -> None:
-        if not self.running:
-            return
-        self._stream_mode_applied = None
-        self._stream_mode_ack_pending = True
-        self._stream_mode_ack_warned = False
-        self._stream_mode_ack_deadline = time.time() + 2.0
-        self.send_command(("stream_mode", self._stream_mode_requested))
-
-    def _check_stream_mode_ack_timeout(self):
-        if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
-            if time.time() >= self._stream_mode_ack_deadline:
-                log_session("PROTO", "no stream-mode ACK from firmware; continue with current decoding")
-                print("Protocol warning: no stream-mode ACK from firmware; continue with current decoding.")
-                self._stream_mode_ack_warned = True
-                self._stream_mode_ack_pending = False
 
     def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
         stable: List[List[List[int]]] = []
@@ -1614,6 +1580,10 @@ class LowerComputerComm:
                         applied_direct_generation,
                         direct_reject_reason,
                         has_motion_result_status,
+                        feedback_admission_sequence,
+                        feedback_admission_status,
+                        feedback_reject_reason,
+                        has_feedback_admission_status,
                         calibration_warning_bitmap,
                         calibration_auto_min_offset_counts,
                         has_calibration_warning_status,
@@ -1673,6 +1643,12 @@ class LowerComputerComm:
                     )
                     model.has_calibration_warning_status = bool(
                         has_calibration_warning_status
+                    )
+                    model.feedback_admission_sequence = int(feedback_admission_sequence)
+                    model.feedback_admission_status = int(feedback_admission_status)
+                    model.feedback_reject_reason = int(feedback_reject_reason)
+                    model.has_feedback_admission_status = bool(
+                        has_feedback_admission_status
                     )
                     model.has_system_status_data = True
                     model.system_status_last_rx_ts = time.time()
@@ -1856,15 +1832,6 @@ class LowerComputerComm:
                         "PROTO",
                         f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
                     )
-                    if ack_cmd == CMD_SENSOR_STREAM_MODE:
-                        self._stream_mode_applied = int(applied_mode)
-                        self._stream_mode_ack_pending = False
-                        if status != PROTO_ACK_STATUS_OK and not self._stream_mode_ack_warned:
-                            print(
-                                f"Protocol warning: stream-mode rejected "
-                                f"(status={status}, applied={applied_mode})."
-                            )
-                            self._stream_mode_ack_warned = True
                     with self._ack_lock:
                         self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
                         self._ack_lock.notify_all()
@@ -1881,7 +1848,6 @@ class LowerComputerComm:
                         CMD_STOP,
                         CMD_RESET,
                         CMD_CALIBRATE,
-                        CMD_CALIB_DATA,
                         CMD_ACTIVE_SCOPE,
                         CMD_RUN_FEEDBACK,
                         CMD_PAUSE,
@@ -1908,8 +1874,6 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_CALIBRATE:
                             model.control_enabled = False
                             model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
-                        elif ack_cmd == CMD_CALIB_DATA:
-                            model.control_enabled = False
                         elif ack_cmd == CMD_ACTIVE_SCOPE:
                             pass
                         elif ack_cmd == CMD_RUN_FEEDBACK:
@@ -2155,8 +2119,6 @@ class LowerComputerComm:
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":
             return build_calibrate_cmd()
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_data":
-            return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
@@ -2191,8 +2153,6 @@ class LowerComputerComm:
             return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
-            return build_stream_mode_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "local_test_params":
             return build_local_test_params_cmd(cmd[1], cmd[2])
         if cmd == "local_test_start":

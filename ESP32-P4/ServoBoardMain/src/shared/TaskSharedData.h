@@ -101,6 +101,22 @@
 #define DIRECT_REJECT_STALE 5
 #define DIRECT_REJECT_FAULT 6
 
+// Feedback admission result. CMD_RUN_FEEDBACK is asynchronous: the upper
+// computer first queues it, then StateMachineTask publishes the final result.
+#define FEEDBACK_ADMISSION_IDLE 0
+#define FEEDBACK_ADMISSION_PENDING 1
+#define FEEDBACK_ADMISSION_ACCEPTED 2
+#define FEEDBACK_ADMISSION_REJECTED 3
+
+#define FEEDBACK_REJECT_NONE 0
+#define FEEDBACK_REJECT_MANUAL_REFERENCE 1
+#define FEEDBACK_REJECT_STATE 2
+#define FEEDBACK_REJECT_WORKSPACE 3
+#define FEEDBACK_REJECT_MULTITURN 4
+#define FEEDBACK_REJECT_ABS_LIMIT 5
+#define FEEDBACK_REJECT_MODE_SWITCH 6
+#define FEEDBACK_REJECT_EVENT_QUEUE 7
+
 #define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
 #define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
 #define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
@@ -424,6 +440,9 @@ typedef struct {
     volatile uint8_t system_state;
     volatile uint8_t paused_resume_state;
     volatile uint8_t servo_target_owner;
+    volatile uint32_t feedback_admission_sequence;
+    volatile uint8_t feedback_admission_status;
+    volatile uint8_t feedback_reject_reason;
     volatile uint32_t emergency_stop_request_token;
     volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;
@@ -484,8 +503,8 @@ typedef struct {
     volatile int16_t overload_fault_load[SERVO_TOTAL_NUM];
     volatile uint32_t overload_fault_reset_token;
 
-    int32_t calib_zero_raw_cache[ENCODER_TOTAL_NUM];
-    volatile uint8_t calib_zero_raw_valid;
+
+
 } TaskSharedData_t;
 
 #endif // TASK_SHARED_DATA_H

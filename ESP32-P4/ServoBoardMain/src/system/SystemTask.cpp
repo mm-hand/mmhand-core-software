@@ -79,7 +79,7 @@ void System_Init() {
     memset(sharedData.pendingMotorTargetRaw, 0, sizeof(sharedData.pendingMotorTargetRaw));
     memset(sharedData.pendingMotorSweepTargetRaw, 0, sizeof(sharedData.pendingMotorSweepTargetRaw));
     memset(sharedData.restore_multi_turn_abs, 0, sizeof(sharedData.restore_multi_turn_abs));
-    memset(sharedData.calib_zero_raw_cache, 0, sizeof(sharedData.calib_zero_raw_cache));
+
     sharedData.motor_command_token = 0;
     sharedData.motor_sweep_command_token = 0;
     sharedData.joint_command_token = 0;
@@ -107,6 +107,9 @@ void System_Init() {
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;
     sharedData.paused_resume_state = SYSTEM_STATE_IDLE;
     sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
+    sharedData.feedback_admission_sequence = 0;
+    sharedData.feedback_admission_status = FEEDBACK_ADMISSION_IDLE;
+    sharedData.feedback_reject_reason = FEEDBACK_REJECT_NONE;
     sharedData.emergency_stop_request_token = 0;
     sharedData.servo_emergency_stop_token = 0;
     sharedData.system_fault_bitmap = 0;
@@ -161,10 +164,10 @@ void System_Init() {
         sharedData.overload_fault_load[i] = 0;
     }
     sharedData.overload_fault_reset_token = 0;
-    sharedData.calib_zero_raw_valid = 0;
 
 
-        initManualCalibrationForTest();
+
+        initializeCalibrationRuntimeState();
 
     ManualEncoderReference bootManualReferences[ENCODER_TOTAL_NUM];
     uint32_t bootManualSequence = 0;

@@ -1981,10 +1981,12 @@ class ControlPanel(QtWidgets.QWidget):
         if pose is None:
             return
         targets, joints = pose
-        self.apply_preset(targets, joint_indices=joints)
-        self._set_status(
-            "Open Pose set: active Current Min + "
-            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg"
+        self._apply_and_send_joint_pose(
+            targets,
+            joints,
+            "Open Pose",
+            "active Current Min + "
+            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
         )
 
     def apply_zero_pose(self) -> None:
@@ -1992,20 +1994,48 @@ class ControlPanel(QtWidgets.QWidget):
         if pose is None:
             return
         targets, joints = pose
-        self.apply_preset(targets, joint_indices=joints)
-        self._set_status(
-            "Zero Pose set: active Current Min + "
-            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg"
+        self._apply_and_send_joint_pose(
+            targets,
+            joints,
+            "Zero Pose",
+            "active Current Min + "
+            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
         )
 
     def apply_fist_pose(self) -> None:
-        angles: List[float] = []
-        for i in range(ENCODER_COUNT):
+        joints = self._active_scope_joint_indices()
+        if not joints:
+            self._set_status("Fist Pose blocked: no active joints selected")
+            return
+        angles = self.resolved_joint_targets()
+        for i in joints:
             max_deg = self._joint_target_max_deg(i)
             target = max(self._joint_target_min_deg(i), max_deg - 2.0)
-            angles.append(self._clamp_joint_target_deg(i, target))
-        self.apply_preset(angles)
-        self._set_status("Fist Pose set: URDF Max-2 deg")
+            angles[i] = self._clamp_joint_target_deg(i, target)
+        self._apply_and_send_joint_pose(angles, joints, "Fist Pose", "URDF Max - 2 deg")
+
+    def _apply_and_send_joint_pose(
+        self,
+        targets: List[float],
+        joints: List[int],
+        source: str,
+        detail: str,
+    ) -> None:
+        """Reflect a preset in the controls and submit the same target to P4."""
+        self.apply_preset(targets, joint_indices=joints)
+        if not self._guard_joint_command_started():
+            self._set_status(f"{source} blocked: feedback controller is not ready")
+            return
+        try:
+            result = self.context.send_joint_targets(targets, source=source, live=False)
+        except Exception as exc:
+            self._set_status(f"{source} send failed: {type(exc).__name__}: {exc}")
+            return
+        if not bool(getattr(result, "sent", result)):
+            message = str(getattr(result, "message", "") or "P4 rejected the joint target")
+            self._set_status(f"{source} blocked: {message}")
+            return
+        self._set_status(f"{source} sent: {detail}")
 
     def start_controller(self) -> None:
         if self._app_mode == "manual" and self._manual_submode() == "device_check":
@@ -2158,6 +2188,9 @@ class ControlPanel(QtWidgets.QWidget):
         self.context.emit_action("Clear Fault")
 
     def _active_scope_joint_indices(self) -> List[int]:
+        if self._app_mode == "manual":
+            joint_mask = int(self._selected_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+            return _ordered_joint_indices_from_mask(joint_mask)
         data = self._current_active_scope_tuple()
         if data is not None:
             _motor_mask, joint_mask, _require_can = data
@@ -3504,11 +3537,18 @@ class ControlPanel(QtWidgets.QWidget):
             self._error("Calib Load", f"加载失败：{message}")
             self._set_status(f"Calib Load failed: {message}")
 
-    def _apply_active_scope_for_current_mode(self) -> bool:
+    def _apply_active_scope_for_current_mode(self, force_joint: bool = False) -> bool:
         if self._app_mode == "manual" and self._manual_submode() == "device_check":
             self.backend.set_pid_control(False)
             return True
         data = self._current_active_scope_tuple()
+        if force_joint and self._app_mode == "manual":
+            joint_mask = int(self._selected_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+            data = (
+                self._motor_mask_for_joint_mask(joint_mask),
+                joint_mask,
+                True,
+            )
         if data is None:
             return False
         motor_mask, joint_mask, require_can = data
@@ -3519,7 +3559,9 @@ class ControlPanel(QtWidgets.QWidget):
             self._set_status("Active scope will apply after connect")
             return False
         try:
-            mode = self._manual_submode() if self._app_mode == "manual" else "joint"
+            mode = "joint" if force_joint else (
+                self._manual_submode() if self._app_mode == "manual" else "joint"
+            )
             if self._app_mode in ("manual", "teleop"):
                 if mode == "motor":
                     self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
@@ -4004,7 +4046,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
         if system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
-            if not self._apply_active_scope_for_current_mode():
+            if not self._apply_active_scope_for_current_mode(force_joint=True):
                 return False
         if not self.feedback_command_allowed(show_status=True):
             return False

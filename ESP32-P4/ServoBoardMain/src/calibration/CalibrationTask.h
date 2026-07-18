@@ -190,7 +190,7 @@ bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* o
 bool computeSecondaryServoTargetForJoint(uint8_t jointIndex, int32_t primaryTarget, int16_t* outSecondaryTarget);
 
 void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count);
-void initManualCalibrationForTest(void);
+void initializeCalibrationRuntimeState(void);
 
 // Run one-joint calibration search. Not called automatically by the state machine.
 bool runSingleJointCalibration(TaskSharedData_t* sharedData,

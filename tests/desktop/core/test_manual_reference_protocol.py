@@ -86,6 +86,19 @@ def test_system_status_parses_calibration_assembly_warning_extension():
     assert parsed[-1] is True
 
 
+def test_system_status_parses_feedback_admission_extension():
+    payload = bytearray(148)
+    payload.extend(struct.pack(">I", 42))
+    payload.extend(bytes([3, 4]))
+
+    parsed = parse_system_status_packet(bytes(payload))
+
+    assert parsed is not None
+    # The calibration warning fields deliberately remain at the tuple tail for
+    # older desktop callers; the admission fields precede them.
+    assert parsed[-7:-3] == (42, 3, 4, True)
+
+
 def test_manual_reference_snapshot_parses_all_21_pairs():
     mins = [100 + i for i in range(ENCODER_COUNT)]
     maxs = [1000 + i for i in range(ENCODER_COUNT)]

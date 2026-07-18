@@ -640,6 +640,10 @@ class HandModel:
         default_factory=lambda: [0] * ENCODER_COUNT
     )
     has_calibration_warning_status: bool = False
+    feedback_admission_sequence: int = 0
+    feedback_admission_status: int = 0
+    feedback_reject_reason: int = 0
+    has_feedback_admission_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
@@ -710,12 +714,6 @@ class HandModel:
         for i, a in enumerate(angles):
             if i < len(self.encoders):
                 self.encoders[i].target_angle_deg = float(a)
-
-    def set_encoder_zeros(self, zero_raw_list: List[int]) -> None:
-        """设置全部编码器的零点值（校准）"""
-        for i, z in enumerate(zero_raw_list):
-            if i < len(self.encoders):
-                self.encoders[i].zero_raw = int(z) & 0xFFFF
 
     def copy_state_from(self, other: "HandModel") -> None:
         """仅复制状态（编码器 raw/error、电机 error/state/伺服遥测），不覆盖 target_angle_deg、zero_raw"""
@@ -840,6 +838,18 @@ class HandModel:
         )
         self.has_calibration_warning_status = bool(
             getattr(other, "has_calibration_warning_status", False)
+        )
+        self.feedback_admission_sequence = int(
+            getattr(other, "feedback_admission_sequence", 0) or 0
+        )
+        self.feedback_admission_status = int(
+            getattr(other, "feedback_admission_status", 0) or 0
+        )
+        self.feedback_reject_reason = int(
+            getattr(other, "feedback_reject_reason", 0) or 0
+        )
+        self.has_feedback_admission_status = bool(
+            getattr(other, "has_feedback_admission_status", False)
         )
         self.can_link_online = bool(getattr(other, "can_link_online", False))
         self.has_fault_status_data = bool(getattr(other, "has_fault_status_data", False))

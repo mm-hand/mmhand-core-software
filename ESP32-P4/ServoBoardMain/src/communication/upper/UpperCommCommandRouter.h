@@ -14,7 +14,7 @@ int16_t clampServoAbsCommand(int32_t value);
 // 写入 21 个关节角目标，并切换到 joint PID 控制模式。
 void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count);
 // 清零关节目标，保留为历史单字节 'b' 命令兼容入口。
-void upperClearTargetAngles(TaskSharedData_t* sharedData);
+
 // 写入 22 个舵机直控目标，source 表示 TARGET/ABSOLUTE 等直控语义。
 bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
                             const int32_t* targets,
@@ -24,7 +24,7 @@ bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
 bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count);
 // 写入 tendon guard 配置，用于阻止指定关节继续释放到危险边界。
 // 缓存上位机下发的校准零点 raw 数据，供后续校准流程消费。
-void upperCacheCalibZeroRaw(TaskSharedData_t* sharedData, const float* values, uint8_t count);
+
 
 bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeMotorMask,

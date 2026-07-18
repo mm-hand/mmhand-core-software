@@ -34,7 +34,6 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                 const AutoCalibrationParams& params);
 
 bool startAutoCalibrationTask(TaskSharedData_t* sharedData);
-bool isAutoCalibrationFeedbackReady(TaskSharedData_t* sharedData);
 void autoCalibrationTask(void* parameter);
 
 #endif // AUTO_CALIBRATION_TASK_H

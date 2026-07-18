@@ -33,9 +33,9 @@
 #define CMD_START 0xCC
 #define CMD_STOP 0xCD
 #define CMD_RESET 0xCE
-#define CMD_CALIB_DATA 0xCF
+
 #define CMD_MOTOR_POS 0xD0
-#define CMD_SENSOR_STREAM_MODE 0xD1
+
 #define CMD_MOTOR_POS_SWEEP 0xD2
 #define CMD_MOTOR_POS_ABS 0xD3
 #define CMD_MOTOR_POS_ABS_ONE 0xDE
@@ -52,7 +52,7 @@
 #define CMD_LOCAL_TEST_PARAMS 0xE1
 #define CMD_LOCAL_TEST_START 0xE2
 #define CMD_LOCAL_TEST_STOP 0xE3
-#define CMD_SIDE_SWAY_ADJUST 0xE4
+
 #define CMD_CLEAR_CALIBRATION 0xE5
 #define CMD_MANUAL_ENCODER_REFERENCE 0xE6
 #define CMD_MANUAL_ENCODER_QUERY 0xE7
@@ -72,8 +72,8 @@
 #define MANUAL_SAVE_STATUS_OK 1
 #define MANUAL_SAVE_STATUS_FAILED 2
 
-#define SENSOR_STREAM_MODE_LEGACY_U16_WRAP 0
-#define SENSOR_STREAM_MODE_SIGNED_I16 1
+
+
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);

@@ -23,11 +23,6 @@ static const uint32_t kStateServoFeedbackTimeoutMs = 500;
 static const int32_t kReadyEnterOutsideToleranceCounts = 24;
 static const int32_t kReadyExitOutsideToleranceCounts = 48;
 static const uint8_t kCalibrationAckRepeatCount = 20;
-#ifndef BOOT_AUTO_CALIBRATION_ENABLE
-#define BOOT_AUTO_CALIBRATION_ENABLE 0
-#endif
-static const uint32_t kBootAutoCalibrationDelayMs = 1500;
-
 static uint32_t collectSystemFaults(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData);
 static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData);
@@ -210,21 +205,22 @@ static void resetCommandState(TaskSharedData_t* sharedData)
     }
 }
 
-static void setCommandModeJoint(TaskSharedData_t* sharedData)
+static bool setCommandModeJoint(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
-        return;
+        return false;
     }
 
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
+        return false;
     }
     sharedData->control_mode = CONTROL_MODE_JOINT;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     if (lock) {
         xSemaphoreGive(lock);
     }
+    return true;
 }
 
 static void setCommandModeDirect(TaskSharedData_t* sharedData)
@@ -390,6 +386,21 @@ static void resetServoTargetQueue(TaskSharedData_t* sharedData)
     if (sharedData && sharedData->servoTargetQueue) {
         xQueueReset(sharedData->servoTargetQueue);
     }
+}
+
+static void setFeedbackAdmissionResult(TaskSharedData_t* sharedData,
+                                       uint32_t requestSequence,
+                                       uint8_t status,
+                                       uint8_t rejectReason)
+{
+    if (!sharedData || requestSequence == 0) {
+        return;
+    }
+    if (sharedAtomicLoad(&sharedData->feedback_admission_sequence) != requestSequence) {
+        return;
+    }
+    sharedAtomicStore(&sharedData->feedback_admission_status, status);
+    sharedAtomicStore(&sharedData->feedback_reject_reason, rejectReason);
 }
 
 static void requestServoEmergencyTorqueOff(TaskSharedData_t* sharedData)
@@ -1084,30 +1095,54 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
         case SYSTEM_EVENT_RUN_FEEDBACK:
             if (!manualReferenceGateReady(sharedData)) {
                 logManualReferenceReject(sharedData, "RUN_FEEDBACK");
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_MANUAL_REFERENCE);
                 break;
             }
             if (!canAcceptRunFeedback(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
                               (unsigned)sharedData->system_state);
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_STATE);
                 break;
             }
             if (!activeJointsInControlWorkspace(sharedData)) {
                 FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: feedback gate changed");
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_WORKSPACE);
                 break;
             }
             if (!activeMotorsMultiTurnKnown(sharedData)) {
                 logMultiTurnUnknownReject(sharedData, "RUN_FEEDBACK");
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_MULTITURN);
                 break;
             }
             if (!activeMotorsAbsLimitsCalibrated(sharedData)) {
                 FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: active joints are not calibrated");
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_ABS_LIMIT);
+                break;
+            }
+            if (!setCommandModeJoint(sharedData)) {
+                FW_LOG_INFO_PRINTLN("[STATE] reject RUN_FEEDBACK: command mode mutex busy");
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_MODE_SWITCH);
                 break;
             }
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
             sharedData->control_enabled = 1;
-            setCommandModeJoint(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_RUN_FEEDBACK);
+            setFeedbackAdmissionResult(sharedData, event.token,
+                                       FEEDBACK_ADMISSION_ACCEPTED,
+                                       FEEDBACK_REJECT_NONE);
             break;
 
         case SYSTEM_EVENT_RUN_DIRECT_DONE:
@@ -1476,9 +1511,9 @@ void stateMachineTask(void* parameter)
     }
 
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
-    bool bootAutoCalibrationRequested = false;
+
     uint32_t handledEmergencyStopToken = 0;
-    const uint32_t bootStateBeginMs = millis();
+
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t periodTicks = pdMS_TO_TICKS(10);
 
@@ -1503,19 +1538,6 @@ void stateMachineTask(void* parameter)
 
         const uint32_t faults = collectSystemFaults(sharedData);
         sharedAtomicStore(&sharedData->system_fault_bitmap, faults);
-
-#if BOOT_AUTO_CALIBRATION_ENABLE
-        if (!bootAutoCalibrationRequested &&
-            sharedData->system_state == SYSTEM_STATE_IDLE &&
-            sharedData->control_enabled == 0 &&
-            sharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE &&
-            (uint32_t)(millis() - bootStateBeginMs) >= kBootAutoCalibrationDelayMs &&
-            isAutoCalibrationFeedbackReady(sharedData)) {
-            bootAutoCalibrationRequested = true;
-            FW_LOG_INFO_PRINTLN("[STATE] boot feedback ready; posting AUTO CALIBRATE");
-            postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-        }
-#endif
 
         const uint32_t blockingFaults =
             blockingFaultsForState(sharedData->system_state, faults);

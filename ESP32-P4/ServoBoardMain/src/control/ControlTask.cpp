@@ -16,14 +16,6 @@
 #include "ControlSolver.h"
 #include "DualTendonControl.h"
 
-#ifndef SOLVER_DIAG_LOG_ENABLE
-#define SOLVER_DIAG_LOG_ENABLE 0
-#endif
-
-#ifndef FEEDBACK_SERIAL_DEBUG_ENABLE
-#define FEEDBACK_SERIAL_DEBUG_ENABLE 0
-#endif
-
 static ControlSolver g_controlSolver;
 static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
 static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
@@ -31,11 +23,9 @@ static uint32_t g_dualReleaseAnchorValidBitmap = 0;
 
 static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
-
-static const uint8_t kDebugJointIndices[] = {0,1,2,3};
+static const uint8_t kDebugJointIndices[] = {0, 1, 2, 3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
-static const uint32_t kFeedbackSerialDebugIntervalMs = 100;
 
 static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
@@ -511,10 +501,6 @@ void controlTask(void* parameter)
     memset(&commandSnapshot, 0, sizeof(commandSnapshot));
     readControlCommandSnapshot(sharedData, &commandSnapshot);
 
-#if SOLVER_DIAG_LOG_ENABLE
-    uint32_t lastDiagLogMs = 0;
-#endif
-
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
     bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
@@ -537,7 +523,6 @@ void controlTask(void* parameter)
     uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
     bool sineTestActive = false;
     uint32_t sineTestStartMs = 0;
-    uint32_t lastFeedbackSerialDebugMs = 0;
 
     while (1)
     {
@@ -656,16 +641,6 @@ void controlTask(void* parameter)
         }
 
         sharedAtomicStore(&sharedData->joint16_dual_feedback_fault, (uint8_t)0);
-
-#if SOLVER_DIAG_LOG_ENABLE
-        const uint32_t nowMs = millis();
-        if (nowMs - lastDiagLogMs >= 500) {
-            lastDiagLogMs = nowMs;
-            FW_LOG_INFO_PRINTF("[Solver] j16 qRef=%.2f qFb=%.2f\r\n",
-                          (double)localTargets[kThumbBaseJointIndex],
-                          (double)magAngles[kThumbBaseJointIndex]);
-        }
-#endif
 
         bool canBusOnline = false;
         if (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE && sensorData.isValid) {
@@ -1121,36 +1096,6 @@ void controlTask(void* parameter)
                 }
             }
         }
-
-#if FEEDBACK_SERIAL_DEBUG_ENABLE
-        if (feedbackRunningState && commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
-            const uint32_t nowMs = millis();
-            if ((uint32_t)(nowMs - lastFeedbackSerialDebugMs) >= kFeedbackSerialDebugIntervalMs) {
-                lastFeedbackSerialDebugMs = nowMs;
-                for (uint8_t di = 0; di < kDebugJointCount; di++) {
-                    const uint8_t jointIndex = kDebugJointIndices[di];
-                    const bool jointActive =
-                        (sharedAtomicLoad(&sharedData->active_joint_mask) &
-                         (1UL << jointIndex)) != 0;
-                    if (!jointActive) {
-                        continue;
-                    }
-                    FW_LOG_INFO_PRINTF(
-                        "[FB DBG] J%02u valid=%u tgt=%.3f act=%.3f l1=%.3f l2act=%ld l2out=%.3f cmd=%d curAbs=%ld cmdValid=%u\r\n",
-                        jointIndex,
-                        (unsigned)(mappedData.validFlags[jointIndex] != 0 ? 1 : 0),
-                        localTargets[jointIndex],
-                        magAngles[jointIndex],
-                        g_controlSolver.getPidOutput(jointIndex, 0),
-                        (long)absolutePositionTendon[jointIndex],
-                        g_controlSolver.getPidOutput(jointIndex, 1),
-                        (int)jointCmdPos[jointIndex],
-                        (long)absolutePositionRaw[jointIndex],
-                        (unsigned)jointCmdValid[jointIndex]);
-                }
-            }
-        }
-#endif
 
         const uint8_t publishOwner =
             sharedAtomicLoad(&sharedData->servo_target_owner);

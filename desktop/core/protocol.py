@@ -60,9 +60,7 @@ CMD_ANGLE_CTRL = 0xCB
 CMD_START = 0xCC
 CMD_STOP = 0xCD
 CMD_RESET = 0xCE
-CMD_CALIB_DATA = 0xCF
 CMD_MOTOR_POS = 0xD0
-CMD_SENSOR_STREAM_MODE = 0xD1
 CMD_MOTOR_POS_SWEEP = 0xD2
 CMD_MOTOR_POS_ABS = 0xD3
 CMD_MOTOR_POS_ABS_ONE = 0xDE
@@ -85,8 +83,6 @@ CMD_MANUAL_ENCODER_QUERY = 0xE7
 CMD_MANUAL_ENCODER_SINGLE = 0xE8
 CMD_ROPE_INIT = 0xE9
 
-SENSOR_STREAM_MODE_LEGACY_U16_WRAP = 0
-SENSOR_STREAM_MODE_SIGNED_I16 = 1
 
 PROTO_ACK_STATUS_OK = 0
 PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
@@ -122,6 +118,22 @@ ROPE_INIT_REASON_TARGET_PUBLISH_FAILED = 7
 ROPE_INIT_REASON_SYSTEM_FAULT = 8
 ROPE_INIT_REASON_CANCELLED = 9
 ROPE_INIT_REASON_TASK_START_FAILED = 10
+
+# RUN_FEEDBACK admission is asynchronous: the command ACK only means that P4
+# queued the request.  These fields report the eventual StateMachine result.
+FEEDBACK_ADMISSION_IDLE = 0
+FEEDBACK_ADMISSION_PENDING = 1
+FEEDBACK_ADMISSION_ACCEPTED = 2
+FEEDBACK_ADMISSION_REJECTED = 3
+
+FEEDBACK_REJECT_NONE = 0
+FEEDBACK_REJECT_MANUAL_REFERENCE = 1
+FEEDBACK_REJECT_STATE = 2
+FEEDBACK_REJECT_WORKSPACE = 3
+FEEDBACK_REJECT_MULTITURN = 4
+FEEDBACK_REJECT_ABS_LIMIT = 5
+FEEDBACK_REJECT_MODE_SWITCH = 6
+FEEDBACK_REJECT_EVENT_QUEUE = 7
 
 SYSTEM_FAULT_CAN_OFFLINE = 1 << 0
 SYSTEM_FAULT_JOINT16_DUAL = 1 << 1
@@ -335,6 +347,17 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         ]
         if has_calibration_warning_status else [0] * ENCODER_COUNT
     )
+    has_feedback_admission_status = len(payload) >= 154
+    feedback_admission_sequence = (
+        struct.unpack(">I", payload[148:152])[0]
+        if has_feedback_admission_status else 0
+    )
+    feedback_admission_status = (
+        payload[152] if has_feedback_admission_status else FEEDBACK_ADMISSION_IDLE
+    )
+    feedback_reject_reason = (
+        payload[153] if has_feedback_admission_status else FEEDBACK_REJECT_NONE
+    )
     return (
         system_state,
         control_enabled,
@@ -379,6 +402,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         applied_direct_generation,
         direct_reject_reason,
         has_motion_result_status,
+        feedback_admission_sequence,
+        feedback_admission_status,
+        feedback_reject_reason,
+        has_feedback_admission_status,
         calibration_warning_bitmap,
         calibration_auto_min_offset_counts,
         has_calibration_warning_status,
@@ -950,14 +977,6 @@ def build_reset_cmd() -> bytes:
     return _build_command_frame(CMD_RESET)
 
 
-def build_calib_data_cmd(zero_encoder_raw: List[int]) -> bytes:
-    if len(zero_encoder_raw) != ENCODER_COUNT:
-        raise ValueError(f"need exactly {ENCODER_COUNT} encoder zero values")
-    vals = [float(v) for v in zero_encoder_raw]
-    payload = struct.pack(f"<{ENCODER_COUNT}f", *vals)
-    return _build_command_frame(CMD_CALIB_DATA, payload)
-
-
 def build_active_scope_cmd(active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bytes:
     payload = struct.pack(
         ">IIB",
@@ -1272,13 +1291,6 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
         v = MOTOR_ABS_CMD_MAX
     payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
-
-
-def build_stream_mode_cmd(mode: int) -> bytes:
-    mode_int = int(mode)
-    if mode_int not in (SENSOR_STREAM_MODE_LEGACY_U16_WRAP, SENSOR_STREAM_MODE_SIGNED_I16):
-        raise ValueError("unsupported sensor stream mode")
-    return _build_command_frame(CMD_SENSOR_STREAM_MODE, bytes([mode_int & 0xFF]))
 
 
 def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:

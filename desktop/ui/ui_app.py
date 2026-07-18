@@ -52,6 +52,14 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
     CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT,
     ENCODER_COUNT,
+    FEEDBACK_ADMISSION_REJECTED,
+    FEEDBACK_REJECT_ABS_LIMIT,
+    FEEDBACK_REJECT_EVENT_QUEUE,
+    FEEDBACK_REJECT_MANUAL_REFERENCE,
+    FEEDBACK_REJECT_MODE_SWITCH,
+    FEEDBACK_REJECT_MULTITURN,
+    FEEDBACK_REJECT_STATE,
+    FEEDBACK_REJECT_WORKSPACE,
     MOTOR_COUNT,
     VALID_MOTOR_MASK,
     SYSTEM_FAULT_CALIBRATION,
@@ -1166,6 +1174,11 @@ class HandGUI(QtWidgets.QMainWindow):
         elif "OVERLOAD" in sys_faults:
             lines.append("Overload motors: unknown")
 
+        feedback_reject = self._feedback_admission_reject_text(state)
+        if feedback_reject:
+            text = f"{text} | FF REJECTED"
+            lines.append(f"Feedback admission: rejected ({feedback_reject})")
+
         summary = self._build_fault_summary(state)
         if summary.get("active"):
             body = self._fault_body_text(summary)
@@ -1174,6 +1187,24 @@ class HandGUI(QtWidgets.QMainWindow):
                 lines.append(body)
 
         return text, "\n".join(lines)
+
+    @staticmethod
+    def _feedback_admission_reject_text(state: HandModel) -> str:
+        if not bool(getattr(state, "has_feedback_admission_status", False)):
+            return ""
+        if int(getattr(state, "feedback_admission_status", 0) or 0) != FEEDBACK_ADMISSION_REJECTED:
+            return ""
+        reason = int(getattr(state, "feedback_reject_reason", 0) or 0)
+        names = {
+            FEEDBACK_REJECT_MANUAL_REFERENCE: "Manual reference missing",
+            FEEDBACK_REJECT_STATE: "state does not allow feedback",
+            FEEDBACK_REJECT_WORKSPACE: "active joint is outside READY workspace",
+            FEEDBACK_REJECT_MULTITURN: "multi-turn position unknown",
+            FEEDBACK_REJECT_ABS_LIMIT: "active joint calibration is invalid",
+            FEEDBACK_REJECT_MODE_SWITCH: "command mode switch is busy",
+            FEEDBACK_REJECT_EVENT_QUEUE: "state event queue is full",
+        }
+        return names.get(reason, f"unknown reason {reason}")
 
     def _turn_known_status(self, state: HandModel, system_status_fresh: Optional[bool] = None) -> tuple[str, bool, str]:
         if system_status_fresh is None:
