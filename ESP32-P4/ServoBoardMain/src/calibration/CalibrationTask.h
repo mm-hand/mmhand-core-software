@@ -22,43 +22,44 @@ static inline bool calibrationStatusHasUsableResult(uint8_t status)
 // calibration remains usable and must not enter the fault path.
 static const int32_t kCalibrationAutoMinAssemblyWarnCounts = 350;
 static const int32_t kCalibrationAutoMaxShortfallWarnCounts = 300;
-static const int32_t kCalibrationAutoSpanWarnMinCounts = 2300;
-static const int32_t kCalibrationAutoSpanWarnMaxCounts = 6300;
+static const int32_t kCalibrationUrdfManualSpanWarnCounts = 360;
 
 static const uint8_t CALIB_WARN_NONE = 0x00;
 static const uint8_t CALIB_WARN_AUTO_MIN_OFFSET = 0x01;
 static const uint8_t CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02;
-static const uint8_t CALIB_WARN_AUTO_SPAN_RANGE = 0x04;
+static const uint8_t CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH = 0x04;
+// Keep the old name as a source-compatible alias. Wire bit 0x04 now means
+// that the theoretical URDF encoder span differs from Manual Span.
+static const uint8_t CALIB_WARN_AUTO_SPAN_RANGE =
+    CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH;
 
 static constexpr uint8_t calibrationAssemblyWarningReasonForMetrics(
     int32_t autoMinOffsetCounts,
     int32_t autoMaxShortfallCounts,
-    int32_t autoSpanCounts)
+    int32_t urdfManualSpanDifferenceCounts)
 {
     return
         (autoMinOffsetCounts >= kCalibrationAutoMinAssemblyWarnCounts
              ? CALIB_WARN_AUTO_MIN_OFFSET : CALIB_WARN_NONE) |
         (autoMaxShortfallCounts >= kCalibrationAutoMaxShortfallWarnCounts
              ? CALIB_WARN_AUTO_MAX_SHORTFALL : CALIB_WARN_NONE) |
-        (autoSpanCounts < kCalibrationAutoSpanWarnMinCounts ||
-         autoSpanCounts > kCalibrationAutoSpanWarnMaxCounts
-             ? CALIB_WARN_AUTO_SPAN_RANGE : CALIB_WARN_NONE);
+        (urdfManualSpanDifferenceCounts >
+                 kCalibrationUrdfManualSpanWarnCounts
+             ? CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH : CALIB_WARN_NONE);
 }
 
-static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 2300) ==
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 360) ==
                   CALIB_WARN_NONE,
               "Assembly warning lower boundaries changed");
-static_assert(calibrationAssemblyWarningReasonForMetrics(350, 299, 2300) ==
+static_assert(calibrationAssemblyWarningReasonForMetrics(350, 299, 360) ==
                   CALIB_WARN_AUTO_MIN_OFFSET,
               "Auto Min warning threshold must be inclusive");
-static_assert(calibrationAssemblyWarningReasonForMetrics(349, 300, 6300) ==
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 300, 360) ==
                   CALIB_WARN_AUTO_MAX_SHORTFALL,
               "Auto Max warning threshold must be inclusive");
-static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 2299) ==
-                  CALIB_WARN_AUTO_SPAN_RANGE &&
-              calibrationAssemblyWarningReasonForMetrics(349, 299, 6301) ==
-                  CALIB_WARN_AUTO_SPAN_RANGE,
-              "Auto Span warning range must remain 2300..6300 inclusive");
+static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 361) ==
+                  CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
+              "URDF/Manual Span warning must trigger only above 360 counts");
 
 #define DUAL_TENDON_LUT_ACTUATOR_COUNT 2
 #define DUAL_TENDON_LUT_MAX_SAMPLES 24
@@ -97,6 +98,9 @@ struct CalibrationAssemblyWarningInfo {
     int16_t autoMinOffsetCounts;
     int16_t autoMaxShortfallCounts;
     uint16_t autoSpanCounts;
+    uint16_t manualSpanCounts;
+    uint16_t urdfSpanCounts;
+    uint16_t spanDifferenceCounts;
 };
 
 // Per-joint calibration result:

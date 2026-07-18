@@ -76,21 +76,18 @@ def _run_algorithm_gui(
 ) -> None:
     backend.reset()
     try:
-        from desktop.algorithm.example_algorithm import run as algorithm_run
+        from desktop.algorithm.example_algorithm import PoseCycleController
     except ImportError:
-        print("desktop.algorithm.example_algorithm module not found. Please implement run(backend, stop_event=None).")
+        print("desktop.algorithm.example_algorithm module not found. Please implement PoseCycleController.")
         return
-    if not callable(algorithm_run):
-        print("example_algorithm.run must be callable: run(backend, stop_event=None).")
-        return
+    algorithm_controller = PoseCycleController(backend)
 
-    stop_event = threading.Event()
+    def set_algorithm_enabled(enabled: bool) -> bool:
+        if enabled:
+            return algorithm_controller.start()
+        algorithm_controller.stop("Algorithm Enabled unchecked")
+        return True
 
-    def run_alg() -> None:
-        algorithm_run(backend, stop_event=stop_event)
-
-    alg_thread = threading.Thread(target=run_alg, daemon=False)
-    alg_thread.start()
     from desktop.ui.ui_app import HandGUI
 
     gui_win = HandGUI(
@@ -98,13 +95,14 @@ def _run_algorithm_gui(
         title_suffix="Algorithm",
         current_port=port,
         current_mode="Algorithm",
-        on_close_extra=lambda: stop_event.set(),
+        on_close_extra=algorithm_controller.shutdown,
+        algorithm_control_callback=set_algorithm_enabled,
+        algorithm_running_callback=algorithm_controller.is_running,
         pose_generate=POSE_DISPLAY_FROM_TEXT,
         tactile_port=tactile_port,
     )
     gui_win.run()
-    stop_event.set()
-    alg_thread.join(timeout=3.0)
+    algorithm_controller.shutdown()
 
 
 def _make_ros2_bridge(

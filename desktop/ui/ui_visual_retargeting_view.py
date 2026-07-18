@@ -44,22 +44,40 @@ class _CameraScanRunner:
             import cv2
             from desktop.teleop.Posture.camera_mocap import open_camera
 
-            for idx in range(self.max_index + 1):
-                cap = None
+            # Probing absent numeric indices is expected on Windows. Silence only
+            # this scan so an unavailable Camera 2..8 does not look like the
+            # selected camera has failed to start.
+            logging = getattr(getattr(cv2, "utils", None), "logging", None)
+            old_log_level = None
+            if logging is not None:
                 try:
-                    cap = open_camera(idx, cv2)
-                    if cap is not None and cap.isOpened():
-                        ok, _frame = cap.read()
-                        if ok:
-                            cameras.append(idx)
+                    old_log_level = logging.getLogLevel()
+                    logging.setLogLevel(logging.LOG_LEVEL_SILENT)
                 except Exception:
-                    pass
-                finally:
-                    if cap is not None:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
+                    old_log_level = None
+            try:
+                for idx in range(self.max_index + 1):
+                    cap = None
+                    try:
+                        cap = open_camera(idx, cv2)
+                        if cap is not None and cap.isOpened():
+                            ok, _frame = cap.read()
+                            if ok:
+                                cameras.append(idx)
+                    except Exception:
+                        pass
+                    finally:
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
+            finally:
+                if logging is not None and old_log_level is not None:
+                    try:
+                        logging.setLogLevel(old_log_level)
+                    except Exception:
+                        pass
         except Exception as exc:
             self.bridge.status_changed.emit(f"Camera scan failed: {exc}")
         self.bridge.cameras_ready.emit(cameras)
@@ -278,9 +296,15 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self.stop_send_btn.setEnabled(self._send_targets_enabled)
 
     def start_sending_targets(self) -> None:
+        if self._runner is None or not self._runner.is_running():
+            self._on_status_changed("Teleop send blocked: start camera tracking first")
+            return
+        if not self.context.is_comm_connected():
+            self._on_status_changed("Teleop send blocked: connect the P4 serial port first")
+            return
         self._set_send_targets_enabled(True)
         self.context.emit_action("Visual Retargeting send ON")
-        self._on_status_changed("Visual Retargeting send enabled")
+        self._on_status_changed("Visual Retargeting send enabled; waiting for a tracked hand")
 
     def stop_sending_targets(self) -> None:
         self._set_send_targets_enabled(False)
@@ -322,9 +346,16 @@ class VisualRetargetingView(QtWidgets.QWidget):
         self.camera_combo.blockSignals(False)
         self.camera_combo.setEnabled(True)
         self.refresh_btn.setEnabled(True)
-        self._on_status_changed(f"Found {len(cameras)} camera(s)")
+        if cameras:
+            labels = ", ".join(f"Camera {int(camera_id)}" for camera_id in cameras)
+            self._on_status_changed(f"Found {len(cameras)} camera(s): {labels}")
+        else:
+            self._on_status_changed("No camera found: check USB connection, privacy permission, or camera occupancy")
 
     def _on_runner_stopped(self) -> None:
+        if self._send_targets_enabled:
+            self._set_send_targets_enabled(False)
+            self.context.emit_action("Visual Retargeting send OFF: camera stopped")
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.refresh_btn.setEnabled(True)
@@ -385,6 +416,11 @@ class VisualRetargetingView(QtWidgets.QWidget):
             text = f"{self._last_targets[idx]:.2f}" if idx < len(self._last_targets) else "-"
             self.angle_table.item(idx, 1).setText(text)
         if self._send_targets_enabled:
+            if not self.context.is_comm_connected():
+                self._set_send_targets_enabled(False)
+                self.context.emit_action("Visual Retargeting send OFF: P4 serial disconnected")
+                self._on_status_changed("Teleop send stopped: P4 serial port disconnected")
+                return
             selected_targets, missing_feedback = self._targets_for_selected_joints(self._last_targets)
             if selected_targets is None:
                 if missing_feedback:

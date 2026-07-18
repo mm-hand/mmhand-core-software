@@ -1,0 +1,55 @@
+# TopoOptimizer configuration for Wuji Hand 1.
+
+optimizer:
+  type: "TopoOptimizer"
+  urdf_path: "../../wuji-description/hand/body/urdf/{hand_side}.urdf"
+  link_naming:
+    prefix: "{hand_side}_"
+    palm: "palm_link"
+    fingers: [finger1, finger2, finger3, finger4, finger5]
+    link1: "{finger}_link1"
+    link2: "{finger}_link2"
+    pip: "{finger}_link3"
+    dip: "{finger}_link4"
+    tip: "{finger}_tip_link"
+
+retarget:
+  lp_alpha: 0.2
+  norm_delta: 0.04
+
+  mediapipe_rotation_by_hand:
+    left:
+      x: 5.0
+      y: -5.0
+      z: 10.0
+    right:
+      x: -5.0
+      y: -5.0
+      z: -10.0
+
+  topo:
+    lambda_warm: 1.0
+    lambda_lap: 150.0
+    lambda_pose: 0.1
+    lambda_smooth: 0.01
+    first_frame_stage1_maxeval: 50
+    later_frame_stage1_maxeval: 1
+    first_frame_stage2_maxeval: 80
+    later_frame_stage2_maxeval: 10
+    nlopt_ftol_abs: 1.0e-4
+    edge_eps: 1.0e-8
+    topo_distance_scale: 50.0
+    robot_keypoint_backoff_m: 0.005
+    # Thumb-free hack layered on top of the base topo objective.
+    thumb_free: true
+    lambda_thumb_rel: 5.0
+    thumb_rel_full_rad: 0.35
+    thumb_rel_off_rad: 0.80
+    thumb_rel_skip_proximal: 2
+    lambda_antirev: 20.0
+
+render:
+  camera:
+    azimuth: 135
+    elevation: -20
+    distance: 0.5

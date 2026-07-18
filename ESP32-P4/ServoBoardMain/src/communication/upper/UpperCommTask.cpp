@@ -512,6 +512,12 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
         buffer, &idx, warningInfo.autoMaxShortfallCounts);
     appendU16BigEndian(
         buffer, &idx, warningInfo.autoSpanCounts);
+    appendU16BigEndian(
+        buffer, &idx, warningInfo.manualSpanCounts);
+    appendU16BigEndian(
+        buffer, &idx, warningInfo.urdfSpanCounts);
+    appendU16BigEndian(
+        buffer, &idx, warningInfo.spanDifferenceCounts);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);

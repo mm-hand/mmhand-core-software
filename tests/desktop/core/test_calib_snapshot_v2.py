@@ -6,7 +6,7 @@ from desktop.core.angle_mapping import urdf_manual_scaled_mapping_metadata
 from desktop.core.protocol import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
-    CALIB_WARN_AUTO_SPAN_RANGE,
+    CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     CMD_CALIB_LOAD_JOINT,
     DUAL_TENDON_LUT_ACTUATOR_COUNT,
     DUAL_TENDON_LUT_MAX_SAMPLES,
@@ -119,9 +119,9 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
     reason = (
         CALIB_WARN_AUTO_MIN_OFFSET |
         CALIB_WARN_AUTO_MAX_SHORTFALL |
-        CALIB_WARN_AUTO_SPAN_RANGE
+        CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH
     )
-    payload.extend(struct.pack(">BhhH", reason, 412, 326, 2184))
+    payload.extend(struct.pack(">BhhHHHH", reason, 412, 326, 2184, 3400, 2957, 443))
 
     parsed = parse_joint_calib_snapshot_packet(bytes(payload))
 
@@ -131,6 +131,10 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
     assert parsed["autoMinOffsetCounts"] == 412
     assert parsed["autoMaxShortfallCounts"] == 326
     assert parsed["assemblyAutoSpanCounts"] == 2184
+    assert parsed["assemblyManualSpanCounts"] == 3400
+    assert parsed["assemblyUrdfSpanCounts"] == 2957
+    assert parsed["assemblySpanDifferenceCounts"] == 443
+    assert parsed["hasAssemblySpanComparisonFields"] is True
 
 
 def test_direction_negative_v3_snapshot_requires_physical_raw_endpoints():

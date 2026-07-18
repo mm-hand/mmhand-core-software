@@ -100,7 +100,7 @@ class DeviceCheckView(QtWidgets.QWidget):
             "Manual Span",
             "Auto Min",
             "Auto Max",
-            "URDF Span",
+            "URDF Span (Enc)",
             "URDF Min",
             "Current Min",
             "URDF Max",
@@ -128,8 +128,15 @@ class DeviceCheckView(QtWidgets.QWidget):
             auto_max = self._make_item("-")
             spec = get_spec(joint)
             urdf_min_deg, urdf_max_deg = spec.urdf_range_deg
-            urdf_span = self._make_item(f"{urdf_max_deg - urdf_min_deg:.2f}")
-            urdf_span.setToolTip("Static mechanical angle span: URDF Max - URDF Min (deg)")
+            urdf_span_deg = urdf_max_deg - urdf_min_deg
+            urdf_span_counts = int(math.floor(
+                urdf_span_deg * ENCODER_RAW_MODULO / 360.0 + 0.5
+            ))
+            urdf_span = self._make_item(str(urdf_span_counts))
+            urdf_span.setToolTip(
+                f"Theoretical magnetic encoder span: {urdf_span_deg:.2f} deg "
+                f"x {ENCODER_RAW_MODULO}/360 = {urdf_span_counts} counts"
+            )
             urdf_min = self._make_item(f"{urdf_min_deg:.2f}")
             current_min = self._make_item("-")
             urdf_max = self._make_item(f"{urdf_max_deg:.2f}")

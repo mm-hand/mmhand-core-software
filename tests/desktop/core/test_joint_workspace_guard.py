@@ -59,6 +59,25 @@ def test_workspace_uses_dynamic_min_and_static_urdf_max():
     assert workspace.current_max_deg == pytest.approx(spec.urdf_range_deg[1])
     assert workspace.clamp(-1000.0) == pytest.approx(12.5)
     assert workspace.clamp(1000.0) == pytest.approx(spec.urdf_range_deg[1])
+    assert workspace.open_pose_target() == pytest.approx(17.5)
+
+
+def test_workspace_open_pose_target_clamps_at_urdf_max():
+    state = _ready_state(current_min=52.0)
+    version, urdf_crc = urdf_manual_scaled_mapping_metadata()
+    spec = get_spec(0)
+
+    workspace = resolve_joint_workspace_range(
+        state,
+        0,
+        spec.urdf_range_deg[0],
+        spec.urdf_range_deg[1],
+        version,
+        urdf_crc,
+    )
+
+    assert workspace.ready
+    assert workspace.open_pose_target() == pytest.approx(spec.urdf_range_deg[1])
 
 
 def test_workspace_rejects_manual_crc_mismatch():

@@ -44,6 +44,15 @@ class HandGuiContext:
     def emit_action(self, msg: str) -> None:
         self._app.emit_action(msg)
 
+    def set_algorithm_enabled(self, enabled: bool) -> bool:
+        return bool(self._app.set_algorithm_enabled(enabled))
+
+    def is_algorithm_running(self) -> bool:
+        return bool(self._app.is_algorithm_running())
+
+    def cancel_algorithm(self, reason: str = "stop requested") -> None:
+        self._app.cancel_algorithm(reason)
+
     def set_status(self, text: str) -> None:
         self._app._set_status(text)
 

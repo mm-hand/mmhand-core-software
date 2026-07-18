@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import math
 import platform
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -45,6 +47,30 @@ def _interval_from_fps(fps: float) -> float:
     return 0.0 if fps <= 0.0 else 1.0 / fps
 
 
+def _mediapipe_model_asset_path(model_path: Path) -> Path:
+    """Return a path MediaPipe's native loader can open on Windows.
+
+    Some MediaPipe Windows wheels fail to open a ``.task`` model when its
+    absolute path includes non-ASCII characters. Keep the repository asset in
+    place, but mirror it into the user's ASCII temporary cache for native use.
+    """
+    source = Path(model_path).resolve()
+    if str(source).isascii():
+        return source
+
+    cache_dir = Path(tempfile.gettempdir()) / "mmhand_mediapipe"
+    if not str(cache_dir).isascii():
+        raise RuntimeError(
+            "MediaPipe model path contains non-ASCII characters and no ASCII temporary path is available."
+        )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / source.name
+    source_stat = source.stat()
+    if not cached.exists() or cached.stat().st_size != source_stat.st_size:
+        shutil.copy2(source, cached)
+    return cached
+
+
 def open_camera(
     camera_id: int,
     cv2,
@@ -52,11 +78,15 @@ def open_camera(
     height: int = DEFAULT_CAMERA_HEIGHT,
     fps: float = DEFAULT_CAMERA_FPS,
 ):
-    """Open a camera with Windows-friendly backend fallbacks."""
+    """Open a camera with Windows-friendly backend fallbacks.
+
+    A failed probe returns ``None``.  In particular, do not fall back to
+    ``CAP_ANY`` on Windows: it may invoke vendor backends repeatedly for an
+    absent index and flood the console with misleading camera errors.
+    """
     backends = [
         getattr(cv2, "CAP_DSHOW", 700),
         getattr(cv2, "CAP_MSMF", 1400),
-        getattr(cv2, "CAP_ANY", 0),
     ]
     if platform.system().lower() != "windows":
         backends = [getattr(cv2, "CAP_ANY", 0)]
@@ -72,7 +102,7 @@ def open_camera(
             return cap
         cap.release()
 
-    return cv2.VideoCapture(camera_id)
+    return None
 
 
 def joint_angle_dict_to_encoder_degrees(joint_angles: dict[str, float]) -> list[float]:
@@ -137,6 +167,7 @@ def run_mocap_loop(
     urdf_path = Path(urdf_path)
     _emit_status(status_callback, "Loading MediaPipe hand model...")
     ensure_model_exists(model_path, MODEL_URL)
+    mediapipe_model_path = _mediapipe_model_asset_path(model_path)
 
     retargeter = None
     if retarget_enabled:
@@ -179,7 +210,7 @@ def run_mocap_loop(
             inference_in_flight = False
 
     options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(model_path)),
+        base_options=BaseOptions(model_asset_path=str(mediapipe_model_path)),
         running_mode=RunningMode.LIVE_STREAM,
         num_hands=num_hands,
         min_hand_detection_confidence=min_hand_detection_confidence,
@@ -189,8 +220,11 @@ def run_mocap_loop(
     )
 
     cap = open_camera(camera_id, cv2, width=int(camera_width), height=int(camera_height), fps=float(camera_fps))
-    if not cap.isOpened():
-        _emit_status(status_callback, f"Error: failed to open camera with id {camera_id}.")
+    if cap is None or not cap.isOpened():
+        _emit_status(
+            status_callback,
+            f"Camera {camera_id} unavailable. Refresh Cameras, then select a detected camera.",
+        )
         return 1
 
     stop_event = stop_event or threading.Event()

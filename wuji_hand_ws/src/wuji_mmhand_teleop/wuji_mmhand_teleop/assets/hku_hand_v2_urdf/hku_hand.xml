@@ -1,0 +1,159 @@
+<mujoco model="HKU Hand">
+  <compiler angle="radian" meshdir="./meshes/"/>
+
+  <asset>
+    <mesh name="base_link" content_type="model/stl" file="base_link.STL"/>
+    <mesh name="1-1_Link" content_type="model/stl" file="1-1_Link.STL"/>
+    <mesh name="1-2_Link" content_type="model/stl" file="1-2_Link.STL"/>
+    <mesh name="1-3_Link" content_type="model/stl" file="1-3_Link.STL"/>
+    <mesh name="1-4_Link" content_type="model/stl" file="1-4_Link.STL"/>
+    <mesh name="2-1_Link" content_type="model/stl" file="2-1_Link.STL"/>
+    <mesh name="2-2_Link" content_type="model/stl" file="2-2_Link.STL"/>
+    <mesh name="2-3_Link" content_type="model/stl" file="2-3_Link.STL"/>
+    <mesh name="2-4_Link" content_type="model/stl" file="2-4_Link.STL"/>
+    <mesh name="3-1_Link" content_type="model/stl" file="3-1_Link.STL"/>
+    <mesh name="3-2_Link" content_type="model/stl" file="3-2_Link.STL"/>
+    <mesh name="3-3_Link" content_type="model/stl" file="3-3_Link.STL"/>
+    <mesh name="3-4_Link" content_type="model/stl" file="3-4_Link.STL"/>
+    <mesh name="4-1_Link" content_type="model/stl" file="4-1_Link.STL"/>
+    <mesh name="4-2_Link" content_type="model/stl" file="4-2_Link.STL"/>
+    <mesh name="4-3_Link" content_type="model/stl" file="4-3_Link.STL"/>
+    <mesh name="4-4_Link" content_type="model/stl" file="4-4_Link.STL"/>
+    <mesh name="5-1_Link" content_type="model/stl" file="5-1_Link.STL"/>
+    <mesh name="5-2_Link" content_type="model/stl" file="5-2_Link.STL"/>
+    <mesh name="5-3_Link" content_type="model/stl" file="5-3_Link.STL"/>
+    <mesh name="5-4_Link" content_type="model/stl" file="5-4_Link.STL"/>
+    <mesh name="5-5_Link" content_type="model/stl" file="5-5_Link.STL"/>
+  </asset>
+
+  <worldbody>
+    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
+    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
+    <body name="1-1_Link" pos="0.097499 -0.025791 0.0074875">
+      <inertial pos="0.00666469 2.43312e-05 -0.00122359" quat="0.467688 0.527327 0.539243 0.460881" mass="0.0023023" diaginertia="1.1577e-07 9.93033e-08 6.6012e-08"/>
+      <joint name="1-1" pos="0 0 0" axis="0 0 1" range="-0.8727 0.5236"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="1-1_Link"/>
+      <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="1-1_Link"/>
+      <body name="1-2_Link" pos="0.012725 0 -0.0014425" quat="0.707029 -0.707032 -0.0103852 -0.0103853">
+        <inertial pos="0.0152742 -0.00198875 0.000229799" quat="0.412812 0.5608 0.440067 0.566949" mass="0.00692845" diaginertia="6.37703e-07 6.23146e-07 1.4913e-07"/>
+        <joint name="1-2" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="1-2_Link"/>
+        <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="1-2_Link"/>
+        <body name="1-3_Link" pos="0.035 0 0.0001495" quat="0.999922 0 0 0.0124532">
+          <inertial pos="0.0135681 -0.00233323 -0.000158142" quat="0.58998 0.389036 0.58854 0.392678" mass="0.00699314" diaginertia="7.45987e-07 7.22226e-07 1.80145e-07"/>
+          <joint name="1-3" pos="0 0 0" axis="0 0 1" range="0 1.4835"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="1-3_Link"/>
+          <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="1-3_Link"/>
+          <body name="1-4_Link" pos="0.028 0 -0.00029976" quat="1 0 0 -0.000343165">
+            <inertial pos="0.0153967 0.000257997 0.000356415" quat="0.498879 0.49353 0.500335 0.507161" mass="0.00512412" diaginertia="4.21289e-07 3.83024e-07 1.13778e-07"/>
+            <joint name="1-4" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="1-4_Link"/>
+            <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="1-4_Link"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="2-1_Link" pos="0.1025 -0.0017912 0.0074875">
+      <inertial pos="0.00666469 2.43312e-05 -0.00122359" quat="0.467688 0.527327 0.539243 0.460881" mass="0.0023023" diaginertia="1.1577e-07 9.93033e-08 6.6012e-08"/>
+      <joint name="2-1" pos="0 0 0" axis="0 0 1" range="-0.8727 0.8727"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="2-1_Link"/>
+      <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="2-1_Link"/>
+      <body name="2-2_Link" pos="0.012725 0 -0.0014425" quat="0.707105 -0.707108 0 0">
+        <inertial pos="0.015016 -0.00236468 0.000505831" quat="0.414745 0.572046 0.425214 0.565635" mass="0.00712442" diaginertia="6.44373e-07 6.30803e-07 1.5035e-07"/>
+        <joint name="2-2" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="2-2_Link"/>
+        <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="2-2_Link"/>
+        <body name="2-3_Link" pos="0.034985 -0.0010281 0.0001495">
+          <inertial pos="0.0135728 -0.00231653 0.000161557" quat="0.596306 0.38204 0.593193 0.382866" mass="0.0072524" diaginertia="7.7248e-07 7.49926e-07 1.81959e-07"/>
+          <joint name="2-3" pos="0 0 0" axis="0 0 1" range="0 1.4835"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="2-3_Link"/>
+          <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="2-3_Link"/>
+          <body name="2-4_Link" pos="0.028 -0.00012529 -0.00029976">
+            <inertial pos="0.0153978 0.000178622 0.000356415" quat="0.500186 0.494818 0.49906 0.505874" mass="0.00512412" diaginertia="4.21289e-07 3.83024e-07 1.13778e-07"/>
+            <joint name="2-4" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="2-4_Link"/>
+            <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="2-4_Link"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="3-1_Link" pos="0.097499 0.022209 0.0074875">
+      <inertial pos="0.00666469 2.43312e-05 -0.00122359" quat="0.467688 0.527327 0.539243 0.460881" mass="0.0023023" diaginertia="1.1577e-07 9.93033e-08 6.6012e-08"/>
+      <joint name="3-1" pos="0 0 0" axis="0 0 1" range="-0.5236 1.1345"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="3-1_Link"/>
+      <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="3-1_Link"/>
+      <body name="3-2_Link" pos="0.012725 0 -0.0014425" quat="0.707105 -0.707108 0 0">
+        <inertial pos="0.0152848 -0.00190554 0.0002298" quat="0.411267 0.559599 0.441592 0.568071" mass="0.00692845" diaginertia="6.37703e-07 6.23146e-07 1.4913e-07"/>
+        <joint name="3-2" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="3-2_Link"/>
+        <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="3-2_Link"/>
+        <body name="3-3_Link" pos="0.034999 0.00019049 0.0001495">
+          <inertial pos="0.0136452 -0.0018426 0.000161558" quat="0.58955 0.371654 0.599754 0.39319" mass="0.0072524" diaginertia="7.7248e-07 7.49926e-07 1.81959e-07"/>
+          <joint name="3-3" pos="0 0 0" axis="0 0 1" range="0 1.4835"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.180392 0.180392 0.180392 1" mesh="3-3_Link"/>
+          <geom type="mesh" rgba="0.180392 0.180392 0.180392 1" mesh="3-3_Link"/>
+          <body name="3-4_Link" pos="0.027987 0.00084958 -0.00029976">
+            <inertial pos="0.0153822 0.000714575 0.000356412" quat="0.491302 0.486054 0.507601 0.514505" mass="0.00512413" diaginertia="4.21289e-07 3.83024e-07 1.13778e-07"/>
+            <joint name="3-4" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.180392 0.180392 0.180392 1" mesh="3-4_Link"/>
+            <geom type="mesh" rgba="0.180392 0.180392 0.180392 1" mesh="3-4_Link"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="4-1_Link" pos="0.081999 0.046209 0.0074875">
+      <inertial pos="0.00666469 2.43312e-05 -0.00122359" quat="0.467688 0.527327 0.539243 0.460881" mass="0.0023023" diaginertia="1.1577e-07 9.93033e-08 6.6012e-08"/>
+      <joint name="4-1" pos="0 0 0" axis="0 0 1" range="-0.3491 1.1345"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="4-1_Link"/>
+      <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="4-1_Link"/>
+      <body name="4-2_Link" pos="0.012725 0 -0.0014425" quat="0.707105 -0.707108 0 0">
+        <inertial pos="0.0113498 -0.00233987 0.000254398" quat="0.486714 0.532698 0.453054 0.523531" mass="0.00481072" diaginertia="3.82059e-07 3.61957e-07 1.13652e-07"/>
+        <joint name="4-2" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="4-2_Link"/>
+        <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="4-2_Link"/>
+        <body name="4-3_Link" pos="0.034985 -0.0010281 0.0001495">
+          <inertial pos="0.0135728 -0.00231653 0.000161557" quat="0.596306 0.38204 0.593193 0.382866" mass="0.0072524" diaginertia="7.7248e-07 7.49926e-07 1.81959e-07"/>
+          <joint name="4-3" pos="0 0 0" axis="0 0 1" range="0 1.4835"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.180392 0.180392 0.180392 1" mesh="4-3_Link"/>
+          <geom type="mesh" rgba="0.180392 0.180392 0.180392 1" mesh="4-3_Link"/>
+          <body name="4-4_Link" pos="0.028 -0.00012529 -0.00029976">
+            <inertial pos="0.0153978 0.000178623 0.000356414" quat="0.500186 0.494817 0.499061 0.505873" mass="0.00512413" diaginertia="4.21289e-07 3.83024e-07 1.13778e-07"/>
+            <joint name="4-4" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.180392 0.180392 0.180392 1" mesh="4-4_Link"/>
+            <geom type="mesh" rgba="0.180392 0.180392 0.180392 1" mesh="4-4_Link"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="5-1_Link" pos="0.036402 -0.026652 0.010947" quat="0.36464 0 0 -0.931149">
+      <inertial pos="-0.00146256 -0.00094268 -0.0162484" quat="0.990109 -0.0652249 -0.118439 -0.0374444" mass="0.0132709" diaginertia="1.54423e-06 1.33033e-06 7.49288e-07"/>
+      <joint name="5-1" pos="0 0 0" axis="0 0 1" range="-1.0308 0.54"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="5-1_Link"/>
+      <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="5-1_Link"/>
+      <body name="5-2_Link" pos="0.0016159 0.0014636 -0.035499" quat="0.81419 0.105825 0.552997 0.141736">
+        <inertial pos="0.00663321 9.64456e-05 -0.00116963" quat="0.442606 0.537163 0.56195 0.446953" mass="0.00220881" diaginertia="1.10461e-07 9.40841e-08 6.24743e-08"/>
+        <joint name="5-2" pos="0 0 0" axis="0 0 1" range="-1.0472 1.0472"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.407843 0.407843 0.407843 1" mesh="5-2_Link"/>
+        <geom type="mesh" rgba="0.407843 0.407843 0.407843 1" mesh="5-2_Link"/>
+        <body name="5-3_Link" pos="0.012725 0 -0.0014425" quat="0.686978 -0.68698 0.167511 0.167511">
+          <inertial pos="0.0150791 -0.00192264 0.00050579" quat="0.40639 0.56574 0.43357 0.571667" mass="0.00712436" diaginertia="6.44374e-07 6.30805e-07 1.5035e-07"/>
+          <joint name="5-3" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="5-3_Link"/>
+          <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="5-3_Link"/>
+          <body name="5-4_Link" pos="0.035 0 0.0001495" quat="0.995399 0 0 0.0958178">
+            <inertial pos="0.013019 -0.00448263 0.000161553" quat="0.625423 0.428936 0.56022 0.333188" mass="0.00725239" diaginertia="7.72478e-07 7.49925e-07 1.81959e-07"/>
+            <joint name="5-4" pos="0 0 0" axis="0 0 1" range="0 1.4835"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="5-4_Link"/>
+            <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="5-4_Link"/>
+            <body name="5-5_Link" pos="0.02761 -0.0046551 -0.00029976">
+              <inertial pos="0.0152236 -0.00231576 0.000356508" quat="0.539604 0.533703 0.457244 0.463591" mass="0.00512406" diaginertia="4.2128e-07 3.83019e-07 1.13776e-07"/>
+              <joint name="5-5" pos="0 0 0" axis="0 0 1" range="0 1.5708"/>
+              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.964706 0.964706 0.952941 1" mesh="5-5_Link"/>
+              <geom type="mesh" rgba="0.964706 0.964706 0.952941 1" mesh="5-5_Link"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

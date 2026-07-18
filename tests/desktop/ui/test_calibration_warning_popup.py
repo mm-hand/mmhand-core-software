@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from desktop.core.protocol import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
-    CALIB_WARN_AUTO_SPAN_RANGE,
+    CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     ENCODER_COUNT,
 )
 from desktop.ui.ui_control_panels import ControlPanel
@@ -16,11 +16,15 @@ def _state(mask: int):
         "assemblyWarningReason": (
             CALIB_WARN_AUTO_MIN_OFFSET |
             CALIB_WARN_AUTO_MAX_SHORTFALL |
-            CALIB_WARN_AUTO_SPAN_RANGE
+            CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH
         ),
         "autoMinOffsetCounts": 412,
         "autoMaxShortfallCounts": 326,
         "assemblyAutoSpanCounts": 2184,
+        "assemblyManualSpanCounts": 3400,
+        "assemblyUrdfSpanCounts": 2957,
+        "assemblySpanDifferenceCounts": 443,
+        "hasAssemblySpanComparisonFields": True,
     }
     return SimpleNamespace(
         has_calibration_warning_status=True,
@@ -50,8 +54,10 @@ def test_calibration_warning_popup_explains_all_reasons_once():
     assert "J12" in body
     assert "412 counts" in body
     assert "326 counts" in body
-    assert "2184 counts" in body
-    assert "2300～6300" in body
+    assert "3400 counts" in body
+    assert "2957 counts" in body
+    assert "443 counts" in body
+    assert "超过 360 counts" in body
     assert len(actions) == 1
 
 

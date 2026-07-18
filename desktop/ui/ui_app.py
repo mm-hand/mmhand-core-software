@@ -94,6 +94,8 @@ class HandGUI(QtWidgets.QMainWindow):
         current_mode: Optional[str] = None,
         on_close_extra: Optional[Callable[[], None]] = None,
         action_callback: Optional[Callable[[str], None]] = None,
+        algorithm_control_callback: Optional[Callable[[bool], bool]] = None,
+        algorithm_running_callback: Optional[Callable[[], bool]] = None,
         pose_generate: bool = False,
         pose_generate_path: Optional[str] = None,
         tactile_port: Optional[str] = None,
@@ -108,6 +110,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self.current_mode = self._normalize_mode(current_mode or "Monitor")
         self._on_close_extra = on_close_extra
         self._action_callback = action_callback
+        self._algorithm_control_callback = algorithm_control_callback
+        self._algorithm_running_callback = algorithm_running_callback
         self._pose_generate = bool(pose_generate)
         self._pose_generate_path = pose_generate_path or str(POSE_FIST_PATH)
         self.tactile_port = tactile_port or ""
@@ -1999,6 +2003,37 @@ class HandGUI(QtWidgets.QMainWindow):
             except Exception:
                 pass
         self._set_status(msg)
+
+    def set_algorithm_enabled(self, enabled: bool) -> bool:
+        if self.current_mode != "Algorithm" or self._algorithm_control_callback is None:
+            self._set_status("Algorithm control is unavailable in this mode")
+            return False
+        try:
+            accepted = bool(self._algorithm_control_callback(bool(enabled)))
+        except Exception as exc:
+            self._set_status(f"Algorithm control failed: {exc}")
+            return False
+        if enabled and not accepted:
+            self._set_status("Algorithm is already running")
+            return False
+        self.emit_action("Algorithm Enabled" if enabled else "Algorithm Disabled")
+        return True
+
+    def is_algorithm_running(self) -> bool:
+        if self._algorithm_running_callback is None:
+            return False
+        try:
+            return bool(self._algorithm_running_callback())
+        except Exception:
+            return False
+
+    def cancel_algorithm(self, reason: str = "stop requested") -> None:
+        if self._algorithm_control_callback is None:
+            return
+        try:
+            self._algorithm_control_callback(False)
+        except Exception:
+            pass
 
     @staticmethod
     def _event_type_from_message(msg: str) -> str:

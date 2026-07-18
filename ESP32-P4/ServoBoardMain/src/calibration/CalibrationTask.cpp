@@ -4,6 +4,7 @@
 
 #include "CalibrationMath.h"
 #include "JointCalibrationProfile.h"
+#include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
 #include "../shared/SharedSafetyState.h"
 #include "../system/FirmwareLog.h"
@@ -62,15 +63,29 @@ bool evaluateCalibrationAssemblyWarning(
         result.autoMaxRaw, manual.maxRaw, direction);
     const int32_t autoSpan = calibrationDirectedEncoderDelta(
         result.autoMinRaw, result.autoMaxRaw, direction);
-    if (autoSpan < 0) {
+    const int32_t manualSpan = calibrationDirectedEncoderDelta(
+        manual.minRaw, manual.maxRaw, direction);
+    const float urdfSpanDeg =
+        kUrdfJointLimits[jointIndex].maxDeg -
+        kUrdfJointLimits[jointIndex].minDeg;
+    const int32_t urdfSpan = calibrationDegToEncoderCount(urdfSpanDeg);
+    if (autoSpan < 0 || manualSpan <= 0 || urdfSpan <= 0 ||
+        manualSpan >= kCalibrationEncoderModulo ||
+        urdfSpan >= kCalibrationEncoderModulo) {
         return false;
     }
+    const int32_t spanDifference = manualSpan >= urdfSpan
+        ? manualSpan - urdfSpan
+        : urdfSpan - manualSpan;
 
     out->autoMinOffsetCounts = (int16_t)minOffset;
     out->autoMaxShortfallCounts = (int16_t)maxShortfall;
     out->autoSpanCounts = (uint16_t)autoSpan;
+    out->manualSpanCounts = (uint16_t)manualSpan;
+    out->urdfSpanCounts = (uint16_t)urdfSpan;
+    out->spanDifferenceCounts = (uint16_t)spanDifference;
     out->reasonMask = calibrationAssemblyWarningReasonForMetrics(
-        minOffset, maxShortfall, autoSpan);
+        minOffset, maxShortfall, spanDifference);
     return true;
 }
 
@@ -117,7 +132,8 @@ bool updateCalibrationAssemblyWarning(
 
     FW_LOG_INFO_PRINTF(
         "[CALIB ASSEMBLY] J%02u manual=%u->%u auto=%u->%u dir=%d "
-        "minOffset=%d/%ld maxShortfall=%d/%ld autoSpan=%u/%ld..%ld "
+        "minOffset=%d/%ld maxShortfall=%d/%ld autoSpan=%u "
+        "manualSpan=%u urdfSpan=%u spanDiff=%u/%ld "
         "reason=0x%02X warning=%u\r\n",
         (unsigned)jointIndex,
         (unsigned)g_manualEncoderReference[jointIndex].minRaw,
@@ -130,8 +146,10 @@ bool updateCalibrationAssemblyWarning(
         (int)info.autoMaxShortfallCounts,
         (long)kCalibrationAutoMaxShortfallWarnCounts,
         (unsigned)info.autoSpanCounts,
-        (long)kCalibrationAutoSpanWarnMinCounts,
-        (long)kCalibrationAutoSpanWarnMaxCounts,
+        (unsigned)info.manualSpanCounts,
+        (unsigned)info.urdfSpanCounts,
+        (unsigned)info.spanDifferenceCounts,
+        (long)kCalibrationUrdfManualSpanWarnCounts,
         (unsigned)info.reasonMask,
         warning ? 1U : 0U);
     return warning;

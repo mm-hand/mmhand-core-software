@@ -33,7 +33,9 @@ PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12
 CALIB_WARN_NONE = 0x00
 CALIB_WARN_AUTO_MIN_OFFSET = 0x01
 CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02
-CALIB_WARN_AUTO_SPAN_RANGE = 0x04
+CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH = 0x04
+# Compatibility alias for callers that still import the original name.
+CALIB_WARN_AUTO_SPAN_RANGE = CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH
 
 TASK_RUNTIME_UPPER_COMM = 0
 TASK_RUNTIME_STATE_MACHINE = 1
@@ -517,7 +519,11 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["autoMinOffsetCounts"] = 0
     result["autoMaxShortfallCounts"] = 0
     result["assemblyAutoSpanCounts"] = 0
+    result["assemblyManualSpanCounts"] = 0
+    result["assemblyUrdfSpanCounts"] = 0
+    result["assemblySpanDifferenceCounts"] = 0
     result["hasAssemblyWarningFields"] = False
+    result["hasAssemblySpanComparisonFields"] = False
     extended_len = 54 + 1 + 1 + 2 + 4 + 4 + (
         DUAL_TENDON_LUT_ACTUATOR_COUNT * DUAL_TENDON_LUT_MAX_SAMPLES * 2
     )
@@ -582,6 +588,21 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
                     )[0]
                     idx += 2
                     result["hasAssemblyWarningFields"] = True
+                    span_comparison_len = warning_len + 6
+                    if len(payload) >= span_comparison_len:
+                        result["assemblyManualSpanCounts"] = struct.unpack(
+                            ">H", payload[idx:idx + 2]
+                        )[0]
+                        idx += 2
+                        result["assemblyUrdfSpanCounts"] = struct.unpack(
+                            ">H", payload[idx:idx + 2]
+                        )[0]
+                        idx += 2
+                        result["assemblySpanDifferenceCounts"] = struct.unpack(
+                            ">H", payload[idx:idx + 2]
+                        )[0]
+                        idx += 2
+                        result["hasAssemblySpanComparisonFields"] = True
     return result
 
 

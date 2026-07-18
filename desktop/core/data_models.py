@@ -440,6 +440,18 @@ class JointWorkspaceRange:
             target = self.current_min_deg
         return max(self.current_min_deg, min(self.current_max_deg, target))
 
+    def open_pose_target(self, offset_deg: float = 5.0) -> float:
+        """Return the calibrated open/zero pose inside the dynamic workspace."""
+        if not self.ready or self.current_min_deg is None:
+            raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
+        try:
+            offset = float(offset_deg)
+        except (TypeError, ValueError):
+            offset = 0.0
+        if not math.isfinite(offset):
+            offset = 0.0
+        return self.clamp(self.current_min_deg + max(0.0, offset))
+
 
 def resolve_joint_workspace_range(
     model: Optional["HandModel"],

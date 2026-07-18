@@ -21,7 +21,7 @@ from desktop.core.data_models import (
 from desktop.core.protocol import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
-    CALIB_WARN_AUTO_SPAN_RANGE,
+    CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     ENCODER_COUNT,
     HAND_PROFILE,
     MOTOR_COUNT,
@@ -109,6 +109,8 @@ try:
     WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = urdf_manual_scaled_mapping_metadata()
 except (OSError, TypeError, ValueError):
     WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = 0, 0
+
+OPEN_POSE_CURRENT_MIN_OFFSET_DEG = 5.0
 
 
 def _load_default_auto_calibration_joint_indices() -> List[int]:
@@ -771,7 +773,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.release_half_turn_btn.clicked.connect(lambda _checked=False: self.release_all_motors_half_turn())
         self.tighten_half_turn_btn.clicked.connect(lambda _checked=False: self.tighten_all_motors_half_turn())
         self.fist_btn.clicked.connect(lambda _checked=False: self.apply_fist_pose())
-        self.zero_btn.clicked.connect(lambda _checked=False: self.apply_preset([0.0] * ENCODER_COUNT))
+        self.zero_btn.clicked.connect(lambda _checked=False: self.apply_zero_pose())
 
         self.tabs = QtWidgets.QTabWidget()
         self.device_check_view = DeviceCheckView(
@@ -1933,11 +1935,17 @@ class ControlPanel(QtWidgets.QWidget):
         except Exception as exc:
             self._error("Tighten Failed", f"{type(exc).__name__}: {exc}")
 
-    def apply_preset(self, angles: List[float]) -> None:
+    def apply_preset(self, angles: List[float], joint_indices: Optional[List[int]] = None) -> None:
         clamped_angles = list(angles[:ENCODER_COUNT])
+        if len(clamped_angles) < ENCODER_COUNT:
+            clamped_angles.extend([0.0] * (ENCODER_COUNT - len(clamped_angles)))
+        indices = range(ENCODER_COUNT) if joint_indices is None else joint_indices
         self._updating = True
         try:
-            for i, value in enumerate(clamped_angles):
+            for i in indices:
+                if i < 0 or i >= ENCODER_COUNT:
+                    continue
+                value = clamped_angles[i]
                 value = self._clamp_joint_target_deg(i, float(value))
                 clamped_angles[i] = value
                 self.joint_target_spins[i].setValue(value)
@@ -1947,9 +1955,48 @@ class ControlPanel(QtWidgets.QWidget):
             self._updating = False
         self.context.draw_pose_angles(clamped_angles)
 
+    def _build_current_min_open_pose_targets(self) -> Optional[Tuple[List[float], List[int]]]:
+        joints = self._active_scope_joint_indices()
+        if not joints:
+            self._set_status("Open/Zero Pose blocked: no active joints selected")
+            return None
+        targets = self.resolved_joint_targets()
+        missing: List[str] = []
+        for joint in joints:
+            workspace = self._joint_workspace_range(joint, self._state)
+            if not workspace.ready:
+                missing.append(f"J{joint:02d} {workspace.reason}")
+                continue
+            targets[joint] = workspace.open_pose_target(OPEN_POSE_CURRENT_MIN_OFFSET_DEG)
+        if missing:
+            detail = "; ".join(missing[:4])
+            if len(missing) > 4:
+                detail += f"; +{len(missing) - 4} more"
+            self._set_status(f"Open/Zero Pose blocked: {detail}")
+            return None
+        return targets, joints
+
     def apply_open_pose(self) -> None:
-        self.apply_preset([0.0] * ENCODER_COUNT)
-        self._set_status("Open Pose set: all joints 0.00 deg")
+        pose = self._build_current_min_open_pose_targets()
+        if pose is None:
+            return
+        targets, joints = pose
+        self.apply_preset(targets, joint_indices=joints)
+        self._set_status(
+            "Open Pose set: active Current Min + "
+            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg"
+        )
+
+    def apply_zero_pose(self) -> None:
+        pose = self._build_current_min_open_pose_targets()
+        if pose is None:
+            return
+        targets, joints = pose
+        self.apply_preset(targets, joint_indices=joints)
+        self._set_status(
+            "Zero Pose set: active Current Min + "
+            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg"
+        )
 
     def apply_fist_pose(self) -> None:
         angles: List[float] = []
@@ -2008,6 +2055,7 @@ class ControlPanel(QtWidgets.QWidget):
     def stop_controller(self) -> None:
         self._update_connection_lights()
         self._estop_latched = True
+        self.context.cancel_algorithm("E-STOP")
         self.stop_all_tests("stopped by E-STOP", update_status=False)
         try:
             self.backend.stop()
@@ -3648,6 +3696,9 @@ class ControlPanel(QtWidgets.QWidget):
             )
             max_shortfall = 0
             auto_span = 0
+            manual_span = 0
+            urdf_span = 0
+            span_difference = 0
             details = []
             if bool(result.get("hasAssemblyWarningFields", False)):
                 min_offset = int(result.get("autoMinOffsetCounts", 0) or 0)
@@ -3655,6 +3706,18 @@ class ControlPanel(QtWidgets.QWidget):
                     result.get("autoMaxShortfallCounts", 0) or 0
                 )
                 auto_span = int(result.get("assemblyAutoSpanCounts", 0) or 0)
+                has_span_comparison = bool(
+                    result.get("hasAssemblySpanComparisonFields", False)
+                )
+                manual_span = int(
+                    result.get("assemblyManualSpanCounts", 0) or 0
+                )
+                urdf_span = int(
+                    result.get("assemblyUrdfSpanCounts", 0) or 0
+                )
+                span_difference = int(
+                    result.get("assemblySpanDifferenceCounts", 0) or 0
+                )
                 if reason & CALIB_WARN_AUTO_MIN_OFFSET:
                     details.append(
                         f"Auto Min 比 Manual Min 正向内缩 {min_offset} counts，"
@@ -3665,10 +3728,17 @@ class ControlPanel(QtWidgets.QWidget):
                         f"Auto Max 距 Manual Max 仍差 {max_shortfall} counts，"
                         "达到或超过 300 counts"
                     )
-                if reason & CALIB_WARN_AUTO_SPAN_RANGE:
-                    details.append(
-                        f"Auto Span 为 {auto_span} counts，不在 2300～6300 counts 范围内"
-                    )
+                if reason & CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH:
+                    if has_span_comparison:
+                        details.append(
+                            f"Manual Span 为 {manual_span} counts，URDF 理论磁编 "
+                            f"Span 为 {urdf_span} counts，差值 {span_difference} "
+                            "counts，超过 360 counts"
+                        )
+                    else:
+                        details.append(
+                            f"旧固件报告 Auto Span 范围警告：{auto_span} counts"
+                        )
             else:
                 # Compatibility with the first WARN-capable firmware, which
                 # only reported the Auto Min offset in SYSTEM_STATUS.
@@ -3686,7 +3756,8 @@ class ControlPanel(QtWidgets.QWidget):
             event_items.append(
                 f"J{joint:02d}:reason=0x{reason:02X},"
                 f"minOffset={min_offset},maxShortfall={max_shortfall},"
-                f"autoSpan={auto_span}"
+                f"autoSpan={auto_span},manualSpan={manual_span},"
+                f"urdfSpan={urdf_span},spanDifference={span_difference}"
             )
 
         self._calibration_warning_popup_mask |= new_mask
