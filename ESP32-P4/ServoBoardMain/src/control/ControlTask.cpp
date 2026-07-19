@@ -37,7 +37,7 @@ static const uint8_t kJointControlOverloadLatchCycles = 20;
 static const uint16_t kJointControlFeedbackSpeed = 0;
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
-static const float kFeedbackRunDoneToleranceDeg = 1.0f;
+static const float kFeedbackRunDoneToleranceDeg = 0.5f;
 static const uint8_t kFeedbackRunDoneStableCycles = 10;
 static const uint32_t kFeedbackRunTimeoutMs = 8000;
 static const int32_t kUpperWorkspaceWarningCounts = 48;
@@ -218,7 +218,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        float qRefDeg,
                                        float qFbDeg,
                                        const ServoAngleData_t& servoData,
-                                       uint32_t commandToken,
                                        uint16_t speed,
                                        uint8_t acc)
 {
@@ -232,8 +231,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        qRefDeg,
                                        qFbDeg,
                                        &servoData,
-                                       commandToken,
                                        &tendonTargets)) {
+        resetDualTendonController(jointIndex);
         return 0;
     }
 
@@ -242,6 +241,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
         const uint8_t motorChannel = tendonTargets.motorChannel[i];
         if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
+            resetDualTendonController(jointIndex);
             return 0;
         }
         const MotorMapItem& motor = motorMap[motorChannel];
@@ -259,6 +259,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         // LOCK only enables the ABS min/max output clamp; it must not disable
         // feedback control for an otherwise calibrated dual-tendon joint.
         if ((validBitmap & bit) == 0) {
+            resetDualTendonController(jointIndex);
             return 0;
         }
         if (limitMin > limitMax) {
@@ -502,6 +503,7 @@ void controlTask(void* parameter)
     readControlCommandSnapshot(sharedData, &commandSnapshot);
 
     TickType_t lastWakeTime = xTaskGetTickCount();
+    TickType_t lastPidComputeTick = lastWakeTime;
     const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
     bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
     bool hotplugHoldMotor[SERVO_TOTAL_NUM] = {false};
@@ -903,14 +905,32 @@ void controlTask(void* parameter)
         // but they must not compete with the calibration producer for the
         // single-slot servoTargetQueue.
         const bool controlTargetBuildAllowed = controlEnabled;
+        if (!controlTargetBuildAllowed || !feedbackOutputState) {
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+                if (isDualTendonJoint(jointIndex)) {
+                    resetDualTendonController(jointIndex);
+                }
+            }
+        }
         if (controlTargetBuildAllowed) {
+            const TickType_t pidComputeTick = xTaskGetTickCount();
+            const TickType_t elapsedPidTicks = pidComputeTick - lastPidComputeTick;
+            lastPidComputeTick = pidComputeTick;
+            float pidDtSeconds =
+                (float)elapsedPidTicks * (float)portTICK_PERIOD_MS * 0.001f;
+            // Use the nominal period on first entry or after a scheduler stall.
+            // This prevents a stale interval from creating an I/D impulse.
+            if (!isfinite(pidDtSeconds) || pidDtSeconds < 0.001f || pidDtSeconds > 0.100f) {
+                pidDtSeconds = 0.010f;
+            }
             // PID uses tendon-space ABS so a positive correction has the same
             // "shorten tendon" meaning on motors with opposite raw ABS directions.
             // Single-motor output converts the final tendon-space target back to raw.
             g_controlSolver.compute(localTargets,
                                     magAngles,
                                     absolutePositionTendon,
-                                    outPulsesTendon);
+                                    outPulsesTendon,
+                                    pidDtSeconds);
             if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
             {
                 const uint32_t activeMotorMask =
@@ -995,6 +1015,9 @@ void controlTask(void* parameter)
 
                 if (!jointActive)
                 {
+                    if (isDualTendonJoint(jointIndex)) {
+                        resetDualTendonController(jointIndex);
+                    }
                     jointCmdPos[jointIndex] = clampServoPos(absolutePositionRaw[jointIndex]);
                     jointCmdValid[jointIndex] = 0;
                     continue;
@@ -1002,6 +1025,9 @@ void controlTask(void* parameter)
 
                 if (emergency)
                 {
+                    if (isDualTendonJoint(jointIndex)) {
+                        resetDualTendonController(jointIndex);
+                    }
                     const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1012,6 +1038,9 @@ void controlTask(void* parameter)
 
                 if (hotplugHoldActive)
                 {
+                    if (isDualTendonJoint(jointIndex)) {
+                        resetDualTendonController(jointIndex);
+                    }
                     const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1032,7 +1061,6 @@ void controlTask(void* parameter)
                                                 localTargets[jointIndex],
                                                 magAngles[jointIndex],
                                                 servoData,
-                                                jointCommandToken,
                                                 kJointControlFeedbackSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT);
                     if (appended == 0) {

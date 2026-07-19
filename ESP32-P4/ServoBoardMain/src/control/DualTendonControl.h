@@ -10,6 +10,13 @@ struct DualTendonMotorTargets {
     float motorRef[2];
     float motorFbModel[2];
     float motorErr[2];
+    float refVelocity[2];
+    float fbVelocity[2];
+    float velocityError[2];
+    float filteredVelocityError[2];
+    float pTerm[2];
+    float iTerm[2];
+    float dTerm[2];
     float pidCorrection[2];
     uint8_t count;
 };
@@ -29,7 +36,6 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,
                                    const ServoAngleData_t* servoData,
-                                   uint32_t commandToken,
                                    DualTendonMotorTargets* outTargets);
 
 #endif // DUAL_TENDON_CONTROL_H

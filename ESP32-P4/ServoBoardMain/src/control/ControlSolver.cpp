@@ -25,8 +25,10 @@ void ControlSolver::begin()
     }
     init(zeros, ratios, dirs);
 
+    // 2026-07-19: 弹簧加载的单电机关节在正向紧绳负反馈时实测存在约 1.5 deg 静差。
+    // 当前先保持 Ki/Kd 为 0，待阶跃数据确认后再按标准离散 PID 参数调节。
     float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {5.5f, 0.0f, 0.7f, 0.0f, 100.0f, 600.0f},
+        {5.7f, 0.0f, 0.0f, 0.0f, 100.0f, 600.0f},
         {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
     };
     setPIDParams(pidConfigs);
@@ -55,20 +57,22 @@ void ControlSolver::setPIDParams(float pidParams[][PID_PARAMETER_NUM])
 bool ControlSolver::compute(float* targetDegs,
                             float* magActualDegs,
                             const int32_t* absolutePosition,
-                            int32_t* outServoPulses)
+                            int32_t* outServoPulses,
+                            float dtSeconds)
 {
-    if (!targetDegs || !magActualDegs || !absolutePosition || !outServoPulses) {
+    if (!targetDegs || !magActualDegs || !absolutePosition || !outServoPulses ||
+        !isfinite(dtSeconds) || dtSeconds <= 0.0f) {
         return false;
     }
 
     for (int i = 0; i < JOINT_COUNT; i++) {
         // 外环把角度误差转成舵机侧位置修正量。
-        f_PID_Calculate(&_pids[i][0], targetDegs[i], magActualDegs[i]);
+        f_PID_Calculate(&_pids[i][0], targetDegs[i], magActualDegs[i], dtSeconds);
 
         // 内环以当前舵机绝对位置为基准，输出最终舵机目标位置。
         const float loop2Target = _pids[i][0].Output + (float)absolutePosition[i];
         const float loop2Actual = (float)absolutePosition[i];
-        f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual);
+        f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual, dtSeconds);
 
         outServoPulses[i] = (int32_t)_pids[i][1].Output + absolutePosition[i];
     }
@@ -85,5 +89,11 @@ float ControlSolver::getPidOutput(uint8_t jointIndex, uint8_t loopIndex) const
 
 void ControlSolver::resetAll()
 {
-    memset(_pids, 0, sizeof(_pids));
+    for (int i = 0; i < JOINT_COUNT; i++) {
+        for (int loop = 0; loop < 2; loop++) {
+            if (_pids[i][loop].PID_Calc_Clear) {
+                _pids[i][loop].PID_Calc_Clear(&_pids[i][loop]);
+            }
+        }
+    }
 }

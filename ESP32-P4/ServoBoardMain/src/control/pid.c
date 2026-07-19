@@ -65,6 +65,7 @@ static void PID_Calc_Clear(PID_Info_TypeDef *Pid)
 	Pid->Iout = 0;
 	Pid->Dout = 0;
 	Pid->Output = 0;
+	Pid->derivativeInitialized = 0;
 }
 //------------------------------------------------------------------------------
 
@@ -116,7 +117,7 @@ static void PID_ErrorHandle(PID_Info_TypeDef *Pid)
   * @param  Measure Measure for the pid controller
   * @retval the Pid Output
   */
-float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure)
+float f_PID_Calculate(PID_Info_TypeDef *Pid, float target, float measure, float dtSeconds)
 {	
   // 位置式 PID 与增量式 PID 共用同一状态结构，由 Pid->type 决定计算路径。
   /* update the pid error status */
@@ -125,6 +126,12 @@ float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure)
   {
     Pid->PID_Calc_Clear(Pid);
     return 0;
+  }
+
+  // Standard discrete PID requires an explicit positive sample period.
+  if(!isfinite(dtSeconds) || dtSeconds <= 0.0f)
+  {
+    return Pid->Output;
   }
   
   /* update the target/measure */
@@ -143,7 +150,7 @@ float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure)
 		{
       /* Update the PID Integral */
       if(Pid->param.ki != 0)
-        Pid->Integral += Pid->Err[0];
+        Pid->Integral += Pid->Err[0] * dtSeconds;
       else
         Pid->Integral = 0;
 
@@ -152,7 +159,9 @@ float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure)
       /* Update the Proportional Output,Integral Output,Derivative Output */
       Pid->Pout = Pid->param.kp * Pid->Err[0];
       Pid->Iout = Pid->param.ki * Pid->Integral;
-      Pid->Dout = Pid->param.kd * (Pid->Err[0] - Pid->Err[1]);
+      Pid->Dout = Pid->derivativeInitialized
+        ? Pid->param.kd * (Pid->Err[0] - Pid->Err[1]) / dtSeconds
+        : 0.0f;
       
       /* update the PID output */
       Pid->Output = Pid->Pout + Pid->Iout + Pid->Dout;
@@ -162,14 +171,18 @@ float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure)
 		{
       /* Update the Proportional Output,Integral Output,Derivative Output */
       Pid->Pout = Pid->param.kp * (Pid->Err[0] - Pid->Err[1]);
-      Pid->Iout = Pid->param.ki * (Pid->Err[0]);
-      Pid->Dout = Pid->param.kd * (Pid->Err[0] - 2.f*Pid->Err[1] + Pid->Err[2]);
+      Pid->Iout = Pid->param.ki * Pid->Err[0] * dtSeconds;
+      Pid->Dout = Pid->derivativeInitialized
+        ? Pid->param.kd * (Pid->Err[0] - 2.f*Pid->Err[1] + Pid->Err[2]) / dtSeconds
+        : 0.0f;
 
       /* update the PID output */
       Pid->Output += Pid->Pout + Pid->Iout + Pid->Dout;
       VAL_LIMIT(Pid->Output,-Pid->param.limitOutput,Pid->param.limitOutput);
 		}
   }
+
+  Pid->derivativeInitialized = 1;
 
   return Pid->Output;
 }

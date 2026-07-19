@@ -633,13 +633,11 @@ class HandController:
     def request_run_feedback(self) -> bool:
         if self._paused or not self.comm:
             return False
-        with self.state_lock:
-            state = int(getattr(self.current_state, "system_state", -1))
-        if state == SYSTEM_STATE_RUN_FEEDBACK:
-            return True
-        # ACTIVE_SCOPE can already have queued P4's READY transition while the
-        # desktop status cache is still one packet behind. P4 owns final
-        # RUN_FEEDBACK admission and keeps all firmware-side safety checks.
+        # A status packet can lag behind a freshly completed one-shot feedback
+        # run. Always pair a new joint target with RUN_FEEDBACK so P4 can
+        # reacquire ownership after it has already returned to READY.
+        # P4 treats a duplicate request while RUN_FEEDBACK is active as
+        # idempotent, without resetting the servo target queue.
         self.comm.send_command("run_feedback")
         return True
 
@@ -1184,8 +1182,13 @@ class HandController:
             return False, f"snapshot missing dual tendon LUT: {missing_text}"
 
         locked_bitmap &= valid_bitmap
+        limits_sent_at = time.time()
         self.comm.send_command(("calib_load_limits", valid_bitmap, locked_bitmap, mins, maxs))
-        ack = self.comm.wait_for_ack(CMD_CALIB_LOAD_LIMITS, CALIB_LOAD_ACK_TIMEOUT_S)
+        ack = self.comm.wait_for_ack(
+            CMD_CALIB_LOAD_LIMITS,
+            CALIB_LOAD_ACK_TIMEOUT_S,
+            received_after=limits_sent_at,
+        )
         if not ack or int(ack[2]) != 0:
             return False, "motor ABS limit load ACK timeout/reject"
 
@@ -1197,8 +1200,13 @@ class HandController:
                 continue
             payload = dict(result)
             payload["joint"] = joint_idx
+            joint_sent_at = time.time()
             self.comm.send_command(("calib_load_joint", payload))
-            ack = self.comm.wait_for_ack(CMD_CALIB_LOAD_JOINT, CALIB_LOAD_ACK_TIMEOUT_S)
+            ack = self.comm.wait_for_ack(
+                CMD_CALIB_LOAD_JOINT,
+                CALIB_LOAD_ACK_TIMEOUT_S,
+                received_after=joint_sent_at,
+            )
             if not ack or int(ack[2]) != 0:
                 return False, f"J{joint_idx:02d} load ACK timeout/reject"
             loaded += 1

@@ -23,13 +23,15 @@ struct DualTendonJointConfig {
     float ki[2];
     float kd[2];
     float integralLimit[2];
+    float dTermLimit[2];
     int32_t maxReleaseFromCalibCounts;
 };
 
 struct DualTendonJointState {
-    uint32_t lastToken;
     float integral[2];
-    float prevFbModel[2];
+    float prevMotorRef[2];
+    float prevMotorFbModel[2];
+    float filteredVelocityError[2];
     uint8_t prevValid;
 };
 
@@ -43,8 +45,12 @@ static const uint8_t kDualTendonModelSharedCadGeometry = 1;
 static const float kDefaultDualTendonCountsPerMm = 40.0f;
 static const float kDefaultDualTendonKp = 1.0f;
 static const float kDefaultDualTendonKi = 0.0f;
-static const float kDefaultDualTendonKd = 0.03f;
+static const float kDefaultDualTendonKd = 0.00f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
+static const float kDefaultDualTendonDTermLimitCounts = 100.0f;
+static const float kDualTendonVelocityFilterTauSec = 0.050f;
+static const float kDualTendonVelocityFilterAlpha =
+    kControlPeriodSec / (kDualTendonVelocityFilterTauSec + kControlPeriodSec);
 static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 900;
 static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1600;
 static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 2500;
@@ -83,6 +89,8 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     out->kd[1] = kDefaultDualTendonKd;
     out->integralLimit[0] = kDefaultDualTendonIntegralLimit;
     out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
+    out->dTermLimit[0] = kDefaultDualTendonDTermLimitCounts;
+    out->dTermLimit[1] = kDefaultDualTendonDTermLimitCounts;
     out->maxReleaseFromCalibCounts = kDefaultDualTendonMaxReleaseFromCalibCounts;
 
     switch (jointIndex) {
@@ -336,7 +344,6 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,
                                    const ServoAngleData_t* servoData,
-                                   uint32_t commandToken,
                                    DualTendonMotorTargets* outTargets)
 {
     if (!servoData || !outTargets || jointIndex >= ENCODER_TOTAL_NUM) {
@@ -378,40 +385,69 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->motorRef[i] = motorRefModel[i];
         outTargets->motorFbModel[i] = motorFbModel[i];
         outTargets->motorErr[i] = outTargets->motorRef[i] - outTargets->motorFbModel[i];
+        outTargets->refVelocity[i] = 0.0f;
+        outTargets->fbVelocity[i] = 0.0f;
+        outTargets->velocityError[i] = 0.0f;
+        outTargets->filteredVelocityError[i] = 0.0f;
+        outTargets->pTerm[i] = 0.0f;
+        outTargets->iTerm[i] = 0.0f;
+        outTargets->dTerm[i] = 0.0f;
         outTargets->pidCorrection[i] = 0.0f;
     }
 
-    const bool resetState =
-        !state.prevValid || (state.lastToken != commandToken);
+    const bool resetState = !state.prevValid;
     if (resetState) {
         state.integral[0] = 0.0f;
         state.integral[1] = 0.0f;
-        state.prevFbModel[0] = outTargets->motorFbModel[0];
-        state.prevFbModel[1] = outTargets->motorFbModel[1];
+        state.prevMotorRef[0] = outTargets->motorRef[0];
+        state.prevMotorRef[1] = outTargets->motorRef[1];
+        state.prevMotorFbModel[0] = outTargets->motorFbModel[0];
+        state.prevMotorFbModel[1] = outTargets->motorFbModel[1];
+        state.filteredVelocityError[0] = 0.0f;
+        state.filteredVelocityError[1] = 0.0f;
         state.prevValid = 1;
-        state.lastToken = commandToken;
     }
-
     for (uint8_t i = 0; i < 2; i++) {
         const uint8_t motorChannel = outTargets->motorChannel[i];
         const float motorCurrent = (float)servoData->servoAngles[motorChannel];
-        const float dFb = resetState
+        const float refVelocity = resetState
             ? 0.0f
-            : (outTargets->motorFbModel[i] - state.prevFbModel[i]) / kControlPeriodSec;
+            : (outTargets->motorRef[i] - state.prevMotorRef[i]) / kControlPeriodSec;
+        const float fbVelocity = resetState
+            ? 0.0f
+            : (outTargets->motorFbModel[i] - state.prevMotorFbModel[i]) /
+                  kControlPeriodSec;
+        const float velocityError = refVelocity - fbVelocity;
+
+        state.filteredVelocityError[i] +=
+            kDualTendonVelocityFilterAlpha *
+            (velocityError - state.filteredVelocityError[i]);
 
         state.integral[i] += outTargets->motorErr[i] * kControlPeriodSec;
         state.integral[i] = constrainFloat(state.integral[i],
                                            -cfg.integralLimit[i],
                                            cfg.integralLimit[i]);
 
-        const float correction =
-            cfg.kp[i] * outTargets->motorErr[i] +
-            cfg.ki[i] * state.integral[i] -
-            cfg.kd[i] * dFb;
+        const float pTerm = cfg.kp[i] * outTargets->motorErr[i];
+        const float iTerm = cfg.ki[i] * state.integral[i];
+        const float dTerm = constrainFloat(
+            cfg.kd[i] * state.filteredVelocityError[i],
+            -cfg.dTermLimit[i],
+            cfg.dTermLimit[i]);
+        const float correction = pTerm + iTerm + dTerm;
+
+        outTargets->refVelocity[i] = refVelocity;
+        outTargets->fbVelocity[i] = fbVelocity;
+        outTargets->velocityError[i] = velocityError;
+        outTargets->filteredVelocityError[i] = state.filteredVelocityError[i];
+        outTargets->pTerm[i] = pTerm;
+        outTargets->iTerm[i] = iTerm;
+        outTargets->dTerm[i] = dTerm;
         outTargets->pidCorrection[i] = correction;
         outTargets->targetAbs[i] =
             clampServoPos((int32_t)(motorCurrent + correction));
-        state.prevFbModel[i] = outTargets->motorFbModel[i];
+        state.prevMotorRef[i] = outTargets->motorRef[i];
+        state.prevMotorFbModel[i] = outTargets->motorFbModel[i];
     }
 
     return true;

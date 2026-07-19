@@ -12,6 +12,7 @@ desktop/teleop/Posture/.vscode/
 run_data/
 desktop/logs/
 desktop/multiturn_cache.json
+desktop/resources/config/calib_load_snapshot.json
 ESP32-P4ID/
 
 # Local firmware experiments and waveform captures

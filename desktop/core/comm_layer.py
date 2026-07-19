@@ -2049,6 +2049,10 @@ class LowerComputerComm:
 
     def _enqueue_latest_high_rate(self, cmd: SendCmd):
         # Keep only the latest pending high-rate command to avoid UI backlog.
+        # For joint live control, the target must remain ahead of its paired
+        # RUN_FEEDBACK request. Otherwise replacing an older angle_live packet
+        # can move the new target behind RUN_FEEDBACK, letting P4 start and
+        # finish a one-shot run against the stale target.
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
             kept = [item for item in pending if not self._is_high_rate_command(item)]
@@ -2059,7 +2063,15 @@ class LowerComputerComm:
             if maxsize > 0 and len(pending) >= maxsize:
                 return
 
-            pending.append(cmd)
+            if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+                for index, pending_cmd in enumerate(pending):
+                    if pending_cmd == "run_feedback":
+                        pending.insert(index, cmd)
+                        break
+                else:
+                    pending.append(cmd)
+            else:
+                pending.append(cmd)
             self.tx_queue.unfinished_tasks += 1
             self.tx_queue.not_empty.notify()
 

@@ -1100,6 +1100,17 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                                            FEEDBACK_REJECT_MANUAL_REFERENCE);
                 break;
             }
+            // Every desktop joint target is paired with RUN_FEEDBACK. A status
+            // packet can be one feedback cycle behind P4, so a repeated request
+            // while this run already owns the output must be harmless. Do not
+            // reset the queue here: ControlTask will consume the newer joint
+            // command token on its next cycle.
+            if (sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK) {
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_ACCEPTED,
+                                           FEEDBACK_REJECT_NONE);
+                break;
+            }
             if (!canAcceptRunFeedback(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
                               (unsigned)sharedData->system_state);

@@ -119,6 +119,7 @@ typedef struct _PID_TypeDef
     float Iout;         /*!< Integral Output */
     float Dout;         /*!< Derivative Output */
     float Output;       /*!< PID Output */
+    uint8_t derivativeInitialized; /*!< Previous error is valid for D term */
 	
 		PID_Parameter_Typedef param;            /*!< structure that contains the parameters */
     PID_ErrorHandler_Typedef ERRORHandler;  /*!< structure that contains the pid Error handler. */
@@ -152,7 +153,7 @@ extern void PID_Init(PID_Info_TypeDef *Pid,PID_Type_e type,float para[PID_PARAME
 /**
   * @brief  Caculate the PID Controller
   */
-extern float f_PID_Calculate(PID_Info_TypeDef *Pid, float target,float measure);
+extern float f_PID_Calculate(PID_Info_TypeDef *Pid, float target, float measure, float dtSeconds);
 
 #ifdef __cplusplus
 }

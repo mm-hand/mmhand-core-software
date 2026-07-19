@@ -1,11 +1,15 @@
 """Tests for core_logic.py - HandController.set_motor_positions_absolute"""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
+import desktop.core.core_logic as core_logic
 from desktop.core.core_logic import HandController
 from desktop.core.protocol import (
+    CMD_CALIB_LOAD_JOINT,
+    CMD_CALIB_LOAD_LIMITS,
     ControlMode,
+    ENCODER_COUNT,
     MOTOR_COUNT,
     MOTOR_ABS_CMD_MIN,
     MOTOR_ABS_CMD_MAX,
@@ -251,13 +255,13 @@ class TestRequestRunFeedback:
         assert controller.request_run_feedback() is True
         controller.comm.send_command.assert_called_once_with("run_feedback")
 
-    def test_does_not_duplicate_when_feedback_is_already_running(self, controller):
+    def test_requeues_when_feedback_is_already_running(self, controller):
         controller.comm = MagicMock()
         controller._paused = False
         controller.current_state.system_state = SYSTEM_STATE_RUN_FEEDBACK
 
         assert controller.request_run_feedback() is True
-        controller.comm.send_command.assert_not_called()
+        controller.comm.send_command.assert_called_once_with("run_feedback")
 
 
 class TestResetMultiturnBaselineForNewDevice:
@@ -274,3 +278,78 @@ class TestResetMultiturnBaselineForNewDevice:
         assert ok is False
         assert "already trusted" in message
         controller.comm.send_command.assert_not_called()
+
+
+class TestLoadCalibrationSnapshot:
+    def test_each_joint_waits_for_an_ack_newer_than_its_own_send(self, monkeypatch):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.query_manual_encoder_references = MagicMock(return_value=True)
+        controller.current_state.manual_reference_nvs_valid = True
+        controller.current_state.manual_reference_valid_bitmap = (1 << 9) | (1 << 10)
+        controller.current_state.manual_reference_min_raw = [1000] * ENCODER_COUNT
+        controller.current_state.manual_reference_max_raw = [5000] * ENCODER_COUNT
+
+        mapping_version = 3
+        urdf_crc = 0x12345678
+        manual_crc = 0x00ABCDEF
+        monkeypatch.setattr(
+            core_logic,
+            "urdf_manual_scaled_mapping_metadata",
+            lambda: (mapping_version, urdf_crc),
+        )
+        monkeypatch.setattr(
+            core_logic,
+            "manual_encoder_reference_entry_crc",
+            lambda *_args: manual_crc,
+        )
+        monkeypatch.setattr(
+            core_logic.time,
+            "time",
+            MagicMock(side_effect=[100.0, 101.0, 102.0]),
+        )
+        controller.comm.wait_for_ack.side_effect = [
+            (CMD_CALIB_LOAD_LIMITS, 1, 0, 100.1),
+            (CMD_CALIB_LOAD_JOINT, 1, 0, 101.1),
+            (CMD_CALIB_LOAD_JOINT, 1, 0, 102.1),
+        ]
+
+        joint_results = [None] * ENCODER_COUNT
+        for joint in (9, 10):
+            joint_results[joint] = {
+                "success": True,
+                "mappingVersion": mapping_version,
+                "urdfConfigCrc": urdf_crc,
+                "manualReferenceCrc": manual_crc,
+            }
+        snapshot = {
+            "schema_version": 3,
+            "active_joint_mask": (1 << 9) | (1 << 10),
+            "motor_abs_limit_valid_bitmap": 0,
+            "motor_abs_limit_locked_bitmap": 0,
+            "motor_abs_limit_min": [0] * MOTOR_COUNT,
+            "motor_abs_limit_max": [0] * MOTOR_COUNT,
+            "joint_calib_results": joint_results,
+        }
+
+        ok, message = controller.load_calibration_snapshot(snapshot)
+
+        assert ok is True
+        assert message == "loaded 2 joints"
+        assert controller.comm.wait_for_ack.call_args_list == [
+            call(
+                CMD_CALIB_LOAD_LIMITS,
+                core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
+                received_after=100.0,
+            ),
+            call(
+                CMD_CALIB_LOAD_JOINT,
+                core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
+                received_after=101.0,
+            ),
+            call(
+                CMD_CALIB_LOAD_JOINT,
+                core_logic.CALIB_LOAD_ACK_TIMEOUT_S,
+                received_after=102.0,
+            ),
+        ]
