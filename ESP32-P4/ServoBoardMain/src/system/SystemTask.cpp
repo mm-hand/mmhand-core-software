@@ -1,4 +1,4 @@
-﻿#include "SystemTask.h"
+#include "SystemTask.h"
 #include "../calibration/CalibrationTask.h"
 #include "FirmwareLog.h"
 #include "StateMachineTask.h"

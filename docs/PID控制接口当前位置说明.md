@@ -79,8 +79,7 @@ ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp
 PID 初始化：
 
 ```cpp
-PID_Init(&_pids[i][0], PID_POSITION, pidParams[0]);
-PID_Init(&_pids[i][1], PID_POSITION, pidParams[1]);
+PID_Init(&_pids[i], PID_POSITION, pidParams);
 ```
 
 位置：
@@ -92,13 +91,8 @@ ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp:50
 PID 计算：
 
 ```cpp
-f_PID_Calculate(&_pids[i][0], targetDegs[i], magActualDegs[i]);
-
-const float loop2Target = _pids[i][0].Output + (float)absolutePosition[i];
-const float loop2Actual = (float)absolutePosition[i];
-f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual);
-
-outServoPulses[i] = (int16_t)_pids[i][1].Output + absolutePosition[i];
+f_PID_Calculate(&_pids[i], targetDegs[i], magActualDegs[i], dtSeconds);
+outServoPulses[i] = absolutePosition[i] + (int32_t)_pids[i].Output;
 ```
 
 位置：
@@ -109,13 +103,14 @@ ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp:66
 
 ### 当前控制结构
 
-单关节目前是两级 PID：
+单关节目前是单级外环 PID：
 
-1. 外环：关节角度 PID  
+1. 关节角度 PID
    `targetDegs[i] - magActualDegs[i]`
 
-2. 内环：舵机 ABS PID  
-   外环输出叠加当前舵机 ABS，得到舵机 ABS 目标。
+2. 舵机位置命令
+   外环输出直接叠加当前舵机 ABS，得到舵机 ABS 目标；
+   舵机自身负责到达该位置。
 
 最终输出是：
 

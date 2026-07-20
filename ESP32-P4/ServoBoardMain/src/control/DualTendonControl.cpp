@@ -9,16 +9,10 @@
 
 namespace {
 
-struct Point2D {
-    float x;
-    float y;
-};
-
+// 单个双腱关节的静态调参与配置。当前值来自固件常量，
+// 结构上保留了后续从 EEPROM/配置加载的可能。
 struct DualTendonJointConfig {
     uint8_t enabled;
-    uint8_t model;
-    float motorZero[2];
-    float countsPerMm[2];
     float kp[2];
     float ki[2];
     float kd[2];
@@ -27,6 +21,7 @@ struct DualTendonJointConfig {
     int32_t maxReleaseFromCalibCounts;
 };
 
+// 动态 PID/滤波状态，按逻辑关节索引。关节停止参与闭环输出时会重置。
 struct DualTendonJointState {
     float integral[2];
     float prevMotorRef[2];
@@ -38,14 +33,9 @@ struct DualTendonJointState {
 static DualTendonJointState g_dualTendonState[ENCODER_TOTAL_NUM];
 
 static const float kControlPeriodSec = 0.010f;
-static const float kDegToRad = 3.14159265358979323846f / 180.0f;
-
-static const uint8_t kDualTendonModelSharedCadGeometry = 1;
-
-static const float kDefaultDualTendonCountsPerMm = 40.0f;
-static const float kDefaultDualTendonKp = 0.60f;
+static const float kDefaultDualTendonKp = 0.00f;
 static const float kDefaultDualTendonKi = 0.0f;
-static const float kDefaultDualTendonKd = -0.00f;
+static const float kDefaultDualTendonKd = 0.6f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
 static const float kDefaultDualTendonDTermLimitCounts = 100.0f;
 static const float kDualTendonVelocityFilterTauSec = 0.050f;
@@ -54,21 +44,6 @@ static const float kDualTendonVelocityFilterAlpha =
 static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 1000;
 static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1800;
 static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 2500;
-
-static const Point2D kJoint16Origin = {0.0f, 0.0f};
-static const Point2D kJoint16A1_0 = {-5.741894f, 0.244188f};
-static const Point2D kJoint16B1_0 = {-1.808043f, 4.317810f};
-static const Point2D kJoint16C1 = {6.900f, 3.50f};
-static const float kJoint16L1_AB = 5.663f;
-static const float kJoint16L1_0 = 14.4094f;
-static const float kJoint16ThetaSwitch1 = 52.87f * kDegToRad;
-
-static const Point2D kJoint16A2_0 = {1.232425f, -4.847660f};
-static const Point2D kJoint16B2_0 = {4.245159f, -1.727883f};
-static const Point2D kJoint16C2 = {6.900f, -2.502f};
-static const float kJoint16L2_AB = 4.337f;
-static const float kJoint16L2_0 = 6.1338f;
-static const float kJoint16ThetaSwitch2 = 30.51f * kDegToRad;
 
 static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 {
@@ -79,8 +54,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     memset(out, 0, sizeof(*out));
     out->enabled = 1;
 
-    out->countsPerMm[0] = kDefaultDualTendonCountsPerMm;
-    out->countsPerMm[1] = kDefaultDualTendonCountsPerMm;
+    // 先使用保守默认值；特殊关节只覆盖自身的安全释放余量。
     out->kp[0] = kDefaultDualTendonKp;
     out->kp[1] = kDefaultDualTendonKp;
     out->ki[0] = kDefaultDualTendonKi;
@@ -98,21 +72,12 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
         case 4:
         case 8:
         case 12:
-            out->model = kDualTendonModelSharedCadGeometry;
-            out->motorZero[0] = 2557.0f;
-            out->motorZero[1] = 358.0f;
             return true;
         case kThumbBaseJointIndex:
-            out->model = kDualTendonModelSharedCadGeometry;
-            out->motorZero[0] = 2557.0f;
-            out->motorZero[1] = 358.0f;
             out->maxReleaseFromCalibCounts =
                 kThumbDualTendonMaxReleaseFromCalibCounts;
             return true;
         case 20:
-            out->model = kDualTendonModelSharedCadGeometry;
-            out->motorZero[0] = 2557.0f;
-            out->motorZero[1] = 358.0f;
             out->maxReleaseFromCalibCounts =
                 kJoint20DualTendonMaxReleaseFromCalibCounts;
             return true;
@@ -124,75 +89,16 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 
 static float constrainFloat(float value, float minValue, float maxValue)
 {
+    // 本地 float 限幅函数，避免在这里引入 Arduino constrain 重载。
     if (value < minValue) return minValue;
     if (value > maxValue) return maxValue;
     return value;
 }
 
-static Point2D rotateAroundCW(Point2D p, Point2D origin, float thetaRad)
-{
-    const float dx = p.x - origin.x;
-    const float dy = p.y - origin.y;
-    const float c = cosf(thetaRad);
-    const float s = sinf(thetaRad);
-    Point2D out;
-    out.x = origin.x + dx * c + dy * s;
-    out.y = origin.y - dx * s + dy * c;
-    return out;
-}
-
-static float dist2D(Point2D a, Point2D b)
-{
-    const float dx = a.x - b.x;
-    const float dy = a.y - b.y;
-    return sqrtf(dx * dx + dy * dy);
-}
-
-static float joint16Tendon1LengthChange(float qRad)
-{
-    const Point2D a = rotateAroundCW(kJoint16A1_0, kJoint16Origin, qRad);
-    const Point2D b = rotateAroundCW(kJoint16B1_0, kJoint16Origin, qRad);
-    const float lWrap = kJoint16L1_AB + dist2D(b, kJoint16C1);
-    const float lDirect = dist2D(a, kJoint16C1);
-    const float length = (qRad > kJoint16ThetaSwitch1) ? lDirect : lWrap;
-    return length - kJoint16L1_0;
-}
-
-static float joint16Tendon2LengthChange(float qRad)
-{
-    const Point2D a = rotateAroundCW(kJoint16A2_0, kJoint16Origin, qRad);
-    const Point2D b = rotateAroundCW(kJoint16B2_0, kJoint16Origin, qRad);
-    const float lWrap = kJoint16L2_AB + dist2D(b, kJoint16C2);
-    const float lDirect = dist2D(a, kJoint16C2);
-    const float length = (qRad < kJoint16ThetaSwitch2) ? lDirect : lWrap;
-    return length - kJoint16L2_0;
-}
-
-static bool tendonLengthChange(const DualTendonJointConfig& cfg,
-                               uint8_t jointIndex,
-                               uint8_t actuatorIndex,
-                               float qDeg,
-                               float* outMm)
-{
-    if (!outMm) {
-        return false;
-    }
-    switch (cfg.model) {
-        case kDualTendonModelSharedCadGeometry: {
-            (void)jointIndex;
-            const float qRad = qDeg * kDegToRad;
-            *outMm = (actuatorIndex == 0)
-                ? joint16Tendon1LengthChange(qRad)
-                : joint16Tendon2LengthChange(qRad);
-            return true;
-        }
-        default:
-            return false;
-    }
-}
-
 static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActuators[2])
 {
+    // 双腱关节由两个逻辑拉动方向相反的执行器表示。
+    // 同号双执行器由通用输出构建器处理。
     if (!outActuators || getJointActuatorCount(jointIndex) < 2) {
         return false;
     }
@@ -208,6 +114,7 @@ static bool interpolateDualTendonLutMotorAbs(const JointCalibrationResult& calib
                                              float qDeg,
                                              float* outAbs)
 {
+    // 提前拒绝不完整 LUT；下面的插值假设角度步长均匀。
     if (!outAbs ||
         actuatorIndex >= DUAL_TENDON_LUT_ACTUATOR_COUNT ||
         calib.dualTendonLutValid == 0 ||
@@ -221,6 +128,7 @@ static bool interpolateDualTendonLutMotorAbs(const JointCalibrationResult& calib
 
     const float firstDeg = calib.dualTendonLutAngleStartDeg;
     const float stepDeg = calib.dualTendonLutAngleStepDeg;
+    // 超出范围的请求钳到最近的标定端点，不在实测腱绳关系之外外推。
     if (qDeg <= firstDeg) {
         *outAbs = (float)calib.dualTendonLutMotorAbs[actuatorIndex][0];
         return true;
@@ -268,6 +176,8 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
     float lutRefDeg = qRefDeg;
     float lutFbDeg = qFbDeg;
     if (calib.mappingVersion >= 2) {
+        // 新版标定把 URDF 关节限位和 raw LUT 扫描范围分开保存，
+        // 插值前需要先把 URDF 角度转换回 LUT 角度。
         const float urdfSpan = calib.angleMax - calib.angleMin;
         if (!isfinite(urdfSpan) || urdfSpan <= 0.0f ||
             !isfinite(calib.totalDeg) || calib.totalDeg <= 0.0f) {
@@ -280,6 +190,8 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
     }
 
     for (uint8_t i = 0; i < 2; i++) {
+        // 标定样本与电机通道绑定；执行器顺序混用会让拮抗对相互对抗，
+        // 因此要求通道完全匹配。
         if (calib.dualTendonLutMotor[i] != actuators[i].motorChannel) {
             return false;
         }
@@ -291,10 +203,11 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
     return true;
 }
 
-} // namespace
+} // 匿名命名空间结束
 
 bool isDualTendonJoint(uint8_t jointIndex)
 {
+    // 仅有配置还不够，硬件映射也必须提供两个异号执行器。
     DualTendonJointConfig cfg;
     if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
         return false;
@@ -317,6 +230,7 @@ int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
                                        int32_t currentRawAbs,
                                        int32_t targetRawAbs)
 {
+    // 在腱绳坐标中比较，使“释放”的符号不受各电机 raw ABS 方向影响。
     DualTendonJointConfig cfg;
     if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
         return clampServoPos(targetRawAbs);
@@ -331,8 +245,8 @@ int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
     const int32_t actualReleaseFromCalib =
         calibratedAnchorTendonAbs - currentTendonAbs;
 
-    // Stateless feedback gate: once feedback reaches the release allowance,
-    // hold only commands that keep releasing. Tightening is always allowed.
+    // 无状态反馈门限：反馈达到释放余量后，仅保持继续释放的命令。
+    // 收紧命令始终允许通过。
     if (actualReleaseFromCalib >= cfg.maxReleaseFromCalibCounts &&
         targetTendonAbs < currentTendonAbs) {
         return clampServoPos(currentRawAbs);
@@ -346,6 +260,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    const ServoAngleData_t* servoData,
                                    DualTendonMotorTargets* outTargets)
 {
+    // 双腱主求解流程：先把关节参考/反馈映射成两个已标定电机位置，
+    // 再为每个电机叠加小幅 PID 修正。
     if (!servoData || !outTargets || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
@@ -374,6 +290,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
     DualTendonJointState& state = g_dualTendonState[jointIndex];
     outTargets->count = 2;
     for (uint8_t i = 0; i < 2; i++) {
+        // 两个电机都必须有效且在线；任一侧丢失都会使拮抗解失效，
+        // 调用方随后会保持当前位置。
         const uint8_t motorChannel = actuators[i].motorChannel;
         if (motorChannel >= SERVO_TOTAL_NUM ||
             !isMotorChannelValid(motorChannel) ||
@@ -397,6 +315,7 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
 
     const bool resetState = !state.prevValid;
     if (resetState) {
+        // 用当前模型值初始化历史项，避免闭环刚启用的第一周期产生微分尖峰。
         state.integral[0] = 0.0f;
         state.integral[1] = 0.0f;
         state.prevMotorRef[0] = outTargets->motorRef[0];
@@ -408,6 +327,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         state.prevValid = 1;
     }
     for (uint8_t i = 0; i < 2; i++) {
+        // 微分项基于模型速度误差，而不是 raw 编码器速度，
+        // 这样阻尼项始终处在已标定的电机空间中。
         const uint8_t motorChannel = outTargets->motorChannel[i];
         const float motorCurrent = (float)servoData->servoAngles[motorChannel];
         const float refVelocity = resetState

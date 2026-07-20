@@ -32,8 +32,6 @@ class JointTrace:
     target_deg: np.ndarray
     actual_deg: np.ndarray
     loop1_output: np.ndarray
-    loop2_actual: np.ndarray
-    loop2_output: np.ndarray
     source: str
 
 
@@ -199,13 +197,11 @@ def load_debug_trace(session_dir: Path, joint: int) -> Optional[JointTrace]:
         target = np.asarray([safe_float(row.get("target_deg")) for row in selected], dtype=float)
         actual = np.asarray([safe_float(row.get("actual_deg")) for row in selected], dtype=float)
         loop1 = np.asarray([safe_float(row.get("loop1_output")) for row in selected], dtype=float)
-        loop2_actual = np.asarray([safe_float(row.get("loop2_actual")) for row in selected], dtype=float)
-        loop2_output = np.asarray([safe_float(row.get("loop2_output")) for row in selected], dtype=float)
         valid = np.isfinite(time_values) & np.isfinite(target) & np.isfinite(actual)
         if np.count_nonzero(valid) < 3:
             continue
         columns = deduplicate_time(
-            (time_values[valid], target[valid], actual[valid], loop1[valid], loop2_actual[valid], loop2_output[valid])
+            (time_values[valid], target[valid], actual[valid], loop1[valid])
         )
         trace = JointTrace(*columns, source=path.name)
         if best is None or len(trace.time_s) > len(best.time_s):
@@ -230,7 +226,7 @@ def load_joint_state_trace(session_dir: Path, joint: int) -> Optional[JointTrace
         return None
     time_values, target, actual = deduplicate_time((time_values[valid], target[valid], actual[valid]))
     empty = np.full(len(time_values), np.nan)
-    return JointTrace(time_values, target, actual, empty, empty.copy(), empty.copy(), path.name)
+    return JointTrace(time_values, target, actual, empty, path.name)
 
 
 def load_joint_trace(session_dir: Path, joint: int) -> JointTrace:
@@ -311,8 +307,6 @@ def trim_trace(trace: JointTrace, start_s: Optional[float], end_s: Optional[floa
         trace.target_deg[mask],
         trace.actual_deg[mask],
         trace.loop1_output[mask],
-        trace.loop2_actual[mask],
-        trace.loop2_output[mask],
         trace.source,
     )
 
@@ -663,10 +657,6 @@ def plot_analysis(
     if pid_handles:
         axes[2].legend(pid_handles, pid_labels, loc="best")
 
-    if np.any(np.isfinite(trace.loop2_actual)):
-        axes[3].plot(t, trace.loop2_actual, label="debug motor actual", color="#0891b2", linewidth=1.1)
-    if np.any(np.isfinite(trace.loop2_output)):
-        axes[3].plot(t, trace.loop2_output, label="debug motor target", color="#f59e0b", linewidth=1.1)
     if servo is not None:
         servo_t = servo.time_s - t0
         axes[3].scatter(servo_t, servo.actual_abs, label="telemetry ABS", color="#0f766e", s=10, alpha=0.55)

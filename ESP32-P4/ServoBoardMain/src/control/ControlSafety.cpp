@@ -6,6 +6,7 @@ bool shouldEmergencyStop(bool canBusOnline,
                          uint8_t jointIndex,
                          bool encoderFeedbackFault)
 {
+    // 只有 CAN 反馈新鲜且目标关节编码器已成功映射时，才允许闭环关节控制。
     if (!canBusOnline || !sensorData.isValid) {
         return true;
     }

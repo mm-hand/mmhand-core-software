@@ -894,22 +894,18 @@ def parse_tactile_full_fragment(
 
 def parse_joint_debug_packet(
     payload: bytes,
-) -> Optional[Tuple[int, bool, float, float, float, float, float, bool, int, int]]:
-    legacy_len = 2 + 5 * 4
-    cmd_len = legacy_len + 1 + 2
+) -> Optional[Tuple[int, bool, float, float, float, bool, int, int]]:
+    base_len = 2 + 3 * 4
+    cmd_len = base_len + 1 + 2
     cmd_ts_len = cmd_len + 4
-    if len(payload) not in (legacy_len, cmd_len, cmd_ts_len):
+    if len(payload) not in (cmd_len, cmd_ts_len):
         return None
 
-    joint_index, valid, target_deg, actual_deg, loop1_out, loop2_act, loop2_out = struct.unpack(
-        ">BBfffff", payload[:legacy_len]
+    joint_index, valid, target_deg, actual_deg, loop1_out = struct.unpack(
+        ">BBfff", payload[:base_len]
     )
-    if len(payload) >= cmd_len:
-        cmd_valid = payload[legacy_len] == 1
-        cmd_target_pos = struct.unpack(">h", payload[legacy_len + 1 : legacy_len + 3])[0]
-    else:
-        cmd_valid = False
-        cmd_target_pos = 0
+    cmd_valid = payload[base_len] == 1
+    cmd_target_pos = struct.unpack(">h", payload[base_len + 1 : base_len + 3])[0]
 
     if len(payload) == cmd_ts_len:
         device_timestamp_ms = struct.unpack(">I", payload[cmd_len : cmd_len + 4])[0]
@@ -922,8 +918,6 @@ def parse_joint_debug_packet(
         target_deg,
         actual_deg,
         loop1_out,
-        loop2_act,
-        loop2_out,
         cmd_valid,
         cmd_target_pos,
         device_timestamp_ms,

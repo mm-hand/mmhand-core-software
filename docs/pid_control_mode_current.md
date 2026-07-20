@@ -6,7 +6,7 @@
 
 当前单电机和双电机负反馈都不属于标准“增量式 PID”。
 
-单电机使用的是明确的“位置式 PID”。代码中两级 PID 都通过 `PID_Init(..., PID_POSITION, ...)` 初始化，计算公式是：
+单电机使用的是明确的“位置式 PID”。代码中单个关节角度 PID 通过 `PID_Init(..., PID_POSITION, ...)` 初始化，计算公式是：
 
 ```text
 Output = Kp * e(k) + Ki * sum(e) + Kd * (e(k) - e(k-1))
@@ -41,11 +41,10 @@ ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp
 当前参数：
 
 ```text
-外环：Kp=5.5, Ki=0.0, Kd=0.7, IntegralLimit=100, OutputLimit=600
-内环：Kp=1.0, Ki=0.0, Kd=0.0, IntegralLimit=0,   OutputLimit=30719
+关节角度环：Kp=5.7, Ki=0.0, Kd=0.0, IntegralLimit=100, OutputLimit=600
 ```
 
-单电机是两级位置式 PID。
+单电机是单级位置式 PID。
 
 ### 外环
 
@@ -63,28 +62,15 @@ targetDeg - magActualDeg
 
 也就是日志里的 `l1`。
 
-### 内环
+### 舵机位置命令
 
-当前代码中内环目标是：
-
-```text
-loop2Target = outerOutput + absolutePosition
-loop2Actual = absolutePosition
-```
-
-然后内环 PID 输出：
-
-```text
-outServoPulses = innerOutput + absolutePosition
-```
-
-由于当前内环参数是 `Kp=1, Ki=0, Kd=0`，所以内环基本等价于：
+当前代码已去掉固件内环 PID，单电机关节直接把外环输出叠加到当前舵机位置：
 
 ```text
 outServoPulses = absolutePosition + outerOutput
 ```
 
-因此当前单电机实际行为可以简化理解为：
+因此当前单电机实际行为可以理解为：
 
 ```text
 目标角度 - 当前角度 -> 外环位置式 PID -> tendon 修正量
@@ -220,7 +206,7 @@ Kd = 0.04
 单电机日志：
 
 ```text
-[FB DBG] J03 valid=1 tgt=... act=... l1=... l2act=... l2out=... cmd=... curAbs=...
+[FB DBG] J03 valid=1 tgt=... act=... l1=... cmd=... curAbs=...
 ```
 
 字段含义：
@@ -229,8 +215,6 @@ Kd = 0.04
 tgt：目标关节角
 act：磁编实际角
 l1：外环 PID 输出，也就是 tendon/ABS 修正量
-l2act：内环当前 tendon/ABS
-l2out：内环 PID 输出
 cmd：最终下发电机目标
 curAbs：当前电机原始 ABS
 ```
@@ -248,7 +232,7 @@ M22 motorRef/motorFbModel/motorErr/correction/current/target
 ## 最终判断
 
 ```text
-单电机：位置式 PID，双环结构，输出作为当前位置上的修正量。
+单电机：单级位置式 PID，输出作为当前位置上的修正量。
 双电机：手写位置误差 P/I/D correction，不是标准增量式 PID，输出也作为当前 ABS 上的修正量。
 ```
 

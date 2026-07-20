@@ -1059,8 +1059,6 @@ class LowerComputerComm:
             "target_deg",
             "actual_deg",
             "loop1_output",
-            "loop2_actual",
-            "loop2_output",
             "cmd_valid",
             "cmd_target_pos",
         ]
@@ -1080,8 +1078,6 @@ class LowerComputerComm:
         target_deg: float,
         actual_deg: float,
         loop1_out: float,
-        loop2_act: float,
-        loop2_out: float,
         cmd_valid: bool,
         cmd_target_pos: int,
         device_timestamp_ms: int,
@@ -1094,8 +1090,6 @@ class LowerComputerComm:
             "target_deg": float(target_deg),
             "actual_deg": float(actual_deg),
             "loop1_output": float(loop1_out),
-            "loop2_actual": float(loop2_act),
-            "loop2_output": float(loop2_out),
             "cmd_valid": 1 if cmd_valid else 0,
             "cmd_target_pos": int(cmd_target_pos),
         }
@@ -1489,8 +1483,6 @@ class LowerComputerComm:
                         target_deg,
                         actual_deg,
                         loop1_out,
-                        loop2_act,
-                        loop2_out,
                         cmd_valid,
                         cmd_target_pos,
                         device_timestamp_ms,
@@ -1502,8 +1494,6 @@ class LowerComputerComm:
                         target_deg=target_deg,
                         actual_deg=actual_deg,
                         loop1_out=loop1_out,
-                        loop2_act=loop2_act,
-                        loop2_out=loop2_out,
                         cmd_valid=cmd_valid,
                         cmd_target_pos=cmd_target_pos,
                         device_timestamp_ms=device_timestamp_ms,
@@ -1513,8 +1503,6 @@ class LowerComputerComm:
                         model.joint_debug_target_deg[joint_index] = float(target_deg)
                         model.joint_debug_actual_deg[joint_index] = float(actual_deg)
                         model.joint_debug_loop1_output[joint_index] = float(loop1_out)
-                        model.joint_debug_loop2_actual[joint_index] = float(loop2_act)
-                        model.joint_debug_loop2_output[joint_index] = float(loop2_out)
                         model.joint_debug_cmd_valid[joint_index] = bool(cmd_valid)
                         model.joint_debug_cmd_target_pos[joint_index] = int(cmd_target_pos)
                         model.joint_debug_timestamp_ms[joint_index] = int(device_timestamp_ms)

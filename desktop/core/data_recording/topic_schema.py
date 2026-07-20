@@ -134,8 +134,6 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "target_deg",
         "actual_deg",
         "loop1_output",
-        "loop2_actual",
-        "loop2_output",
         "cmd_valid",
         "cmd_target_pos",
     ],

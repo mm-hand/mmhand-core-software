@@ -325,8 +325,6 @@ typedef struct {
     float targetDeg;
     float magActualDeg;
     float loop1Output;
-    float loop2Actual;
-    float loop2Output;
     int16_t cmdTargetPos;
     uint32_t timestamp;
     uint8_t jointIndex;

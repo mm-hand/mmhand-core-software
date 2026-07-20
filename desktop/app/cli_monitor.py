@@ -111,8 +111,6 @@ def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
         "jd_target": list(s.joint_debug_target_deg),
         "jd_actual": list(s.joint_debug_actual_deg),
         "jd_l1": list(s.joint_debug_loop1_output),
-        "jd_l2a": list(s.joint_debug_loop2_actual),
-        "jd_l2o": list(s.joint_debug_loop2_output),
         "jd_cmd_valid": list(s.joint_debug_cmd_valid),
         "jd_cmd_pos": list(s.joint_debug_cmd_target_pos),
     }
@@ -199,8 +197,6 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
     jd_target = snap["jd_target"]
     jd_actual = snap["jd_actual"]
     jd_l1 = snap["jd_l1"]
-    jd_l2a = snap["jd_l2a"]
-    jd_l2o = snap["jd_l2o"]
     jd_cmd_valid = snap["jd_cmd_valid"]
     jd_cmd_pos = snap["jd_cmd_pos"]
     for idx in [j for j in DEBUG_JOINTS if 0 <= j < ENCODER_COUNT]:
@@ -208,8 +204,7 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
         print(
             f"J{idx:02d} valid={int(bool(jd_valid[idx]))} "
             f"target={float(jd_target[idx]):8.3f} actual={float(jd_actual[idx]):8.3f} "
-            f"loop1={float(jd_l1[idx]):8.3f} loop2a={float(jd_l2a[idx]):8.3f} "
-            f"loop2o={float(jd_l2o[idx]):8.3f} cmd={cmd_text}"
+            f"loop1={float(jd_l1[idx]):8.3f} cmd={cmd_text}"
         )
     print("-" * 88)
     print("Controls: 's' start, 'x' stop, 'r' reset, 'c' calibrate, 'q' quit.")

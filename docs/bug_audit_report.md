@@ -136,11 +136,10 @@ while ((anchor - candidate) > 2048) {
 `ControlSolver.cpp` 默认 PID 参数：
 
 ```cpp
-{5.5f, 0.0f, 0.7f, 0.0f, 100.0f, 600.0f},
-{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
+{5.7f, 0.0f, 0.0f, 0.0f, 100.0f, 600.0f}
 ```
 
-两级 PID 的 `Ki` 都是 `0.0f`。`pid.c` 中当 `ki == 0` 时会强制：
+当前单环 PID 的 `Ki` 是 `0.0f`。`pid.c` 中当 `ki == 0` 时会强制：
 
 ```cpp
 Pid->Integral = 0;

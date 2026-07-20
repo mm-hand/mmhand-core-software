@@ -1842,8 +1842,6 @@ class HandGUI(QtWidgets.QMainWindow):
                 "target_deg": row.get("target_deg", ""),
                 "actual_deg": row.get("actual_deg", ""),
                 "loop1_output": row.get("loop1_output", ""),
-                "loop2_actual": row.get("loop2_actual", ""),
-                "loop2_output": row.get("loop2_output", ""),
                 "cmd_valid": row.get("cmd_valid", ""),
                 "cmd_target_pos": row.get("cmd_target_pos", ""),
             },

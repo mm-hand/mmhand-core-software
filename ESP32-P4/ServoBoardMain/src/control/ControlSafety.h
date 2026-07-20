@@ -5,7 +5,8 @@
 
 #include "../shared/TaskSharedData.h"
 
-// Feedback validity required before closed-loop output is allowed.
+// 闭环输出前必须满足的反馈有效性检查。
+// 返回 true 表示调用方应保持该关节当前电机位置，而不是发布新的 PID 目标。
 bool shouldEmergencyStop(bool canBusOnline,
                          const RemoteSensorData_t& sensorData,
                          const MappedAngleData_t& mappedData,

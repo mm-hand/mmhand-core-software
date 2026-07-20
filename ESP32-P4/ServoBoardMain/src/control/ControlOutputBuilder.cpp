@@ -5,7 +5,7 @@
 static const int32_t kServoSingleTurnModulo = 4096;
 static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
 
-// Clamp to the signed multi-turn range accepted by the servo protocol.
+// 限制到舵机协议接受的有符号多圈范围。
 int16_t clampServoPos(int32_t value)
 {
     if (value > 30719) return 30719;
@@ -17,6 +17,8 @@ int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
                                      uint8_t motorChannel,
                                      int32_t value)
 {
+    // 限位数组由标定和状态机代码共享，先在安全保护下拷贝，
+    // 再在本地执行限制。
     int32_t clamped = value;
     if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
         const uint32_t bit = (1UL << motorChannel);
@@ -44,7 +46,7 @@ int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
     return clampServoPos(clamped);
 }
 
-// Clamp a single-turn raw servo position to 0..4095.
+// 将单圈 raw 舵机位置限制到 0..4095。
 int16_t clampServoSingleTurnRaw(int32_t value)
 {
     if (value > 4095) return 4095;
@@ -52,13 +54,15 @@ int16_t clampServoSingleTurnRaw(int32_t value)
     return (int16_t)value;
 }
 
-// Expand a single-turn target to the nearest equivalent multi-turn position.
+// 将单圈目标展开为最近的等价多圈位置。
 int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
 {
     const int32_t baseTarget = (int32_t)clampServoSingleTurnRaw(singleTurnRaw);
     int32_t bestTarget = baseTarget;
     int32_t bestDistance = 0x7FFFFFFF;
 
+    // 检查当前圈以及前后一圈；在这个小窗口内，单圈目标
+    // 有且只有一个距离当前反馈最近的等价位置。
     const int32_t currentTurn = currentAbsPos / kServoSingleTurnModulo;
     for (int32_t turnOffset = -1; turnOffset <= 1; ++turnOffset)
     {
@@ -76,13 +80,13 @@ int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleT
     return clampServoPos(bestTarget);
 }
 
-// Anchor sweep mode to the current multi-turn position.
+// 将 sweep 模式锚定到当前多圈位置。
 int32_t anchorSingleTurnSweepToCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
 {
     return (int32_t)expandSingleTurnTargetNearCurrent(currentAbsPos, singleTurnRaw);
 }
 
-// Normalize single-turn raw delta to the shortest path.
+// 将单圈 raw 差值归一化为最短路径。
 int32_t wrapServoRawDelta(int32_t delta)
 {
     while (delta > kServoSingleTurnHalf) delta -= kServoSingleTurnModulo;
@@ -90,9 +94,8 @@ int32_t wrapServoRawDelta(int32_t delta)
     return delta;
 }
 
-// Build physical motor targets for one logical joint target. Dual-tendon
-// antagonist joints need an explicit two-motor controller, so this legacy helper
-// only expands the primary actuator for them.
+// 为一个逻辑关节目标生成物理电机目标。双腱拮抗关节需要
+// 显式的双电机控制器，因此这个旧辅助函数只展开主执行器。
 uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
                                          int32_t primaryTargetAbs,
                                          JointActuatorRuntimeTarget* outTargets,
@@ -104,6 +107,8 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
 
     uint8_t outCount = 0;
     const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    // 符号相反的双电机关节属于拮抗机构，第二个电机不能用
+    // 简单 offset 镜像生成，因此交给双腱控制器处理。
     const bool dualAntagonist =
         actuatorCount >= 2 &&
         outCapacity > 0;
@@ -121,6 +126,8 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
     const uint8_t maxActuatorCount =
         (actuatorCount >= 2 && primarySign != secondarySign) ? 1 : actuatorCount;
     for (uint8_t i = 0; i < maxActuatorCount && outCount < outCapacity; i++) {
+        // HardwareMap 负责 bus/id/channel 映射；这里仅跳过
+        // 无法安全寻址的条目。
         JointActuatorItem actuator;
         if (!getJointActuator(jointIndex, i, &actuator)) {
             continue;
@@ -142,7 +149,7 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
     return outCount;
 }
 
-// Append one servo target to a batch.
+// 向 batch 追加一个舵机目标。
 bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint8_t busIndex,
                        uint8_t servoId,
@@ -150,6 +157,8 @@ bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint16_t speed,
                        uint8_t acc)
 {
+    // 舵机目标队列使用固定大小 batch，即使调用方传入过多执行器，
+    // 也不能写出 SERVO_TARGET_BATCH_MAX。
     if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX) {
         return false;
     }
@@ -178,6 +187,7 @@ uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
 
     uint8_t appended = 0;
     for (uint8_t i = 0; i < targetCount; i++) {
+        // 统计成功追加的数量，调用方可据此回退到保持当前位置。
         if (appendServoTarget(batch,
                               targets[i].busIndex,
                               targets[i].servoId,
@@ -202,6 +212,7 @@ uint8_t appendJointActuatorRuntimeTargets(ServoTargetBatch_t* batch,
 
     uint8_t appended = 0;
     for (uint8_t i = 0; i < targetCount; i++) {
+        // 运行时目标已包含 offset 和方向相关决策。
         if (appendServoTarget(batch,
                               targets[i].busIndex,
                               targets[i].servoId,

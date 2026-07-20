@@ -1,4 +1,4 @@
-﻿#include "ControlTask.h"
+#include "ControlTask.h"
 
 #include <math.h>
 #include <string.h>
@@ -17,29 +17,40 @@
 #include "DualTendonControl.h"
 
 static ControlSolver g_controlSolver;
+// 释放锚点用于防止拮抗腱绳继续松过标定余量，按物理电机通道索引。
 static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
 static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
 static uint32_t g_dualReleaseAnchorValidBitmap = 0;
 
 void invalidateDualTendonReleaseAnchors(uint32_t motorMask)
 {
+    // 标定/预加载会改变物理参考姿态，因此下一个控制周期必须
+    // 从实时电机反馈重新捕获锚点。
     g_dualReleaseAnchorValidBitmap &= ~motorMask;
 }
 
+// 磁编码器数值是 14 bit 环形计数。
 static const int32_t kEncoderModulo = 16384;
+// 标定行程溢出判定为回绕前，允许少量边界余量。
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
+// 每个周期只发布少量关节调试数据，避免队列流量过大。
 static const uint8_t kDebugJointIndices[] = {0, 1, 2, 3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
 
 static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
+// 磁编码器断开时传感器协议使用的标记值。
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
+// 直控模式对负载尖峰更敏感；关节 PID 模式允许更高负载。
 static const int16_t kControlOverloadLoadThreshold = 800;
 static const int16_t kJointControlOverloadLoadThreshold = 2000;
+// 只有连续多个高负载帧后才锁存故障。
 static const uint8_t kControlOverloadLatchCycles = 20;
 static const uint8_t kJointControlOverloadLatchCycles = 20;
+// 速度 0 表示让舵机固件使用适合反馈控制的默认速度。
 static const uint16_t kJointControlFeedbackSpeed = 0;
+// 完成判定同时要求位置误差满足容差，并持续稳定若干帧。
 static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
 static const uint8_t kDirectRunDoneStableCycles = 5;
 static const float kFeedbackRunDoneToleranceDeg = 0.5f;
@@ -54,6 +65,7 @@ static const float kLocalTestMaxAbsAmpDeg = 180.0f;
 
 static float sanitizeLocalTestFreq(float freqHz)
 {
+    // 保证生成的正弦轨迹有限，并且频率不会超出固件控制环可承受范围。
     if (!isfinite(freqHz) || freqHz < kLocalTestMinFreqHz) {
         return kLocalTestMinFreqHz;
     }
@@ -65,6 +77,7 @@ static float sanitizeLocalTestFreq(float freqHz)
 
 static float sanitizeLocalTestAmp(float ampDeg)
 {
+    // 幅值允许带符号，便于操作端不改 phaseRad 也能翻转相位。
     if (!isfinite(ampDeg)) {
         return 0.0f;
     }
@@ -77,7 +90,7 @@ static float sanitizeLocalTestAmp(float ampDeg)
     return ampDeg;
 }
 
-// 鍗忚瀛楁浣跨敤 int16 浼犺緭锛屼繚鐣欐渶澶ф鍊?32767 浣滀负寮傚父/鍗犱綅锛屾甯稿€奸檺鍒跺埌 32766銆?
+// 协议字段使用 int16，保留 +32767 作为哨兵/无效值。
 static int16_t clampMappedCountForProtocol(int32_t value)
 {
     if (value > 32766) return 32766;
@@ -87,6 +100,7 @@ static int16_t clampMappedCountForProtocol(int32_t value)
 
 static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
+    // 应用标定映射前，先统一磁编码器方向。
     int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
     if (direction < 0) {
         oriented = (kEncoderModulo - oriented) & (kEncoderModulo - 1);
@@ -96,6 +110,7 @@ static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 
 static int32_t wrapEncoderCount(int32_t value)
 {
+    // 回绕到 0..16383 编码器计数范围。
     value %= kEncoderModulo;
     if (value < 0) value += kEncoderModulo;
     return value;
@@ -103,10 +118,11 @@ static int32_t wrapEncoderCount(int32_t value)
 
 static int32_t forwardEncoderDelta(int32_t from, int32_t to)
 {
+    // 从一个 raw 编码器计数到另一个计数的正向环形距离。
     return wrapEncoderCount(to - from);
 }
 
-// Encoder counts to degrees.
+// 编码器计数转角度。
 static float convertEncoderCountToDeg(int32_t encoderCount)
 {
     return (float)encoderCount * 360.0f / (float)kEncoderModulo;
@@ -114,12 +130,15 @@ static float convertEncoderCountToDeg(int32_t encoderCount)
 
 static int32_t degToEncoderCount(float deg)
 {
+    // 按远离 0 的方向取整，使小的正负角度映射保持对称。
     const float scaled = deg * (float)kEncoderModulo / 360.0f;
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
 }
 
 static float mapCalibratedEncoderToDeg(const JointCalibrationResult& calib, int32_t orientedRaw)
 {
+    // 新版缩放标定使用 startEncoder/encoderSpan/totalDeg 表示实测行程；
+    // 旧版标定回退到 offset 和硬限位最大值。
     if (calib.scaled && calib.encoderSpan > 0 && calib.totalDeg > 0.0f) {
         int32_t delta = forwardEncoderDelta(calib.startEncoder, orientedRaw);
         if (delta > calib.encoderSpan + kEncoderMarginCounts) {
@@ -142,6 +161,7 @@ static float mapCalibratedEncoderToDeg(const JointCalibrationResult& calib, int3
 
 static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
 {
+    // 在 PID 接收目标前，先把上位机目标限制到可用标定关节范围。
     if (!isfinite(targetDeg)) {
         targetDeg = 0.0f;
     }
@@ -179,7 +199,7 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
     return targetDeg;
 }
 
-// Find the motorMap channel for a physical bus/id pair.
+// 根据物理 bus/id 查找 motorMap 通道。
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
     return findMotorChannelByBusId(bus, id);
@@ -191,6 +211,8 @@ static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
                                               uint16_t speed,
                                               uint8_t acc)
 {
+    // 为该关节每个在线执行器根据实时舵机反馈生成保持命令；
+    // 故障和热插拔稳定阶段使用该路径。
     if (!batch) {
         return 0;
     }
@@ -226,6 +248,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        uint16_t speed,
                                        uint8_t acc)
 {
+    // 将一个逻辑关节目标转换为两个拮抗电机目标，
+    // 再经过标定得到的释放保护和锁定限位。
     if (!batch || !sharedData) {
         return 0;
     }
@@ -260,9 +284,9 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             limitMin = sharedData->motor_abs_limit_min[motorChannel];
             limitMax = sharedData->motor_abs_limit_max[motorChannel];
         }
-        // Calibration validity is required to establish the tendon release anchor.
-        // LOCK only enables the ABS min/max output clamp; it must not disable
-        // feedback control for an otherwise calibrated dual-tendon joint.
+        // 建立腱绳释放锚点需要有效标定。
+        // LOCK 只启用 ABS 最小/最大输出限幅，不能让已标定的双腱关节
+        // 失去反馈控制能力。
         if ((validBitmap & bit) == 0) {
             resetDualTendonController(jointIndex);
             return 0;
@@ -294,9 +318,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         target.busIndex = motor.busIndex;
         target.servoId = motor.servoID;
         target.sign = 1;
-        // Apply the same LOCK semantics as single-motor feedback: locked
-        // channels are clamped to their calibrated ABS range, while unlocked
-        // channels keep feedback control and may move beyond that range.
+        // 与单电机反馈使用相同的 LOCK 语义：锁定通道限制在标定 ABS 范围内，
+        // 未锁定通道继续保持反馈控制，并允许运动到该范围之外。
         target.targetAbs = clampServoPosByMotorAbsLimit(sharedData,
                                                         motorChannel,
                                                         releaseLimitedTarget);
@@ -307,6 +330,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
 
 static int16_t servoLoadMagnitude(int16_t rawLoad)
 {
+    // 舵机负载的符号/高位编码方向；故障逻辑只关心 10 bit 幅值。
     int16_t mag = rawLoad;
     if (mag < 0) {
         mag = -mag;
@@ -317,6 +341,8 @@ static int16_t servoLoadMagnitude(int16_t rawLoad)
 static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
                                         const ControlCommandSnapshot_t& commandSnapshot)
 {
+    // 过载检查只关注当前控制模式正在主动命令的电机；
+    // 空闲电机的负载可能是旧值或与当前动作无关。
     if (!sharedData) {
         return 0;
     }
@@ -347,6 +373,7 @@ static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
 
 static bool jointHasOverloadFault(uint8_t jointIndex, uint32_t overloadFaultBitmap)
 {
+    // 一个关节的任一执行器存在电机故障时，整个关节都应保持。
     const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
     for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
         JointActuatorItem actuator;
@@ -361,6 +388,7 @@ static bool jointHasOverloadFault(uint8_t jointIndex, uint32_t overloadFaultBitm
 
 static int32_t abs32Local(int32_t value)
 {
+    // 本地小工具函数，避免嵌入式构建中依赖重载 abs()。
     return value < 0 ? -value : value;
 }
 
@@ -368,6 +396,7 @@ static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
                                          const ServoAngleData_t& servoData,
                                          const ControlCommandSnapshot_t& commandSnapshot)
 {
+    // 直控 RUN 完成判定只对绝对多圈命令有意义。
     if (!sharedData ||
         commandSnapshot.controlMode != CONTROL_MODE_DIRECT_MOTOR ||
         commandSnapshot.motorDirectCommandSource != MOTOR_DIRECT_SOURCE_ABSOLUTE) {
@@ -403,6 +432,8 @@ static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
                                         const float* targetDegs,
                                         const float* actualDegs)
 {
+    // 反馈 RUN 完成要求每个激活关节都有有效映射反馈，
+    // 并连续多个周期保持在角度容差内。
     if (!sharedData || !targetDegs || !actualDegs || !mappedData.isValid) {
         return false;
     }
@@ -433,7 +464,7 @@ static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
 
 static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlCommandSnapshot_t* out)
 {
-// Read host commands once per control cycle to avoid mixed partial updates.
+    // 每个控制周期只读取一次上位机命令，避免混入部分更新。
     if (!sharedData || !out) {
         return false;
     }
@@ -468,10 +499,15 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
 }
 
 // ============================================================================
-// ControlTask - 鏍稿績瀹炴椂鎺у埗浠诲姟
+// ControlTask - 核心实时控制任务。
 // ============================================================================
-// 杩愯棰戠巼锛氶€氬父涓?100Hz (10ms 鍛ㄦ湡)
-// 鑱岃矗锛?// 1) 鏀堕泦鎬荤嚎浼犳潵鐨勪己鏈嶇數鏈虹粷瀵逛綅缃笌纾佺紪鐮佸櫒瑙掑害銆?// 2) 璇诲彇涓婁綅鏈轰笅鍙戠殑鍛戒护蹇収 (ControlCommandSnapshot_t)銆?// 3) 鏍规嵁涓嶅悓妯″紡 (CONTROL_MODE_JOINT 闂幆 / CONTROL_MODE_DIRECT_MOTOR 鐩存帶) 鎵ц鍒嗗彂銆?// 4) 鎵ц瀹夊叏妫€鏌ワ紙濡傛€ュ仠銆佽繃杞姐€佸弽鍚戦噴鏀句繚鎶ゃ€佸伐浣滅┖闂撮檺浣嶏級銆?// 5) 璋冪敤鍙岀幆 PID 姹傝В鍣?(ControlSolver) 鑾峰緱鐩爣鑴夊啿锛屽苟缁勮 Batch 浜ょ粰搴曞眰銆?// ============================================================================
+// 运行频率为 100 Hz（10 ms 周期）。职责：
+// 1. 读取舵机绝对位置反馈和磁编码器角度。
+// 2. 将上位机命令快照到 ControlCommandSnapshot_t。
+// 3. 按关节闭环模式或电机直控模式分发。
+// 4. 执行安全检查：停止状态、过载、编码器故障、工作空间限位。
+// 5. 运行 ControlSolver，并向总线层发布一个舵机目标 batch。
+// ============================================================================
 void controlTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -482,6 +518,7 @@ void controlTask(void* parameter)
 
     g_controlSolver.begin();
 
+    // 每 10 ms 复用的工作缓冲区，避免实时任务中进行堆分配。
     float localTargets[ENCODER_TOTAL_NUM] = {0.0f};
     float magAngles[ENCODER_TOTAL_NUM] = {0.0f};
     int32_t absolutePositionRaw[ENCODER_TOTAL_NUM] = {0};
@@ -497,6 +534,7 @@ void controlTask(void* parameter)
     uint32_t lastOverloadFaultResetToken =
         sharedAtomicLoad(&sharedData->overload_fault_reset_token);
     {
+        // 控制任务启动时清空对外公开的故障状态。
         SharedSafetyGuard guard;
         sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
@@ -510,15 +548,19 @@ void controlTask(void* parameter)
     TickType_t lastWakeTime = xTaskGetTickCount();
     TickType_t lastPidComputeTick = lastWakeTime;
     const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
+    // 新上线电机会保持一个命令周期，避免 direct/joint 模式立即跳到过期 UI 目标。
     bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
     bool hotplugHoldMotor[SERVO_TOTAL_NUM] = {false};
+    // token 由上位机/状态机单调更新，使本任务无需逐项比较目标即可发现新命令。
     uint32_t lastMotorCommandToken = commandSnapshot.motorCommandToken;
     uint32_t lastMotorSweepCommandToken = commandSnapshot.motorSweepCommandToken;
     uint32_t lastJointCommandToken = commandSnapshot.jointCommandToken;
     uint8_t lastMotorDirectSource = commandSnapshot.motorDirectCommandSource;
+    // sweep 模式把 0..4095 raw 命令展开为连续多圈运动。
     int16_t prevSweepRawTarget[SERVO_TOTAL_NUM] = {0};
     int32_t sweepExpandedTarget[SERVO_TOTAL_NUM] = {0};
     bool sweepAnchorValid[SERVO_TOTAL_NUM] = {false};
+    // RUN 完成判定使用去抖计数，避免单个噪声帧误判动作完成。
     uint8_t directRunDoneStableCount = 0;
     uint8_t feedbackRunDoneStableCount = 0;
     uint32_t feedbackRunToken = 0;
@@ -535,6 +577,7 @@ void controlTask(void* parameter)
     {
         taskRuntimeMarkLoopStart(TASK_RUNTIME_CONTROL);
         if (!readControlCommandSnapshot(sharedData, &commandSnapshot)) {
+            // 如果命令互斥锁短暂繁忙，本帧跳过输出，但保持周期调度对齐。
             taskRuntimeMarkLoopEnd(TASK_RUNTIME_CONTROL);
             const TickType_t nextWakeTime = lastWakeTime + solverPeriodTicks;
             const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
@@ -547,6 +590,7 @@ void controlTask(void* parameter)
         const uint32_t motorCommandToken = commandSnapshot.motorCommandToken;
         if (motorCommandToken != lastMotorCommandToken)
         {
+            // 新的电机直控命令会解除当前热插拔保持状态。
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             lastMotorCommandToken = motorCommandToken;
         }
@@ -554,6 +598,7 @@ void controlTask(void* parameter)
         const uint32_t motorSweepCommandToken = commandSnapshot.motorSweepCommandToken;
         if (motorSweepCommandToken != lastMotorSweepCommandToken)
         {
+            // sweep 命令变化可能有意跨过 raw 回绕点。
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             lastMotorSweepCommandToken = motorSweepCommandToken;
         }
@@ -561,6 +606,7 @@ void controlTask(void* parameter)
         const uint32_t jointCommandToken = commandSnapshot.jointCommandToken;
         if (jointCommandToken != lastJointCommandToken)
         {
+            // 新关节目标会开启新的单次反馈完成判定窗口。
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             feedbackRunDoneStableCount = 0;
             lastJointCommandToken = jointCommandToken;
@@ -569,6 +615,7 @@ void controlTask(void* parameter)
         const uint8_t motorDirectSource = commandSnapshot.motorDirectCommandSource;
         if (motorDirectSource != lastMotorDirectSource)
         {
+            // 单圈命令和 sweep 命令使用不同的锚定语义。
             memset(sweepAnchorValid, 0, sizeof(sweepAnchorValid));
             lastMotorDirectSource = motorDirectSource;
         }
@@ -577,6 +624,7 @@ void controlTask(void* parameter)
             sharedAtomicLoad(&sharedData->overload_fault_reset_token);
         if (overloadFaultResetToken != lastOverloadFaultResetToken)
         {
+            // 操作端请求故障复位时，同时清理私有锁存状态和共享故障 bitmap/负载快照。
             overloadFaultLatched = 0;
             memset(overloadHighCount, 0, sizeof(overloadHighCount));
             {
@@ -591,6 +639,7 @@ void controlTask(void* parameter)
 
         ServoTargetBatch_t targetBatch;
         memset(&targetBatch, 0, sizeof(targetBatch));
+        // 每个循环生成一个 batch 并用 overwrite 发布，下游始终看到最新完整命令集。
         targetBatch.timestamp = millis();
         targetBatch.source = SERVO_TARGET_OWNER_CONTROL;
         int16_t jointCmdPos[ENCODER_TOTAL_NUM] = {0};
@@ -601,6 +650,7 @@ void controlTask(void* parameter)
         servoData.timestamp = millis();
 
         if (sharedData->servoFeedbackQueue) {
+            // 只 peek 不消费：多个任务都可能需要查看最新反馈。
             xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0);
         }
 
@@ -609,12 +659,14 @@ void controlTask(void* parameter)
         bool telemetryFresh = false;
         if (sharedData->servoTelemetrySnapshotQueue &&
             xQueuePeek(sharedData->servoTelemetrySnapshotQueue, &telemetryData, 0) == pdTRUE) {
+            // 负载/电流数据用于过载保护，因此比编码器映射更快过期。
             telemetryFresh =
                 (uint32_t)(millis() - telemetryData.timestamp) <= kServoTelemetryTimeoutMs;
         }
 
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
         {
+            // 检测电机从离线到在线的热插拔变化，并保持恢复电机直到下一条显式命令。
             const bool onlineNow = (servoData.onlineStatus[ch] != 0);
             if (onlineNow && !prevMotorOnline[ch]) {
                 hotplugHoldMotor[ch] = true;
@@ -632,6 +684,8 @@ void controlTask(void* parameter)
         g_dualReleaseAnchorValidBitmap &=
             sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
 
+        // 按关节缓存当前电机位置，分别保存 raw 坐标和腱绳坐标。
+        // PID 使用腱绳空间，总线命令使用 raw 空间。
         memset(absolutePositionRaw, 0, sizeof(absolutePositionRaw));
         memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
@@ -651,6 +705,7 @@ void controlTask(void* parameter)
 
         bool canBusOnline = false;
         if (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE && sensorData.isValid) {
+            // 超过 CAN 超时时间后，磁编码器反馈视为过期。
             const uint32_t nowMs = millis();
             canBusOnline = (nowMs - sensorData.timestamp) <= kCanBusOfflineTimeoutMs;
         }
@@ -661,6 +716,8 @@ void controlTask(void* parameter)
 
         if (canBusOnline)
         {
+            // 将 raw 磁编码器读数转换为已标定 URDF 角度，
+            // 同时发布紧凑协议计数和 float 调试角度。
             uint32_t encoderOnlineMask = 0;
             uint32_t encoderFaultMask = 0;
             {
@@ -683,6 +740,7 @@ void controlTask(void* parameter)
 
                 const int32_t orientedRaw = orientEncoderRaw(sensorData.encoderValues[i], g_encoderDirection[i]);
                 if (!g_jointCalibResult[i].success) {
+                    // 未标定关节故意标记为无效，禁止进入反馈 PID。
                     mappedData.angleValues[i] = 0;
                     mappedData.validFlags[i] = 0;
                     magAngles[i] = 0.0f;
@@ -694,6 +752,8 @@ void controlTask(void* parameter)
                 const JointCalibrationResult& calib = g_jointCalibResult[i];
                 float mappedDeg = 0.0f;
                 if (calib.mappingVersion >= 2) {
+                    // 2 版及以上映射可检测超出标定工作空间的计数，
+                    // 并上报去抖后的上限警告。
                     EncoderUrdfMapResult mapping;
                     const bool mapped =
                         calib.mappingVersion == kManualScaledUrdfFeedbackMappingVersion
@@ -771,6 +831,8 @@ void controlTask(void* parameter)
             commandSnapshot.controlMode == CONTROL_MODE_JOINT;
         if (sineTestEnabled)
         {
+            // 本地正弦测试会覆盖选中关节的上位机目标，
+            // 但仍复用正常关节 PID 和安全流水线。
             const uint32_t sineTestToken = commandSnapshot.sineTestRequestToken;
             if (!sineTestActive || sineTestToken != lastSineTestRequestToken)
             {
@@ -823,6 +885,7 @@ void controlTask(void* parameter)
 
         if (normalOutputAllowed && telemetryFresh)
         {
+            // 被命令电机持续高负载后锁存过载故障。
             const uint32_t overloadMotorMask =
                 activeOverloadMotorMask(sharedData, commandSnapshot);
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
@@ -877,6 +940,7 @@ void controlTask(void* parameter)
         overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
 
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
+            // 本地正弦生成后仍要限幅，确保测试轨迹不会请求超出标定关节工作空间。
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
             }
@@ -887,8 +951,8 @@ void controlTask(void* parameter)
             commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
             !sineTestActive;
         if (feedbackOneShotActive) {
-            // Snapshot the clamped target for this command generation. Completion
-            // must be judged against one stable target, not a later UI update.
+            // 为本次命令 generation 记录限幅后的目标快照。
+            // 完成判定必须针对一个稳定目标，而不是后续 UI 更新。
             if (!feedbackRunTracking || feedbackRunToken != jointCommandToken) {
                 memcpy(feedbackRunTargetDeg, localTargets, sizeof(feedbackRunTargetDeg));
                 feedbackRunToken = jointCommandToken;
@@ -905,12 +969,11 @@ void controlTask(void* parameter)
             feedbackRunTimeoutEventQueued = false;
         }
 
-        // Only the CONTROL owner may construct servo targets. Angle mapping,
-        // telemetry and debug publication above continue during calibration,
-        // but they must not compete with the calibration producer for the
-        // single-slot servoTargetQueue.
+        // 只有 CONTROL owner 可以构建舵机目标。标定期间，上面的角度映射、
+        // 遥测和调试发布仍会继续，但不能与标定生产者竞争单槽 servoTargetQueue。
         const bool controlTargetBuildAllowed = controlEnabled;
         if (!controlTargetBuildAllowed || !feedbackOutputState) {
+            // 双腱 PID 含历史项；只要反馈输出没有实际驱动关节，就清空这些状态。
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 if (isDualTendonJoint(jointIndex)) {
                     resetDualTendonController(jointIndex);
@@ -923,14 +986,12 @@ void controlTask(void* parameter)
             lastPidComputeTick = pidComputeTick;
             float pidDtSeconds =
                 (float)elapsedPidTicks * (float)portTICK_PERIOD_MS * 0.001f;
-            // Use the nominal period on first entry or after a scheduler stall.
-            // This prevents a stale interval from creating an I/D impulse.
+            // 首次进入或调度停顿后使用标称周期，避免过期时间间隔造成 I/D 冲击。
             if (!isfinite(pidDtSeconds) || pidDtSeconds < 0.001f || pidDtSeconds > 0.100f) {
                 pidDtSeconds = 0.010f;
             }
-            // PID uses tendon-space ABS so a positive correction has the same
-            // "shorten tendon" meaning on motors with opposite raw ABS directions.
-            // Single-motor output converts the final tendon-space target back to raw.
+            // PID 使用腱绳空间 ABS，使正修正在 raw ABS 方向相反的电机上
+            // 仍表示相同的“收紧腱绳”含义。单电机输出会把最终腱绳空间目标转回 raw。
             g_controlSolver.compute(localTargets,
                                     magAngles,
                                     absolutePositionTendon,
@@ -938,6 +999,7 @@ void controlTask(void* parameter)
                                     pidDtSeconds);
             if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
             {
+                // 直控模式绕过关节 PID，将上位机电机目标直接发给对应物理通道。
                 const uint32_t activeMotorMask =
                     sharedAtomicLoad(&sharedData->active_motor_mask) &
                     validMotorChannelMask();
@@ -955,6 +1017,7 @@ void controlTask(void* parameter)
                     int16_t targetPos = clampServoPos(servoData.servoAngles[ch]);
                     if (!hotplugHoldMotor[ch]) {
                         if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
+                            // sweep 目标是单圈 raw 值，通过增量展开实现连续旋转。
                             const int16_t rawTarget =
                                 clampServoSingleTurnRaw(commandSnapshot.motorSweepTargetRaw[ch]);
                             if (!sweepAnchorValid[ch]) {
@@ -970,10 +1033,12 @@ void controlTask(void* parameter)
                             targetPos = clampServoPos(sweepExpandedTarget[ch]);
                             sweepExpandedTarget[ch] = targetPos;
                         } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
+                            // absolute 来源本身已经使用多圈舵机计数。
                             sweepAnchorValid[ch] = false;
                             targetPos = clampServoPos(
                                 (int32_t)commandSnapshot.motorTargetRaw[ch]);
                         } else {
+                            // 旧单圈来源会选择当前反馈附近最近的等价绝对目标。
                             sweepAnchorValid[ch] = false;
                             targetPos = expandSingleTurnTargetNearCurrent(
                                 servoData.servoAngles[ch],
@@ -991,6 +1056,7 @@ void controlTask(void* parameter)
             {
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
+                // 关节模式会对每个关节独立决定：保持、使用双腱控制或输出普通 PID 目标。
                 const uint8_t bus = jointMap[jointIndex].busIndex;
                 const uint8_t id = jointMap[jointIndex].servoID;
                 const int jointMotorCh = findMotorChannel(bus, id);
@@ -1020,6 +1086,7 @@ void controlTask(void* parameter)
 
                 if (!jointActive)
                 {
+                    // 未激活关节不发布主动命令，并丢弃双腱状态，便于重新启用时干净启动。
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1030,6 +1097,7 @@ void controlTask(void* parameter)
 
                 if (emergency)
                 {
+                    // 反馈故障、总线丢失、输出关闭和过载都会统一进入保持当前位置行为。
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1043,6 +1111,7 @@ void controlTask(void* parameter)
 
                 if (hotplugHoldActive)
                 {
+                    // 刚上线的电机会保持在反馈位置，直到操作端命令它有意移动。
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1056,9 +1125,10 @@ void controlTask(void* parameter)
 
                 int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
-                // Only active joints follow PID and emit servo targets.
+                // 只有激活关节才跟随 PID 并输出舵机目标。
                 const bool dualTendonJoint = isDualTendonJoint(jointIndex);
                 if (jointActive && dualTendonJoint) {
+                    // 拮抗关节需要已标定的双电机目标；计算失败时回退为保持所有执行器。
                     const uint8_t appended =
                         appendDualTendonTargets(&targetBatch,
                                                 sharedData,
@@ -1078,6 +1148,8 @@ void controlTask(void* parameter)
                 }
 
                 if (jointActive) {
+                    // 普通单电机关节：先把腱绳空间 PID 结果转回电机 raw ABS，
+                    // 再应用锁定限位。
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                         const uint8_t motorCh = (uint8_t)jointMotorCh;
                         const int32_t targetRawAbs =
@@ -1091,6 +1163,8 @@ void controlTask(void* parameter)
                 }
 
                 if (dualTendonJoint) {
+                    // 如果双腱关节走到这个回退路径，不尝试通用镜像，
+                    // 而是保持各执行器当前位置。
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 } else {
@@ -1106,6 +1180,8 @@ void controlTask(void* parameter)
 
         if (sharedData->jointDebugQueue)
         {
+            // 发布紧凑的滚动调试样本。队列满时丢弃最旧样本，
+            // 保证 UI 看到新鲜的控制环数据。
             for (uint8_t di = 0; di < kDebugJointCount; di++)
             {
                 const uint8_t jointIndex = kDebugJointIndices[di];
@@ -1116,9 +1192,7 @@ void controlTask(void* parameter)
                 debugData.valid = (mappedData.validFlags[jointIndex] != 0) ? 1 : 0;
                 debugData.targetDeg = localTargets[jointIndex];
                 debugData.magActualDeg = magAngles[jointIndex];
-                debugData.loop1Output = g_controlSolver.getPidOutput(jointIndex, 0);
-                debugData.loop2Actual = (float)absolutePositionTendon[jointIndex];
-                debugData.loop2Output = g_controlSolver.getPidOutput(jointIndex, 1);
+                debugData.loop1Output = g_controlSolver.getPidOutput(jointIndex);
                 debugData.cmdTargetPos = jointCmdPos[jointIndex];
                 debugData.cmdValid = jointCmdValid[jointIndex];
 
@@ -1148,12 +1222,14 @@ void controlTask(void* parameter)
         if (sharedData->servoTargetQueue &&
             targetBatch.count > 0 &&
             controlTargetPublishAllowed) {
+            // 发布前再次检查 owner/state，防止状态切换时泄漏过期的 CONTROL 目标 batch。
             xQueueOverwrite(sharedData->servoTargetQueue, &targetBatch);
         }
 
         if (directRunningState &&
             commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR &&
             commandSnapshot.motorDirectCommandSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
+            // 当所有激活电机连续多个控制帧保持在容差内时，直控 absolute RUN 完成。
             if (directAbsoluteTargetsReached(sharedData, servoData, commandSnapshot)) {
                 if (directRunDoneStableCount < 255) {
                     directRunDoneStableCount++;
@@ -1173,6 +1249,8 @@ void controlTask(void* parameter)
         }
 
         if (feedbackOneShotActive && feedbackRunTracking) {
+            // 单次 feedback RUN 根据命令开始时捕获的快照判定完成。
+            // 正弦测试会一直运行，直到被显式停止。
             const bool targetsReached = feedbackJointTargetsReached(
                 sharedData,
                 mappedData,
@@ -1185,8 +1263,8 @@ void controlTask(void* parameter)
                 }
                 if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles &&
                     !feedbackRunDoneEventQueued) {
-                    // Queue-full is transient. Keep the completion pending and retry
-                    // instead of dropping it and leaving RUN_FEEDBACK latched.
+                    // 队列满是暂态问题；保留完成事件并重试，
+                    // 避免丢弃事件导致 RUN_FEEDBACK 一直锁定。
                     feedbackRunDoneEventQueued = postSystemEventForToken(
                         sharedData,
                         SYSTEM_EVENT_RUN_FEEDBACK_DONE,
@@ -1213,6 +1291,7 @@ void controlTask(void* parameter)
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_CONTROL);
         const TickType_t nextWakeTime = lastWakeTime + solverPeriodTicks;
         const bool periodOverrun = (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+        // 运行时监视器记录本循环是否错过 10 ms 截止时间。
         taskRuntimeMarkPeriodResult(TASK_RUNTIME_CONTROL, periodOverrun);
         vTaskDelayUntil(&lastWakeTime, solverPeriodTicks);
         if (periodOverrun) vTaskDelay(1);

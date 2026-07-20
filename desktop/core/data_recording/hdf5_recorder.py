@@ -227,8 +227,6 @@ def _field_dtype_kind(field: str) -> str:
         "target_deg",
         "actual_deg",
         "loop1_output",
-        "loop2_actual",
-        "loop2_output",
     } or field.endswith("_deg"):
         return "float"
     if field.endswith(("_force", "_mean_force", "_max_force", "_fx", "_fy", "_fz", "_mag")):

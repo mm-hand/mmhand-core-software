@@ -1,4 +1,4 @@
-﻿#include "ServoCommunicationTask.h"
+#include "ServoCommunicationTask.h"
 
 #include <string.h>
 

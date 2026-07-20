@@ -34,7 +34,7 @@ def test_step_metrics_detect_rise_overshoot_and_settling() -> None:
     after = time_s >= 1.0
     actual[after] = 10.0 * (1.0 - np.exp(-(time_s[after] - 1.0) / 0.25))
     empty = np.full(len(time_s), np.nan)
-    trace = JointTrace(time_s, target, actual, empty, empty.copy(), empty.copy(), "synthetic")
+    trace = JointTrace(time_s, target, actual, empty, "synthetic")
 
     rows = analyze_steps(trace, tolerance_deg=0.5, settle_hold_s=0.3)
 
@@ -55,8 +55,6 @@ def test_loads_debug_data_and_infers_single_motor(tmp_path: Path) -> None:
                 "target_deg": 5.0,
                 "actual_deg": 4.0 + index * 0.2,
                 "loop1_output": 10.0,
-                "loop2_actual": 2000.0,
-                "loop2_output": 2010.0,
             }
         )
     _write_csv(

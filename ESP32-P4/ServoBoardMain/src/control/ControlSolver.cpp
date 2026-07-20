@@ -27,9 +27,8 @@ void ControlSolver::begin()
 
     // 2026-07-19: 弹簧加载的单电机关节在正向紧绳负反馈时实测存在约 1.5 deg 静差。
     // 当前先保持 Ki/Kd 为 0，待阶跃数据确认后再按标准离散 PID 参数调节。
-    float pidConfigs[2][PID_PARAMETER_NUM] = {
-        {5.7f, 0.0f, 0.0f, 0.0f, 100.0f, 600.0f},
-        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30719.0f}
+    float pidConfigs[PID_PARAMETER_NUM] = {
+        5.7f, 0.0f, 0.0f, 0.0f, 100.0f, 600.0f
     };
     setPIDParams(pidConfigs);
 }
@@ -45,12 +44,11 @@ void ControlSolver::init(int16_t* zeroOffsets, float* gearRatios, int8_t* direct
     _initialized = true;
 }
 
-void ControlSolver::setPIDParams(float pidParams[][PID_PARAMETER_NUM])
+void ControlSolver::setPIDParams(float pidParams[PID_PARAMETER_NUM])
 {
-    // 每个关节拥有两套 PID 状态，互不共享积分和历史误差。
+    // 每个关节拥有独立 PID 状态，互不共享积分和历史误差。
     for (int i = 0; i < JOINT_COUNT; i++) {
-        PID_Init(&_pids[i][0], PID_POSITION, pidParams[0]);
-        PID_Init(&_pids[i][1], PID_POSITION, pidParams[1]);
+        PID_Init(&_pids[i], pidParams);
     }
 }
 
@@ -60,40 +58,36 @@ bool ControlSolver::compute(float* targetDegs,
                             int32_t* outServoPulses,
                             float dtSeconds)
 {
+    // 本周期所有缓冲区都由 ControlTask 持有；求解器只读输入并写
+    // outServoPulses，因此自身不做 FreeRTOS 同步。
     if (!targetDegs || !magActualDegs || !absolutePosition || !outServoPulses ||
         !isfinite(dtSeconds) || dtSeconds <= 0.0f) {
         return false;
     }
 
     for (int i = 0; i < JOINT_COUNT; i++) {
-        // 外环把角度误差转成舵机侧位置修正量。
-        f_PID_Calculate(&_pids[i][0], targetDegs[i], magActualDegs[i], dtSeconds);
-
-        // 内环以当前舵机绝对位置为基准，输出最终舵机目标位置。
-        const float loop2Target = _pids[i][0].Output + (float)absolutePosition[i];
-        const float loop2Actual = (float)absolutePosition[i];
-        f_PID_Calculate(&_pids[i][1], loop2Target, loop2Actual, dtSeconds);
-
-        outServoPulses[i] = (int32_t)_pids[i][1].Output + absolutePosition[i];
+        // 把角度误差转成舵机侧位置修正量，舵机自身完成位置闭环。
+        f_PID_Calculate(&_pids[i], targetDegs[i], magActualDegs[i], dtSeconds);
+        outServoPulses[i] = absolutePosition[i] + (int32_t)_pids[i].Output;
     }
     return true;
 }
 
-float ControlSolver::getPidOutput(uint8_t jointIndex, uint8_t loopIndex) const
+float ControlSolver::getPidOutput(uint8_t jointIndex) const
 {
-    if (jointIndex >= JOINT_COUNT || loopIndex > 1) {
+    // UI 选择变化时调试端可能请求非法索引；返回无害的 0，
+    // 避免暴露原始数组访问。
+    if (jointIndex >= JOINT_COUNT) {
         return 0.0f;
     }
-    return _pids[jointIndex][loopIndex].Output;
+    return _pids[jointIndex].Output;
 }
 
 void ControlSolver::resetAll()
 {
+    // 只重置动态 PID 状态；已配置的增益和机械变换保持不变，
+    // 这样下一个控制周期可以立即重新启动。
     for (int i = 0; i < JOINT_COUNT; i++) {
-        for (int loop = 0; loop < 2; loop++) {
-            if (_pids[i][loop].PID_Calc_Clear) {
-                _pids[i][loop].PID_Calc_Clear(&_pids[i][loop]);
-            }
-        }
+        PID_Calc_Clear(&_pids[i]);
     }
 }
