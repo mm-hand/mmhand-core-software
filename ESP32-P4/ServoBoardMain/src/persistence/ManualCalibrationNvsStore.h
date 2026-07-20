@@ -8,9 +8,10 @@
 static const uint32_t kManualEncoderReferenceFullMask =
     (1UL << ENCODER_TOTAL_NUM) - 1UL;
 
-// Validate operator-entered raw endpoint pairs against the configured encoder
-// directions. The legacy return value remains "all 21 valid"; callers that
-// operate on a selected scope should use manualEncoderReferencesCoverMask().
+// Validate that operator-entered endpoint pairs are present and in the raw
+// 14-bit range. A zero-span pair is allowed to be persisted so Min and Max can
+// be captured in separate operations. Runtime motion gates separately require
+// a non-zero directed span through manualEncoderReferencesCoverActiveMask().
 bool manualEncoderReferencesValidate(
     const ManualEncoderReference* references,
     uint32_t* outValidMask = NULL);
@@ -30,6 +31,7 @@ void manualEncoderReferencesApplyRam(
     const ManualEncoderReference* references);
 uint32_t manualEncoderReferencesValidMask();
 bool manualEncoderReferencesComplete();
+// True only when every requested stored pair also has a usable non-zero span.
 bool manualEncoderReferencesCoverActiveMask(uint32_t requiredMask);
 
 // Independent A/B NVS snapshot. V2 persists a validity bitmap so one selected

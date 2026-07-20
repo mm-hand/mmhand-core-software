@@ -205,11 +205,8 @@ bool manualEncoderReferencesValidate(
     if (references) {
         for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
             const ManualEncoderReference& ref = references[joint];
-            const int32_t span = calibrationDirectedEncoderDelta(
-                ref.minRaw, ref.maxRaw, g_encoderDirection[joint]);
             if (ref.valid && ref.minRaw < kCalibrationEncoderModulo &&
-                ref.maxRaw < kCalibrationEncoderModulo &&
-                span > 0 && span < kCalibrationEncoderModulo) {
+                ref.maxRaw < kCalibrationEncoderModulo) {
                 validMask |= (1UL << joint);
             }
         }
@@ -297,8 +294,25 @@ bool manualEncoderReferencesComplete()
 
 bool manualEncoderReferencesCoverActiveMask(uint32_t requiredMask)
 {
-    return manualEncoderReferencesCoverMask(
-        g_manualEncoderReference, requiredMask, NULL);
+    requiredMask &= kManualEncoderReferenceFullMask;
+    if (requiredMask == 0) {
+        return false;
+    }
+
+    uint32_t usableMask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        const ManualEncoderReference& ref = g_manualEncoderReference[joint];
+        if (!ref.valid || ref.minRaw >= kCalibrationEncoderModulo ||
+            ref.maxRaw >= kCalibrationEncoderModulo) {
+            continue;
+        }
+        const int32_t span = calibrationDirectedEncoderDelta(
+            ref.minRaw, ref.maxRaw, g_encoderDirection[joint]);
+        if (span > 0 && span < kCalibrationEncoderModulo) {
+            usableMask |= (1UL << joint);
+        }
+    }
+    return (usableMask & requiredMask) == requiredMask;
 }
 
 bool manualCalibrationNvsLoadLatest(

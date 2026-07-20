@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -77,7 +78,7 @@ from desktop.core.session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
-from .ui_qt_compat import QtCore, QtGui, QtWidgets, ensure_app
+from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
 from .ui_services import LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
 from .ui_task_runtime import TaskRuntimeWindow
@@ -94,6 +95,8 @@ FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
 
 
 class HandGUI(QtWidgets.QMainWindow):
+    test_recording_stop_finished = Signal(str, str, str)
+
     def __init__(
         self,
         backend: HandBackend,
@@ -130,6 +133,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state_buffer = LatestStateBuffer()
         self._state_buffer_version = 0
         self._data_logger = DataSessionRecorder(flush_every=10)
+        self._test_recording_stop_lock = threading.Lock()
+        self._test_recording_stop_thread: Optional[threading.Thread] = None
+        self.test_recording_stop_finished.connect(self._on_test_recording_stop_finished)
         self._recording_status_note = ""
         self._recording_csv_path = ""
         self._joint_debug_csv_path = ""
@@ -1366,6 +1372,8 @@ class HandGUI(QtWidgets.QMainWindow):
             self._set_status("Calibration blocked: serial port is not connected")
 
     def _start_data_recording(self, options: Optional[Dict[str, bool]] = None) -> None:
+        if self._test_recording_stop_active():
+            raise RuntimeError("previous test recording is still finalizing")
         options = dict(options or self._recording_format_options)
         self._record_tactile_full = bool(options.get("tactile_full", False))
         meta = {
@@ -1431,6 +1439,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._set_status(f"Recording: {path}" + (f" | {' | '.join(notes)}" if notes else ""))
 
     def _stop_data_recording(self, reason: str = "stopped") -> None:
+        if self._test_recording_stop_active():
+            self._set_status("Recording files are still finalizing in the background")
+            return
         if self._data_logger.is_running():
             path = self._data_logger.path
             self._record_event("save_data_stop", detail=reason, source="recorder")
@@ -1441,6 +1452,8 @@ class HandGUI(QtWidgets.QMainWindow):
             self._stop_joint_debug_packet_log()
 
     def start_recording_for_test(self, reason: str = "test") -> None:
+        if self._test_recording_stop_active():
+            raise RuntimeError("previous test recording is still finalizing; retry shortly")
         if self._data_logger.is_running():
             self._stop_data_recording(f"restart by {reason}")
         if not self.save_data_check.isChecked():
@@ -1450,13 +1463,73 @@ class HandGUI(QtWidgets.QMainWindow):
         self._start_data_recording(self._recording_format_options)
 
     def stop_recording_for_test(self, reason: str = "test stopped") -> None:
-        self._stop_data_recording(reason)
         self.save_data_check.blockSignals(True)
         self.save_data_check.setChecked(False)
         self.save_data_check.blockSignals(False)
+        with self._test_recording_stop_lock:
+            thread = self._test_recording_stop_thread
+            if thread is not None and thread.is_alive():
+                return
+            if not self._data_logger.is_running():
+                self._stop_joint_debug_packet_log()
+                return
+            path = self._data_logger.path
+            self._record_event("save_data_stop", detail=reason, source="recorder")
+            thread = threading.Thread(
+                target=self._finish_test_recording_stop,
+                args=(path, reason),
+                name="mmhand-test-recording-stop",
+                daemon=True,
+            )
+            self._test_recording_stop_thread = thread
+        self._recording_status_note = ""
+        self._recording_csv_path = ""
+        self._set_status(f"Test stopped; finalizing recording in background: {path}")
+        thread.start()
+
+    def _test_recording_stop_active(self) -> bool:
+        with self._test_recording_stop_lock:
+            thread = self._test_recording_stop_thread
+            return bool(thread is not None and thread.is_alive())
+
+    def _finish_test_recording_stop(self, path: str, reason: str) -> None:
+        error = ""
+        try:
+            self._data_logger.stop()
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                self._stop_joint_debug_packet_log()
+            except Exception as exc:
+                if not error:
+                    error = f"{type(exc).__name__}: {exc}"
+        self.test_recording_stop_finished.emit(path, reason, error)
+
+    def _on_test_recording_stop_finished(self, path: str, reason: str, error: str) -> None:
+        with self._test_recording_stop_lock:
+            self._test_recording_stop_thread = None
+        if error:
+            log_session("RECORDER", f"test recording finalize failed path={path} error={error}")
+            self._set_status(f"Test stopped; recording finalize failed: {error}")
+            return
+        log_session("RECORDER", f"test recording finalized path={path} reason={reason}")
+        self._set_status(f"Recording {reason}: {path}")
+
+    def _wait_for_test_recording_stop(self, timeout_s: float = 4.0) -> None:
+        with self._test_recording_stop_lock:
+            thread = self._test_recording_stop_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, float(timeout_s)))
 
     def _on_toggle_save_data(self, checked: bool) -> None:
         if checked:
+            if self._test_recording_stop_active():
+                self.save_data_check.blockSignals(True)
+                self.save_data_check.setChecked(False)
+                self.save_data_check.blockSignals(False)
+                self._set_status("Recording files are still finalizing; retry shortly")
+                return
             options = self._choose_recording_formats()
             if options is None:
                 self.save_data_check.blockSignals(True)
@@ -2182,6 +2255,7 @@ class HandGUI(QtWidgets.QMainWindow):
         try:
             log_session("APP", "window closing")
             self.control_panel.stop_all_tests("window closed")
+            self._wait_for_test_recording_stop()
             self._display_windows.close_all()
             if self._task_runtime_window is not None:
                 self._task_runtime_window.close()

@@ -10,4 +10,8 @@
 // - 只向 servoTargetQueue 写 batch，不直接访问舵机 UART。
 void controlTask(void* parameter);
 
+// Calibration calls this only while feedback control is stopped. The next
+// feedback cycle rebuilds release anchors from the newly preloaded pose.
+void invalidateDualTendonReleaseAnchors(uint32_t motorMask);
+
 #endif // CONTROL_TASK_H

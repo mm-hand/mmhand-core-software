@@ -54,6 +54,7 @@ from desktop.core.protocol import (
     ROPE_INIT_REASON_SYSTEM_FAULT,
     ROPE_INIT_REASON_CANCELLED,
     ROPE_INIT_REASON_TASK_START_FAILED,
+    directed_encoder_delta,
     manual_encoder_reference_entry_crc,
 )
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
@@ -111,6 +112,7 @@ except (OSError, TypeError, ValueError):
     WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = 0, 0
 
 OPEN_POSE_CURRENT_MIN_OFFSET_DEG = 5.0
+FIST_POSE_URDF_MAX_OFFSET_DEG = 7.0
 
 
 def _load_default_auto_calibration_joint_indices() -> List[int]:
@@ -302,6 +304,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._control_widgets: List[QtWidgets.QWidget] = []
         self._state: Optional[HandModel] = None
         self._estop_latched = False
+        self._estop_in_progress = False
 
         self.joint_current_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
@@ -2010,9 +2013,17 @@ class ControlPanel(QtWidgets.QWidget):
         angles = self.resolved_joint_targets()
         for i in joints:
             max_deg = self._joint_target_max_deg(i)
-            target = max(self._joint_target_min_deg(i), max_deg - 2.0)
+            target = max(
+                self._joint_target_min_deg(i),
+                max_deg - FIST_POSE_URDF_MAX_OFFSET_DEG,
+            )
             angles[i] = self._clamp_joint_target_deg(i, target)
-        self._apply_and_send_joint_pose(angles, joints, "Fist Pose", "URDF Max - 2 deg")
+        self._apply_and_send_joint_pose(
+            angles,
+            joints,
+            "Fist Pose",
+            f"URDF Max - {FIST_POSE_URDF_MAX_OFFSET_DEG:.0f} deg",
+        )
 
     def _apply_and_send_joint_pose(
         self,
@@ -2083,16 +2094,24 @@ class ControlPanel(QtWidgets.QWidget):
         self._set_status("Enable requested: waiting for IDLE controllable")
 
     def stop_controller(self) -> None:
-        self._update_connection_lights()
-        self._estop_latched = True
-        self.context.cancel_algorithm("E-STOP")
-        self.stop_all_tests("stopped by E-STOP", update_status=False)
+        if self._estop_in_progress:
+            return
+        self._estop_in_progress = True
         try:
-            self.backend.stop()
-        except Exception:
-            pass
-        self._clear_run_states()
-        self.context.emit_action("Stop")
+            self._update_connection_lights()
+            self._estop_latched = True
+            # STOP is safety-critical. Enqueue it before recorder/HDF5 cleanup
+            # or any other UI-side cancellation work.
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            self.context.cancel_algorithm("E-STOP")
+            self.stop_all_tests("stopped by E-STOP", update_status=False)
+            self._clear_run_states()
+            self.context.emit_action("Stop")
+        finally:
+            self._estop_in_progress = False
 
     def pause_controller(self) -> None:
         try:
@@ -2566,7 +2585,35 @@ class ControlPanel(QtWidgets.QWidget):
         if state is None or not bool(getattr(state, "manual_reference_nvs_valid", False)):
             return active_joints
         valid_mask = int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
-        return [joint for joint in active_joints if (valid_mask & (1 << joint)) == 0]
+        min_values = list(getattr(state, "manual_reference_min_raw", []) or [])
+        max_values = list(getattr(state, "manual_reference_max_raw", []) or [])
+        directions = list(
+            getattr(state, "manual_reference_encoder_directions", []) or []
+        )
+        has_directions = bool(
+            getattr(state, "has_manual_reference_encoder_directions", False)
+        )
+        missing: List[int] = []
+        for joint in active_joints:
+            if (valid_mask & (1 << joint)) == 0:
+                missing.append(joint)
+                continue
+            if (
+                not has_directions
+                or joint >= len(min_values)
+                or joint >= len(max_values)
+                or joint >= len(directions)
+            ):
+                missing.append(joint)
+                continue
+            span = directed_encoder_delta(
+                int(min_values[joint]),
+                int(max_values[joint]),
+                int(directions[joint]),
+            )
+            if span is None or span <= 0:
+                missing.append(joint)
+        return missing
 
     def _active_scope_status_mismatch(self) -> str:
         state = self._state

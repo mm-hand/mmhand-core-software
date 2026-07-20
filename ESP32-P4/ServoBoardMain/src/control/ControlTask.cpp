@@ -21,6 +21,11 @@ static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
 static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
 static uint32_t g_dualReleaseAnchorValidBitmap = 0;
 
+void invalidateDualTendonReleaseAnchors(uint32_t motorMask)
+{
+    g_dualReleaseAnchorValidBitmap &= ~motorMask;
+}
+
 static const int32_t kEncoderModulo = 16384;
 static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 static const uint8_t kDebugJointIndices[] = {0, 1, 2, 3};

@@ -5,6 +5,7 @@
 
 static const int32_t kCalibrationEncoderModulo = 16384;
 static const int32_t kCalibrationEncoderHalfTurn = kCalibrationEncoderModulo / 2;
+static const int32_t kFeedbackReadyEnterOutsideToleranceCounts = 24;
 
 
 

@@ -165,9 +165,13 @@ class DataSessionRecorder:
             self._running = False
             self._stop.set()
             thread = self._thread
-        if thread is not None:
-            thread.join(timeout=3.0)
-        self._drain_queue()
+        if thread is not None and thread is not threading.current_thread():
+            # The worker owns all CSV/HDF5/rosbag writes. Let it drain the
+            # bounded queue before closing writers so two threads never write
+            # or close the same file concurrently.
+            thread.join()
+        elif thread is None:
+            self._drain_queue()
         self._csv.stop()
         self._hdf5.stop(write_file=True)
         self._rosbag.stop()

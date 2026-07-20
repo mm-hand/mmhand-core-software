@@ -32,8 +32,8 @@ def test_pose_targets_change_only_active_joints(monkeypatch):
     assert open_targets[0] == 20.0
     assert open_targets[12] == 32.0
     assert open_targets[1] == 10.0
-    assert fist_targets[0] == 53.0
-    assert fist_targets[12] == 63.0
+    assert fist_targets[0] == 48.0
+    assert fist_targets[12] == 58.0
     assert fist_targets[1] == 10.0
 
 

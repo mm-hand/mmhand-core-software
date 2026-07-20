@@ -224,8 +224,37 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
         return false;
     }
 
+    // Recheck after taking the command lock. A queued RUN_DIRECT event may
+    // otherwise take ownership between the optimistic check above and this
+    // scope update.
+    const uint8_t lockedState = sharedData->system_state;
+    if (sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+        sharedData->control_enabled != 0 ||
+        (lockedState != SYSTEM_STATE_IDLE &&
+         lockedState != SYSTEM_STATE_READY &&
+         lockedState != SYSTEM_STATE_UNCONTROLLABLE)) {
+        if (lock) {
+            xSemaphoreGive(lock);
+        }
+        FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE rejected after lock state=%u owner=%u enabled=%u\r\n",
+                           (unsigned)lockedState,
+                           (unsigned)sharedData->servo_target_owner,
+                           (unsigned)sharedData->control_enabled);
+        return false;
+    }
+
     const uint32_t appliedMotorMask = activeMotorMask & motorMaskLimit;
     const uint32_t appliedJointMask = activeJointMask & jointMaskLimit;
+    const bool cancelledPendingDirect = sharedData->pending_direct_valid != 0;
+    const uint32_t cancelledGeneration = sharedData->pending_direct_generation;
+    if (cancelledPendingDirect) {
+        sharedData->pending_direct_valid = 0;
+        sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+        sharedData->pending_direct_motor_mask = 0;
+        sharedData->pending_direct_joint_mask = 0;
+        sharedData->pending_direct_require_can = 0;
+        sharedData->direct_reject_reason = DIRECT_REJECT_STALE;
+    }
     {
         SharedSafetyGuard guard;
         sharedAtomicStore(&sharedData->active_motor_mask, appliedMotorMask);
@@ -250,5 +279,9 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                   (unsigned long)appliedMotorMask,
                   (unsigned long)appliedJointMask,
                   (unsigned)(requireCanFeedback ? 1 : 0));
+    if (cancelledPendingDirect) {
+        FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE cancelled pending RUN_DIRECT generation=%lu\r\n",
+                           (unsigned long)cancelledGeneration);
+    }
     return true;
 }

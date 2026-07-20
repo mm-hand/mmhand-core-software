@@ -384,6 +384,8 @@ class DeviceCheckView(QtWidgets.QWidget):
             self._raw_items[joint].setText("-" if raw is None else str(raw))
 
             manual_valid = nvs_valid and bool(valid_mask & bit)
+            manual_span_ready = False
+            span = None
             if manual_valid and joint < len(min_raw_values) and joint < len(max_raw_values):
                 min_raw = int(min_raw_values[joint]) & 0x3FFF
                 max_raw = int(max_raw_values[joint]) & 0x3FFF
@@ -397,9 +399,14 @@ class DeviceCheckView(QtWidgets.QWidget):
                         spin.blockSignals(False)
                 direction = int(directions[joint]) if has_directions and joint < len(directions) else 0
                 span = directed_encoder_delta(min_raw, max_raw, direction)
+                manual_span_ready = span is not None and span > 0
                 self._span_items[joint].setText("-" if span is None else str(span))
                 self._span_items[joint].setToolTip(
-                    "Waiting for P4 direction packet" if span is None else f"P4 directed span, direction={direction:+d}"
+                    "Waiting for P4 direction packet"
+                    if span is None else
+                    ("Saved, but Min and Max are equal; capture the other endpoint before calibration"
+                     if span == 0 else
+                     f"P4 directed span, direction={direction:+d}")
                 )
             else:
                 self._span_items[joint].setText("-")
@@ -428,6 +435,8 @@ class DeviceCheckView(QtWidgets.QWidget):
                 status_text, color = "READY", "#2e7d32"
             elif not manual_valid:
                 status_text, color = "Manual missing", "#c62828"
+            elif not manual_span_ready:
+                status_text, color = "Manual span zero", "#d17a00"
             elif not bool(auto_mask & bit):
                 status_text, color = "Needs auto calib", "#d17a00"
             else:

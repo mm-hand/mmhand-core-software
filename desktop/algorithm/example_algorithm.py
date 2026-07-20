@@ -28,6 +28,7 @@ POSE_HOLD_SECONDS = 3.0
 READY_POLL_SECONDS = 0.2
 COMMAND_SOURCE = "Algorithm Pose Cycle"
 OPEN_POSE_CURRENT_MIN_OFFSET_DEG = 5.0
+FIST_POSE_URDF_MAX_OFFSET_DEG = 7.0
 
 
 class PoseCycleController:
@@ -183,13 +184,13 @@ def build_open_pose_targets(state: HandModel) -> list[float]:
 
 
 def build_fist_pose_targets(state: HandModel) -> list[float]:
-    """Build Fist Pose only for active joints; backend applies final clamping."""
+    """Build Fist Pose at URDF Max - 7 deg for active joints only."""
     targets = _base_targets(state)
     active_mask = _active_joint_mask(state)
     for joint in range(ENCODER_COUNT):
         if active_mask & (1 << joint):
             urdf_max = float(get_spec(joint).urdf_range_deg[1])
-            targets[joint] = urdf_max - 2.0
+            targets[joint] = urdf_max - FIST_POSE_URDF_MAX_OFFSET_DEG
     return targets
 
 

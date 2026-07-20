@@ -6,6 +6,7 @@
 
 #include "CalibrationMath.h"
 #include "CalibrationTask.h"
+#include "../control/ControlTask.h"
 #include "../hardware/HardwareMap.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
@@ -71,6 +72,7 @@ static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
 static const int16_t kDualPrimaryTightLoadThreshold = 190;
 static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
 static const int16_t kDualSecondaryFinalLoadThreshold = 250;
+static const int16_t kDualPrimaryFinalLoadThreshold = 120;
 static const int16_t kWorkspaceTightLoadThreshold = 190;
 static const int32_t kWorkspaceReleaseCounts = 3200;
 static const int32_t kWorkspaceTargetToleranceCounts = 60;
@@ -2764,6 +2766,183 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
     return false;
 }
 
+static bool finishDualTendonReadyPreload(TaskSharedData_t* sharedData,
+                                         uint8_t jointIndex,
+                                         uint8_t primaryMotor,
+                                         int32_t primaryStartAbs,
+                                         int16_t primaryLoadThreshold,
+                                         uint8_t secondaryMotor,
+                                         int32_t secondaryStartAbs,
+                                         const AutoCalibrationParams& params,
+                                         int32_t* outPrimaryAbs,
+                                         int32_t* outSecondaryAbs,
+                                         uint16_t* outEncoderRaw,
+                                         int32_t* outEncoder,
+                                         int16_t* outPrimaryLoad,
+                                         int16_t* outSecondaryLoad)
+{
+    int32_t primaryCommandAbs = primaryStartAbs;
+    int32_t secondaryCommandAbs = secondaryStartAbs;
+    int32_t commandRemainder = 0;
+    uint32_t lastCommandMs = millis();
+    uint32_t lastTraceMs = 0;
+
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_FINAL_READY_PRELOAD_BEGIN J%02u primary=M%02u startAbs=%ld loadThreshold=%d secondary=M%02u holdAbs=%ld; secondary already reached final threshold\r\n",
+                       jointIndex,
+                       primaryMotor,
+                       (long)primaryStartAbs,
+                       primaryLoadThreshold,
+                       secondaryMotor,
+                       (long)secondaryStartAbs);
+
+    // Synchronize both commands to the measured exchange endpoint before the
+    // primary motor starts tightening. This prevents a stale exchange target
+    // from surviving into the final preload phase.
+    if (!publishDualMotorCalibrationTargets(sharedData,
+                                            primaryMotor,
+                                            primaryCommandAbs,
+                                            secondaryMotor,
+                                            secondaryCommandAbs,
+                                            params)) {
+        return false;
+    }
+
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        const uint32_t nowMs = millis();
+        uint16_t currentRaw = 0;
+        int32_t currentEncoder = 0;
+        int32_t currentPrimaryAbs = 0;
+        int32_t currentSecondaryAbs = 0;
+        int16_t primaryLoadRaw = 0;
+        int16_t secondaryLoadRaw = 0;
+        if (!readLatestEncoderSample(sharedData,
+                                     jointIndex,
+                                     &currentRaw,
+                                     &currentEncoder) ||
+            !readLatestMotorServoAbs(sharedData,
+                                     primaryMotor,
+                                     &currentPrimaryAbs) ||
+            !readLatestMotorServoAbs(sharedData,
+                                     secondaryMotor,
+                                     &currentSecondaryAbs) ||
+            !readLatestMotorServoLoad(sharedData,
+                                      primaryMotor,
+                                      &primaryLoadRaw) ||
+            !readLatestMotorServoLoad(sharedData,
+                                      secondaryMotor,
+                                      &secondaryLoadRaw)) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_FINAL_READY_PRELOAD lost feedback J%02u primary=M%02u secondary=M%02u\r\n",
+                               jointIndex,
+                               primaryMotor,
+                               secondaryMotor);
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                               CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                               jointIndex,
+                               primaryMotor,
+                               primaryMotor,
+                               secondaryMotor,
+                               0,
+                               (1UL << primaryMotor) | (1UL << secondaryMotor));
+            return false;
+        }
+
+        const int16_t primaryLoad = servoLoadMagnitude(primaryLoadRaw);
+        const int16_t secondaryLoad = servoLoadMagnitude(secondaryLoadRaw);
+        const bool primaryReady = primaryLoad > primaryLoadThreshold;
+        if (primaryReady) {
+            if (outPrimaryAbs) {
+                *outPrimaryAbs = currentPrimaryAbs;
+            }
+            if (outSecondaryAbs) {
+                *outSecondaryAbs = currentSecondaryAbs;
+            }
+            if (outEncoderRaw) {
+                *outEncoderRaw = currentRaw;
+            }
+            if (outEncoder) {
+                *outEncoder = currentEncoder;
+            }
+            if (outPrimaryLoad) {
+                *outPrimaryLoad = primaryLoad;
+            }
+            if (outSecondaryLoad) {
+                *outSecondaryLoad = secondaryLoad;
+            }
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_FINAL_READY_PRELOAD_FOUND J%02u primary=M%02u abs=%ld load=%d/%d secondary=M%02u abs=%ld load=%d diagnostic raw=%u oriented=%ld\r\n",
+                               jointIndex,
+                               primaryMotor,
+                               (long)currentPrimaryAbs,
+                               primaryLoad,
+                               primaryLoadThreshold,
+                               secondaryMotor,
+                               (long)currentSecondaryAbs,
+                               secondaryLoad,
+                               (unsigned)currentRaw,
+                               (long)currentEncoder);
+            return publishDualMotorCalibrationTargets(sharedData,
+                                                      primaryMotor,
+                                                      currentPrimaryAbs,
+                                                      secondaryMotor,
+                                                      currentSecondaryAbs,
+                                                      params);
+        }
+
+        const uint32_t dtMs = nowMs - lastCommandMs;
+        if (dtMs >= params.loopMs) {
+            const int32_t numerator =
+                (int32_t)dtMs * params.tightenSpeedCountsPerSec +
+                commandRemainder;
+            const int32_t stepCounts = numerator / 1000;
+            commandRemainder = numerator % 1000;
+            if (stepCounts > 0) {
+                primaryCommandAbs = motorApplyTendonDelta(primaryMotor,
+                                                           primaryCommandAbs,
+                                                           stepCounts);
+                if (!publishDualMotorCalibrationTargets(sharedData,
+                                                        primaryMotor,
+                                                        primaryCommandAbs,
+                                                        secondaryMotor,
+                                                        secondaryCommandAbs,
+                                                        params)) {
+                    return false;
+                }
+            }
+            lastCommandMs = nowMs;
+        }
+
+        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
+            lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE_DUAL_FINAL_READY_PRELOAD J%02u primary=M%02u cmd=%ld abs=%ld load=%d/%d secondary=M%02u holdCmd=%ld abs=%ld load=%d diagnostic raw=%u oriented=%ld\r\n",
+                               jointIndex,
+                               primaryMotor,
+                               (long)primaryCommandAbs,
+                               (long)currentPrimaryAbs,
+                               primaryLoad,
+                               primaryLoadThreshold,
+                               secondaryMotor,
+                               (long)secondaryCommandAbs,
+                               (long)currentSecondaryAbs,
+                               secondaryLoad,
+                               (unsigned)currentRaw,
+                               (long)currentEncoder);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
+    }
+
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] CANCEL DUAL_FINAL_READY_PRELOAD J%02u primary=M%02u cmd=%ld secondary=M%02u cmd=%ld state=%u owner=%u enabled=%u\r\n",
+                       jointIndex,
+                       primaryMotor,
+                       (long)primaryCommandAbs,
+                       secondaryMotor,
+                       (long)secondaryCommandAbs,
+                       sharedData ? (unsigned)sharedData->system_state : 255,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255);
+    return false;
+}
+
 static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t secondaryMotor,
@@ -3007,6 +3186,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     const int16_t primaryTightLoadThreshold = kDualPrimaryTightLoadThreshold;
     const int16_t secondaryPreloadLoadThreshold = kDualSecondaryPreloadLoadThreshold;
     const int16_t secondaryFinalLoadThreshold = kDualSecondaryFinalLoadThreshold;
+    const int16_t primaryFinalLoadThreshold = kDualPrimaryFinalLoadThreshold;
 
     uint16_t initialRaw = 0;
     int32_t initialEncoder = 0;
@@ -3028,17 +3208,18 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         return false;
     }
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_BEGIN J%02u primary=M%02u primaryShortenSign=%d secondary=M%02u secondaryShortenSign=%d slack=%ld primaryLoad=%d secondaryPreloadLoad=%d secondaryFinalLoad=%d startDeg=%.3f tightDeg=dynamic initialEncoder=%ld primaryAbs=%ld secondaryAbs=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_BEGIN J%02u primary=M%02u primaryShortenSign=%d secondary=M%02u secondaryShortenSign=%d slack=%ld primaryLoad=%d secondaryPreloadLoad=%d secondaryFinalLoad=%d primaryFinalLoad=%d startDeg=%.3f tightDeg=dynamic initialEncoder=%ld primaryAbs=%ld secondaryAbs=%ld\r\n",
                   jointIndex,
                   primaryMotor,
                   (int)primaryShortenSign,
                   secondaryMotor,
                   (int)secondaryShortenSign,
                   (long)kDualAutoSlackCounts,
-                  primaryTightLoadThreshold,
-                  secondaryPreloadLoadThreshold,
-                  secondaryFinalLoadThreshold,
-                  kAutoCalibrationStartDeg,
+                   primaryTightLoadThreshold,
+                   secondaryPreloadLoadThreshold,
+                   secondaryFinalLoadThreshold,
+                   primaryFinalLoadThreshold,
+                   kAutoCalibrationStartDeg,
                   (long)initialEncoder,
                   (long)primaryAbs,
                   (long)secondaryAbs);
@@ -3206,6 +3387,33 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                  primaryNeg3Abs,
                                  secondaryNeg3Abs);
 
+    // Preserve the mechanical Auto Min/LUT endpoint above. READY must use a
+    // different final pose in which both tendons are loaded: secondary has
+    // already reached 250, then primary is restored to 240 while secondary
+    // remains at the exchange endpoint command.
+    int32_t primaryReadyAbs = primaryNeg3Abs;
+    int32_t secondaryReadyAbs = secondaryNeg3Abs;
+    uint16_t readyRaw = neg3Raw;
+    int32_t readyEncoder = neg3Encoder;
+    int16_t primaryReadyLoad = 0;
+    int16_t secondaryReadyLoad = neg3Load;
+    if (!finishDualTendonReadyPreload(sharedData,
+                                     jointIndex,
+                                     primaryMotor,
+                                     primaryNeg3Abs,
+                                     primaryFinalLoadThreshold,
+                                     secondaryMotor,
+                                     secondaryNeg3Abs,
+                                     params,
+                                     &primaryReadyAbs,
+                                     &secondaryReadyAbs,
+                                     &readyRaw,
+                                     &readyEncoder,
+                                     &primaryReadyLoad,
+                                     &secondaryReadyLoad)) {
+        return false;
+    }
+
     const int32_t signedSpan = signedEncoderDeltaLocal(neg3Encoder, primary80Encoder);
     const int8_t encoderTravelSign = 1;
     const int32_t resultStartEncoder =
@@ -3250,6 +3458,35 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                          primaryMotor,
                                          secondaryMotor,
                                          fitSamples);
+    EncoderUrdfMapResult readyMap = {};
+    if (!mapManualScaledEncoderToUrdf(
+            jointIndex,
+            result,
+            g_manualEncoderReference[jointIndex],
+            readyRaw,
+            g_encoderDirection[jointIndex],
+            &readyMap) ||
+        !readyMap.valid ||
+        readyMap.outsideCounts < -kFeedbackReadyEnterOutsideToleranceCounts) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_FINAL_READY_MAP J%02u raw=%u oriented=%ld valid=%u ready=%u outside=%ld enterTolerance=%ld\r\n",
+                           jointIndex,
+                           (unsigned)readyRaw,
+                           (long)readyEncoder,
+                           readyMap.valid ? 1U : 0U,
+                           readyMap.feedbackReady ? 1U : 0U,
+                           (long)readyMap.outsideCounts,
+                           (long)kFeedbackReadyEnterOutsideToleranceCounts);
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                           CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                           jointIndex,
+                           primaryMotor,
+                           readyEncoder,
+                           readyMap.outsideCounts,
+                           secondaryMotor,
+                           (1UL << primaryMotor) | (1UL << secondaryMotor));
+        return false;
+    }
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_ENCODER_RESULT J%02u defaultDir=%d runtimeDir=%d signed=%ld resultStart=%ld resultZero=%ld resultTight=%ld\r\n",
                   jointIndex,
@@ -3273,30 +3510,44 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     g_jointCalibResult[jointIndex] = result;
     updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
     g_encoderOffsetManual[jointIndex] = result.offset;
-    syncJointTargetToZero(sharedData, jointIndex);
+    syncJointTargetToDeg(sharedData, jointIndex, readyMap.urdfDeg);
     clearJointServoMultiTurnUnknown(sharedData, jointIndex);
-    setCalibratedMotorAbsLimit(sharedData, primaryMotor, primary80Abs);
-    setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryNeg3Abs);
+    const int32_t primaryLimitTightAbs =
+        motorRawAbsToTendonAbs(primaryMotor, primaryReadyAbs) >
+                motorRawAbsToTendonAbs(primaryMotor, primary80Abs)
+            ? primaryReadyAbs
+            : primary80Abs;
+    const int32_t secondaryLimitTightAbs =
+        motorRawAbsToTendonAbs(secondaryMotor, secondaryReadyAbs) >
+                motorRawAbsToTendonAbs(secondaryMotor, secondaryNeg3Abs)
+            ? secondaryReadyAbs
+            : secondaryNeg3Abs;
+    setCalibratedMotorAbsLimit(sharedData, primaryMotor, primaryLimitTightAbs);
+    setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryLimitTightAbs);
+    invalidateDualTendonReleaseAnchors((1UL << primaryMotor) |
+                                      (1UL << secondaryMotor));
 
     if (workspaceState) {
-        // The exchange finishes with primary released and secondary tightened
-        // to the final load threshold. This is the physical POSE_A for all
-        // later workspace planning in the same calibration sequence.
+        // Cache the final two-tendon preload pose, not the earlier mechanical
+        // endpoint where primary was released. Later joints can reuse this A
+        // pose without introducing slack again.
         workspaceState->primaryMotor = primaryMotor;
         workspaceState->secondaryMotor = secondaryMotor;
-        workspaceState->primaryReleaseAbs = primaryNeg3Abs;
-        workspaceState->secondaryTightAbs = secondaryNeg3Abs;
+        workspaceState->primaryReleaseAbs = primaryReadyAbs;
+        workspaceState->secondaryTightAbs = secondaryReadyAbs;
         workspaceState->currentPose = DUAL_WORKSPACE_POSE_A;
         workspaceState->valid = 1;
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE J%02u pose=A primaryRelease=M%02u:%ld secondaryTight=M%02u:%ld\r\n",
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE J%02u pose=A primaryReady=M%02u:%ld secondaryReady=M%02u:%ld load=%d/%d\r\n",
                            (unsigned)jointIndex,
                            (unsigned)primaryMotor,
-                           (long)primaryNeg3Abs,
+                           (long)primaryReadyAbs,
                            (unsigned)secondaryMotor,
-                           (long)secondaryNeg3Abs);
+                           (long)secondaryReadyAbs,
+                           primaryReadyLoad,
+                           secondaryReadyLoad);
     }
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_RESULT J%02u neg3Raw=%u neg3=%ld pos80Raw=%u pos80=%ld span=%ld zero=%ld primary80Abs=%ld primaryNeg3Abs=%ld secondaryPreloadRaw=%u secondaryPreloadEncoder=%ld secondaryPreloadAbs=%ld secondaryNeg3Abs=%ld loadPrimary=%d loadSecondaryPreload=%d loadSecondaryNeg3=%d\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_RESULT J%02u neg3Raw=%u neg3=%ld pos80Raw=%u pos80=%ld span=%ld zero=%ld primary80Abs=%ld primaryNeg3Abs=%ld secondaryPreloadRaw=%u secondaryPreloadEncoder=%ld secondaryPreloadAbs=%ld secondaryNeg3Abs=%ld loadPrimary=%d loadSecondaryPreload=%d loadSecondaryNeg3=%d readyRaw=%u readyEncoder=%ld readyDeg=%.3f primaryReadyAbs=%ld primaryReadyLoad=%d secondaryReadyAbs=%ld secondaryReadyLoad=%d\r\n",
                   jointIndex,
                   (unsigned)neg3Raw,
                   (long)result.startEncoder,
@@ -3310,9 +3561,16 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (long)secondaryPreloadEncoder,
                   (long)secondaryPreloadAbs,
                   (long)secondaryNeg3Abs,
-                  primary80Load,
-                  secondaryPreloadLoad,
-                  neg3Load);
+                   primary80Load,
+                   secondaryPreloadLoad,
+                   neg3Load,
+                   (unsigned)readyRaw,
+                   (long)readyEncoder,
+                   readyMap.urdfDeg,
+                   (long)primaryReadyAbs,
+                   primaryReadyLoad,
+                   (long)secondaryReadyAbs,
+                   secondaryReadyLoad);
     FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=%.3f totalDeg=%.3f angleMax=%.3f span=%ld\r\n",
                   jointIndex,
                   result.startDeg,

@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "CalibrationMath.h"
 #include "CalibrationTask.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
@@ -18,7 +19,6 @@ static const uint32_t kTimeoutMs = 8000;
 static const uint32_t kFeedbackMaxAgeMs = 500;
 static const int32_t kTightenStepCounts = 60;
 static const int32_t kReleaseStepCounts = 30;
-static const int32_t kEnterToleranceCounts = 24;
 static const uint8_t kInsideStableSamples = 3;
 static const int32_t kServoAbsMin = -30719;
 static const int32_t kServoAbsMax = 30719;
@@ -131,7 +131,8 @@ static void ropeInitTask(void* parameter)
                 ok = false;
                 break;
             }
-            if (mapped.outsideCounts[joint] >= -kEnterToleranceCounts) {
+            if (mapped.outsideCounts[joint] >=
+                -kFeedbackReadyEnterOutsideToleranceCounts) {
                 continue;
             }
 

@@ -43,16 +43,16 @@ static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 static const uint8_t kDualTendonModelSharedCadGeometry = 1;
 
 static const float kDefaultDualTendonCountsPerMm = 40.0f;
-static const float kDefaultDualTendonKp = 1.0f;
+static const float kDefaultDualTendonKp = 0.60f;
 static const float kDefaultDualTendonKi = 0.0f;
-static const float kDefaultDualTendonKd = 0.00f;
+static const float kDefaultDualTendonKd = -0.00f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
 static const float kDefaultDualTendonDTermLimitCounts = 100.0f;
 static const float kDualTendonVelocityFilterTauSec = 0.050f;
 static const float kDualTendonVelocityFilterAlpha =
     kControlPeriodSec / (kDualTendonVelocityFilterTauSec + kControlPeriodSec);
-static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 900;
-static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1600;
+static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 1000;
+static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1800;
 static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 2500;
 
 static const Point2D kJoint16Origin = {0.0f, 0.0f};
