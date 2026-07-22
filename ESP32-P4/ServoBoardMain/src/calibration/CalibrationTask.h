@@ -61,27 +61,8 @@ static_assert(calibrationAssemblyWarningReasonForMetrics(349, 299, 361) ==
                   CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
               "URDF/Manual Span warning must trigger only above 360 counts");
 
-#define DUAL_TENDON_LUT_ACTUATOR_COUNT 2
-#define DUAL_TENDON_LUT_MAX_SAMPLES 24
-
-// Per-joint calibration config:
-// - angleScope/bottomReserved/topReserved/angleReserved are all degrees.
-// - Manual RANGE100 start/tight points overwrite the usable control range.
-// - Load and motion parameters are used by the optional single-joint search.
-struct JointCalibrationConfig {
-    float angleScope;
-    float bottomReserved;
-    float topReserved;
-    float angleReserved;
-
-    int16_t loadThreshold;
-    int16_t tightenStep;
-    uint16_t tightenSpeed;
-    uint8_t tightenAcc;
-
-    uint32_t settleMs;
-    uint32_t maxSearchMs;
-};
+#define TENDON_LUT_ACTUATOR_COUNT 2
+#define TENDON_LUT_MAX_SAMPLES 24
 
 // Device-specific magnetic encoder reference entered by the operator.
 // Min means the fully released tendon endpoint and max means the fully
@@ -152,15 +133,17 @@ struct JointCalibrationResult {
     float totalDeg;
     bool scaled;
 
-    uint8_t dualTendonLutValid;
-    uint8_t dualTendonLutCount;
-    uint8_t dualTendonLutMotor[DUAL_TENDON_LUT_ACTUATOR_COUNT];
-    float dualTendonLutAngleStartDeg;
-    float dualTendonLutAngleStepDeg;
-    int32_t dualTendonLutMotorAbs[DUAL_TENDON_LUT_ACTUATOR_COUNT][DUAL_TENDON_LUT_MAX_SAMPLES];
+    // 通用腱绳传动 LUT。单电机关节只使用第 0 行并将第 1 路电机记为
+    // 0xFF；双电机关节使用两行。字段顺序和尺寸保持不变，避免破坏
+    // 当前 V3 标定快照的二进制布局。
+    uint8_t tendonLutValid;
+    uint8_t tendonLutCount;
+    uint8_t tendonLutMotor[TENDON_LUT_ACTUATOR_COUNT];
+    float tendonLutAngleStartDeg;
+    float tendonLutAngleStepDeg;
+    int32_t tendonLutMotorAbs[TENDON_LUT_ACTUATOR_COUNT][TENDON_LUT_MAX_SAMPLES];
 };
 
-extern JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
@@ -189,19 +172,7 @@ extern JointDualServoConstraint g_joint16DualServoConstraint;
 bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* out);
 bool computeSecondaryServoTargetForJoint(uint8_t jointIndex, int32_t primaryTarget, int16_t* outSecondaryTarget);
 
-void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count);
 void initializeCalibrationRuntimeState(void);
-
-// Run one-joint calibration search. Not called automatically by the state machine.
-bool runSingleJointCalibration(TaskSharedData_t* sharedData,
-                               uint8_t jointIndex,
-                               const JointCalibrationConfig& cfg,
-                               JointCalibrationResult* out);
-
-bool queueJointCalibrationTarget(TaskSharedData_t* sharedData,
-                                 uint8_t jointIndex,
-                                 int16_t primaryTarget,
-                                 const JointCalibrationConfig& cfg);
 
 int32_t calibrationAutoMinManualOffsetCounts(
     uint8_t jointIndex,

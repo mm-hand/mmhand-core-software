@@ -2,26 +2,23 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "MMHAND UI",
-      "type": "debugpy",
+      "name": "C/C++ Runner: Debug Session",
+      "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/desktop/main.py",
-      "args": ["ui"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "python": "D:\\SoftwareInstall\\Anaconda\\envs\\torch\\python.exe",
-      "justMyCode": true
-    },
-    {
-      "name": "MMHAND CLI",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/desktop/main.py",
-      "args": ["cli"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "python": "D:\\SoftwareInstall\\Anaconda\\envs\\torch\\python.exe",
-      "justMyCode": true
+      "args": [],
+      "stopAtEntry": false,
+      "externalConsole": true,
+      "cwd": "c:/浏览器下周/mmhand-cl/mmhand-cl/ESP32-P4/ServoBoardMain/src/control",
+      "program": "c:/浏览器下周/mmhand-cl/mmhand-cl/ESP32-P4/ServoBoardMain/src/control/build/Debug/outDebug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
     }
   ]
 }

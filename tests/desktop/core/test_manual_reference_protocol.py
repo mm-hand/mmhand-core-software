@@ -96,7 +96,25 @@ def test_system_status_parses_feedback_admission_extension():
     assert parsed is not None
     # The calibration warning fields deliberately remain at the tuple tail for
     # older desktop callers; the admission fields precede them.
-    assert parsed[-7:-3] == (42, 3, 4, True)
+    assert parsed[-11:-7] == (42, 3, 4, True)
+
+
+def test_system_status_parses_feedback_collision_extension():
+    payload = bytearray(154)
+    dual_hold_mask = (1 << 0) | (1 << 12) | (1 << 20)
+    armed_mask = dual_hold_mask | (1 << 3)
+    payload.extend(struct.pack(">II", dual_hold_mask, 9))
+    payload.extend(struct.pack(">I", armed_mask))
+
+    parsed = parse_system_status_packet(bytes(payload))
+
+    assert parsed is not None
+    assert parsed[-7:-3] == (
+        armed_mask,
+        dual_hold_mask,
+        9,
+        True,
+    )
 
 
 def test_manual_reference_snapshot_parses_all_21_pairs():

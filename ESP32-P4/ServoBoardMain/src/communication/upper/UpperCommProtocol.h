@@ -58,6 +58,7 @@
 #define CMD_MANUAL_ENCODER_QUERY 0xE7
 #define CMD_MANUAL_ENCODER_SINGLE 0xE8
 #define CMD_ROPE_INIT 0xE9
+#define CMD_ANGLE_CTRL_MASKED 0xEA
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -76,6 +77,7 @@
 
 
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
+static const size_t kMaskedFloatPayloadBytes = sizeof(uint32_t) + kFloatPayloadBytes;
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
 static const size_t kMotorPosAbsOnePayloadBytes = 3;
 static const size_t kActiveScopePayloadBytes = 9;

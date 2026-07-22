@@ -31,6 +31,7 @@ class RawIkTargetBridge:
         auto_start: bool = False,
         input_space: str = LEGACY_CALIBRATED_DEG,
     ) -> None:
+        self.backend = backend
         self.config = Ros2RawIkTargetConfig(
             topic=topic,
             auto_start=auto_start,
@@ -87,6 +88,7 @@ class RawIkTargetBridge:
         self._thread.start()
 
     def stop(self) -> None:
+        self.backend.set_ros2_output_armed(False, reason="ros2_bridge_stop")
         if not self._started:
             return
         rclpy = self._rclpy

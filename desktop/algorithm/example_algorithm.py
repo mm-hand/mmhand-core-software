@@ -18,6 +18,7 @@ from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import (
     ENCODER_COUNT,
     SYSTEM_STATE_READY,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
 
@@ -101,7 +102,11 @@ def _state_ready_reason(state: Optional[HandModel]) -> str:
         return "state unavailable"
 
     system_state = int(getattr(state, "system_state", -1))
-    if system_state not in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK):
+    if system_state not in (
+        SYSTEM_STATE_READY,
+        SYSTEM_STATE_RECOVERY_REQUIRED,
+        SYSTEM_STATE_RUN_FEEDBACK,
+    ):
         return f"system_state={system_state}, waiting for READY"
 
     active_mask = _active_joint_mask(state)

@@ -27,6 +27,7 @@ public:
                  float dtSeconds);
     // 提供给调试上报使用，读取指定关节的 PID 输出。
     float getPidOutput(uint8_t jointIndex) const;
+    void resetJoint(uint8_t jointIndex);
     // 清空 PID 状态，后续状态机需要在模式切换时重置积分项可调用此接口。
     void resetAll();
 

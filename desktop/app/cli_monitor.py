@@ -363,6 +363,12 @@ def run_cli_monitor(
         try:
             ros_bridge.start()
             ros_status = f"ON {ros2_input} {ros_topic}"
+            if auto_start:
+                ok, message = backend.set_ros2_output_armed(
+                    True, reason="CLI_AUTO_START"
+                )
+                if not ok:
+                    print(f"ROS2 auto-start blocked: {message}")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             ros_bridge = None
@@ -382,6 +388,12 @@ def run_cli_monitor(
                     break
                 if key == "s":
                     backend.start()
+                    if ros_bridge is not None:
+                        ok, message = backend.set_ros2_output_armed(
+                            True, reason="CLI_START_KEY"
+                        )
+                        if not ok:
+                            print(f"ROS2 enable blocked: {message}")
                 if key == "x":
                     backend.stop()
                 if key == "r":

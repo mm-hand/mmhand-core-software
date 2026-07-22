@@ -644,6 +644,10 @@ class HandModel:
     feedback_admission_status: int = 0
     feedback_reject_reason: int = 0
     has_feedback_admission_status: bool = False
+    feedback_collision_armed_bitmap: int = 0
+    feedback_collision_hold_bitmap: int = 0
+    feedback_collision_transition_count: int = 0
+    has_feedback_collision_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
@@ -799,6 +803,18 @@ class HandModel:
         self.direct_reject_reason = int(getattr(other, "direct_reject_reason", 0) or 0)
         self.has_motion_result_status = bool(
             getattr(other, "has_motion_result_status", False)
+        )
+        self.feedback_collision_armed_bitmap = int(
+            getattr(other, "feedback_collision_armed_bitmap", 0) or 0
+        )
+        self.feedback_collision_hold_bitmap = int(
+            getattr(other, "feedback_collision_hold_bitmap", 0) or 0
+        )
+        self.feedback_collision_transition_count = int(
+            getattr(other, "feedback_collision_transition_count", 0) or 0
+        )
+        self.has_feedback_collision_status = bool(
+            getattr(other, "has_feedback_collision_status", False)
         )
         self.manual_reference_last_rx_time = float(
             getattr(other, "manual_reference_last_rx_time", 0.0) or 0.0

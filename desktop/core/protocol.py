@@ -82,6 +82,7 @@ CMD_MANUAL_ENCODER_REFERENCE = 0xE6
 CMD_MANUAL_ENCODER_QUERY = 0xE7
 CMD_MANUAL_ENCODER_SINGLE = 0xE8
 CMD_ROPE_INIT = 0xE9
+CMD_ANGLE_CTRL_MASKED = 0xEA
 
 
 PROTO_ACK_STATUS_OK = 0
@@ -101,6 +102,7 @@ SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
 SYSTEM_STATE_PAUSED = 7
 SYSTEM_STATE_ROPE_INIT_RUNNING = 8
+SYSTEM_STATE_RECOVERY_REQUIRED = 9
 
 ROPE_INIT_STATUS_IDLE = 0
 ROPE_INIT_STATUS_RUNNING = 1
@@ -188,8 +190,8 @@ ENCODER_COUNT = 21
 MOTOR_COUNT = 27
 ENCODER_RAW_MODULO = 16384
 DUAL_TENDON_JOINT_INDICES = (0, 4, 8, 12, 16, 20)
-DUAL_TENDON_LUT_ACTUATOR_COUNT = 2
-DUAL_TENDON_LUT_MAX_SAMPLES = 24
+TENDON_LUT_ACTUATOR_COUNT = 2
+TENDON_LUT_MAX_SAMPLES = 24
 TACTILE_GROUP_COUNT = 5
 TACTILE_SENSOR_PER_GROUP = 3
 TACTILE_AXIS_COUNT = 3
@@ -199,6 +201,16 @@ TACTILE_PAD_TAXELS = 52
 TACTILE_SENSOR_TAXEL_COUNTS = (TACTILE_PAD_TAXELS, TACTILE_TIP_TAXELS, TACTILE_TIP_TAXELS)
 TACTILE_FULL_BYTES = TACTILE_GROUP_COUNT * sum(TACTILE_SENSOR_TAXEL_COUNTS) * TACTILE_AXIS_COUNT
 TACTILE_FULL_PACKET_MAGIC = b"T2"
+
+
+def tendon_lut_field(result: dict, field_name: str, default=None):
+    """读取通用 Tendon LUT 字段，同时兼容旧快照的 dualTendonLut 键。"""
+    if field_name in result:
+        return result[field_name]
+    if field_name.startswith("tendonLut"):
+        legacy_name = "dualTendonLut" + field_name[len("tendonLut"):]
+        return result.get(legacy_name, default)
+    return result.get(field_name, default)
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
 VALID_MOTOR_MASK_V1 = (1 << VALID_MOTOR_COUNT_V1) - 1
@@ -358,6 +370,19 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
     feedback_reject_reason = (
         payload[153] if has_feedback_admission_status else FEEDBACK_REJECT_NONE
     )
+    has_feedback_collision_status = len(payload) >= 166
+    feedback_collision_hold_bitmap = (
+        struct.unpack(">I", payload[154:158])[0]
+        if has_feedback_collision_status else 0
+    )
+    feedback_collision_transition_count = (
+        struct.unpack(">I", payload[158:162])[0]
+        if has_feedback_collision_status else 0
+    )
+    feedback_collision_armed_bitmap = (
+        struct.unpack(">I", payload[162:166])[0]
+        if has_feedback_collision_status else 0
+    )
     return (
         system_state,
         control_enabled,
@@ -406,6 +431,10 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         feedback_admission_status,
         feedback_reject_reason,
         has_feedback_admission_status,
+        feedback_collision_armed_bitmap,
+        feedback_collision_hold_bitmap,
+        feedback_collision_transition_count,
+        has_feedback_collision_status,
         calibration_warning_bitmap,
         calibration_auto_min_offset_counts,
         has_calibration_warning_status,
@@ -522,14 +551,14 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     idx += 1
     result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
     idx += 1
-    result["dualTendonLutValid"] = False
-    result["dualTendonLutCount"] = 0
-    result["dualTendonLutMotor"] = [0xFF, 0xFF]
-    result["dualTendonLutAngleStartDeg"] = 0.0
-    result["dualTendonLutAngleStepDeg"] = 0.0
-    result["dualTendonLutMotorAbs"] = [
-        [0] * DUAL_TENDON_LUT_MAX_SAMPLES
-        for _ in range(DUAL_TENDON_LUT_ACTUATOR_COUNT)
+    result["tendonLutValid"] = False
+    result["tendonLutCount"] = 0
+    result["tendonLutMotor"] = [0xFF, 0xFF]
+    result["tendonLutAngleStartDeg"] = 0.0
+    result["tendonLutAngleStepDeg"] = 0.0
+    result["tendonLutMotorAbs"] = [
+        [0] * TENDON_LUT_MAX_SAMPLES
+        for _ in range(TENDON_LUT_ACTUATOR_COUNT)
     ]
     result["mappingVersion"] = 0
     result["encoderAtUrdfMin"] = 0
@@ -552,27 +581,27 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["hasAssemblyWarningFields"] = False
     result["hasAssemblySpanComparisonFields"] = False
     extended_len = 54 + 1 + 1 + 2 + 4 + 4 + (
-        DUAL_TENDON_LUT_ACTUATOR_COUNT * DUAL_TENDON_LUT_MAX_SAMPLES * 2
+        TENDON_LUT_ACTUATOR_COUNT * TENDON_LUT_MAX_SAMPLES * 2
     )
     if len(payload) >= extended_len:
-        result["dualTendonLutValid"] = bool(payload[idx])
+        result["tendonLutValid"] = bool(payload[idx])
         idx += 1
-        result["dualTendonLutCount"] = int(payload[idx])
+        result["tendonLutCount"] = int(payload[idx])
         idx += 1
-        result["dualTendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
+        result["tendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
         idx += 2
-        result["dualTendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
+        result["tendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
         idx += 4
-        result["dualTendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
+        result["tendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
         idx += 4
         motor_abs: List[List[int]] = []
-        for _actuator in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+        for _actuator in range(TENDON_LUT_ACTUATOR_COUNT):
             row: List[int] = []
-            for _sample in range(DUAL_TENDON_LUT_MAX_SAMPLES):
+            for _sample in range(TENDON_LUT_MAX_SAMPLES):
                 row.append(struct.unpack(">h", payload[idx:idx + 2])[0])
                 idx += 2
             motor_abs.append(row)
-        result["dualTendonLutMotorAbs"] = motor_abs
+        result["tendonLutMotorAbs"] = motor_abs
         v2_len = extended_len + 17
         if len(payload) >= v2_len:
             result["mappingVersion"] = int(payload[idx])
@@ -988,6 +1017,22 @@ def build_angle_cmd(angles: List[float]) -> bytes:
     return _build_command_frame(CMD_ANGLE_CTRL, payload)
 
 
+def build_masked_angle_cmd(angles: List[float], joint_mask: int) -> bytes:
+    """构造带本次控制掩码的 21 路角度命令。
+
+    角度数组仍保持固定 21 路，掩码只决定哪些 active joint 进入 PID；
+    未置位关节由 P4 保持当前舵机 ABS，避免单行 Send 带动同组其他关节。
+    """
+    if len(angles) != ENCODER_COUNT:
+        raise ValueError(f"need exactly {ENCODER_COUNT} joint angles")
+    valid_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
+    if valid_mask == 0:
+        raise ValueError("masked angle command requires a non-zero joint mask")
+    payload = struct.pack(">I", valid_mask)
+    payload += struct.pack(f"<{ENCODER_COUNT}f", *angles)
+    return _build_command_frame(CMD_ANGLE_CTRL_MASKED, payload)
+
+
 def build_run_feedback_cmd() -> bytes:
     return _build_command_frame(CMD_RUN_FEEDBACK, b"")
 
@@ -1067,19 +1112,19 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     payload.append(1 if bool(result.get("scaled", False)) else 0)
     direction = -1 if int(result.get("encoderDirection", 1)) < 0 else 1
     payload.extend(struct.pack(">b", direction))
-    payload.append(1 if bool(result.get("dualTendonLutValid", False)) else 0)
-    payload.append(int(result.get("dualTendonLutCount", 0)) & 0xFF)
-    motors = list(result.get("dualTendonLutMotor", [0xFF, 0xFF]))
-    while len(motors) < DUAL_TENDON_LUT_ACTUATOR_COUNT:
+    payload.append(1 if bool(tendon_lut_field(result, "tendonLutValid", False)) else 0)
+    payload.append(int(tendon_lut_field(result, "tendonLutCount", 0)) & 0xFF)
+    motors = list(tendon_lut_field(result, "tendonLutMotor", [0xFF, 0xFF]))
+    while len(motors) < TENDON_LUT_ACTUATOR_COUNT:
         motors.append(0xFF)
-    for i in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+    for i in range(TENDON_LUT_ACTUATOR_COUNT):
         payload.append(int(motors[i]) & 0xFF)
-    payload.extend(_pack_float_be(float(result.get("dualTendonLutAngleStartDeg", 0.0))))
-    payload.extend(_pack_float_be(float(result.get("dualTendonLutAngleStepDeg", 0.0))))
-    motor_abs = result.get("dualTendonLutMotorAbs", [])
-    for actuator in range(DUAL_TENDON_LUT_ACTUATOR_COUNT):
+    payload.extend(_pack_float_be(float(tendon_lut_field(result, "tendonLutAngleStartDeg", 0.0))))
+    payload.extend(_pack_float_be(float(tendon_lut_field(result, "tendonLutAngleStepDeg", 0.0))))
+    motor_abs = tendon_lut_field(result, "tendonLutMotorAbs", [])
+    for actuator in range(TENDON_LUT_ACTUATOR_COUNT):
         row = motor_abs[actuator] if actuator < len(motor_abs) else []
-        for sample in range(DUAL_TENDON_LUT_MAX_SAMPLES):
+        for sample in range(TENDON_LUT_MAX_SAMPLES):
             value = row[sample] if sample < len(row) else 0
             payload.extend(struct.pack(">h", _clamp_i16(value)))
     payload.append(int(result.get("mappingVersion", 0)) & 0xFF)

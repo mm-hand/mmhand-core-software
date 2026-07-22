@@ -47,24 +47,55 @@ static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
     }
 }
 
-void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count)
+void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
+                                  const float* angles,
+                                  uint8_t count,
+                                  uint32_t jointMask)
 {
     if (!sharedData || !angles) {
         return;
     }
     if (count > ENCODER_TOTAL_NUM) count = ENCODER_TOTAL_NUM;
+    const uint32_t appliedMask =
+        jointMask & sharedAtomicLoad(&sharedData->active_joint_mask) &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    if (appliedMask == 0) {
+        FW_LOG_INFO_PRINTF(
+            "[UPPER] ANGLE_MASK rejected requested=0x%08lX active=0x%08lX\r\n",
+            (unsigned long)jointMask,
+            (unsigned long)sharedAtomicLoad(&sharedData->active_joint_mask));
+        return;
+    }
     SemaphoreHandle_t lock = sharedData->commandStateMutex ? sharedData->commandStateMutex : sharedData->targetAnglesMutex;
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE)
     {
+        const uint32_t previousMask = sharedData->feedback_command_joint_mask;
         // Write the complete joint target set while the command mutex is held.
         for (uint8_t i = 0; i < count; i++) {
             sharedData->targetAngles[i] = angles[i];
         }
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+        sharedData->feedback_command_joint_mask = appliedMask;
         sharedData->joint_command_token++;
         xSemaphoreGive(lock);
+        if (previousMask != appliedMask) {
+            FW_LOG_INFO_PRINTF(
+                "[UPPER] ANGLE_MASK applied=0x%08lX previous=0x%08lX\r\n",
+                (unsigned long)appliedMask,
+                (unsigned long)previousMask);
+        }
     }
+}
+
+void upperApplyTargetAngles(TaskSharedData_t* sharedData,
+                            const float* angles,
+                            uint8_t count)
+{
+    const uint32_t activeMask = sharedData
+        ? sharedAtomicLoad(&sharedData->active_joint_mask)
+        : 0;
+    upperApplyTargetAnglesMasked(sharedData, angles, count, activeMask);
 }
 
 bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
@@ -208,6 +239,7 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
         sharedData->control_enabled != 0 ||
         (state != SYSTEM_STATE_IDLE &&
          state != SYSTEM_STATE_READY &&
+         state != SYSTEM_STATE_RECOVERY_REQUIRED &&
          state != SYSTEM_STATE_UNCONTROLLABLE)) {
         FW_LOG_INFO_PRINTF("[UPPER] ACTIVE_SCOPE rejected state=%u owner=%u enabled=%u\r\n",
                       (unsigned)state,
@@ -232,6 +264,7 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
         sharedData->control_enabled != 0 ||
         (lockedState != SYSTEM_STATE_IDLE &&
          lockedState != SYSTEM_STATE_READY &&
+         lockedState != SYSTEM_STATE_RECOVERY_REQUIRED &&
          lockedState != SYSTEM_STATE_UNCONTROLLABLE)) {
         if (lock) {
             xSemaphoreGive(lock);

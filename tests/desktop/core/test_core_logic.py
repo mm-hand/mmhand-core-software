@@ -11,6 +11,7 @@ from desktop.core.protocol import (
     ControlMode,
     ENCODER_COUNT,
     MOTOR_COUNT,
+    TENDON_LUT_MAX_SAMPLES,
     MOTOR_ABS_CMD_MIN,
     MOTOR_ABS_CMD_MAX,
     SYSTEM_STATE_IDLE,
@@ -315,12 +316,21 @@ class TestLoadCalibrationSnapshot:
         ]
 
         joint_results = [None] * ENCODER_COUNT
-        for joint in (9, 10):
+        for joint, motor in ((9, 12), (10, 13)):
             joint_results[joint] = {
                 "success": True,
                 "mappingVersion": mapping_version,
                 "urdfConfigCrc": urdf_crc,
                 "manualReferenceCrc": manual_crc,
+                "tendonLutValid": True,
+                "tendonLutCount": 3,
+                "tendonLutMotor": [motor, 0xFF],
+                "tendonLutAngleStartDeg": 0.0,
+                "tendonLutAngleStepDeg": 5.0,
+                "tendonLutMotorAbs": [
+                    list(range(TENDON_LUT_MAX_SAMPLES)),
+                    [0] * TENDON_LUT_MAX_SAMPLES,
+                ],
             }
         snapshot = {
             "schema_version": 3,

@@ -189,6 +189,14 @@ def run_ui(
         try:
             bridge.start()
             print(f"ROS2 {ros2_input} input enabled on {ros_topic}")
+            if auto_start:
+                # --auto-start 只在进程启动时授权一次；E-STOP 撤权后，持续
+                # 到来的 ROS2 帧不能再次授权，必须由用户点击现有 ENABLE。
+                backend.start()
+                ok, message = backend.set_ros2_output_armed(
+                    True, reason="UI_AUTO_START"
+                )
+                print(message if ok else f"ROS2 auto-start blocked: {message}")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             bridge = None

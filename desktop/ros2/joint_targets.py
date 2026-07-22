@@ -8,7 +8,6 @@ import time
 from typing import Callable, Iterable, Optional
 
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import ControlMode
 from desktop.teleop.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
@@ -53,11 +52,11 @@ class JointTargetCommandHandler:
             self._warn(f"ignored ROS2 joint target: {exc}")
             return False
 
-        self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-        result = self.backend.send_joint_targets(
+        # 两个 ROS2 输入 topic 统一经过 backend 的授权门。这里不能直接调用
+        # send_joint_targets，否则 E-STOP 后的下一帧会再次发送 RUN_FEEDBACK。
+        result = self.backend.send_ros2_joint_targets(
             adaptation.urdf_targets_deg,
             source=f"ROS2:{self.topic}",
-            live=True,
             input_space=adaptation.source_space,
             raw_targets=adaptation.source_targets,
         )
@@ -90,6 +89,7 @@ class Ros2JointTargetBridge:
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
     ) -> None:
+        self.backend = backend
         self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=URDF_DEG)
         self.handler = JointTargetCommandHandler(
             backend,
@@ -142,6 +142,7 @@ class Ros2JointTargetBridge:
         self._thread.start()
 
     def stop(self) -> None:
+        self.backend.set_ros2_output_armed(False, reason="ros2_bridge_stop")
         if not self._started:
             return
         rclpy = self._rclpy

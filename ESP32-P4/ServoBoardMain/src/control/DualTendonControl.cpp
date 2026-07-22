@@ -4,6 +4,7 @@
 #include <string.h>
 #include "ControlOutputBuilder.h"
 #include "ControlSafety.h"
+#include "TendonCalibrationLut.h"
 #include "../calibration/CalibrationTask.h"
 #include "../hardware/HardwareMap.h"
 
@@ -18,7 +19,6 @@ struct DualTendonJointConfig {
     float kd[2];
     float integralLimit[2];
     float dTermLimit[2];
-    int32_t maxReleaseFromCalibCounts;
 };
 
 // 动态 PID/滤波状态，按逻辑关节索引。关节停止参与闭环输出时会重置。
@@ -33,18 +33,14 @@ struct DualTendonJointState {
 static DualTendonJointState g_dualTendonState[ENCODER_TOTAL_NUM];
 
 static const float kControlPeriodSec = 0.010f;
-static const float kDefaultDualTendonKp = 0.00f;
+static const float kDefaultDualTendonKp = 0.60f;
 static const float kDefaultDualTendonKi = 0.0f;
-static const float kDefaultDualTendonKd = 0.6f;
+static const float kDefaultDualTendonKd = 0.0f;
 static const float kDefaultDualTendonIntegralLimit = 0.0f;
 static const float kDefaultDualTendonDTermLimitCounts = 100.0f;
 static const float kDualTendonVelocityFilterTauSec = 0.050f;
 static const float kDualTendonVelocityFilterAlpha =
     kControlPeriodSec / (kDualTendonVelocityFilterTauSec + kControlPeriodSec);
-static const int32_t kDefaultDualTendonMaxReleaseFromCalibCounts = 1000;
-static const int32_t kThumbDualTendonMaxReleaseFromCalibCounts = 1800;
-static const int32_t kJoint20DualTendonMaxReleaseFromCalibCounts = 2500;
-
 static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 {
     if (!out) {
@@ -54,7 +50,7 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     memset(out, 0, sizeof(*out));
     out->enabled = 1;
 
-    // 先使用保守默认值；特殊关节只覆盖自身的安全释放余量。
+    // All supported dual-tendon joints currently share the same controller gains.
     out->kp[0] = kDefaultDualTendonKp;
     out->kp[1] = kDefaultDualTendonKp;
     out->ki[0] = kDefaultDualTendonKi;
@@ -65,8 +61,6 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
     out->dTermLimit[0] = kDefaultDualTendonDTermLimitCounts;
     out->dTermLimit[1] = kDefaultDualTendonDTermLimitCounts;
-    out->maxReleaseFromCalibCounts = kDefaultDualTendonMaxReleaseFromCalibCounts;
-
     switch (jointIndex) {
         case 0:
         case 4:
@@ -74,12 +68,8 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
         case 12:
             return true;
         case kThumbBaseJointIndex:
-            out->maxReleaseFromCalibCounts =
-                kThumbDualTendonMaxReleaseFromCalibCounts;
             return true;
         case 20:
-            out->maxReleaseFromCalibCounts =
-                kJoint20DualTendonMaxReleaseFromCalibCounts;
             return true;
         default:
             out->enabled = 0;
@@ -109,52 +99,6 @@ static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActu
     return outActuators[0].sign != outActuators[1].sign;
 }
 
-static bool interpolateDualTendonLutMotorAbs(const JointCalibrationResult& calib,
-                                             uint8_t actuatorIndex,
-                                             float qDeg,
-                                             float* outAbs)
-{
-    // 提前拒绝不完整 LUT；下面的插值假设角度步长均匀。
-    if (!outAbs ||
-        actuatorIndex >= DUAL_TENDON_LUT_ACTUATOR_COUNT ||
-        calib.dualTendonLutValid == 0 ||
-        calib.dualTendonLutCount < 3 ||
-        calib.dualTendonLutCount > DUAL_TENDON_LUT_MAX_SAMPLES ||
-        !isfinite(calib.dualTendonLutAngleStartDeg) ||
-        !isfinite(calib.dualTendonLutAngleStepDeg) ||
-        calib.dualTendonLutAngleStepDeg <= 0.0f) {
-        return false;
-    }
-
-    const float firstDeg = calib.dualTendonLutAngleStartDeg;
-    const float stepDeg = calib.dualTendonLutAngleStepDeg;
-    // 超出范围的请求钳到最近的标定端点，不在实测腱绳关系之外外推。
-    if (qDeg <= firstDeg) {
-        *outAbs = (float)calib.dualTendonLutMotorAbs[actuatorIndex][0];
-        return true;
-    }
-
-    const uint8_t lastIndex = calib.dualTendonLutCount - 1;
-    const float lastDeg = firstDeg + stepDeg * (float)lastIndex;
-    if (qDeg >= lastDeg) {
-        *outAbs = (float)calib.dualTendonLutMotorAbs[actuatorIndex][lastIndex];
-        return true;
-    }
-
-    const float position = (qDeg - firstDeg) / stepDeg;
-    uint8_t lowerIndex = (uint8_t)floorf(position);
-    if (lowerIndex >= lastIndex) {
-        lowerIndex = lastIndex - 1;
-    }
-    const float t = position - (float)lowerIndex;
-    const float lower =
-        (float)calib.dualTendonLutMotorAbs[actuatorIndex][lowerIndex];
-    const float upper =
-        (float)calib.dualTendonLutMotorAbs[actuatorIndex][lowerIndex + 1];
-    *outAbs = lower + (upper - lower) * t;
-    return true;
-}
-
 static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
                                                      const JointActuatorItem actuators[2],
                                                      float qRefDeg,
@@ -168,35 +112,20 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
 
     const JointCalibrationResult& calib = g_jointCalibResult[jointIndex];
     if (!calib.success || !calib.scaled ||
-        calib.dualTendonLutValid == 0 ||
-        calib.dualTendonLutCount < 3) {
+        calib.tendonLutValid == 0 ||
+        calib.tendonLutCount < 3) {
         return false;
-    }
-
-    float lutRefDeg = qRefDeg;
-    float lutFbDeg = qFbDeg;
-    if (calib.mappingVersion >= 2) {
-        // 新版标定把 URDF 关节限位和 raw LUT 扫描范围分开保存，
-        // 插值前需要先把 URDF 角度转换回 LUT 角度。
-        const float urdfSpan = calib.angleMax - calib.angleMin;
-        if (!isfinite(urdfSpan) || urdfSpan <= 0.0f ||
-            !isfinite(calib.totalDeg) || calib.totalDeg <= 0.0f) {
-            return false;
-        }
-        lutRefDeg = calib.startDeg +
-            ((qRefDeg - calib.angleMin) / urdfSpan) * calib.totalDeg;
-        lutFbDeg = calib.startDeg +
-            ((qFbDeg - calib.angleMin) / urdfSpan) * calib.totalDeg;
     }
 
     for (uint8_t i = 0; i < 2; i++) {
         // 标定样本与电机通道绑定；执行器顺序混用会让拮抗对相互对抗，
         // 因此要求通道完全匹配。
-        if (calib.dualTendonLutMotor[i] != actuators[i].motorChannel) {
+        if (calib.tendonLutMotor[i] != actuators[i].motorChannel) {
             return false;
         }
-        if (!interpolateDualTendonLutMotorAbs(calib, i, lutRefDeg, &outRef[i]) ||
-            !interpolateDualTendonLutMotorAbs(calib, i, lutFbDeg, &outFb[i])) {
+        // 公共 LUT 函数内部只做一次 URDF -> 标定角转换，避免重复缩放。
+        if (!interpolateTendonCalibrationMotorAbs(calib, i, qRefDeg, &outRef[i]) ||
+            !interpolateTendonCalibrationMotorAbs(calib, i, qFbDeg, &outFb[i])) {
             return false;
         }
     }
@@ -222,36 +151,6 @@ void resetDualTendonController(uint8_t jointIndex)
         return;
     }
     g_dualTendonState[jointIndex] = DualTendonJointState();
-}
-
-int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
-                                       uint8_t motorChannel,
-                                       int32_t calibratedAnchorRawAbs,
-                                       int32_t currentRawAbs,
-                                       int32_t targetRawAbs)
-{
-    // 在腱绳坐标中比较，使“释放”的符号不受各电机 raw ABS 方向影响。
-    DualTendonJointConfig cfg;
-    if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
-        return clampServoPos(targetRawAbs);
-    }
-
-    const int32_t calibratedAnchorTendonAbs =
-        motorRawAbsToTendonAbs(motorChannel, calibratedAnchorRawAbs);
-    const int32_t currentTendonAbs =
-        motorRawAbsToTendonAbs(motorChannel, currentRawAbs);
-    const int32_t targetTendonAbs =
-        motorRawAbsToTendonAbs(motorChannel, targetRawAbs);
-    const int32_t actualReleaseFromCalib =
-        calibratedAnchorTendonAbs - currentTendonAbs;
-
-    // 无状态反馈门限：反馈达到释放余量后，仅保持继续释放的命令。
-    // 收紧命令始终允许通过。
-    if (actualReleaseFromCalib >= cfg.maxReleaseFromCalibCounts &&
-        targetTendonAbs < currentTendonAbs) {
-        return clampServoPos(currentRawAbs);
-    }
-    return clampServoPos(targetRawAbs);
 }
 
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
@@ -311,6 +210,9 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->iTerm[i] = 0.0f;
         outTargets->dTerm[i] = 0.0f;
         outTargets->pidCorrection[i] = 0.0f;
+        outTargets->lutBoundaryClamped[i] = 0;
+        outTargets->lutMinAbs[i] = 0;
+        outTargets->lutMaxAbs[i] = 0;
     }
 
     const bool resetState = !state.prevValid;
@@ -365,8 +267,23 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->iTerm[i] = iTerm;
         outTargets->dTerm[i] = dTerm;
         outTargets->pidCorrection[i] = correction;
-        outTargets->targetAbs[i] =
+        const int32_t rawTarget =
             clampServoPos((int32_t)(motorCurrent + correction));
+        int32_t lutMinAbs = 0;
+        int32_t lutMaxAbs = 0;
+        if (!tendonCalibrationMotorAbsRange(g_jointCalibResult[jointIndex],
+                                            i,
+                                            &lutMinAbs,
+                                            &lutMaxAbs)) {
+            return false;
+        }
+        int32_t boundedTarget = rawTarget;
+        if (boundedTarget < lutMinAbs) boundedTarget = lutMinAbs;
+        if (boundedTarget > lutMaxAbs) boundedTarget = lutMaxAbs;
+        outTargets->targetAbs[i] = clampServoPos(boundedTarget);
+        outTargets->lutBoundaryClamped[i] = boundedTarget != rawTarget ? 1 : 0;
+        outTargets->lutMinAbs[i] = lutMinAbs;
+        outTargets->lutMaxAbs[i] = lutMaxAbs;
         state.prevMotorRef[i] = outTargets->motorRef[i];
         state.prevMotorFbModel[i] = outTargets->motorFbModel[i];
     }

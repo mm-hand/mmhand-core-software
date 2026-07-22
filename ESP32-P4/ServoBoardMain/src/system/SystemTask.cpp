@@ -83,6 +83,7 @@ void System_Init() {
     sharedData.motor_command_token = 0;
     sharedData.motor_sweep_command_token = 0;
     sharedData.joint_command_token = 0;
+    sharedData.feedback_command_joint_mask = 0;
     sharedData.motor_direct_command_generation = 0;
     sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData.pending_direct_generation = 0;
@@ -110,6 +111,11 @@ void System_Init() {
     sharedData.feedback_admission_sequence = 0;
     sharedData.feedback_admission_status = FEEDBACK_ADMISSION_IDLE;
     sharedData.feedback_reject_reason = FEEDBACK_REJECT_NONE;
+    sharedData.feedback_collision_armed_bitmap = 0;
+    sharedData.feedback_collision_hold_bitmap = 0;
+    sharedData.feedback_collision_transition_count = 0;
+    sharedData.feedback_recovery_pending = 0;
+    sharedData.feedback_recovery_request_sequence = 0;
     sharedData.emergency_stop_request_token = 0;
     sharedData.servo_emergency_stop_token = 0;
     sharedData.system_fault_bitmap = 0;

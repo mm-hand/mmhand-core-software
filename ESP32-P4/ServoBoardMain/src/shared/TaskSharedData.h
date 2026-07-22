@@ -75,6 +75,7 @@
 #define SYSTEM_STATE_RUN_DIRECT 6
 #define SYSTEM_STATE_PAUSED 7
 #define SYSTEM_STATE_ROPE_INIT_RUNNING 8
+#define SYSTEM_STATE_RECOVERY_REQUIRED 9
 
 #define ROPE_INIT_STATUS_IDLE 0
 #define ROPE_INIT_STATUS_RUNNING 1
@@ -279,6 +280,7 @@ typedef struct {
     uint32_t motorCommandToken;
     uint32_t motorSweepCommandToken;
     uint32_t jointCommandToken;
+    uint32_t feedbackCommandJointMask;
     uint32_t motorDirectCommandGeneration;
     uint8_t motorDirectCommandSource;
     uint8_t controlMode;
@@ -413,6 +415,8 @@ typedef struct {
     volatile uint32_t motor_command_token;
     volatile uint32_t motor_sweep_command_token;
     volatile uint32_t joint_command_token;
+    // 当前角度命令真正参与 PID 的关节。它与 active_joint_mask 相交后生效。
+    volatile uint32_t feedback_command_joint_mask;
     volatile uint32_t motor_direct_command_generation;
     volatile uint8_t motor_direct_command_source;
     volatile uint32_t pending_direct_generation;
@@ -441,6 +445,15 @@ typedef struct {
     volatile uint32_t feedback_admission_sequence;
     volatile uint8_t feedback_admission_status;
     volatile uint8_t feedback_reject_reason;
+    // 磁编运动碰撞检测由 ControlTask 产生并通过状态包上报：armed 表示已确认
+    // 关节进入有效运动，hold 表示已冻结触发瞬间的舵机 ABS；状态变化序号用于立即刷新 UI。
+    volatile uint32_t feedback_collision_armed_bitmap;
+    volatile uint32_t feedback_collision_hold_bitmap;
+    volatile uint32_t feedback_collision_transition_count;
+    // A safe inward feedback command received while below currentMin starts
+    // Rope Init first, then resumes the latest joint target automatically.
+    volatile uint8_t feedback_recovery_pending;
+    volatile uint32_t feedback_recovery_request_sequence;
     volatile uint32_t emergency_stop_request_token;
     volatile uint32_t servo_emergency_stop_token;
     volatile uint32_t system_fault_bitmap;

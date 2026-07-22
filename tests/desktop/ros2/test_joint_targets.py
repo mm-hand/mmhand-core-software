@@ -1,7 +1,7 @@
 import math
 from types import SimpleNamespace
 
-from desktop.core.protocol import ControlMode, ENCODER_COUNT
+from desktop.core.protocol import ENCODER_COUNT
 from desktop.ros2.joint_targets import JointTargetCommandHandler
 
 
@@ -11,6 +11,7 @@ class FakeBackend:
         self.sent = []
         self.starts = 0
         self.result = result
+        self.armed = True
 
     def set_control_mode(self, mode) -> None:
         self.control_modes.append(mode)
@@ -18,8 +19,12 @@ class FakeBackend:
     def start(self) -> None:
         self.starts += 1
 
-    def send_joint_targets(self, targets, *, source="", live=False, input_space="", raw_targets=None):
-        self.sent.append((list(targets), source, live, input_space, list(raw_targets or [])))
+    def set_ros2_output_armed(self, armed, *, reason=""):
+        self.armed = bool(armed)
+        return True, reason
+
+    def send_ros2_joint_targets(self, targets, *, source="", input_space="", raw_targets=None):
+        self.sent.append((list(targets), source, input_space, list(raw_targets or [])))
         return self.result
 
 
@@ -30,9 +35,9 @@ def test_ros2_handler_sends_valid_21_degree_targets() -> None:
     ok = handler.handle_message(SimpleNamespace(data=[1.5] * ENCODER_COUNT))
 
     assert ok is True
-    assert backend.control_modes == [ControlMode.JOINT_ANGLE]
+    assert backend.control_modes == []
     assert backend.sent == [
-        ([1.5] * ENCODER_COUNT, "ROS2:/mmhand/joint_targets", True, "urdf_deg", [1.5] * ENCODER_COUNT)
+        ([1.5] * ENCODER_COUNT, "ROS2:/mmhand/joint_targets", "urdf_deg", [1.5] * ENCODER_COUNT)
     ]
 
 
@@ -79,3 +84,14 @@ def test_ros2_handler_reports_backend_workspace_rejection() -> None:
 
     assert handler.handle_values([0.0] * ENCODER_COUNT) is False
     assert warnings == ["Joint command blocked: J00 Manual reference missing"]
+
+
+def test_joint_target_bridge_stop_revokes_output_even_before_start() -> None:
+    from desktop.ros2.joint_targets import Ros2JointTargetBridge
+
+    backend = FakeBackend()
+    bridge = Ros2JointTargetBridge(backend)
+
+    bridge.stop()
+
+    assert backend.armed is False

@@ -12,6 +12,7 @@ from desktop.paths import PACKAGE_DIR
 from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .comm_layer import LowerComputerComm, list_ports
 from .data_models import HandModel
+from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CLEAR_CALIBRATION,
@@ -26,19 +27,21 @@ from .protocol import (
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
     DUAL_TENDON_JOINT_INDICES,
-    DUAL_TENDON_LUT_MAX_SAMPLES,
+    TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
     MOTOR_COUNT,
     ControlMode,
     MOTOR_ABS_CMD_MAX,
     MOTOR_ABS_CMD_MIN,
     SYSTEM_STATE_IDLE,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_PAUSED,
     manual_encoder_reference_crc,
     manual_encoder_reference_entry_crc,
+    tendon_lut_field,
 )
 from .session_log import log_session
 
@@ -62,29 +65,40 @@ MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 HOST_MULTITURN_CACHE_ENABLE = False
 
 
-def _joint_calib_result_has_valid_dual_lut(item: Optional[dict]) -> bool:
+def _joint_calib_result_has_valid_tendon_lut(
+    item: Optional[dict], joint_idx: int
+) -> bool:
     if not isinstance(item, dict) or not bool(item.get("success", False)):
         return False
-    if not bool(item.get("dualTendonLutValid", False)):
+    if not bool(tendon_lut_field(item, "tendonLutValid", False)):
         return False
     try:
-        count = int(item.get("dualTendonLutCount", 0))
+        count = int(tendon_lut_field(item, "tendonLutCount", 0))
     except (TypeError, ValueError):
         return False
-    if count < 3 or count > DUAL_TENDON_LUT_MAX_SAMPLES:
+    if count < 3 or count > TENDON_LUT_MAX_SAMPLES:
         return False
-    motors = item.get("dualTendonLutMotor", [])
+    expected_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
+    motors = tendon_lut_field(item, "tendonLutMotor", [])
     if not isinstance(motors, list) or len(motors) < 2:
         return False
     try:
-        if any(int(motors[i]) < 0 or int(motors[i]) >= MOTOR_COUNT for i in range(2)):
+        expected_motors = [
+            motor_idx for motor_idx, mapped_joint in enumerate(MOTOR_TO_JOINT_INDEX)
+            if int(mapped_joint) == int(joint_idx)
+        ]
+        if len(expected_motors) != expected_count:
+            return False
+        if any(int(motors[i]) != expected_motors[i] for i in range(expected_count)):
+            return False
+        if expected_count == 1 and int(motors[1]) != 0xFF:
             return False
     except (TypeError, ValueError):
         return False
-    motor_abs = item.get("dualTendonLutMotorAbs", [])
+    motor_abs = tendon_lut_field(item, "tendonLutMotorAbs", [])
     if not isinstance(motor_abs, list) or len(motor_abs) < 2:
         return False
-    for row in motor_abs[:2]:
+    for row in motor_abs[:expected_count]:
         if not isinstance(row, list) or len(row) < count:
             return False
     return True
@@ -510,6 +524,7 @@ class HandController:
                     if getattr(new_model, "has_system_status_data", False):
                         self._started = int(new_model.system_state) in (
                             SYSTEM_STATE_IDLE,
+                            SYSTEM_STATE_RECOVERY_REQUIRED,
                             SYSTEM_STATE_RUN_FEEDBACK,
                             SYSTEM_STATE_READY,
                             SYSTEM_STATE_RUN_DIRECT,
@@ -527,10 +542,10 @@ class HandController:
                     print(f"Update loop caught exception: {e}")
                 break
 
-    def set_target_angles(self, angles: List[float]):
+    def set_target_angles(self, angles: List[float]) -> bool:
         """设置 ENCODER_COUNT 路关节目标角（度），JOINT_ANGLE 模式；暂停时不发送"""
         if self._paused:
-            return
+            return False
         if len(angles) != ENCODER_COUNT:
             raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
 
@@ -538,12 +553,15 @@ class HandController:
         with self.state_lock:
             self.current_state.set_target_angles(angles)
         if self.comm and self._control_mode == ControlMode.JOINT_ANGLE:
-            self.comm.send_command(self.current_state)
+            return bool(self.comm.send_command(self.current_state))
+        return False
 
-    def set_target_angles_live(self, angles: List[float]):
+    def set_target_angles_live(
+        self, angles: List[float], *, joint_mask: Optional[int] = None
+    ) -> bool:
         """高频滑条跟随专用：仅保留最新目标，避免串口队列积压。"""
         if self._paused:
-            return
+            return False
         if len(angles) != ENCODER_COUNT:
             raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
 
@@ -552,7 +570,33 @@ class HandController:
             self.current_state.set_target_angles(angles)
         if self.comm and self._control_mode == ControlMode.JOINT_ANGLE:
             # tuple 命令走 comm_layer 高速通道（latest-only queue）。
-            self.comm.send_command(("angle_live", list(angles)))
+            if joint_mask is not None:
+                return bool(self.comm.send_command(
+                    ("angle_live_masked", list(angles), int(joint_mask))
+                ))
+            return bool(self.comm.send_command(("angle_live", list(angles))))
+        return False
+
+    def send_target_angles_and_run_feedback(
+        self,
+        angles: List[float],
+        *,
+        live: bool = False,
+        joint_mask: Optional[int] = None,
+    ) -> bool:
+        """把关节目标与 RUN_FEEDBACK 作为同一个队列事务发送。"""
+        if self._paused or not self.comm or self._control_mode != ControlMode.JOINT_ANGLE:
+            return False
+        if len(angles) != ENCODER_COUNT:
+            raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
+        validated = self._validate_angles(angles)
+        with self.state_lock:
+            self.current_state.set_target_angles(validated)
+        if joint_mask is not None:
+            return bool(self.comm.send_command(
+                ("joint_target_run_masked", list(validated), int(joint_mask))
+            ))
+        return bool(self.comm.send_command(("joint_target_run", list(validated))))
 
     def set_motor_positions_raw(self, motor_pos_raw: List[int]):
         """设置 MOTOR_COUNT 路电机目标编码器原始值，DIRECT_MOTOR 模式；暂停时不发送"""
@@ -638,8 +682,7 @@ class HandController:
         # reacquire ownership after it has already returned to READY.
         # P4 treats a duplicate request while RUN_FEEDBACK is active as
         # idempotent, without resetting the servo target queue.
-        self.comm.send_command("run_feedback")
-        return True
+        return bool(self.comm.send_command("run_feedback"))
 
     def set_manual_encoder_references(
         self,
@@ -1171,15 +1214,16 @@ class HandController:
                 f"snapshot Manual CRC mismatch: {mismatch_text}; "
                 "re-run automatic calibration for these joints"
             )
-        missing_dual_lut = [
+        missing_tendon_lut = [
             joint_idx for joint_idx in range(ENCODER_COUNT)
             if (active_joint_mask & (1 << joint_idx)) and
-            joint_idx in DUAL_TENDON_JOINT_INDICES and
-            not _joint_calib_result_has_valid_dual_lut(joint_results[joint_idx])
+            not _joint_calib_result_has_valid_tendon_lut(
+                joint_results[joint_idx], joint_idx
+            )
         ]
-        if missing_dual_lut:
-            missing_text = ",".join(f"J{idx:02d}" for idx in missing_dual_lut)
-            return False, f"snapshot missing dual tendon LUT: {missing_text}"
+        if missing_tendon_lut:
+            missing_text = ",".join(f"J{idx:02d}" for idx in missing_tendon_lut)
+            return False, f"snapshot missing tendon LUT: {missing_text}"
 
         locked_bitmap &= valid_bitmap
         limits_sent_at = time.time()

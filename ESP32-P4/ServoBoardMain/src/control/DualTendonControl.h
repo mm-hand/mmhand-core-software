@@ -24,6 +24,10 @@ struct DualTendonMotorTargets {
     float iTerm[2];
     float dTerm[2];
     float pidCorrection[2];
+    // 最终目标是否被自动标定 LUT 的实测 ABS 边界截断，用于碰撞检测排除边界停住。
+    uint8_t lutBoundaryClamped[2];
+    int32_t lutMinAbs[2];
+    int32_t lutMaxAbs[2];
     // 上述数组中有效的电机条目数量。
     uint8_t count;
 };
@@ -32,13 +36,6 @@ struct DualTendonMotorTargets {
 bool isDualTendonJoint(uint8_t jointIndex);
 // 清空指定关节的 PID 历史；输出关闭或反馈无效时调用。
 void resetDualTendonController(uint8_t jointIndex);
-
-// 实际反馈达到标定释放余量后，只阻止继续释放的命令；收紧命令始终放行。
-int32_t clampDualTendonReleaseFromCalib(uint8_t jointIndex,
-                                       uint8_t motorChannel,
-                                       int32_t calibratedAnchorRawAbs,
-                                       int32_t currentRawAbs,
-                                       int32_t targetRawAbs);
 
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,

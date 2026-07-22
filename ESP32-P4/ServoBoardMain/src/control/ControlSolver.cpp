@@ -83,6 +83,14 @@ float ControlSolver::getPidOutput(uint8_t jointIndex) const
     return _pids[jointIndex].Output;
 }
 
+void ControlSolver::resetJoint(uint8_t jointIndex)
+{       //重置特定关节角
+    if (jointIndex >= JOINT_COUNT) {
+        return;
+    }
+    PID_Calc_Clear(&_pids[jointIndex]);
+}
+
 void ControlSolver::resetAll()
 {
     // 只重置动态 PID 状态；已配置的增益和机械变换保持不变，

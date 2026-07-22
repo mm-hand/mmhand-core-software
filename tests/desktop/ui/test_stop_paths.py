@@ -3,6 +3,7 @@ import time
 from types import MethodType, SimpleNamespace
 
 from desktop.ui.ui_app import HandGUI
+from desktop.core.protocol import ControlMode
 from desktop.ui.ui_control_panels import ControlPanel
 
 
@@ -90,3 +91,116 @@ def test_test_stop_returns_without_waiting_for_recording_finalize():
         "feedforward stopped",
         "",
     )
+
+
+def test_joint_enable_does_not_stage_a_direct_motor_command():
+    events = []
+    backend = SimpleNamespace(
+        set_control_mode=lambda mode: events.append(("mode", mode)),
+        set_pid_control=lambda enabled: events.append(("pid", enabled)),
+        set_motor_positions_absolute=lambda _targets: events.append("motor_abs"),
+        start=lambda: events.append("start"),
+    )
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "joint",
+        _active_scope_joint_calib_missing_indices=lambda: [],
+        _apply_active_scope_for_current_mode=lambda: True,
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_multiturn_unknown_mask=lambda: 0,
+        _show_turn_recovery_guide=lambda *_args: None,
+        _sync_motor_targets_to_feedback=lambda: events.append("sync_motor") or True,
+        _build_motor_abs_command_list=lambda: [0] * 27,
+        _motor_last_sent_abs=[],
+        _estop_latched=True,
+        backend=backend,
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda text: events.append(("action", text)),
+        ),
+        _set_status=lambda text: events.append(("status", text)),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlPanel.start_controller(panel)
+
+    assert ("mode", ControlMode.JOINT_ANGLE) in events
+    assert ("pid", True) in events
+    assert "start" in events
+    assert "motor_abs" not in events
+    assert "sync_motor" not in events
+
+
+def test_joint_enable_rearms_ros2_without_an_extra_button():
+    events = []
+    backend = SimpleNamespace(
+        set_control_mode=lambda mode: events.append(("mode", mode)),
+        set_pid_control=lambda enabled: events.append(("pid", enabled)),
+        start=lambda: events.append("start"),
+        set_ros2_output_armed=lambda armed, reason="": (
+            events.append(("ros2_arm", bool(armed), reason)) or (True, "ROS2 armed")
+        ),
+    )
+    panel = SimpleNamespace(
+        _app_mode="teleop",
+        _manual_submode=lambda: "joint",
+        _active_scope_joint_calib_missing_indices=lambda: [],
+        _apply_active_scope_for_current_mode=lambda: True,
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_multiturn_unknown_mask=lambda: 0,
+        _show_turn_recovery_guide=lambda *_args: None,
+        _estop_latched=True,
+        backend=backend,
+        context=SimpleNamespace(
+            ros2_enabled=True,
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda text: events.append(("action", text)),
+        ),
+        _set_status=lambda text: events.append(("status", text)),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlPanel.start_controller(panel)
+
+    assert ("ros2_arm", True, "UI_ENABLE") in events
+    assert "start" in events
+
+
+def test_motor_enable_stages_direct_hold_without_extra_start_event():
+    events = []
+    targets = [100 + index for index in range(27)]
+    backend = SimpleNamespace(
+        set_control_mode=lambda mode: events.append(("mode", mode)),
+        set_pid_control=lambda enabled: events.append(("pid", enabled)),
+        set_motor_positions_absolute=lambda values: events.append(("motor_abs", list(values))),
+        start=lambda: events.append("start"),
+    )
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "motor",
+        _apply_active_scope_for_current_mode=lambda: True,
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_multiturn_unknown_mask=lambda: 0,
+        _show_turn_recovery_guide=lambda *_args: None,
+        _sync_motor_targets_to_feedback=lambda: True,
+        _build_motor_abs_command_list=lambda: targets,
+        _motor_last_sent_abs=[],
+        _estop_latched=True,
+        backend=backend,
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda text: events.append(("action", text)),
+        ),
+        _set_status=lambda text: events.append(("status", text)),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlPanel.start_controller(panel)
+
+    assert ("mode", ControlMode.DIRECT_MOTOR) in events
+    assert ("pid", False) in events
+    assert ("motor_abs", targets) in events
+    assert "start" not in events

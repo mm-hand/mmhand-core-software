@@ -106,33 +106,50 @@ class _Controller:
         self.update_callbacks = []
         self.sent = []
         self.run_requests = 0
+        self.stop_requests = 0
+        self.pause_requests = 0
+        self.queue_result = True
 
     def register_update_callback(self, callback):
         self.update_callbacks.append(callback)
 
     def set_target_angles(self, targets):
         self.sent.append(("normal", list(targets)))
+        return True
 
-    def set_target_angles_live(self, targets):
-        self.sent.append(("live", list(targets)))
+    def set_target_angles_live(self, targets, *, joint_mask=None):
+        self.sent.append(("live", list(targets), joint_mask))
+        return True
+
+    def send_target_angles_and_run_feedback(self, targets, *, live=False, joint_mask=None):
+        self.sent.append(("live" if live else "normal", list(targets), joint_mask))
+        self.run_requests += 1
+        return self.queue_result
 
     def request_run_feedback(self):
         self.run_requests += 1
         return True
 
+    def stop(self):
+        self.stop_requests += 1
 
-class _TendonGuard:
-    def sync_to_controller(self, backend, force=False):
-        return None
+    def pause(self):
+        self.pause_requests += 1
 
-    def apply(self, state, targets, source=""):
-        return list(targets), [], ""
+    def set_control_mode(self, _mode):
+        pass
+
+    def set_active_scope(self, motor_mask, joint_mask, require_can):
+        self.current_state.active_motor_mask = int(motor_mask)
+        self.current_state.active_joint_mask = int(joint_mask)
+        self.current_state.require_can_feedback = bool(require_can)
+        return True
 
 
 def test_backend_clamps_active_joint_to_dynamic_workspace():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)
-    backend = HandBackend(controller=controller, tendon_guard=_TendonGuard())
+    backend = HandBackend(controller=controller)
     targets = [0.0] * ENCODER_COUNT
 
     result = backend.send_joint_targets(targets, source="test", live=False)
@@ -148,7 +165,7 @@ def test_backend_blocks_active_joint_without_valid_auto():
     state = _ready_state()
     state.auto_calibration_valid_bitmap = 0
     controller = _Controller(state)
-    backend = HandBackend(controller=controller, tendon_guard=_TendonGuard())
+    backend = HandBackend(controller=controller)
 
     result = backend.send_joint_targets([0.0] * ENCODER_COUNT, source="test")
 
@@ -156,3 +173,104 @@ def test_backend_blocks_active_joint_without_valid_auto():
     assert result.blocked == [0]
     assert controller.sent == []
     assert controller.run_requests == 0
+
+
+def test_backend_reports_not_sent_when_atomic_queue_rejects_command():
+    state = _ready_state(current_min=12.5)
+    controller = _Controller(state)
+    controller.queue_result = False
+    backend = HandBackend(controller=controller)
+
+    result = backend.send_joint_targets([20.0] * ENCODER_COUNT, source="test")
+
+    assert not result.sent
+    assert "not queued" in result.message
+
+
+def test_backend_forwards_single_joint_command_mask_to_controller():
+    state = _ready_state(joint_idx=3, current_min=5.0)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+
+    result = backend.send_joint_targets(
+        [10.0] * ENCODER_COUNT,
+        source="Run J3",
+        command_joint_mask=1 << 3,
+    )
+
+    assert result.sent
+    assert controller.sent[-1][2] == (1 << 3)
+
+
+def _arm_ros2_backend(backend):
+    backend.is_comm_connected = lambda: True
+    backend.is_started = lambda: True
+    ok, message = backend.set_ros2_output_armed(True, reason="test")
+    assert ok, message
+
+
+def test_ros2_frame_requires_existing_enable_authorization():
+    state = _ready_state(current_min=12.5)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    backend.is_comm_connected = lambda: True
+    backend.is_started = lambda: True
+
+    blocked = backend.send_ros2_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="ROS2:/raw_ik_target",
+    )
+    assert not blocked.sent
+    assert blocked.message.endswith("not_armed")
+    assert controller.sent == []
+
+    _arm_ros2_backend(backend)
+    sent = backend.send_ros2_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="ROS2:/raw_ik_target",
+    )
+    assert sent.sent
+    assert controller.run_requests == 1
+    # ROS2 每帧绑定 ENABLE 时的 active scope，不继承单行 UI 掩码，
+    # 也不在串口稍后发送时重新解释可能已变化的 scope。
+    assert controller.sent[-1][2] == state.active_joint_mask
+
+
+def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():
+    state = _ready_state(current_min=12.5)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+
+    before_stop = backend.send_ros2_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="ROS2:/mmhand/joint_targets",
+    )
+    assert before_stop.sent
+
+    backend.stop()
+    after_stop = backend.send_ros2_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="ROS2:/mmhand/joint_targets",
+    )
+
+    assert controller.stop_requests == 1
+    assert not backend.ros2_output_armed()
+    assert not after_stop.sent
+    # E-STOP 前一帧允许发送，E-STOP 后持续到来的帧不能产生第二次 RUN。
+    assert controller.run_requests == 1
+
+
+def test_pause_and_scope_change_both_revoke_ros2_authorization():
+    state = _ready_state(current_min=12.5)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+
+    backend.pause()
+    assert controller.pause_requests == 1
+    assert not backend.ros2_output_armed()
+
+    _arm_ros2_backend(backend)
+    assert backend.set_active_scope(0x02, 0x02, True)
+    assert not backend.ros2_output_armed()

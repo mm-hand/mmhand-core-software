@@ -47,8 +47,8 @@ ESP32-P4/ServoBoardMain/src/control/pid.h
 主要函数：
 
 ```cpp
-void PID_Init(PID_Info_TypeDef *Pid, PID_Type_e type, float para[PID_PARAMETER_NUM]);
-float f_PID_Calculate(PID_Info_TypeDef *Pid, float target, float measure);
+PID_Status_e PID_Init(PID_Info_TypeDef *pid, const float params[PID_PARAMETER_NUM]);
+float f_PID_Calculate(PID_Info_TypeDef *pid, float target, float measure, float dtSeconds);
 ```
 
 位置：
@@ -79,7 +79,7 @@ ESP32-P4/ServoBoardMain/src/control/ControlSolver.cpp
 PID 初始化：
 
 ```cpp
-PID_Init(&_pids[i], PID_POSITION, pidParams);
+PID_Init(&_pids[i], pidParams);
 ```
 
 位置：

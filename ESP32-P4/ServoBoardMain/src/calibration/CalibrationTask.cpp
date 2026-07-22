@@ -3,24 +3,22 @@
 #include <string.h>
 
 #include "CalibrationMath.h"
-#include "JointCalibrationProfile.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
 #include "../shared/SharedSafetyState.h"
 #include "../system/FirmwareLog.h"
 
-// CalibrationTask 模块职责�?
-// 1) 管理关节标定参数与标定结果；
-// 2) 提供单关节自动标定流程；
-// 3) 在当前测试阶段，支持手工标定结果注入，但不作为常驻任务运行�?
+// CalibrationTask 模块职责：
+// 1) 管理关节标定结果和人工磁编参考值；
+// 2) 提供标定结果告警、编码器方向和双执行器映射等公共能力；
+// 3) 实际机械搜索由 AutoCalibrationTask 的非阻塞状态机执行。
 //
 // 数据来源约束�?
 // - 编码器原始值来�?canRxQueue（RemoteSensorData_t）；
 // - 舵机运动与反馈通过 servoCommunicationTask 的队�?快照交互�?
 // - 标定生命周期�?UI 状态由 StateMachineTask 统一管理�?
 
-// 全局标定配置与结果（按关节索�?0~ENCODER_TOTAL_NUM-1）�?
-JointCalibrationConfig g_jointCalibConfig[ENCODER_TOTAL_NUM];
+// 全局标定结果（按关节索引 0~ENCODER_TOTAL_NUM-1）。
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
@@ -208,46 +206,6 @@ JointDualServoConstraint g_joint16DualServoConstraint = {
     0
 };
 
-static const int32_t kEncoderModulo = 16384;
-static const int32_t kEncoderHalfTurn = kEncoderModulo / 2;
-
-// 按安装方向统一编码器原始值方向，输出范围 [0, modulo)�?
-static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction) {
-    int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
-    if (direction < 0) {
-        oriented = (kEncoderModulo - oriented) & (kEncoderModulo - 1);
-    }
-    return oriented;
-}
-
-
-
-static int32_t wrapEncoderCount(int32_t value) {
-    value %= kEncoderModulo;
-    if (value < 0) value += kEncoderModulo;
-    return value;
-}
-
-static int32_t forwardEncoderDelta(int32_t from, int32_t to) {
-    return wrapEncoderCount(to - from);
-}
-
-static float encoderCountToDeg(int32_t count) {
-    return (float)count * 360.0f / (float)kEncoderModulo;
-}
-
-static int32_t degToEncoderCount(float deg) {
-    const float scaled = deg * (float)kEncoderModulo / 360.0f;
-    return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
-}
-
-// 舵机绝对位置限幅，防止下发超出协�?硬件安全范围的目标值�?
-static int16_t clampToServoPos(int32_t value) {
-    if (value > 30719) return 30719;
-    if (value < -30719) return -30719;
-    return (int16_t)value;
-}
-
 // 获取关节双舵机约束：
 // - 当前�?joint16 返回有效约束�?
 // - 其余关节返回 false，调用方按单舵机流程处理�?
@@ -285,308 +243,14 @@ bool computeSecondaryServoTargetForJoint(uint8_t jointIndex,
     return false;
 }
 
-// 计算目标与当前编码器差值，并在整圈边界处做环绕归一化（最短路径）�?
-static int32_t wrapEncoderDelta(int32_t target, int32_t actual) {
-    int32_t delta = target - actual;
-    while (delta > kEncoderHalfTurn) delta -= kEncoderModulo;
-    while (delta < -kEncoderHalfTurn) delta += kEncoderModulo;
-    return delta;
-}
-
-// �?CAN 最新快照读取关节编码器值，并做方向统一�?
-// 失败条件：队列无数据、数据无效、关节报错、参数越界�?
-static bool readLatestEncoderRaw(TaskSharedData_t* sharedData, uint8_t jointIndex, int32_t* outEncoder) {
-    if (!sharedData || !outEncoder || jointIndex >= ENCODER_TOTAL_NUM) return false;
-
-    RemoteSensorData_t sensorData;
-    if (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE) return false;
-    if (!sensorData.isValid) return false;
-    const uint32_t bit = (1UL << jointIndex);
-    {
-        SharedSafetyGuard guard;
-        if ((sharedAtomicLoad(&sharedData->encoder_online_bitmap) & bit) == 0) return false;
-        if ((sharedAtomicLoad(&sharedData->encoder_fault_bitmap) & bit) != 0) return false;
-    }
-
-    *outEncoder = orientEncoderRaw(sensorData.encoderValues[jointIndex], g_encoderDirection[jointIndex]);
-    return true;
-}
-static int findMotorChannel(uint8_t bus, uint8_t id)
-{
-    return findMotorChannelByBusId(bus, id);
-}
-
-static bool readLatestServoAbs(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int32_t* outAbs)
-{
-    // 标定任务不直接访问舵机总线，只�?servoFeedbackQueue 读取最新快照�?
-    if (!sharedData || !outAbs) {
-        return false;
-    }
-    const int ch = findMotorChannel(bus, id);
-    if (ch < 0) {
-        return false;
-    }
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue || xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE) {
-        return false;
-    }
-    if (servoData.onlineStatus[ch] == 0) {
-        return false;
-    }
-    *outAbs = servoData.servoAngles[ch];
-    return true;
-}
-
-static bool readLatestServoLoad(TaskSharedData_t* sharedData, uint8_t bus, uint8_t id, int16_t* outLoad)
-{
-    // 负载来自舵机通信层发布的遥测快照，用于判断是否触碰机械限位�?
-    if (!sharedData || !outLoad) {
-        return false;
-    }
-    const int ch = findMotorChannel(bus, id);
-    if (ch < 0) {
-        return false;
-    }
-    ServoTelemetryData_t telemetry;
-    QueueHandle_t queue = sharedData->servoTelemetrySnapshotQueue ? sharedData->servoTelemetrySnapshotQueue : sharedData->servoTelemetryQueue;
-    if (!queue || xQueuePeek(queue, &telemetry, 0) != pdTRUE) {
-        return false;
-    }
-    if (telemetry.onlineStatus[ch] == 0) {
-        return false;
-    }
-    *outLoad = telemetry.load[ch];
-    return true;
-}
-
-static bool appendServoTarget(ServoTargetBatch_t* batch,
-                              uint8_t busIndex,
-                              uint8_t servoId,
-                              int16_t position,
-                              uint16_t speed,
-                              uint8_t acc)
-{
-    // CalibrationTask 构造的 batch 仍走 servoTargetQueue，由 ServoCommunicationTask 执行�?
-    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX || busIndex >= NUM_BUSES) {
-        return false;
-    }
-    ServoTargetCommand_t& cmd = batch->commands[batch->count++];
-    cmd.busIndex = busIndex;
-    cmd.servoId = servoId;
-    cmd.position = position;
-    cmd.speed = speed;
-    cmd.acc = acc;
-    return true;
-}
-
-bool queueJointCalibrationTarget(TaskSharedData_t* sharedData,
-                                 uint8_t jointIndex,
-                                 int16_t primaryTarget,
-                                 const JointCalibrationConfig& cfg)
-{
-    // 校准目标必须�?CALIBRATION source，且只有当前 owner �?CALIBRATION 才允许入队�?
-    if (!sharedData || !sharedData->servoTargetQueue || jointIndex >= ENCODER_TOTAL_NUM) {
-        return false;
-    }
-
-    ServoTargetBatch_t batch;
-    memset(&batch, 0, sizeof(batch));
-    batch.timestamp = millis();
-    batch.source = SERVO_TARGET_OWNER_CALIBRATION;
-    appendServoTarget(&batch,
-                      jointMap[jointIndex].busIndex,
-                      jointMap[jointIndex].servoID,
-                      primaryTarget,
-                      cfg.tightenSpeed,
-                      cfg.tightenAcc);
-
-    JointDualServoConstraint dualCfg;
-    int16_t secondaryTarget = 0;
-    if (getJointDualServoConstraint(jointIndex, &dualCfg) &&
-        computeSecondaryServoTargetForJoint(jointIndex, primaryTarget, &secondaryTarget)) {
-        appendServoTarget(&batch,
-                          dualCfg.secondaryBusIndex,
-                          dualCfg.secondaryServoID,
-                          secondaryTarget,
-                          cfg.tightenSpeed,
-                          cfg.tightenAcc);
-    }
-
-    if (batch.count == 0) {
-        return false;
-    }
-    if (sharedData->servo_target_owner != SERVO_TARGET_OWNER_CALIBRATION) {
-        return false;
-    }
-    return xQueueOverwrite(sharedData->servoTargetQueue, &batch) == pdTRUE;
-}
-
-// 标定后回退动作�?
-// 将关节移动到 angleReserved 预留角度，避免长时间停在机械限位附近�?
-// 成功返回 true；超时或反馈不可用返�?false（不影响标定主结果已写回）�?
-static bool moveJointToReserved(TaskSharedData_t* sharedData,
-                                uint8_t jointIndex,
-                                const JointCalibrationConfig& cfg,
-                                int32_t offset) {
-    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) return false;
-
-    const int32_t targetEncoder = offset + degToEncoderCount(cfg.angleReserved);
-    const uint8_t bus = jointMap[jointIndex].busIndex;
-    const uint8_t servoId = jointMap[jointIndex].servoID;
-    const uint32_t beginMs = millis();
-
-    while (millis() - beginMs < 3000) {
-        int32_t currentEncoder = 0;
-        if (!readLatestEncoderRaw(sharedData, jointIndex, &currentEncoder)) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-
-        int32_t encoderErr = wrapEncoderDelta(targetEncoder, currentEncoder);
-        if (abs((int)encoderErr) <= 6) {
-            return true;
-        }
-
-        int32_t currentServoPos = 0;
-        if (!readLatestServoAbs(sharedData, bus, servoId, &currentServoPos)) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-
-        int32_t step = encoderErr / 8;
-        if (step == 0) step = (encoderErr > 0) ? 1 : -1;
-
-        int32_t stepLimit = (int32_t)abs((int)cfg.tightenStep) * 3;
-        if (stepLimit < 1) stepLimit = 1;
-        if (step > stepLimit) step = stepLimit;
-        if (step < -stepLimit) step = -stepLimit;
-
-        const int16_t targetPos = clampToServoPos(currentServoPos + step);
-        queueJointCalibrationTarget(sharedData, jointIndex, targetPos, cfg);
-        vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
-    }
-
-    return false;
-}
-// 装载默认标定参数�?
-void initDefaultCalibrationConfig(JointCalibrationConfig* cfg, uint8_t count) {
-    loadJointCalibrationProfile(cfg, count);
-}
-
-// 测试模式初始化：
-// 1) 装载默认配置�?
-// 2) 将手�?startRaw/tightRaw 按方向自动转换成 oriented start/tight�?
-// 3) 用两点定�?RANGE100: start=-5deg, tight=90deg, zero=5/95 span�?
-// 4) 将可用结果同步到手工回退表；
-// 5) 保持标定状态为 IDLE（自动标定任务关闭）�?
+// 初始化运行期标定存储。当前非阻塞自动标定状态机直接使用
+// AutoCalibrationParams，不再装载旧的逐关节静态 Profile。
 void initializeCalibrationRuntimeState(void) {
-    initDefaultCalibrationConfig(g_jointCalibConfig, ENCODER_TOTAL_NUM);
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));
     memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
-    FW_LOG_INFO_PRINTLN("[BOOT CALIB] default profile loaded; auto calibration pending");
+    FW_LOG_INFO_PRINTLN("[BOOT CALIB] runtime state cleared; auto calibration pending");
 
     getJointDualServoConstraint(kJoint16Index, &g_joint16DualServoConstraint);
-
-}
-
-// 单关节自动标定主流程�?
-// - 逐步“收紧”舵机直到负载跨阈值，判定触及机械限位�?
-// - 读取该时刻编码器值作�?encoderMax�?
-// - 根据配置推导 offset/angleMax，并尝试回退到预留角度�?
-// 返回 false 的典型原因：参数非法、总线不可用、编码器读取失败、超时未触发阈值�?
-bool runSingleJointCalibration(TaskSharedData_t* sharedData,
-                               uint8_t jointIndex,
-                               const JointCalibrationConfig& cfg,
-                               JointCalibrationResult* out) {
-    if (!sharedData || !out || jointIndex >= ENCODER_TOTAL_NUM) return false;
-
-    out->success = false;
-    out->encoderMin = 0;
-    out->encoderMax = 0;
-    out->offset = 0;
-    out->angleMax = 0.0f;
-    out->startEncoder = 0;
-    out->tightEncoder = 0;
-    out->zeroEncoder = 0;
-    out->encoderSpan = 0;
-    out->startServoAbs = 0;
-    out->tightServoAbs = 0;
-    out->zeroServoAbs = 0;
-    out->startDeg = 0.0f;
-    out->tightDeg = 0.0f;
-    out->totalDeg = 0.0f;
-    out->scaled = false;
-
-    const uint8_t bus = jointMap[jointIndex].busIndex;
-    const uint8_t servoId = jointMap[jointIndex].servoID;
-    int32_t currentServoPos = 0;
-    if (!readLatestServoAbs(sharedData, bus, servoId, &currentServoPos)) {
-        return false;
-    }
-    int16_t commandPos = clampToServoPos(currentServoPos);
-    int32_t encoderMin = 0;
-    if (!readLatestEncoderRaw(sharedData, jointIndex, &encoderMin)) {
-        return false;
-    }
-
-    bool seenBelowThreshold = false;
-    const uint32_t searchBeginMs = millis();
-
-    while (millis() - searchBeginMs < cfg.maxSearchMs) {
-        int32_t tightenStep = (int32_t)cfg.tightenStep;
-        if (tightenStep == 0) tightenStep = 1;
-        commandPos = clampToServoPos((int32_t)commandPos + tightenStep);
-        if (!queueJointCalibrationTarget(sharedData, jointIndex, commandPos, cfg)) {
-            return false;
-        }
-        vTaskDelay(pdMS_TO_TICKS(cfg.settleMs));
-
-        int16_t load = 0;
-        if (!readLatestServoLoad(sharedData, bus, servoId, &load)) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-        if (load < cfg.loadThreshold) {
-            seenBelowThreshold = true;
-        }
-
-        if (seenBelowThreshold && load >= cfg.loadThreshold) {
-            int32_t encoderMax = 0;
-            if (!readLatestEncoderRaw(sharedData, jointIndex, &encoderMax)) {
-                return false;
-            }
-
-            const int32_t derivedAngleScopeCount = forwardEncoderDelta(encoderMin, encoderMax);
-            const int32_t bottomReservedCount = degToEncoderCount(cfg.bottomReserved);
-            const int32_t topReservedCount = degToEncoderCount(cfg.topReserved);
-            const float usableAngleMax =
-                encoderCountToDeg(derivedAngleScopeCount) - cfg.bottomReserved - cfg.topReserved;
-            if (derivedAngleScopeCount <= 0 ||
-                (bottomReservedCount + topReservedCount) >= derivedAngleScopeCount ||
-                usableAngleMax <= 0.0f) {
-                return false;
-            }
-
-            out->encoderMin = encoderMin;
-            out->encoderMax = encoderMax;
-            out->offset = wrapEncoderCount(encoderMin + bottomReservedCount);
-            out->angleMax = usableAngleMax;
-            out->startEncoder = encoderMin;
-            out->tightEncoder = encoderMax;
-            out->zeroEncoder = out->offset;
-            out->encoderSpan = derivedAngleScopeCount;
-            out->startDeg = 0.0f;
-            out->tightDeg = usableAngleMax;
-            out->totalDeg = usableAngleMax;
-            out->scaled = false;
-            out->success = true;
-
-            moveJointToReserved(sharedData, jointIndex, cfg, out->offset);
-            return true;
-        }
-    }
-
-    return false;
 }

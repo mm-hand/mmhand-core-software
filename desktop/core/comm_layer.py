@@ -39,6 +39,7 @@ from .protocol import (
     TX_QUEUE_GET_TIMEOUT,
     TX_QUEUE_MAXSIZE,
     build_angle_cmd,
+    build_masked_angle_cmd,
     build_active_scope_cmd,
     build_calib_load_joint_cmd,
     build_calib_load_limits_cmd,
@@ -82,10 +83,12 @@ from .protocol import (
     CMD_MANUAL_ENCODER_QUERY,
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
+    CMD_ANGLE_CTRL_MASKED,
     SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_READY,
     SYSTEM_STATE_PAUSED,
     SYSTEM_FAULT_CALIBRATION,
@@ -993,6 +996,9 @@ class LowerComputerComm:
         model.timestamp = time.time()
         model.calib_status = "DISCONNECTED"
         model.has_system_status_data = False
+        model.has_feedback_collision_status = False
+        model.feedback_collision_armed_bitmap = 0
+        model.feedback_collision_hold_bitmap = 0
         model.has_connectivity_status = False
         model.has_encoder_health_status = False
         model.has_servo_angle_data = False
@@ -1212,7 +1218,7 @@ class LowerComputerComm:
     def _update_tx_diag(self, cmd: SendCmd, data_len: int) -> None:
         self._tx_diag_total_cmds += 1
         self._tx_diag_bytes += int(data_len)
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+        if isinstance(cmd, tuple) and cmd[0] in ("angle_live", "angle_live_masked"):
             self._tx_diag_angle_live_cmds += 1
 
     def _maybe_print_tx_diag(self) -> None:
@@ -1572,6 +1578,10 @@ class LowerComputerComm:
                         feedback_admission_status,
                         feedback_reject_reason,
                         has_feedback_admission_status,
+                        feedback_collision_armed_bitmap,
+                        feedback_collision_hold_bitmap,
+                        feedback_collision_transition_count,
+                        has_feedback_collision_status,
                         calibration_warning_bitmap,
                         calibration_auto_min_offset_counts,
                         has_calibration_warning_status,
@@ -1638,6 +1648,18 @@ class LowerComputerComm:
                     model.has_feedback_admission_status = bool(
                         has_feedback_admission_status
                     )
+                    model.feedback_collision_armed_bitmap = int(
+                        feedback_collision_armed_bitmap
+                    )
+                    model.feedback_collision_hold_bitmap = int(
+                        feedback_collision_hold_bitmap
+                    )
+                    model.feedback_collision_transition_count = int(
+                        feedback_collision_transition_count
+                    )
+                    model.has_feedback_collision_status = bool(
+                        has_feedback_collision_status
+                    )
                     model.has_system_status_data = True
                     model.system_status_last_rx_ts = time.time()
                     if calib_status == 0:
@@ -1647,7 +1669,11 @@ class LowerComputerComm:
                         ):
                             if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
                                 model.calib_status = "FAILED"
-                            elif model.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
+                            elif model.system_state in (
+                                SYSTEM_STATE_IDLE,
+                                SYSTEM_STATE_READY,
+                                SYSTEM_STATE_RECOVERY_REQUIRED,
+                            ):
                                 model.calib_status = "SUCCESS"
                             else:
                                 model.calib_status = "IDLE"
@@ -1942,10 +1968,10 @@ class LowerComputerComm:
                 usable = ((online_mask & (1 << i)) != 0) and ((fault_mask & (1 << i)) == 0)
                 model.encoders[i].error = not usable
 
-    def send_command(self, cmd: SendCmd):
+    def send_command(self, cmd: SendCmd) -> bool:
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
-            return
+            return False
         if cmd in ("calibrate", "clear_calibration"):
             self._auto_calib_logger.log("TX", str(cmd))
         elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
@@ -1956,17 +1982,18 @@ class LowerComputerComm:
             self._auto_calib_logger.log("TX", repr(cmd))
         if cmd == "stop":
             self._enqueue_stop_immediately()
-            return
+            return True
         if cmd == "pause":
             self._enqueue_pause_immediately()
-            return
+            return True
         if self._is_high_rate_command(cmd):
-            self._enqueue_latest_high_rate(cmd)
-            return
+            return self._enqueue_latest_high_rate(cmd)
         try:
             self.tx_queue.put_nowait(cmd)
+            return True
         except queue.Full:
-            pass
+            log_session("COMM", f"drop TX queue full cmd={cmd!r}")
+            return False
 
     def _enqueue_stop_immediately(self) -> None:
         with self.tx_queue.mutex:
@@ -1993,19 +2020,32 @@ class LowerComputerComm:
             "motor_pos_abs",
             "motor_pos_abs_one",
             "angle_live",
+            "joint_target_run",
+            "angle_live_masked",
+            "joint_target_run_masked",
         )
 
     @staticmethod
     def _is_joint_command(cmd: SendCmd) -> bool:
         if isinstance(cmd, HandModel):
             return True
-        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live"
+        return (
+            isinstance(cmd, tuple) and cmd[0] in (
+                "angle_live",
+                "joint_target_run",
+                "angle_live_masked",
+                "joint_target_run_masked",
+            )
+        )
 
     def invalidate_pending_joint_commands(self) -> int:
-        """Drop pending joint-control commands from TX queue."""
+        """Drop pending joint targets and their feedback ownership request."""
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_joint_command(item)]
+            kept = [
+                item for item in pending
+                if not self._is_joint_command(item) and item != "run_feedback"
+            ]
             removed = len(pending) - len(kept)
             if removed <= 0:
                 return 0
@@ -2035,7 +2075,7 @@ class LowerComputerComm:
                     return None
                 self._ack_lock.wait(timeout=remaining)
 
-    def _enqueue_latest_high_rate(self, cmd: SendCmd):
+    def _enqueue_latest_high_rate(self, cmd: SendCmd) -> bool:
         # Keep only the latest pending high-rate command to avoid UI backlog.
         # For joint live control, the target must remain ahead of its paired
         # RUN_FEEDBACK request. Otherwise replacing an older angle_live packet
@@ -2043,15 +2083,28 @@ class LowerComputerComm:
         # finish a one-shot run against the stale target.
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_high_rate_command(item)]
+            paired_joint_command = (
+                isinstance(cmd, tuple) and cmd[0] in (
+                    "joint_target_run",
+                    "joint_target_run_masked",
+                )
+            )
+            kept = []
+            for item in pending:
+                drop_item = self._is_high_rate_command(item)
+                if paired_joint_command:
+                    drop_item = drop_item or self._is_joint_command(item) or item == "run_feedback"
+                if not drop_item:
+                    kept.append(item)
             pending.clear()
             pending.extend(kept)
 
             maxsize = self.tx_queue.maxsize
             if maxsize > 0 and len(pending) >= maxsize:
-                return
+                log_session("COMM", f"drop high-rate TX queue full cmd={cmd!r}")
+                return False
 
-            if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+            if isinstance(cmd, tuple) and cmd[0] in ("angle_live", "angle_live_masked"):
                 for index, pending_cmd in enumerate(pending):
                     if pending_cmd == "run_feedback":
                         pending.insert(index, cmd)
@@ -2062,6 +2115,7 @@ class LowerComputerComm:
                 pending.append(cmd)
             self.tx_queue.unfinished_tasks += 1
             self.tx_queue.not_empty.notify()
+            return True
 
     def _tx_loop(self):
         while self.running and self.serial and self.serial.is_open:
@@ -2153,6 +2207,13 @@ class LowerComputerComm:
             return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "angle_live_masked":
+            return build_masked_angle_cmd(cmd[1], cmd[2])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "joint_target_run":
+            # 目标角与负反馈所有权请求合为一次串口写入，避免只送达其中一条。
+            return build_angle_cmd(cmd[1]) + build_run_feedback_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "joint_target_run_masked":
+            return build_masked_angle_cmd(cmd[1], cmd[2]) + build_run_feedback_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "local_test_params":
             return build_local_test_params_cmd(cmd[1], cmd[2])
         if cmd == "local_test_start":

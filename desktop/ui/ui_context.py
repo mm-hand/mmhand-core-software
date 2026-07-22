@@ -31,10 +31,6 @@ class HandGuiContext:
     def control_panel(self):
         return self._app.control_panel
 
-    @property
-    def tendon_guard(self):
-        return self._app.backend.tendon_guard
-
     def is_comm_connected(self) -> bool:
         return self._app.is_comm_connected()
 
@@ -75,6 +71,7 @@ class HandGuiContext:
         live: bool = False,
         input_space: str = "urdf_deg",
         raw_targets=None,
+        command_joint_mask=None,
     ):
         return self._app.send_joint_targets(
             angles,
@@ -82,6 +79,7 @@ class HandGuiContext:
             live=live,
             input_space=input_space,
             raw_targets=raw_targets,
+            command_joint_mask=command_joint_mask,
         )
 
     def start_recording_for_test(self, reason: str = "test") -> None:

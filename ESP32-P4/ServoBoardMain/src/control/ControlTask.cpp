@@ -15,19 +15,12 @@
 #include "ControlSafety.h"
 #include "ControlSolver.h"
 #include "DualTendonControl.h"
+#include "FeedbackCollisionGuard.h"
+#include "TendonCalibrationLut.h"
 
 static ControlSolver g_controlSolver;
-// 释放锚点用于防止拮抗腱绳继续松过标定余量，按物理电机通道索引。
-static int32_t g_dualReleaseAnchorRawAbs[SERVO_TOTAL_NUM];
-static int32_t g_dualReleaseAnchorCalibSignature[SERVO_TOTAL_NUM];
-static uint32_t g_dualReleaseAnchorValidBitmap = 0;
-
-void invalidateDualTendonReleaseAnchors(uint32_t motorMask)
-{
-    // 标定/预加载会改变物理参考姿态，因此下一个控制周期必须
-    // 从实时电机反馈重新捕获锚点。
-    g_dualReleaseAnchorValidBitmap &= ~motorMask;
-}
+// 碰撞检测历史放在静态区，避免挤占 10 ms 控制任务栈。
+static FeedbackCollisionGuard g_feedbackCollisionGuard;
 
 // 磁编码器数值是 14 bit 环形计数。
 static const int32_t kEncoderModulo = 16384;
@@ -38,14 +31,20 @@ static const uint8_t kDebugJointIndices[] = {0, 1, 2, 3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
 
+#define CONTROL_PID_DIAG_LOG_ENABLE 1
+static const uint32_t kControlPidDiagLogPeriodMs = 50;
+static uint32_t g_controlPidDiagLastLogMs = 0;
+static uint8_t g_controlPidDiagNextJoint = 0;
+
 static const uint32_t kCanBusOfflineTimeoutMs = 1000;
 static const uint32_t kServoTelemetryTimeoutMs = 500;
 // 磁编码器断开时传感器协议使用的标记值。
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 // 直控模式对负载尖峰更敏感；关节 PID 模式允许更高负载。
 static const int16_t kControlOverloadLoadThreshold = 800;
-static const int16_t kJointControlOverloadLoadThreshold = 2000;
-// 只有连续多个高负载帧后才锁存故障。
+static const int16_t kJointControlOverloadLoadThreshold = 1000;
+// 800/1000 counts 仅用于独立硬过载故障；碰撞保持不再使用负载值判定。
+// 只有连续多个高负载帧后才锁存硬故障。
 static const uint8_t kControlOverloadLatchCycles = 20;
 static const uint8_t kJointControlOverloadLatchCycles = 20;
 // 速度 0 表示让舵机固件使用适合反馈控制的默认速度。
@@ -62,6 +61,56 @@ static const float kLocalTestTwoPi = 6.28318530717958647692f;
 static const float kLocalTestMinFreqHz = 0.001f;
 static const float kLocalTestMaxFreqHz = 100.0f;
 static const float kLocalTestMaxAbsAmpDeg = 180.0f;
+
+static bool shouldLogControlPidDiag(uint8_t jointIndex,
+                                    uint32_t nowMs,
+                                    uint32_t activeJointMask)
+{
+#if CONTROL_PID_DIAG_LOG_ENABLE
+    if (jointIndex >= ENCODER_TOTAL_NUM) {
+        return false;
+    }
+    // 全手控制仍只允许每 50 ms 输出一条 PID 日志，但在 active joint 之间
+    // 轮询。旧实现总由循环首位 J00 抢占全局时间槽，导致日志长期只有 M00/M01。
+    if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
+        kControlPidDiagLogPeriodMs) {
+        return false;
+    }
+
+    const uint32_t validMask = activeJointMask &
+        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+    if (validMask == 0) {
+        return false;
+    }
+    uint8_t selectedJoint = ENCODER_TOTAL_NUM;
+    for (uint8_t offset = 0; offset < ENCODER_TOTAL_NUM; offset++) {
+        const uint8_t candidate =
+            (uint8_t)((g_controlPidDiagNextJoint + offset) % ENCODER_TOTAL_NUM);
+        if ((validMask & (1UL << candidate)) != 0) {
+            selectedJoint = candidate;
+            break;
+        }
+    }
+    const uint8_t nextJointAfterLog =
+        (uint8_t)((selectedJoint + 1U) % ENCODER_TOTAL_NUM);
+    if (jointIndex != selectedJoint) {
+        // 被选中的关节可能因离线或保护分支没有进入 PID。超过两个日志周期
+        // 后允许下一个实际运行到这里的关节接管，避免诊断轮询永久卡死。
+        if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
+            (kControlPidDiagLogPeriodMs * 2U)) {
+            return false;
+        }
+    }
+    g_controlPidDiagLastLogMs = nowMs;
+    g_controlPidDiagNextJoint = nextJointAfterLog;
+    return true;
+#else
+    (void)jointIndex;
+    (void)nowMs;
+    (void)activeJointMask;
+    return false;
+#endif
+}
 
 static float sanitizeLocalTestFreq(float freqHz)
 {
@@ -178,10 +227,10 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
         }
         maxDeg = calibration.angleMax;
     } else {
-        maxDeg =
-            g_jointCalibConfig[jointIndex].angleScope -
-            g_jointCalibConfig[jointIndex].bottomReserved -
-            g_jointCalibConfig[jointIndex].topReserved;
+        // 未生成 Auto 结果时仅保留 URDF 静态范围作为输入校验；状态机仍会
+        // 阻止该关节进入负反馈，不能把静态范围误认为有效标定。
+        minDeg = kUrdfJointLimits[jointIndex].minDeg;
+        maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
     }
 
     if (!isfinite(maxDeg) || maxDeg <= 0.0f) {
@@ -199,11 +248,45 @@ static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
     return targetDeg;
 }
 
+// 单电机关节的角度 PID 会持续在“当前 ABS + 修正量”上推进，因此仅限制
+// 关节角目标还不够。这里使用自动标定 LUT 的实测 ABS 包络做最终硬钳位，
+// 防止弹簧受阻、静差或累计命令把舵机推出已经验证过的机械工作空间。
+static bool clampSingleTendonTargetByLut(uint8_t jointIndex,
+                                         uint8_t motorChannel,
+                                         int32_t targetRawAbs,
+                                         int32_t* outTargetRawAbs,
+                                         int32_t* outLutMinAbs,
+                                         int32_t* outLutMaxAbs)
+{
+    if (!outTargetRawAbs || !outLutMinAbs || !outLutMaxAbs ||
+        jointIndex >= ENCODER_TOTAL_NUM ||
+        motorChannel >= SERVO_TOTAL_NUM) {
+        return false;
+    }
+
+    const JointCalibrationResult& calibration = g_jointCalibResult[jointIndex];
+    if (calibration.tendonLutMotor[0] != motorChannel ||
+        !tendonCalibrationMotorAbsRange(calibration,
+                                        0,
+                                        outLutMinAbs,
+                                        outLutMaxAbs)) {
+        return false;
+    }
+
+    int32_t clamped = targetRawAbs;
+    if (clamped < *outLutMinAbs) clamped = *outLutMinAbs;
+    if (clamped > *outLutMaxAbs) clamped = *outLutMaxAbs;
+    *outTargetRawAbs = clampServoPos(clamped);
+    return true;
+}
+
 // 根据物理 bus/id 查找 motorMap 通道。
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
     return findMotorChannelByBusId(bus, id);
 }
+
+static int16_t servoLoadMagnitude(int16_t rawLoad);
 
 static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
                                               uint8_t jointIndex,
@@ -239,17 +322,120 @@ static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
     return appendJointActuatorRuntimeTargets(batch, targets, targetCount, speed, acc);
 }
 
+// 碰撞触发后持续下发触发瞬间的 ABS 快照，阻止位置式 PID 继续推进。
+static uint8_t appendJointActuatorSnapshotTargets(
+    ServoTargetBatch_t* batch,
+    uint8_t jointIndex,
+    const ServoAngleData_t& servoData,
+    const int32_t holdAbs[MAX_JOINT_ACTUATORS],
+    uint16_t speed,
+    uint8_t acc)
+{
+    if (!batch || !holdAbs) {
+        return 0;
+    }
+
+    JointActuatorRuntimeTarget targets[MAX_JOINT_ACTUATORS];
+    uint8_t targetCount = 0;
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    for (uint8_t i = 0; i < actuatorCount && i < MAX_JOINT_ACTUATORS; i++) {
+        JointActuatorItem actuator;
+        if (!getJointActuator(jointIndex, i, &actuator) ||
+            actuator.motorChannel >= SERVO_TOTAL_NUM ||
+            servoData.onlineStatus[actuator.motorChannel] == 0) {
+            continue;
+        }
+        const MotorMapItem& motor = motorMap[actuator.motorChannel];
+        JointActuatorRuntimeTarget& target = targets[targetCount++];
+        target.motorChannel = actuator.motorChannel;
+        target.busIndex = motor.busIndex;
+        target.servoId = motor.servoID;
+        target.sign = actuator.sign;
+        target.targetAbs = clampServoPos(holdAbs[i]);
+    }
+
+    return appendJointActuatorRuntimeTargets(batch, targets, targetCount, speed, acc);
+}
+
+// 将监测段复位原因转成稳定日志名，避免实机排查时只看到数字枚举。
+static const char* feedbackCollisionResetReasonName(uint8_t reason)
+{
+    switch (reason) {
+        case FEEDBACK_COLLISION_MONITOR_RESET_TARGET_CHANGED:
+            return "target_changed";
+        case FEEDBACK_COLLISION_MONITOR_RESET_DIRECTION_CHANGED:
+            return "direction_changed";
+        case FEEDBACK_COLLISION_MONITOR_RESET_ERROR_DEADBAND:
+            return "error_deadband";
+        case FEEDBACK_COLLISION_MONITOR_RESET_HOLD_RELEASED:
+            return "hold_released";
+        default:
+            return "none";
+    }
+}
+
+// 将 HOLD 解除原因写成可读文本，避免日志只有 reason 数字。
+static const char* feedbackCollisionReleaseReasonName(uint8_t reason)
+{
+    switch (reason) {
+        case FEEDBACK_COLLISION_RELEASE_CONTEXT:
+            return "context";
+        case FEEDBACK_COLLISION_RELEASE_INVALID_FEEDBACK:
+            return "invalid_feedback";
+        case FEEDBACK_COLLISION_RELEASE_TARGET_RETREAT:
+            return "target_retreat";
+        default:
+            return "none";
+    }
+}
+
+// 发布碰撞监测与保持状态。状态变化序号使上位机无需等待心跳即可刷新。
+static void publishFeedbackCollisionState(TaskSharedData_t* sharedData,
+                                          uint8_t jointIndex,
+                                          bool armed,
+                                          bool holdActive)
+{
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
+        return;
+    }
+
+    const uint32_t bit = 1UL << jointIndex;
+    const uint32_t previousArmed = armed
+        ? sharedAtomicFetchOr(&sharedData->feedback_collision_armed_bitmap, bit)
+        : sharedAtomicFetchAnd(&sharedData->feedback_collision_armed_bitmap, ~bit);
+    const uint32_t nextArmed = armed
+        ? (previousArmed | bit)
+        : (previousArmed & ~bit);
+
+    const uint32_t previousHold = holdActive
+        ? sharedAtomicFetchOr(&sharedData->feedback_collision_hold_bitmap, bit)
+        : sharedAtomicFetchAnd(&sharedData->feedback_collision_hold_bitmap, ~bit);
+    const uint32_t nextHold = holdActive
+        ? (previousHold | bit)
+        : (previousHold & ~bit);
+    if (previousArmed != nextArmed || previousHold != nextHold) {
+        sharedAtomicAddFetch(&sharedData->feedback_collision_transition_count,
+                             (uint32_t)1);
+    }
+}
+
 static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        float qRefDeg,
                                        float qFbDeg,
                                        const ServoAngleData_t& servoData,
+                                       const ServoTelemetryData_t& telemetryData,
+                                       bool telemetryFresh,
                                        uint16_t speed,
-                                       uint8_t acc)
+                                       uint8_t acc,
+                                       bool* outPidPushActive,
+                                       bool* outLutBoundaryClamped)
 {
-    // 将一个逻辑关节目标转换为两个拮抗电机目标，
-    // 再经过标定得到的释放保护和锁定限位。
+    // 将逻辑关节目标转换成两个拮抗电机目标，并返回下一周期碰撞检测需要的
+    // PID 推进与 LUT 边界证据；用户 LOCK 限位仍在最后独立执行。
+    if (outPidPushActive) *outPidPushActive = false;
+    if (outLutBoundaryClamped) *outLutBoundaryClamped = false;
     if (!batch || !sharedData) {
         return 0;
     }
@@ -267,6 +453,14 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
 
     JointActuatorRuntimeTarget runtimeTargets[MAX_JOINT_ACTUATORS];
     uint8_t targetCount = 0;
+    const uint32_t diagNowMs = millis();
+    const bool logPidDiag =
+        sharedAtomicLoad(&sharedData->system_state) == SYSTEM_STATE_RUN_FEEDBACK &&
+        sharedAtomicLoad(&sharedData->control_enabled) != 0 &&
+        shouldLogControlPidDiag(
+            jointIndex,
+            diagNowMs,
+            sharedAtomicLoad(&sharedData->active_joint_mask));
     for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
         const uint8_t motorChannel = tendonTargets.motorChannel[i];
         if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
@@ -276,43 +470,18 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         const MotorMapItem& motor = motorMap[motorChannel];
         const uint32_t bit = (1UL << motorChannel);
         uint32_t validBitmap = 0;
-        int32_t limitMin = 0;
-        int32_t limitMax = 0;
         {
             SharedSafetyGuard guard;
             validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-            limitMin = sharedData->motor_abs_limit_min[motorChannel];
-            limitMax = sharedData->motor_abs_limit_max[motorChannel];
         }
-        // 建立腱绳释放锚点需要有效标定。
-        // LOCK 只启用 ABS 最小/最大输出限幅，不能让已标定的双腱关节
-        // 失去反馈控制能力。
+        // A valid calibrated range remains the feedback eligibility gate. LOCK
+        // independently decides whether that range also clamps motor ABS output.
+        // LOCK only enables the ABS min/max output clamp; it must not disable
+        // feedback control for an otherwise calibrated dual-tendon joint.
         if ((validBitmap & bit) == 0) {
             resetDualTendonController(jointIndex);
             return 0;
         }
-        if (limitMin > limitMax) {
-            const int32_t tmp = limitMin;
-            limitMin = limitMax;
-            limitMax = tmp;
-        }
-
-        const int32_t calibratedTightAbs =
-            (getMotorTendonShortenAbsSign(motorChannel) > 0) ? limitMax : limitMin;
-        const int32_t currentRawAbs = servoData.servoAngles[motorChannel];
-        if ((g_dualReleaseAnchorValidBitmap & bit) == 0 ||
-            g_dualReleaseAnchorCalibSignature[motorChannel] != calibratedTightAbs) {
-            g_dualReleaseAnchorRawAbs[motorChannel] = currentRawAbs;
-            g_dualReleaseAnchorCalibSignature[motorChannel] = calibratedTightAbs;
-            g_dualReleaseAnchorValidBitmap |= bit;
-        }
-
-        const int32_t releaseLimitedTarget = clampDualTendonReleaseFromCalib(
-            jointIndex,
-            motorChannel,
-            g_dualReleaseAnchorRawAbs[motorChannel],
-            currentRawAbs,
-            tendonTargets.targetAbs[i]);
         JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
         target.motorChannel = motorChannel;
         target.busIndex = motor.busIndex;
@@ -322,7 +491,56 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         // 未锁定通道继续保持反馈控制，并允许运动到该范围之外。
         target.targetAbs = clampServoPosByMotorAbsLimit(sharedData,
                                                         motorChannel,
-                                                        releaseLimitedTarget);
+                                                        tendonTargets.targetAbs[i]);
+        if (outPidPushActive &&
+            fabsf(tendonTargets.pidCorrection[i]) >= 1.0f &&
+            tendonTargets.pidCorrection[i] * tendonTargets.motorErr[i] > 0.0f) {
+            *outPidPushActive = true;
+        }
+        if (outLutBoundaryClamped && tendonTargets.lutBoundaryClamped[i] != 0) {
+            *outLutBoundaryClamped = true;
+        }
+    }
+
+    if (logPidDiag && targetCount == 2) {
+        const uint8_t m0 = runtimeTargets[0].motorChannel;
+        const uint8_t m1 = runtimeTargets[1].motorChannel;
+        const int32_t abs0 = servoData.servoAngles[m0];
+        const int32_t abs1 = servoData.servoAngles[m1];
+        const int16_t load0 = telemetryFresh ? servoLoadMagnitude(telemetryData.load[m0]) : 0;
+        const int16_t load1 = telemetryFresh ? servoLoadMagnitude(telemetryData.load[m1]) : 0;
+        const int16_t speed0 = telemetryFresh ? telemetryData.speed[m0] : 0;
+        const int16_t speed1 = telemetryFresh ? telemetryData.speed[m1] : 0;
+        const uint32_t lockedBitmap =
+            sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+        FW_LOG_INFO_PRINTF(
+            "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
+            "M%02u a=%ld c=%d l=%ld e=%.1f o=%.1f ld=%d s=%d k=%u "
+            "M%02u a=%ld c=%d l=%ld e=%.1f o=%.1f ld=%d s=%d k=%u tel=%u\r\n",
+            (unsigned long)diagNowMs,
+            (unsigned)jointIndex,
+            (double)qRefDeg,
+            (double)qFbDeg,
+            (double)(qRefDeg - qFbDeg),
+            (unsigned)m0,
+            (long)abs0,
+            (int)runtimeTargets[0].targetAbs,
+            (long)((int32_t)runtimeTargets[0].targetAbs - abs0),
+            (double)tendonTargets.motorErr[0],
+            (double)tendonTargets.pidCorrection[0],
+            (int)load0,
+            (int)speed0,
+            (unsigned)((lockedBitmap & (1UL << m0)) != 0),
+            (unsigned)m1,
+            (long)abs1,
+            (int)runtimeTargets[1].targetAbs,
+            (long)((int32_t)runtimeTargets[1].targetAbs - abs1),
+            (double)tendonTargets.motorErr[1],
+            (double)tendonTargets.pidCorrection[1],
+            (int)load1,
+            (int)speed1,
+            (unsigned)((lockedBitmap & (1UL << m1)) != 0),
+            (unsigned)telemetryFresh);
     }
 
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
@@ -430,7 +648,8 @@ static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
 static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
                                         const MappedAngleData_t& mappedData,
                                         const float* targetDegs,
-                                        const float* actualDegs)
+                                        const float* actualDegs,
+                                        uint32_t commandJointMask)
 {
     // 反馈 RUN 完成要求每个激活关节都有有效映射反馈，
     // 并连续多个周期保持在角度容差内。
@@ -438,7 +657,7 @@ static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
         return false;
     }
 
-    const uint32_t requiredMask =
+    const uint32_t requiredMask = commandJointMask &
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     if (requiredMask == 0) {
@@ -480,6 +699,7 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     out->motorCommandToken = sharedData->motor_command_token;
     out->motorSweepCommandToken = sharedData->motor_sweep_command_token;
     out->jointCommandToken = sharedData->joint_command_token;
+    out->feedbackCommandJointMask = sharedData->feedback_command_joint_mask;
     out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
     out->motorDirectCommandSource = sharedData->motor_direct_command_source;
     out->controlMode = sharedData->control_mode;
@@ -529,6 +749,11 @@ void controlTask(void* parameter)
     MappedAngleData_t mappedData;
     uint32_t overloadFaultLatched = 0;
     uint8_t overloadHighCount[SERVO_TOTAL_NUM] = {0};
+    // 碰撞冻结使用触发瞬间的舵机实际 ABS；PID/LUT 证据取上一控制周期结果。
+    int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS] = {{0}};
+    bool feedbackCollisionPidPushActive[ENCODER_TOTAL_NUM] = {false};
+    bool feedbackCollisionLutBoundaryClamped[ENCODER_TOTAL_NUM] = {false};
+    uint32_t lastFeedbackCollisionSensorTimestamp = 0;
     uint8_t upperWorkspaceHighCount[ENCODER_TOTAL_NUM] = {0};
     uint32_t upperWorkspaceWarningBitmap = 0;
     uint32_t lastOverloadFaultResetToken =
@@ -565,6 +790,7 @@ void controlTask(void* parameter)
     uint8_t feedbackRunDoneStableCount = 0;
     uint32_t feedbackRunToken = 0;
     uint32_t feedbackRunStartMs = 0;
+    uint32_t feedbackRunJointMask = 0;
     float feedbackRunTargetDeg[ENCODER_TOTAL_NUM] = {0.0f};
     bool feedbackRunTracking = false;
     bool feedbackRunDoneEventQueued = false;
@@ -680,9 +906,6 @@ void controlTask(void* parameter)
 
         sharedAtomicFetchOr(&sharedData->overload_fault_bitmap, overloadFaultLatched);
         overloadFaultLatched = sharedAtomicLoad(&sharedData->overload_fault_bitmap);
-
-        g_dualReleaseAnchorValidBitmap &=
-            sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
 
         // 按关节缓存当前电机位置，分别保存 raw 坐标和腱绳坐标。
         // PID 使用腱绳空间，总线命令使用 raw 空间。
@@ -946,6 +1169,167 @@ void controlTask(void* parameter)
             }
         }
 
+        const uint32_t activeJointMask =
+            sharedAtomicLoad(&sharedData->active_joint_mask) &
+            ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+        // 本地正弦测试有自己的关节选择；普通 UI/算法/遥操则使用最近一帧
+        // 角度命令携带的控制掩码。这样单行控制不会影响测试或整手实时流。
+        const uint32_t feedbackCommandJointMask =
+            (sineTestActive
+                ? commandSnapshot.sineTestJointMask
+                : commandSnapshot.feedbackCommandJointMask) &
+            activeJointMask;
+        const bool feedbackCollisionContextValid =
+            feedbackOutputState &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            (systemState == SYSTEM_STATE_READY ||
+             systemState == SYSTEM_STATE_RUN_FEEDBACK);
+        const bool newFeedbackCollisionSample =
+            canBusOnline &&
+            sensorData.timestamp != 0 &&
+            sensorData.timestamp != lastFeedbackCollisionSensorTimestamp;
+
+        if (newFeedbackCollisionSample) {
+            lastFeedbackCollisionSensorTimestamp = sensorData.timestamp;
+        }
+
+        // 碰撞检测只消费磁编新帧。200 ms 速度窗与 400 ms 进展窗同步滚动，
+        // PID 推进和 LUT 边界证据使用上一控制周期的输出，最多只引入 10 ms 延迟。
+        for (uint8_t jointIndex = 0;
+             jointIndex < ENCODER_TOTAL_NUM;
+             jointIndex++) {
+            const bool jointActive =
+                (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
+            const bool contextActive =
+                feedbackCollisionContextValid && jointActive;
+
+            FeedbackCollisionResult collisionResult;
+            memset(&collisionResult, 0, sizeof(collisionResult));
+            if (!contextActive) {
+                collisionResult = g_feedbackCollisionGuard.resetJoint(
+                    jointIndex,
+                    FEEDBACK_COLLISION_RELEASE_CONTEXT);
+            } else if (!canBusOnline ||
+                       mappedData.validFlags[jointIndex] == 0) {
+                collisionResult = g_feedbackCollisionGuard.resetJoint(
+                    jointIndex,
+                    FEEDBACK_COLLISION_RELEASE_INVALID_FEEDBACK);
+            } else if (newFeedbackCollisionSample) {
+                FeedbackCollisionInput input;
+                input.timestampMs = sensorData.timestamp;
+                input.contextActive = true;
+                input.feedbackValid = true;
+                input.targetDeg = localTargets[jointIndex];
+                input.feedbackDeg = magAngles[jointIndex];
+                input.pidPushActive =
+                    feedbackCollisionPidPushActive[jointIndex];
+                input.lutBoundaryClamped =
+                    feedbackCollisionLutBoundaryClamped[jointIndex];
+                collisionResult =
+                    g_feedbackCollisionGuard.update(jointIndex, input);
+            } else {
+                collisionResult.armed =
+                    g_feedbackCollisionGuard.isArmed(jointIndex);
+                collisionResult.holdActive =
+                    g_feedbackCollisionGuard.isHoldActive(jointIndex);
+                collisionResult.holdAngleDeg =
+                    g_feedbackCollisionGuard.holdAngleDeg(jointIndex);
+            }
+
+            if (collisionResult.armedChanged && collisionResult.armed) {
+                FW_LOG_INFO_PRINTF(
+                    "[COLLISION_ARM] J%02u qRef=%.3f qFb=%.3f "
+                    "v200=%.3fdeg/s source=velocity candidate_ms=%lu\r\n",
+                    (unsigned)jointIndex,
+                    (double)localTargets[jointIndex],
+                    (double)magAngles[jointIndex],
+                    (double)collisionResult.directionVelocityDegPerSec,
+                    (unsigned long)collisionResult.candidateAgeMs);
+            }
+
+            if (collisionResult.monitorReset &&
+                !collisionResult.holdReleased) {
+                FW_LOG_INFO_PRINTF(
+                    "[COLLISION_MON_RESET] J%02u reason=%s(%u) "
+                    "target_delta=%.3f qRef=%.3f qFb=%.3f\r\n",
+                    (unsigned)jointIndex,
+                    feedbackCollisionResetReasonName(
+                        collisionResult.monitorResetReason),
+                    (unsigned)collisionResult.monitorResetReason,
+                    (double)collisionResult.targetDeltaDeg,
+                    (double)localTargets[jointIndex],
+                    (double)magAngles[jointIndex]);
+            }
+
+            if (collisionResult.holdEntered) {
+                memset(feedbackCollisionHoldAbs[jointIndex],
+                       0,
+                       sizeof(feedbackCollisionHoldAbs[jointIndex]));
+                const uint8_t actuatorCount =
+                    getJointActuatorCount(jointIndex);
+                for (uint8_t actuatorIndex = 0;
+                     actuatorIndex < actuatorCount &&
+                     actuatorIndex < MAX_JOINT_ACTUATORS;
+                     actuatorIndex++) {
+                    JointActuatorItem actuator;
+                    if (getJointActuator(jointIndex,
+                                         actuatorIndex,
+                                         &actuator) &&
+                        actuator.motorChannel < SERVO_TOTAL_NUM) {
+                        feedbackCollisionHoldAbs[jointIndex][actuatorIndex] =
+                            servoData.servoAngles[actuator.motorChannel];
+                    }
+                }
+                g_controlSolver.resetJoint(jointIndex);
+                if (isDualTendonJoint(jointIndex)) {
+                    resetDualTendonController(jointIndex);
+                }
+                FW_LOG_INFO_PRINTF(
+                    "[COLLISION_HOLD] J%02u blockedTarget=%.3f holdAngle=%.3f "
+                    "v200=%.3fdeg/s progress400=%.3fdeg "
+                    "candidate_ms=%lu\r\n",
+                    (unsigned)jointIndex,
+                    (double)collisionResult.holdTargetDeg,
+                    (double)collisionResult.holdAngleDeg,
+                    (double)collisionResult.directionVelocityDegPerSec,
+                    (double)collisionResult.directionProgressDeg,
+                    (unsigned long)collisionResult.candidateAgeMs);
+            }
+
+            if (collisionResult.holdReleased) {
+                g_controlSolver.resetJoint(jointIndex);
+                if (isDualTendonJoint(jointIndex)) {
+                    resetDualTendonController(jointIndex);
+                }
+                FW_LOG_INFO_PRINTF(
+                    "[COLLISION_RELEASE] J%02u reason=%s(%u) "
+                    "blockedTarget=%.3f newTarget=%.3f retreat=%.3f "
+                    "qFb=%.3f\r\n",
+                    (unsigned)jointIndex,
+                    feedbackCollisionReleaseReasonName(
+                        collisionResult.releaseReason),
+                    (unsigned)collisionResult.releaseReason,
+                    (double)collisionResult.holdTargetDeg,
+                    (double)localTargets[jointIndex],
+                    (double)collisionResult.targetRetreatDeg,
+                    (double)magAngles[jointIndex]);
+            }
+
+            publishFeedbackCollisionState(
+                sharedData,
+                jointIndex,
+                collisionResult.armed,
+                collisionResult.holdActive);
+
+            if (collisionResult.holdActive) {
+                localTargets[jointIndex] =
+                    collisionResult.holdAngleDeg;
+            }
+            if (!contextActive) {
+                feedbackCollisionPidPushActive[jointIndex] = false;
+                feedbackCollisionLutBoundaryClamped[jointIndex] = false;
+            }
+        }
         const bool feedbackOneShotActive =
             feedbackRunningState &&
             commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
@@ -955,6 +1339,7 @@ void controlTask(void* parameter)
             // 完成判定必须针对一个稳定目标，而不是后续 UI 更新。
             if (!feedbackRunTracking || feedbackRunToken != jointCommandToken) {
                 memcpy(feedbackRunTargetDeg, localTargets, sizeof(feedbackRunTargetDeg));
+                feedbackRunJointMask = feedbackCommandJointMask;
                 feedbackRunToken = jointCommandToken;
                 feedbackRunStartMs = millis();
                 feedbackRunDoneStableCount = 0;
@@ -997,6 +1382,11 @@ void controlTask(void* parameter)
                                     absolutePositionTendon,
                                     outPulsesTendon,
                                     pidDtSeconds);
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+                if (g_feedbackCollisionGuard.isHoldActive(jointIndex)) {
+                    g_controlSolver.resetJoint(jointIndex);
+                }
+            }
             if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
             {
                 // 直控模式绕过关节 PID，将上位机电机目标直接发给对应物理通道。
@@ -1076,15 +1466,18 @@ void controlTask(void* parameter)
                     (jointMotorCh >= 0) &&
                     (jointMotorCh < SERVO_TOTAL_NUM) &&
                     hotplugHoldMotor[jointMotorCh];
+                const bool jointInScope =
+                    (activeJointMask & (1UL << jointIndex)) != 0;
                 const bool jointActive =
-                    (sharedAtomicLoad(&sharedData->active_joint_mask) &
-                     (1UL << jointIndex)) != 0;
+                    (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
+                feedbackCollisionPidPushActive[jointIndex] = false;
+                feedbackCollisionLutBoundaryClamped[jointIndex] = false;
 
                 if (bus >= NUM_BUSES) {
                     continue;
                 }
 
-                if (!jointActive)
+                if (!jointInScope)
                 {
                     // 未激活关节不发布主动命令，并丢弃双腱状态，便于重新启用时干净启动。
                     if (isDualTendonJoint(jointIndex)) {
@@ -1123,6 +1516,46 @@ void controlTask(void* parameter)
                     continue;
                 }
 
+                if (!jointActive)
+                {
+                    // 单行角度命令只允许掩码内关节进入 PID。其余 active joint
+                    // 持续跟随本周期实际 ABS，避免同一手指受力时因磁编联动而
+                    // 追踪旧角度目标，进而误带动 J01/J02 等相邻关节。
+                    g_controlSolver.resetJoint(jointIndex);
+                    if (isDualTendonJoint(jointIndex)) {
+                        resetDualTendonController(jointIndex);
+                    }
+                    appendJointActuatorHoldTargets(&targetBatch,
+                                                   jointIndex,
+                                                   servoData,
+                                                   SERVO_TARGET_SPEED_DEFAULT,
+                                                   SERVO_TARGET_ACC_DEFAULT);
+                    jointCmdPos[jointIndex] =
+                        clampServoPos(absolutePositionRaw[jointIndex]);
+                    jointCmdValid[jointIndex] = servoOnline ? 1 : 0;
+                    continue;
+                }
+
+                if (g_feedbackCollisionGuard.isHoldActive(jointIndex))
+                {
+                    if (isDualTendonJoint(jointIndex)) {
+                        resetDualTendonController(jointIndex);
+                    }
+                    const uint8_t appended = appendJointActuatorSnapshotTargets(
+                        &targetBatch,
+                        jointIndex,
+                        servoData,
+                        feedbackCollisionHoldAbs[jointIndex],
+                        kJointControlFeedbackSpeed,
+                        SERVO_TARGET_ACC_DEFAULT);
+                    localTargets[jointIndex] =
+                        g_feedbackCollisionGuard.holdAngleDeg(jointIndex);
+                    jointCmdPos[jointIndex] =
+                        clampServoPos(feedbackCollisionHoldAbs[jointIndex][0]);
+                    jointCmdValid[jointIndex] = appended > 0 ? 1 : 0;
+                    continue;
+                }
+
                 int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
                 // 只有激活关节才跟随 PID 并输出舵机目标。
@@ -1136,8 +1569,12 @@ void controlTask(void* parameter)
                                                 localTargets[jointIndex],
                                                 magAngles[jointIndex],
                                                 servoData,
+                                                telemetryData,
+                                                telemetryFresh,
                                                 kJointControlFeedbackSpeed,
-                                                SERVO_TARGET_ACC_DEFAULT);
+                                                SERVO_TARGET_ACC_DEFAULT,
+                                                &feedbackCollisionPidPushActive[jointIndex],
+                                                &feedbackCollisionLutBoundaryClamped[jointIndex]);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                        SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1149,16 +1586,120 @@ void controlTask(void* parameter)
 
                 if (jointActive) {
                     // 普通单电机关节：先把腱绳空间 PID 结果转回电机 raw ABS，
-                    // 再应用锁定限位。
+                    // 再强制限制到 LUT 实测工作空间，最后应用用户 LOCK 限位。
+                    bool lutWorkspaceValid = false;
+                    bool lutWorkspaceClamped = false;
+                    int32_t lutWorkspaceMinAbs = 0;
+                    int32_t lutWorkspaceMaxAbs = 0;
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                         const uint8_t motorCh = (uint8_t)jointMotorCh;
                         const int32_t targetRawAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
-                        targetPos = clampServoPosByMotorAbsLimit(sharedData,
-                                                                 motorCh,
-                                                                 targetRawAbs);
+                        int32_t lutClampedTarget = targetRawAbs;
+                        lutWorkspaceValid = clampSingleTendonTargetByLut(
+                            jointIndex,
+                            motorCh,
+                            targetRawAbs,
+                            &lutClampedTarget,
+                            &lutWorkspaceMinAbs,
+                            &lutWorkspaceMaxAbs);
+                        if (lutWorkspaceValid) {
+                            lutWorkspaceClamped = lutClampedTarget != targetRawAbs;
+                            targetPos = clampServoPosByMotorAbsLimit(sharedData,
+                                                                     motorCh,
+                                                                     lutClampedTarget);
+                        } else {
+                            // 标定结果或电机映射异常时保持当前位置，不能绕过
+                            // LUT 工作空间继续发送位置式 PID 输出。
+                            targetPos = clampServoPos(servoData.servoAngles[motorCh]);
+                        }
                     } else {
                         targetPos = clampServoPos(outPulsesTendon[jointIndex]);
+                    }
+                    const float pidOutput =
+                        g_controlSolver.getPidOutput(jointIndex);
+                    const float angleError =
+                        localTargets[jointIndex] - magAngles[jointIndex];
+                    feedbackCollisionPidPushActive[jointIndex] =
+                        fabsf(pidOutput) >= 1.0f &&
+                        pidOutput * angleError > 0.0f;
+                    feedbackCollisionLutBoundaryClamped[jointIndex] =
+                        !lutWorkspaceValid || lutWorkspaceClamped;
+
+                    if (feedbackOutputState && shouldLogControlPidDiag(
+                            jointIndex,
+                            millis(),
+                            activeJointMask)) {
+                        const int32_t currentAbs =
+                            (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
+                                ? servoData.servoAngles[jointMotorCh]
+                                : absolutePositionRaw[jointIndex];
+                        const int32_t targetLead = (int32_t)targetPos - currentAbs;
+                        const int16_t rawLoad =
+                            (telemetryFresh && jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
+                                ? telemetryData.load[jointMotorCh]
+                                : 0;
+                        const int16_t loadMag = telemetryFresh
+                            ? servoLoadMagnitude(rawLoad)
+                            : 0;
+                        const int16_t servoSpeed =
+                            (telemetryFresh && jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
+                                ? telemetryData.speed[jointMotorCh]
+                                : 0;
+                        const uint32_t motorBit =
+                            (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
+                                ? (1UL << jointMotorCh)
+                                : 0;
+                        const uint32_t lockedBitmap =
+                            sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+                        float lutRefAbs = 0.0f;
+                        float lutFbAbs = 0.0f;
+                        bool lutValid = false;
+                        if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
+                            const JointCalibrationResult& calibration =
+                                g_jointCalibResult[jointIndex];
+                            // 单环 PID 仍使用角度误差；这里插值得到的模型位置只用于
+                            // 诊断，LUT 的 ABS 最小/最大值已在上方参与最终硬钳位。
+                            lutValid = calibration.tendonLutMotor[0] ==
+                                           (uint8_t)jointMotorCh &&
+                                interpolateTendonCalibrationMotorAbs(
+                                    calibration,
+                                    0,
+                                    localTargets[jointIndex],
+                                    &lutRefAbs) &&
+                                interpolateTendonCalibrationMotorAbs(
+                                    calibration,
+                                    0,
+                                    magAngles[jointIndex],
+                                    &lutFbAbs);
+                        }
+                        FW_LOG_INFO_PRINTF(
+                            "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
+                            "out=%.2f abs=%ld cmd=%d lead=%ld load=%d mag=%d speed=%d "
+                            "lock=%u telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
+                            "lutDelta=%.2f lutRange=[%ld,%ld] lutClamp=%u\r\n",
+                            (unsigned long)millis(),
+                            (unsigned)jointIndex,
+                            jointMotorCh,
+                            (double)localTargets[jointIndex],
+                            (double)magAngles[jointIndex],
+                            (double)(localTargets[jointIndex] - magAngles[jointIndex]),
+                            (double)g_controlSolver.getPidOutput(jointIndex),
+                            (long)currentAbs,
+                            (int)targetPos,
+                            (long)targetLead,
+                            (int)rawLoad,
+                            (int)loadMag,
+                            (int)servoSpeed,
+                            (unsigned)((lockedBitmap & motorBit) != 0),
+                            (unsigned)telemetryFresh,
+                            lutValid ? 1U : 0U,
+                            (double)lutRefAbs,
+                            (double)lutFbAbs,
+                            (double)(lutRefAbs - lutFbAbs),
+                            (long)lutWorkspaceMinAbs,
+                            (long)lutWorkspaceMaxAbs,
+                            lutWorkspaceClamped ? 1U : 0U);
                     }
                 }
 
@@ -1255,7 +1796,8 @@ void controlTask(void* parameter)
                 sharedData,
                 mappedData,
                 feedbackRunTargetDeg,
-                magAngles
+                magAngles,
+                feedbackRunJointMask
             );
             if (targetsReached) {
                 if (feedbackRunDoneStableCount < 255) {
@@ -1276,7 +1818,12 @@ void controlTask(void* parameter)
             }
 
             const uint32_t elapsedMs = (uint32_t)(millis() - feedbackRunStartMs);
+            const bool collisionHoldActive =
+                sharedAtomicLoad(&sharedData->feedback_collision_hold_bitmap) != 0;
+            // 碰撞保持必须持续锁住触发时的舵机 ABS，直到反向目标或模式退出；
+            // 此时不能让旧的单次负反馈超时提前结束 RUN_FEEDBACK。
             if (!targetsReached &&
+                !collisionHoldActive &&
                 !feedbackRunDoneEventQueued &&
                 elapsedMs >= kFeedbackRunTimeoutMs &&
                 !feedbackRunTimeoutEventQueued) {

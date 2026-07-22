@@ -32,6 +32,42 @@ static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 static const uint8_t kTactileFullPacketMagic0 = 0x54; // 'T'
 static const uint8_t kTactileFullPacketMagic1 = 0x32; // '2'
 
+static bool calibrationTendonLutMatchesJoint(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result)
+{
+    if (!result.success) {
+        return true;
+    }
+    if (jointIndex >= ENCODER_TOTAL_NUM ||
+        result.tendonLutValid == 0 ||
+        result.tendonLutCount < 3 ||
+        result.tendonLutCount > TENDON_LUT_MAX_SAMPLES ||
+        !isfinite(result.tendonLutAngleStartDeg) ||
+        !isfinite(result.tendonLutAngleStepDeg) ||
+        result.tendonLutAngleStepDeg <= 0.0f) {
+        return false;
+    }
+
+    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
+    const uint8_t expectedCount = actuatorCount >= 2 ? 2 : 1;
+    for (uint8_t actuatorIndex = 0; actuatorIndex < expectedCount;
+         actuatorIndex++) {
+        JointActuatorItem actuator;
+        if (!getJointActuator(jointIndex, actuatorIndex, &actuator) ||
+            actuator.motorChannel >= SERVO_TOTAL_NUM ||
+            result.tendonLutMotor[actuatorIndex] != actuator.motorChannel) {
+            return false;
+        }
+    }
+    // 单电机快照必须明确把未使用的第 1 行标成 0xFF，避免错误地把
+    // 另一台电机的表加载到当前关节。
+    if (expectedCount == 1 && result.tendonLutMotor[1] != 0xFF) {
+        return false;
+    }
+    return true;
+}
+
 // Append a float using big-endian wire order.
 static void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
 {
@@ -181,7 +217,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[160];
+    uint8_t buffer[176];
     size_t idx = 0;
     uint32_t faultBitmap = 0;
     uint32_t unknownBitmap = 0;
@@ -290,6 +326,16 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
                        sharedAtomicLoad(&sharedData->feedback_admission_sequence));
     buffer[idx++] = sharedAtomicLoad(&sharedData->feedback_admission_status);
     buffer[idx++] = sharedAtomicLoad(&sharedData->feedback_reject_reason);
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->feedback_collision_hold_bitmap));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->feedback_collision_transition_count));
+    // 保留原 hold/transition 的字节位置，在包尾追加 armed 位图。
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->feedback_collision_armed_bitmap));
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
@@ -481,17 +527,17 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
     buffer[idx++] = result.scaled ? 1 : 0;
     buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
-    buffer[idx++] = result.dualTendonLutValid ? 1 : 0;
-    buffer[idx++] = result.dualTendonLutCount;
-    buffer[idx++] = result.dualTendonLutMotor[0];
-    buffer[idx++] = result.dualTendonLutMotor[1];
-    appendFloatBigEndian(buffer, &idx, result.dualTendonLutAngleStartDeg);
-    appendFloatBigEndian(buffer, &idx, result.dualTendonLutAngleStepDeg);
-    for (uint8_t actuator = 0; actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
-        for (uint8_t sample = 0; sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
+    buffer[idx++] = result.tendonLutValid ? 1 : 0;
+    buffer[idx++] = result.tendonLutCount;
+    buffer[idx++] = result.tendonLutMotor[0];
+    buffer[idx++] = result.tendonLutMotor[1];
+    appendFloatBigEndian(buffer, &idx, result.tendonLutAngleStartDeg);
+    appendFloatBigEndian(buffer, &idx, result.tendonLutAngleStepDeg);
+    for (uint8_t actuator = 0; actuator < TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+        for (uint8_t sample = 0; sample < TENDON_LUT_MAX_SAMPLES; sample++) {
             appendI16BigEndian(buffer,
                                &idx,
-                               clampI16Local(result.dualTendonLutMotorAbs[actuator][sample]));
+                               clampI16Local(result.tendonLutMotorAbs[actuator][sample]));
         }
     }
     buffer[idx++] = result.mappingVersion;
@@ -867,9 +913,9 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_ROPE_INIT:
             return kRopeInitPayloadBytes;
         case CMD_ANGLE_CTRL:
-
-
             return kFloatPayloadBytes;
+        case CMD_ANGLE_CTRL_MASKED:
+            return kMaskedFloatPayloadBytes;
         case CMD_MOTOR_POS:
             return kMotorPosPayloadBytes;
         case CMD_MOTOR_POS_SWEEP:
@@ -905,6 +951,7 @@ static bool commandRequiresManualReference(uint8_t cmd)
         case CMD_CALIBRATE:
         case CMD_RUN_FEEDBACK:
         case CMD_ANGLE_CTRL:
+        case CMD_ANGLE_CTRL_MASKED:
         case CMD_LOCAL_TEST_START:
             return true;
         default:
@@ -1082,7 +1129,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                    requestedMask) {
             status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
         } else if (sharedData->system_state != SYSTEM_STATE_IDLE &&
-                   sharedData->system_state != SYSTEM_STATE_READY) {
+                   sharedData->system_state != SYSTEM_STATE_READY &&
+                   sharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (!postSystemEvent(sharedData, SYSTEM_EVENT_ROPE_INIT)) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
@@ -1187,6 +1235,29 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
         if (parseFloatArrayLittleEndian(frame + 1, frameLen - 1, parsedAngles, ENCODER_TOTAL_NUM)) {
             upperApplyTargetAngles(sharedData, parsedAngles, ENCODER_TOTAL_NUM);
+        }
+        return;
+    }
+
+    if (cmd == CMD_ANGLE_CTRL_MASKED)
+    {
+        if (frameLen < 1 + kMaskedFloatPayloadBytes) {
+            return;
+        }
+        const uint32_t jointMask =
+            ((uint32_t)frame[1] << 24) |
+            ((uint32_t)frame[2] << 16) |
+            ((uint32_t)frame[3] << 8) |
+            (uint32_t)frame[4];
+        float parsedAngles[ENCODER_TOTAL_NUM] = {0.0f};
+        if (parseFloatArrayLittleEndian(frame + 5,
+                                        frameLen - 5,
+                                        parsedAngles,
+                                        ENCODER_TOTAL_NUM)) {
+            upperApplyTargetAnglesMasked(sharedData,
+                                         parsedAngles,
+                                         ENCODER_TOTAL_NUM,
+                                         jointMask);
         }
         return;
     }
@@ -1491,17 +1562,17 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 result.totalDeg = readFloatBigEndian(p); p += 4;
                 result.scaled = (*p++ != 0);
                 const int8_t direction = ((int8_t)(*p++)) < 0 ? -1 : 1;
-                result.dualTendonLutValid = (*p++ != 0) ? 1 : 0;
-                result.dualTendonLutCount = *p++;
-                result.dualTendonLutMotor[0] = *p++;
-                result.dualTendonLutMotor[1] = *p++;
-                result.dualTendonLutAngleStartDeg = readFloatBigEndian(p); p += 4;
-                result.dualTendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
+                result.tendonLutValid = (*p++ != 0) ? 1 : 0;
+                result.tendonLutCount = *p++;
+                result.tendonLutMotor[0] = *p++;
+                result.tendonLutMotor[1] = *p++;
+                result.tendonLutAngleStartDeg = readFloatBigEndian(p); p += 4;
+                result.tendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
                 for (uint8_t actuator = 0;
-                     actuator < DUAL_TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+                     actuator < TENDON_LUT_ACTUATOR_COUNT; actuator++) {
                     for (uint8_t sample = 0;
-                         sample < DUAL_TENDON_LUT_MAX_SAMPLES; sample++) {
-                        result.dualTendonLutMotorAbs[actuator][sample] =
+                         sample < TENDON_LUT_MAX_SAMPLES; sample++) {
+                        result.tendonLutMotorAbs[actuator][sample] =
                             readI16BigEndian(p);
                         p += 2;
                     }
@@ -1573,15 +1644,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                             !isfinite(result.tightDeg) ||
                             !isfinite(result.totalDeg) ||
                             result.encoderSpan <= 0 || result.totalDeg <= 0.0f ||
-                            (result.dualTendonLutValid != 0 &&
-                             (!isfinite(result.dualTendonLutAngleStartDeg) ||
-                              !isfinite(result.dualTendonLutAngleStepDeg) ||
-                              result.dualTendonLutAngleStepDeg <= 0.0f ||
-                              result.dualTendonLutCount < 3 ||
-                              result.dualTendonLutCount >
-                                  DUAL_TENDON_LUT_MAX_SAMPLES ||
-                              result.dualTendonLutMotor[0] >= SERVO_TOTAL_NUM ||
-                              result.dualTendonLutMotor[1] >= SERVO_TOTAL_NUM)))) {
+                            !calibrationTendonLutMatchesJoint(jointIndex,
+                                                             result))) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else {
                     g_jointCalibResult[jointIndex] = result;
@@ -1856,6 +1920,7 @@ void upperCommunicationTask(void* parameter)
     bool faultStatusSentInitialized = false;
 
     uint32_t lastSystemStatusTransitionSent = 0;
+    uint32_t lastFeedbackCollisionTransitionSent = 0;
     uint32_t lastSystemStatusSentMs = 0;
     bool systemStatusSentInitialized = false;
     uint32_t lastManualReferenceSentMs = 0;
@@ -2041,9 +2106,13 @@ void upperCommunicationTask(void* parameter)
 
 
         const uint32_t stateTransitionCount = sharedData->state_transition_count;
+        const uint32_t feedbackCollisionTransitionCount =
+            sharedAtomicLoad(&sharedData->feedback_collision_transition_count);
         const bool systemStatusChanged =
             (!systemStatusSentInitialized) ||
-            (stateTransitionCount != lastSystemStatusTransitionSent);
+            (stateTransitionCount != lastSystemStatusTransitionSent) ||
+            (feedbackCollisionTransitionCount !=
+             lastFeedbackCollisionTransitionSent);
         const bool systemStatusHeartbeatDue =
             (!systemStatusSentInitialized) ||
             ((nowMs - lastSystemStatusSentMs) >= kSystemStatusHeartbeatMs);
@@ -2051,6 +2120,8 @@ void upperCommunicationTask(void* parameter)
             if (sendSystemStatusPacket(sharedData)) {
                 taskRuntimeMarkSystemStatusSent();
                 lastSystemStatusTransitionSent = stateTransitionCount;
+                lastFeedbackCollisionTransitionSent =
+                    feedbackCollisionTransitionCount;
                 lastSystemStatusSentMs = nowMs;
                 systemStatusSentInitialized = true;
             }

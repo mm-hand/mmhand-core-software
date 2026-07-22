@@ -13,7 +13,6 @@ from desktop.paths import (
     POSE_FIST_PATH,
     PROJECT_ROOT,
     RAW_IK_Q_TARGET_PATH,
-    TENDON_MANUAL_CALIB_PATH,
 )
 from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
 from desktop.core.data_recording import DataSessionRecorder
@@ -52,6 +51,7 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_WRONG_DIRECTION,
     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
     CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT,
+    DUAL_TENDON_JOINT_INDICES,
     ENCODER_COUNT,
     FEEDBACK_ADMISSION_REJECTED,
     FEEDBACK_REJECT_ABS_LIMIT,
@@ -70,6 +70,7 @@ from desktop.core.protocol import (
     SYSTEM_FAULT_OVERLOAD,
     SYSTEM_FAULT_SERVO_OFFLINE,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
@@ -82,7 +83,7 @@ from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
 from .ui_services import LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
 from .ui_task_runtime import TaskRuntimeWindow
-from .ui_tendon_guard import MOTOR_TO_JOINT_INDEX
+from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX
 from .ui_windows import DisplayWindowManager
 
 
@@ -146,13 +147,14 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_status_refresh = 0.0
         self._pending_status_text = ""
         self._last_overload_popup_mask = 0
+        self._last_feedback_collision_armed_mask: Optional[int] = None
+        self._last_feedback_collision_hold_mask: Optional[int] = None
         self._fault_popup_episode_active = False
         self._fault_dialog_active = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
         self._task_runtime_window: Optional[TaskRuntimeWindow] = None
         self.context = HandGuiContext(self)
-        self.tendon_guard = self.backend.tendon_guard
 
         self.backend.register_update_callback(self._on_state_update)
         self.backend.register_joint_target_callback(self._on_joint_target_command)
@@ -235,6 +237,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.fault_label = self._make_top_status_label("SYS -", 132)
         self.calib_label = self._make_top_status_label("CALIB -", 82)
         self.overload_label = self._make_top_status_label("OL -", 96)
+        self.feedback_hold_label = self._make_top_status_label("COLLISION -", 180)
         self.turn_label = self._make_top_status_label("TURN -", 98)
         self.delay_label = self._make_top_status_label("--", 62)
 
@@ -242,6 +245,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self.fault_label,
             self.calib_label,
             self.overload_label,
+            self.feedback_hold_label,
             self.turn_label,
             self.delay_label,
         ]:
@@ -654,6 +658,9 @@ class HandGUI(QtWidgets.QMainWindow):
             overload_text, overload_tip, overload_active = self._format_overload_summary(state, now)
         else:
             overload_text, overload_tip, overload_active = "OL -", "Lower serial disconnected", False
+        hold_text, hold_tip, hold_active, hold_known = self._format_feedback_collision_summary(
+            state, connected and system_status_fresh
+        )
         delay_text, delay_state = self._format_delay_status(delay_ms)
         self.fault_label.setText(sys_text)
         self.fault_label.setToolTip(sys_tip)
@@ -661,6 +668,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self.calib_label.setToolTip(calib_tip)
         self.overload_label.setText(overload_text)
         self.overload_label.setToolTip(overload_tip)
+        self.feedback_hold_label.setText(hold_text)
+        self.feedback_hold_label.setToolTip(hold_tip)
         self.turn_label.setText(turn_text)
         self.turn_label.setToolTip(turn_tip)
         self.delay_label.setText(delay_text)
@@ -671,10 +680,109 @@ class HandGUI(QtWidgets.QMainWindow):
         self._style_top_status_label(self.fault_label, system_style)
         self._style_top_status_label(self.calib_label, calib_style)
         self._style_top_status_label(self.overload_label, "warn" if overload_active else "ok")
+        self._style_top_status_label(
+            self.feedback_hold_label,
+            "warn" if hold_active else ("ok" if hold_known else "neutral"),
+        )
         self._style_top_status_label(self.turn_label, "neutral" if not connected else ("ok" if turn_ok else "warn"))
         self._style_top_status_label(self.delay_label, delay_state)
         self._handle_fault_side_effects(state)
 
+    def _format_feedback_collision_summary(
+        self,
+        state: HandModel,
+        system_status_fresh: bool,
+    ) -> tuple[str, str, bool, bool]:
+        """只使用 P4 上报状态显示碰撞监测，避免 UI 本地猜测控制状态。"""
+        if not system_status_fresh or not bool(
+            getattr(state, "has_feedback_collision_status", False)
+        ):
+            self._last_feedback_collision_armed_mask = None
+            self._last_feedback_collision_hold_mask = None
+            return "COLLISION ?", "Collision status is unavailable or stale", False, False
+
+        valid_mask = (1 << ENCODER_COUNT) - 1
+        armed_mask = int(
+            getattr(state, "feedback_collision_armed_bitmap", 0) or 0
+        ) & valid_mask
+        hold_mask = int(
+            getattr(state, "feedback_collision_hold_bitmap", 0) or 0
+        ) & valid_mask
+        previous_armed = self._last_feedback_collision_armed_mask
+        previous_hold = self._last_feedback_collision_hold_mask
+        self._last_feedback_collision_armed_mask = armed_mask
+        self._last_feedback_collision_hold_mask = hold_mask
+
+        if previous_armed is not None and previous_armed != armed_mask:
+            entered = armed_mask & ~previous_armed
+            if entered:
+                joints = ",".join(
+                    f"J{i:02d}" for i in range(ENCODER_COUNT)
+                    if entered & (1 << i)
+                )
+                log_session("COLLISION_ARM", f"entered={joints}")
+        if previous_hold is not None and previous_hold != hold_mask:
+            entered = hold_mask & ~previous_hold
+            released = previous_hold & ~hold_mask
+            if entered:
+                joints = ",".join(
+                    f"J{i:02d}" for i in range(ENCODER_COUNT)
+                    if entered & (1 << i)
+                )
+                log_session("COLLISION_HOLD", f"entered={joints}")
+            if released:
+                joints = ",".join(
+                    f"J{i:02d}" for i in range(ENCODER_COUNT)
+                    if released & (1 << i)
+                )
+                log_session("COLLISION_RELEASE", f"released={joints}")
+
+        def joint_detail(joint_index: int) -> str:
+            """将碰撞位图中的关节编号转成可读文本，并明确标记双腱关节。"""
+            suffix = " (dual tendon)" if joint_index in DUAL_TENDON_JOINT_INDICES else ""
+            return f"J{joint_index:02d}{suffix}"
+
+        mask_detail = (
+            f"armed_mask=0x{armed_mask:08X}\n"
+            f"hold_mask=0x{hold_mask:08X}"
+        )
+
+        if hold_mask:
+            joints = [i for i in range(ENCODER_COUNT) if hold_mask & (1 << i)]
+            text = (
+                "COLLISION HOLD " + ",".join(f"J{i:02d}" for i in joints)
+                if len(joints) <= 2
+                else f"COLLISION HOLD x{len(joints)}"
+            )
+            detail = "\n".join(joint_detail(i) for i in joints)
+            return (
+                text,
+                "Collision ABS hold is active:\n"
+                f"{detail}\n"
+                f"{mask_detail}\n"
+                "Send a target more than 1.0 deg in the reverse direction to release.",
+                True,
+                True,
+            )
+
+        if armed_mask:
+            joints = ",".join(
+                joint_detail(i) for i in range(ENCODER_COUNT)
+                if armed_mask & (1 << i)
+            )
+            return (
+                "COLLISION MON",
+                "Motion confirmed; collision progress windows are monitoring: "
+                f"{joints}\n{mask_detail}",
+                False,
+                True,
+            )
+        return (
+            "COLLISION IDLE",
+            f"No joint has met the motion-arm condition.\n{mask_detail}",
+            False,
+            True,
+        )
     @staticmethod
     def _packet_status_fresh(
         state: HandModel,
@@ -1249,6 +1357,7 @@ class HandGUI(QtWidgets.QMainWindow):
             6: "RUN_DIRECT",
             7: "PAUSED",
             SYSTEM_STATE_ROPE_INIT_RUNNING: "ROPE_INIT",
+            SYSTEM_STATE_RECOVERY_REQUIRED: "RECOVERY",
         }
         try:
             return names.get(int(value), str(value))
@@ -1288,25 +1397,44 @@ class HandGUI(QtWidgets.QMainWindow):
         live: bool = False,
         input_space: str = "urdf_deg",
         raw_targets=None,
+        command_joint_mask=None,
     ):
         guard = getattr(self.control_panel, "feedback_command_allowed", None)
         if callable(guard) and not guard(source=source, show_status=True):
             return False
-        try:
-            self.control_panel._refresh_tendon_guard_from_ui()
-        except Exception:
-            pass
+        previous_state = self.backend.get_current_state()
+        previous_targets = list(getattr(previous_state, "target_angles", []) or [])
         result = self.backend.send_joint_targets(
             angles,
             source=source,
             live=live,
             input_space=input_space,
             raw_targets=raw_targets,
+            command_joint_mask=command_joint_mask,
         )
         if result.message:
             self._set_status(result.message)
         if source and result.sent:
             self.emit_action(source)
+            if not live:
+                # 记录整包中真正变化的关节，实机日志可以直接识别单行 Send
+                # 是否意外夹带了其他输入框的历史目标。
+                changed = []
+                for idx, value in enumerate(list(result.targets or [])):
+                    if idx >= len(previous_targets) or abs(float(value) - float(previous_targets[idx])) >= 0.001:
+                        old = previous_targets[idx] if idx < len(previous_targets) else float("nan")
+                        changed.append(f"J{idx:02d}:{old:.3f}->{float(value):.3f}")
+                preview = ", ".join(changed[:8]) if changed else "none"
+                if len(changed) > 8:
+                    preview += f", +{len(changed) - 8} more"
+                mask_text = (
+                    "active"
+                    if command_joint_mask is None
+                    else f"0x{int(command_joint_mask):08X}"
+                )
+                self.emit_action(
+                    f"JOINT_CMD source={source} mask={mask_text} changed={preview}"
+                )
         return result
 
     def _on_joint_target_command(self, payload: Dict[str, object]) -> None:
@@ -1608,6 +1736,15 @@ class HandGUI(QtWidgets.QMainWindow):
             "calib_status": getattr(state, "calib_status", ""),
             "system_state": int(getattr(state, "system_state", 0) or 0),
             "system_fault_bitmap": f"0x{int(getattr(state, 'system_fault_bitmap', 0) or 0):08X}",
+            "feedback_collision_armed_mask": (
+                f"0x{int(getattr(state, 'feedback_collision_armed_bitmap', 0) or 0):08X}"
+            ),
+            "feedback_collision_hold_mask": (
+                f"0x{int(getattr(state, 'feedback_collision_hold_bitmap', 0) or 0):08X}"
+            ),
+            "feedback_collision_transition_count": int(
+                getattr(state, "feedback_collision_transition_count", 0) or 0
+            ),
             "active_scope_label": scope_label,
             "active_motor_mask": active_motor_mask,
             "active_joint_mask": active_joint_mask,
@@ -2057,7 +2194,6 @@ class HandGUI(QtWidgets.QMainWindow):
             "calib_load_snapshot": CALIB_LOAD_SNAPSHOT_PATH,
             "calib_deg": CALIB_DEG_PATH,
             "hand_geo": HAND_GEO_PATH,
-            "tendon_manual_calib": TENDON_MANUAL_CALIB_PATH,
             "motor_mid_calib": MOTOR_MID_CALIB_PATH,
             "manus_calibration": MANUS_CALIBRATION_PATH,
             "raw_ik_q_target": RAW_IK_Q_TARGET_PATH,

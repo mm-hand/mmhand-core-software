@@ -13,6 +13,11 @@
 int16_t clampServoAbsCommand(int32_t value);
 // 写入 21 个关节角目标，并切换到 joint PID 控制模式。
 void upperApplyTargetAngles(TaskSharedData_t* sharedData, const float* angles, uint8_t count);
+// 写入角度并限定本次负反馈实际参与 PID 的关节；未置位 active joint 保持当前 ABS。
+void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
+                                  const float* angles,
+                                  uint8_t count,
+                                  uint32_t jointMask);
 // 清零关节目标，保留为历史单字节 'b' 命令兼容入口。
 
 // 写入 22 个舵机直控目标，source 表示 TARGET/ABSOLUTE 等直控语义。

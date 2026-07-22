@@ -168,7 +168,7 @@ desktop/
     core_logic.py             # HandController 等核心控制逻辑
     hand_backend.py           # UI/CLI/ROS2 共用 backend facade
     hand_geometry.py          # 手部几何与姿态计算
-    tendon_guard.py           # 腱保护逻辑
+    motor_mapping.py          # 电机/关节映射与直控辅助函数
     angle_mapping.py          # 关节/电机映射
     auto_calib_logger.py      # 自动标定日志
     run_data_logger.py        # 运行数据日志

@@ -11,14 +11,12 @@ import threading
 import time
 from typing import Callable, Iterable, List, Optional, Tuple
 
-from desktop.paths import TENDON_MANUAL_CALIB_PATH
-
 from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController
 from .data_models import HandModel, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT
-from .tendon_guard import TendonGuard
+from .session_log import log_session
 
 
 StateCallback = Callable[[HandModel], None]
@@ -81,19 +79,14 @@ class HandBackend:
 
     The low-level controller still owns protocol-level behavior.  This class
     owns application-level lifecycle, state fan-out, tactile serial management,
-    tendon guard orchestration, and the command surface that UI/ROS clients use.
+    and the command surface that UI/ROS clients use.
     """
 
     def __init__(
         self,
         controller: Optional[HandController] = None,
-        *,
-        tendon_guard: Optional[TendonGuard] = None,
-        tendon_guard_config_path: Optional[str] = None,
     ) -> None:
         self._controller = controller or HandController()
-        guard_path = tendon_guard_config_path or str(TENDON_MANUAL_CALIB_PATH)
-        self.tendon_guard = tendon_guard or TendonGuard(guard_path)
         self.tactile_port = ""
         self.tactile_comm: Optional[TactileSerialComm] = None
         self._tactile_state: Optional[HandModel] = None
@@ -101,7 +94,15 @@ class HandBackend:
         self._state_callbacks: List[StateCallback] = []
         self._callback_lock = threading.Lock()
         self._joint_target_callbacks: List[JointTargetCallback] = []
+        # ROS2 回调运行在独立线程。授权检查、角度入队与 E-STOP 必须共用
+        # 同一把锁，保证 STOP 入队后不会再插入新的 joint_target_run。
+        self._ros2_output_lock = threading.RLock()
+        self._ros2_output_armed = False
+        self._ros2_armed_scope: Optional[Tuple[int, int, bool]] = None
+        self._ros2_last_drop_reason = ""
+        self._ros2_last_drop_log_ts = 0.0
         self._requested_active_joint_mask: Optional[int] = None
+        self._requested_active_scope: Optional[Tuple[int, int, bool]] = None
         try:
             self._workspace_mapping_version, self._workspace_urdf_crc = (
                 urdf_manual_scaled_mapping_metadata()
@@ -184,16 +185,21 @@ class HandBackend:
         return self._controller.current_state
 
     def connect(self, port: str) -> bool:
+        self.set_ros2_output_armed(False, reason="connect")
         self._ensure_controller_callback_registered()
         self._requested_active_joint_mask = None
+        self._requested_active_scope = None
         return bool(self._controller.initialize(str(port)))
 
     def initialize(self, port: str) -> bool:
         return self.connect(port)
 
     def shutdown(self, stop_lower: bool = True) -> None:
-        self._requested_active_joint_mask = None
-        self._controller.shutdown(stop_lower=stop_lower)
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="shutdown")
+            self._requested_active_joint_mask = None
+            self._requested_active_scope = None
+            self._controller.shutdown(stop_lower=stop_lower)
 
     def disconnect(self, stop_lower: bool = False) -> None:
         self.shutdown(stop_lower=stop_lower)
@@ -335,6 +341,7 @@ class HandBackend:
         live: bool = False,
         input_space: str = "urdf_deg",
         raw_targets: Optional[Iterable[float]] = None,
+        command_joint_mask: Optional[int] = None,
     ) -> JointCommandResult:
         from desktop.teleop.joint_target_adapter import active_mapping_identity
 
@@ -349,6 +356,9 @@ class HandBackend:
             "mapping_id": mapping.mapping_id,
             "mapping_version": mapping.mapping_version,
             "urdf_config_crc": mapping.urdf_config_crc,
+            "command_joint_mask": (
+                None if command_joint_mask is None else int(command_joint_mask)
+            ),
         }
         guarded, workspace_blocked, clamped, workspace_message = self._apply_joint_workspace_guard(
             state,
@@ -379,17 +389,26 @@ class HandBackend:
             )
             return result
 
-        guarded, tendon_blocked, tendon_message = self.tendon_guard.apply(state, guarded, source=source)
-        if live:
-            self._controller.set_target_angles_live(guarded)
+        start_feedback = bool(source and not str(source).startswith("Hold"))
+        if start_feedback:
+            sent = self._controller.send_target_angles_and_run_feedback(
+                guarded,
+                live=live,
+                joint_mask=command_joint_mask,
+            )
+        elif live:
+            sent = self._controller.set_target_angles_live(
+                guarded,
+                joint_mask=command_joint_mask,
+            )
         else:
-            self._controller.set_target_angles(guarded)
-        if source and not tendon_blocked and not str(source).startswith("Hold"):
-            self._controller.request_run_feedback()
-        message = tendon_message or workspace_message
+            sent = self._controller.set_target_angles(guarded)
+        message = workspace_message
+        if not sent and not message:
+            message = "Joint command was not queued; check connection, mode, and pause state"
         result = JointCommandResult(
-            sent=True,
-            blocked=list(tendon_blocked),
+            sent=bool(sent),
+            blocked=[],
             clamped=list(clamped),
             message=message,
             targets=guarded,
@@ -400,7 +419,7 @@ class HandBackend:
                 "live": bool(live),
                 "input_targets": input_targets,
                 "output_targets": guarded,
-                "blocked": list(tendon_blocked),
+                "blocked": [],
                 "clamped": list(clamped),
                 "message": message,
                 "sent": bool(result.sent),
@@ -409,6 +428,117 @@ class HandBackend:
             }
         )
         return result
+
+    @staticmethod
+    def _state_active_scope(state: Optional[HandModel]) -> Tuple[int, int, bool]:
+        """读取 P4 已确认的 active scope，供 ROS2 授权绑定与逐帧核验。"""
+        return (
+            int(getattr(state, "active_motor_mask", 0) or 0),
+            int(getattr(state, "active_joint_mask", 0) or 0),
+            bool(getattr(state, "require_can_feedback", False)),
+        )
+
+    def _set_ros2_output_armed_locked(self, armed: bool, *, reason: str) -> Tuple[bool, str]:
+        """在已持有 ROS2 锁时更新授权；不得直接从锁外调用。"""
+        if not armed:
+            was_armed = self._ros2_output_armed
+            self._ros2_output_armed = False
+            self._ros2_armed_scope = None
+            if was_armed:
+                log_session("ROS2_GATE", f"DISARM reason={reason or 'requested'}")
+            return True, "ROS2 joint output disabled"
+
+        if not self.is_comm_connected():
+            return False, "ROS2 enable blocked: P4 serial is not connected"
+
+        state = self.get_current_state()
+        scope = self._requested_active_scope or self._state_active_scope(state)
+        if int(scope[1]) == 0:
+            return False, "ROS2 enable blocked: active joint scope is empty"
+
+        self._ros2_output_armed = True
+        self._ros2_armed_scope = scope
+        self._ros2_last_drop_reason = ""
+        log_session(
+            "ROS2_GATE",
+            "ARM reason={} motor=0x{:08X} joint=0x{:08X} require_can={}".format(
+                reason or "requested",
+                int(scope[0]),
+                int(scope[1]),
+                int(bool(scope[2])),
+            ),
+        )
+        return True, "ROS2 joint output enabled; waiting for a valid P4 state"
+
+    def set_ros2_output_armed(self, armed: bool, *, reason: str = "") -> Tuple[bool, str]:
+        """授权或撤销两条 ROS2 21 关节角输入链路。
+
+        授权只表达用户通过现有 ENABLE 允许遥操；P4 在线、READY 和作用域
+        一致性仍由每一帧发送前核验。E-STOP/Pause/断连会主动撤销授权。
+        """
+        with self._ros2_output_lock:
+            return self._set_ros2_output_armed_locked(bool(armed), reason=reason)
+
+    def ros2_output_armed(self) -> bool:
+        with self._ros2_output_lock:
+            return bool(self._ros2_output_armed)
+
+    def _log_ros2_drop_locked(self, reason: str) -> None:
+        """同类 ROS2 丢帧日志每秒最多记录一次，避免 100 Hz 输入刷屏。"""
+        now = time.monotonic()
+        if reason == self._ros2_last_drop_reason and now - self._ros2_last_drop_log_ts < 1.0:
+            return
+        self._ros2_last_drop_reason = reason
+        self._ros2_last_drop_log_ts = now
+        log_session("ROS2_GATE", f"DROP reason={reason}")
+
+    def send_ros2_joint_targets(
+        self,
+        angles: Iterable[float],
+        *,
+        source: str,
+        input_space: str = "urdf_deg",
+        raw_targets: Optional[Iterable[float]] = None,
+    ) -> JointCommandResult:
+        """在安全授权门后发送一帧 ROS2 关节角。
+
+        该锁覆盖“检查授权 -> 发送角度”整个事务；E-STOP 使用同一把锁执行
+        “撤权 -> STOP”，从线程时序上杜绝 STOP 后被下一帧重新启动。
+        """
+        values = list(angles)
+        raw_values = list(raw_targets) if raw_targets is not None else list(values)
+        with self._ros2_output_lock:
+            if not self._ros2_output_armed:
+                reason = "not_armed"
+            elif not self.is_comm_connected():
+                reason = "serial_offline"
+            elif not self.is_started():
+                reason = "controller_not_ready"
+            else:
+                state_scope = self._state_active_scope(self.get_current_state())
+                if self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope:
+                    reason = "active_scope_mismatch"
+                else:
+                    # 把 ENABLE 时绑定的 scope 显式写入每一帧命令。即使串口队列
+                    # 后续恰逢 UI 切换 scope，旧遥操帧也不能作用到新选中的关节。
+                    ros2_joint_mask = int(self._ros2_armed_scope[1])
+                    self._ros2_last_drop_reason = ""
+                    self.set_control_mode(ControlMode.JOINT_ANGLE)
+                    return self.send_joint_targets(
+                        values,
+                        source=source,
+                        live=True,
+                        input_space=input_space,
+                        raw_targets=raw_values,
+                        command_joint_mask=ros2_joint_mask,
+                    )
+
+            self._log_ros2_drop_locked(reason)
+            return JointCommandResult(
+                sent=False,
+                message=f"ROS2 joint target dropped: {reason}",
+                targets=values,
+            )
 
     def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> bool:
         starter = getattr(self.comm, "start_joint_debug_packet_log", None)
@@ -458,7 +588,9 @@ class HandBackend:
         return self._controller.invalidate_joint_commands()
 
     def pause(self) -> None:
-        self._controller.pause()
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="pause")
+            self._controller.pause()
 
     def resume(self) -> None:
         self._controller.resume()
@@ -497,10 +629,18 @@ class HandBackend:
         return self._controller.request_run_feedback()
 
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
-        ok = self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
-        if ok:
-            self._requested_active_joint_mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
-        return ok
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="active_scope_change")
+            ok = self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
+            if ok:
+                valid_joint_mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+                self._requested_active_joint_mask = valid_joint_mask
+                self._requested_active_scope = (
+                    int(active_motor_mask),
+                    valid_joint_mask,
+                    bool(require_can_feedback),
+                )
+            return ok
 
     def set_manual_encoder_references(self, manual_min_raw, manual_max_raw) -> bool:
         return self._controller.set_manual_encoder_references(
@@ -539,10 +679,14 @@ class HandBackend:
         self._controller.start()
 
     def stop(self) -> None:
-        self._controller.stop()
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="E_STOP")
+            self._controller.stop()
 
     def reset(self) -> None:
-        self._controller.reset()
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="reset")
+            self._controller.reset()
 
     def is_started(self) -> bool:
         return self._controller.is_started()

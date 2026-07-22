@@ -8,8 +8,8 @@ from desktop.core.protocol import (
     CALIB_WARN_AUTO_MIN_OFFSET,
     CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     CMD_CALIB_LOAD_JOINT,
-    DUAL_TENDON_LUT_ACTUATOR_COUNT,
-    DUAL_TENDON_LUT_MAX_SAMPLES,
+    TENDON_LUT_ACTUATOR_COUNT,
+    TENDON_LUT_MAX_SAMPLES,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     build_calib_load_joint_cmd,
@@ -38,14 +38,14 @@ def test_joint_calibration_v3_protocol_round_trip():
         "totalDeg": 74.7,
         "scaled": True,
         "encoderDirection": 1,
-        "dualTendonLutValid": True,
-        "dualTendonLutCount": 3,
-        "dualTendonLutMotor": [5, 6],
-        "dualTendonLutAngleStartDeg": -5.0,
-        "dualTendonLutAngleStepDeg": 5.0,
-        "dualTendonLutMotorAbs": [
-            list(range(DUAL_TENDON_LUT_MAX_SAMPLES))
-            for _ in range(DUAL_TENDON_LUT_ACTUATOR_COUNT)
+        "tendonLutValid": True,
+        "tendonLutCount": 3,
+        "tendonLutMotor": [5, 6],
+        "tendonLutAngleStartDeg": -5.0,
+        "tendonLutAngleStepDeg": 5.0,
+        "tendonLutMotorAbs": [
+            list(range(TENDON_LUT_MAX_SAMPLES))
+            for _ in range(TENDON_LUT_ACTUATOR_COUNT)
         ],
         "mappingVersion": mapping_version,
         "encoderAtUrdfMin": 1200,
@@ -80,6 +80,29 @@ def test_joint_calibration_v3_protocol_round_trip():
     assert parsed["currentMaxDeg"] == 63.0
     assert parsed["hasManualScaledV3Fields"] is True
     assert parsed["hasAssemblyWarningFields"] is False
+    assert parsed["tendonLutValid"] is True
+    assert parsed["tendonLutCount"] == 3
+    assert parsed["tendonLutMotor"] == [5, 6]
+    assert parsed["tendonLutMotorAbs"][0][:3] == [0, 1, 2]
+
+    # 旧 JSON 快照使用 dualTendonLut* 键；写回 P4 时继续兼容读取，
+    # 但新上行包和新保存文件统一输出 tendonLut*。
+    legacy_result = dict(result)
+    for generic_name in (
+        "tendonLutValid",
+        "tendonLutCount",
+        "tendonLutMotor",
+        "tendonLutAngleStartDeg",
+        "tendonLutAngleStepDeg",
+        "tendonLutMotorAbs",
+    ):
+        legacy_name = "dualTendonLut" + generic_name[len("tendonLut"):]
+        legacy_result[legacy_name] = legacy_result.pop(generic_name)
+    legacy_frame = build_calib_load_joint_cmd(legacy_result)
+    legacy_parsed = parse_joint_calib_snapshot_packet(legacy_frame[3:-1])
+    assert legacy_parsed is not None
+    assert legacy_parsed["tendonLutValid"] is True
+    assert legacy_parsed["tendonLutMotor"] == [5, 6]
 
 
 def test_joint_calibration_snapshot_parses_optional_warning_details():

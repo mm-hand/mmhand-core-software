@@ -26,7 +26,7 @@ from desktop.core.protocol import (
     HAND_PROFILE,
     MOTOR_COUNT,
     DUAL_TENDON_JOINT_INDICES,
-    DUAL_TENDON_LUT_MAX_SAMPLES,
+    TENDON_LUT_MAX_SAMPLES,
     VALID_MOTOR_MASK,
     ControlMode,
     MOTOR_ABS_CMD_MIN,
@@ -39,6 +39,7 @@ from desktop.core.protocol import (
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_READY,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
     ROPE_INIT_STATUS_RUNNING,
     ROPE_INIT_STATUS_SUCCESS,
@@ -56,12 +57,12 @@ from desktop.core.protocol import (
     ROPE_INIT_REASON_TASK_START_FAILED,
     directed_encoder_delta,
     manual_encoder_reference_entry_crc,
+    tendon_lut_field,
 )
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 from .ui_device_check_view import DeviceCheckView
-from .ui_tendon_guard import (
+from desktop.core.motor_mapping import (
     MOTOR_TO_JOINT_INDEX,
-    TendonGuard,
     clamp_motor_abs,
     motor_abs_after_tendon_action,
     motor_tendon_shorten_abs_sign,
@@ -315,8 +316,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_target_spins: List[QtWidgets.QDoubleSpinBox] = []
         self.joint_sliders: List[QtWidgets.QSlider] = []
         self.joint_send_buttons: List[QtWidgets.QPushButton] = []
-        self.joint_tie_sign_edits: List[QtWidgets.QLineEdit] = []
-        self.joint_tie_x1_edits: List[QtWidgets.QLineEdit] = []
         self._joint_target_user_set: List[bool] = []
         self._joint_target_initialized = False
         self._joint_run_states = [False] * ENCODER_COUNT
@@ -693,8 +692,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.joint_target_spins = []
         self.joint_sliders = []
         self.joint_send_buttons = []
-        self.joint_tie_sign_edits = []
-        self.joint_tie_x1_edits = []
         self.joint_use_checks = [None] * ENCODER_COUNT
         self.joint_group_use_checks = []
         self.teleop_joint_use_checks = [None] * ENCODER_COUNT
@@ -1633,9 +1630,10 @@ class ControlPanel(QtWidgets.QWidget):
                 SYSTEM_STATE_UNCONTROLLABLE,
                 SYSTEM_STATE_IDLE,
                 SYSTEM_STATE_READY,
+                SYSTEM_STATE_RECOVERY_REQUIRED,
             ):
                 self.calib_btn.setToolTip(
-                    "Calibration requires UNCONTROLLABLE, IDLE, or READY; "
+                    "Calibration requires UNCONTROLLABLE, IDLE, READY, or RECOVERY; "
                     "click to see the current-state blocker"
                 )
             else:
@@ -1683,6 +1681,7 @@ class ControlPanel(QtWidgets.QWidget):
     def _joint_spin_changed(self, idx: int, value: float) -> None:
         if self._updating:
             return
+        self._mark_joint_target_user_set(idx)
         clamped = self._clamp_joint_target_deg(idx, float(value))
         self.joint_sliders[idx].blockSignals(True)
         self.joint_sliders[idx].setValue(int(round(clamped * 100.0)))
@@ -1691,6 +1690,7 @@ class ControlPanel(QtWidgets.QWidget):
     def _joint_slider_changed(self, idx: int, value: int) -> None:
         if self._updating:
             return
+        self._mark_joint_target_user_set(idx)
         target = self._clamp_joint_target_deg(idx, float(value) / 100.0)
         self.joint_target_spins[idx].blockSignals(True)
         self.joint_target_spins[idx].setValue(target)
@@ -1723,6 +1723,7 @@ class ControlPanel(QtWidgets.QWidget):
             self.motor_target_spins[idx].blockSignals(False)
 
     def resolved_joint_targets(self) -> List[float]:
+        """读取全部编辑框目标，仅用于 Send All、整手姿态和测试算法。"""
         targets = []
         for i in range(ENCODER_COUNT):
             if i < len(self._joint_target_user_set) and self._joint_target_user_set[i]:
@@ -1731,6 +1732,34 @@ class ControlPanel(QtWidgets.QWidget):
                 raw = self._joint_feedback_target(i)
             value = self._clamp_joint_target_deg(i, raw)
             targets.append(value)
+        return targets
+
+    def _single_joint_command_targets(self, command_joint: int) -> List[float]:
+        """构造单行命令：目标关节取编辑值，其余关节保持实时反馈角。
+
+        P4 的角度协议固定发送 21 路，因此“Run J03”不能直接复用所有曾被
+        编辑过的输入框，否则 J02 的历史目标会被整包重发。反馈无效的关节
+        才回退到上一次目标，避免用无效角度生成突跳命令。
+        """
+        state = self._state
+        state_targets = list(getattr(state, "target_angles", []) or []) if state is not None else []
+        targets: List[float] = []
+        for i in range(ENCODER_COUNT):
+            if i == command_joint:
+                raw = float(self.joint_target_spins[i].value())
+            elif (
+                state is not None and
+                self._joint_angle_display_calibrated(i, state) and
+                self._joint_encoder_display_valid(i, state) and
+                self._joint_angle_feedback_valid(i, state) and
+                i < len(getattr(state, "angles", []))
+            ):
+                raw = float(state.angles[i])
+            elif i < len(state_targets):
+                raw = float(state_targets[i])
+            else:
+                raw = float(self.joint_target_spins[i].value())
+            targets.append(self._clamp_joint_target_deg(i, raw))
         return targets
 
     def resolved_motor_targets(self) -> List[int]:
@@ -1746,8 +1775,13 @@ class ControlPanel(QtWidgets.QWidget):
         self._mark_joint_target_user_set(idx)
         if not self._guard_joint_command_started():
             return
-        targets = self.resolved_joint_targets()
-        self.context.send_joint_targets(targets, source=f"Run J{idx}", live=False)
+        targets = self._single_joint_command_targets(idx)
+        self.context.send_joint_targets(
+            targets,
+            source=f"Run J{idx}",
+            live=False,
+            command_joint_mask=(1 << idx),
+        )
         self._set_row_running(False, idx, True)
         self._set_status(f"Joint command sent (J{idx})")
 
@@ -2048,6 +2082,19 @@ class ControlPanel(QtWidgets.QWidget):
             return
         self._set_status(f"{source} sent: {detail}")
 
+    def _arm_ros2_output_after_enable(self) -> str:
+        """复用现有 ENABLE 授权 ROS2，不增加独立遥操使能按钮。"""
+        if not bool(getattr(self.context, "ros2_enabled", False)):
+            return ""
+        setter = getattr(self.backend, "set_ros2_output_armed", None)
+        if not callable(setter):
+            return "ROS2 gate unavailable"
+        ok, message = setter(True, reason="UI_ENABLE")
+        self.context.emit_action(
+            "ROS2 output armed by ENABLE" if ok else f"ROS2 arm blocked: {message}"
+        )
+        return str(message or "")
+
     def start_controller(self) -> None:
         if self._app_mode == "manual" and self._manual_submode() == "device_check":
             self._set_status("ENABLE blocked: switch to Joint or Motor Channels after Device Check")
@@ -2073,13 +2120,30 @@ class ControlPanel(QtWidgets.QWidget):
         if state is not None and getattr(state, "system_state", None) == SYSTEM_STATE_PAUSED:
             self._estop_latched = False
             self.backend.start()
+            ros2_note = ControlPanel._arm_ros2_output_after_enable(self)
             self.context.emit_action("Resume")
-            self._set_status("Resume requested: continuing paused target")
+            status = "Resume requested: continuing paused target"
+            self._set_status(f"{status}; {ros2_note}" if ros2_note else status)
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
             self._show_turn_recovery_guide(unknown_mask, "ENABLE")
             return
+
+        if self._manual_submode() != "motor":
+            # 关节负反馈/遥操启动时不能先发舵机 ABS 直控命令。
+            # ABS 命令会让 P4 立即进入 RUN_DIRECT，紧接着的负反馈
+            # START/RUN 会因模式门禁被拒绝，表现为 Send 成功但舵机不转。
+            self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
+            self.backend.set_pid_control(True)
+            self._estop_latched = False
+            self.backend.start()
+            ros2_note = ControlPanel._arm_ros2_output_after_enable(self)
+            self.context.emit_action("Start joint feedback controller")
+            status = "Enable requested: waiting for joint READY"
+            self._set_status(f"{status}; {ros2_note}" if ros2_note else status)
+            return
+
         if not self._sync_motor_targets_to_feedback():
             self._set_status("Enable waits for fresh motor feedback")
             return
@@ -2089,9 +2153,9 @@ class ControlPanel(QtWidgets.QWidget):
         self.backend.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         self._estop_latched = False
-        self.backend.start()
-        self.context.emit_action("Start with current motor feedback synced as target zero")
-        self._set_status("Enable requested: waiting for IDLE controllable")
+        # 绝对位置直控命令自带 RUN_DIRECT 请求，不再叠加 START 事件。
+        self.context.emit_action("Start direct motor hold from current feedback")
+        self._set_status("Direct motor hold requested")
 
     def stop_controller(self) -> None:
         if self._estop_in_progress:
@@ -2232,8 +2296,12 @@ class ControlPanel(QtWidgets.QWidget):
             return
         state = self._state
         system_state = getattr(state, "system_state", None)
-        if system_state not in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
-            self._set_status("Rope Init blocked: wait for IDLE/READY")
+        if system_state not in (
+            SYSTEM_STATE_IDLE,
+            SYSTEM_STATE_READY,
+            SYSTEM_STATE_RECOVERY_REQUIRED,
+        ):
+            self._set_status("Rope Init blocked: wait for IDLE/READY/RECOVERY")
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
@@ -2413,11 +2481,12 @@ class ControlPanel(QtWidgets.QWidget):
             SYSTEM_STATE_UNCONTROLLABLE,
             SYSTEM_STATE_IDLE,
             SYSTEM_STATE_READY,
+            SYSTEM_STATE_RECOVERY_REQUIRED,
         ):
             self._warn(
                 "Calibration unavailable",
                 "Stop the active motion first. Calibration requires P4 state "
-                f"UNCONTROLLABLE, IDLE, or READY; current state={system_state}.",
+                f"UNCONTROLLABLE, IDLE, READY, or RECOVERY; current state={system_state}.",
             )
             self._set_status(
                 f"Calibrate blocked: P4 system_state={system_state}"
@@ -3137,29 +3206,41 @@ class ControlPanel(QtWidgets.QWidget):
             return 0
 
     @staticmethod
-    def _joint_calib_result_has_valid_dual_lut(item: Optional[dict]) -> bool:
+    def _joint_calib_result_has_valid_tendon_lut(
+        item: Optional[dict], joint_idx: int
+    ) -> bool:
+        """校验单/双电机关节共用的标定 LUT，并核对 LUT 行与实际电机映射。"""
         if not isinstance(item, dict) or not bool(item.get("success", False)):
             return False
-        if not bool(item.get("dualTendonLutValid", False)):
+        if not bool(tendon_lut_field(item, "tendonLutValid", False)):
             return False
         try:
-            count = int(item.get("dualTendonLutCount", 0))
+            count = int(tendon_lut_field(item, "tendonLutCount", 0))
         except (TypeError, ValueError):
             return False
-        if count < 3 or count > DUAL_TENDON_LUT_MAX_SAMPLES:
+        if count < 3 or count > TENDON_LUT_MAX_SAMPLES:
             return False
-        motors = item.get("dualTendonLutMotor", [])
+        expected_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
+        expected_motors = [
+            motor_idx for motor_idx, mapped_joint in enumerate(MOTOR_TO_JOINT_INDEX)
+            if int(mapped_joint) == int(joint_idx)
+        ]
+        if len(expected_motors) != expected_count:
+            return False
+        motors = tendon_lut_field(item, "tendonLutMotor", [])
         if not isinstance(motors, list) or len(motors) < 2:
             return False
         try:
-            if any(int(motors[i]) < 0 or int(motors[i]) >= MOTOR_COUNT for i in range(2)):
+            if any(int(motors[i]) != expected_motors[i] for i in range(expected_count)):
+                return False
+            if expected_count == 1 and int(motors[1]) != 0xFF:
                 return False
         except (TypeError, ValueError):
             return False
-        motor_abs = item.get("dualTendonLutMotorAbs", [])
+        motor_abs = tendon_lut_field(item, "tendonLutMotorAbs", [])
         if not isinstance(motor_abs, list) or len(motor_abs) < 2:
             return False
-        for row in motor_abs[:2]:
+        for row in motor_abs[:expected_count]:
             if not isinstance(row, list) or len(row) < count:
                 return False
         return True
@@ -3218,15 +3299,16 @@ class ControlPanel(QtWidgets.QWidget):
                 self._format_joint_list(missing_joints[:8])
             )
             return
-        missing_dual_lut = [
+        missing_tendon_lut = [
             idx for idx in required_joints
-            if idx in DUAL_TENDON_JOINT_INDICES and
-            not self._joint_calib_result_has_valid_dual_lut(joint_results[idx])
+            if not self._joint_calib_result_has_valid_tendon_lut(
+                joint_results[idx], idx
+            )
         ]
-        if missing_dual_lut:
+        if missing_tendon_lut:
             self._set_status(
-                "Calib snapshot waiting dual tendon LUT: " +
-                self._format_joint_list(missing_dual_lut[:8])
+                "Calib snapshot waiting tendon LUT: " +
+                self._format_joint_list(missing_tendon_lut[:8])
             )
             return
 
@@ -3285,7 +3367,7 @@ class ControlPanel(QtWidgets.QWidget):
             return
 
         payload = {
-            "schema_version": 3,
+            "schema_version": 4,
             "saved_at_host_time": time.time(),
             "hand_profile": HAND_PROFILE,
             "feedback_mapping_version": mapping_version,
@@ -3433,16 +3515,17 @@ class ControlPanel(QtWidgets.QWidget):
                 "legacy/v1-v2 snapshot is view-only; v3 recalibration required: " +
                 self._format_joint_list(incompatible_mapping)
             )
-        missing_dual_lut = [
+        missing_tendon_lut = [
             joint_idx for joint_idx in range(ENCODER_COUNT)
             if (snapshot_joint_mask & (1 << joint_idx)) and
-            joint_idx in DUAL_TENDON_JOINT_INDICES and
-            not self._joint_calib_result_has_valid_dual_lut(joint_results[joint_idx])
+            not self._joint_calib_result_has_valid_tendon_lut(
+                joint_results[joint_idx], joint_idx
+            )
         ]
-        if missing_dual_lut:
+        if missing_tendon_lut:
             return (
-                "snapshot missing dual tendon LUT; recalibrate or load a schema_version 2 snapshot: " +
-                self._format_joint_list(missing_dual_lut)
+                "snapshot missing tendon LUT; recalibrate with the current firmware: " +
+                self._format_joint_list(missing_tendon_lut)
             )
         missing_motors = [
             motor_idx for motor_idx in range(MOTOR_COUNT)
@@ -3566,7 +3649,12 @@ class ControlPanel(QtWidgets.QWidget):
             if (
                 scope_ok and
                 mode in ("joint", "test") and
-                current_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
+                current_state in (
+                    SYSTEM_STATE_UNCONTROLLABLE,
+                    SYSTEM_STATE_IDLE,
+                    SYSTEM_STATE_READY,
+                    SYSTEM_STATE_RECOVERY_REQUIRED,
+                )
             ):
                 self.backend.start()
                 ready_recheck = True
@@ -4092,7 +4180,11 @@ class ControlPanel(QtWidgets.QWidget):
     def _guard_joint_command_started(self) -> bool:
         self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
-        if system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
+        if system_state in (
+            SYSTEM_STATE_IDLE,
+            SYSTEM_STATE_READY,
+            SYSTEM_STATE_RECOVERY_REQUIRED,
+        ):
             if not self._apply_active_scope_for_current_mode(force_joint=True):
                 return False
         if not self.feedback_command_allowed(show_status=True):
@@ -4104,6 +4196,7 @@ class ControlPanel(QtWidgets.QWidget):
         if system_state not in (
             SYSTEM_STATE_IDLE,
             SYSTEM_STATE_READY,
+            SYSTEM_STATE_RECOVERY_REQUIRED,
             SYSTEM_STATE_RUN_FEEDBACK,
         ):
             if self._estop_latched:
@@ -4699,44 +4792,6 @@ class ControlPanel(QtWidgets.QWidget):
                 return self._slider_from_abs_pos(int(state.servo_angles[idx]))
         return self._read_motor_target_slider_int(idx)
 
-    def _on_joint_tie_field_commit(self, joint_idx: int) -> None:
-        if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
-            return
-        sign_text = self.joint_tie_sign_edits[joint_idx].text().strip()
-        sign = TendonGuard.parse_sign_text(sign_text)
-        if sign > 0:
-            self.joint_tie_sign_edits[joint_idx].setText("+")
-        elif sign < 0:
-            self.joint_tie_sign_edits[joint_idx].setText("-")
-        else:
-            self.joint_tie_sign_edits[joint_idx].setText("")
-        try:
-            x1 = int(float(self.joint_tie_x1_edits[joint_idx].text()))
-        except (TypeError, ValueError):
-            x1 = 0
-        x1 = clamp_motor_abs(x1)
-        self.joint_tie_x1_edits[joint_idx].setText(str(x1))
-        saved = self.context.tendon_guard.set_joint(joint_idx, sign != 0, 1 if sign >= 0 else -1, x1)
-        if saved:
-            if sign == 0:
-                self._set_status(f"tie saved: J{joint_idx} disabled, x1={x1}")
-            else:
-                self._set_status(f"tie saved: J{joint_idx} sign={'+' if sign > 0 else '-'} x1={x1}")
-        else:
-            self._set_status(f"tie save failed: J{joint_idx}")
-
-    def _refresh_tendon_guard_from_ui(self) -> None:
-        config = []
-        for idx in range(min(ENCODER_COUNT, len(self.joint_tie_sign_edits), len(self.joint_tie_x1_edits))):
-            sign = TendonGuard.parse_sign_text(self.joint_tie_sign_edits[idx].text())
-            try:
-                x1 = int(float(self.joint_tie_x1_edits[idx].text()))
-            except (TypeError, ValueError):
-                x1 = 0
-            config.append({"enabled": sign != 0, "pull_sign": 1 if sign >= 0 else -1, "x1_abs": clamp_motor_abs(x1)})
-        if len(config) == ENCODER_COUNT:
-            self.context.tendon_guard.config = config
-
     def _refresh_joint_feedback_view(self, sync_target: bool = False) -> None:
         state = self._state
         joint_has_data = bool(state is not None and getattr(state, "has_sensor_data", False))
@@ -5090,8 +5145,13 @@ class ControlPanel(QtWidgets.QWidget):
         if not self._guard_joint_command_started():
             return
         try:
-            targets = self.resolved_joint_targets()
-            self.context.send_joint_targets(targets, source=f"Slider J{idx}", live=True)
+            targets = self._single_joint_command_targets(idx)
+            self.context.send_joint_targets(
+                targets,
+                source=f"Slider J{idx}",
+                live=True,
+                command_joint_mask=(1 << idx),
+            )
         except Exception as exc:
             self._set_status(f"Joint slider send failed: {exc}")
 

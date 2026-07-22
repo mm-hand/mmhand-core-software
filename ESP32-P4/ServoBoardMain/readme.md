@@ -240,7 +240,6 @@ CAN 使用 ESP32 TWAI，默认引脚：
 - 校准期间 `servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION`。
 - 普通控制目标不会覆盖校准目标。
 - 退出校准需要通过 START、STOP 或 RESET。
-- `runSingleJointCalibration()` 仍保留为内部能力，可后续接入明确的单关节校准命令。
 
 ## 开发边界
 

@@ -24,7 +24,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from desktop.core.protocol import MOTOR_COUNT  # noqa: E402
-from desktop.ui.ui_tendon_guard import MOTOR_TO_JOINT_INDEX  # noqa: E402
+from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX  # noqa: E402
 
 
 def _default_run_data_dir() -> str:

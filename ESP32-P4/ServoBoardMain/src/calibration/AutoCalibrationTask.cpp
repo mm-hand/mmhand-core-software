@@ -7,6 +7,7 @@
 #include "CalibrationMath.h"
 #include "CalibrationTask.h"
 #include "../control/ControlTask.h"
+#include "../control/TendonCalibrationLut.h"
 #include "../hardware/HardwareMap.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
@@ -77,24 +78,24 @@ static const int16_t kWorkspaceTightLoadThreshold = 190;
 static const int32_t kWorkspaceReleaseCounts = 3200;
 static const int32_t kWorkspaceTargetToleranceCounts = 60;
 static const float kReverseMinFollowDeg = 12.0f;
-static const float kDualTendonFitSampleStepDeg = 5.0f;
-static const uint8_t kDualTendonRawSampleCapacity =
-    DUAL_TENDON_LUT_MAX_SAMPLES * 3;
+static const float kTendonFitSampleStepDeg = 5.0f;
+static const uint8_t kTendonRawSampleCapacity =
+    TENDON_LUT_MAX_SAMPLES * 3;
 static const uint8_t kAngleStallStableSamples = 2;
 static const int32_t kPreReleaseSyncTargetToleranceCounts = 40;
 static const int32_t kPreReleaseSyncSettleDeltaCounts = 20;
 static const uint8_t kPreReleaseSyncStableSamples = 2;
 
-struct DualTendonRawFitSample {
+struct TendonRawFitSample {
     int32_t encoder;
     int32_t primaryAbs;
     int32_t secondaryAbs;
 };
 
-struct DualTendonRawFitBuffer {
+struct TendonRawFitBuffer {
     uint8_t count;
     float nextTravelDeg;
-    DualTendonRawFitSample samples[kDualTendonRawSampleCapacity];
+    TendonRawFitSample samples[kTendonRawSampleCapacity];
 };
 
 enum DualWorkspacePose : uint8_t {
@@ -186,6 +187,56 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
                    (int)getMotorTendonShortenAbsSign(motorChannel),
                    (long)kCalibratedMotorAbsWindowCounts,
                    (long)kCalibratedMotorAbsMaxMarginCounts);
+}
+
+static void setSingleTendonLutAbsLimit(TaskSharedData_t* sharedData,
+                                      uint8_t motorChannel,
+                                      int32_t lutMinAbs,
+                                      int32_t lutMaxAbs,
+                                      int32_t lutTightAbs)
+{
+    if (!sharedData || motorChannel >= SERVO_TOTAL_NUM ||
+        !isMotorChannelValid(motorChannel)) {
+        return;
+    }
+
+    // 单腱工作区以 LUT 的实测包络为基础，并沿收绳方向保留原有的 500
+    // counts 紧端余量。这里只登记有效范围，不自动 LOCK，保持当前 UI
+    // 的“默认解锁、用户按 LOCK 后才硬钳位”语义。
+    lutMinAbs = clampToServoAbsRangeLocal(lutMinAbs);
+    lutMaxAbs = clampToServoAbsRangeLocal(lutMaxAbs);
+    if (lutMinAbs > lutMaxAbs) {
+        const int32_t tmp = lutMinAbs;
+        lutMinAbs = lutMaxAbs;
+        lutMaxAbs = tmp;
+    }
+    const int32_t tightWithMargin = clampToServoAbsRangeLocal(
+        motorApplyTendonDelta(motorChannel,
+                              lutTightAbs,
+                              kCalibratedMotorAbsMaxMarginCounts));
+    int32_t limitMin = lutMinAbs;
+    int32_t limitMax = lutMaxAbs;
+    if (tightWithMargin < limitMin) limitMin = tightWithMargin;
+    if (tightWithMargin > limitMax) limitMax = tightWithMargin;
+
+    const uint32_t bit = (uint32_t)(1UL << motorChannel);
+    {
+        SharedSafetyGuard guard;
+        sharedData->motor_abs_limit_min[motorChannel] = limitMin;
+        sharedData->motor_abs_limit_max[motorChannel] = limitMax;
+        sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, bit);
+        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap, ~bit);
+    }
+    FW_LOG_INFO_PRINTF(
+        "[AUTO CALIB] SINGLE_LUT_ABS_LIMIT M%02u lut=[%ld,%ld] "
+        "limit=[%ld,%ld] tight=%ld margin=%ld locked=0\r\n",
+        (unsigned)motorChannel,
+        (long)lutMinAbs,
+        (long)lutMaxAbs,
+        (long)limitMin,
+        (long)limitMax,
+        (long)lutTightAbs,
+        (long)kCalibratedMotorAbsMaxMarginCounts);
 }
 
 static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
@@ -693,7 +744,7 @@ static int32_t encoderForPositiveTravelResult(int32_t encoder, int8_t travelSign
     return calibrationWrapEncoderCount(kCalibrationEncoderModulo - encoder);
 }
 
-static void resetDualTendonRawFitBuffer(DualTendonRawFitBuffer* buffer)
+static void resetTendonRawFitBuffer(TendonRawFitBuffer* buffer)
 {
     if (!buffer) {
         return;
@@ -701,30 +752,30 @@ static void resetDualTendonRawFitBuffer(DualTendonRawFitBuffer* buffer)
     memset(buffer, 0, sizeof(*buffer));
 }
 
-static bool appendDualTendonRawFitSample(DualTendonRawFitBuffer* buffer,
+static bool appendTendonRawFitSample(TendonRawFitBuffer* buffer,
                                          int32_t encoder,
                                          int32_t primaryAbs,
                                          int32_t secondaryAbs)
 {
-    if (!buffer || buffer->count >= kDualTendonRawSampleCapacity) {
+    if (!buffer || buffer->count >= kTendonRawSampleCapacity) {
         return false;
     }
     if (buffer->count > 0) {
-        DualTendonRawFitSample& prev = buffer->samples[buffer->count - 1];
+        TendonRawFitSample& prev = buffer->samples[buffer->count - 1];
         if (prev.encoder == encoder &&
             prev.primaryAbs == primaryAbs &&
             prev.secondaryAbs == secondaryAbs) {
             return true;
         }
     }
-    DualTendonRawFitSample& sample = buffer->samples[buffer->count++];
+    TendonRawFitSample& sample = buffer->samples[buffer->count++];
     sample.encoder = calibrationWrapEncoderCount(encoder);
     sample.primaryAbs = primaryAbs;
     sample.secondaryAbs = secondaryAbs;
     return true;
 }
 
-static void maybeAppendDualTendonTravelFitSample(DualTendonRawFitBuffer* buffer,
+static void maybeAppendTendonTravelFitSample(TendonRawFitBuffer* buffer,
                                                  float travelDeg,
                                                  int32_t encoder,
                                                  int32_t primaryAbs,
@@ -737,12 +788,12 @@ static void maybeAppendDualTendonTravelFitSample(DualTendonRawFitBuffer* buffer,
         return;
     }
     while (travelDeg + 0.1f >= buffer->nextTravelDeg) {
-        buffer->nextTravelDeg += kDualTendonFitSampleStepDeg;
+        buffer->nextTravelDeg += kTendonFitSampleStepDeg;
     }
-    appendDualTendonRawFitSample(buffer, encoder, primaryAbs, secondaryAbs);
+    appendTendonRawFitSample(buffer, encoder, primaryAbs, secondaryAbs);
 }
 
-static float dualFitSampleAngleDeg(const JointCalibrationResult& result,
+static float tendonFitSampleAngleDeg(const JointCalibrationResult& result,
                                    int32_t encoder)
 {
     if (result.encoderSpan <= 0 || result.totalDeg <= 0.0f) {
@@ -755,7 +806,7 @@ static float dualFitSampleAngleDeg(const JointCalibrationResult& result,
         ((float)delta / (float)result.encoderSpan) * result.totalDeg;
 }
 
-static bool interpolateDualFitAbs(float targetDeg,
+static bool interpolateTendonFitAbs(float targetDeg,
                                   const float* sampleDeg,
                                   const int32_t* sampleAbs,
                                   uint8_t sampleCount,
@@ -786,20 +837,24 @@ static bool interpolateDualFitAbs(float targetDeg,
     return true;
 }
 
-static bool buildDualTendonLutFromRawSamples(JointCalibrationResult* result,
-                                             uint8_t primaryMotor,
-                                             uint8_t secondaryMotor,
-                                             const DualTendonRawFitBuffer& raw)
+// 单、双腱共用同一套固定两行存储：单电机只写第 0 行，第 1 行保持
+// motor=0xFF；双电机同时写两行。LUT 保存的是舵机 raw ABS counts。
+static bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
+                                         uint8_t primaryMotor,
+                                         uint8_t secondaryMotor,
+                                         uint8_t actuatorCount,
+                                         const TendonRawFitBuffer& raw)
 {
-    if (!result) {
+    if (!result || actuatorCount == 0 ||
+        actuatorCount > TENDON_LUT_ACTUATOR_COUNT) {
         return false;
     }
-    result->dualTendonLutValid = 0;
-    result->dualTendonLutCount = 0;
-    memset(result->dualTendonLutMotor, 0xFF, sizeof(result->dualTendonLutMotor));
-    memset(result->dualTendonLutMotorAbs, 0, sizeof(result->dualTendonLutMotorAbs));
-    result->dualTendonLutAngleStartDeg = result->startDeg;
-    result->dualTendonLutAngleStepDeg = kDualTendonFitSampleStepDeg;
+    result->tendonLutValid = 0;
+    result->tendonLutCount = 0;
+    memset(result->tendonLutMotor, 0xFF, sizeof(result->tendonLutMotor));
+    memset(result->tendonLutMotorAbs, 0, sizeof(result->tendonLutMotorAbs));
+    result->tendonLutAngleStartDeg = result->startDeg;
+    result->tendonLutAngleStepDeg = kTendonFitSampleStepDeg;
 
     if (!result->success || !result->scaled ||
         result->encoderSpan <= 0 ||
@@ -808,20 +863,20 @@ static bool buildDualTendonLutFromRawSamples(JointCalibrationResult* result,
         return false;
     }
 
-    float sampleDeg[kDualTendonRawSampleCapacity];
-    int32_t primaryAbs[kDualTendonRawSampleCapacity];
-    int32_t secondaryAbs[kDualTendonRawSampleCapacity];
+    float sampleDeg[kTendonRawSampleCapacity];
+    int32_t primaryAbs[kTendonRawSampleCapacity];
+    int32_t secondaryAbs[kTendonRawSampleCapacity];
     uint8_t sampleCount = 0;
 
     for (uint8_t i = 0; i < raw.count; i++) {
         const float angleDeg =
-            dualFitSampleAngleDeg(*result, raw.samples[i].encoder);
+            tendonFitSampleAngleDeg(*result, raw.samples[i].encoder);
         if (!isfinite(angleDeg) ||
-            angleDeg < result->startDeg - kDualTendonFitSampleStepDeg ||
-            angleDeg > result->tightDeg + kDualTendonFitSampleStepDeg) {
+            angleDeg < result->startDeg - kTendonFitSampleStepDeg ||
+            angleDeg > result->tightDeg + kTendonFitSampleStepDeg) {
             continue;
         }
-        if (sampleCount >= kDualTendonRawSampleCapacity) {
+        if (sampleCount >= kTendonRawSampleCapacity) {
             continue;
         }
 
@@ -845,46 +900,52 @@ static bool buildDualTendonLutFromRawSamples(JointCalibrationResult* result,
     }
 
     if (sampleCount < 3 ||
-        sampleDeg[sampleCount - 1] - sampleDeg[0] < kDualTendonFitSampleStepDeg * 2.0f ||
-        sampleDeg[0] > result->startDeg + kDualTendonFitSampleStepDeg ||
-        sampleDeg[sampleCount - 1] < result->tightDeg - kDualTendonFitSampleStepDeg) {
+        sampleDeg[sampleCount - 1] - sampleDeg[0] < kTendonFitSampleStepDeg * 2.0f ||
+        sampleDeg[0] > result->startDeg + kTendonFitSampleStepDeg ||
+        sampleDeg[sampleCount - 1] < result->tightDeg - kTendonFitSampleStepDeg) {
         return false;
     }
 
     uint8_t lutCount =
-        (uint8_t)ceilf(result->totalDeg / kDualTendonFitSampleStepDeg) + 1;
-    if (lutCount > DUAL_TENDON_LUT_MAX_SAMPLES) {
-        lutCount = DUAL_TENDON_LUT_MAX_SAMPLES;
+        (uint8_t)ceilf(result->totalDeg / kTendonFitSampleStepDeg) + 1;
+    if (lutCount > TENDON_LUT_MAX_SAMPLES) {
+        lutCount = TENDON_LUT_MAX_SAMPLES;
     }
     if (lutCount < 3) {
         return false;
     }
 
-    result->dualTendonLutMotor[0] = primaryMotor;
-    result->dualTendonLutMotor[1] = secondaryMotor;
-    result->dualTendonLutAngleStartDeg = result->startDeg;
-    result->dualTendonLutAngleStepDeg = kDualTendonFitSampleStepDeg;
+    result->tendonLutMotor[0] = primaryMotor;
+    if (actuatorCount > 1) {
+        result->tendonLutMotor[1] = secondaryMotor;
+    }
+    result->tendonLutAngleStartDeg = result->startDeg;
+    // 固定容量下仍强制包含两个机械端点。行程过长时步长会略大于
+    // 5 度，但不会因简单截断而丢失紧端样本。
+    result->tendonLutAngleStepDeg =
+        result->totalDeg / (float)(lutCount - 1);
     for (uint8_t i = 0; i < lutCount; i++) {
         const float targetDeg =
-            result->dualTendonLutAngleStartDeg +
-            result->dualTendonLutAngleStepDeg * (float)i;
-        if (!interpolateDualFitAbs(targetDeg,
-                                   sampleDeg,
-                                   primaryAbs,
-                                   sampleCount,
-                                   &result->dualTendonLutMotorAbs[0][i]) ||
-            !interpolateDualFitAbs(targetDeg,
-                                   sampleDeg,
-                                   secondaryAbs,
-                                   sampleCount,
-                                   &result->dualTendonLutMotorAbs[1][i])) {
-            result->dualTendonLutValid = 0;
-            result->dualTendonLutCount = 0;
+            result->tendonLutAngleStartDeg +
+            result->tendonLutAngleStepDeg * (float)i;
+        if (!interpolateTendonFitAbs(targetDeg,
+                                     sampleDeg,
+                                     primaryAbs,
+                                     sampleCount,
+                                     &result->tendonLutMotorAbs[0][i]) ||
+            (actuatorCount > 1 &&
+             !interpolateTendonFitAbs(targetDeg,
+                                      sampleDeg,
+                                      secondaryAbs,
+                                      sampleCount,
+                                      &result->tendonLutMotorAbs[1][i]))) {
+            result->tendonLutValid = 0;
+            result->tendonLutCount = 0;
             return false;
         }
     }
-    result->dualTendonLutCount = lutCount;
-    result->dualTendonLutValid = 1;
+    result->tendonLutCount = lutCount;
+    result->tendonLutValid = 1;
     return true;
 }
 
@@ -1009,19 +1070,6 @@ static bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                                         out);
 }
 
-static void applyDynamicAutoCalibrationConfig(JointCalibrationConfig* cfg,
-                                              const JointCalibrationResult& result)
-{
-    if (!cfg || !result.success || result.totalDeg <= 0.0f) {
-        return;
-    }
-
-    cfg->angleScope = result.totalDeg;
-    cfg->bottomReserved = -result.startDeg;
-    cfg->topReserved = 0.0f;
-    cfg->angleReserved = -result.startDeg;
-}
-
 static uint8_t buildAutoCalibrationJointListFromActiveScope(TaskSharedData_t* sharedData,
                                                             uint8_t* outJoints,
                                                             uint8_t maxCount)
@@ -1137,7 +1185,8 @@ struct JointCalibContext {
     uint8_t motorChannel;
     int32_t directionSign;
     int8_t encoderTravelSign;
-    JointCalibrationConfig motionCfg;
+    uint16_t commandSpeed;
+    uint8_t commandAcc;
     uint32_t stateBeginMs;
     uint32_t lastCommandMs;
     uint32_t lastTraceMs;
@@ -1167,6 +1216,7 @@ struct JointCalibContext {
     uint32_t preReleaseSyncWindowStartMs;
     uint8_t preReleaseSyncStableSamples;
     uint8_t releaseAngleStallStable;
+    TendonRawFitBuffer fitSamples;
 };
 
 static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
@@ -1200,10 +1250,13 @@ static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
     return true;
 }
 
+// 将当前非阻塞标定步骤的主电机目标写入批次；速度和加速度直接来自
+// AutoCalibrationParams，双执行器映射存在时同时追加副电机目标。
 static bool appendJointCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                                 uint8_t jointIndex,
                                                 int16_t primaryTarget,
-                                                const JointCalibrationConfig& cfg)
+                                                uint16_t speed,
+                                                uint8_t acc)
 {
     if (!batch || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
@@ -1213,8 +1266,8 @@ static bool appendJointCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                 jointMap[jointIndex].busIndex,
                                 jointMap[jointIndex].servoID,
                                 primaryTarget,
-                                cfg.tightenSpeed,
-                                cfg.tightenAcc)) {
+                                speed,
+                                acc)) {
         return false;
     }
 
@@ -1226,8 +1279,8 @@ static bool appendJointCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                     dualCfg.secondaryBusIndex,
                                     dualCfg.secondaryServoID,
                                     secondaryTarget,
-                                    cfg.tightenSpeed,
-                                    cfg.tightenAcc)) {
+                                    speed,
+                                    acc)) {
             batch->count = originalCount;
             return false;
         }
@@ -2959,7 +3012,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                        uint16_t* outLimitRaw,
                                        int32_t* outLimitEncoder,
                                        int16_t* outSecondaryLoad,
-                                       DualTendonRawFitBuffer* fitBuffer)
+                                       TendonRawFitBuffer* fitBuffer)
 {
     int32_t secondaryCommandAbs = secondaryStartAbs;
     int32_t primaryCommandAbs = primaryStartAbs;
@@ -3009,7 +3062,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
             calibrationWrapEncoderDelta(currentEncoder, startEncoder);
         const float totalAngleDeltaDeg =
             fabsf(calibrationEncoderCountToDeg(totalEncoderDelta));
-        maybeAppendDualTendonTravelFitSample(fitBuffer,
+        maybeAppendTendonTravelFitSample(fitBuffer,
                                              totalAngleDeltaDeg,
                                              currentEncoder,
                                              currentPrimaryAbs,
@@ -3333,8 +3386,8 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     uint16_t secondaryPreloadRaw = 0;
     int32_t secondaryPreloadEncoder = secondaryStartEncoder;
     int16_t secondaryPreloadLoad = 0;
-    DualTendonRawFitBuffer fitSamples;
-    resetDualTendonRawFitBuffer(&fitSamples);
+    TendonRawFitBuffer fitSamples;
+    resetTendonRawFitBuffer(&fitSamples);
     if (!findDualSecondaryPreloadPoint(sharedData,
                                        jointIndex,
                                        secondaryMotor,
@@ -3357,11 +3410,11 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                       jointIndex);
         return false;
     }
-    appendDualTendonRawFitSample(&fitSamples,
+    appendTendonRawFitSample(&fitSamples,
                                  exchangeStartEncoder,
                                  primary80Abs,
                                  secondaryPreloadAbs);
-    fitSamples.nextTravelDeg = kDualTendonFitSampleStepDeg;
+    fitSamples.nextTravelDeg = kTendonFitSampleStepDeg;
 
     if (!findDualExchangeLimitPoint(sharedData,
                                     jointIndex,
@@ -3382,7 +3435,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                     &fitSamples)) {
         return false;
     }
-    appendDualTendonRawFitSample(&fitSamples,
+    appendTendonRawFitSample(&fitSamples,
                                  neg3Encoder,
                                  primaryNeg3Abs,
                                  secondaryNeg3Abs);
@@ -3454,10 +3507,11 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         return false;
     }
     const bool lutBuilt =
-        buildDualTendonLutFromRawSamples(&result,
-                                         primaryMotor,
-                                         secondaryMotor,
-                                         fitSamples);
+        buildTendonLutFromRawSamples(&result,
+                                     primaryMotor,
+                                     secondaryMotor,
+                                     2,
+                                     fitSamples);
     EncoderUrdfMapResult readyMap = {};
     if (!mapManualScaledEncoderToUrdf(
             jointIndex,
@@ -3500,13 +3554,12 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   jointIndex,
                   lutBuilt ? 1U : 0U,
                   (unsigned)fitSamples.count,
-                  (unsigned)result.dualTendonLutCount,
-                  result.dualTendonLutAngleStartDeg,
-                  result.dualTendonLutAngleStepDeg,
+                  (unsigned)result.tendonLutCount,
+                  result.tendonLutAngleStartDeg,
+                  result.tendonLutAngleStepDeg,
                   primaryMotor,
                   secondaryMotor);
 
-    applyDynamicAutoCalibrationConfig(&g_jointCalibConfig[jointIndex], result);
     g_jointCalibResult[jointIndex] = result;
     updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
     g_encoderOffsetManual[jointIndex] = result.offset;
@@ -3524,8 +3577,6 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
             : secondaryNeg3Abs;
     setCalibratedMotorAbsLimit(sharedData, primaryMotor, primaryLimitTightAbs);
     setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryLimitTightAbs);
-    invalidateDualTendonReleaseAnchors((1UL << primaryMotor) |
-                                      (1UL << secondaryMotor));
 
     if (workspaceState) {
         // Cache the final two-tendon preload pose, not the earlier mechanical
@@ -3685,6 +3736,7 @@ static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
     ctx->state = AUTO_CALIB_STATE_INIT;
     ctx->jointIndex = jointIndex;
     ctx->motorChannel = 0xFF;
+    resetTendonRawFitBuffer(&ctx->fitSamples);
 }
 
 // ============================================================================
@@ -3724,11 +3776,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 return;
             }
 
-            JointCalibrationConfig& cfg = g_jointCalibConfig[ctx->jointIndex];
-            ctx->motionCfg = cfg;
-            ctx->motionCfg.tightenSpeed = params.servoSpeed;
-            ctx->motionCfg.tightenAcc = params.servoAcc;
-            ctx->motionCfg.settleMs = params.loopMs;
+            // 当前非阻塞标定状态机直接使用本轮 AutoCalibrationParams，
+            // 不再经过已经淘汰的逐关节静态参数表。
+            ctx->commandSpeed = params.servoSpeed;
+            ctx->commandAcc = params.servoAcc;
             ctx->bus = jointMap[ctx->jointIndex].busIndex;
             ctx->servoId = jointMap[ctx->jointIndex].servoID;
             const int motorChannel = findMotorChannel(ctx->bus, ctx->servoId);
@@ -3856,6 +3907,20 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 fabsf(calibrationEncoderCountToDeg(totalEncoderDelta));
             const bool loadHigh = hasLoad && loadMag >= params.tightLoadHigh;
 
+            if (ctx->startFound) {
+                // 单电机从紧端向松端运动期间，约每 5 度保存一次磁编位置与
+                // 舵机 raw ABS，供标定结束后重采样成等间隔 Tendon LUT。
+                const int32_t releaseDelta =
+                    calibrationWrapEncoderDelta(currentEncoder, ctx->startEncoder);
+                const float releaseTravelDeg =
+                    fabsf(calibrationEncoderCountToDeg(releaseDelta));
+                maybeAppendTendonTravelFitSample(&ctx->fitSamples,
+                                                 releaseTravelDeg,
+                                                 currentEncoder,
+                                                 currentAbs,
+                                                 0);
+            }
+
             if ((nowMs - ctx->lastTraceMs) >= params.traceMs) {
                 ctx->lastTraceMs = nowMs;
                 FW_LOG_INFO_PRINTF("[AUTO CALIB] TRACE J%02u phase=%s cmd=%ld abs=%ld raw=%u oriented=%ld dCount=%ld totalAbs=%ld totalDeg=%.3f load=%d startFound=%u elapsed=%lu\r\n",
@@ -3931,7 +3996,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     if (!appendJointCalibrationTargetToBatch(batch,
                                                              ctx->jointIndex,
                                                              clampToServoPosLocal(ctx->preReleaseSyncTargetAbs),
-                                                             ctx->motionCfg)) {
+                                                             ctx->commandSpeed,
+                                                             ctx->commandAcc)) {
                         failAutoCalibContextWithDiag(ctx,
                                                      sharedData,
                                                      "pre-release sync target append failed",
@@ -3978,7 +4044,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                             appendJointCalibrationTargetToBatch(batch,
                                                                 ctx->jointIndex,
                                                                 clampToServoPosLocal(ctx->commandAbs),
-                                                                ctx->motionCfg);
+                                                                ctx->commandSpeed,
+                                                                ctx->commandAcc);
                             failAutoCalibContextWithDiag(ctx,
                                                          sharedData,
                                                          "find max command outside +/-30719",
@@ -3994,7 +4061,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         if (!appendJointCalibrationTargetToBatch(batch,
                                                                  ctx->jointIndex,
                                                                  clampToServoPosLocal(ctx->commandAbs),
-                                                                 ctx->motionCfg)) {
+                                                                 ctx->commandSpeed,
+                                                                 ctx->commandAcc)) {
                             failAutoCalibContextWithDiag(ctx,
                                                          sharedData,
                                                          "find max target append failed",
@@ -4026,7 +4094,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         appendJointCalibrationTargetToBatch(batch,
                                                             ctx->jointIndex,
                                                             clampToServoPosLocal(ctx->commandAbs),
-                                                            ctx->motionCfg);
+                                                            ctx->commandSpeed,
+                                                            ctx->commandAcc);
                         failAutoCalibContextWithDiag(ctx,
                                                      sharedData,
                                                      "release command outside +/-30719",
@@ -4042,7 +4111,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     if (!appendJointCalibrationTargetToBatch(batch,
                                                              ctx->jointIndex,
                                                              clampToServoPosLocal(ctx->commandAbs),
-                                                             ctx->motionCfg)) {
+                                                             ctx->commandSpeed,
+                                                             ctx->commandAcc)) {
                         failAutoCalibContextWithDiag(ctx,
                                                      sharedData,
                                                      "release target append failed",
@@ -4152,6 +4222,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                               tightServoAbs,
                                               kAutoServoZeroPullCounts);
 
+                    // 强制记录松端，确保 LUT 同时包含两个机械端点。
+                    appendTendonRawFitSample(&ctx->fitSamples,
+                                             tightEncoder,
+                                             tightServoAbs,
+                                             0);
+
                     JointCalibrationResult result;
                     if (!buildAutoZeroTightCalibrationResult(ctx->jointIndex,
                                                              resultTautEncoder,
@@ -4171,6 +4247,44 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                      resultZeroEncoder,
                                                      resultTightEncoder,
                                                      0);
+                        return;
+                    }
+                    const bool lutBuilt =
+                        buildTendonLutFromRawSamples(&result,
+                                                     ctx->motorChannel,
+                                                     0xFF,
+                                                     1,
+                                                     ctx->fitSamples);
+                    if (!lutBuilt) {
+                        failAutoCalibContextWithDiag(ctx,
+                                                     sharedData,
+                                                     "single tendon LUT build failed",
+                                                     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
+                                                     CALIB_DIAG_PHASE_RELEASE,
+                                                     ctx->motorChannel,
+                                                     ctx->fitSamples.count,
+                                                     result.encoderSpan,
+                                                     result.tendonLutCount,
+                                                     0);
+                        return;
+                    }
+                    int32_t lutMinAbs = 0;
+                    int32_t lutMaxAbs = 0;
+                    if (result.tendonLutMotor[0] != ctx->motorChannel ||
+                        !tendonCalibrationMotorAbsRange(result,
+                                                        0,
+                                                        &lutMinAbs,
+                                                        &lutMaxAbs)) {
+                        failAutoCalibContextWithDiag(ctx,
+                                                     sharedData,
+                                                     "single tendon LUT range invalid",
+                                                     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
+                                                     CALIB_DIAG_PHASE_RELEASE,
+                                                     ctx->motorChannel,
+                                                     result.tendonLutCount,
+                                                     result.tendonLutMotor[0],
+                                                     lutMinAbs,
+                                                     lutMaxAbs);
                         return;
                     }
                     if (result.encoderSpan >= kAutoCalibrationRejectNearFullWrapSpan) {
@@ -4200,8 +4314,17 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   (long)resultTautEncoder,
                                   (long)resultZeroEncoder,
                                   (long)resultTightEncoder);
+                    FW_LOG_INFO_PRINTF(
+                        "[AUTO CALIB] SINGLE_LUT J%02u built=%u rawSamples=%u "
+                        "lutSamples=%u startDeg=%.3f stepDeg=%.3f motor=M%02u\r\n",
+                        ctx->jointIndex,
+                        lutBuilt ? 1U : 0U,
+                        (unsigned)ctx->fitSamples.count,
+                        (unsigned)result.tendonLutCount,
+                        result.tendonLutAngleStartDeg,
+                        result.tendonLutAngleStepDeg,
+                        ctx->motorChannel);
 
-                    applyDynamicAutoCalibrationConfig(&g_jointCalibConfig[ctx->jointIndex], result);
                     g_jointCalibResult[ctx->jointIndex] = result;
                     updateCalibrationAssemblyWarning(sharedData,
                                                      ctx->jointIndex,
@@ -4214,9 +4337,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                          ctx->jointIndex,
                                          result.currentMinDeg);
                     clearJointServoMultiTurnUnknown(sharedData, ctx->jointIndex);
-                    setCalibratedMotorAbsLimit(sharedData,
-                                               ctx->motorChannel,
-                                               result.tightServoAbs);
+                    setSingleTendonLutAbsLimit(
+                        sharedData,
+                        ctx->motorChannel,
+                        lutMinAbs,
+                        lutMaxAbs,
+                        result.tendonLutMotorAbs[0][result.tendonLutCount - 1]);
                     ctx->state = AUTO_CALIB_STATE_DONE;
                     ctx->stateBeginMs = nowMs;
                     ctx->lastTraceMs = nowMs;
@@ -4262,7 +4388,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                             batch,
                             ctx->jointIndex,
                             clampToServoPosLocal(ctx->targetAbs),
-                            ctx->motionCfg)) {
+                            ctx->commandSpeed,
+                            ctx->commandAcc)) {
                         failAutoCalibContextWithDiag(
                             ctx,
                             sharedData,
@@ -4287,8 +4414,14 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
         case AUTO_CALIB_STATE_PRE_RELEASE_SYNC:
         {
+            int32_t currentEncoder = 0;
             int32_t currentAbs = 0;
-            if (!readLatestMotorServoAbs(sharedData, ctx->motorChannel, &currentAbs)) {
+            if (!readLatestEncoderOriented(sharedData,
+                                           ctx->jointIndex,
+                                           &currentEncoder) ||
+                !readLatestMotorServoAbs(sharedData,
+                                         ctx->motorChannel,
+                                         &currentAbs)) {
                 failAutoCalibContextWithDiag(ctx,
                                              sharedData,
                                              "pre-release sync lost servo feedback",
@@ -4316,7 +4449,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             if (!appendJointCalibrationTargetToBatch(batch,
                                                      ctx->jointIndex,
                                                      clampToServoPosLocal(ctx->preReleaseSyncTargetAbs),
-                                                     ctx->motionCfg)) {
+                                                     ctx->commandSpeed,
+                                                     ctx->commandAcc)) {
                 failAutoCalibContextWithDiag(ctx,
                                              sharedData,
                                              "pre-release sync target append failed",
@@ -4372,6 +4506,16 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             ctx->windowStartMs = nowMs;
             ctx->lastCommandMs = nowMs;
             ctx->releaseAngleStallStable = 0;
+            // 以已经停稳的紧端作为单电机 LUT 第一个样本。
+            // 后续释放过程按磁编行程采点，不按命令位置猜测绳长关系。
+            ctx->startEncoder = currentEncoder;
+            ctx->startServoAbs = currentAbs;
+            resetTendonRawFitBuffer(&ctx->fitSamples);
+            appendTendonRawFitSample(&ctx->fitSamples,
+                                     currentEncoder,
+                                     currentAbs,
+                                     0);
+            ctx->fitSamples.nextTravelDeg = kTendonFitSampleStepDeg;
             ctx->state = AUTO_CALIB_STATE_TIGHTEN;
             FW_LOG_INFO_PRINTF("[AUTO CALIB] PRE_RELEASE_SYNC_READY J%02u releaseStartAbs=%ld\r\n",
                           ctx->jointIndex,
