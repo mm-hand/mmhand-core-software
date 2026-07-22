@@ -132,7 +132,7 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
     assert "sync_motor" not in events
 
 
-def test_joint_enable_rearms_ros2_without_an_extra_button():
+def test_joint_enable_does_not_arm_raw_ik_output():
     events = []
     backend = SimpleNamespace(
         set_control_mode=lambda mode: events.append(("mode", mode)),
@@ -164,8 +164,49 @@ def test_joint_enable_rearms_ros2_without_an_extra_button():
 
     ControlPanel.start_controller(panel)
 
-    assert ("ros2_arm", True, "UI_ENABLE") in events
+    assert not any(event[0] == "ros2_arm" for event in events if isinstance(event, tuple))
     assert "start" in events
+
+
+class _ToggleButton:
+    def __init__(self):
+        self.checked = False
+        self.text = ""
+
+    def blockSignals(self, _blocked):
+        pass
+
+    def setChecked(self, checked):
+        self.checked = bool(checked)
+
+    def setText(self, text):
+        self.text = str(text)
+
+
+def test_raw_ik_button_is_the_only_ui_path_that_arms_teleoperation():
+    events = []
+    state = {"enabled": False}
+
+    def set_raw_ik(enabled):
+        state["enabled"] = bool(enabled)
+        events.append(("raw_ik", bool(enabled)))
+        return True, "RAW IK output enabled" if enabled else "RAW IK output disabled"
+
+    panel = SimpleNamespace(
+        backend=SimpleNamespace(
+            set_raw_ik_output_enabled=set_raw_ik,
+            raw_ik_output_enabled=lambda: state["enabled"],
+        ),
+        raw_ik_enable_btn=_ToggleButton(),
+        context=SimpleNamespace(emit_action=lambda text: events.append(("action", text))),
+        _set_status=lambda text: events.append(("status", text)),
+    )
+
+    ControlPanel.toggle_raw_ik_output(panel, True)
+
+    assert ("raw_ik", True) in events
+    assert panel.raw_ik_enable_btn.checked
+    assert panel.raw_ik_enable_btn.text == "RAW IK ON"
 
 
 def test_motor_enable_stages_direct_hold_without_extra_start_event():

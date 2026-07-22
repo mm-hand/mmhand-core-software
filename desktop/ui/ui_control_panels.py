@@ -435,6 +435,12 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn = QtWidgets.QPushButton("ENABLE")
         self.stop_btn = QtWidgets.QPushButton("E-STOP")
         self.pause_btn = QtWidgets.QPushButton("Pause")
+        self.raw_ik_enable_btn = QtWidgets.QPushButton("RAW IK ENABLE")
+        self.raw_ik_enable_btn.setCheckable(True)
+        self.raw_ik_enable_btn.setChecked(False)
+        self.raw_ik_enable_btn.setToolTip(
+            "Separately authorize ROS2 raw IK/joint target frames; ordinary ENABLE does not arm teleoperation"
+        )
         self.reset_btn = QtWidgets.QPushButton("Clear Fault")
         self.reset_btn.setToolTip("Clear latched protection/fault flags, clear command state, and return firmware to UNCONTROLLABLE")
         self.calib_btn = QtWidgets.QPushButton("Calibrate")
@@ -447,6 +453,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn.setMinimumHeight(46)
         self.stop_btn.setMinimumHeight(46)
         self.pause_btn.setMinimumHeight(46)
+        self.raw_ik_enable_btn.setMinimumHeight(46)
         for btn in (
             self.calib_btn,
             self.reset_btn,
@@ -457,6 +464,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn.setStyleSheet("font-weight:700;background:#2e7d32;color:white;")
         self.stop_btn.setStyleSheet("font-weight:700;background:#c62828;color:white;")
         self.pause_btn.setStyleSheet("font-weight:700;background:#f9a825;color:black;")
+        self.raw_ik_enable_btn.setStyleSheet("font-weight:700;background:#455a64;color:white;")
         self.nvs_control_btn.setStyleSheet("font-weight:700;background:#e8f5e9;color:#1b5e20;")
 
         def centered_action_cell(button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
@@ -471,13 +479,14 @@ class ControlPanel(QtWidgets.QWidget):
         dev_layout.addWidget(centered_action_cell(self.enable_btn), 0, 0, 2, 1)
         dev_layout.addWidget(centered_action_cell(self.stop_btn), 0, 1, 2, 1)
         dev_layout.addWidget(centered_action_cell(self.pause_btn), 0, 2, 2, 1)
-        dev_layout.addWidget(self.calib_btn, 0, 3)
-        dev_layout.addWidget(self.reset_btn, 0, 4)
-        dev_layout.addWidget(self.rope_init_btn, 1, 3)
-        dev_layout.addWidget(self.nvs_control_btn, 1, 4)
+        dev_layout.addWidget(centered_action_cell(self.raw_ik_enable_btn), 0, 3, 2, 1)
+        dev_layout.addWidget(self.calib_btn, 0, 4)
+        dev_layout.addWidget(self.reset_btn, 0, 5)
+        dev_layout.addWidget(self.rope_init_btn, 1, 4)
+        dev_layout.addWidget(self.nvs_control_btn, 1, 5)
         dev_layout.setRowStretch(0, 1)
         dev_layout.setRowStretch(1, 1)
-        for col in range(5):
+        for col in range(6):
             dev_layout.setColumnStretch(col, 1)
         layout.addWidget(device)
         self._update_connection_lights()
@@ -485,6 +494,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.enable_btn.clicked.connect(lambda _checked=False: self.start_controller())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_controller())
         self.pause_btn.clicked.connect(lambda _checked=False: self.pause_controller())
+        self.raw_ik_enable_btn.toggled.connect(self.toggle_raw_ik_output)
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_with_confirm())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate())
         self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_controller())
@@ -1646,6 +1656,29 @@ class ControlPanel(QtWidgets.QWidget):
                 mode != "device_check" and
                 (mode == "motor" or joint_workspace_ready)
             )
+        if getattr(self, "raw_ik_enable_btn", None) is not None:
+            # UI 必须显示 backend 的真实授权状态。E-STOP、Pause、断线或
+            # active scope 改变后 backend 会撤权，按钮会在下一次刷新时复位。
+            raw_ik_enabled = bool(self.backend.raw_ik_output_enabled())
+            self.raw_ik_enable_btn.blockSignals(True)
+            self.raw_ik_enable_btn.setChecked(raw_ik_enabled)
+            self.raw_ik_enable_btn.setText(
+                "RAW IK ON" if raw_ik_enabled else "RAW IK ENABLE"
+            )
+            self.raw_ik_enable_btn.blockSignals(False)
+            self.raw_ik_enable_btn.setVisible(bool(self.context.ros2_enabled))
+            self.raw_ik_enable_btn.setEnabled(
+                bool(self.context.ros2_enabled) and
+                mode != "device_check" and
+                (
+                    raw_ik_enabled or
+                    (
+                        bool(self.context.is_comm_connected()) and
+                        bool(self.backend.is_started()) and
+                        joint_workspace_ready
+                    )
+                )
+            )
         if getattr(self, "mid_calib_btn", None) is not None:
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
         has_active_motor = (self._active_motor_mask_from_ui() & VALID_MOTOR_MASK) != 0
@@ -2082,19 +2115,6 @@ class ControlPanel(QtWidgets.QWidget):
             return
         self._set_status(f"{source} sent: {detail}")
 
-    def _arm_ros2_output_after_enable(self) -> str:
-        """复用现有 ENABLE 授权 ROS2，不增加独立遥操使能按钮。"""
-        if not bool(getattr(self.context, "ros2_enabled", False)):
-            return ""
-        setter = getattr(self.backend, "set_ros2_output_armed", None)
-        if not callable(setter):
-            return "ROS2 gate unavailable"
-        ok, message = setter(True, reason="UI_ENABLE")
-        self.context.emit_action(
-            "ROS2 output armed by ENABLE" if ok else f"ROS2 arm blocked: {message}"
-        )
-        return str(message or "")
-
     def start_controller(self) -> None:
         if self._app_mode == "manual" and self._manual_submode() == "device_check":
             self._set_status("ENABLE blocked: switch to Joint or Motor Channels after Device Check")
@@ -2120,10 +2140,8 @@ class ControlPanel(QtWidgets.QWidget):
         if state is not None and getattr(state, "system_state", None) == SYSTEM_STATE_PAUSED:
             self._estop_latched = False
             self.backend.start()
-            ros2_note = ControlPanel._arm_ros2_output_after_enable(self)
             self.context.emit_action("Resume")
-            status = "Resume requested: continuing paused target"
-            self._set_status(f"{status}; {ros2_note}" if ros2_note else status)
+            self._set_status("Resume requested: continuing paused target")
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
@@ -2138,10 +2156,8 @@ class ControlPanel(QtWidgets.QWidget):
             self.backend.set_pid_control(True)
             self._estop_latched = False
             self.backend.start()
-            ros2_note = ControlPanel._arm_ros2_output_after_enable(self)
             self.context.emit_action("Start joint feedback controller")
-            status = "Enable requested: waiting for joint READY"
-            self._set_status(f"{status}; {ros2_note}" if ros2_note else status)
+            self._set_status("Enable requested: waiting for joint READY")
             return
 
         if not self._sync_motor_targets_to_feedback():
@@ -2156,6 +2172,19 @@ class ControlPanel(QtWidgets.QWidget):
         # 绝对位置直控命令自带 RUN_DIRECT 请求，不再叠加 START 事件。
         self.context.emit_action("Start direct motor hold from current feedback")
         self._set_status("Direct motor hold requested")
+
+    def toggle_raw_ik_output(self, enabled: bool) -> None:
+        """只切换遥操授权，不改变普通负反馈 Enable 或当前控制目标。"""
+        ok, message = self.backend.set_raw_ik_output_enabled(bool(enabled))
+        actual = bool(self.backend.raw_ik_output_enabled())
+        self.raw_ik_enable_btn.blockSignals(True)
+        self.raw_ik_enable_btn.setChecked(actual)
+        self.raw_ik_enable_btn.setText("RAW IK ON" if actual else "RAW IK ENABLE")
+        self.raw_ik_enable_btn.blockSignals(False)
+        self.context.emit_action(
+            "RAW IK output enabled" if actual else "RAW IK output disabled"
+        )
+        self._set_status(message if ok else f"RAW IK enable blocked: {message}")
 
     def stop_controller(self) -> None:
         if self._estop_in_progress:

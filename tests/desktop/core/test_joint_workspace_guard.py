@@ -209,6 +209,35 @@ def _arm_ros2_backend(backend):
     assert ok, message
 
 
+def test_raw_ik_semantic_gate_reuses_ros2_authorization():
+    state = _ready_state(current_min=12.5)
+    backend = HandBackend(controller=_Controller(state))
+    backend.is_comm_connected = lambda: True
+    backend.is_started = lambda: True
+
+    ok, message = backend.set_raw_ik_output_enabled(True)
+    assert ok, message
+    assert backend.raw_ik_output_enabled()
+    assert backend.ros2_output_armed()
+
+    ok, message = backend.set_raw_ik_output_enabled(False)
+    assert ok, message
+    assert not backend.raw_ik_output_enabled()
+
+
+def test_raw_ik_gate_rejects_prearming_before_ordinary_enable():
+    state = _ready_state(current_min=12.5)
+    backend = HandBackend(controller=_Controller(state))
+    backend.is_comm_connected = lambda: True
+    backend.is_started = lambda: False
+
+    ok, message = backend.set_raw_ik_output_enabled(True)
+
+    assert not ok
+    assert "press ENABLE first" in message
+    assert not backend.raw_ik_output_enabled()
+
+
 def test_ros2_frame_requires_existing_enable_authorization():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)

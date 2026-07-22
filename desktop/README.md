@@ -128,6 +128,10 @@ python -m desktop cli --port COMx --ros2 --ros-topic /mmhand/joint_targets
 python -m desktop cli --port COMx --ros2 --auto-start
 ```
 
+`--auto-start` 只启动普通控制器，不会自动放行遥操。GUI 中还需点击
+`RAW IK ENABLE`；CLI 中按 `i` 开启、按 `o` 关闭。ROS2 节点在未授权时
+仍持续接收最新角度，但不会向 P4 下发运动命令。
+
 ROS2 消息约定：
 
 - topic 默认值：`/mmhand/joint_targets`

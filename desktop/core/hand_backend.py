@@ -473,8 +473,9 @@ class HandBackend:
     def set_ros2_output_armed(self, armed: bool, *, reason: str = "") -> Tuple[bool, str]:
         """授权或撤销两条 ROS2 21 关节角输入链路。
 
-        授权只表达用户通过现有 ENABLE 允许遥操；P4 在线、READY 和作用域
-        一致性仍由每一帧发送前核验。E-STOP/Pause/断连会主动撤销授权。
+        该授权只由独立 RAW IK Enable 或 CLI 的独立按键建立，普通控制 ENABLE
+        不得隐式放行遥操。P4 在线、READY 和作用域一致性仍由每一帧发送前
+        核验；E-STOP、Pause、断连和作用域切换会主动撤销授权。
         """
         with self._ros2_output_lock:
             return self._set_ros2_output_armed_locked(bool(armed), reason=reason)
@@ -482,6 +483,26 @@ class HandBackend:
     def ros2_output_armed(self) -> bool:
         with self._ros2_output_lock:
             return bool(self._ros2_output_armed)
+
+    def set_raw_ik_output_enabled(self, enabled: bool) -> Tuple[bool, str]:
+        """响应独立 RAW IK 开关，并复用线程安全的 ROS2 输出授权门。"""
+        # UI 灰显不是安全门。CLI 或其他调用方也必须先启动普通控制器，
+        # 防止提前预授权后某次普通 START 意外放行持续到来的遥操帧。
+        if enabled and not self.is_started():
+            return False, "ordinary controller is not enabled; press ENABLE first"
+        ok, message = self.set_ros2_output_armed(
+            bool(enabled),
+            reason="RAW_IK_ENABLE" if enabled else "RAW_IK_DISABLE",
+        )
+        if enabled and ok:
+            return True, "RAW IK output enabled; waiting for the next ROS2 frame"
+        if not enabled and ok:
+            return True, "RAW IK output disabled"
+        return ok, message
+
+    def raw_ik_output_enabled(self) -> bool:
+        """返回当前 RAW IK 用户授权；运行门禁仍在每一帧发送前复核。"""
+        return self.ros2_output_armed()
 
     def _log_ros2_drop_locked(self, reason: str) -> None:
         """同类 ROS2 丢帧日志每秒最多记录一次，避免 100 Hz 输入刷屏。"""

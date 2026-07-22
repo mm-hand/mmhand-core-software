@@ -25,6 +25,10 @@ class FakeBackend:
         self.calls.append(("calibrate",))
         return True
 
+    def set_raw_ik_output_enabled(self, enabled: bool):
+        self.calls.append(("raw_ik", bool(enabled)))
+        return True, "RAW IK output enabled" if enabled else "RAW IK output disabled"
+
     def shutdown(self) -> None:
         self.calls.append(("shutdown",))
 
@@ -67,3 +71,34 @@ def test_cli_monitor_drives_backend_commands_only() -> None:
         ("calibrate",),
         ("shutdown",),
     ]
+
+
+class _FakeRosBridge:
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+def test_cli_start_and_raw_ik_authorization_are_separate(monkeypatch) -> None:
+    backend = FakeBackend()
+    monkeypatch.setattr(
+        "desktop.app.cli_monitor._make_ros2_bridge",
+        lambda *_args, **_kwargs: _FakeRosBridge(),
+    )
+
+    code = run_cli_monitor(
+        port="COM9",
+        no_plot=True,
+        ros2_enabled=True,
+        backend=backend,
+        key_reader_factory=lambda: FakeKeyReader(["s", "i", "o", "q"]),
+        render=False,
+        sleep_s=0.0,
+    )
+
+    assert code == 0
+    assert backend.calls.count(("start",)) == 1
+    assert ("raw_ik", True) in backend.calls
+    assert ("raw_ik", False) in backend.calls

@@ -190,13 +190,10 @@ def run_ui(
             bridge.start()
             print(f"ROS2 {ros2_input} input enabled on {ros_topic}")
             if auto_start:
-                # --auto-start 只在进程启动时授权一次；E-STOP 撤权后，持续
-                # 到来的 ROS2 帧不能再次授权，必须由用户点击现有 ENABLE。
+                # --auto-start 只启动普通控制器，不授予遥操输出权限。
+                # ROS2 可继续接收和刷新最新帧，用户必须显式点击 RAW IK ENABLE。
                 backend.start()
-                ok, message = backend.set_ros2_output_armed(
-                    True, reason="UI_AUTO_START"
-                )
-                print(message if ok else f"ROS2 auto-start blocked: {message}")
+                print("Controller auto-started; RAW IK output remains disabled")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             bridge = None

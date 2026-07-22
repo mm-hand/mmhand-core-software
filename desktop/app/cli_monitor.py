@@ -207,7 +207,10 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
             f"loop1={float(jd_l1[idx]):8.3f} cmd={cmd_text}"
         )
     print("-" * 88)
-    print("Controls: 's' start, 'x' stop, 'r' reset, 'c' calibrate, 'q' quit.")
+    print(
+        "Controls: 's' start, 'i' RAW IK enable, 'o' RAW IK disable, "
+        "'x' stop, 'r' reset, 'c' calibrate, 'q' quit."
+    )
     print(f"Calibration: {_render_calib_status(str(snap['calib_status']))}")
 
 
@@ -364,11 +367,7 @@ def run_cli_monitor(
             ros_bridge.start()
             ros_status = f"ON {ros2_input} {ros_topic}"
             if auto_start:
-                ok, message = backend.set_ros2_output_armed(
-                    True, reason="CLI_AUTO_START"
-                )
-                if not ok:
-                    print(f"ROS2 auto-start blocked: {message}")
+                print("Controller auto-started; RAW IK output remains disabled")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             ros_bridge = None
@@ -388,12 +387,13 @@ def run_cli_monitor(
                     break
                 if key == "s":
                     backend.start()
-                    if ros_bridge is not None:
-                        ok, message = backend.set_ros2_output_armed(
-                            True, reason="CLI_START_KEY"
-                        )
-                        if not ok:
-                            print(f"ROS2 enable blocked: {message}")
+                if key == "i" and ros_bridge is not None:
+                    # CLI 与 GUI 使用同一独立授权门；普通 start 不得放行遥操。
+                    ok, message = backend.set_raw_ik_output_enabled(True)
+                    print(message if ok else f"RAW IK enable blocked: {message}")
+                if key == "o" and ros_bridge is not None:
+                    _, message = backend.set_raw_ik_output_enabled(False)
+                    print(message)
                 if key == "x":
                     backend.stop()
                 if key == "r":
