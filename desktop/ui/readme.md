@@ -17,7 +17,7 @@ python -m desktop ui
 ## Components
 
 - `ui_control_panels.py`: Qt-native control surface with channel tables, device controls, Teleop controls, and the Replay CSV view.
-- `ui_replay_view.py`: imports one teleoperation CSV, previews its 21-joint ranges, and exposes a single Send/Stop control.
+- `ui_replay_view.py`: imports an action-command CSV or joint-current CSV, shows live 21-joint Current/Replay Target/Error values, and exposes a single Send/Stop control.
 - `ui_pose_view.py`: `pyqtgraph.opengl.GLViewWidget` URDF skeleton view. It reuses line/scatter items for updates.
 - `ui_tactile_view.py`: `pyqtgraph.ImageItem` tactile heatmap with latest-only background matrix preparation and throttled refresh.
 - `ui_camera_view.py`: OpenCV capture thread with main-thread `QImage/QPixmap` display.

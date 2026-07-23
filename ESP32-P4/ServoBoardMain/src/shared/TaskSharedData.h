@@ -41,6 +41,7 @@
 #define MOTOR_DIRECT_SOURCE_SWEEP 2
 #define MOTOR_DIRECT_SOURCE_ABSOLUTE 3
 
+// 状态机事件编号属于固件内部 ABI；完成事件通过 SystemEvent_t.token 绑定命令代次。
 #define SYSTEM_EVENT_START 1
 #define SYSTEM_EVENT_STOP 2
 #define SYSTEM_EVENT_RESET 3
@@ -67,6 +68,9 @@
 #define MULTITURN_NVS_SAVE_REASON_OFFLINE_MOVE 6
 #define MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE 7
 
+// 顶层系统状态：
+// UNCONTROLLABLE: 输出关闭/硬件门禁未满足；IDLE: 仅直控条件满足；
+// READY: 反馈门禁满足；RECOVERY_REQUIRED: 可通过 Rope Init 回到 READY。
 #define SYSTEM_STATE_UNCONTROLLABLE 0
 #define SYSTEM_STATE_IDLE 1
 #define SYSTEM_STATE_RUN_FEEDBACK 2
@@ -118,6 +122,7 @@
 #define FEEDBACK_REJECT_MODE_SWITCH 6
 #define FEEDBACK_REJECT_EVENT_QUEUE 7
 
+// 上行故障位图。bit 1 保留旧协议编号，当前固件不再产生 J16 专用假故障。
 #define SYSTEM_FAULT_CAN_OFFLINE      (1UL << 0)
 #define SYSTEM_FAULT_JOINT16_DUAL     (1UL << 1)
 #define SYSTEM_FAULT_OVERLOAD         (1UL << 2)
@@ -179,7 +184,6 @@
 #define TASK_AUTO_CALIB_PRIORITY 2
 #define TASK_MONITOR_PRIORITY 1
 #define TASK_NVS_PERSIST_PRIORITY 1
-#define TASK_SOLVER_PRIORITY TASK_CONTROL_PRIORITY
 
 // FreeRTOS task stack sizes.
 #define UPPER_COMM_TASK_STACK_SIZE 8192
@@ -190,7 +194,6 @@
 #define AUTO_CALIB_TASK_STACK_SIZE 8192
 #define TASK_MONITOR_STACK_SIZE 4096
 #define NVS_PERSIST_TASK_STACK_SIZE 4096
-#define SOLVER_TASK_STACK_SIZE CONTROL_TASK_STACK_SIZE
 
 #define SERVO_TARGET_BATCH_MAX SERVO_TOTAL_NUM
 
@@ -221,12 +224,6 @@ extern MotorMapItem motorMap[SERVO_TOTAL_NUM];
 extern JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM];
 
 typedef struct {
-    uint8_t cmdID;
-    uint8_t payload[8];
-    uint8_t len;
-} RemoteCommand_t;
-
-typedef struct {
     uint16_t encoderValues[ENCODER_TOTAL_NUM];
     uint8_t errorFlags[ENCODER_TOTAL_NUM];
     uint32_t errorBitmap;
@@ -241,14 +238,6 @@ typedef struct {
     uint32_t timestamp;
     bool isValid;
 } MappedAngleData_t;
-
-typedef struct {
-    uint8_t cmdType;
-    uint8_t servoId;
-    int16_t position;
-    uint16_t speed;
-    uint8_t busIndex;
-} ServoCommand_t;
 
 typedef struct {
     uint8_t event;
@@ -389,10 +378,9 @@ typedef struct {
 } MultiTurnNvsSaveResult_t;
 
 typedef struct {
-    QueueHandle_t cmdQueue;
-    QueueHandle_t statusQueue;
+    // 状态机事件队列：保存顺序事件；E-STOP 另走 token，不依赖该队列容量。
     QueueHandle_t stateEventQueue;
-    QueueHandle_t canTxQueue;
+    // 以下容量为 1 的队列均表示最新快照，生产者使用 xQueueOverwrite。
     QueueHandle_t canRxQueue;
     QueueHandle_t servoTargetQueue;
     QueueHandle_t servoFeedbackQueue;
@@ -401,13 +389,15 @@ typedef struct {
     QueueHandle_t servoTelemetryQueue;
     QueueHandle_t servoTelemetrySnapshotQueue;
     QueueHandle_t mappedAngleQueue;
+    // 调试与触觉允许保留少量待发送帧，由 UpperCommTask 顺序消费。
     QueueHandle_t jointDebugQueue;
     QueueHandle_t tactileQueue;
+    // 多圈 Flash 写入使用独立请求/结果队列，避免阻塞舵机通信任务。
     QueueHandle_t multiturnNvsSaveQueue;
     QueueHandle_t multiturnNvsResultQueue;
 
     float targetAngles[ENCODER_TOTAL_NUM];
-    SemaphoreHandle_t targetAnglesMutex;
+    // 所有控制命令、目标角和直控暂存区共用这一把锁，避免读到跨帧组合数据。
     SemaphoreHandle_t commandStateMutex;
 
     int32_t motorTargetRaw[SERVO_TOTAL_NUM];
@@ -509,15 +499,11 @@ typedef struct {
     volatile uint8_t calibration_fault_latched;
     volatile uint32_t calibration_warning_bitmap;
     int16_t calibration_auto_min_offset_counts[ENCODER_TOTAL_NUM];
-    volatile uint8_t joint16_dual_feedback_fault;
     CalibrationDiagData_t calibration_diag;
 
     volatile uint32_t overload_fault_bitmap;
     volatile int16_t overload_fault_load[SERVO_TOTAL_NUM];
     volatile uint32_t overload_fault_reset_token;
-
-
-
 } TaskSharedData_t;
 
 #endif // TASK_SHARED_DATA_H

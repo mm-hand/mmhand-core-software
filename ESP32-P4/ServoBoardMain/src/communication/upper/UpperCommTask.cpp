@@ -8,6 +8,7 @@
 #include "../../hardware/HardwareMap.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
+#include "../../system/SystemTask.h"
 #include "../../system/TaskRuntimeMonitor.h"
 #include "../../persistence/ManualCalibrationNvsStore.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
@@ -18,10 +19,6 @@
 
 #include <math.h>
 #include <string.h>
-
-extern volatile uint8_t g_calibrationStatus;
-extern volatile uint8_t g_calibrationAckStatus;
-extern volatile uint8_t g_calibrationAckRepeatRemaining;
 
 // UpperCommTask responsibilities:
 // 1) parse host commands and update shared command state;

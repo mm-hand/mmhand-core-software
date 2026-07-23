@@ -67,7 +67,8 @@
 - `canRxQueue` / `tactileQueue`：CAN 层发布编码器、触觉和错误状态。
 - `mappedAngleQueue` / `jointDebugQueue`：控制层发布内部映射角度和调试信息；上位机 sensor 包直接来自 CAN 原始编码器 raw。
 - `commandStateMutex`：保护控制命令相关共享字段。
-- `targetAnglesMutex`：保留兼容旧目标访问，新的控制命令优先走 `commandStateMutex`。
+- `commandStateMutex`：统一保护目标角、直控目标和命令 token；旧的
+  `targetAnglesMutex` 已删除，避免同一份命令状态被两把锁分别保护。
 
 控制任务每个周期只读取一次 `ControlCommandSnapshot_t`，避免读到上位机连续下发时的半更新数据。
 

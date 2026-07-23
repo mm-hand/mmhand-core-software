@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
 from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from desktop.core.data_models import resolve_joint_workspace_range
@@ -24,6 +24,10 @@ from .replay_models import ReplayTrace
 REPLAY_WAIT_POLL_SECONDS = 0.05
 # 不能为了追赶时间轴而静默跳过姿态；调度严重落后时直接中止并提示用户重试。
 REPLAY_MAX_SCHEDULING_LAG_SECONDS = 0.25
+# 20 Hz记录关键帧之间按10 ms插值，下位机闭环控制仍保持100 Hz。
+REPLAY_OUTPUT_PERIOD_SECONDS = 0.01
+# 大于该间隔视为原动作暂停或采集间断，不跨越空白区缓慢插值。
+REPLAY_MAX_INTERPOLATION_GAP_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,17 @@ class ReplayStatus:
     total_frames: int = 0
     elapsed_s: float = 0.0
     duration_s: float = 0.0
+    current_targets: Tuple[float, ...] = ()
+    current_joint_mask: int = 0
+
+
+@dataclass(frozen=True)
+class ReplayOutputSample:
+    """Replay线程实际发送的一帧；连续关键帧之间可包含插值样本。"""
+
+    time_s: float
+    targets: Tuple[float, ...]
+    command_joint_mask: int
 
 
 class ReplayController:
@@ -94,17 +109,18 @@ class ReplayController:
                 return False, message
 
             stop_event = threading.Event()
+            output_samples = self._build_output_samples(trace, active_mask)
             self._stop_event = stop_event
             self._thread = threading.Thread(
                 target=self._run,
-                args=(trace, active_mask, token, stop_event),
+                args=(trace, output_samples, active_mask, token, stop_event),
                 name="mmhand-replay-csv",
                 daemon=False,
             )
             self._set_status(
                 "running",
                 f"正在播放 {trace.name}",
-                total_frames=trace.frame_count,
+                total_frames=len(output_samples),
                 duration_s=trace.duration_s,
             )
             self._thread.start()
@@ -172,7 +188,13 @@ class ReplayController:
             if not workspace.ready:
                 invalid.append(f"J{joint:02d}未标定")
                 continue
-            values = [frame.target_urdf_deg[joint] for frame in trace.frames]
+            values = [
+                frame.target_urdf_deg[joint]
+                for frame in trace.frames
+                if (int(frame.command_joint_mask) or active_mask) & (1 << joint)
+            ]
+            if not values:
+                continue
             low = min(values)
             high = max(values)
             if low < workspace.current_min_deg - 1e-6:
@@ -183,6 +205,56 @@ class ReplayController:
             return "CSV轨迹超出当前工作空间：" + "；".join(invalid[:6])
         return ""
 
+    @staticmethod
+    def _build_output_samples(
+        trace: ReplayTrace,
+        fallback_active_mask: int,
+    ) -> List[ReplayOutputSample]:
+        """把20 Hz连续关键帧插值成100 Hz，离散命令仍只生成一个样本。"""
+        samples: List[ReplayOutputSample] = []
+        for index, frame in enumerate(trace.frames):
+            frame_mask = int(frame.command_joint_mask) or int(fallback_active_mask)
+            samples.append(
+                ReplayOutputSample(
+                    float(frame.time_s),
+                    tuple(float(value) for value in frame.target_urdf_deg),
+                    frame_mask,
+                )
+            )
+            if frame.frame_kind != "continuous" or index + 1 >= len(trace.frames):
+                continue
+            next_frame = trace.frames[index + 1]
+            next_mask = int(next_frame.command_joint_mask) or int(fallback_active_mask)
+            gap_s = float(next_frame.time_s) - float(frame.time_s)
+            if (
+                next_frame.frame_kind != "continuous"
+                or next_frame.stream_id != frame.stream_id
+                or next_mask != frame_mask
+                or gap_s <= REPLAY_OUTPUT_PERIOD_SECONDS
+                or gap_s > REPLAY_MAX_INTERPOLATION_GAP_SECONDS
+            ):
+                continue
+            offset_s = REPLAY_OUTPUT_PERIOD_SECONDS
+            while offset_s < gap_s - 1e-9:
+                alpha = offset_s / gap_s
+                targets = tuple(
+                    float(start) + (float(end) - float(start)) * alpha
+                    for start, end in zip(
+                        frame.target_urdf_deg,
+                        next_frame.target_urdf_deg,
+                    )
+                )
+                samples.append(
+                    ReplayOutputSample(
+                        float(frame.time_s) + offset_s,
+                        targets,
+                        frame_mask,
+                    )
+                )
+                offset_s += REPLAY_OUTPUT_PERIOD_SECONDS
+        samples.sort(key=lambda sample: sample.time_s)
+        return samples
+
     def _runtime_reject_reason(self, token: int, active_mask: int) -> str:
         if not self.backend.replay_motion_token_valid(token):
             return "Replay控制权已被其他命令撤销"
@@ -190,9 +262,8 @@ class ReplayController:
         system_state = int(getattr(state, "system_state", -1))
         if system_state not in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK):
             return f"P4离开READY/RUN_FEEDBACK，state={system_state}"
-        hold_mask = int(getattr(state, "feedback_collision_hold_bitmap", 0) or 0)
-        if hold_mask & active_mask:
-            return f"碰撞保持触发，mask=0x{hold_mask:08X}"
+        # 碰撞 HOLD 只冻结对应关节的舵机 ABS，不是遥操/Replay暂停条件。
+        # 必须继续发送后续目标，P4才能在目标反向回撤至少1°时解除 HOLD。
         current_active = int(getattr(state, "active_joint_mask", 0) or 0)
         if active_mask & ~current_active:
             return "active scope在Replay期间发生变化"
@@ -201,6 +272,7 @@ class ReplayController:
     def _run(
         self,
         trace: ReplayTrace,
+        output_samples: List[ReplayOutputSample],
         active_mask: int,
         token: int,
         stop_event: threading.Event,
@@ -209,7 +281,7 @@ class ReplayController:
         abort_reason = ""
         frame_index = 0
         try:
-            while frame_index < trace.frame_count:
+            while frame_index < len(output_samples):
                 if stop_event.is_set():
                     abort_reason = "Replay已停止"
                     break
@@ -217,8 +289,8 @@ class ReplayController:
                 if abort_reason:
                     break
 
-                frame = trace.frames[frame_index]
-                deadline = start_time + float(frame.time_s)
+                sample = output_samples[frame_index]
+                deadline = start_time + float(sample.time_s)
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0.0:
@@ -233,7 +305,7 @@ class ReplayController:
                     break
 
                 elapsed = time.monotonic() - start_time
-                scheduling_lag = elapsed - float(frame.time_s)
+                scheduling_lag = elapsed - float(sample.time_s)
                 if scheduling_lag > REPLAY_MAX_SCHEDULING_LAG_SECONDS:
                     abort_reason = (
                         f"Replay调度落后{scheduling_lag:.3f}s，"
@@ -241,10 +313,10 @@ class ReplayController:
                     )
                     break
                 result = self.backend.send_joint_targets(
-                    frame.target_urdf_deg,
+                    sample.targets,
                     source=f"Replay:{trace.name}",
                     live=True,
-                    command_joint_mask=active_mask,
+                    command_joint_mask=sample.command_joint_mask,
                     motion_token=token,
                 )
                 if not result.sent:
@@ -255,9 +327,11 @@ class ReplayController:
                     "running",
                     f"正在播放 {trace.name}",
                     frame_index=frame_index + 1,
-                    total_frames=trace.frame_count,
+                    total_frames=len(output_samples),
                     elapsed_s=min(trace.duration_s, elapsed),
                     duration_s=trace.duration_s,
+                    current_targets=sample.targets,
+                    current_joint_mask=sample.command_joint_mask,
                 )
                 frame_index += 1
         except Exception as exc:
@@ -268,21 +342,37 @@ class ReplayController:
                 if self._stop_event is stop_event:
                     self._stop_event = None
             if abort_reason:
+                last_sample = (
+                    output_samples[frame_index - 1]
+                    if frame_index > 0
+                    else None
+                )
                 self._set_status(
                     "aborted",
                     abort_reason,
-                    total_frames=trace.frame_count,
+                    total_frames=len(output_samples),
                     duration_s=trace.duration_s,
+                    current_targets=(
+                        last_sample.targets if last_sample is not None else ()
+                    ),
+                    current_joint_mask=(
+                        last_sample.command_joint_mask
+                        if last_sample is not None
+                        else 0
+                    ),
                 )
                 self._emit("replay_abort", abort_reason)
             else:
+                final_sample = output_samples[-1]
                 self._set_status(
                     "completed",
                     f"Replay完成：{trace.name}",
-                    frame_index=trace.frame_count,
-                    total_frames=trace.frame_count,
+                    frame_index=len(output_samples),
+                    total_frames=len(output_samples),
                     elapsed_s=trace.duration_s,
                     duration_s=trace.duration_s,
+                    current_targets=final_sample.targets,
+                    current_joint_mask=final_sample.command_joint_mask,
                 )
                 self._emit("replay_complete", f"file={trace.path}")
 
@@ -295,6 +385,8 @@ class ReplayController:
         total_frames: int = 0,
         elapsed_s: float = 0.0,
         duration_s: float = 0.0,
+        current_targets: Tuple[float, ...] = (),
+        current_joint_mask: int = 0,
     ) -> None:
         with self._lock:
             self._status = ReplayStatus(
@@ -304,6 +396,8 @@ class ReplayController:
                 total_frames=int(total_frames),
                 elapsed_s=float(elapsed_s),
                 duration_s=float(duration_s),
+                current_targets=tuple(float(value) for value in current_targets),
+                current_joint_mask=int(current_joint_mask),
             )
 
     def _emit(self, event_type: str, detail: str) -> None:

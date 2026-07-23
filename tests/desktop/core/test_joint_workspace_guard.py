@@ -277,6 +277,29 @@ def test_ros2_frame_requires_existing_enable_authorization():
     assert controller.sent[-1][2] == state.active_joint_mask
 
 
+def test_collision_hold_does_not_block_ros2_retreat_target():
+    state = _ready_state(current_min=12.5)
+    state.feedback_collision_hold_bitmap = state.active_joint_mask
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    _arm_ros2_backend(backend)
+
+    forward = backend.send_ros2_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="ROS2:/raw_ik_target",
+    )
+    retreat = backend.send_ros2_joint_targets(
+        [15.0] * ENCODER_COUNT,
+        source="ROS2:/raw_ik_target",
+    )
+
+    assert forward.sent
+    assert retreat.sent
+    assert backend.ros2_output_armed()
+    assert controller.run_requests == 2
+    assert controller.sent[-1][1][0] == pytest.approx(15.0)
+
+
 def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)

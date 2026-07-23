@@ -15,9 +15,14 @@ def _write_csv(path, rows):
     fieldnames = [
         "host_time",
         "source",
+        "source_kind",
+        "frame_kind",
+        "replayable",
+        "stream_id",
         "valid",
         "active_joint_mask",
         "command_joint_mask",
+        "live_enabled",
         "blocked",
         "sent_to_backend",
         "mapping_id",
@@ -149,3 +154,100 @@ def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_p
     assert trace.duration_s == pytest.approx(0.05)
     assert any("sent_to_backend" in warning for warning in trace.warnings)
     assert any("active scope" in warning for warning in trace.warnings)
+
+
+def test_loader_accepts_visual_retargeting_continuous_stream(tmp_path):
+    path = tmp_path / "07_遥操作总表.csv"
+    base = {
+        "source": "Visual Retargeting",
+        "valid": 1,
+        "active_joint_mask": "0x00000003",
+        "command_joint_mask": "0x00000003",
+        "live_enabled": 1,
+        "blocked": 0,
+        "sent_to_backend": 1,
+        "mapping_id": "mapping",
+        "mapping_version": 3,
+        "urdf_config_crc": 123,
+    }
+    _write_csv(
+        path,
+        [
+            {
+                **base,
+                "host_time": "2026-07-23 10:00:00.000",
+                "output_joint_targets_json": _targets(1),
+            },
+            {
+                **base,
+                "host_time": "2026-07-23 10:00:00.050",
+                "output_joint_targets_json": _targets(2),
+            },
+        ],
+    )
+
+    trace = load_replay_csv(path)
+
+    assert trace.frame_count == 2
+    assert trace.frames[0].source_kind == "visual_retargeting"
+    assert all(frame.frame_kind == "continuous" for frame in trace.frames)
+
+
+def test_loader_keeps_single_ui_send_as_discrete_frame(tmp_path):
+    path = tmp_path / "07_遥操作总表.csv"
+    _write_csv(
+        path,
+        [
+            {
+                "host_time": "2026-07-23 10:00:00.000",
+                "source": "Send J03",
+                "valid": 1,
+                "active_joint_mask": "0x00000008",
+                "command_joint_mask": "0x00000008",
+                "live_enabled": 0,
+                "blocked": 0,
+                "sent_to_backend": 1,
+                "mapping_id": "mapping",
+                "mapping_version": 3,
+                "urdf_config_crc": 123,
+                "output_joint_targets_json": _targets(3),
+            }
+        ],
+    )
+
+    trace = load_replay_csv(path)
+
+    assert trace.frame_count == 1
+    assert trace.frames[0].frame_kind == "discrete"
+    assert trace.frames[0].command_joint_mask == 0x08
+
+
+def test_loader_accepts_joint_wide_current_csv(tmp_path):
+    path = tmp_path / "02_关节总表.csv"
+    fieldnames = ["host_time"]
+    for joint in range(ENCODER_COUNT):
+        label = f"J{joint:02d}"
+        fieldnames.extend(
+            [
+                f"{label}_current_deg",
+                f"{label}_current_valid",
+                f"{label}_active",
+            ]
+        )
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for milliseconds, value in ((0, 10.0), (50, 11.0)):
+            row = {"host_time": f"2026-07-23 10:00:00.{milliseconds:03d}"}
+            for joint in range(ENCODER_COUNT):
+                label = f"J{joint:02d}"
+                row[f"{label}_current_deg"] = value if joint == 0 else ""
+                row[f"{label}_current_valid"] = 1 if joint == 0 else 0
+                row[f"{label}_active"] = 1 if joint == 0 else 0
+            writer.writerow(row)
+
+    trace = load_replay_csv(path)
+
+    assert trace.data_kind == "joint_actual"
+    assert trace.active_joint_mask == 1
+    assert [frame.target_urdf_deg[0] for frame in trace.frames] == [10.0, 11.0]

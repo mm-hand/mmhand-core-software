@@ -1,5 +1,7 @@
 #include "SystemTask.h"
 #include "../calibration/CalibrationTask.h"
+#include "../communication/can/CanCommTask.h"
+#include "../communication/upper/UpperCommTask.h"
 #include "FirmwareLog.h"
 #include "StateMachineTask.h"
 #include "TaskRuntimeMonitor.h"
@@ -8,22 +10,24 @@
 #include "../hardware/HardwareMap.h"
 #include "../persistence/MultiTurnNvsPersistenceTask.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
-#include "../calibration/RopeInitTask.h"
 #include "../communication/upper/UpperCommProtocol.h"
+#include "../shared/TaskSharedData.h"
 
 #include <string.h>
 
-// SystemTask 妯″潡鑱岃矗锛?// 1) 瀹屾垚绯荤粺绾ц祫婧愬垵濮嬪寲锛堥槦鍒椼€佷簰鏂ラ攣銆佸叡浜姸鎬侊級锛?// 2) 缁存姢璺ㄤ换鍔″叡浜璞?sharedData锛?// 3) 鍒涘缓骞舵媺璧蜂笂浣嶆満閫氫俊銆佺姸鎬佹満銆丆AN銆佽埖鏈洪€氫俊鍜屾帶鍒朵换鍔°€?
-// Persistent calibration state reported in SYSTEM_STATUS.
+// SystemTask 负责一次性初始化共享资源、恢复持久化数据并创建 FreeRTOS 任务。
+// 持续随 SYSTEM_STATUS 上报的标定状态。
 volatile uint8_t g_calibrationStatus = CALIB_STATUS_IDLE;
-// Short-lived calibration event stream reported as repeated CALIB_ACK packets.
+// 需要通过 CALIB_ACK 重发的瞬时标定结果及其剩余重发次数。
 volatile uint8_t g_calibrationAckStatus = CALIB_STATUS_IDLE;
 volatile uint8_t g_calibrationAckRepeatRemaining = 0;
 
-// Shared task data and queues.
+namespace {
+
+// 所有业务任务共享的唯一运行时状态；只在本文件创建，通过任务参数传入各模块。
 TaskSharedData_t sharedData;
 
-// Task handles used for runtime visibility and future management.
+// 任务句柄只用于运行时监控注册，不作为跨模块控制接口。
 TaskHandle_t upperCommTaskHandle = NULL;
 TaskHandle_t stateMachineTaskHandle = NULL;
 TaskHandle_t canCommTaskHandle = NULL;
@@ -32,18 +36,20 @@ TaskHandle_t controlTaskHandle = NULL;
 TaskHandle_t taskMonitorTaskHandle = NULL;
 TaskHandle_t nvsPersistTaskHandle = NULL;
 
+} // namespace
+
 void System_Init() {
-        Serial.begin(921600);
+    // 上位机二进制协议与固件日志共用该串口，波特率必须与 desktop 保持一致。
+    Serial.begin(921600);
     while (!Serial) {
         delay(10);
     }
     delay(1000);
 
-        sharedData.cmdQueue = xQueueCreate(5, sizeof(ServoCommand_t));
-    sharedData.statusQueue = xQueueCreate(3, sizeof(ServoStatus_t));
+    // 容量为 1 的队列用 Peek/Overwrite 表示“最新快照”；
+    // 事件与调试队列保留少量历史，由消费者顺序清空。
     sharedData.stateEventQueue = xQueueCreate(8, sizeof(SystemEvent_t));
     sharedData.canRxQueue = xQueueCreate(1, sizeof(RemoteSensorData_t));
-    sharedData.canTxQueue = xQueueCreate(5, sizeof(RemoteCommand_t));
     sharedData.servoTargetQueue = xQueueCreate(1, sizeof(ServoTargetBatch_t));
     sharedData.servoFeedbackQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
     sharedData.servoAngleQueue = xQueueCreate(1, sizeof(ServoAngleData_t));
@@ -56,9 +62,8 @@ void System_Init() {
     sharedData.multiturnNvsSaveQueue = xQueueCreate(1, sizeof(MultiTurnNvsSaveJob_t));
     sharedData.multiturnNvsResultQueue = xQueueCreate(1, sizeof(MultiTurnNvsSaveResult_t));
 
-    if (!sharedData.cmdQueue || !sharedData.statusQueue ||
-        !sharedData.stateEventQueue ||
-        !sharedData.canRxQueue || !sharedData.canTxQueue ||
+    if (!sharedData.stateEventQueue ||
+        !sharedData.canRxQueue ||
         !sharedData.servoTargetQueue || !sharedData.servoFeedbackQueue ||
         !sharedData.servoAngleQueue || !sharedData.servoRawQueue ||
         !sharedData.servoTelemetryQueue || !sharedData.servoTelemetrySnapshotQueue ||
@@ -68,11 +73,12 @@ void System_Init() {
         while (1) {}
     }
 
-    sharedData.targetAnglesMutex = xSemaphoreCreateMutex();
+    // 目标角、直控命令和暂存命令必须在同一临界区内成组更新。
     sharedData.commandStateMutex = xSemaphoreCreateMutex();
-    if (!sharedData.targetAnglesMutex || !sharedData.commandStateMutex) {
+    if (!sharedData.commandStateMutex) {
         while (1) {}
     }
+    // 命令缓冲区先清零；后续 token 递增用于识别新命令并丢弃旧完成事件。
     memset(sharedData.targetAngles, 0, sizeof(sharedData.targetAngles));
     memset(sharedData.motorTargetRaw, 0, sizeof(sharedData.motorTargetRaw));
     memset(sharedData.motorSweepTargetRaw, 0, sizeof(sharedData.motorSweepTargetRaw));
@@ -86,6 +92,7 @@ void System_Init() {
     sharedData.feedback_command_joint_mask = 0;
     sharedData.motor_direct_command_generation = 0;
     sharedData.motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    // 直控命令先写入 pending 区，状态机通过后再原子提升为 applied 命令。
     sharedData.pending_direct_generation = 0;
     sharedData.applied_direct_generation = 0;
     sharedData.pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
@@ -103,6 +110,8 @@ void System_Init() {
     memset(sharedData.sine_test_amp_deg, 0, sizeof(sharedData.sine_test_amp_deg));
     memset(sharedData.sine_test_freq_hz, 0, sizeof(sharedData.sine_test_freq_hz));
     memset(sharedData.sine_test_phase_rad, 0, sizeof(sharedData.sine_test_phase_rad));
+
+    // 上电默认不允许任何任务拥有舵机输出；状态机完成硬件/标定门禁后再进入 IDLE/READY。
     sharedData.control_enabled = 0;
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;
@@ -116,6 +125,7 @@ void System_Init() {
     sharedData.feedback_collision_transition_count = 0;
     sharedData.feedback_recovery_pending = 0;
     sharedData.feedback_recovery_request_sequence = 0;
+    // E-STOP 使用单调 token 绕过普通事件队列，队列满时也不会丢急停请求。
     sharedData.emergency_stop_request_token = 0;
     sharedData.servo_emergency_stop_token = 0;
     sharedData.system_fault_bitmap = 0;
@@ -126,10 +136,13 @@ void System_Init() {
     sharedData.rope_init_sequence = 0;
     sharedData.rope_init_joint_mask = 0;
     sharedData.rope_init_timestamp = 0;
+
+    // 默认活动范围为 J08-J11；上位机连接后会按 UI 选择覆盖这两个 mask。
     const uint32_t validMotorMask = validMotorChannelMask();
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.calibration_aux_motor_mask = 0;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
+    // 所有有效舵机上电先视为多圈未知，只有 NVS 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     sharedData.servo_online_bitmap = 0;
     sharedData.encoder_online_bitmap = 0;
@@ -141,6 +154,8 @@ void System_Init() {
     sharedData.restore_multi_turn_result_token = 0;
     sharedData.restore_multi_turn_restored_mask = 0;
     sharedData.restore_multi_turn_rejected_mask = 0;
+
+    // 多圈 NVS 保存由独立低优先级任务执行，控制任务只递增请求 token。
     sharedData.multiturn_nvs_save_request_token = 0;
     sharedData.multiturn_nvs_save_reason = 0;
     sharedData.multiturn_nvs_save_result_token = 0;
@@ -149,6 +164,8 @@ void System_Init() {
     sharedData.multiturn_nvs_enabled = 1;
     sharedData.multiturn_nvs_snapshot_valid = 0;
     sharedData.host_rx_heartbeat_ms = millis();
+
+    // Manual 磁编参考必须从 P4 NVS 恢复；缺失时仅禁止反馈/标定，不禁止直控。
     sharedData.manual_reference_valid_bitmap = 0;
     sharedData.manual_reference_crc = 0;
     sharedData.manual_reference_nvs_sequence = 0;
@@ -163,18 +180,19 @@ void System_Init() {
     sharedData.calibration_warning_bitmap = 0;
     memset(sharedData.calibration_auto_min_offset_counts, 0,
            sizeof(sharedData.calibration_auto_min_offset_counts));
-    sharedData.joint16_dual_feedback_fault = 0;
     memset(&sharedData.calibration_diag, 0, sizeof(sharedData.calibration_diag));
+
+    // 过载保护保存触发电机及原始负载，reset token 通知 ControlTask 清本地状态。
     sharedData.overload_fault_bitmap = 0;
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
         sharedData.overload_fault_load[i] = 0;
     }
     sharedData.overload_fault_reset_token = 0;
 
+    // Auto 标定结果先初始化 RAM；Calib Load 或本次标定会再写入有效结果。
+    initializeCalibrationRuntimeState();
 
-
-        initializeCalibrationRuntimeState();
-
+    // Manual Min/Max 只以 P4 NVS 为可信源，上电恢复后同步有效位、CRC 和序号。
     ManualEncoderReference bootManualReferences[ENCODER_TOTAL_NUM];
     uint32_t bootManualSequence = 0;
     uint32_t bootManualCrc = 0;
@@ -199,7 +217,8 @@ void System_Init() {
             "[NVS MANUAL] no valid snapshot; active scopes without Manual data are gated");
     }
 
-        xTaskCreate(
+    // 任务按“通信与采样 -> 状态仲裁 -> 控制 -> 持久化/监控”职责拆分。
+    xTaskCreate(
         upperCommunicationTask,
         "upperCommunicationTask",
         UPPER_COMM_TASK_STACK_SIZE,
@@ -208,7 +227,7 @@ void System_Init() {
         &upperCommTaskHandle
     );
 
-        xTaskCreate(
+    xTaskCreate(
         stateMachineTask,
         "stateMachineTask",
         STATE_MACHINE_TASK_STACK_SIZE,
@@ -217,7 +236,7 @@ void System_Init() {
         &stateMachineTaskHandle
     );
 
-        xTaskCreate(
+    xTaskCreate(
         canCommunicationTask,
         "canCommunicationTask",
         CAN_COMM_TASK_STACK_SIZE,
@@ -226,7 +245,7 @@ void System_Init() {
         &canCommTaskHandle
     );
 
-        xTaskCreate(
+    xTaskCreate(
         servoCommunicationTask,
         "servoCommunicationTask",
         SERVO_COMM_TASK_STACK_SIZE,
@@ -235,7 +254,7 @@ void System_Init() {
         &servoCommTaskHandle
     );
 
-        xTaskCreate(
+    xTaskCreate(
         controlTask,
         "controlTask",
         CONTROL_TASK_STACK_SIZE,
@@ -253,6 +272,7 @@ void System_Init() {
         &nvsPersistTaskHandle
     );
 
+    // 注册业务任务后，TaskRuntimeMonitor 才能统计周期、执行时间和栈余量。
     taskRuntimeRegister(TASK_RUNTIME_UPPER_COMM, upperCommTaskHandle, UPPER_COMM_TASK_STACK_SIZE);
     taskRuntimeRegister(TASK_RUNTIME_STATE_MACHINE, stateMachineTaskHandle, STATE_MACHINE_TASK_STACK_SIZE);
     taskRuntimeRegister(TASK_RUNTIME_CAN_COMM, canCommTaskHandle, CAN_COMM_TASK_STACK_SIZE);

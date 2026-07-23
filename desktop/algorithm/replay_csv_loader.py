@@ -1,4 +1,4 @@
-"""读取 Save Data 生成的遥操作CSV，并恢复原始上位机时间轴。"""
+"""读取动作指令或关节实际角CSV，并恢复原始上位机时间轴。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,20 @@ from datetime import datetime
 import json
 import math
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
+from desktop.core.data_recording.motion_sampler import classify_motion_source
 from desktop.core.protocol import ENCODER_COUNT
 
-from .replay_models import ReplayFrame, ReplayTrace
+from .replay_models import ALL_JOINTS_MASK, ReplayFrame, ReplayTrace
 
 
-# 超过该间隔仍保留原始停顿，但在UI中提示用户检查记录是否中断。
 REPLAY_LARGE_GAP_SECONDS = 1.0
-_TELEOP_SOURCE_MARKERS = ("ROS2", "RAW_IK", "MANUS", "WUJI", "TELEOP")
+_COMMAND_TARGET_FIELDS = (
+    "output_joint_targets_json",
+    "joint_targets_json",
+    "input_joint_targets_json",
+)
 
 
 def _is_true(value: object) -> bool:
@@ -31,7 +35,7 @@ def _parse_int(value: object, default: int = 0) -> int:
 
 
 def _parse_host_time(row: Dict[str, str]) -> tuple[float, str]:
-    """兼容新格式和历史Run Data，但不会把旧字段重新写回新CSV。"""
+    """读取新格式毫秒时间，同时兼容旧ISO和Unix秒字段。"""
     candidates = [
         row.get("host_time", ""),
         row.get("host_time_iso", ""),
@@ -56,13 +60,8 @@ def _parse_host_time(row: Dict[str, str]) -> tuple[float, str]:
 
 
 def _parse_joint_targets(row: Dict[str, str]) -> list[float]:
-    # 新轨迹表优先播放真正通过保护后送入backend的目标。
-    field_candidates = (
-        "output_joint_targets_json",
-        "joint_targets_json",
-        "input_joint_targets_json",
-    )
-    for field_name in field_candidates:
+    """优先回放经过工作空间保护后真正送入backend的21角目标。"""
+    for field_name in _COMMAND_TARGET_FIELDS:
         text = str(row.get(field_name, "") or "").strip()
         if not text:
             continue
@@ -78,26 +77,116 @@ def _parse_joint_targets(row: Dict[str, str]) -> list[float]:
     raise ValueError("缺少关节目标数组")
 
 
-def _is_teleop_source(source: str) -> bool:
-    upper = str(source or "").upper()
-    return any(marker in upper for marker in _TELEOP_SOURCE_MARKERS)
-
-
 def _same_optional_metadata(current: object, candidate: object) -> bool:
     if current in ("", 0, None) or candidate in ("", 0, None):
         return True
     return current == candidate
 
 
+def _detect_csv_kind(fieldnames: Sequence[str]) -> str:
+    names = set(fieldnames)
+    if any(field in names for field in _COMMAND_TARGET_FIELDS):
+        return "command"
+    if all(f"J{joint:02d}_current_deg" in names for joint in range(ENCODER_COUNT)):
+        return "joint_actual"
+    raise ValueError(
+        "CSV既不是动作指令总表，也不是包含J00-J20 current列的关节总表"
+    )
+
+
+def _parse_actual_joint_row(
+    row: Dict[str, str],
+    previous_values: Optional[list[float]],
+) -> tuple[list[float], int]:
+    """从关节宽表提取实际Current；非活动关节沿用上一帧或填0。"""
+    values = list(previous_values) if previous_values is not None else [0.0] * ENCODER_COUNT
+    active_mask = 0
+    valid_mask = 0
+    has_active_columns = False
+    for joint in range(ENCODER_COUNT):
+        label = f"J{joint:02d}"
+        active_text = str(row.get(f"{label}_active", "") or "").strip()
+        if active_text:
+            has_active_columns = True
+            if _is_true(active_text):
+                active_mask |= 1 << joint
+        valid_field = f"{label}_current_valid"
+        valid = _is_true(row.get(valid_field)) if valid_field in row else True
+        text = str(row.get(f"{label}_current_deg", "") or "").strip()
+        if not valid or not text:
+            continue
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError(f"{label}_current_deg包含NaN或无穷值")
+        values[joint] = value
+        valid_mask |= 1 << joint
+    if not has_active_columns:
+        active_mask = valid_mask
+    if active_mask == 0:
+        raise ValueError("该行没有活动关节")
+    missing = active_mask & ~valid_mask
+    if missing:
+        raise ValueError(f"活动关节缺少有效Current，mask=0x{missing:08X}")
+    return values, active_mask & ALL_JOINTS_MASK
+
+
+def _append_timed_frame(
+    frames: list[ReplayFrame],
+    frame: ReplayFrame,
+    *,
+    first_epoch: float,
+    epoch: float,
+) -> int:
+    """处理毫秒时间戳并列：连续帧保留最新值，离散命令保持原顺序。"""
+    relative = max(0.0, epoch - first_epoch)
+    normalized = ReplayFrame(
+        relative,
+        frame.target_urdf_deg,
+        frame.frame_kind,
+        frame.source_kind,
+        frame.stream_id,
+        frame.command_joint_mask,
+    )
+    if not frames or relative > frames[-1].time_s:
+        frames.append(normalized)
+        return 0
+    if (
+        normalized.frame_kind == "continuous"
+        and frames[-1].frame_kind == "continuous"
+        and normalized.stream_id == frames[-1].stream_id
+    ):
+        frames[-1] = ReplayFrame(
+            frames[-1].time_s,
+            normalized.target_urdf_deg,
+            normalized.frame_kind,
+            normalized.source_kind,
+            normalized.stream_id,
+            normalized.command_joint_mask,
+        )
+        return 1
+    # host_time只精确到毫秒；给同毫秒离散事件增加1 us顺序偏移，禁止吞掉命令。
+    frames.append(
+        ReplayFrame(
+            frames[-1].time_s + 0.000001,
+            normalized.target_urdf_deg,
+            normalized.frame_kind,
+            normalized.source_kind,
+            normalized.stream_id,
+            normalized.command_joint_mask,
+        )
+    )
+    return 0
+
+
 def load_replay_csv(path: Path | str) -> ReplayTrace:
-    """载入整份遥操作轨迹；无效、被拦截或未实际发送的行不会参与回放。"""
+    """载入动作指令总表或关节实际角总表，生成可安全回放的完整轨迹。"""
     csv_path = Path(path).expanduser().resolve()
     if not csv_path.is_file():
         raise FileNotFoundError(f"CSV不存在：{csv_path}")
 
     frames: list[ReplayFrame] = []
     warnings: list[str] = []
-    source = ""
+    source_names: set[str] = set()
     mapping_id = ""
     mapping_version = 0
     urdf_crc = 0
@@ -110,94 +199,133 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
     max_gap_s = 0.0
     legacy_sent_unknown = False
     legacy_scope_unknown = False
-    fixed_nonzero_mask = 0
+    previous_actual_values: Optional[list[float]] = None
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             raise ValueError("CSV没有表头")
+        data_kind = _detect_csv_kind(reader.fieldnames)
+
         for row_number, row in enumerate(reader, start=2):
             raw_rows += 1
-            row_source = str(row.get("source", "") or "").strip()
-            if not _is_teleop_source(row_source):
-                dropped_rows += 1
-                continue
-            if "valid" in row and not _is_true(row.get("valid")):
-                dropped_rows += 1
-                continue
-            if "blocked" in row and _is_true(row.get("blocked")):
-                dropped_rows += 1
-                continue
-            if "sent_to_backend" in row:
-                if not _is_true(row.get("sent_to_backend")):
-                    dropped_rows += 1
-                    continue
-            else:
-                legacy_sent_unknown = True
-
             try:
                 epoch, host_text = _parse_host_time(row)
-                targets = _parse_joint_targets(row)
-                row_mask = _parse_int(
-                    row.get("command_joint_mask") or row.get("active_joint_mask"),
-                    0,
-                )
-                row_mapping_id = str(row.get("mapping_id", "") or "")
-                row_mapping_version = _parse_int(row.get("mapping_version"), 0)
-                row_crc = _parse_int(row.get("urdf_config_crc"), 0)
-            except (TypeError, ValueError) as exc:
+            except ValueError as exc:
                 raise ValueError(f"CSV第{row_number}行无效：{exc}") from exc
+            if previous_epoch is not None and epoch < previous_epoch:
+                raise ValueError(f"CSV第{row_number}行host_time发生倒退")
 
-            if not _same_optional_metadata(mapping_id, row_mapping_id):
-                raise ValueError(f"CSV第{row_number}行mapping_id发生变化")
-            if not _same_optional_metadata(mapping_version, row_mapping_version):
-                raise ValueError(f"CSV第{row_number}行mapping_version发生变化")
-            if not _same_optional_metadata(urdf_crc, row_crc):
-                raise ValueError(f"CSV第{row_number}行URDF CRC发生变化")
-            mapping_id = mapping_id or row_mapping_id
-            mapping_version = mapping_version or row_mapping_version
-            urdf_crc = urdf_crc or row_crc
-            source = source or row_source
-            active_joint_mask |= row_mask
+            if data_kind == "command":
+                row_source = str(row.get("source", "") or "").strip()
+                live = _is_true(row.get("live_enabled"))
+                inferred_source_kind, inferred_frame_kind, inferred_replayable = (
+                    classify_motion_source(row_source, live)
+                )
+                source_kind = str(row.get("source_kind", "") or inferred_source_kind)
+                frame_kind = str(row.get("frame_kind", "") or inferred_frame_kind)
+                replayable_text = str(row.get("replayable", "") or "").strip()
+                # 新schema列可能存在但旧写入方未填值；空值必须继续按来源推断，
+                # 不能把整份历史CSV误判为“禁止回放”。
+                replayable = (
+                    _is_true(replayable_text)
+                    if replayable_text
+                    else inferred_replayable
+                )
+                if "valid" in row and not _is_true(row.get("valid")):
+                    replayable = False
+                if "blocked" in row and _is_true(row.get("blocked")):
+                    replayable = False
+                if "sent_to_backend" in row:
+                    if not _is_true(row.get("sent_to_backend")):
+                        replayable = False
+                else:
+                    legacy_sent_unknown = True
+                if not replayable or frame_kind not in ("continuous", "discrete"):
+                    dropped_rows += 1
+                    previous_epoch = epoch
+                    continue
+                try:
+                    targets = _parse_joint_targets(row)
+                    row_mask = _parse_int(
+                        row.get("command_joint_mask")
+                        or row.get("active_joint_mask"),
+                        0,
+                    ) & ALL_JOINTS_MASK
+                    row_mapping_id = str(row.get("mapping_id", "") or "")
+                    row_mapping_version = _parse_int(row.get("mapping_version"), 0)
+                    row_crc = _parse_int(row.get("urdf_config_crc"), 0)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"CSV第{row_number}行无效：{exc}") from exc
+                if not _same_optional_metadata(mapping_id, row_mapping_id):
+                    raise ValueError(f"CSV第{row_number}行mapping_id发生变化")
+                if not _same_optional_metadata(mapping_version, row_mapping_version):
+                    raise ValueError(f"CSV第{row_number}行mapping_version发生变化")
+                if not _same_optional_metadata(urdf_crc, row_crc):
+                    raise ValueError(f"CSV第{row_number}行URDF CRC发生变化")
+                mapping_id = mapping_id or row_mapping_id
+                mapping_version = mapping_version or row_mapping_version
+                urdf_crc = urdf_crc or row_crc
+                stream_id = str(row.get("stream_id", "") or "")
+                if not stream_id:
+                    stream_id = (
+                        f"legacy-{source_kind}-{row_mask:08X}"
+                        if frame_kind == "continuous"
+                        else f"legacy-event-{row_number}"
+                    )
+                source_names.add(row_source or source_kind)
+            else:
+                try:
+                    targets, row_mask = _parse_actual_joint_row(
+                        row, previous_actual_values
+                    )
+                except (TypeError, ValueError) as exc:
+                    dropped_rows += 1
+                    previous_epoch = epoch
+                    continue
+                previous_actual_values = list(targets)
+                source_kind = "joint_feedback"
+                frame_kind = "continuous"
+                stream_id = f"joint-actual-{row_mask:08X}"
+                source_names.add("Joint Current")
+
             if row_mask == 0:
                 legacy_scope_unknown = True
-            elif fixed_nonzero_mask == 0:
-                fixed_nonzero_mask = row_mask
-            elif row_mask != fixed_nonzero_mask:
-                raise ValueError(
-                    f"CSV第{row_number}行active scope发生变化，不能作为一条连续轨迹播放"
-                )
-
+            active_joint_mask |= row_mask
             if first_epoch is None:
                 first_epoch = epoch
                 first_host_text = host_text
             if previous_epoch is not None:
-                if epoch < previous_epoch:
-                    raise ValueError(f"CSV第{row_number}行host_time发生倒退")
-                gap = epoch - previous_epoch
-                max_gap_s = max(max_gap_s, gap)
-            relative = max(0.0, epoch - first_epoch)
-            if frames and relative <= frames[-1].time_s:
-                # 同一时间戳只保留最后到达的目标，避免回放时集中突发发送。
-                frames[-1] = ReplayFrame(frames[-1].time_s, targets)
-                dropped_rows += 1
-            else:
-                frames.append(ReplayFrame(relative, targets))
+                max_gap_s = max(max_gap_s, epoch - previous_epoch)
+            frame = ReplayFrame(
+                0.0,
+                targets,
+                frame_kind,
+                source_kind,
+                stream_id,
+                row_mask,
+            )
+            dropped_rows += _append_timed_frame(
+                frames,
+                frame,
+                first_epoch=first_epoch,
+                epoch=epoch,
+            )
             previous_epoch = epoch
 
     if legacy_sent_unknown:
         warnings.append("历史CSV没有sent_to_backend，无法确认每帧当时是否真正入队")
     if legacy_scope_unknown or active_joint_mask == 0:
-        warnings.append("CSV没有active scope，播放时将使用P4当前active joint mask")
+        warnings.append("CSV有帧缺少active scope，播放时将使用P4当前active joint mask")
+    if data_kind == "joint_actual":
+        warnings.append("关节实际角CSV没有模型CRC，播放前只能使用当前标定工作空间校验")
     if max_gap_s > REPLAY_LARGE_GAP_SECONDS:
-        warnings.append(
-            f"存在{max_gap_s:.3f}s无目标间隔，Replay会原样保留这段停顿"
-        )
+        warnings.append(f"存在{max_gap_s:.3f}s无目标间隔，Replay会保留这段停顿")
 
     trace = ReplayTrace(
         path=csv_path,
         frames=frames,
-        source=source,
+        source=", ".join(sorted(source_names)),
         start_host_time=first_host_text,
         active_joint_mask=active_joint_mask,
         mapping_id=mapping_id,
@@ -206,6 +334,7 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
         raw_row_count=raw_rows,
         dropped_row_count=dropped_rows,
         max_gap_s=max_gap_s,
+        data_kind=data_kind,
         warnings=warnings,
     )
     trace.validate()

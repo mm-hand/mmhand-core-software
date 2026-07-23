@@ -76,21 +76,23 @@ python -m desktop ui --mode teleop --port COMx
 python -m desktop ui --mode replay --port COMx
 ```
 
-## Replay 遥操作轨迹
+## Replay 动作轨迹
 
 Replay 不再保存单帧手势 JSON，而是直接读取 `Save Data` 生成的
-`07_遥操作总表.csv`，按 `host_time` 还原整段21关节动作。
+`07_遥操作总表.csv` 或 `02_关节总表.csv`，按 `host_time` 还原整段21关节
+目标或实际运动。
 
 操作顺序：
 
 1. 连接P4，选择需要控制的关节并按`ENABLE`。
 2. 完成标定和`Rope Init`，确认系统状态为`READY`。
-3. 遥操时勾选`Save Data`，记录完整目标轨迹。
+3. 使用普通负反馈 UI、视觉遥操或手套遥操时勾选`Save Data`。
 4. 打开`Replay`页面，点击`导入 CSV`选择轨迹文件。
-5. 核对轨迹时长、帧数、active scope和URDF CRC后点击`Send`。
+5. 核对轨迹时长、帧数、active scope及21关节实时角后点击`Send`。
 
 Replay只有在启动瞬间系统状态严格等于`READY`时才会进入。运行期间如果发生
-E-STOP、Pause、断线、FAULT、active scope变化或碰撞保持，Replay会立即终止。
+E-STOP、Pause、断线、FAULT或active scope变化，Replay会立即终止。碰撞保持
+不会暂停轨迹；后续反向目标会继续发往P4并用于解除保持。
 播放期间`Send`会切换为`Stop`；URDF CRC不一致或轨迹越过当前工作空间时会拒绝启动。
 
 完整操作说明见 [algorithm/README.md](algorithm/README.md)。
@@ -104,7 +106,7 @@ E-STOP、Pause、断线、FAULT、active scope变化或碰撞保持，Replay会�
 3. `03_舵机总表.csv`：27 路目标、raw/ABS、负载、速度、原始电流、电压、温度和在线状态。
 4. `04_触觉总表.csv`：五指触觉汇总。
 5. `06_操作事件总表.csv`：按钮操作、状态切换和碰撞检测进入/解除事件。
-6. `07_遥操作总表.csv`：遥操作输入、实际下发目标和对应时间轴。
+6. `07_遥操作总表.csv`：普通UI、视觉遥操和手套/ROS2的实际下发目标及时间轴。
 
 勾选“触觉全量”后额外生成 `05_触觉全量.csv`。原来的关节长表、舵机长表、
 Joint Debug 原始包和五指触觉宽表不再重复生成 CSV，但仍可写入 HDF5/ROS2 bag

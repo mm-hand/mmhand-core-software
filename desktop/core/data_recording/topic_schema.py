@@ -120,6 +120,11 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
     "teleop_input": [
         *TIME_FIELDS,
         "source",
+        "source_kind",
+        "frame_kind",
+        "replayable",
+        "stream_id",
+        "command_sequence",
         "frame_id",
         "valid",
         "latency_ms",

@@ -426,7 +426,6 @@ void canCommunicationTask(void* parameter) {
     uint32_t lastCanId = 0;
     uint32_t lastTwaiHealthCheckMs = 0;
     bool twaiRecoveryRequested = false;
-    RemoteCommand_t txCmd;
 
     const uint8_t kAllEncoderFramesMask = (uint8_t)((1U << CAN_ENC_FRAME_COUNT) - 1U);
     const uint8_t kAllErrorFramesMask = (uint8_t)((1U << CAN_ERROR_DETAIL_FRAME_COUNT) - 1U);
@@ -808,15 +807,6 @@ void canCommunicationTask(void* parameter) {
                     }
                 }
             }
-        }
-
-        if (xQueueReceive(sharedData->canTxQueue, &txCmd, 0) == pdTRUE) {
-            twai_message_t txMsg;
-            txMsg.identifier = txCmd.cmdID;
-            txMsg.extd = 0;
-            txMsg.data_length_code = txCmd.len;
-            memcpy(txMsg.data, txCmd.payload, txCmd.len);
-            twai_transmit(&txMsg, pdMS_TO_TICKS(10));
         }
 
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_CAN_COMM);

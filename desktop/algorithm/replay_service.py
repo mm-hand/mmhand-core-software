@@ -1,4 +1,4 @@
-"""供Qt Replay页面调用的CSV轨迹服务。"""
+"""供Qt Replay页面调用的动作或实际角CSV轨迹服务。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .replay_models import ReplayTrace
 
 
 class ReplayService:
-    """集中管理当前导入的CSV和播放线程，UI不直接操作控制器。"""
+    """集中管理当前导入的动作CSV和播放线程，UI不直接操作控制器。"""
 
     def __init__(self, backend: HandBackend) -> None:
         self.backend = backend
@@ -53,7 +53,7 @@ class ReplayService:
     def send(self) -> tuple[bool, str]:
         trace = self.trace()
         if trace is None:
-            return False, "请先导入遥操作CSV"
+            return False, "请先导入动作或关节状态CSV"
         return self.controller.start(trace)
 
     def stop(self, reason: str = "用户停止") -> bool:

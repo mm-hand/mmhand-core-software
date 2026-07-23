@@ -16,6 +16,10 @@ from desktop.paths import (
 )
 from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
 from desktop.core.data_recording import DataSessionRecorder
+from desktop.core.data_recording.motion_sampler import (
+    MOTION_RECORD_PERIOD_SECONDS,
+    MotionCommandSampler,
+)
 from desktop.core.data_recording.topic_schema import (
     DEFAULT_CSV_TOPICS,
     DEFAULT_TOPICS,
@@ -95,6 +99,7 @@ from .ui_windows import DisplayWindowManager
 PROJECT_ROOT_DIR = str(PROJECT_ROOT)
 DISPLAY_POLL_MS = 33
 CAMERA_UI_POLL_MS = 50
+STATE_RECORD_POLL_MS = 50
 SYSTEM_STATUS_STALE_AFTER_S = 1.0
 FAULT_STATUS_STALE_AFTER_S = 1.0
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
@@ -141,6 +146,11 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state_buffer = LatestStateBuffer()
         self._state_buffer_version = 0
         self._data_logger = DataSessionRecorder(flush_every=10)
+        # P4控制仍为100 Hz；状态与连续动作只以20 Hz落盘，降低CSV/HDF5体积。
+        self._motion_record_sampler = MotionCommandSampler(
+            MOTION_RECORD_PERIOD_SECONDS
+        )
+        self._last_state_record_signature = None
         self._test_recording_stop_lock = threading.Lock()
         self._test_recording_stop_thread: Optional[threading.Thread] = None
         self.test_recording_stop_finished.connect(self._on_test_recording_stop_finished)
@@ -185,6 +195,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._display_timer = QtCore.QTimer(self)
         self._display_timer.timeout.connect(self._display_poll)
         self._display_timer.start(DISPLAY_POLL_MS)
+        self._recording_timer = QtCore.QTimer(self)
+        self._recording_timer.timeout.connect(self._recording_poll)
+        self._recording_timer.start(STATE_RECORD_POLL_MS)
         self._camera_timer = QtCore.QTimer(self)
         self._camera_timer.timeout.connect(self._display_windows.update_cameras)
         self._camera_timer.start(CAMERA_UI_POLL_MS)
@@ -561,15 +574,20 @@ class HandGUI(QtWidgets.QMainWindow):
             # A serial port can stay open after lower status heartbeats stop.
             self._last_status_refresh = time.time()
             self._update_status_text(state)
-        if (has_new_state or has_new_tactile) and self._data_logger.is_running():
-            self._write_run_data_row(state)
-
     def _consume_tactile_state(self) -> bool:
         has_new, state = self.backend.consume_tactile_state_into(self._state)
         if has_new:
             self._state = state or HandModel()
             self._tactile_state = self._state
         return bool(has_new)
+
+    def _recording_poll(self) -> None:
+        """以独立50 ms时钟保存最新状态，避免UI 33 ms刷新周期把20 Hz降成15 Hz。"""
+        if not self._data_logger.is_running():
+            return
+        if self._state is not None:
+            self._maybe_write_run_data_row(self._state)
+        self._flush_motion_recording_due()
 
     def _start_tactile_port(self, port: str) -> bool:
         if not port:
@@ -1492,7 +1510,7 @@ class HandGUI(QtWidgets.QMainWindow):
         return result
 
     def _on_joint_target_command(self, payload: Dict[str, object]) -> None:
-        """把一次遥操作输入及其最终下发结果写入同一行，供整段动作回放。"""
+        """记录所有关节动作；连续流20 Hz降采样，离散UI命令逐条保留。"""
         if not self._data_logger.is_running():
             return
         host_time = time.time()
@@ -1512,38 +1530,44 @@ class HandGUI(QtWidgets.QMainWindow):
         command_joint_mask = payload.get("command_joint_mask")
         if command_joint_mask is None:
             command_joint_mask = active_joint_mask
-        self._data_logger.write(
-            "teleop_input",
-            {
-                "host_time": host_time,
-                "p4_time_ms": p4_time_ms,
-                "source": source,
-                "frame_id": "",
-                "valid": 1,
-                "latency_ms": "",
-                "active_joint_mask": f"0x{active_joint_mask:08X}",
-                "command_joint_mask": f"0x{int(command_joint_mask):08X}",
-                "live_enabled": 1 if payload.get("live", False) else 0,
-                "blocked": 1 if blocked_list else 0,
-                "block_reason": payload.get("message", ""),
-                "sent_to_backend": 1 if payload.get("sent", False) else 0,
-                "input_space": payload.get("input_space", "urdf_deg"),
-                "output_space": payload.get("output_space", "urdf_deg"),
-                "mapping_id": payload.get("mapping_id", ""),
-                "mapping_version": payload.get("mapping_version", ""),
-                "urdf_config_crc": payload.get("urdf_config_crc", ""),
-                "clamped_joints_json": json.dumps(
-                    clamped_list, ensure_ascii=False, default=str
-                ),
-                "raw_joint_targets_json": json.dumps(raw_input_targets, ensure_ascii=False, default=str),
-                "input_joint_targets_json": json.dumps(
-                    input_targets, ensure_ascii=False, default=str
-                ),
-                "output_joint_targets_json": json.dumps(
-                    output_targets, ensure_ascii=False, default=str
-                ),
-            },
-        )
+        row = {
+            "host_time": host_time,
+            "p4_time_ms": p4_time_ms,
+            "source": source,
+            "frame_id": "",
+            "valid": 1,
+            "latency_ms": "",
+            "active_joint_mask": f"0x{active_joint_mask:08X}",
+            "command_joint_mask": f"0x{int(command_joint_mask):08X}",
+            "live_enabled": 1 if payload.get("live", False) else 0,
+            "blocked": 1 if blocked_list else 0,
+            "block_reason": payload.get("message", ""),
+            "sent_to_backend": 1 if payload.get("sent", False) else 0,
+            "input_space": payload.get("input_space", "urdf_deg"),
+            "output_space": payload.get("output_space", "urdf_deg"),
+            "mapping_id": payload.get("mapping_id", ""),
+            "mapping_version": payload.get("mapping_version", ""),
+            "urdf_config_crc": payload.get("urdf_config_crc", ""),
+            "clamped_joints_json": json.dumps(
+                clamped_list, ensure_ascii=False, default=str
+            ),
+            "raw_joint_targets_json": json.dumps(
+                raw_input_targets, ensure_ascii=False, default=str
+            ),
+            "input_joint_targets_json": json.dumps(
+                input_targets, ensure_ascii=False, default=str
+            ),
+            "output_joint_targets_json": json.dumps(
+                output_targets, ensure_ascii=False, default=str
+            ),
+        }
+        for sampled_row in self._motion_record_sampler.submit(row):
+            self._data_logger.write("teleop_input", sampled_row)
+
+    def _flush_motion_recording_due(self, *, force: bool = False) -> None:
+        """补写连续动作末帧；关闭记录时必须强制执行一次。"""
+        for row in self._motion_record_sampler.flush_due(force=force):
+            self._data_logger.write("teleop_input", row)
 
     def draw_pose_angles(self, angles: List[float]) -> None:
         self._display_windows.open_pose()
@@ -1573,7 +1597,10 @@ class HandGUI(QtWidgets.QMainWindow):
             "ros2_enabled": self.ros2_enabled,
             "ros_topic": self.ros_topic,
             "recording_formats": options,
-            "csv_layout_version": 4,
+            "csv_layout_version": 5,
+            "state_recording_hz": 20,
+            "continuous_motion_recording_hz": 20,
+            "replay_interpolation_hz": 100,
             "encoder_count": ENCODER_COUNT,
             "motor_count": MOTOR_COUNT,
             "finger_order": FINGER_NAMES,
@@ -1614,6 +1641,8 @@ class HandGUI(QtWidgets.QMainWindow):
             enable_hdf5=bool(options.get("hdf5", True)),
             enable_rosbag=bool(options.get("rosbag", False)),
         )
+        self._motion_record_sampler.reset()
+        self._last_state_record_signature = None
         path = self._data_logger.path
         self._last_recorded_proto_ack_sequence = int(
             getattr(self._state, "proto_ack_sequence", 0) or 0
@@ -1644,6 +1673,9 @@ class HandGUI(QtWidgets.QMainWindow):
             return
         if self._data_logger.is_running():
             path = self._data_logger.path
+            self._flush_motion_recording_due(force=True)
+            if self._state is not None:
+                self._maybe_write_run_data_row(self._state, force=True)
             self._record_event("save_data_stop", detail=reason, source="recorder")
             self._data_logger.stop()
             self._stop_joint_debug_packet_log()
@@ -1674,6 +1706,13 @@ class HandGUI(QtWidgets.QMainWindow):
                 self._stop_joint_debug_packet_log()
                 return
             path = self._data_logger.path
+            flush_motion = getattr(self, "_flush_motion_recording_due", None)
+            if callable(flush_motion):
+                flush_motion(force=True)
+            state = getattr(self, "_state", None)
+            write_state = getattr(self, "_maybe_write_run_data_row", None)
+            if state is not None and callable(write_state):
+                write_state(state, force=True)
             self._record_event("save_data_stop", detail=reason, source="recorder")
             thread = threading.Thread(
                 target=self._finish_test_recording_stop,
@@ -1795,6 +1834,25 @@ class HandGUI(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Save Data Format", "至少选择一种保存格式。")
             return None
         return options
+
+    def _maybe_write_run_data_row(
+        self,
+        state: HandModel,
+        *,
+        force: bool = False,
+    ) -> bool:
+        """20 Hz记录最新状态；相同P4/触觉快照不重复落盘。"""
+        signature = (
+            float(getattr(state, "host_rx_time", 0.0) or 0.0),
+            int(getattr(state, "p4_time_ms", 0) or 0),
+            getattr(state, "tactile_summary_seq", None),
+            getattr(state, "tactile_full_seq", None),
+        )
+        if not force and signature == self._last_state_record_signature:
+            return False
+        self._last_state_record_signature = signature
+        self._write_run_data_row(state)
+        return True
 
     def _write_run_data_row(self, state: HandModel) -> None:
         scope_label, active_motor_mask, active_joint_mask, active_require_can = self._current_scope_record_fields()
@@ -1951,8 +2009,12 @@ class HandGUI(QtWidgets.QMainWindow):
         for i in range(ENCODER_COUNT):
             label = f"J{i:02d}"
             encoder = state.encoders[i] if i < len(state.encoders) else None
+            # 关节总表可以直接作为Replay输入，必须沿用Joint Channels的完整有效性门禁。
             current_valid = bool(
-                self.control_panel._joint_angle_feedback_valid(i, state)
+                self.control_panel._joint_encoder_status(i, state) in ("ok", "warn")
+                and self.control_panel._joint_angle_feedback_valid(i, state)
+                and
+                self.control_panel._joint_angle_display_calibrated(i, state)
             )
             row[f"{label}_current_deg"] = (
                 state.angles[i] if current_valid and i < len(state.angles) else ""

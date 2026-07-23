@@ -66,7 +66,7 @@ void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
             (unsigned long)sharedAtomicLoad(&sharedData->active_joint_mask));
         return;
     }
-    SemaphoreHandle_t lock = sharedData->commandStateMutex ? sharedData->commandStateMutex : sharedData->targetAnglesMutex;
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE)
     {
         const uint32_t previousMask = sharedData->feedback_command_joint_mask;

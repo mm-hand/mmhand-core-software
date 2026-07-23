@@ -79,13 +79,18 @@ def test_replay_sends_complete_trace_and_finishes(monkeypatch):
         time.sleep(0.01)
 
     assert ok is True
-    assert [row[0][0] for row in backend.sent] == [10.0, 15.0, 20.0]
+    sent_values = [row[0][0] for row in backend.sent]
+    assert len(sent_values) == 7
+    assert sent_values[0] == 10.0
+    assert sent_values[-1] == 20.0
+    assert sent_values == sorted(sent_values)
     assert backend.sent[-1][1]["source"].startswith("Replay:")
     assert backend.sent[-1][1]["command_joint_mask"] == 1
     assert controller.status().state == "completed"
+    assert controller.status().current_targets[0] == 20.0
 
 
-def test_collision_hold_aborts_running_replay(monkeypatch):
+def test_collision_hold_keeps_replay_running_for_retreat_frames(monkeypatch):
     backend = _Backend()
     controller = ReplayController(backend)
     monkeypatch.setattr(controller, "_entry_reject_reason", lambda *_: "")
@@ -103,5 +108,34 @@ def test_collision_hold_aborts_running_replay(monkeypatch):
         time.sleep(0.01)
 
     assert ok is True
-    assert controller.status().state == "aborted"
-    assert "碰撞" in controller.status().message
+    assert controller.status().state == "completed"
+    assert len(backend.sent) == 7
+
+
+def test_replay_sends_discrete_ui_command_once(monkeypatch):
+    backend = _Backend()
+    controller = ReplayController(backend)
+    monkeypatch.setattr(controller, "_entry_reject_reason", lambda *_: "")
+    trace = ReplayTrace(
+        path=Path("single-ui-command.csv"),
+        active_joint_mask=1,
+        frames=[
+            ReplayFrame(
+                0.0,
+                [12.0] * ENCODER_COUNT,
+                frame_kind="discrete",
+                source_kind="ui_feedback",
+                stream_id="event-1",
+                command_joint_mask=1,
+            )
+        ],
+    )
+
+    ok, _ = controller.start(trace)
+    deadline = time.monotonic() + 1.0
+    while controller.is_running() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert ok is True
+    assert len(backend.sent) == 1
+    assert backend.sent[0][0][0] == 12.0

@@ -728,7 +728,7 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
         return false;
     }
 
-    SemaphoreHandle_t lock = sharedData->commandStateMutex ? sharedData->commandStateMutex : sharedData->targetAnglesMutex;
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(2)) != pdTRUE) {
         return false;
     }
@@ -964,7 +964,6 @@ void controlTask(void* parameter)
             }
         }
 
-        sharedAtomicStore(&sharedData->joint16_dual_feedback_fault, (uint8_t)0);
 
         bool canBusOnline = false;
         if (xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE && sensorData.isValid) {

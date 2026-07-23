@@ -39,7 +39,7 @@ class DataSessionRecorder:
         self._rosbag = RosbagSessionRecorder()
         self._event = EventRecorder(self.write)
         self._queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue(maxsize=self.max_queue)
-        # Replay要求恢复每一帧已下发目标，遥操轨迹不能沿用普通遥测的“队满丢最旧”策略。
+        # Replay要求恢复每一帧已记录动作，动作轨迹不能沿用普通遥测的“队满丢最旧”策略。
         # 独立队列由同一个writer线程落盘，因此不引入CSV/HDF5并发写入。
         self._teleop_queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue()
         self._stop = threading.Event()

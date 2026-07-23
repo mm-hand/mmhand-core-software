@@ -12,18 +12,33 @@
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "FirmwareLog.h"
+#include "SystemTask.h"
 #include "TaskRuntimeMonitor.h"
 
-extern volatile uint8_t g_calibrationStatus;
-extern volatile uint8_t g_calibrationAckStatus;
-extern volatile uint8_t g_calibrationAckRepeatRemaining;
-
+// 通信/反馈新鲜度门限：超过该时间即视为链路离线。
 static const uint32_t kStateCanOfflineTimeoutMs = 1000;
 static const uint32_t kStateServoFeedbackTimeoutMs = 500;
+// READY 下边界迟滞：进入允许低 24 counts，退出必须连续低于 48 counts。
 static const int32_t kReadyEnterOutsideToleranceCounts = 24;
 static const int32_t kReadyExitOutsideToleranceCounts = 48;
+// 连续 3 个新磁编样本满足条件才改变 READY 锁存，避免边界抖动。
 static const uint8_t kWorkspaceStableSampleCount = 3;
+// 标定结果 ACK 重发次数，降低上位机漏掉瞬时结果的概率。
 static const uint8_t kCalibrationAckRepeatCount = 20;
+
+// READY 拒绝日志原因只用于诊断，不进入上下位机协议。
+enum FeedbackReadyRejectLogReason : uint8_t {
+    FEEDBACK_READY_REJECT_CAN_GATE = 1,
+    FEEDBACK_READY_REJECT_MULTITURN = 2,
+    FEEDBACK_READY_REJECT_EMPTY_SCOPE = 3,
+    FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE = 4,
+    FEEDBACK_READY_REJECT_CALIBRATION_MISSING = 5,
+    FEEDBACK_READY_REJECT_MAPPED_INVALID = 6,
+    FEEDBACK_READY_REJECT_BELOW_WORKSPACE = 7,
+    FEEDBACK_READY_REJECT_CALIBRATION_MISMATCH = 8,
+    FEEDBACK_READY_REJECT_ENCODER_CAN = 9,
+    FEEDBACK_READY_REJECT_SYSTEM_FAULT = 10,
+};
 static uint32_t collectSystemFaults(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
@@ -31,15 +46,20 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
 static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData);
 static uint8_t idleOrReadyState(TaskSharedData_t* sharedData);
 
+// 每位对应一个关节的 READY 迟滞锁存状态。
 static uint32_t s_workspaceReadyLatchMask = 0;
+// 只对新 mapped sample 更新连续计数，状态机重复轮询同一帧不累计。
 static uint32_t s_workspaceLastMappedTimestamp = 0;
 static uint8_t s_workspaceEnterStable[ENCODER_TOTAL_NUM] = {0};
 static uint8_t s_workspaceExitStable[ENCODER_TOTAL_NUM] = {0};
+// 锁存绑定到当前 Auto/Manual 标定版本，标定变化时立即清除旧 READY。
 static uint16_t s_workspaceAutoMinRaw[ENCODER_TOTAL_NUM] = {0};
 static uint16_t s_workspaceAutoMaxRaw[ENCODER_TOTAL_NUM] = {0};
 static uint32_t s_workspaceManualCrc[ENCODER_TOTAL_NUM] = {0};
 static uint8_t s_workspaceMappingVersion[ENCODER_TOTAL_NUM] = {0};
 
+// 反馈和自动标定只要求当前 active scope 的 Manual 数据完整；
+// 未选择关节缺失 Manual 不会阻止单指调试或直控。
 static bool manualReferenceGateReady(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -60,6 +80,7 @@ static bool manualReferenceGateReady(TaskSharedData_t* sharedData)
 static void logManualReferenceReject(TaskSharedData_t* sharedData,
                                      const char* eventName)
 {
+    // 同一有效位图 1 秒内只打印一次，避免状态机 100 Hz 刷屏。
     static uint32_t s_lastLogMs = 0;
     static uint32_t s_lastMask = 0;
     const uint32_t nowMs = millis();
@@ -87,6 +108,7 @@ static void logManualReferenceReject(TaskSharedData_t* sharedData,
 
 static void setCalibrationStatus(uint8_t status, bool emitAck)
 {
+    // 持续状态与瞬时 ACK 分开维护：清到 IDLE 时必须同时停止旧 ACK 重发。
     g_calibrationStatus = status;
     if (status == CALIB_STATUS_IDLE) {
         g_calibrationAckStatus = CALIB_STATUS_IDLE;
@@ -110,9 +132,8 @@ bool requestEmergencyStop(TaskSharedData_t* sharedData)
         return false;
     }
 
-    // Latch STOP independently of the normal event queue, then notify the
-    // servo task immediately. Both tokens are monotonic and cannot be dropped
-    // when the normal command queue is full.
+    // STOP 独立于普通事件队列锁存，同时立即通知舵机任务。
+    // 两个 token 单调递增，即使普通事件队列已满也不会丢失急停。
     sharedAtomicAddFetch(&sharedData->emergency_stop_request_token, (uint32_t)1);
     sharedAtomicAddFetch(&sharedData->servo_emergency_stop_token, (uint32_t)1);
     taskRuntimeMarkStopRequested();
@@ -144,6 +165,7 @@ static void requestMultiTurnNvsSave(TaskSharedData_t* sharedData, uint8_t reason
     (void)reason;
     return;
 #else
+    // 状态机只发布保存请求，真正的 Flash 写入由低优先级持久化任务完成。
     sharedData->multiturn_nvs_save_reason = reason;
     sharedAtomicAddFetch(&sharedData->multiturn_nvs_save_request_token, (uint32_t)1);
 #endif
@@ -151,6 +173,7 @@ static void requestMultiTurnNvsSave(TaskSharedData_t* sharedData, uint8_t reason
 
 static bool shouldSaveMultiTurnOnInterrupt(uint8_t state)
 {
+    // 只有可能改变舵机多圈位置的运行态在 STOP/RESET 前需要保存。
     return state == SYSTEM_STATE_RUN_DIRECT ||
            state == SYSTEM_STATE_RUN_FEEDBACK ||
            state == SYSTEM_STATE_CALIBRATION_RUNNING ||
@@ -163,6 +186,7 @@ static void setSystemState(TaskSharedData_t* sharedData, uint8_t state)
     if (!sharedData) {
         return;
     }
+    // 统一维护 transition_count，禁止其他模块直接“顺手”改 system_state。
     if (sharedData->system_state != state) {
         sharedData->system_state = state;
         sharedData->state_transition_count++;
@@ -180,6 +204,7 @@ static void resetCommandState(TaskSharedData_t* sharedData)
         return;
     }
 
+    // RESET 同时失效全部命令 token，随后到达的旧 DONE 事件会被识别为过期。
     for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
         sharedData->targetAngles[i] = 0.0f;
     }
@@ -258,6 +283,7 @@ static void setCommandModeDirect(TaskSharedData_t* sharedData)
 static void clearPendingDirectCommand(TaskSharedData_t* sharedData,
                                       uint8_t rejectReason)
 {
+    // 只清 staged 命令，不覆盖已经生效并正在执行的 motorTargetRaw。
     if (!sharedData) {
         return;
     }
@@ -320,6 +346,7 @@ static void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
                                        uint32_t generation,
                                        uint8_t rejectReason)
 {
+    // generation 必须匹配，旧事件不能拒绝后来写入的新直控命令。
     if (!sharedData) {
         return;
     }
@@ -344,6 +371,8 @@ static void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
 static bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
                                         uint32_t generation)
 {
+    // 状态/在线/多圈门禁通过后，才把 pending 命令及其 active scope
+    // 一次性提升为 ControlTask 可见的正式直控命令。
     if (!sharedData) {
         return false;
     }
@@ -412,6 +441,7 @@ static void setFeedbackAdmissionResult(TaskSharedData_t* sharedData,
     if (!sharedData || requestSequence == 0) {
         return;
     }
+    // 上位机可能连续发目标；只允许最新请求写回准入结果。
     if (sharedAtomicLoad(&sharedData->feedback_admission_sequence) != requestSequence) {
         return;
     }
@@ -428,6 +458,7 @@ static void requestServoEmergencyTorqueOff(TaskSharedData_t* sharedData)
 
 static bool canAcceptStart(uint8_t state)
 {
+    // START 只负责恢复 PAUSED 或重新评估空闲态，不直接进入某种控制模式。
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
@@ -445,14 +476,14 @@ static bool canAcceptRunDirect(uint8_t state)
 
 static bool canAcceptRunFeedback(uint8_t state)
 {
+    // 普通反馈只能从 READY 进入；RECOVERY_REQUIRED 另走自动 Rope Init 分支。
     return state == SYSTEM_STATE_READY;
 }
 
 static bool canAcceptCalibrate(uint8_t state)
 {
-    // Before the selected joints have Auto results, the feedback state can
-    // legitimately remain UNCONTROLLABLE. Manual coverage is checked before
-    // this state gate, so calibration must be allowed to create those results.
+    // 未生成 Auto 结果时系统可能保持 UNCONTROLLABLE。Manual 门禁会先检查，
+    // 因此必须允许从 UNCONTROLLABLE 启动标定来创建 Auto 结果。
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
@@ -464,6 +495,7 @@ static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return false;
     }
+    // 只检查 active scope；未参与本次动作的离线舵机不阻塞单指测试。
     const uint32_t activeMask = readyServoRequiredMask(sharedData);
     return activeMask != 0 &&
            ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & activeMask) == 0);
@@ -507,6 +539,7 @@ static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
                                    int32_t c,
                                    int32_t d)
 {
+    // READY 门禁在 100 Hz 被反复检查，按原因和上下文做 1 秒去重。
     static uint32_t s_lastLogMs = 0;
     static uint8_t s_lastReason = 0;
     static uint32_t s_lastA = 0;
@@ -516,7 +549,7 @@ static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
     const uint32_t nowMs = millis();
     const bool sameReject =
         reason == s_lastReason &&
-        (reason == 7 ||
+        (reason == FEEDBACK_READY_REJECT_BELOW_WORKSPACE ||
          (a == s_lastA && b == s_lastB && c == s_lastC && d == s_lastD));
     if (sameReject &&
         (uint32_t)(nowMs - s_lastLogMs) <= 1000) {
@@ -530,59 +563,59 @@ static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
     s_lastLogMs = nowMs;
 
     switch (reason) {
-        case 1:
+        case FEEDBACK_READY_REJECT_CAN_GATE:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: joint mode/CAN gate inactive motor=0x%08lX joint=0x%08lX mode=%ld require_can=%ld\r\n",
                           (unsigned long)a,
                           (unsigned long)b,
                           (long)c,
                           (long)d);
             break;
-        case 2:
+        case FEEDBACK_READY_REJECT_MULTITURN:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: multi-turn unknown active=0x%08lX unknown=0x%08lX\r\n",
                           (unsigned long)a,
                           (unsigned long)b);
             break;
-        case 3:
+        case FEEDBACK_READY_REJECT_EMPTY_SCOPE:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: active joint mask is zero motor=0x%08lX\r\n",
                           (unsigned long)a);
             break;
-        case 4:
+        case FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: mapped angle unavailable code=%lu age_ms=%ld\r\n",
                           (unsigned long)a,
                           (long)c);
             break;
-        case 5:
+        case FEEDBACK_READY_REJECT_CALIBRATION_MISSING:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: joint calibration missing J%02lu active=0x%08lX\r\n",
                           (unsigned long)a,
                           (unsigned long)b);
             break;
-        case 6:
+        case FEEDBACK_READY_REJECT_MAPPED_INVALID:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: mapped angle invalid J%02lu valid_flags=0x%08lX\r\n",
                           (unsigned long)a,
                           (unsigned long)b);
             break;
-        case 7:
+        case FEEDBACK_READY_REJECT_BELOW_WORKSPACE:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: joint below workspace J%02lu preserve=%ld outside=%ld tolerance=%ld\r\n",
                           (unsigned long)a,
                           (long)((int32_t)b),
                           (long)c,
                           (long)d);
             break;
-        case 8:
+        case FEEDBACK_READY_REJECT_CALIBRATION_MISMATCH:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: calibration/manual mismatch J%02lu mapping=%lu urdf_crc=0x%08lX manual_entry_crc=0x%08lX\r\n",
                           (unsigned long)a,
                           (unsigned long)b,
                           (unsigned long)(uint32_t)c,
                           (unsigned long)(uint32_t)d);
             break;
-        case 9:
+        case FEEDBACK_READY_REJECT_ENCODER_CAN:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: encoder/CAN unavailable offline=0x%08lX fault=0x%08lX sensor_fresh=%ld can_link=%ld\r\n",
                           (unsigned long)a,
                           (unsigned long)b,
                           (long)c,
                           (long)d);
             break;
-        case 10:
+        case FEEDBACK_READY_REJECT_SYSTEM_FAULT:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: system fault=0x%08lX\r\n",
                           (unsigned long)a);
             break;
@@ -608,6 +641,7 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     if (!sharedData) {
         return;
     }
+    // 运行态故障统一撤销输出所有权并锁存，必须由 RESET/Clear Fault 显式恢复。
     const uint8_t interruptedState = sharedData->system_state;
     clearPendingDirectCommand(sharedData, DIRECT_REJECT_FAULT);
     sharedAtomicStore(&sharedData->feedback_recovery_pending, (uint8_t)0);
@@ -638,9 +672,9 @@ static void resetControlProtectionFaults(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return;
     }
-    sharedAtomicStore(&sharedData->joint16_dual_feedback_fault, (uint8_t)0);
     {
         SharedSafetyGuard guard;
+        // bitmap 和对应负载数组属于同一份故障快照，必须成组清零。
         sharedAtomicStore(&sharedData->overload_fault_bitmap, (uint32_t)0);
         for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
             sharedData->overload_fault_load[i] = 0;
@@ -655,6 +689,7 @@ static uint32_t readyServoRequiredMask(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return 0;
     }
+    // 标定期间辅助双腱电机也会运动，故必须加入在线/多圈检查。
     uint32_t requiredMask = sharedAtomicLoad(&sharedData->active_motor_mask);
     if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
         requiredMask |= sharedAtomicLoad(&sharedData->calibration_aux_motor_mask);
@@ -667,6 +702,7 @@ static bool readyRequiresCan(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return false;
     }
+    // 纯舵机直控不依赖磁编/CAN；关节反馈、标定和 Rope Init 依赖。
     if (sharedData->control_mode == CONTROL_MODE_DIRECT_MOTOR) {
         return false;
     }
@@ -738,8 +774,9 @@ static bool directMotorMaskReady(TaskSharedData_t* sharedData,
         return false;
     }
 
-    // Servo/CAN/multi-turn readiness is evaluated against the pending scope
-    // above. Keep only faults that are independent of the previous scope.
+    // 新直控命令已经按 pending scope 独立检查舵机在线、CAN 依赖和多圈可信；
+    // 此处忽略旧 scope 遗留的 CAN/SERVO/MULTITURN 位，只保留与 scope
+    // 无关的过载、标定等全局故障。
     const uint32_t scopeDependentFaults =
         SYSTEM_FAULT_CAN_OFFLINE |
         SYSTEM_FAULT_SERVO_OFFLINE |
@@ -757,15 +794,17 @@ static bool isControllableEntryReady(TaskSharedData_t* sharedData)
         return false;
     }
 
-    // IDLE means direct-motor hardware is usable. Manual/Auto/CAN belong to
-    // the feedback READY gate and must not block recovery or direct control.
+    // IDLE 只表示直控硬件可用。Manual/Auto/CAN 属于反馈 READY 门禁，
+    // 不应阻止设备恢复或纯舵机直控。
     return directMotorMaskReady(sharedData, readyServoRequiredMask(sharedData));
 }
 
-// ============================================================================
-// activeJointsInControlWorkspace - 关节工作空间准入校验
-// ============================================================================
-// 该函数是判断系统能否�?IDLE 自动晋升�?READY 状态的关键�?// 1) 遍历当前启用�?active_joint_mask（支持动态任意数量的关节）�?// 2) 检查这些被选中的关节是否都已经成功完成过标定（g_jointCalibResult[i].success == true）�?// 3) 读取磁编码器当前的角度值，校验其是否落在宽容度范围�?(-0.8° �?max+0.8°)�?// 只有当所有选中关节都处于“安全可控范围内”时，系统才允许进入 READY�?// ============================================================================
+// 反馈 READY 的总门禁：
+// 1) 当前 active joints 必须有 Manual、Auto v3、有效磁编映射和舵机 ABS 限位；
+// 2) 磁编/CAN/舵机反馈必须在线且新鲜，多圈状态必须可信；
+// 3) READY 只由工作空间下边界决定：低于 Auto Min 时进入 RECOVERY_REQUIRED，
+//    上边界越界只由控制层限制目标并记录警告，不在这里强制退出 READY；
+// 4) 24/48 counts 迟滞和连续三帧确认用于消除边界抖动。
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
                                            uint32_t* recoverableBelowMask)
 {
@@ -781,7 +820,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
     }
     if (!readyRequiresCan(sharedData)) {
         logFeedbackReadyReject(sharedData,
-                               1,
+                               FEEDBACK_READY_REJECT_CAN_GATE,
                                sharedAtomicLoad(&sharedData->active_motor_mask),
                                sharedAtomicLoad(&sharedData->active_joint_mask),
                                sharedData->control_mode,
@@ -790,7 +829,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
     }
     if (!activeMotorsMultiTurnKnown(sharedData)) {
         logFeedbackReadyReject(sharedData,
-                               2,
+                               FEEDBACK_READY_REJECT_MULTITURN,
                                readyServoRequiredMask(sharedData),
                                sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap),
                                0,
@@ -806,7 +845,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
         ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     if (activeMask == 0) {
         logFeedbackReadyReject(sharedData,
-                               3,
+                               FEEDBACK_READY_REJECT_EMPTY_SCOPE,
                                sharedAtomicLoad(&sharedData->active_motor_mask),
                                0,
                                0,
@@ -831,7 +870,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
         (activeMask & ~encoderOnlineMask) != 0 ||
         (activeMask & encoderFaultMask) != 0) {
         logFeedbackReadyReject(sharedData,
-                               9,
+                               FEEDBACK_READY_REJECT_ENCODER_CAN,
                                activeMask & ~encoderOnlineMask,
                                activeMask & encoderFaultMask,
                                sensorFresh ? 1 : 0,
@@ -840,26 +879,31 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
     }
     const uint32_t feedbackFaults = collectSystemFaults(sharedData);
     if (feedbackFaults != 0) {
-        logFeedbackReadyReject(sharedData, 10, feedbackFaults, 0, 0, 0);
+        logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_SYSTEM_FAULT,
+                               feedbackFaults, 0, 0, 0);
         return false;
     }
 
     MappedAngleData_t mappedData;
     if (!sharedData->mappedAngleQueue) {
-        logFeedbackReadyReject(sharedData, 4, 0, 0, 0, 0);
+        logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE,
+                               0, 0, 0, 0);
         return false;
     }
     if (xQueuePeek(sharedData->mappedAngleQueue, &mappedData, 0) != pdTRUE) {
-        logFeedbackReadyReject(sharedData, 4, 1, 0, 0, 0);
+        logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE,
+                               1, 0, 0, 0);
         return false;
     }
     const uint32_t mappedAgeMs = nowMs - mappedData.timestamp;
     if (!mappedData.isValid) {
-        logFeedbackReadyReject(sharedData, 4, 2, 0, (int32_t)mappedAgeMs, 0);
+        logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE,
+                               2, 0, (int32_t)mappedAgeMs, 0);
         return false;
     }
     if (mappedAgeMs > kStateCanOfflineTimeoutMs) {
-        logFeedbackReadyReject(sharedData, 4, 3, 0, (int32_t)mappedAgeMs, 0);
+        logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_MAPPED_UNAVAILABLE,
+                               3, 0, (int32_t)mappedAgeMs, 0);
         return false;
     }
 
@@ -876,7 +920,8 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
         }
         const JointCalibrationResult& calib = g_jointCalibResult[calibJoint];
         if (!calib.success) {
-            logFeedbackReadyReject(sharedData, 5, calibJoint, activeMask, 0, 0);
+            logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_CALIBRATION_MISSING,
+                                   calibJoint, activeMask, 0, 0);
             return false;
         }
         const uint32_t manualEntryCrc =
@@ -886,7 +931,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
             calib.urdfConfigCrc != kManualScaledUrdfConfigCrc ||
             calib.manualReferenceCrc != manualEntryCrc) {
             logFeedbackReadyReject(sharedData,
-                                   8,
+                                   FEEDBACK_READY_REJECT_CALIBRATION_MISMATCH,
                                    calibJoint,
                                    calib.mappingVersion,
                                    (int32_t)calib.urdfConfigCrc,
@@ -900,7 +945,8 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
                     validMask |= (1UL << i);
                 }
             }
-            logFeedbackReadyReject(sharedData, 6, calibJoint, validMask, 0, 0);
+            logFeedbackReadyReject(sharedData, FEEDBACK_READY_REJECT_MAPPED_INVALID,
+                                   calibJoint, validMask, 0, 0);
             return false;
         }
 
@@ -911,6 +957,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
             s_workspaceManualCrc[calibJoint] != calib.manualReferenceCrc ||
             s_workspaceMappingVersion[calibJoint] != calib.mappingVersion;
         if (calibrationChanged) {
+            // Auto 端点、Manual CRC 或映射版本任一变化，旧 READY 锁存立即失效。
             s_workspaceReadyLatchMask &= ~jointBit;
             s_workspaceEnterStable[calibJoint] = 0;
             s_workspaceExitStable[calibJoint] = 0;
@@ -923,6 +970,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
         const int32_t outsideCounts = mappedData.outsideCounts[calibJoint];
         if (isNewMappedSample) {
             if ((s_workspaceReadyLatchMask & jointBit) != 0) {
+                // 已 READY：只有连续三帧低于 -48 counts 才退出。
                 s_workspaceEnterStable[calibJoint] = 0;
                 if (outsideCounts < -kReadyExitOutsideToleranceCounts) {
                     if (s_workspaceExitStable[calibJoint] < 255) {
@@ -936,6 +984,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
                     s_workspaceExitStable[calibJoint] = 0;
                 }
             } else {
+                // 未 READY：连续三帧回到 -24 counts 以内才进入。
                 s_workspaceExitStable[calibJoint] = 0;
                 if (outsideCounts >= -kReadyEnterOutsideToleranceCounts) {
                     if (s_workspaceEnterStable[calibJoint] < 255) {
@@ -959,7 +1008,7 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
             }
             if (outsideCounts < -kReadyEnterOutsideToleranceCounts) {
                 logFeedbackReadyReject(sharedData,
-                                       7,
+                                       FEEDBACK_READY_REJECT_BELOW_WORKSPACE,
                                        calibJoint,
                                        0,
                                        outsideCounts,
@@ -981,6 +1030,8 @@ static void markActiveJointsWorkspaceReady(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return;
     }
+    // Rope Init 已实际把关节送回工作空间，直接建立与当前标定绑定的 READY 锁存，
+    // 避免等待后续三帧时 UI 短暂回到 IDLE。
     const uint32_t activeMask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         kManualEncoderReferenceFullMask;
@@ -1012,13 +1063,12 @@ static bool feedbackTargetsPointIntoWorkspace(TaskSharedData_t* sharedData)
         return false;
     }
 
-    SemaphoreHandle_t lock = sharedData->commandStateMutex
-        ? sharedData->commandStateMutex
-        : sharedData->targetAnglesMutex;
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return false;
     }
 
+    // 自动恢复只允许“向工作空间内部”运动，禁止目标仍低于动态 currentMin。
     bool safe = true;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         if ((activeMask & (1UL << joint)) == 0) {
@@ -1047,6 +1097,8 @@ static bool beginRopeInitMotion(TaskSharedData_t* sharedData,
     if (!sharedData) {
         return false;
     }
+    // Rope Init 临时借用 CALIBRATION 输出所有权，但 system_state 使用独立状态，
+    // 便于 UI、故障处理和完成事件区分自动标定。
     sharedData->rope_init_sequence++;
     sharedData->rope_init_joint_mask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
@@ -1080,6 +1132,7 @@ static bool beginRopeInitMotion(TaskSharedData_t* sharedData,
 
 static uint8_t idleOrReadyState(TaskSharedData_t* sharedData)
 {
+    // 状态优先级：硬件不可控 > 工作空间已就绪 > 可通过 Rope Init 恢复 > 普通 IDLE。
     if (!isControllableEntryReady(sharedData)) {
         return SYSTEM_STATE_UNCONTROLLABLE;
     }
@@ -1111,6 +1164,7 @@ static void updateReadyStateIfIdle(TaskSharedData_t* sharedData)
 static bool feedbackCompletionMatchesCurrentCommand(TaskSharedData_t* sharedData,
                                                     const SystemEvent_t& event)
 {
+    // token=0 保留给不绑定代次的内部完成事件；正常控制使用 joint_command_token。
     return sharedData &&
            (event.token == 0 || event.token == sharedData->joint_command_token);
 }
@@ -1120,9 +1174,8 @@ static void releaseFeedbackRun(TaskSharedData_t* sharedData)
     if (!sharedData) {
         return;
     }
-    // Leave the servo's last accepted position in place for a stable hold.
-    // Only the feedback task's ownership is released so another joint scope
-    // can be selected immediately.
+    // 保留舵机最后一次接受的位置作为稳定保持，仅释放反馈任务所有权，
+    // 这样上位机可以立即切换 active scope 并发送下一条关节命令。
     sharedData->control_enabled = 0;
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     setSystemState(sharedData, idleOrReadyState(sharedData));
@@ -1135,6 +1188,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
         return;
     }
 
+    // 所有状态迁移集中在此处；事件处理必须先做门禁，再授予输出所有权。
     switch (event.event)
     {
         case SYSTEM_EVENT_START:
@@ -1180,8 +1234,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_STOP:
-            // Discard motion events queued before STOP. New commands must be
-            // issued after the state has visibly returned to UNCONTROLLABLE.
+            // 丢弃 STOP 之前已排队的运动事件。上位机必须在看到
+            // UNCONTROLLABLE 后重新发送命令，旧事件不能让设备自行复动。
             if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
                 requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             }
@@ -1208,6 +1262,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_RESET:
+            // RESET 清命令、清可复位保护并断扭矩，但不伪造多圈或标定数据。
             if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
                 requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             }
@@ -1225,6 +1280,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_RUN_DIRECT:
+            // staged 直控必须同时满足代次、状态、在线和多圈可信四项门禁。
             if (!pendingDirectCommandMatches(sharedData, event.token)) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_DIRECT generation=%lu pending=%lu valid=%u\r\n",
                                    (unsigned long)event.token,
@@ -1291,6 +1347,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK:
+            // 反馈准入结果通过 sequence 回写给上位机；RECOVERY_REQUIRED
+            // 会自动启动 Rope Init，完成后再恢复本次反馈请求。
             if (!manualReferenceGateReady(sharedData)) {
                 logManualReferenceReject(sharedData, "RUN_FEEDBACK");
                 setFeedbackAdmissionResult(sharedData, event.token,
@@ -1321,11 +1379,9 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 }
                 break;
             }
-            // Every desktop joint target is paired with RUN_FEEDBACK. A status
-            // packet can be one feedback cycle behind P4, so a repeated request
-            // while this run already owns the output must be harmless. Do not
-            // reset the queue here: ControlTask will consume the newer joint
-            // command token on its next cycle.
+            // 每个上位机关节目标都会附带 RUN_FEEDBACK。状态包可能落后一帧，
+            // 因此已经在反馈运行时收到重复请求必须幂等；不能重置输出队列，
+            // ControlTask 会在下一周期消费更新后的 joint_command_token。
             if (sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK) {
                 setFeedbackAdmissionResult(sharedData, event.token,
                                            FEEDBACK_ADMISSION_ACCEPTED,
@@ -1478,6 +1534,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_PAUSE:
+            // PAUSE 记录原运行态并断扭矩；START 仅在门禁仍满足时恢复。
             if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT &&
                 sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
                 FW_LOG_INFO_PRINTF("[STATE] reject PAUSE in state=%u\r\n",
@@ -1494,6 +1551,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
 
         case SYSTEM_EVENT_CALIBRATE:
         {
+            // 标定允许从 UNCONTROLLABLE 启动，但 Manual、任务所有权和 active scope
+            // 仍必须在启动 AutoCalibrationTask 前通过检查。
             if (!manualReferenceGateReady(sharedData)) {
                 logManualReferenceReject(sharedData, "CALIBRATE");
                 setCalibrationStatus(CALIB_STATUS_FAILED, true);
@@ -1539,6 +1598,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
 
         case SYSTEM_EVENT_ROPE_INIT:
         {
+            // 手动 Rope Init 只处理 active scope，并且要求其 Manual/Auto/多圈已可信。
             const uint8_t preflightReason =
                 ropeInitActiveScopeRejectReason(sharedData);
             if (preflightReason != ROPE_INIT_REASON_NONE) {
@@ -1597,6 +1657,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 sharedAtomicStore(
                     &sharedData->feedback_recovery_request_sequence,
                     (uint32_t)0);
+                // 自动恢复场景下，Rope Init 完成后再次核验最新目标，再交还反馈所有权。
                 if (resumeFeedback && commandModeJoint &&
                     feedbackTargetsPointIntoWorkspace(sharedData) &&
                     activeJointsInControlWorkspace(sharedData)) {
@@ -1661,6 +1722,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_CALIBRATION_DONE:
+            // 标定任务已将结果写入 RAM；此处只更新状态、清对应多圈未知并请求 NVS。
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_DONE in state=%u\r\n",
                               (unsigned)sharedData->system_state);
@@ -1681,6 +1743,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_REEVALUATE_READY:
+            // active scope、Manual 或 Calib Load 改变后触发一次显式重评估。
             if (sharedData->control_enabled == 0 &&
                 sharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE &&
                 (sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
@@ -1699,6 +1762,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             break;
 
         case SYSTEM_EVENT_CALIBRATION_FAILED:
+            // 标定失败属于锁存故障：撤销所有权、断扭矩并等待用户 Clear Fault。
             if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
                 FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_FAILED in state=%u\r\n",
                               (unsigned)sharedData->system_state);
@@ -1723,6 +1787,7 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
         return 0;
     }
 
+    // 只汇总“当前观测”和已经锁存的故障，不在本函数执行状态迁移。
     const uint32_t nowMs = millis();
     uint32_t faults = 0;
 
@@ -1766,10 +1831,7 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
         faults |= SYSTEM_FAULT_SERVO_OFFLINE;
     }
 
-    // Temporary single-finger test mode: do not promote the joint16 dual-servo
-    // consistency check to a system fault. Otherwise a setup without the J16
-    // primary/secondary motors cannot enter READY. The control task still keeps
-    // its local J16 hold behavior when that joint is actually used.
+    // 过载和标定失败由产生故障的任务锁存，状态机只负责提升为系统故障。
     if (sharedAtomicLoad(&sharedData->overload_fault_bitmap) != 0) {
         faults |= SYSTEM_FAULT_OVERLOAD;
     }
@@ -1788,6 +1850,7 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
 
 static uint32_t blockingFaultsForState(uint8_t state, uint32_t faults)
 {
+    // 不同运动态依赖不同传感器：直控忽略 CAN；自动标定允许重建多圈参考。
     switch (state) {
         case SYSTEM_STATE_RUN_DIRECT:
             return faults & ~SYSTEM_FAULT_CAN_OFFLINE;
@@ -1795,8 +1858,8 @@ static uint32_t blockingFaultsForState(uint8_t state, uint32_t faults)
         case SYSTEM_STATE_ROPE_INIT_RUNNING:
             return faults;
         case SYSTEM_STATE_CALIBRATION_RUNNING:
-            // Auto calibration intentionally reconstructs the multi-turn
-            // reference, so unknown turns are not an abort condition here.
+            // 自动标定会主动重建多圈参考，因此标定期间出现 Turn Unknown
+            // 不能作为终止本次标定的条件。
             return faults & ~SYSTEM_FAULT_MULTITURN_UNKNOWN;
         default:
             return 0;
@@ -1816,12 +1879,12 @@ static bool stateOwnsMotionResources(TaskSharedData_t* sharedData)
            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
 }
 
-// ============================================================================
-// StateMachineTask - 系统顶层大状态机任务
-// ============================================================================
-// 运行频率：通常�?100Hz (10ms 周期)
-// 职责�?// 1) 负责全局安全状态流转：UNCONTROLLABLE (不可�?异常) -> IDLE (空闲可用)
-//    -> READY (各关节在有效工作空间内，准备就绪) -> RUN_FEEDBACK / RUN_DIRECT�?// 2) 处理外部发来的指令事件（�?SYSTEM_EVENT_START、SYSTEM_EVENT_CALIBRATE）�?// 3) 不断收集底层的错误状�?(collectSystemFaults)，一旦发现断联、过载等致命错误�?//    立即强制退�?UNCONTROLLABLE 状态并触发紧急急停 (Emergency Hold)�?// ============================================================================
+// 系统顶层状态机，周期 10 ms（100 Hz）：
+// 1) 优先消费不可丢失的 E-STOP token；
+// 2) 顺序处理普通状态事件；
+// 3) 汇总 CAN、舵机、多圈、过载和标定故障；
+// 4) 运行态遇到阻塞故障立即撤销所有权并进入 UNCONTROLLABLE；
+// 5) 无任务占用输出时持续重评估 UNCONTROLLABLE/IDLE/RECOVERY_REQUIRED/READY。
 void stateMachineTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
@@ -1840,6 +1903,7 @@ void stateMachineTask(void* parameter)
     for (;;)
     {
         taskRuntimeMarkLoopStart(TASK_RUNTIME_STATE_MACHINE);
+        // E-STOP token 比普通队列优先，且只处理每个新 token 一次。
         const uint32_t emergencyStopToken =
             sharedAtomicLoad(&sharedData->emergency_stop_request_token);
         if (emergencyStopToken != handledEmergencyStopToken) {
@@ -1852,6 +1916,7 @@ void stateMachineTask(void* parameter)
         }
 
         SystemEvent_t event;
+        // 单周期清空当前事件队列，保持状态切换延迟低于一个 10 ms 周期。
         while (xQueueReceive(sharedData->stateEventQueue, &event, 0) == pdTRUE) {
             handleSystemEvent(sharedData, event);
         }
@@ -1864,6 +1929,7 @@ void stateMachineTask(void* parameter)
         if (stateOwnsMotionResources(sharedData) && blockingFaults != 0) {
             enterFaultHold(sharedData, blockingFaults);
         } else if (!stateOwnsMotionResources(sharedData)) {
+            // 空闲态不锁死 READY；新反馈、active scope 或标定变化会自动更新状态。
             updateReadyStateIfIdle(sharedData);
         }
 

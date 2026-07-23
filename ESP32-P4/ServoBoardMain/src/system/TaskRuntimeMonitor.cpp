@@ -5,6 +5,7 @@
 
 namespace {
 
+// 每个诊断槽只累计最坏值，不在实时任务中分配内存或打印日志。
 struct TaskRuntimeSlot {
     TaskHandle_t handle;
     uint8_t active;
@@ -24,7 +25,9 @@ struct TaskRuntimeSlot {
 };
 
 TaskRuntimeSlot g_slots[TASK_RUNTIME_COUNT] = {};
+// 所有任务都会更新诊断槽，使用自旋锁保护短小的字段复制和计数操作。
 portMUX_TYPE g_runtimeLock = portMUX_INITIALIZER_UNLOCKED;
+// 0xFFFF 表示当前 FreeRTOS 配置未提供可用的 runtime stats。
 uint16_t g_coreIdlePermille[2] = {0xFFFF, 0xFFFF};
 uint32_t g_lastSystemStatusMs = 0;
 uint32_t g_systemStatusMaxGapMs = 0;
@@ -33,6 +36,7 @@ int64_t g_stopRequestedUs = 0;
 uint32_t g_stopLastLatencyUs = 0;
 uint32_t g_stopMaxLatencyUs = 0;
 
+// 只有同时开启 FreeRTOS runtime stats 与 trace facility 才能计算双核 idle。
 #if defined(configGENERATE_RUN_TIME_STATS) && (configGENERATE_RUN_TIME_STATS == 1) && \
     defined(configUSE_TRACE_FACILITY) && (configUSE_TRACE_FACILITY == 1)
 #if defined(configRUN_TIME_COUNTER_TYPE)
@@ -54,6 +58,8 @@ uint32_t clampUs(int64_t value)
 
 uint32_t sampleCurrentTaskStackFreeBytes()
 {
+    // 当前栈指针减去栈起始地址，用于估算“此刻剩余栈”；
+    // 不支持 pxTaskGetStackStart 的构建返回 0，由上位机显示为未知。
 #if defined(INCLUDE_pxTaskGetStackStart) && (INCLUDE_pxTaskGetStackStart == 1)
     volatile uint8_t marker = 0;
     uint8_t* stackStart = (uint8_t*)pxTaskGetStackStart(NULL);
@@ -74,7 +80,7 @@ void sampleTaskStacks()
         portEXIT_CRITICAL(&g_runtimeLock);
         if (!handle) continue;
 
-        // ESP-IDF FreeRTOS reports the high-water mark in bytes.
+        // ESP-IDF FreeRTOS 的高水位单位是字节，表示历史最小剩余栈。
         const uint32_t freeBytes = (uint32_t)uxTaskGetStackHighWaterMark(handle);
         const uint8_t priority = (uint8_t)uxTaskPriorityGet(handle);
         portENTER_CRITICAL(&g_runtimeLock);
@@ -96,6 +102,7 @@ void sampleCoreIdle()
         sizeof(g_taskStatusBuffer) / sizeof(g_taskStatusBuffer[0]),
         &totalRuntime
     );
+    // 第一帧只建立基线，下一秒才有可比较的增量。
     if (count == 0 || g_previousTotalRuntime == 0) {
         g_previousTotalRuntime = totalRuntime;
         for (UBaseType_t i = 0; i < count; i++) {
@@ -162,6 +169,7 @@ void taskRuntimeRegister(uint8_t taskId, TaskHandle_t handle, uint32_t stackAllo
 
 void taskRuntimeUnregister(uint8_t taskId)
 {
+    // 动态任务退出前保留最后一次栈余量，但清空句柄，避免监控访问已删除任务。
     if (taskId >= TASK_RUNTIME_COUNT) return;
     const uint32_t freeBytes = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
     portENTER_CRITICAL(&g_runtimeLock);
@@ -183,6 +191,7 @@ void taskRuntimeMarkLoopStart(uint8_t taskId)
     const uint32_t currentStackFreeBytes = sampleCurrentTaskStackFreeBytes();
     portENTER_CRITICAL(&g_runtimeLock);
     TaskRuntimeSlot& slot = g_slots[taskId];
+    // gap 是相邻两轮开始时刻之差；exec 是本轮 Start 到 End 的执行时间。
     if (slot.lastLoopStartUs > 0) {
         const uint32_t gapUs = clampUs(nowUs - slot.lastLoopStartUs);
         if (gapUs > slot.maxGapUs) slot.maxGapUs = gapUs;
@@ -242,6 +251,7 @@ bool taskRuntimeGetSnapshot(uint8_t taskId, TaskRuntimeSnapshot* out)
     out->coreId = slot.coreId;
     out->stackAllocatedBytes = slot.stackAllocatedBytes;
     out->stackCurrentFreeBytes = slot.stackCurrentFreeBytes;
+    // 某些平台无法直接采当前栈，异常值不得超过创建任务时声明的栈大小。
     if (out->stackAllocatedBytes > 0 && out->stackCurrentFreeBytes > out->stackAllocatedBytes) {
         out->stackCurrentFreeBytes = out->stackAllocatedBytes;
     }
@@ -295,6 +305,7 @@ void taskRuntimeMarkStopTorqueOffComplete(void)
 {
     const int64_t nowUs = esp_timer_get_time();
     portENTER_CRITICAL(&g_runtimeLock);
+    // 只有完整经历“收到 STOP -> 发出急停请求 -> 舵机完成断扭矩”才记一次时延。
     if (g_stopReceivedUs > 0 && g_stopRequestedUs >= g_stopReceivedUs) {
         g_stopLastLatencyUs = clampUs(nowUs - g_stopReceivedUs);
         if (g_stopLastLatencyUs > g_stopMaxLatencyUs) {
@@ -310,6 +321,7 @@ void taskRuntimeMonitorTask(void* parameter)
 {
     (void)parameter;
     TickType_t lastWakeTime = xTaskGetTickCount();
+    // 监控任务低频运行，避免为了诊断反过来干扰 10 ms 控制周期。
     const TickType_t periodTicks = pdMS_TO_TICKS(1000);
     for (;;) {
         taskRuntimeMarkLoopStart(TASK_RUNTIME_MONITOR);

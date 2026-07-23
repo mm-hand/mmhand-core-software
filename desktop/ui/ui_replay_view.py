@@ -6,7 +6,7 @@ from pathlib import Path
 
 from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_READY
 
-from .ui_qt_compat import QtCore, QtWidgets
+from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
 
 class ReplayView(QtWidgets.QWidget):
@@ -48,18 +48,19 @@ class ReplayView(QtWidgets.QWidget):
         summary_layout.addWidget(self.warning_label)
         layout.addWidget(summary_group)
 
-        preview_group = QtWidgets.QGroupBox("21关节轨迹范围预览")
+        preview_group = QtWidgets.QGroupBox("21关节实时角度")
         preview_layout = QtWidgets.QVBoxLayout(preview_group)
         self.preview_table = QtWidgets.QTableWidget(ENCODER_COUNT, 5)
         self.preview_table.setHorizontalHeaderLabels(
-            ["Joint", "Start deg", "End deg", "Min deg", "Max deg"]
+            ["Joint", "Current deg", "Valid", "Replay Target", "Error"]
         )
         self.preview_table.verticalHeader().setVisible(False)
         self.preview_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         header = self.preview_table.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        for column in range(1, 5):
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        for column in (1, 3, 4):
             header.setSectionResizeMode(column, QtWidgets.QHeaderView.Stretch)
         for joint in range(ENCODER_COUNT):
             self.preview_table.setItem(
@@ -96,9 +97,9 @@ class ReplayView(QtWidgets.QWidget):
     def _import_csv(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "导入遥操作轨迹",
+            "导入动作轨迹",
             "",
-            "遥操作CSV (*.csv);;所有文件 (*)",
+            "动作或关节状态 CSV (*.csv);;所有文件 (*)",
         )
         if not path:
             return
@@ -131,7 +132,8 @@ class ReplayView(QtWidgets.QWidget):
             else "使用P4当前active scope"
         )
         self.summary_label.setText(
-            f"来源：{trace.source or '-'}    帧数：{trace.frame_count}    "
+            f"数据：{'实际关节角' if trace.data_kind == 'actual' else '动作指令'}    "
+            f"来源：{trace.source or '-'}    记录帧数：{trace.frame_count}    "
             f"时长：{trace.duration_s:.3f} s    平均频率：{trace.average_hz:.2f} Hz\n"
             f"开始时间：{trace.start_host_time or '-'}    最大帧间隔："
             f"{trace.max_gap_s:.3f} s    Active：{scope}\n"
@@ -142,12 +144,6 @@ class ReplayView(QtWidgets.QWidget):
         self.warning_label.setText(
             "" if not trace.warnings else "注意：" + "；".join(trace.warnings)
         )
-        for joint in range(ENCODER_COUNT):
-            start, end, low, high = trace.joint_statistics(joint)
-            for column, value in enumerate((start, end, low, high), start=1):
-                self.preview_table.setItem(
-                    joint, column, QtWidgets.QTableWidgetItem(f"{value:.3f}")
-                )
 
     def _refresh_status(self) -> None:
         state = self.context.get_state()
@@ -165,6 +161,11 @@ class ReplayView(QtWidgets.QWidget):
         self.replay_status.setText(status.message)
         if status.duration_s > 0.0:
             ratio = max(0.0, min(1.0, status.elapsed_s / status.duration_s))
+        elif status.total_frames > 0:
+            ratio = max(
+                0.0,
+                min(1.0, float(status.frame_index) / float(status.total_frames)),
+            )
         else:
             ratio = 0.0
         self.progress.setValue(int(round(ratio * 1000.0)))
@@ -176,3 +177,71 @@ class ReplayView(QtWidgets.QWidget):
             "font-weight:700;color:#b71c1c;" if running else "font-weight:700;"
         )
         self.send_btn.setEnabled(running or (self.service.trace() is not None and ready))
+        self._refresh_joint_feedback(state, status)
+
+    def _refresh_joint_feedback(self, state, replay_status) -> None:
+        """复用 Joint Channels 的有效性判断，刷新真实反馈和当前回放目标。"""
+        panel = self.context.control_panel
+        angles = list(getattr(state, "angles", []) or []) if state is not None else []
+        targets = tuple(getattr(replay_status, "current_targets", ()) or ())
+        target_mask = int(getattr(replay_status, "current_joint_mask", 0) or 0)
+
+        self.preview_table.setUpdatesEnabled(False)
+        try:
+            for joint in range(ENCODER_COUNT):
+                encoder_status = panel._joint_encoder_status(joint, state)
+                angle_valid = (
+                    encoder_status in ("ok", "warn")
+                    and panel._joint_angle_feedback_valid(joint, state)
+                    and panel._joint_angle_display_calibrated(joint, state)
+                    and joint < len(angles)
+                )
+                current = float(angles[joint]) if angle_valid else None
+                current_item = self.preview_table.item(joint, 1)
+                valid_item = self.preview_table.item(joint, 2)
+                target_item = self.preview_table.item(joint, 3)
+                error_item = self.preview_table.item(joint, 4)
+
+                if current is None:
+                    current_item.setText("-")
+                    current_item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+                    valid_item.setText("-")
+                    valid_item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+                else:
+                    current_item.setText(f"{current:.3f}")
+                    out_of_workspace = bool(
+                        joint < len(getattr(state, "encoders", []) or [])
+                        and getattr(
+                            state.encoders[joint],
+                            "angle_out_of_workspace",
+                            False,
+                        )
+                    )
+                    current_item.setForeground(
+                        QtGui.QBrush(
+                            QtGui.QColor("#d89b00" if out_of_workspace else "#000000")
+                        )
+                    )
+                    valid_item.setText("WARN" if encoder_status == "warn" else "OK")
+                    valid_item.setForeground(
+                        QtGui.QBrush(
+                            QtGui.QColor(
+                                "#d89b00" if encoder_status == "warn" else "#1b7f3a"
+                            )
+                        )
+                    )
+
+                target_valid = bool(
+                    target_mask & (1 << joint) and joint < len(targets)
+                )
+                if target_valid:
+                    target = float(targets[joint])
+                    target_item.setText(f"{target:.3f}")
+                    error_item.setText(
+                        f"{target - current:.3f}" if current is not None else "-"
+                    )
+                else:
+                    target_item.setText("-")
+                    error_item.setText("-")
+        finally:
+            self.preview_table.setUpdatesEnabled(True)
