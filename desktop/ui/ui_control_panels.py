@@ -69,7 +69,7 @@ from desktop.core.motor_mapping import (
     motor_target_from_servo_feedback,
 )
 from .ui_teleop_view import TeleopView
-from .ui_algorithm_view import AlgorithmView
+from .ui_replay_view import ReplayView
 
 
 MOTOR_TARGET_SCALE_LO = 0
@@ -411,7 +411,7 @@ class ControlPanel(QtWidgets.QWidget):
         self._tri_test_t0 = 0.0
 
         self._body_widget: Optional[QtWidgets.QWidget] = None
-        self._algorithm_view: Optional[AlgorithmView] = None
+        self._replay_view: Optional[ReplayView] = None
         self._app_mode = "manual"
         self.scope_combo: Optional[QtWidgets.QComboBox] = None
         self._scope_selection_index = 0
@@ -651,7 +651,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._body_widget.deleteLater()
             self._body_widget = None
         self.scope_combo = None
-        self._algorithm_view = None
+        self._replay_view = None
         self._reset_manual_widget_refs()
 
     def _reset_manual_widget_refs(self) -> None:
@@ -1659,6 +1659,7 @@ class ControlPanel(QtWidgets.QWidget):
         if getattr(self, "raw_ik_enable_btn", None) is not None:
             # UI 必须显示 backend 的真实授权状态。E-STOP、Pause、断线或
             # active scope 改变后 backend 会撤权，按钮会在下一次刷新时复位。
+            ros2_available = bool(self.context.ros2_enabled)
             raw_ik_enabled = bool(self.backend.raw_ik_output_enabled())
             self.raw_ik_enable_btn.blockSignals(True)
             self.raw_ik_enable_btn.setChecked(raw_ik_enabled)
@@ -1666,9 +1667,14 @@ class ControlPanel(QtWidgets.QWidget):
                 "RAW IK ON" if raw_ik_enabled else "RAW IK ENABLE"
             )
             self.raw_ik_enable_btn.blockSignals(False)
-            self.raw_ik_enable_btn.setVisible(bool(self.context.ros2_enabled))
+            # ROS2 bridge 成功启动后才显示遥操授权按钮；普通控制和 Replay
+            # 模式未接入 ROS2 时保持隐藏，避免把不可用入口暴露给用户。
+            self.raw_ik_enable_btn.setVisible(ros2_available)
+            self.raw_ik_enable_btn.setToolTip(
+                "Authorize ROS2 raw IK/joint target output"
+            )
             self.raw_ik_enable_btn.setEnabled(
-                bool(self.context.ros2_enabled) and
+                ros2_available and
                 mode != "device_check" and
                 (
                     raw_ik_enabled or
@@ -1698,11 +1704,11 @@ class ControlPanel(QtWidgets.QWidget):
             self._build_teleop_body()
             self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
             self.backend.set_pid_control(True)
-        elif "algorithm" in mode:
+        elif "replay" in mode:
             self._clear_body()
-            self._app_mode = "algorithm"
-            self._algorithm_view = AlgorithmView(self.context)
-            self._body_widget = self._algorithm_view
+            self._app_mode = "replay"
+            self._replay_view = ReplayView(self.context)
+            self._body_widget = self._replay_view
             self.body_layout.addWidget(self._body_widget)
             self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
             self.backend.set_pid_control(True)
@@ -2199,7 +2205,7 @@ class ControlPanel(QtWidgets.QWidget):
                 self.backend.stop()
             except Exception:
                 pass
-            self.context.cancel_algorithm("E-STOP")
+            self.context.cancel_replay("E-STOP")
             self.stop_all_tests("stopped by E-STOP", update_status=False)
             self._clear_run_states()
             self.context.emit_action("Stop")
@@ -2207,6 +2213,7 @@ class ControlPanel(QtWidgets.QWidget):
             self._estop_in_progress = False
 
     def pause_controller(self) -> None:
+        self.context.cancel_replay("Pause")
         try:
             self.backend.pause()
         except Exception:
@@ -3069,6 +3076,13 @@ class ControlPanel(QtWidgets.QWidget):
             self._teleop_selected_motor_mask = int(motor_mask) & VALID_MOTOR_MASK
             return int(motor_mask), int(joint_mask), True
 
+        if self._app_mode == "replay" and self._state is not None:
+            return (
+                int(getattr(self._state, "active_motor_mask", 0) or 0),
+                int(getattr(self._state, "active_joint_mask", 0) or 0),
+                True,
+            )
+
         data = self.scope_combo.currentData() if getattr(self, "scope_combo", None) is not None else None
         if not data:
             return None
@@ -3864,10 +3878,6 @@ class ControlPanel(QtWidgets.QWidget):
             name="mmhand-startup-calib-load",
             daemon=True,
         ).start()
-
-    def append_algorithm_output(self, text: str) -> None:
-        if self._algorithm_view is not None:
-            self._algorithm_view.append_output(text)
 
     def _maybe_show_calibration_assembly_warning(self, state) -> None:
         if not bool(getattr(state, "has_calibration_warning_status", False)):

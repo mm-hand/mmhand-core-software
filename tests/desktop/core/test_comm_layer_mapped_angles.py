@@ -10,13 +10,14 @@ from desktop.core.protocol import (
     ENCODER_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_SENSOR,
+    parse_servo_telem_packet,
 )
 
 
 def _sensor_payload(joint_idx: int, value: int) -> bytes:
     values = [DISCONNECT_SENTINEL] * ENCODER_COUNT
     values[joint_idx] = value
-    return b"".join(struct.pack(">h", item) for item in values)
+    return b"".join(struct.pack(">h", item) for item in values) + struct.pack(">I", 1234)
 
 
 def _calibrated_model(joint_idx: int = 6, angle_max: float = 64.104) -> HandModel:
@@ -27,6 +28,26 @@ def _calibrated_model(joint_idx: int = 6, angle_max: float = 64.104) -> HandMode
         "angleMax": angle_max,
     }
     return model
+
+
+def test_servo_telemetry_packet_includes_signed_current() -> None:
+    payload = b"".join(
+        (
+            struct.pack(">hhhBBB", 120, -230, 45, 120, 36, 1),
+            struct.pack(">hhhBBB", -80, 700, -61, 118, 40, 0),
+        )
+    )
+
+    parsed = parse_servo_telem_packet(payload)
+
+    assert parsed == (
+        [120, -80],
+        [-230, 700],
+        [45, -61],
+        [120, 118],
+        [36, 40],
+        [True, False],
+    )
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():
@@ -80,7 +101,9 @@ def test_changed_calibration_snapshot_invalidates_only_old_mapped_cache(monkeypa
         lambda _payload: dict(new_result),
     )
 
-    updated = comm._process_packets([(PACKET_TYPE_JOINT_CALIB_SNAPSHOT, b"")])
+    updated = comm._process_packets([
+        (PACKET_TYPE_JOINT_CALIB_SNAPSHOT, struct.pack(">I", 2234)),
+    ])
 
     assert updated is not None
     assert updated.joint_calib_results[joint_idx] == new_result
@@ -103,7 +126,9 @@ def test_repeated_identical_snapshot_does_not_invalidate_fresh_angle(monkeypatch
         lambda _payload: dict(model.joint_calib_results[joint_idx]),
     )
 
-    updated = comm._process_packets([(PACKET_TYPE_JOINT_CALIB_SNAPSHOT, b"")])
+    updated = comm._process_packets([
+        (PACKET_TYPE_JOINT_CALIB_SNAPSHOT, struct.pack(">I", 3234)),
+    ])
 
     assert updated is not None
     assert updated.encoders[joint_idx].raw == 321

@@ -34,7 +34,7 @@ def test_estop_is_enqueued_before_test_and_recorder_cleanup():
         _update_connection_lights=lambda: events.append("lights"),
         backend=SimpleNamespace(stop=lambda: events.append("backend.stop")),
         context=SimpleNamespace(
-            cancel_algorithm=lambda _reason: events.append("cancel_algorithm"),
+            cancel_replay=lambda _reason: events.append("cancel_replay"),
             emit_action=lambda _message: events.append("emit_action"),
         ),
         stop_all_tests=lambda *_args, **_kwargs: events.append("stop_all_tests"),

@@ -3,15 +3,14 @@ from __future__ import annotations
 from typing import Dict, List
 
 
+# CSV/HDF5/ROS bag 统一只暴露两条时间轴：
+# host_time 为带毫秒的本地日期时间，p4_time_ms 为固件开机后的 millis()。
+TIME_FIELDS = ["sample_index", "host_time", "p4_time_ms"]
+
+
 TOPIC_FIELDNAMES: Dict[str, List[str]] = {
     "core_state": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "mode",
         "controller_started",
         "calib_status",
@@ -38,13 +37,7 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "has_fault_status_data",
     ],
     "joint_state": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "joint_index",
         "is_active_joint",
         "joint_deg",
@@ -54,16 +47,9 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "joint_debug_actual_deg",
         "joint_debug_target_deg",
         "joint_debug_cmd_target_pos",
-        "joint_debug_timestamp_ms",
     ],
     "servo_state": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "motor_index",
         "joint_index",
         "is_active_motor",
@@ -79,18 +65,13 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "load",
         "load_mag",
         "load_dir",
+        "current_raw",
         "voltage",
         "temperature",
         "overload_fault",
     ],
     "tactile_summary": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "finger_index",
         "finger_name",
         "sensor_count",
@@ -106,13 +87,7 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "tactile_full_dropped",
     ],
     "tactile_full": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "finger_index",
         "finger_name",
         "sensor_index",
@@ -124,14 +99,7 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "force_mag",
     ],
     "joint_debug_packets": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
-        "device_ts_ms",
+        *TIME_FIELDS,
         "joint_index",
         "valid",
         "target_deg",
@@ -141,13 +109,7 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "cmd_target_pos",
     ],
     "event_log": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "event_type",
         "source",
         "detail",
@@ -156,63 +118,47 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "active_joint_mask",
     ],
     "teleop_input": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "source",
         "frame_id",
         "valid",
         "latency_ms",
-        "input_space",
-        "mapping_id",
-        "mapping_version",
-        "urdf_config_crc",
-        "raw_joint_targets_json",
-        "joint_targets_json",
-    ],
-    "teleop_output": [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
-        "source",
+        "active_joint_mask",
+        "command_joint_mask",
         "live_enabled",
         "blocked",
         "block_reason",
         "sent_to_backend",
+        "input_space",
         "output_space",
+        "mapping_id",
+        "mapping_version",
+        "urdf_config_crc",
         "clamped_joints_json",
-        "joint_targets_json",
+        "raw_joint_targets_json",
+        "input_joint_targets_json",
+        "output_joint_targets_json",
     ],
 }
 
 
 def _wide_joint_fields() -> List[str]:
     fields = [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
     ]
     for idx in range(21):
         label = f"J{idx:02d}"
         fields.extend([
-            f"{label}_deg",
+            f"{label}_current_deg",
+            f"{label}_current_valid",
             f"{label}_target_deg",
             f"{label}_encoder_raw",
             f"{label}_active",
+            f"{label}_debug_valid",
             f"{label}_debug_actual_deg",
             f"{label}_debug_target_deg",
+            f"{label}_debug_pid_output",
+            f"{label}_debug_cmd_valid",
             f"{label}_debug_cmd_target_pos",
         ])
     return fields
@@ -220,13 +166,7 @@ def _wide_joint_fields() -> List[str]:
 
 def _wide_servo_fields() -> List[str]:
     fields = [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
     ]
     for idx in range(27):
         label = f"M{idx:02d}"
@@ -240,6 +180,7 @@ def _wide_servo_fields() -> List[str]:
             f"{label}_load_mag",
             f"{label}_load_dir",
             f"{label}_speed",
+            f"{label}_current_raw",
             f"{label}_voltage",
             f"{label}_temperature",
             f"{label}_online",
@@ -256,13 +197,7 @@ _FINGER_CN_NAMES = ["拇指", "食指", "中指", "无名指", "小指"]
 
 def _wide_tactile_summary_fields() -> List[str]:
     fields = [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "tactile_online",
         "tactile_summary_seq",
         "tactile_full_seq",
@@ -283,13 +218,7 @@ def _wide_tactile_summary_fields() -> List[str]:
 
 def _wide_tactile_full_fields() -> List[str]:
     fields = [
-        "sample_index",
-        "host_time_iso",
-        "host_time_unix_s",
-        "host_time",
-        "elapsed_s",
-        "device_timestamp",
-        "device_elapsed_s",
+        *TIME_FIELDS,
         "finger_index",
         "finger_name",
     ]
@@ -316,23 +245,13 @@ TOPIC_FIELDNAMES.update(
 
 
 CSV_TOPIC_FILENAMES: Dict[str, str] = {
-    "core_state": "01_基础状态_core_state.csv",
-    "joint_state": "02_关节长表_joint_state.csv",
-    "joint_wide": "03_关节宽表_21关节一行.csv",
-    "servo_state": "04_舵机长表_servo_state.csv",
-    "servo_wide": "05_舵机宽表_27舵机一行.csv",
-    "tactile_summary": "06_触觉汇总长表_tactile_summary.csv",
-    "tactile_summary_wide": "07_触觉汇总宽表_五指一行.csv",
-    "tactile_full": "08_触觉全量长表_tactile_full.csv",
-    "tactile_full_thumb_wide": "09_触觉全量_拇指_wide.csv",
-    "tactile_full_index_wide": "10_触觉全量_食指_wide.csv",
-    "tactile_full_middle_wide": "11_触觉全量_中指_wide.csv",
-    "tactile_full_ring_wide": "12_触觉全量_无名指_wide.csv",
-    "tactile_full_pinky_wide": "13_触觉全量_小指_wide.csv",
-    "joint_debug_packets": "14_joint_debug原始包.csv",
-    "event_log": "15_操作事件_event_log.csv",
-    "teleop_input": "16_遥操作输入_teleop_input.csv",
-    "teleop_output": "17_遥操作输出_teleop_output.csv",
+    "core_state": "01_基础状态.csv",
+    "joint_wide": "02_关节总表.csv",
+    "servo_wide": "03_舵机总表.csv",
+    "tactile_summary_wide": "04_触觉总表.csv",
+    "tactile_full": "05_触觉全量.csv",
+    "event_log": "06_操作事件总表.csv",
+    "teleop_input": "07_遥操作总表.csv",
 }
 
 
@@ -345,9 +264,28 @@ DEFAULT_TOPICS = [
     "tactile_summary",
     "tactile_summary_wide",
     "teleop_input",
-    "teleop_output",
     "joint_debug_packets",
     "event_log",
+]
+
+# CSV面向人工查看，只输出合并后的总表；长表和原始debug仍保留给HDF5/ROS bag。
+DEFAULT_CSV_TOPICS = [
+    "core_state",
+    "joint_wide",
+    "servo_wide",
+    "tactile_summary_wide",
+    "event_log",
+    "teleop_input",
+]
+
+# 勾选触觉全量时，CSV只增加一张长表；HDF5同时保留五指宽表便于算法读取。
+TACTILE_FULL_TOPICS = [
+    "tactile_full",
+    "tactile_full_thumb_wide",
+    "tactile_full_index_wide",
+    "tactile_full_middle_wide",
+    "tactile_full_ring_wide",
+    "tactile_full_pinky_wide",
 ]
 
 
@@ -356,8 +294,7 @@ ROSBAG_TOPIC_NAMES = {
     "joint_state": "/mmhand/joint_state",
     "servo_state": "/mmhand/motor_state",
     "tactile_summary": "/mmhand/tactile_summary",
-    "teleop_input": "/mmhand/teleop_input",
-    "teleop_output": "/mmhand/teleop_output",
+    "teleop_input": "/mmhand/teleop",
     "joint_debug_packets": "/mmhand/joint_debug_packets",
     "event_log": "/mmhand/events",
 }

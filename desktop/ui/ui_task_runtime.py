@@ -5,14 +5,11 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 from desktop.core.protocol import TASK_RUNTIME_NAMES, TASK_RUNTIME_STATE_MACHINE, TASK_RUNTIME_CONTROL
+from desktop.paths import LOG_DIR
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
 
-TASK_RUNTIME_LOG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "logs",
-    "task_runtime",
-)
+TASK_RUNTIME_LOG_DIR = os.path.join(str(LOG_DIR), "task_runtime")
 TASK_RUNTIME_LOG_KEEP = 20
 UNKNOWN_PERMILLE = 0xFFFF
 

@@ -14,7 +14,7 @@ class EventRecorder:
         *,
         source: str = "ui",
         detail: str = "",
-        device_timestamp: object = "",
+        p4_time_ms: object = "",
         active_scope_label: str = "",
         active_motor_mask: str = "",
         active_joint_mask: str = "",
@@ -24,7 +24,7 @@ class EventRecorder:
             "event_log",
             {
                 "host_time": time.time() if host_time is None else float(host_time),
-                "device_timestamp": device_timestamp,
+                "p4_time_ms": p4_time_ms,
                 "event_type": str(event_type),
                 "source": str(source),
                 "detail": str(detail),

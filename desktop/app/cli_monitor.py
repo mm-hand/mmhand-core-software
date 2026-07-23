@@ -94,7 +94,8 @@ def _render_calib_status(calib_status: str) -> str:
 def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
     s = backend.get_state_snapshot()
     return {
-        "timestamp": s.timestamp,
+        "host_rx_time": s.host_rx_time,
+        "p4_time_ms": s.p4_time_ms if s.has_p4_time else None,
         "calib_status": s.calib_status,
         "enc_raw": [e.raw for e in s.encoders],
         "enc_err": [e.error for e in s.encoders],

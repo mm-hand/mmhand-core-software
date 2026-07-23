@@ -27,7 +27,8 @@ struct FeedbackCollisionInput {
     float targetDeg;
     float feedbackDeg;
     bool pidPushActive;
-    bool lutBoundaryClamped;
+    // 只有执行器实际位置已抵达当前推进方向的 LUT 边界时才置位。
+    bool workspaceBoundaryReached;
 };
 
 struct FeedbackCollisionResult {

@@ -317,6 +317,8 @@ typedef struct {
 typedef struct {
     int16_t speed[SERVO_TOTAL_NUM];
     int16_t load[SERVO_TOTAL_NUM];
+    // ST3215 Present Current 原始有符号读数；物理单位换算由上位机另行定义。
+    int16_t current[SERVO_TOTAL_NUM];
     uint8_t voltage[SERVO_TOTAL_NUM];
     uint8_t temperature[SERVO_TOTAL_NUM];
     uint8_t onlineStatus[SERVO_TOTAL_NUM];

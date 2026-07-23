@@ -20,6 +20,7 @@ import math
 import os
 import re
 import sys
+from datetime import datetime
 from typing import Dict, Iterable, List, Sequence
 
 
@@ -115,12 +116,13 @@ def _series(rows: Sequence[Dict[str, str]], key: str) -> List[float]:
 
 
 def _time_series(rows: Sequence[Dict[str, str]]) -> List[float]:
-    if rows and "elapsed_s" in rows[0]:
-        out = [_safe_float(row.get("elapsed_s", "")) for row in rows]
-        if any(math.isfinite(value) for value in out):
-            return out
-
-    raw = [_safe_float(row.get("host_time", "")) for row in rows]
+    raw: List[float] = []
+    for row in rows:
+        text = str(row.get("host_time", "") or "").strip()
+        try:
+            raw.append(datetime.fromisoformat(text).timestamp())
+        except Exception:
+            raw.append(float("nan"))
     finite = [value for value in raw if math.isfinite(value)]
     if not finite:
         return [float(i) for i in range(len(rows))]

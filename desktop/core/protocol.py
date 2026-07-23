@@ -30,6 +30,28 @@ PACKET_TYPE_CALIB_DIAG = 0x10
 PACKET_TYPE_TASK_DIAG = 0x11
 PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12
 
+# 当前 P4 上行协议在以下包的业务负载末尾追加 4 字节大端毫秒时间戳。
+# 标定诊断、任务诊断和 Joint Debug 已在业务结构内携带时间，不重复追加。
+P4_TIMESTAMP_BYTES = 4
+P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset(
+    {
+        PACKET_TYPE_SENSOR,
+        PACKET_TYPE_CALIB_ACK,
+        PACKET_TYPE_SERVO_ANGLE,
+        PACKET_TYPE_SERVO_TELEM,
+        PACKET_TYPE_PROTO_ACK,
+        PACKET_TYPE_FAULT_STATUS,
+        PACKET_TYPE_SERVO_RAW,
+        PACKET_TYPE_TACTILE,
+        PACKET_TYPE_ENCODER_RAW,
+        PACKET_TYPE_SYSTEM_STATUS,
+        PACKET_TYPE_MOTOR_ABS_LIMIT,
+        PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
+        PACKET_TYPE_TACTILE_FULL,
+        PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
+    }
+)
+
 CALIB_WARN_NONE = 0x00
 CALIB_WARN_AUTO_MIN_OFFSET = 0x01
 CALIB_WARN_AUTO_MAX_SHORTFALL = 0x02
@@ -247,6 +269,22 @@ def _build_command_frame(cmd: int, payload: bytes = b"") -> bytes:
     # LEN = CMD byte + payload + tail byte.
     frame_len = 1 + len(payload) + 1
     return bytes([PROTOCOL_HEADER, frame_len & 0xFF, cmd & 0xFF]) + payload + bytes([PROTOCOL_TAIL])
+
+
+def split_p4_timestamp(pkt_type: int, payload: bytes) -> Tuple[bytes, Optional[int]]:
+    """从当前上行包尾剥离 P4 毫秒时间戳。
+
+    新协议不再把上位机接收时间冒充下位机时间。应带时间戳的包若长度不足，
+    返回空负载，让调用方拒绝损坏或旧格式数据包。
+    """
+    if int(pkt_type) not in P4_TRAILING_TIMESTAMP_PACKET_TYPES:
+        return bytes(payload), None
+    if len(payload) < P4_TIMESTAMP_BYTES:
+        return b"", None
+    return (
+        bytes(payload[:-P4_TIMESTAMP_BYTES]),
+        struct.unpack(">I", payload[-P4_TIMESTAMP_BYTES:])[0],
+    )
 
 
 def parse_sensor_packet(payload: bytes) -> Tuple[List[int], List[bool]]:
@@ -778,28 +816,34 @@ def parse_servo_angle_packet(payload: bytes) -> Optional[Tuple[List[int], List[b
 
 def parse_servo_telem_packet(
     payload: bytes,
-) -> Optional[Tuple[List[int], List[int], List[int], List[int], List[bool]]]:
-    if not payload or (len(payload) % 7) != 0:
+) -> Optional[
+    Tuple[List[int], List[int], List[int], List[int], List[int], List[bool]]
+]:
+    # 当前协议每路固定9字节：
+    # speed(i16)、load(i16)、current(i16)、voltage(u8)、temperature(u8)、online(u8)。
+    if not payload or (len(payload) % 9) != 0:
         return None
 
-    channel_count = len(payload) // 7
+    channel_count = len(payload) // 9
     if channel_count <= 0:
         return None
 
     speeds: List[int] = []
     loads: List[int] = []
+    currents: List[int] = []
     volts: List[int] = []
     temps: List[int] = []
     online: List[bool] = []
 
     for i in range(channel_count):
-        base = i * 7
+        base = i * 9
         speeds.append(struct.unpack(">h", payload[base:base + 2])[0])
         loads.append(struct.unpack(">h", payload[base + 2:base + 4])[0])
-        volts.append(payload[base + 4])
-        temps.append(payload[base + 5])
-        online.append(payload[base + 6] == 1)
-    return speeds, loads, volts, temps, online
+        currents.append(struct.unpack(">h", payload[base + 4:base + 6])[0])
+        volts.append(payload[base + 6])
+        temps.append(payload[base + 7])
+        online.append(payload[base + 8] == 1)
+    return speeds, loads, currents, volts, temps, online
 
 
 def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool], bool]]:

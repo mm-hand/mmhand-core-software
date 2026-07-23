@@ -8,7 +8,7 @@ python -m desktop ui
 
 ## Overview
 
-- `desktop.core.hand_backend` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, and the command API that Qt/ROS/teleop/algorithm code should share.
+- `desktop.core.hand_backend` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, Replay motion ownership, and the command API that Qt/ROS/teleop/Replay code shares.
 - `ui_qt_compat.py` selects the Qt binding. It tries `PySide6` first, then falls back to `PyQt5`, and sets `PYQTGRAPH_QT_LIB` before pyqtgraph is imported.
 - `ui_app.py` defines `HandGUI(QMainWindow)`. It owns the Qt window, top toolbar, main splitter, state polling timers, display updates, and UI logging. Hardware lifecycle and command orchestration go through `HandBackend`.
 - `ui_windows.py` manages the `View` menu and the singleton popout windows: hand pose, tactile, and cameras.
@@ -16,7 +16,8 @@ python -m desktop ui
 
 ## Components
 
-- `ui_control_panels.py`: Qt-native control surface with `QTableWidget` channel tables, ENABLE/E-STOP/Pause, Calibrate/Clear Fault/Rope Init/Flash/ABS-limit controls, Send All, local test controls, Teleop toggle, and Algorithm output.
+- `ui_control_panels.py`: Qt-native control surface with channel tables, device controls, Teleop controls, and the Replay CSV view.
+- `ui_replay_view.py`: imports one teleoperation CSV, previews its 21-joint ranges, and exposes a single Send/Stop control.
 - `ui_pose_view.py`: `pyqtgraph.opengl.GLViewWidget` URDF skeleton view. It reuses line/scatter items for updates.
 - `ui_tactile_view.py`: `pyqtgraph.ImageItem` tactile heatmap with latest-only background matrix preparation and throttled refresh.
 - `ui_camera_view.py`: OpenCV capture thread with main-thread `QImage/QPixmap` display.

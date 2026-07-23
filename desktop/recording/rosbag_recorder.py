@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from datetime import datetime
 from typing import Dict, Iterable, Optional
 
 from desktop.core.data_recording.topic_schema import ROSBAG_TOPIC_NAMES
@@ -63,10 +65,15 @@ class RosbagSessionRecorder:
             }
             for topic_name in self._topic_names.values():
                 self._create_topic(topic_name)
+            host_time = time.time()
             self.write_row(
                 "event_log",
                 {
-                    "host_time": _host_time_from_meta(meta),
+                    "host_time": datetime.fromtimestamp(host_time).strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )[:-3],
+                    "p4_time_ms": "",
+                    "_host_time_ns": int(host_time * 1_000_000_000),
                     "event_type": "rosbag_start",
                     "source": "recorder",
                     "detail": "ROS2 bag recording started",
@@ -92,7 +99,9 @@ class RosbagSessionRecorder:
             self._topic_names[topic] = topic_name
             self._create_topic(topic_name)
         msg = String()
-        msg.data = json.dumps(row, ensure_ascii=False, default=str)
+        # 下划线开头的是记录器内部索引，不进入 ROS2 消息正文。
+        public_row = {key: value for key, value in row.items() if not str(key).startswith("_")}
+        msg.data = json.dumps(public_row, ensure_ascii=False, default=str)
         self._writer.write(topic_name, serialize_message(msg), _row_timestamp_ns(row))
 
     def _create_topic(self, topic_name: str) -> None:
@@ -118,13 +127,6 @@ class RosbagSessionRecorder:
 
 def _row_timestamp_ns(row: Dict[str, object]) -> int:
     try:
-        return int(float(row.get("host_time", 0.0)) * 1_000_000_000)
+        return int(row.get("_host_time_ns", 0) or 0)
     except Exception:
         return 0
-
-
-def _host_time_from_meta(meta: Optional[Dict[str, object]]) -> float:
-    try:
-        return float((meta or {}).get("started_host_time", 0.0))
-    except Exception:
-        return 0.0

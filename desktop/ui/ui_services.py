@@ -11,7 +11,6 @@ def clone_hand_model(model: HandModel) -> HandModel:
     snapshot = HandModel()
     snapshot.copy_state_from(model)
     snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
-    snapshot.timestamp = float(getattr(model, "timestamp", 0.0))
     snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
     try:
         snapshot.set_target_angles(model.target_angles)

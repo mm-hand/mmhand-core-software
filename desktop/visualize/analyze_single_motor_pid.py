@@ -14,6 +14,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -150,10 +151,15 @@ def resolve_session(value: str, run_data_dir: Path, joint: int) -> Path:
 
 
 def row_time(row: Dict[str, str]) -> float:
-    for key in ("host_time_unix_s", "host_time", "host_ts_wall"):
-        value = safe_float(row.get(key, ""))
-        if math.isfinite(value):
-            return value
+    host_time = str(row.get("host_time", "") or "").strip()
+    if host_time:
+        try:
+            return datetime.fromisoformat(host_time).timestamp()
+        except Exception:
+            pass
+    value = safe_float(row.get("host_ts_wall", ""))
+    if math.isfinite(value):
+        return value
     return float("nan")
 
 

@@ -5,9 +5,6 @@ import os
 import threading
 from typing import Dict, Iterable, Optional
 
-from .topic_schema import TOPIC_FIELDNAMES
-
-
 class CsvTopicWriter:
     def __init__(self, path: str, fieldnames: Iterable[str], flush_every: int = 10):
         self.path = path
@@ -74,9 +71,12 @@ class CsvSessionExporter:
 
     def write_row(self, topic: str, row: Dict[str, object]) -> None:
         with self._lock:
+            # CSV只允许启动时明确选择的总表，防止长表/debug回调再次动态创建文件。
+            if topic not in self._fieldnames:
+                return
             writer: Optional[CsvTopicWriter] = self._writers.get(topic)
             if writer is None:
-                fields = self._fieldnames.get(topic) or TOPIC_FIELDNAMES.get(topic) or list(row.keys())
+                fields = self._fieldnames[topic]
                 path = self._path_for_topic(topic)
                 writer = CsvTopicWriter(path, fields, flush_every=self.flush_every)
                 self._writers[topic] = writer

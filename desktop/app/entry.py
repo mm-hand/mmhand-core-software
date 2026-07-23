@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--mode",
         "-m",
-        choices=["monitor", "teleop", "algorithm"],
+        choices=["monitor", "teleop", "replay"],
         default="monitor",
         help="UI mode to launch.",
     )

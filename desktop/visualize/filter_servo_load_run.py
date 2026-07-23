@@ -32,10 +32,9 @@ from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX  # noqa: E402
 
 
 BASE_FIELDS = [
-    "sample",
+    "sample_index",
     "host_time",
-    "elapsed_s",
-    "device_timestamp",
+    "p4_time_ms",
     "mode",
     "active_scope_label",
     "active_motor_mask_hex",
@@ -130,25 +129,6 @@ def _row_value(row: Dict[str, str], key: str) -> str:
     return row.get(key, "")
 
 
-def _elapsed_s(host_time: str, t0: Optional[float]) -> str:
-    try:
-        t = float(host_time)
-    except Exception:
-        return ""
-    if t0 is None:
-        return "0.000000"
-    return f"{t - t0:.6f}"
-
-
-def _first_host_time(rows: Sequence[Dict[str, str]]) -> Optional[float]:
-    for row in rows:
-        try:
-            return float(row.get("host_time", ""))
-        except Exception:
-            continue
-    return None
-
-
 def _output_path(csv_path: str, out_path: str) -> str:
     if out_path:
         return os.path.abspath(out_path)
@@ -187,7 +167,6 @@ def filter_csv(csv_path: str, out_path: str = "", motors_text: str = "", joint: 
     motors = _resolve_motors(rows, motors_text, joint)
     out = _output_path(csv_path, out_path)
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    t0 = _first_host_time(rows)
     fields = _fieldnames_for_motors(motors)
 
     with open(out, "w", encoding="utf-8-sig", newline="") as handle:
@@ -195,10 +174,9 @@ def filter_csv(csv_path: str, out_path: str = "", motors_text: str = "", joint: 
         writer.writeheader()
         for sample, row in enumerate(rows):
             slim = {
-                "sample": sample,
+                "sample_index": row.get("sample_index", sample),
                 "host_time": _row_value(row, "host_time"),
-                "elapsed_s": _elapsed_s(_row_value(row, "host_time"), t0),
-                "device_timestamp": _row_value(row, "device_timestamp"),
+                "p4_time_ms": _row_value(row, "p4_time_ms"),
                 "mode": _row_value(row, "mode"),
                 "active_scope_label": _row_value(row, "active_scope_label"),
                 "active_motor_mask_hex": _row_value(row, "active_motor_mask_hex"),

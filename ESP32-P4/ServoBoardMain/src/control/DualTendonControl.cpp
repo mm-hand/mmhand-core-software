@@ -210,7 +210,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->iTerm[i] = 0.0f;
         outTargets->dTerm[i] = 0.0f;
         outTargets->pidCorrection[i] = 0.0f;
-        outTargets->lutBoundaryClamped[i] = 0;
+        outTargets->rawTargetAbs[i] = 0;
+        outTargets->lutTargetClamped[i] = 0;
         outTargets->lutMinAbs[i] = 0;
         outTargets->lutMaxAbs[i] = 0;
     }
@@ -269,6 +270,7 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->pidCorrection[i] = correction;
         const int32_t rawTarget =
             clampServoPos((int32_t)(motorCurrent + correction));
+        outTargets->rawTargetAbs[i] = rawTarget;
         int32_t lutMinAbs = 0;
         int32_t lutMaxAbs = 0;
         if (!tendonCalibrationMotorAbsRange(g_jointCalibResult[jointIndex],
@@ -281,7 +283,7 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         if (boundedTarget < lutMinAbs) boundedTarget = lutMinAbs;
         if (boundedTarget > lutMaxAbs) boundedTarget = lutMaxAbs;
         outTargets->targetAbs[i] = clampServoPos(boundedTarget);
-        outTargets->lutBoundaryClamped[i] = boundedTarget != rawTarget ? 1 : 0;
+        outTargets->lutTargetClamped[i] = boundedTarget != rawTarget ? 1 : 0;
         outTargets->lutMinAbs[i] = lutMinAbs;
         outTargets->lutMaxAbs[i] = lutMaxAbs;
         state.prevMotorRef[i] = outTargets->motorRef[i];

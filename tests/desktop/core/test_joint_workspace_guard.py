@@ -244,6 +244,8 @@ def test_ros2_frame_requires_existing_enable_authorization():
     backend = HandBackend(controller=controller)
     backend.is_comm_connected = lambda: True
     backend.is_started = lambda: True
+    recorded_commands = []
+    backend.register_joint_target_callback(recorded_commands.append)
 
     blocked = backend.send_ros2_joint_targets(
         [20.0] * ENCODER_COUNT,
@@ -252,6 +254,11 @@ def test_ros2_frame_requires_existing_enable_authorization():
     assert not blocked.sent
     assert blocked.message.endswith("not_armed")
     assert controller.sent == []
+    # 未授权的ROS2帧不能驱动硬件，但应保留为Replay页面的只读捕获预览。
+    preview = backend.get_latest_teleop_preview(max_age_s=1.0)
+    assert preview is not None
+    assert preview["valid"] is True
+    assert preview["targets"][0] == 20.0
 
     _arm_ros2_backend(backend)
     sent = backend.send_ros2_joint_targets(
@@ -260,6 +267,11 @@ def test_ros2_frame_requires_existing_enable_authorization():
     )
     assert sent.sent
     assert controller.run_requests == 1
+    assert len(recorded_commands) == 1
+    assert recorded_commands[0]["source"] == "ROS2:/raw_ik_target"
+    assert recorded_commands[0]["sent"] is True
+    assert recorded_commands[0]["command_joint_mask"] == state.active_joint_mask
+    assert len(recorded_commands[0]["output_targets"]) == ENCODER_COUNT
     # ROS2 每帧绑定 ENABLE 时的 active scope，不继承单行 UI 掩码，
     # 也不在串口稍后发送时重新解释可能已变化的 scope。
     assert controller.sent[-1][2] == state.active_joint_mask
@@ -288,6 +300,31 @@ def test_estop_revokes_ros2_and_following_frames_cannot_restart_feedback():
     assert not after_stop.sent
     # E-STOP 前一帧允许发送，E-STOP 后持续到来的帧不能产生第二次 RUN。
     assert controller.run_requests == 1
+
+
+def test_expired_replay_token_cannot_enqueue_an_old_target():
+    state = _ready_state(current_min=12.5)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    backend.is_comm_connected = lambda: True
+    backend.is_started = lambda: True
+
+    ok, token, message = backend.begin_replay_motion()
+    assert ok, message
+    assert backend.cancel_replay_motion("test stop")
+
+    result = backend.send_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="Replay:expired-token",
+        live=True,
+        command_joint_mask=state.active_joint_mask,
+        motion_token=token,
+    )
+
+    assert not result.sent
+    assert "ownership expired" in result.message
+    assert controller.sent == []
+    assert controller.run_requests == 0
 
 
 def test_pause_and_scope_change_both_revoke_ros2_authorization():

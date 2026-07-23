@@ -193,10 +193,10 @@ static uint8_t takeCalibrationAckStatusForPacket()
     return status;
 }
 
-// Send a protocol ACK packet.
+// 协议 ACK 在包尾携带 P4 处理命令时的毫秒时间，供上位机建立操作闭环。
 static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
 {
-    uint8_t buffer[8];
+    uint8_t buffer[12];
     size_t idx = 0;
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -205,6 +205,7 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
     buffer[idx++] = cmd;
     buffer[idx++] = appliedMode;
     buffer[idx++] = status;
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -217,7 +218,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[176];
+    uint8_t buffer[180];
     size_t idx = 0;
     uint32_t faultBitmap = 0;
     uint32_t unknownBitmap = 0;
@@ -336,6 +337,8 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->feedback_collision_armed_bitmap));
+    // 状态包时间表示本次状态快照在 P4 侧被序列化的时刻。
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
@@ -347,7 +350,7 @@ static bool sendManualEncoderReferencePacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[140];
+    uint8_t buffer[144];
     size_t idx = 0;
     ManualEncoderReference references[ENCODER_TOTAL_NUM];
     uint32_t validMask = 0;
@@ -385,6 +388,7 @@ static bool sendManualEncoderReferencePacket(TaskSharedData_t* sharedData)
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         buffer[idx++] = (g_encoderDirection[joint] < 0) ? 0xFF : 0x01;
     }
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
@@ -424,7 +428,7 @@ static void sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
 // Send the servo overload fault bitmap plus the latched trigger load per motor.
 static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloadFaultBitmap)
 {
-    uint8_t buffer[8 + SERVO_TOTAL_NUM * 2];
+    uint8_t buffer[12 + SERVO_TOTAL_NUM * 2];
     int16_t faultLoads[SERVO_TOTAL_NUM] = {0};
     if (sharedData) {
         SharedSafetyGuard guard;
@@ -447,6 +451,7 @@ static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloa
         buffer[idx++] = (uint8_t)((encodedLoad >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(encodedLoad & 0xFF);
     }
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -459,7 +464,7 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[128];
+    uint8_t buffer[132];
     size_t idx = 0;
     uint32_t validBitmap = 0;
     uint32_t lockedBitmap = 0;
@@ -492,6 +497,7 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
         buffer[idx++] = (uint8_t)(((uint16_t)maxAbs >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)((uint16_t)maxAbs & 0xFF);
     }
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -504,7 +510,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     }
 
     const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
-    uint8_t buffer[216];
+    uint8_t buffer[224];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -568,6 +574,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
         buffer, &idx, warningInfo.urdfSpanCounts);
     appendU16BigEndian(
         buffer, &idx, warningInfo.spanDifferenceCounts);
+    appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -603,7 +610,7 @@ static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
 
 static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
 {
-    uint8_t buffer[64];
+    uint8_t buffer[68];
     size_t idx = 0;
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -619,6 +626,8 @@ static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
         buffer[idx++] = (uint8_t)((val >> 8) & 0xFF);
         buffer[idx++] = (uint8_t)(val & 0xFF);
     }
+    // 使用 CAN 接收该批磁编原始数据时记录的 P4 时间，而不是串口发送时间。
+    appendU32BigEndian(buffer, &idx, sensorRaw.timestamp);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
@@ -630,7 +639,8 @@ static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
         return;
     }
 
-    static const size_t kTactileFullSerialChunkBytes = 240;
+    // 帧总长受 1 字节 LEN 和 256 字节发送缓冲区限制；预留 4 字节 P4 时间和尾字节。
+    static const size_t kTactileFullSerialChunkBytes = 239;
     const uint8_t fragCount = (uint8_t)((TACTILE_FULL_BYTES + kTactileFullSerialChunkBytes - 1) /
                                         kTactileFullSerialChunkBytes);
     const uint16_t fullCrc = crc16Ccitt(tactile.fullValues, TACTILE_FULL_BYTES);
@@ -658,6 +668,8 @@ static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
         buffer[idx++] = (uint8_t)((fullCrc >> 8) & 0xFF);
         memcpy(buffer + idx, tactile.fullValues + offset, chunkLen);
         idx += chunkLen;
+        // 每个分片均携带同一批全量触觉数据的 P4 采集时间。
+        appendU32BigEndian(buffer, &idx, tactile.fullTimestamp);
         buffer[idx++] = PROTOCOL_TAIL;
         buffer[1] = (uint8_t)(idx - 2);
         FW_SERIAL_WRITE(buffer, idx);
@@ -680,6 +692,8 @@ static void sendDataPacket(ServoStatus_t* pServo,
     size_t idx = 0;
     bool sendFullTactileAfter = false;
     const RemoteTactileData_t* fullTactile = NULL;
+    uint32_t p4TimestampMs = millis();
+    bool appendTrailingTimestamp = true;
 
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00; // LEN placeholder.
@@ -691,6 +705,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pSensorRaw)
     {
+        p4TimestampMs = pSensorRaw->timestamp;
         buffer[idx++] = PACKET_TYPE_SENSOR;
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
         {
@@ -705,6 +720,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pMappedAngle)
     {
+        p4TimestampMs = pMappedAngle->timestamp;
         buffer[idx++] = PACKET_TYPE_SENSOR;
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++)
         {
@@ -718,6 +734,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pServoAngle)
     {
+        p4TimestampMs = pServoAngle->timestamp;
         buffer[idx++] = PACKET_TYPE_SERVO_ANGLE;
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
@@ -734,6 +751,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pServoRaw)
     {
+        p4TimestampMs = pServoRaw->timestamp;
         buffer[idx++] = PACKET_TYPE_SERVO_RAW;
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
@@ -756,15 +774,23 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pTelemetry)
     {
+        static_assert(
+            3 + SERVO_TOTAL_NUM * 9 + 4 + 1 <= 256,
+            "servo telemetry packet exceeds serial buffer");
+        p4TimestampMs = pTelemetry->timestamp;
         buffer[idx++] = PACKET_TYPE_SERVO_TELEM;
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
             const int16_t speed = pTelemetry->speed[i];
             const int16_t load = pTelemetry->load[i];
+            const int16_t current = pTelemetry->current[i];
             buffer[idx++] = (uint8_t)(((uint16_t)speed >> 8) & 0xFF);
             buffer[idx++] = (uint8_t)((uint16_t)speed & 0xFF);
             buffer[idx++] = (uint8_t)(((uint16_t)load >> 8) & 0xFF);
             buffer[idx++] = (uint8_t)((uint16_t)load & 0xFF);
+            // 电流保持ST3215原始有符号值，避免在固件中硬编码未经确认的mA比例。
+            buffer[idx++] = (uint8_t)(((uint16_t)current >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)((uint16_t)current & 0xFF);
             buffer[idx++] = pTelemetry->voltage[i];
             buffer[idx++] = pTelemetry->temperature[i];
             buffer[idx++] = pTelemetry->onlineStatus[i];
@@ -772,6 +798,7 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pTactile)
     {
+        p4TimestampMs = pTactile->timestamp;
         buffer[idx++] = PACKET_TYPE_TACTILE;
         buffer[idx++] = pTactile->seq;
         for (int i = 0; i < TACTILE_SUMMARY_BYTES; i++)
@@ -783,6 +810,8 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pJointDebug)
     {
+        // Joint Debug 的业务结构本身已经包含 timestamp，禁止重复追加。
+        appendTrailingTimestamp = false;
         buffer[idx++] = PACKET_TYPE_JOINT1_DEBUG;
         buffer[idx++] = pJointDebug->jointIndex;
         buffer[idx++] = pJointDebug->valid;
@@ -799,6 +828,10 @@ static void sendDataPacket(ServoStatus_t* pServo,
         return;
     }
 
+    // 除原生含时间字段的 Joint Debug 外，实时数据包统一追加一次 P4 采集时间。
+    if (appendTrailingTimestamp) {
+        appendU32BigEndian(buffer, &idx, p4TimestampMs);
+    }
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);

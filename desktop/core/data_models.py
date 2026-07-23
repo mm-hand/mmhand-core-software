@@ -579,7 +579,17 @@ class HandModel:
     tactile_module_online: List[bool] = field(default_factory=lambda: [False] * (5 * TACTILE_SENSORS_PER_FINGER))
     tactile_module_last_rx_ts: List[float] = field(default_factory=lambda: [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
     calib_status: str = "IDLE"  # NO_CALIB, IDLE, PENDING, RUNNING, SUCCESS, WARN, FAILED
-    timestamp: float = 0.0
+    # 上位机完成当前状态合并的 Unix 时间，仅用于 UI 新鲜度与 CSV host_time。
+    host_rx_time: float = 0.0
+    # 当前状态最近一次有效 P4 数据包的 millis() 时间。0 表示尚未收到 P4 时间。
+    p4_time_ms: int = 0
+    has_p4_time: bool = False
+    # 最近一次协议 ACK，用于把“UI 请求”和“P4 实际处理”分别写入事件日志。
+    proto_ack_sequence: int = 0
+    proto_ack_cmd: int = 0
+    proto_ack_mode: int = 0
+    proto_ack_status: int = 0
+    proto_ack_p4_time_ms: int = 0
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
     # 原始磁编包（PACKET_TYPE_ENCODER_RAW）与映射角包独立：未标定时 raw 仍应可见。
@@ -678,6 +688,8 @@ class HandModel:
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
     servo_speed: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_load: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    # ST3215 Present Current 原始有符号值，暂不假定其mA换算比例。
+    servo_current: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_voltage: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_temperature: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_telem_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
@@ -719,6 +731,14 @@ class HandModel:
 
     def copy_state_from(self, other: "HandModel") -> None:
         """仅复制状态（编码器 raw/error、电机 error/state/伺服遥测），不覆盖 target_angle_deg、zero_raw"""
+        self.host_rx_time = float(getattr(other, "host_rx_time", 0.0) or 0.0)
+        self.p4_time_ms = int(getattr(other, "p4_time_ms", 0) or 0)
+        self.has_p4_time = bool(getattr(other, "has_p4_time", False))
+        self.proto_ack_sequence = int(getattr(other, "proto_ack_sequence", 0) or 0)
+        self.proto_ack_cmd = int(getattr(other, "proto_ack_cmd", 0) or 0)
+        self.proto_ack_mode = int(getattr(other, "proto_ack_mode", 0) or 0)
+        self.proto_ack_status = int(getattr(other, "proto_ack_status", 0) or 0)
+        self.proto_ack_p4_time_ms = int(getattr(other, "proto_ack_p4_time_ms", 0) or 0)
         for i, e in enumerate(self.encoders):
             if i < len(other.encoders):
                 e.raw = other.encoders[i].raw
@@ -741,6 +761,7 @@ class HandModel:
         self.servo_raw_online = list(other.servo_raw_online)
         self.servo_speed = list(other.servo_speed)
         self.servo_load = list(other.servo_load)
+        self.servo_current = list(other.servo_current)
         self.servo_voltage = list(other.servo_voltage)
         self.servo_temperature = list(other.servo_temperature)
         self.servo_telem_online = list(other.servo_telem_online)

@@ -72,6 +72,7 @@ struct ServoFeedbackInternal {
     int16_t rawPosition;
     int16_t speed;
     int16_t load;
+    int16_t current;
     uint8_t voltage;
     uint8_t temperature;
     // absolutePosition is the servo's current power-session coordinate. It may
@@ -94,7 +95,11 @@ struct ServoFeedbackInternal {
 // Private wrapper for one Feetech UART servo bus.
 class ServoBusDriver {
 public:
-    ServoBusDriver() : _serial(NULL), _writeCount(0), _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT)
+    ServoBusDriver()
+        : _serial(NULL),
+          _writeCount(0),
+          _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT),
+          _currentReadDivider(0)
     {
         memset(_feedback, 0, sizeof(_feedback));
         memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
@@ -180,7 +185,13 @@ public:
         }
 
         const uint8_t addrPresentPosition = 56;
-        const uint8_t feedbackLen = 8;
+        // 电流只用于记录和诊断，不参与当前控制。每条总线约100 ms读取一次，
+        // 其余周期维持原来的8字节反馈，避免扩大串口报文后拖慢10 ms控制链路。
+        static const uint8_t kCurrentReadEverySyncCalls = 5;
+        const bool includeCurrent = (_currentReadDivider == 0);
+        _currentReadDivider =
+            (uint8_t)((_currentReadDivider + 1U) % kCurrentReadEverySyncCalls);
+        const uint8_t feedbackLen = includeCurrent ? 15 : 8;
         const uint16_t timeoutMs = (_syncReadTimeoutMs == 0) ? 1 : _syncReadTimeoutMs;
         int successCount = 0;
 
@@ -204,10 +215,14 @@ public:
                 continue;
             }
             if (rxLen == feedbackLen) {
+                const int16_t current = includeCurrent
+                    ? decodeSigned(rxBuf[13], rxBuf[14])
+                    : _feedback[id].current;
                 recordFeedbackSuccess(id,
                                       decodeSigned(rxBuf[0], rxBuf[1]),
                                       decodeSigned(rxBuf[2], rxBuf[3]),
                                       decodeServoLoad(rxBuf[4], rxBuf[5]),
+                                      current,
                                       rxBuf[6],
                                       rxBuf[7]);
                 successCount++;
@@ -233,6 +248,7 @@ public:
                               (int16_t)_sms.ReadPos(-1),
                               (int16_t)_sms.ReadSpeed(-1),
                               (int16_t)_sms.ReadLoad(-1),
+                              (int16_t)_sms.ReadCurrent(-1),
                               (uint8_t)_sms.ReadVoltage(-1),
                               (uint8_t)_sms.ReadTemper(-1));
         return true;
@@ -371,6 +387,7 @@ private:
                                int16_t rawPos,
                                int16_t speed,
                                int16_t load,
+                               int16_t current,
                                uint8_t voltage,
                                uint8_t temperature)
     {
@@ -379,6 +396,7 @@ private:
         _updateMultiTurnPosition(id, rawPos);
         fb.speed = speed;
         fb.load = load;
+        fb.current = current;
         fb.voltage = voltage;
         fb.temperature = temperature;
         fb.missedReadCount = 0;
@@ -501,6 +519,7 @@ private:
     bool _torqueDisabled[MAX_SERVO_ID + 1];
     bool _multiTurnConfigured[MAX_SERVO_ID + 1];
     uint16_t _syncReadTimeoutMs;
+    uint8_t _currentReadDivider;
 };
 
 static ServoBusDriver g_servoBuses[NUM_BUSES];
@@ -768,6 +787,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             onlineMask |= (1UL << ch);
             telemetryData.speed[ch] = fb.speed;
             telemetryData.load[ch] = fb.load;
+            telemetryData.current[ch] = fb.current;
             telemetryData.voltage[ch] = fb.voltage;
             telemetryData.temperature[ch] = fb.temperature;
             telemetryData.onlineStatus[ch] = 1;

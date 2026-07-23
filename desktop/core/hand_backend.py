@@ -1,15 +1,16 @@
-"""Application-level backend facade for Qt, ROS, teleop, and algorithms.
+"""Application-level backend facade for Qt, ROS, teleop, and Replay.
 
 HandBackend owns the low-level HandController and exposes a stable, UI-free
 application API.  Qt widgets should depend on this facade instead of reaching
 into HandController or LowerComputerComm directly.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 import math
 import threading
 import time
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
@@ -31,7 +32,6 @@ def clone_hand_model(model: HandModel) -> HandModel:
     snapshot = HandModel()
     snapshot.copy_state_from(model)
     snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
-    snapshot.timestamp = float(getattr(model, "timestamp", 0.0))
     snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
     snapshot.tactile_online = bool(getattr(model, "tactile_online", False))
     snapshot.tactile_last_rx_ts = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
@@ -60,9 +60,9 @@ def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
     state.tactile_last_rx_ts = float(getattr(tactile_state, "tactile_last_rx_ts", 0.0) or 0.0)
     state.tactile_module_online = list(getattr(tactile_state, "tactile_module_online", []) or [])
     state.tactile_module_last_rx_ts = list(getattr(tactile_state, "tactile_module_last_rx_ts", []) or [])
-    ts = float(getattr(tactile_state, "timestamp", 0.0) or 0.0)
+    ts = float(getattr(tactile_state, "host_rx_time", 0.0) or 0.0)
     if ts > 0:
-        state.timestamp = ts
+        state.host_rx_time = ts
 
 
 @dataclass
@@ -101,6 +101,13 @@ class HandBackend:
         self._ros2_armed_scope: Optional[Tuple[int, int, bool]] = None
         self._ros2_last_drop_reason = ""
         self._ros2_last_drop_log_ts = 0.0
+        # 遥操预览不等于控制授权：RAW IK关闭时仍缓存最近帧供保存手势。
+        self._teleop_preview_lock = threading.Lock()
+        self._teleop_preview_frames = deque(maxlen=32)
+        # generation令牌把Replay检查与每帧入队绑定，其他运动源可立即使旧令牌失效。
+        self._replay_motion_lock = threading.RLock()
+        self._replay_motion_generation = 0
+        self._replay_motion_active = False
         self._requested_active_joint_mask: Optional[int] = None
         self._requested_active_scope: Optional[Tuple[int, int, bool]] = None
         try:
@@ -185,6 +192,7 @@ class HandBackend:
         return self._controller.current_state
 
     def connect(self, port: str) -> bool:
+        self.cancel_replay_motion("connect")
         self.set_ros2_output_armed(False, reason="connect")
         self._ensure_controller_callback_registered()
         self._requested_active_joint_mask = None
@@ -195,6 +203,7 @@ class HandBackend:
         return self.connect(port)
 
     def shutdown(self, stop_lower: bool = True) -> None:
+        self.cancel_replay_motion("shutdown")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="shutdown")
             self._requested_active_joint_mask = None
@@ -342,12 +351,48 @@ class HandBackend:
         input_space: str = "urdf_deg",
         raw_targets: Optional[Iterable[float]] = None,
         command_joint_mask: Optional[int] = None,
+        motion_token: Optional[int] = None,
+    ) -> JointCommandResult:
+        """串行化Replay令牌检查与实际入队，杜绝STOP之后补入一帧旧目标。"""
+        with self._replay_motion_lock:
+            return self._send_joint_targets_locked(
+                angles,
+                source=source,
+                live=live,
+                input_space=input_space,
+                raw_targets=raw_targets,
+                command_joint_mask=command_joint_mask,
+                motion_token=motion_token,
+            )
+
+    def _send_joint_targets_locked(
+        self,
+        angles: Iterable[float],
+        *,
+        source: str = "",
+        live: bool = False,
+        input_space: str = "urdf_deg",
+        raw_targets: Optional[Iterable[float]] = None,
+        command_joint_mask: Optional[int] = None,
+        motion_token: Optional[int] = None,
     ) -> JointCommandResult:
         from desktop.teleop.joint_target_adapter import active_mapping_identity
 
         state = self.get_current_state()
         input_targets = list(angles)
         raw_input_targets = list(raw_targets) if raw_targets is not None else list(input_targets)
+        is_replay = str(source or "").startswith("Replay:")
+        if is_replay:
+            if motion_token is None or not self.replay_motion_token_valid(motion_token):
+                return JointCommandResult(
+                    sent=False,
+                    message="Replay command rejected: motion ownership expired",
+                    targets=list(input_targets),
+                )
+        else:
+            # 普通UI、ROS2或测试命令一旦到达，就撤销旧Replay令牌。
+            # Replay线程会在下一控制周期退出，避免两个运动源同时写P4目标角。
+            self.cancel_replay_motion(f"preempted by {source or 'joint command'}")
         mapping = active_mapping_identity()
         command_metadata = {
             "input_space": str(input_space or "urdf_deg"),
@@ -383,7 +428,11 @@ class HandBackend:
                     "clamped": list(clamped),
                     "message": workspace_message,
                     "sent": False,
-                    "device_timestamp": getattr(state, "timestamp", ""),
+                    "p4_time_ms": (
+                        getattr(state, "p4_time_ms", "")
+                        if getattr(state, "has_p4_time", False)
+                        else ""
+                    ),
                     **command_metadata,
                 }
             )
@@ -423,7 +472,11 @@ class HandBackend:
                 "clamped": list(clamped),
                 "message": message,
                 "sent": bool(result.sent),
-                "device_timestamp": getattr(state, "timestamp", ""),
+                "p4_time_ms": (
+                    getattr(state, "p4_time_ms", "")
+                    if getattr(state, "has_p4_time", False)
+                    else ""
+                ),
                 **command_metadata,
             }
         )
@@ -490,6 +543,8 @@ class HandBackend:
         # 防止提前预授权后某次普通 START 意外放行持续到来的遥操帧。
         if enabled and not self.is_started():
             return False, "ordinary controller is not enabled; press ENABLE first"
+        if enabled:
+            self.cancel_replay_motion("RAW IK enabled")
         ok, message = self.set_ros2_output_armed(
             bool(enabled),
             reason="RAW_IK_ENABLE" if enabled else "RAW_IK_DISABLE",
@@ -528,6 +583,12 @@ class HandBackend:
         """
         values = list(angles)
         raw_values = list(raw_targets) if raw_targets is not None else list(values)
+        self._cache_teleop_preview(
+            values,
+            raw_values,
+            source=source,
+            input_space=input_space,
+        )
         with self._ros2_output_lock:
             if not self._ros2_output_armed:
                 reason = "not_armed"
@@ -560,6 +621,105 @@ class HandBackend:
                 message=f"ROS2 joint target dropped: {reason}",
                 targets=values,
             )
+
+    def _cache_teleop_preview(
+        self,
+        targets: Iterable[float],
+        raw_targets: Iterable[float],
+        *,
+        source: str,
+        input_space: str,
+    ) -> None:
+        """缓存已映射到URDF空间的ROS2帧；未授权输出时仍可用于保存手势。"""
+        values = [float(value) for value in targets]
+        raw_values = [float(value) for value in raw_targets]
+        if (
+            len(values) != ENCODER_COUNT
+            or not all(math.isfinite(value) for value in values)
+        ):
+            return
+        state = self.get_current_state()
+        guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
+            state,
+            values,
+            source="Replay teleop preview",
+        )
+        frame: Dict[str, object] = {
+            "monotonic_ts": time.monotonic(),
+            "source": str(source or "ROS2"),
+            "input_space": str(input_space or "urdf_deg"),
+            "targets": guarded if not blocked else values,
+            "raw_targets": raw_values if len(raw_values) == ENCODER_COUNT else [],
+            "active_joint_mask": int(
+                getattr(state, "active_joint_mask", 0) or 0
+            ) & ((1 << ENCODER_COUNT) - 1),
+            "valid": not blocked,
+            "blocked": list(blocked),
+            "clamped": list(clamped),
+            "message": str(message or ""),
+        }
+        with self._teleop_preview_lock:
+            self._teleop_preview_frames.append(frame)
+
+    def get_latest_teleop_preview(
+        self, *, max_age_s: float = 0.3
+    ) -> Optional[Dict[str, object]]:
+        """返回最新有效遥操预览的副本，过期帧不会被误保存为手势。"""
+        with self._teleop_preview_lock:
+            if not self._teleop_preview_frames:
+                return None
+            frame = dict(self._teleop_preview_frames[-1])
+        age = time.monotonic() - float(frame.get("monotonic_ts") or 0.0)
+        if age > max(0.0, float(max_age_s)):
+            return None
+        frame["targets"] = list(frame.get("targets") or [])
+        frame["raw_targets"] = list(frame.get("raw_targets") or [])
+        return frame
+
+    def begin_replay_motion(self) -> Tuple[bool, int, str]:
+        """取得Replay独占令牌，并明确撤销RAW IK授权。"""
+        if not self.is_comm_connected():
+            return False, 0, "Replay拒绝：P4串口未连接"
+        if not self.is_started():
+            return False, 0, "Replay拒绝：请先按ENABLE"
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="replay_start")
+        with self._replay_motion_lock:
+            self._replay_motion_generation += 1
+            self._replay_motion_active = True
+            token = self._replay_motion_generation
+        log_session("REPLAY_OWNER", f"CLAIM token={token}")
+        return True, token, "Replay motion ownership granted"
+
+    def replay_motion_token_valid(self, token: int) -> bool:
+        with self._replay_motion_lock:
+            return bool(
+                self._replay_motion_active
+                and int(token) == int(self._replay_motion_generation)
+            )
+
+    def cancel_replay_motion(self, reason: str = "cancelled") -> bool:
+        """撤销Replay令牌；工作线程无需跨线程强杀即可安全退出。"""
+        with self._replay_motion_lock:
+            if not self._replay_motion_active:
+                return False
+            self._replay_motion_active = False
+            self._replay_motion_generation += 1
+            generation = self._replay_motion_generation
+        log_session(
+            "REPLAY_OWNER",
+            f"CANCEL generation={generation} reason={reason or 'cancelled'}",
+        )
+        return True
+
+    def end_replay_motion(self, token: int) -> None:
+        with self._replay_motion_lock:
+            if (
+                self._replay_motion_active
+                and int(token) == int(self._replay_motion_generation)
+            ):
+                self._replay_motion_active = False
+                log_session("REPLAY_OWNER", f"RELEASE token={token}")
 
     def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> bool:
         starter = getattr(self.comm, "start_joint_debug_packet_log", None)
@@ -609,6 +769,7 @@ class HandBackend:
         return self._controller.invalidate_joint_commands()
 
     def pause(self) -> None:
+        self.cancel_replay_motion("pause")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="pause")
             self._controller.pause()
@@ -650,6 +811,7 @@ class HandBackend:
         return self._controller.request_run_feedback()
 
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
+        self.cancel_replay_motion("active_scope_change")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="active_scope_change")
             ok = self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
@@ -700,11 +862,13 @@ class HandBackend:
         self._controller.start()
 
     def stop(self) -> None:
+        self.cancel_replay_motion("E_STOP")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="E_STOP")
             self._controller.stop()
 
     def reset(self) -> None:
+        self.cancel_replay_motion("reset")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="reset")
             self._controller.reset()

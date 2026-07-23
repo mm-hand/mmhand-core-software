@@ -42,7 +42,7 @@ static const uint32_t kServoTelemetryTimeoutMs = 500;
 static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
 // 直控模式对负载尖峰更敏感；关节 PID 模式允许更高负载。
 static const int16_t kControlOverloadLoadThreshold = 800;
-static const int16_t kJointControlOverloadLoadThreshold = 1000;
+static const int16_t kJointControlOverloadLoadThreshold = 2000;
 // 800/1000 counts 仅用于独立硬过载故障；碰撞保持不再使用负载值判定。
 // 只有连续多个高负载帧后才锁存硬故障。
 static const uint8_t kControlOverloadLatchCycles = 20;
@@ -57,6 +57,9 @@ static const uint8_t kFeedbackRunDoneStableCycles = 10;
 static const uint32_t kFeedbackRunTimeoutMs = 8000;
 static const int32_t kUpperWorkspaceWarningCounts = 48;
 static const uint8_t kUpperWorkspaceWarningStableFrames = 3;
+// 碰撞检测只在实际舵机进入 LUT 边界附近时排除“工作空间耗尽”。
+// 不能使用 PID 计算目标被钳位作为证据，否则双电机大误差时会大量漏检。
+static const int32_t kCollisionLutBoundaryToleranceCounts = 32;
 static const float kLocalTestTwoPi = 6.28318530717958647692f;
 static const float kLocalTestMinFreqHz = 0.001f;
 static const float kLocalTestMaxFreqHz = 100.0f;
@@ -110,6 +113,27 @@ static bool shouldLogControlPidDiag(uint8_t jointIndex,
     (void)activeJointMask;
     return false;
 #endif
+}
+
+// 判断舵机实际 ABS 是否已抵达当前推进方向的 LUT 边界。
+// pushDeltaAbs 只表示正负方向，是否抵边始终由 actualAbs 与 LUT Min/Max 决定。
+static bool isActualAbsAtDirectionalLutBoundary(int32_t actualAbs,
+                                                int32_t pushDeltaAbs,
+                                                int32_t lutMinAbs,
+                                                int32_t lutMaxAbs)
+{
+    if (lutMinAbs > lutMaxAbs) {
+        return true;
+    }
+    if (pushDeltaAbs >= 1) {
+        return actualAbs >=
+            (lutMaxAbs - kCollisionLutBoundaryToleranceCounts);
+    }
+    if (pushDeltaAbs <= -1) {
+        return actualAbs <=
+            (lutMinAbs + kCollisionLutBoundaryToleranceCounts);
+    }
+    return false;
 }
 
 static float sanitizeLocalTestFreq(float freqHz)
@@ -430,12 +454,12 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        uint16_t speed,
                                        uint8_t acc,
                                        bool* outPidPushActive,
-                                       bool* outLutBoundaryClamped)
+                                       bool* outWorkspaceBoundaryReached)
 {
     // 将逻辑关节目标转换成两个拮抗电机目标，并返回下一周期碰撞检测需要的
-    // PID 推进与 LUT 边界证据；用户 LOCK 限位仍在最后独立执行。
+    // PID 推进与“实际抵达 LUT 边界”证据；用户 LOCK 限位仍在最后独立执行。
     if (outPidPushActive) *outPidPushActive = false;
-    if (outLutBoundaryClamped) *outLutBoundaryClamped = false;
+    if (outWorkspaceBoundaryReached) *outWorkspaceBoundaryReached = false;
     if (!batch || !sharedData) {
         return 0;
     }
@@ -452,6 +476,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     }
 
     JointActuatorRuntimeTarget runtimeTargets[MAX_JOINT_ACTUATORS];
+    uint8_t actualBoundaryReached[2] = {0, 0};
     uint8_t targetCount = 0;
     const uint32_t diagNowMs = millis();
     const bool logPidDiag =
@@ -497,8 +522,16 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             tendonTargets.pidCorrection[i] * tendonTargets.motorErr[i] > 0.0f) {
             *outPidPushActive = true;
         }
-        if (outLutBoundaryClamped && tendonTargets.lutBoundaryClamped[i] != 0) {
-            *outLutBoundaryClamped = true;
+        actualBoundaryReached[i] = isActualAbsAtDirectionalLutBoundary(
+            servoData.servoAngles[motorChannel],
+            tendonTargets.rawTargetAbs[i] -
+                servoData.servoAngles[motorChannel],
+            tendonTargets.lutMinAbs[i],
+            tendonTargets.lutMaxAbs[i]) ? 1 : 0;
+        // 双电机任意一侧实际抵达其推进方向边界时，才认为关节工作空间耗尽。
+        // “PID 原始目标被 LUT 钳位”本身不再禁止碰撞 HOLD。
+        if (outWorkspaceBoundaryReached && actualBoundaryReached[i] != 0) {
+            *outWorkspaceBoundaryReached = true;
         }
     }
 
@@ -515,8 +548,9 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         FW_LOG_INFO_PRINTF(
             "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
-            "M%02u a=%ld c=%d l=%ld e=%.1f o=%.1f ld=%d s=%d k=%u "
-            "M%02u a=%ld c=%d l=%ld e=%.1f o=%.1f ld=%d s=%d k=%u tel=%u\r\n",
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f tc=%u br=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f tc=%u br=%u ld=%d s=%d k=%u "
+            "tel=%u\r\n",
             (unsigned long)diagNowMs,
             (unsigned)jointIndex,
             (double)qRefDeg,
@@ -524,19 +558,25 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (double)(qRefDeg - qFbDeg),
             (unsigned)m0,
             (long)abs0,
+            (long)tendonTargets.rawTargetAbs[0],
             (int)runtimeTargets[0].targetAbs,
             (long)((int32_t)runtimeTargets[0].targetAbs - abs0),
             (double)tendonTargets.motorErr[0],
             (double)tendonTargets.pidCorrection[0],
+            (unsigned)tendonTargets.lutTargetClamped[0],
+            (unsigned)actualBoundaryReached[0],
             (int)load0,
             (int)speed0,
             (unsigned)((lockedBitmap & (1UL << m0)) != 0),
             (unsigned)m1,
             (long)abs1,
+            (long)tendonTargets.rawTargetAbs[1],
             (int)runtimeTargets[1].targetAbs,
             (long)((int32_t)runtimeTargets[1].targetAbs - abs1),
             (double)tendonTargets.motorErr[1],
             (double)tendonTargets.pidCorrection[1],
+            (unsigned)tendonTargets.lutTargetClamped[1],
+            (unsigned)actualBoundaryReached[1],
             (int)load1,
             (int)speed1,
             (unsigned)((lockedBitmap & (1UL << m1)) != 0),
@@ -752,7 +792,7 @@ void controlTask(void* parameter)
     // 碰撞冻结使用触发瞬间的舵机实际 ABS；PID/LUT 证据取上一控制周期结果。
     int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS] = {{0}};
     bool feedbackCollisionPidPushActive[ENCODER_TOTAL_NUM] = {false};
-    bool feedbackCollisionLutBoundaryClamped[ENCODER_TOTAL_NUM] = {false};
+    bool feedbackCollisionWorkspaceBoundaryReached[ENCODER_TOTAL_NUM] = {false};
     uint32_t lastFeedbackCollisionSensorTimestamp = 0;
     uint8_t upperWorkspaceHighCount[ENCODER_TOTAL_NUM] = {0};
     uint32_t upperWorkspaceWarningBitmap = 0;
@@ -1223,8 +1263,8 @@ void controlTask(void* parameter)
                 input.feedbackDeg = magAngles[jointIndex];
                 input.pidPushActive =
                     feedbackCollisionPidPushActive[jointIndex];
-                input.lutBoundaryClamped =
-                    feedbackCollisionLutBoundaryClamped[jointIndex];
+                input.workspaceBoundaryReached =
+                    feedbackCollisionWorkspaceBoundaryReached[jointIndex];
                 collisionResult =
                     g_feedbackCollisionGuard.update(jointIndex, input);
             } else {
@@ -1327,7 +1367,7 @@ void controlTask(void* parameter)
             }
             if (!contextActive) {
                 feedbackCollisionPidPushActive[jointIndex] = false;
-                feedbackCollisionLutBoundaryClamped[jointIndex] = false;
+                feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
             }
         }
         const bool feedbackOneShotActive =
@@ -1471,7 +1511,7 @@ void controlTask(void* parameter)
                 const bool jointActive =
                     (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
                 feedbackCollisionPidPushActive[jointIndex] = false;
-                feedbackCollisionLutBoundaryClamped[jointIndex] = false;
+                feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
 
                 if (bus >= NUM_BUSES) {
                     continue;
@@ -1574,7 +1614,7 @@ void controlTask(void* parameter)
                                                 kJointControlFeedbackSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT,
                                                 &feedbackCollisionPidPushActive[jointIndex],
-                                                &feedbackCollisionLutBoundaryClamped[jointIndex]);
+                                                &feedbackCollisionWorkspaceBoundaryReached[jointIndex]);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                        SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1588,23 +1628,27 @@ void controlTask(void* parameter)
                     // 普通单电机关节：先把腱绳空间 PID 结果转回电机 raw ABS，
                     // 再强制限制到 LUT 实测工作空间，最后应用用户 LOCK 限位。
                     bool lutWorkspaceValid = false;
-                    bool lutWorkspaceClamped = false;
+                    bool pidTargetLutClamped = false;
                     int32_t lutWorkspaceMinAbs = 0;
                     int32_t lutWorkspaceMaxAbs = 0;
+                    int32_t actualMotorAbs = targetPos;
+                    int32_t rawPidTargetAbs = targetPos;
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                         const uint8_t motorCh = (uint8_t)jointMotorCh;
-                        const int32_t targetRawAbs =
+                        actualMotorAbs = servoData.servoAngles[motorCh];
+                        rawPidTargetAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
-                        int32_t lutClampedTarget = targetRawAbs;
+                        int32_t lutClampedTarget = rawPidTargetAbs;
                         lutWorkspaceValid = clampSingleTendonTargetByLut(
                             jointIndex,
                             motorCh,
-                            targetRawAbs,
+                            rawPidTargetAbs,
                             &lutClampedTarget,
                             &lutWorkspaceMinAbs,
                             &lutWorkspaceMaxAbs);
                         if (lutWorkspaceValid) {
-                            lutWorkspaceClamped = lutClampedTarget != targetRawAbs;
+                            pidTargetLutClamped =
+                                lutClampedTarget != rawPidTargetAbs;
                             targetPos = clampServoPosByMotorAbsLimit(sharedData,
                                                                      motorCh,
                                                                      lutClampedTarget);
@@ -1623,8 +1667,17 @@ void controlTask(void* parameter)
                     feedbackCollisionPidPushActive[jointIndex] =
                         fabsf(pidOutput) >= 1.0f &&
                         pidOutput * angleError > 0.0f;
-                    feedbackCollisionLutBoundaryClamped[jointIndex] =
-                        !lutWorkspaceValid || lutWorkspaceClamped;
+                    // PID 目标是否被 LUT 钳位只用于诊断。碰撞检测必须读取当前实际 ABS，
+                    // 并仅在实际位置已进入本次推进方向的 LUT 边界容差时排除 HOLD。
+                    const bool actualBoundaryReached =
+                        lutWorkspaceValid &&
+                        isActualAbsAtDirectionalLutBoundary(
+                            actualMotorAbs,
+                            rawPidTargetAbs - actualMotorAbs,
+                            lutWorkspaceMinAbs,
+                            lutWorkspaceMaxAbs);
+                    feedbackCollisionWorkspaceBoundaryReached[jointIndex] =
+                        !lutWorkspaceValid || actualBoundaryReached;
 
                     if (feedbackOutputState && shouldLogControlPidDiag(
                             jointIndex,
@@ -1677,7 +1730,8 @@ void controlTask(void* parameter)
                             "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
                             "out=%.2f abs=%ld cmd=%d lead=%ld load=%d mag=%d speed=%d "
                             "lock=%u telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
-                            "lutDelta=%.2f lutRange=[%ld,%ld] lutClamp=%u\r\n",
+                            "lutDelta=%.2f rawTarget=%ld lutRange=[%ld,%ld] "
+                            "lutClamp=%u boundary=%u\r\n",
                             (unsigned long)millis(),
                             (unsigned)jointIndex,
                             jointMotorCh,
@@ -1697,9 +1751,11 @@ void controlTask(void* parameter)
                             (double)lutRefAbs,
                             (double)lutFbAbs,
                             (double)(lutRefAbs - lutFbAbs),
+                            (long)rawPidTargetAbs,
                             (long)lutWorkspaceMinAbs,
                             (long)lutWorkspaceMaxAbs,
-                            lutWorkspaceClamped ? 1U : 0U);
+                            pidTargetLutClamped ? 1U : 0U,
+                            actualBoundaryReached ? 1U : 0U);
                     }
                 }
 

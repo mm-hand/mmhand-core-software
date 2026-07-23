@@ -67,14 +67,56 @@ python -m desktop ui --mode monitor --port COMx --tactile-port COMy
 
 - `monitor`：常规监视和控制界面。
 - `teleop`：遥操作入口，调用 `desktop.teleop.example_teleop.run()`。
-- `algorithm`：算法入口，调用 `desktop.algorithm.example_algorithm.run()` 并同时打开 UI。
+- `replay`：读取 Save Data 遥操作 CSV，并按原时间轴整段回放。
 
 示例：
 
 ```bash
 python -m desktop ui --mode teleop --port COMx
-python -m desktop ui --mode algorithm --port COMx
+python -m desktop ui --mode replay --port COMx
 ```
+
+## Replay 遥操作轨迹
+
+Replay 不再保存单帧手势 JSON，而是直接读取 `Save Data` 生成的
+`07_遥操作总表.csv`，按 `host_time` 还原整段21关节动作。
+
+操作顺序：
+
+1. 连接P4，选择需要控制的关节并按`ENABLE`。
+2. 完成标定和`Rope Init`，确认系统状态为`READY`。
+3. 遥操时勾选`Save Data`，记录完整目标轨迹。
+4. 打开`Replay`页面，点击`导入 CSV`选择轨迹文件。
+5. 核对轨迹时长、帧数、active scope和URDF CRC后点击`Send`。
+
+Replay只有在启动瞬间系统状态严格等于`READY`时才会进入。运行期间如果发生
+E-STOP、Pause、断线、FAULT、active scope变化或碰撞保持，Replay会立即终止。
+播放期间`Send`会切换为`Stop`；URDF CRC不一致或轨迹越过当前工作空间时会拒绝启动。
+
+完整操作说明见 [algorithm/README.md](algorithm/README.md)。
+
+## Save Data 文件
+
+默认保存目录只生成以下 6 张便于人工查看的 CSV：
+
+1. `01_基础状态.csv`：系统状态、故障、active scope、多圈状态和碰撞检测位图。
+2. `02_关节总表.csv`：21 路标定后实时角度、目标角、磁编码 raw 和 Joint Debug。
+3. `03_舵机总表.csv`：27 路目标、raw/ABS、负载、速度、原始电流、电压、温度和在线状态。
+4. `04_触觉总表.csv`：五指触觉汇总。
+5. `06_操作事件总表.csv`：按钮操作、状态切换和碰撞检测进入/解除事件。
+6. `07_遥操作总表.csv`：遥操作输入、实际下发目标和对应时间轴。
+
+勾选“触觉全量”后额外生成 `05_触觉全量.csv`。原来的关节长表、舵机长表、
+Joint Debug 原始包和五指触觉宽表不再重复生成 CSV，但仍可写入 HDF5/ROS2 bag
+供算法训练和底层诊断。
+
+运行中发生碰撞时可以从三处确认：
+
+- P4 文本日志：`[COLLISION_ARM]`、`[COLLISION_HOLD]`、`[COLLISION_RELEASE]`。
+- `01_基础状态.csv`：连续记录 `feedback_collision_armed_mask` 和
+  `feedback_collision_hold_mask`。
+- `06_操作事件总表.csv`：记录 `collision_monitor_enter/exit` 和
+  `collision_hold_enter/release`，并注明具体关节和位图。
 
 ## CLI Mode
 
@@ -208,7 +250,11 @@ desktop/
     Posture/                  # 姿态/重定向依赖和模型
 
   algorithm/
-    example_algorithm.py      # algorithm mode 示例入口
+    replay_models.py          # 手势与序列数据模型
+    replay_store.py           # JSON原子存储、备份和导入导出
+    replay_capture.py         # 遥操目标/P4反馈捕获
+    replay_controller.py      # READY门禁与平滑回放线程
+    replay_service.py         # UI无关Replay服务
 
   tools/
     raw_ik_urdf_viewer.py
@@ -216,7 +262,8 @@ desktop/
   visualize/
     plot_*.py                 # 离线绘图和调试可视化脚本
 
-  logs/                       # 本地运行日志
+run_data/
+  运行日志/                   # 会话、自动标定和任务运行诊断日志
 ```
 
 ## Tests

@@ -12,7 +12,12 @@ from typing import Dict, Iterable, Optional
 from .csv_exporter import CsvSessionExporter
 from .event_recorder import EventRecorder
 from .hdf5_recorder import Hdf5SessionRecorder
-from .topic_schema import CSV_TOPIC_FILENAMES, DEFAULT_TOPICS, TOPIC_FIELDNAMES
+from .topic_schema import (
+    CSV_TOPIC_FILENAMES,
+    DEFAULT_CSV_TOPICS,
+    DEFAULT_TOPICS,
+    TOPIC_FIELDNAMES,
+)
 from desktop.recording.rosbag_recorder import RosbagSessionRecorder
 
 
@@ -34,6 +39,9 @@ class DataSessionRecorder:
         self._rosbag = RosbagSessionRecorder()
         self._event = EventRecorder(self.write)
         self._queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue(maxsize=self.max_queue)
+        # Replay要求恢复每一帧已下发目标，遥操轨迹不能沿用普通遥测的“队满丢最旧”策略。
+        # 独立队列由同一个writer线程落盘，因此不引入CSV/HDF5并发写入。
+        self._teleop_queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -43,8 +51,6 @@ class DataSessionRecorder:
         self._rosbag_path = ""
         self._csv_enabled = False
         self._topic_fieldnames: Dict[str, Iterable[str]] = {}
-        self._started_host_time = 0.0
-        self._device_timestamp_origin: Optional[float] = None
         self._topic_sample_indices: Dict[str, int] = {}
 
     @property
@@ -82,6 +88,7 @@ class DataSessionRecorder:
         session_name: Optional[str] = None,
         meta: Optional[Dict[str, object]] = None,
         topics: Optional[Iterable[str]] = None,
+        csv_topics: Optional[Iterable[str]] = None,
         enable_csv: bool = True,
         enable_hdf5: bool = True,
         enable_rosbag: bool = False,
@@ -94,18 +101,24 @@ class DataSessionRecorder:
         os.makedirs(session_dir, exist_ok=True)
         selected_topics = list(topics or DEFAULT_TOPICS)
         fieldnames = {topic: TOPIC_FIELDNAMES[topic] for topic in selected_topics if topic in TOPIC_FIELDNAMES}
+        selected_csv_topics = list(csv_topics or DEFAULT_CSV_TOPICS)
+        csv_fieldnames = {
+            topic: TOPIC_FIELDNAMES[topic]
+            for topic in selected_csv_topics
+            if topic in TOPIC_FIELDNAMES
+        }
         started_host_time = time.time()
         meta_row = dict(meta or {})
         meta_row.update(
             {
                 "session_name": session,
                 "session_dir": session_dir,
-                "started_host_time": started_host_time,
-                "started_host_time_iso": _host_time_iso(started_host_time),
+                "started_host_time": _host_time_text(started_host_time),
                 "topics": selected_topics,
+                "csv_topics": selected_csv_topics,
                 "csv_topic_filenames": {
                     topic: CSV_TOPIC_FILENAMES.get(topic, f"{topic}.csv")
-                    for topic in selected_topics
+                    for topic in selected_csv_topics
                 },
                 "csv_requested": bool(enable_csv),
                 "hdf5_requested": bool(enable_hdf5),
@@ -115,7 +128,11 @@ class DataSessionRecorder:
         )
         self._write_meta(session_dir, meta_row)
         if enable_csv:
-            self._csv.start(session_dir, fieldnames, topic_filenames=CSV_TOPIC_FILENAMES)
+            self._csv.start(
+                session_dir,
+                csv_fieldnames,
+                topic_filenames=CSV_TOPIC_FILENAMES,
+            )
         else:
             self._csv.stop()
         hdf5_path = os.path.join(session_dir, "训练数据_session.h5")
@@ -144,8 +161,6 @@ class DataSessionRecorder:
             self._rosbag_path = rosbag_path if self._rosbag.enabled else ""
             self._csv_enabled = bool(enable_csv)
             self._topic_fieldnames = fieldnames
-            self._started_host_time = float(started_host_time)
-            self._device_timestamp_origin = None
             self._topic_sample_indices = {}
             self._stop.clear()
             self._running = True
@@ -182,8 +197,6 @@ class DataSessionRecorder:
             self._rosbag_path = ""
             self._csv_enabled = False
             self._topic_fieldnames = {}
-            self._started_host_time = 0.0
-            self._device_timestamp_origin = None
             self._topic_sample_indices = {}
 
     def is_running(self) -> bool:
@@ -194,6 +207,9 @@ class DataSessionRecorder:
         if not self.is_running():
             return
         item = (str(topic), dict(row))
+        if str(topic) == "teleop_input":
+            self._teleop_queue.put_nowait(item)
+            return
         try:
             self._queue.put_nowait(item)
         except queue.Full:
@@ -213,7 +229,19 @@ class DataSessionRecorder:
         self._event.event(event_type, **kwargs)
 
     def _worker(self) -> None:
-        while not self._stop.is_set() or not self._queue.empty():
+        while (
+            not self._stop.is_set()
+            or not self._teleop_queue.empty()
+            or not self._queue.empty()
+        ):
+            try:
+                topic, row = self._teleop_queue.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                self._write_now(topic, row)
+                self._teleop_queue.task_done()
+                continue
             try:
                 topic, row = self._queue.get(timeout=0.1)
             except queue.Empty:
@@ -222,6 +250,13 @@ class DataSessionRecorder:
             self._queue.task_done()
 
     def _drain_queue(self) -> None:
+        while True:
+            try:
+                topic, row = self._teleop_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._write_now(topic, row)
+            self._teleop_queue.task_done()
         while True:
             try:
                 topic, row = self._queue.get_nowait()
@@ -238,25 +273,20 @@ class DataSessionRecorder:
         self._rosbag.write_row(topic, row)
 
     def _normalize_time_fields(self, topic: str, row: Dict[str, object]) -> Dict[str, object]:
+        """统一生成上位机/P4两条时间轴，并彻底移除旧的伪设备时间与 elapsed 字段。"""
         out = dict(row)
         host_time = _to_float_or_none(out.get("host_time"))
         if host_time is None:
             host_time = time.time()
-            out["host_time"] = host_time
-        out.setdefault("host_time_unix_s", host_time)
-        out.setdefault("host_time_iso", _host_time_iso(host_time))
-        if self._started_host_time > 0.0:
-            out.setdefault("elapsed_s", host_time - self._started_host_time)
-        else:
-            out.setdefault("elapsed_s", 0.0)
-
-        device_timestamp = _to_float_or_none(out.get("device_timestamp"))
-        if device_timestamp is not None:
-            if self._device_timestamp_origin is None:
-                self._device_timestamp_origin = device_timestamp
-            out.setdefault("device_elapsed_s", device_timestamp - self._device_timestamp_origin)
-        else:
-            out.setdefault("device_elapsed_s", "")
+        out["host_time"] = _host_time_text(host_time)
+        # ROS bag 仍需 Unix ns 作为索引，但该内部字段不会写入 CSV/HDF5/消息正文。
+        out["_host_time_ns"] = int(host_time * 1_000_000_000)
+        p4_time_ms = out.get("p4_time_ms", "")
+        if p4_time_ms not in ("", None):
+            try:
+                out["p4_time_ms"] = int(p4_time_ms)
+            except Exception:
+                out["p4_time_ms"] = ""
 
         sample_index = self._topic_sample_indices.get(topic, 0)
         self._topic_sample_indices[topic] = sample_index + 1
@@ -293,7 +323,7 @@ class DataSessionRecorder:
                 pass
 
 
-def _host_time_iso(host_time: float) -> str:
+def _host_time_text(host_time: float) -> str:
     try:
         return datetime.fromtimestamp(float(host_time)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     except Exception:

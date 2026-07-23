@@ -108,6 +108,7 @@ from .protocol import (
     parse_task_diag_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
+    split_p4_timestamp,
     TACTILE_GROUP_COUNT,
     TACTILE_FULL_BYTES,
     TACTILE_SENSOR_PER_GROUP,
@@ -453,7 +454,7 @@ class TactileSerialComm:
         model.tactile_last_rx_ts = self._last_tactile_rx_ts
         model.tactile_module_online = [False] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         self._last_model = model
         self._tactile_offline_emitted = True
         return model
@@ -711,7 +712,7 @@ class TactileSerialComm:
         model = HandModel()
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         emitted = False
 
         for pkt_type, payload in packets:
@@ -880,6 +881,7 @@ class LowerComputerComm:
         self._firmware_text_buffer = bytearray()
         self._last_model: Optional[HandModel] = None
         self._last_proto_ack: Optional[tuple] = None
+        self._proto_ack_sequence = 0
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
         self._rx_diag_joint_debug_packets = 0
@@ -993,7 +995,7 @@ class LowerComputerComm:
         model = HandModel()
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         model.calib_status = "DISCONNECTED"
         model.has_system_status_data = False
         model.has_feedback_collision_status = False
@@ -1058,8 +1060,8 @@ class LowerComputerComm:
 
     def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> None:
         fieldnames = [
-            "host_ts_wall",
-            "device_ts_ms",
+            "host_time",
+            "p4_time_ms",
             "joint_index",
             "valid",
             "target_deg",
@@ -1086,11 +1088,11 @@ class LowerComputerComm:
         loop1_out: float,
         cmd_valid: bool,
         cmd_target_pos: int,
-        device_timestamp_ms: int,
+        p4_time_ms: int,
     ) -> None:
         row = {
-            "host_ts_wall": f"{float(host_ts_wall):.6f}",
-            "device_ts_ms": int(device_timestamp_ms),
+            "host_time": float(host_ts_wall),
+            "p4_time_ms": int(p4_time_ms),
             "joint_index": int(joint_index),
             "valid": 1 if valid else 0,
             "target_deg": float(target_deg),
@@ -1385,10 +1387,16 @@ class LowerComputerComm:
             model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
             model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
 
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         emitted = False
 
         for pkt_type, payload in packets:
+            # 当前协议统一把 P4 millis() 放在业务负载末尾。解析业务字段前先剥离，
+            # 并把它登记为本次状态更新对应的下位机时间。
+            payload, packet_p4_time_ms = split_p4_timestamp(pkt_type, payload)
+            if packet_p4_time_ms is not None:
+                model.p4_time_ms = int(packet_p4_time_ms)
+                model.has_p4_time = True
             if pkt_type == 0x01:
                 angles, errors = parse_sensor_packet(payload)
                 if angles:
@@ -1471,10 +1479,11 @@ class LowerComputerComm:
             elif pkt_type == 0x05:
                 parsed = parse_servo_telem_packet(payload)
                 if parsed is not None:
-                    speeds, loads, volts, temps, online = parsed
+                    speeds, loads, currents, volts, temps, online = parsed
                     for i in range(min(MOTOR_COUNT, len(speeds))):
                         model.servo_speed[i] = int(speeds[i])
                         model.servo_load[i] = int(loads[i])
+                        model.servo_current[i] = int(currents[i])
                         model.servo_voltage[i] = int(volts[i])
                         model.servo_temperature[i] = int(temps[i])
                         model.servo_telem_online[i] = bool(online[i]) if i < len(online) else False
@@ -1502,8 +1511,10 @@ class LowerComputerComm:
                         loop1_out=loop1_out,
                         cmd_valid=cmd_valid,
                         cmd_target_pos=cmd_target_pos,
-                        device_timestamp_ms=device_timestamp_ms,
+                        p4_time_ms=device_timestamp_ms,
                     )
+                    model.p4_time_ms = int(device_timestamp_ms)
+                    model.has_p4_time = True
                     if 0 <= joint_index < ENCODER_COUNT:
                         model.joint_debug_valid[joint_index] = valid
                         model.joint_debug_target_deg[joint_index] = float(target_deg)
@@ -1756,6 +1767,8 @@ class LowerComputerComm:
                     model.calib_diag_value_c = int(parsed.get("valueC", 0) or 0)
                     model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
                     model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
+                    model.p4_time_ms = model.calib_diag_timestamp_ms
+                    model.has_p4_time = True
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_TASK_DIAG:
@@ -1767,6 +1780,8 @@ class LowerComputerComm:
                         parsed["host_rx_ts"] = now
                         model.task_runtime[task_id] = dict(parsed)
                         model.task_runtime_last_rx_ts = now
+                        model.p4_time_ms = int(parsed.get("device_timestamp_ms", 0) or 0)
+                        model.has_p4_time = True
                         emitted = True
 
             elif pkt_type == PACKET_TYPE_TACTILE:
@@ -1849,6 +1864,13 @@ class LowerComputerComm:
                     with self._ack_lock:
                         self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
                         self._ack_lock.notify_all()
+                    # ACK 序号只在收到新 ACK 时递增，UI 可据此只记录一次 P4 执行事件。
+                    self._proto_ack_sequence += 1
+                    model.proto_ack_sequence = self._proto_ack_sequence
+                    model.proto_ack_cmd = int(ack_cmd)
+                    model.proto_ack_mode = int(applied_mode)
+                    model.proto_ack_status = int(status)
+                    model.proto_ack_p4_time_ms = int(packet_p4_time_ms or 0)
                     if (
                         ack_cmd in (CMD_STOP, CMD_RESET) and
                         status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)

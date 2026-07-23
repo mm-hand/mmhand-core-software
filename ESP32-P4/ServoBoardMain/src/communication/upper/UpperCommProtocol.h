@@ -28,6 +28,10 @@
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
+// 当前上行协议的实时包统一在业务负载末尾追加 uint32_t P4 毫秒时间戳。
+// 该值来自 millis() 或对应数据快照的 timestamp，按大端序传输。
+static const size_t kP4TimestampBytes = sizeof(uint32_t);
+
 #define CMD_CALIBRATE 0xCA
 #define CMD_ANGLE_CTRL 0xCB
 #define CMD_START 0xCC

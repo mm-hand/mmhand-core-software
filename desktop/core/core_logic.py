@@ -520,7 +520,9 @@ class HandController:
                     self.current_state.copy_state_from(new_model)
                     self.current_state.calib_status = new_model.calib_status
                     self.current_state.tactile_data = new_model.tactile_data
-                    self.current_state.timestamp = new_model.timestamp
+                    self.current_state.host_rx_time = new_model.host_rx_time
+                    self.current_state.p4_time_ms = new_model.p4_time_ms
+                    self.current_state.has_p4_time = new_model.has_p4_time
                     if getattr(new_model, "has_system_status_data", False):
                         self._started = int(new_model.system_state) in (
                             SYSTEM_STATE_IDLE,

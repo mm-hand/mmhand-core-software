@@ -7,7 +7,8 @@ PROJECT_ROOT = PACKAGE_DIR.parent
 RESOURCE_DIR = PACKAGE_DIR / "resources"
 CONFIG_DIR = RESOURCE_DIR / "config"
 URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
-LOG_DIR = PACKAGE_DIR / "logs"
+RUN_DATA_DIR = PROJECT_ROOT / "run_data"
+LOG_DIR = RUN_DATA_DIR / "运行日志"
 
 POSE_FIST_PATH = RESOURCE_DIR / "pose_fist_21deg.txt"
 JOINT_SEQUENCE_EXAMPLE_PATH = RESOURCE_DIR / "joint_sequence_example.txt"

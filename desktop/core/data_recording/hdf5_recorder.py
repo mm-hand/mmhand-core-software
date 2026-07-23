@@ -97,7 +97,7 @@ class Hdf5SessionRecorder:
         assert h5py is not None
         assert self._h5 is not None
         self._h5.attrs["format"] = "mmhand_data_session"
-        self._h5.attrs["format_version"] = 1
+        self._h5.attrs["format_version"] = 2
         self._h5.attrs["created_by"] = "desktop.core.data_recording.Hdf5SessionRecorder"
         self._write_meta_and_config()
         topics_group = self._h5.create_group("topics")
@@ -173,7 +173,8 @@ class Hdf5SessionRecorder:
         if dtype_kind == "str":
             dataset[idx] = "" if value is None else str(value)
         elif dtype_kind == "int":
-            dataset[idx] = _to_int(value)
+            # P4 时间缺失使用 -1，避免与启动瞬间合法的 0 ms 混淆。
+            dataset[idx] = -1 if field == "p4_time_ms" and value in ("", None) else _to_int(value)
         else:
             dataset[idx] = _to_float(value)
 
@@ -204,10 +205,11 @@ def _field_dtype_kind(field: str) -> str:
         "mapping_version",
         "urdf_config_crc",
         "raw_joint_targets_json",
-        "joint_targets_json",
+        "input_joint_targets_json",
+        "output_joint_targets_json",
         "clamped_joints_json",
         "block_reason",
-        "host_time_iso",
+        "host_time",
         "finger_name",
     }
     if field in string_fields:
@@ -215,11 +217,6 @@ def _field_dtype_kind(field: str) -> str:
     if field.endswith("_mask") or field.endswith("_mask_hex"):
         return "str"
     if field in {
-        "host_time",
-        "host_time_unix_s",
-        "device_timestamp",
-        "elapsed_s",
-        "device_elapsed_s",
         "latency_ms",
         "max_force",
         "mean_force",

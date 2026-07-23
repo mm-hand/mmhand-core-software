@@ -16,13 +16,16 @@ POSE_DISPLAY_FROM_TEXT = False
 class Mode(Enum):
     MONITOR = "monitor"
     TELEOP = "teleop"
-    ALGORITHM = "algorithm"
+    REPLAY = "replay"
 
 
 def _run_monitor_gui(
     backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
+    *,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     backend.reset()
     from desktop.ui.ui_app import HandGUI
@@ -35,6 +38,8 @@ def _run_monitor_gui(
         action_callback=None,
         pose_generate=POSE_DISPLAY_FROM_TEXT,
         tactile_port=tactile_port,
+        ros2_enabled=ros2_enabled,
+        ros_topic=ros_topic,
     )
     gui_win.run()
 
@@ -69,40 +74,31 @@ def _run_teleop_gui(
         teleop_run(backend, port)
 
 
-def _run_algorithm_gui(
+def _run_replay_gui(
     backend: HandBackend,
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
+    *,
+    ros2_enabled: bool = False,
+    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
-    backend.reset()
-    try:
-        from desktop.algorithm.example_algorithm import PoseCycleController
-    except ImportError:
-        print("desktop.algorithm.example_algorithm module not found. Please implement PoseCycleController.")
-        return
-    algorithm_controller = PoseCycleController(backend)
-
-    def set_algorithm_enabled(enabled: bool) -> bool:
-        if enabled:
-            return algorithm_controller.start()
-        algorithm_controller.stop("Algorithm Enabled unchecked")
-        return True
+    from desktop.algorithm.replay_service import ReplayService
+    replay_service = ReplayService(backend)
 
     from desktop.ui.ui_app import HandGUI
 
     gui_win = HandGUI(
         backend,
-        title_suffix="Algorithm",
+        title_suffix="Replay",
         current_port=port,
-        current_mode="Algorithm",
-        on_close_extra=algorithm_controller.shutdown,
-        algorithm_control_callback=set_algorithm_enabled,
-        algorithm_running_callback=algorithm_controller.is_running,
+        current_mode="Replay",
+        replay_service=replay_service,
         pose_generate=POSE_DISPLAY_FROM_TEXT,
         tactile_port=tactile_port,
+        ros2_enabled=ros2_enabled,
+        ros_topic=ros_topic,
     )
     gui_win.run()
-    algorithm_controller.shutdown()
 
 
 def _make_ros2_bridge(
@@ -139,7 +135,13 @@ def run(
         backend = HandBackend(backend)
 
     if mode == Mode.MONITOR:
-        _run_monitor_gui(backend, port, tactile_port)
+        _run_monitor_gui(
+            backend,
+            port,
+            tactile_port,
+            ros2_enabled=ros2_enabled,
+            ros_topic=ros_topic,
+        )
         return
     if mode == Mode.TELEOP:
         _run_teleop_gui(
@@ -150,8 +152,14 @@ def run(
             ros_topic=ros_topic,
         )
         return
-    if mode == Mode.ALGORITHM:
-        _run_algorithm_gui(backend, port, tactile_port)
+    if mode == Mode.REPLAY:
+        _run_replay_gui(
+            backend,
+            port,
+            tactile_port,
+            ros2_enabled=ros2_enabled,
+            ros_topic=ros_topic,
+        )
         return
     raise ValueError(f"Unknown mode: {mode}")
 

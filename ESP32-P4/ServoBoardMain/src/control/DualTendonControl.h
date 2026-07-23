@@ -11,6 +11,8 @@ struct DualTendonMotorTargets {
     uint8_t motorChannel[2];
     // 经过模型 PID 修正和限幅后的最终绝对电机命令。
     int32_t targetAbs[2];
+    // 尚未经过 LUT 工作空间钳位的 PID 原始目标，用于诊断和判断实际是否抵达边界。
+    int32_t rawTargetAbs[2];
     // 由标定 LUT 预测的目标和反馈电机位置。
     float motorRef[2];
     float motorFbModel[2];
@@ -24,8 +26,9 @@ struct DualTendonMotorTargets {
     float iTerm[2];
     float dTerm[2];
     float pidCorrection[2];
-    // 最终目标是否被自动标定 LUT 的实测 ABS 边界截断，用于碰撞检测排除边界停住。
-    uint8_t lutBoundaryClamped[2];
+    // PID 原始目标是否被自动标定 LUT 边界截断。该标志只用于诊断，
+    // 不能直接作为碰撞检测的否决条件。
+    uint8_t lutTargetClamped[2];
     int32_t lutMinAbs[2];
     int32_t lutMaxAbs[2];
     // 上述数组中有效的电机条目数量。
