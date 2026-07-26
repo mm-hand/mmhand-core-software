@@ -131,9 +131,6 @@ def run(
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     _ = gui
-    if not isinstance(backend, HandBackend):
-        backend = HandBackend(backend)
-
     if mode == Mode.MONITOR:
         _run_monitor_gui(
             backend,

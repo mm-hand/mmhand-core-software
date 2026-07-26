@@ -45,9 +45,6 @@ from .protocol import (
     build_calib_load_limits_cmd,
     build_calibrate_cmd,
     build_clear_calibration_cmd,
-    build_local_test_params_cmd,
-    build_local_test_start_cmd,
-    build_local_test_stop_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
@@ -2236,12 +2233,6 @@ class LowerComputerComm:
             return build_angle_cmd(cmd[1]) + build_run_feedback_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "joint_target_run_masked":
             return build_masked_angle_cmd(cmd[1], cmd[2]) + build_run_feedback_cmd()
-        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "local_test_params":
-            return build_local_test_params_cmd(cmd[1], cmd[2])
-        if cmd == "local_test_start":
-            return build_local_test_start_cmd()
-        if cmd == "local_test_stop":
-            return build_local_test_stop_cmd()
         if cmd == "start":
             return build_start_cmd()
         if cmd == "run_feedback":

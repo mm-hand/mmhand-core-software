@@ -22,6 +22,8 @@ class Pose3DView(QtWidgets.QWidget):
         self._gl = None
         self._grid_item = None
         self._label = None
+        self._status_label = None
+        self._reload_btn = None
         self._link_items = {}
         self._node_item = None
         self._last_angles: Optional[List[float]] = None
@@ -32,37 +34,95 @@ class Pose3DView(QtWidgets.QWidget):
 
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(6, 6, 6, 6)
+        toolbar = QtWidgets.QHBoxLayout()
+        self._reload_btn = QtWidgets.QPushButton("Reload URDF")
+        self._reload_btn.setToolTip("Reload the hand URDF file and redraw the pose view")
+        self._reload_btn.clicked.connect(lambda _checked=False: self.reload_urdf(reset_angles=True))
+        toolbar.addWidget(self._reload_btn)
+        self._status_label = QtWidgets.QLabel("")
+        self._status_label.setWordWrap(True)
+        toolbar.addWidget(self._status_label, 1)
+        layout.addLayout(toolbar)
         try:
             import pyqtgraph.opengl as gl
 
             self._gl_mod = gl
             self._gl = gl.GLViewWidget()
             self._gl.setBackgroundColor("w")
-            self._gl.opts["distance"] = 0.42
-            self._gl.opts["elevation"] = 18
-            self._gl.opts["azimuth"] = -68
+            self._reset_camera()
             layout.addWidget(self._gl, 1)
-            grid = gl.GLGridItem()
-            grid.setSize(0.22, 0.22)
-            grid.setSpacing(0.02, 0.02)
-            self._grid_item = grid
-            self._gl.addItem(grid)
+            self._install_grid()
         except Exception as exc:
             self._gl_mod = None
             self._label = QtWidgets.QLabel(f"OpenGL pose view unavailable:\n{exc}")
             self._label.setAlignment(QtCore.Qt.AlignCenter)
             layout.addWidget(self._label, 1)
 
-    def _load_urdf(self) -> None:
+    def _load_urdf(self) -> bool:
+        return self.reload_urdf(reset_angles=True)
+
+    def reload_urdf(self, *, reset_angles: bool = False) -> bool:
         urdf_path = str(DEFAULT_URDF_PATH)
+        self._clear_scene()
+        if reset_angles or self._last_angles is None:
+            self._last_angles = [0.0] * ENCODER_COUNT
         try:
             self._kin = UrdfKinematics(urdf_path)
         except Exception as exc:
             self._kin = None
+            text = f"URDF load failed:\n{urdf_path}\n{exc}"
             if self._label is not None:
-                self._label.setText(f"URDF load failed:\n{urdf_path}\n{exc}")
-        self.draw_angles([0.0] * ENCODER_COUNT)
+                self._label.setText(text)
+            self._set_status(text)
+            return False
+        self._closed = False
+        self._paused = False
+        self._reset_camera()
+        self._set_status(f"URDF loaded: {os.path.basename(urdf_path)}")
+        self.draw_angles(self._last_angles)
+        return True
+
+    def _set_status(self, text: str) -> None:
+        if self._status_label is not None:
+            self._status_label.setText(str(text))
+
+    def _install_grid(self) -> None:
+        if self._gl is None or self._gl_mod is None:
+            return
+        try:
+            grid = self._gl_mod.GLGridItem()
+            grid.setSize(0.22, 0.22)
+            grid.setSpacing(0.02, 0.02)
+            self._grid_item = grid
+            self._gl.addItem(grid)
+        except Exception as exc:
+            self._grid_item = None
+            self._set_status(f"Pose grid unavailable: {exc}")
+
+    def _reset_camera(self) -> None:
+        if self._gl is None:
+            return
+        self._gl.opts["distance"] = 0.42
+        self._gl.opts["elevation"] = 18
+        self._gl.opts["azimuth"] = -68
+
+    def _remove_gl_item(self, item) -> None:
+        if self._gl is None or item is None:
+            return
+        try:
+            self._gl.removeItem(item)
+        except Exception:
+            pass
+
+    def _clear_scene(self) -> None:
+        if self._gl is not None:
+            for item in list(getattr(self._gl, "items", [])):
+                if item is self._grid_item:
+                    continue
+                self._remove_gl_item(item)
+        self._link_items.clear()
+        self._node_item = None
 
     def build(self, _parent) -> None:
         pass

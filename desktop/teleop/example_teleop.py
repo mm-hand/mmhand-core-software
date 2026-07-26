@@ -19,8 +19,6 @@ def run(
 ) -> None:
     """遥操作入口：接收 backend 与 port，在此填写你的遥操逻辑。"""
     from desktop.ui.ui_app import HandGUI
-    if not isinstance(backend, HandBackend):
-        backend = HandBackend(backend)
     backend.set_pid_control(True)
     gui = HandGUI(
         backend,

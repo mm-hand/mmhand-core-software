@@ -642,21 +642,6 @@ class HandController:
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs_one", idx, raw))
 
-    def set_local_test_params(self, freq_hz: float, amplitude_deg: float):
-        """设置本地测试参数：频率（Hz）和幅值（度）"""
-        if self.comm:
-            self.comm.send_command(("local_test_params", freq_hz, amplitude_deg))
-
-    def start_local_test(self):
-        """开始本地测试模式"""
-        if self.comm:
-            self.comm.send_command("local_test_start")
-
-    def stop_local_test(self):
-        """停止本地测试模式"""
-        if self.comm:
-            self.comm.send_command("local_test_stop")
-
     def _validate_angles(self, angles: List[float]) -> List[float]:
         out: List[float] = []
         for a in angles:

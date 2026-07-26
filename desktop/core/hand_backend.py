@@ -795,15 +795,6 @@ class HandBackend:
     def set_single_motor_position_absolute(self, motor_index: int, motor_abs: int) -> None:
         self._controller.set_single_motor_position_absolute(motor_index, motor_abs)
 
-    def set_local_test_params(self, freq_hz: float, amplitude_deg: float) -> None:
-        self._controller.set_local_test_params(freq_hz, amplitude_deg)
-
-    def start_local_test(self) -> None:
-        self._controller.start_local_test()
-
-    def stop_local_test(self) -> None:
-        self._controller.stop_local_test()
-
     def request_firmware_calibration(self) -> bool:
         return self._controller.request_firmware_calibration()
 

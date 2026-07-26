@@ -1,4 +1,4 @@
-﻿#include "EncodersTask.h"
+#include "EncodersTask.h"
 #include "../config/Config.h"
 #include "../hal/HalEncoders.h"
 

@@ -103,9 +103,16 @@ class DisplayWindowManager:
         if key == "pose" and hidden is not None:
             self.components[key] = hidden.component
             try:
-                hidden.component.resume()
+                reloader = getattr(hidden.component, "reload_urdf", None)
+                if callable(reloader):
+                    reloader(reset_angles=True)
+                else:
+                    hidden.component.resume()
             except Exception:
-                pass
+                try:
+                    hidden.component.resume()
+                except Exception:
+                    pass
             self._last_pose_update_ts = 0.0
             self._set_action(key, True)
             self.layout_open_windows()

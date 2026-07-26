@@ -189,11 +189,11 @@ class ReplayView(QtWidgets.QWidget):
         self.preview_table.setUpdatesEnabled(False)
         try:
             for joint in range(ENCODER_COUNT):
-                encoder_status = panel._joint_encoder_status(joint, state)
+                encoder_status = panel.joint_encoder_status(joint, state)
                 angle_valid = (
                     encoder_status in ("ok", "warn")
-                    and panel._joint_angle_feedback_valid(joint, state)
-                    and panel._joint_angle_display_calibrated(joint, state)
+                    and panel.joint_angle_feedback_valid(joint, state)
+                    and panel.joint_angle_display_calibrated(joint, state)
                     and joint < len(angles)
                 )
                 current = float(angles[joint]) if angle_valid else None

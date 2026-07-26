@@ -96,9 +96,6 @@ CMD_HOST_HEARTBEAT = 0xDC
 CMD_MULTITURN_NVS_CONTROL = 0xDD
 CMD_CALIB_LOAD_JOINT = 0xDF
 CMD_CALIB_LOAD_LIMITS = 0xE0
-CMD_LOCAL_TEST_PARAMS = 0xE1
-CMD_LOCAL_TEST_START = 0xE2
-CMD_LOCAL_TEST_STOP = 0xE3
 CMD_CLEAR_CALIBRATION = 0xE5
 CMD_MANUAL_ENCODER_REFERENCE = 0xE6
 CMD_MANUAL_ENCODER_QUERY = 0xE7
@@ -1374,16 +1371,3 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
         v = MOTOR_ABS_CMD_MAX
     payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)
-
-
-def build_local_test_params_cmd(freq_hz: float, amplitude_deg: float) -> bytes:
-    payload = struct.pack("<ff", freq_hz, amplitude_deg)
-    return _build_command_frame(CMD_LOCAL_TEST_PARAMS, payload)
-
-
-def build_local_test_start_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_START, b"")
-
-
-def build_local_test_stop_cmd() -> bytes:
-    return _build_command_frame(CMD_LOCAL_TEST_STOP, b"")

@@ -127,7 +127,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
         super().__init__()
-        self.backend = backend if isinstance(backend, HandBackend) else HandBackend(backend)
+        self.backend = backend
         self.current_port = current_port or ""
         self.current_mode = self._normalize_mode(current_mode or "Monitor")
         self._on_close_extra = on_close_extra
@@ -548,7 +548,7 @@ class HandGUI(QtWidgets.QMainWindow):
     def _on_comm_ready(self) -> None:
         self._refresh_start_indicator()
         try:
-            self.control_panel._on_active_scope_changed()
+            self.control_panel.refresh_active_scope()
         except Exception:
             pass
         self.control_panel.begin_startup_device_check()
@@ -687,7 +687,7 @@ class HandGUI(QtWidgets.QMainWindow):
             overload_text, overload_tip, overload_active = self._format_overload_summary(state, now)
         else:
             overload_text, overload_tip, overload_active = "OL -", "Lower serial disconnected", False
-        hold_text, hold_tip, hold_active, hold_known = self._format_feedback_collision_summary(
+        hold_text, hold_tip, hold_active, hold_known = self.format_feedback_collision_summary(
             state, connected and system_status_fresh
         )
         delay_text, delay_state = self._format_delay_status(delay_ms)
@@ -717,12 +717,12 @@ class HandGUI(QtWidgets.QMainWindow):
         self._style_top_status_label(self.delay_label, delay_state)
         self._handle_fault_side_effects(state)
 
-    def _format_feedback_collision_summary(
+    def format_feedback_collision_summary(
         self,
         state: HandModel,
         system_status_fresh: bool,
     ) -> tuple[str, str, bool, bool]:
-        """只使用 P4 上报状态显示碰撞监测，避免 UI 本地猜测控制状态。"""
+        """Return the top-strip feedback collision summary fields."""
         if not system_status_fresh or not bool(
             getattr(state, "has_feedback_collision_status", False)
         ):
@@ -855,6 +855,7 @@ class HandGUI(QtWidgets.QMainWindow):
             False,
             True,
         )
+
     @staticmethod
     def _packet_status_fresh(
         state: HandModel,
@@ -1408,7 +1409,7 @@ class HandGUI(QtWidgets.QMainWindow):
             unknown = 0
         active_mask = 0
         try:
-            active_mask = int(self.control_panel._active_motor_mask_from_ui())
+            active_mask = int(self.control_panel.active_motor_mask())
         except Exception:
             active_mask = 0
         if active_mask == 0:
@@ -1715,7 +1716,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 write_state(state, force=True)
             self._record_event("save_data_stop", detail=reason, source="recorder")
             thread = threading.Thread(
-                target=self._finish_test_recording_stop,
+                target=self.finish_test_recording_stop,
                 args=(path, reason),
                 name="mmhand-test-recording-stop",
                 daemon=True,
@@ -1731,7 +1732,8 @@ class HandGUI(QtWidgets.QMainWindow):
             thread = self._test_recording_stop_thread
             return bool(thread is not None and thread.is_alive())
 
-    def _finish_test_recording_stop(self, path: str, reason: str) -> None:
+    def finish_test_recording_stop(self, path: str, reason: str) -> None:
+        """Finalize test recording and emit the completion signal."""
         error = ""
         try:
             self._data_logger.stop()
@@ -2011,10 +2013,10 @@ class HandGUI(QtWidgets.QMainWindow):
             encoder = state.encoders[i] if i < len(state.encoders) else None
             # 关节总表可以直接作为Replay输入，必须沿用Joint Channels的完整有效性门禁。
             current_valid = bool(
-                self.control_panel._joint_encoder_status(i, state) in ("ok", "warn")
-                and self.control_panel._joint_angle_feedback_valid(i, state)
+                self.control_panel.joint_encoder_status(i, state) in ("ok", "warn")
+                and self.control_panel.joint_angle_feedback_valid(i, state)
                 and
-                self.control_panel._joint_angle_display_calibrated(i, state)
+                self.control_panel.joint_angle_display_calibrated(i, state)
             )
             row[f"{label}_current_deg"] = (
                 state.angles[i] if current_valid and i < len(state.angles) else ""
@@ -2097,13 +2099,7 @@ class HandGUI(QtWidgets.QMainWindow):
         if panel is None:
             return "", "", "", ""
         try:
-            label = panel._active_scope_label_from_ui()
-            data = panel._current_active_scope_tuple()
-            if data is None:
-                return label, "", "", ""
-            motor_mask = f"0x{int(data[0]):08X}"
-            joint_mask = f"0x{int(data[1]):08X}"
-            require_can = 1 if bool(data[2]) else 0
+            label, motor_mask, joint_mask, require_can = panel.active_scope_record_fields()
         except Exception:
             return "", "", "", ""
         return label, motor_mask, joint_mask, require_can
@@ -2415,7 +2411,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def emit_action(self, msg: str) -> None:
         log_session("UI", msg)
-        self._record_event(self._event_type_from_message(msg), detail=msg, source="ui")
+        self._record_event(self.event_type_from_message(msg), detail=msg, source="ui")
         if self._action_callback:
             try:
                 self._action_callback(msg)
@@ -2437,7 +2433,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._set_status(f"{event_type}: {detail}")
 
     @staticmethod
-    def _event_type_from_message(msg: str) -> str:
+    def event_type_from_message(msg: str) -> str:
+        """Return the run-data event type inferred from an action message."""
         text = str(msg or "").strip()
         lower = text.lower()
         if lower.startswith("start"):

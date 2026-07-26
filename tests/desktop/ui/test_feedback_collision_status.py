@@ -4,7 +4,7 @@ from desktop.ui.ui_app import HandGUI
 
 
 def _format_status(*, armed_mask: int, hold_mask: int):
-    """不创建 Qt 窗口，直接验证 P4 碰撞位图到顶部状态栏的格式化结果。"""
+    """Verify P4 collision bitmaps without constructing a Qt window."""
     app = SimpleNamespace(
         _last_feedback_collision_armed_mask=None,
         _last_feedback_collision_hold_mask=None,
@@ -14,7 +14,7 @@ def _format_status(*, armed_mask: int, hold_mask: int):
         feedback_collision_armed_bitmap=armed_mask,
         feedback_collision_hold_bitmap=hold_mask,
     )
-    return HandGUI._format_feedback_collision_summary(app, state, True)
+    return HandGUI.format_feedback_collision_summary(app, state, True)
 
 
 def test_dual_tendon_j00_hold_is_visible_in_top_status():

@@ -6,7 +6,20 @@ from desktop.core.protocol import (
     CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     ENCODER_COUNT,
 )
-from desktop.ui.ui_control_panels import ControlPanel
+from desktop.ui.ui_control_calibration import CalibrationWorkflowController
+
+
+class _WarningHarness(CalibrationWorkflowController):
+    def __init__(self):
+        """Capture warning popup and action side effects."""
+        self._calibration_warning_popup_mask = 0
+        self.actions = []
+        self.warnings = []
+        self.context = SimpleNamespace(emit_action=self.actions.append)
+
+    def _warn(self, title, text):
+        """Capture warning popup content."""
+        self.warnings.append((title, text))
 
 
 def _state(mask: int):
@@ -36,20 +49,14 @@ def _state(mask: int):
 
 
 def test_calibration_warning_popup_explains_all_reasons_once():
-    actions = []
-    warnings = []
-    panel = SimpleNamespace(
-        _calibration_warning_popup_mask=0,
-        context=SimpleNamespace(emit_action=actions.append),
-        _warn=lambda title, text: warnings.append((title, text)),
-    )
+    panel = _WarningHarness()
     mask = 1 << 12
 
-    ControlPanel._maybe_show_calibration_assembly_warning(panel, _state(mask))
-    ControlPanel._maybe_show_calibration_assembly_warning(panel, _state(mask))
+    panel.show_calibration_assembly_warning_if_needed(_state(mask))
+    panel.show_calibration_assembly_warning_if_needed(_state(mask))
 
-    assert len(warnings) == 1
-    title, body = warnings[0]
+    assert len(panel.warnings) == 1
+    title, body = panel.warnings[0]
     assert title == "标定装配警告"
     assert "J12" in body
     assert "412 counts" in body
@@ -58,20 +65,15 @@ def test_calibration_warning_popup_explains_all_reasons_once():
     assert "2957 counts" in body
     assert "443 counts" in body
     assert "超过 360 counts" in body
-    assert len(actions) == 1
+    assert len(panel.actions) == 1
 
 
 def test_calibration_warning_popup_episode_resets_after_warning_clears():
-    warnings = []
-    panel = SimpleNamespace(
-        _calibration_warning_popup_mask=0,
-        context=SimpleNamespace(emit_action=lambda _message: None),
-        _warn=lambda title, text: warnings.append((title, text)),
-    )
+    panel = _WarningHarness()
     mask = 1 << 12
 
-    ControlPanel._maybe_show_calibration_assembly_warning(panel, _state(mask))
-    ControlPanel._maybe_show_calibration_assembly_warning(panel, _state(0))
-    ControlPanel._maybe_show_calibration_assembly_warning(panel, _state(mask))
+    panel.show_calibration_assembly_warning_if_needed(_state(mask))
+    panel.show_calibration_assembly_warning_if_needed(_state(0))
+    panel.show_calibration_assembly_warning_if_needed(_state(mask))
 
-    assert len(warnings) == 2
+    assert len(panel.warnings) == 2

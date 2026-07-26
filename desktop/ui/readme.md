@@ -49,6 +49,6 @@ python -m desktop ui
 ## Import Notes
 
 - Import `HandGUI` from `desktop.ui.ui_app`.
-- `HandGUI` accepts a `HandBackend`; passing a legacy `HandController` still works because it is wrapped in a backend at construction time.
+- `HandGUI` accepts a `HandBackend`; wrap lower-level controllers before constructing the window.
 - Hardware protocol, calibration files, and `HandController` command methods are not changed by the UI migration.
 - If `PySide6.QtWidgets` fails to import because of a DLL issue, the UI falls back to installed `PyQt5`.

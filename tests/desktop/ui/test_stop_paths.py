@@ -4,7 +4,7 @@ from types import MethodType, SimpleNamespace
 
 from desktop.ui.ui_app import HandGUI
 from desktop.core.protocol import ControlMode
-from desktop.ui.ui_control_panels import ControlPanel
+from desktop.ui.ui_control_commands import ControlCommandController
 
 
 class _FakeSignal:
@@ -41,7 +41,7 @@ def test_estop_is_enqueued_before_test_and_recorder_cleanup():
         _clear_run_states=lambda: events.append("clear_run_states"),
     )
 
-    ControlPanel.stop_controller(panel)
+    ControlCommandController.stop_controller(panel)
 
     assert events.index("backend.stop") < events.index("stop_all_tests")
     assert panel._estop_latched is True
@@ -74,7 +74,7 @@ def test_test_stop_returns_without_waiting_for_recording_finalize():
         _stop_joint_debug_packet_log=lambda: None,
         test_recording_stop_finished=_FakeSignal(),
     )
-    app._finish_test_recording_stop = MethodType(HandGUI._finish_test_recording_stop, app)
+    app.finish_test_recording_stop = MethodType(HandGUI.finish_test_recording_stop, app)
 
     started_at = time.perf_counter()
     HandGUI.stop_recording_for_test(app, "feedforward stopped")
@@ -123,7 +123,7 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
         _update_connection_lights=lambda: None,
     )
 
-    ControlPanel.start_controller(panel)
+    ControlCommandController.start_controller(panel)
 
     assert ("mode", ControlMode.JOINT_ANGLE) in events
     assert ("pid", True) in events
@@ -162,7 +162,7 @@ def test_joint_enable_does_not_arm_raw_ik_output():
         _update_connection_lights=lambda: None,
     )
 
-    ControlPanel.start_controller(panel)
+    ControlCommandController.start_controller(panel)
 
     assert not any(event[0] == "ros2_arm" for event in events if isinstance(event, tuple))
     assert "start" in events
@@ -202,7 +202,7 @@ def test_raw_ik_button_is_the_only_ui_path_that_arms_teleoperation():
         _set_status=lambda text: events.append(("status", text)),
     )
 
-    ControlPanel.toggle_raw_ik_output(panel, True)
+    ControlCommandController.toggle_raw_ik_output(panel, True)
 
     assert ("raw_ik", True) in events
     assert panel.raw_ik_enable_btn.checked
@@ -239,7 +239,7 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
         _update_connection_lights=lambda: None,
     )
 
-    ControlPanel.start_controller(panel)
+    ControlCommandController.start_controller(panel)
 
     assert ("mode", ControlMode.DIRECT_MOTOR) in events
     assert ("pid", False) in events
