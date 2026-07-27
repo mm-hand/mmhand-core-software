@@ -67,6 +67,8 @@
 #define MULTITURN_NVS_SAVE_REASON_CALIB_DONE 5
 #define MULTITURN_NVS_SAVE_REASON_OFFLINE_MOVE 6
 #define MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE 7
+// 舵机单独掉电时，保存掉线前最后一次可信反馈；Flash 写入仍由后台任务完成。
+#define MULTITURN_NVS_SAVE_REASON_SERVO_POWER_LOSS 8
 
 // 顶层系统状态：
 // UNCONTROLLABLE: 输出关闭/硬件门禁未满足；IDLE: 仅直控条件满足；
@@ -133,30 +135,23 @@
 
 #define CALIB_DIAG_REASON_NONE 0
 #define CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY 1
-#define CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT 2
-#define CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT 3
-#define CALIB_DIAG_REASON_TELEMETRY_TIMEOUT 4
 #define CALIB_DIAG_REASON_ENCODER_ERROR 5
 #define CALIB_DIAG_REASON_SERVO_OFFLINE 6
-#define CALIB_DIAG_REASON_TURN_UNKNOWN 7
 #define CALIB_DIAG_REASON_OVERLOAD 8
-#define CALIB_DIAG_REASON_LOAD_NOT_REACHED 9
-#define CALIB_DIAG_REASON_ANGLE_NOT_MOVING 10
-#define CALIB_DIAG_REASON_WRONG_DIRECTION 11
-#define CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT 12
 #define CALIB_DIAG_REASON_ZERO_CROSS_INVALID 13
 #define CALIB_DIAG_REASON_WRAP_TOO_LARGE 14
 #define CALIB_DIAG_REASON_ABS_LIMIT_INVALID 15
 #define CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED 16
 #define CALIB_DIAG_REASON_FEEDBACK_LOST 17
 #define CALIB_DIAG_REASON_TASK_START_FAILED 18
-#define CALIB_DIAG_REASON_INTERNAL_ERROR 19
 #define CALIB_DIAG_REASON_CONTROL_LOST 20
 #define CALIB_DIAG_REASON_HOLD_TARGET_FAILED 21
 #define CALIB_DIAG_REASON_JOINT_LIST_INVALID 22
 #define CALIB_DIAG_REASON_DUPLICATE_JOINT 23
 #define CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED 24
 #define CALIB_DIAG_REASON_JOINT_STEP_FAILED 25
+#define CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT 26
+#define CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS 27
 
 #define CALIB_DIAG_PHASE_NONE 0
 #define CALIB_DIAG_PHASE_INIT 1
@@ -250,7 +245,9 @@ typedef struct {
 typedef struct {
     uint8_t busIndex;
     uint8_t servoId;
-    int16_t position;
+    // P4 逻辑多圈 ABS。最终写入 ST3215 前，由舵机通信任务减去该电机
+    // 自己的 logicalOffset，并校验本次上电会话的硬件行程。
+    int32_t position;
     uint16_t speed;
     uint8_t acc;
 } ServoTargetCommand_t;
@@ -273,15 +270,6 @@ typedef struct {
     uint32_t motorDirectCommandGeneration;
     uint8_t motorDirectCommandSource;
     uint8_t controlMode;
-    uint8_t sineTestEnabled;
-    uint32_t sineTestRequestToken;
-    uint32_t sineTestStartMs;
-    uint32_t sineTestJointMask;
-    uint32_t sineTestHoldMs;
-    float sineTestCenterDeg[ENCODER_TOTAL_NUM];
-    float sineTestAmpDeg[ENCODER_TOTAL_NUM];
-    float sineTestFreqHz[ENCODER_TOTAL_NUM];
-    float sineTestPhaseRad[ENCODER_TOTAL_NUM];
 } ControlCommandSnapshot_t;
 
 typedef struct {
@@ -296,9 +284,8 @@ typedef struct {
 typedef struct {
     int32_t servoAngles[SERVO_TOTAL_NUM];
     int16_t servoRawPositions[SERVO_TOTAL_NUM];
-    // Feetech Present Position as returned by ReadPos(), before P4 expansion
-    // or logicalOffset. This is the servo's current power-session coordinate.
-    int32_t servoHardwarePositions[SERVO_TOTAL_NUM];
+    // 最近一次真正写入 P4 Flash 的单圈 raw，用于上位机判断舵机掉电后是否偏离快照。
+    int16_t servoFlashRawPositions[SERVO_TOTAL_NUM];
     uint8_t onlineStatus[SERVO_TOTAL_NUM];
     uint32_t timestamp;
 } ServoAngleData_t;
@@ -419,15 +406,6 @@ typedef struct {
     volatile uint32_t pending_direct_joint_mask;
     volatile uint8_t pending_direct_require_can;
     volatile uint8_t direct_reject_reason;
-    volatile uint8_t sine_test_enabled;
-    volatile uint32_t sine_test_request_token;
-    volatile uint32_t sine_test_start_ms;
-    volatile uint32_t sine_test_joint_mask;
-    volatile uint32_t sine_test_hold_ms;
-    float sine_test_center_deg[ENCODER_TOTAL_NUM];
-    float sine_test_amp_deg[ENCODER_TOTAL_NUM];
-    float sine_test_freq_hz[ENCODER_TOTAL_NUM];
-    float sine_test_phase_rad[ENCODER_TOTAL_NUM];
 
     volatile uint8_t control_enabled;
     volatile uint8_t control_mode;
@@ -463,6 +441,35 @@ typedef struct {
     volatile uint32_t active_joint_mask;
     volatile uint32_t multi_turn_unknown_bitmap;
     volatile uint32_t servo_online_bitmap;
+    // 舵机热插拔恢复分为三个独立维度：
+    // pending 表示仍需执行扭矩关闭/多圈模式配置；configured 表示本次上电会话
+    // 已完成多圈模式配置；failed 表示本次上线周期内恢复事务连续失败。
+    // 它们不能与 multi_turn_unknown_bitmap 合并：自动标定允许重建未知圈数，
+    // 但绝不允许在驱动恢复和多圈模式配置尚未完成时发送运动目标。
+    volatile uint32_t servo_recovery_pending_bitmap;
+    volatile uint32_t servo_multiturn_configured_bitmap;
+    volatile uint32_t servo_recovery_failed_bitmap;
+    // 每台舵机本次上电会话对应的逻辑可达范围。范围由该电机自己的
+    // logicalOffset 独立计算，单台掉电/恢复不会平移其他电机。
+    volatile uint32_t servo_logical_range_valid_bitmap;
+    int32_t servo_logical_range_min[SERVO_TOTAL_NUM];
+    int32_t servo_logical_range_max[SERVO_TOTAL_NUM];
+    // 最近一次因“逻辑目标换算后超出舵机实际硬件行程”而拒绝的诊断。
+    volatile uint32_t servo_range_reject_sequence;
+    volatile uint8_t servo_range_reject_motor;
+    int32_t servo_range_reject_logical_target;
+    int32_t servo_range_reject_hardware_target;
+    int32_t servo_range_reject_logical_min;
+    int32_t servo_range_reject_logical_max;
+    // 只有标定预检通过并准备发送首个舵机目标时才置 1。通信任务据此判断
+    // 是否需要暂停会占用总线的离线探测和热插拔配置事务。
+    volatile uint8_t calibration_motion_started;
+    // 标定成功后由舵机通信任务把当前 power-session ABS 正式登记为可信。
+    // 自动标定任务必须等待 result_token 与 request_token 一致后才能报告完成。
+    volatile uint32_t calibration_trust_request_mask;
+    volatile uint32_t calibration_trust_request_token;
+    volatile uint32_t calibration_trust_result_token;
+    volatile uint32_t calibration_trust_accepted_mask;
     volatile uint32_t encoder_online_bitmap;
     volatile uint32_t encoder_warn_bitmap;
     volatile uint32_t encoder_fault_bitmap;
@@ -481,6 +488,8 @@ typedef struct {
     volatile uint32_t multiturn_nvs_save_fail_count;
     volatile uint8_t multiturn_nvs_enabled;
     volatile uint8_t multiturn_nvs_snapshot_valid;
+    // 与 multiturn_nvs_save_valid_mask 配套；无效位的数据不得用于恢复或界面比较。
+    int16_t multiturn_nvs_snapshot_raw[SERVO_TOTAL_NUM];
     volatile uint32_t host_rx_heartbeat_ms;
 
     // Manual magnetic-encoder endpoint reference restored from the dedicated

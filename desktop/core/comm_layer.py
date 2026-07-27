@@ -26,6 +26,7 @@ from .protocol import (
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
+    PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
     PACKET_TYPE_TASK_DIAG,
@@ -45,6 +46,7 @@ from .protocol import (
     build_calib_load_limits_cmd,
     build_calibrate_cmd,
     build_clear_calibration_cmd,
+    build_clear_calibration_scope_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
@@ -65,6 +67,7 @@ from .protocol import (
     build_stop_cmd,
     CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION,
+    CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
@@ -96,6 +99,7 @@ from .protocol import (
     parse_joint_calib_snapshot_packet,
     parse_manual_encoder_reference_packet,
     parse_motor_abs_limit_packet,
+    parse_servo_logical_range_packet,
     parse_proto_ack,
     parse_sensor_packet,
     parse_servo_angle_packet,
@@ -1002,7 +1006,7 @@ class LowerComputerComm:
         model.has_encoder_health_status = False
         model.has_servo_angle_data = False
         model.has_servo_raw_data = False
-        model.has_servo_hardware_data = False
+        model.has_servo_flash_raw_data = False
         model.has_fault_status_data = False
         model.servo_online_bitmap = 0
         model.encoder_online_bitmap = 0
@@ -1463,14 +1467,16 @@ class LowerComputerComm:
             elif pkt_type == PACKET_TYPE_SERVO_RAW:
                 parsed = parse_servo_raw_packet(payload)
                 if parsed is not None:
-                    raw_positions, hardware_positions, online_flags, has_hardware_positions = parsed
+                    raw_positions, flash_raw_positions, online_flags = parsed
                     for i in range(min(MOTOR_COUNT, len(raw_positions))):
                         model.servo_raw_positions[i] = int(raw_positions[i])
-                        if has_hardware_positions and i < len(hardware_positions):
-                            model.servo_hardware_positions[i] = int(hardware_positions[i])
+                        if i < len(flash_raw_positions):
+                            model.servo_flash_raw_positions[i] = int(
+                                flash_raw_positions[i]
+                            )
                         model.servo_raw_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
                     model.has_servo_raw_data = True
-                    model.has_servo_hardware_data = bool(has_hardware_positions)
+                    model.has_servo_flash_raw_data = True
                     emitted = True
 
             elif pkt_type == 0x05:
@@ -1708,6 +1714,17 @@ class LowerComputerComm:
                         model.motor_abs_limit_max[i] = int(maxs[i])
                     emitted = True
 
+            elif pkt_type == PACKET_TYPE_SERVO_LOGICAL_RANGE:
+                parsed = parse_servo_logical_range_packet(payload)
+                if parsed is not None:
+                    valid_bitmap, mins, maxs = parsed
+                    model.servo_logical_range_valid_bitmap = int(valid_bitmap)
+                    for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
+                        model.servo_logical_range_min[i] = int(mins[i])
+                        model.servo_logical_range_max[i] = int(maxs[i])
+                    model.has_servo_logical_range_status = True
+                    emitted = True
+
             elif pkt_type == PACKET_TYPE_MANUAL_ENCODER_REFERENCE:
                 parsed = parse_manual_encoder_reference_packet(payload)
                 if parsed is not None:
@@ -1849,7 +1866,11 @@ class LowerComputerComm:
                 parsed = parse_proto_ack(payload)
                 if parsed is not None:
                     ack_cmd, applied_mode, status = parsed
-                    if ack_cmd in (CMD_CALIBRATE, CMD_CLEAR_CALIBRATION):
+                    if ack_cmd in (
+                        CMD_CALIBRATE,
+                        CMD_CLEAR_CALIBRATION,
+                        CMD_CLEAR_CALIBRATION_SCOPE,
+                    ):
                         self._auto_calib_logger.log(
                             "ACK",
                             f"cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
@@ -1890,6 +1911,7 @@ class LowerComputerComm:
                         CMD_MANUAL_ENCODER_REFERENCE,
                         CMD_MANUAL_ENCODER_SINGLE,
                         CMD_CLEAR_CALIBRATION,
+                        CMD_CLEAR_CALIBRATION_SCOPE,
                     ) and status == PROTO_ACK_STATUS_OK:
                         model.system_state = int(applied_mode)
                         if ack_cmd == CMD_START:
@@ -1937,6 +1959,10 @@ class LowerComputerComm:
                                 encoder.raw = 0
                                 encoder.angle_error = True
                                 encoder.angle_out_of_workspace = False
+                        elif ack_cmd == CMD_CLEAR_CALIBRATION_SCOPE:
+                            # 局部清除的准确 joint/motor mask 由后续 P4 状态包
+                            # 回读，不能像全局清除一样在通信层把 21 路全部归零。
+                            pass
                     emitted = True
 
         self._apply_connectivity_visibility(model)
@@ -1991,7 +2017,10 @@ class LowerComputerComm:
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
             return False
-        if cmd in ("calibrate", "clear_calibration"):
+        if cmd in ("calibrate", "clear_calibration") or (
+            isinstance(cmd, tuple) and len(cmd) == 2 and
+            cmd[0] == "clear_calibration_scope"
+        ):
             self._auto_calib_logger.log("TX", str(cmd))
         elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
             "active_scope",
@@ -2198,12 +2227,19 @@ class LowerComputerComm:
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
             return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
-        if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
-            return build_calib_load_limits_cmd(cmd[1], cmd[2], cmd[3], cmd[4])
+        if isinstance(cmd, tuple) and len(cmd) == 6 and cmd[0] == "calib_load_limits":
+            return build_calib_load_limits_cmd(
+                cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]
+            )
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
             return build_calib_load_joint_cmd(cmd[1])
         if cmd == "clear_calibration":
             return build_clear_calibration_cmd()
+        if (
+            isinstance(cmd, tuple) and len(cmd) == 2
+            and cmd[0] == "clear_calibration_scope"
+        ):
+            return build_clear_calibration_scope_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":

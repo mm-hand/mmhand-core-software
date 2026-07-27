@@ -191,14 +191,14 @@ class MotorChannelTable(QtWidgets.QTableWidget):
                 antagonist_by_row[row] = group
         table = MotorChannelTable(len(motor_rows), 14)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Motor", "Turn", "RawNow", "HWNow", "AbsNow", "Load", "Target(rel)", "Action",
+            "Group", "Use", "Motor", "Turn", "RawNow", "FlashRaw", "AbsNow", "Load", "Target(rel)", "Action",
             "-", "Raw Slider", "+", "Joint Angle",
         ])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         panel.motor_turn_items = [None] * MOTOR_COUNT
         panel.motor_raw_items = [None] * MOTOR_COUNT
-        panel.motor_hw_items = [None] * MOTOR_COUNT
+        panel.motor_flash_raw_items = [None] * MOTOR_COUNT
         panel.motor_abs_items = [None] * MOTOR_COUNT
         panel.motor_load_items = [None] * MOTOR_COUNT
         panel.motor_joint_items = [None] * MOTOR_COUNT
@@ -320,21 +320,21 @@ class MotorChannelTable(QtWidgets.QTableWidget):
                 table.setSpan(pair_start, 1, pair_end - pair_start + 1, 2)
             turn = panel._make_item("-")
             raw_now = panel._make_item("-")
-            hw_now = panel._make_item("-")
+            flash_raw = panel._make_item("-")
             abs_now = panel._make_item("-")
             load = panel._make_item("-")
             joint = panel._make_item("-")
-            for item in (turn, raw_now, hw_now, abs_now, load, joint):
+            for item in (turn, raw_now, flash_raw, abs_now, load, joint):
                 apply_group_background(item, row)
             panel.motor_turn_items[i] = turn
             panel.motor_raw_items[i] = raw_now
-            panel.motor_hw_items[i] = hw_now
+            panel.motor_flash_raw_items[i] = flash_raw
             panel.motor_abs_items[i] = abs_now
             panel.motor_load_items[i] = load
             panel.motor_joint_items[i] = joint
             table.setItem(row, 3, turn)
             table.setItem(row, 4, raw_now)
-            table.setItem(row, 5, hw_now)
+            table.setItem(row, 5, flash_raw)
             table.setItem(row, 6, abs_now)
             table.setItem(row, 7, load)
             spin = QtWidgets.QSpinBox()

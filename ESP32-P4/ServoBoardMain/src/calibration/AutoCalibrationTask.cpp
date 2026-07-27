@@ -15,8 +15,10 @@
 #include "../system/StateMachineTask.h"
 #include "../system/TaskRuntimeMonitor.h"
 
+// 非空表示自动标定任务正在运行，用于拒绝重复创建。
 static TaskHandle_t g_autoCalibrationTaskHandle = NULL;
 
+// 默认全手标定顺序：四指依次完成后，再按 J20、J16~J19 标定拇指。
 const uint8_t kDefaultAutoCalibrationJoints[] = {
     0, 1, 2, 3,
     4, 5, 6, 7,
@@ -24,16 +26,19 @@ const uint8_t kDefaultAutoCalibrationJoints[] = {
     12, 13, 14, 15,
     20, 16, 17, 18, 19
 };
-const uint8_t kDefaultAutoCalibrationJointsCount = sizeof(kDefaultAutoCalibrationJoints) / sizeof(kDefaultAutoCalibrationJoints[0]);
-// The thumb is mechanically independent of the four side-sway dual joints.
-// Only these joints participate in automatic calibration workspace planning.
+// 默认数组元素数，供全手标定和 active scope 过滤使用。
+const uint8_t kDefaultAutoCalibrationJointsCount =
+    sizeof(kDefaultAutoCalibrationJoints) /
+    sizeof(kDefaultAutoCalibrationJoints[0]);
+// 只有四指侧摆双腱关节参与“为相邻手指让出标定空间”的姿态规划；
+// 拇指机械独立，不进入该规划。
 static const uint8_t kWorkspaceDualJoints[] = {0, 4, 8, 12};
 static const uint8_t kWorkspaceDualJointsCount =
     sizeof(kWorkspaceDualJoints) / sizeof(kWorkspaceDualJoints[0]);
 static const uint8_t kWorkspaceDualHelperCount = kWorkspaceDualJointsCount - 1;
 
-// Keep the four fingers in joint order, then calibrate the thumb as:
-// J20 -> J16 -> J17 -> J18 -> J19.
+// 将用户选择的关节转换为机械安全顺序。四指保持 J00~J15，拇指固定为
+// J20 -> J16 -> J17 -> J18 -> J19。
 static uint8_t autoCalibrationSequenceRank(uint8_t jointIndex)
 {
     if (jointIndex < 16) {
@@ -55,122 +60,131 @@ static uint8_t autoCalibrationSequenceRank(uint8_t jointIndex)
     }
 }
 
-static const uint32_t kAutoFeedbackReadyCanTimeoutMs = 500;
-static const uint32_t kAutoFeedbackReadyServoTimeoutMs = 500;
-static const uint32_t kAutoFeedbackReadyTelemetryTimeoutMs = 800;
-static const uint32_t kAutoEncoderTrustedSampleMaxAgeMs = 300;
-static const uint32_t kAutoInitialFeedbackWaitMs = 1200;
-static const float kAutoCalibrationMinTravelDeg = 10.0f;
-static const float kAutoCalibrationMaxTravelDeg = 359.0f;
-static const int32_t kAutoCalibrationRejectNearFullWrapSpan = kCalibrationEncoderModulo - 1024;
-static const float kAutoCalibrationStartDeg = -5.0f;
-static const float kAutoCalibrationZeroDeg = 0.0f;
-static const int32_t kAutoServoZeroPullCounts = 500;
-static const int32_t kDualAutoSlackCounts = 3200;
-static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5;
-static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;
-static const int16_t kAutoCalibrationOverloadLoadThreshold = 800;
-static const int16_t kDualPrimaryTightLoadThreshold = 190;
-static const int16_t kDualSecondaryPreloadLoadThreshold = 190;
-static const int16_t kDualSecondaryFinalLoadThreshold = 250;
-static const int16_t kDualPrimaryFinalLoadThreshold = 120;
-static const int16_t kWorkspaceTightLoadThreshold = 190;
-static const int32_t kWorkspaceReleaseCounts = 3200;
-static const int32_t kWorkspaceTargetToleranceCounts = 60;
-static const float kReverseMinFollowDeg = 12.0f;
-static const float kTendonFitSampleStepDeg = 5.0f;
+// 反馈新鲜度、行程合法性和机械搜索参数。
+static const uint32_t kAutoFeedbackReadyServoTimeoutMs = 500; // 舵机快照最大年龄。
+static const uint32_t kAutoEncoderTrustedSampleMaxAgeMs = 300; // 磁编可信样本最大年龄。
+static const uint32_t kAutoInitialFeedbackWaitMs = 1200; // 启动时等待首帧反馈时间。
+// 热插拔恢复预检期间不发送任何舵机目标；只有驱动恢复、多圈模式配置和反馈连续稳定后才允许运动。
+static const uint32_t kCalibrationServoRecoveryTimeoutMs = 5000;
+static const uint32_t kCalibrationServoRecoveryLogIntervalMs = 500;
+static const uint8_t kCalibrationServoRecoveryStableSamples = 3;
+// 单关节标定成功后，通过舵机通信任务提交本次会话可信状态的最长等待时间。
+static const uint32_t kCalibrationTrustCommitTimeoutMs = 1000;
+static const float kAutoCalibrationMinTravelDeg = 10.0f; // 有效标定最小磁编行程。
+static const float kAutoCalibrationMaxTravelDeg = 359.0f; // 有效标定最大磁编行程。
+// 接近整圈时端点方向会产生歧义，因此拒绝跨度大于 15360 counts 的结果。
+static const int32_t kAutoCalibrationRejectNearFullWrapSpan =
+    kCalibrationEncoderModulo - 1024;
+static const float kAutoCalibrationStartDeg = -5.0f; // LUT 内部松端起始角。
+static const float kAutoCalibrationZeroDeg = 0.0f;    // LUT 内部零点角。
+static const int32_t kAutoServoZeroPullCounts = 500;  // 紧端回退到内部零点的舵机量。
+static const int32_t kDualAutoSlackCounts = 3200;     // 双腱初始副电机放绳量。
+static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5; // 多圈 ABS 总窗口。
+static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;   // 紧端附加余量。
+static const int16_t kAutoCalibrationOverloadLoadThreshold = 800; // 标定硬过载阈值。
+static const int16_t kDualPrimaryTightLoadThreshold = 190;        // 主电机初次紧绳。
+static const int16_t kDualSecondaryPreloadLoadThreshold = 190;    // 副电机预紧。
+static const int16_t kDualSecondaryFinalLoadThreshold = 250;      // 副电机最终紧端。
+static const int16_t kDualPrimaryFinalLoadThreshold = 120;        // 主电机 READY 补紧。
+static const int16_t kWorkspaceTightLoadThreshold = 190;          // 辅助手指紧绳阈值。
+static const int32_t kWorkspaceReleaseCounts = 3200;              // 辅助手指放绳量。
+static const int32_t kWorkspaceTargetToleranceCounts = 60;        // 姿态复用 ABS 容差。
+static const float kReverseMinFollowDeg = 12.0f;                  // 双腱交换最小角行程。
+static const float kTendonFitSampleStepDeg = 5.0f;                // LUT 采样角步长。
+static const int32_t kSingleTendonMaxReleaseCounts = 4096 * 2;    // 单腱从紧端最多放绳两圈。
+// 原始缓冲容量为最终 LUT 的三倍，为不等速采样和端点样本预留空间。
 static const uint8_t kTendonRawSampleCapacity =
     TENDON_LUT_MAX_SAMPLES * 3;
-static const uint8_t kAngleStallStableSamples = 2;
-static const int32_t kPreReleaseSyncTargetToleranceCounts = 40;
-static const int32_t kPreReleaseSyncSettleDeltaCounts = 20;
-static const uint8_t kPreReleaseSyncStableSamples = 2;
+static const uint8_t kAngleStallStableSamples = 2; // 角度停稳连续确认帧数。
+static const int32_t kPreReleaseSyncTargetToleranceCounts = 40; // 松绳前目标误差窗。
+static const int32_t kPreReleaseSyncSettleDeltaCounts = 20; // 松绳前窗口内 ABS 变化。
+static const uint8_t kPreReleaseSyncStableSamples = 2; // 松绳前连续稳定帧数。
 
+// 一次原始 LUT 采样：磁编方向坐标和两路舵机多圈 ABS。
 struct TendonRawFitSample {
-    int32_t encoder;
-    int32_t primaryAbs;
-    int32_t secondaryAbs;
+    int32_t encoder;      // 方向归一化后的磁编坐标。
+    int32_t primaryAbs;   // 主电机实测多圈 ABS。
+    int32_t secondaryAbs; // 副电机实测多圈 ABS；单腱时为 0。
 };
 
+// 标定期间的稠密原始样本缓冲，最终会重采样为固定角度步长 LUT。
 struct TendonRawFitBuffer {
-    uint8_t count;
-    float nextTravelDeg;
-    TendonRawFitSample samples[kTendonRawSampleCapacity];
+    uint8_t count;             // 当前有效原始样本数。
+    float nextTravelDeg;       // 下一次应采样的内部轨迹角。
+    TendonRawFitSample samples[kTendonRawSampleCapacity]; // 固定容量，避免堆分配。
 };
 
 enum DualWorkspacePose : uint8_t {
     DUAL_WORKSPACE_POSE_NONE = 0,
-    // Primary released by 3200 counts; secondary tightened to load 190.
+    // A：主电机放绳 3200 counts，副电机收绳至 load 190。
     DUAL_WORKSPACE_POSE_A = 1,
-    // Secondary released by 3200 counts; primary tightened to load 190.
+    // B：副电机放绳 3200 counts，主电机收绳至 load 190。
     DUAL_WORKSPACE_POSE_B = 2,
 };
 
+// 四指侧摆关节的 RAM 姿态缓存。缓存记录已实测的 A/B 目标，供同一次标定
+// 序列复用，避免重复松绳。
 struct DualWorkspaceCacheEntry {
-    uint8_t valid;
-    uint8_t currentPose;
-    uint8_t primaryMotor;
-    uint8_t secondaryMotor;
-    int32_t primaryTightAbs;
-    int32_t primaryReleaseAbs;
-    int32_t secondaryTightAbs;
-    int32_t secondaryReleaseAbs;
+    uint8_t valid;               // 1 表示本轮任务中已实测该缓存。
+    uint8_t currentPose;         // 当前 DUAL_WORKSPACE_POSE_*。
+    uint8_t primaryMotor;        // 主执行器 Mxx。
+    uint8_t secondaryMotor;      // 副执行器 Mxx。
+    int32_t primaryTightAbs;     // 主电机 load 190 时的 ABS。
+    int32_t primaryReleaseAbs;   // 主电机从紧端放 3200 counts 后的 ABS。
+    int32_t secondaryTightAbs;   // 副电机 load 190 时的 ABS。
+    int32_t secondaryReleaseAbs; // 副电机从紧端放 3200 counts 后的 ABS。
 };
 
+// 一项工作空间动作：把指定双腱关节调整到 A 或 B。
 struct DualWorkspacePlanStep {
-    uint8_t jointIndex;
-    DualWorkspacePose pose;
+    uint8_t jointIndex;    // 要移动的侧摆关节。
+    DualWorkspacePose pose; // 目标 A/B 姿态。
 };
 
+// 写入结构化诊断 valueC 的工作空间失败阶段。
 enum DualWorkspacePlanStage : int32_t {
     DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT = 101,
     DUAL_WORKSPACE_PLAN_STAGE_EXECUTE = 102,
 };
 
-// Deliberately RAM-only. A position established in one calibration sequence
-// must never be trusted after a reset, power cycle, or manual motion.
+// 只保存在 RAM。同一标定序列结束、重启或人工运动后都不能继续信任。
 static DualWorkspaceCacheEntry g_dualWorkspaceCache[kWorkspaceDualJointsCount];
 
+// 32 位整数绝对值辅助函数，输入不会取 INT32_MIN。
 static int32_t abs32(int32_t value)
 {
     return value < 0 ? -value : value;
 }
 
-static int32_t midpointInt32Local(int32_t a, int32_t b)
+// 将原始多圈 ABS 统一到“收绳为正”的 tendon 坐标，计算从紧端实际放出的 counts。
+// 若电机仍在收绳方向，返回 0，避免机械回弹或反馈抖动被当成过度松绳。
+static int32_t singleTendonReleaseCounts(uint8_t motorChannel,
+                                         int32_t tightAbs,
+                                         int32_t currentAbs)
 {
-    return a + (b - a) / 2;
+    const int32_t tightTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, tightAbs);
+    const int32_t currentTendonAbs =
+        motorRawAbsToTendonAbs(motorChannel, currentAbs);
+    const int32_t releaseCounts = tightTendonAbs - currentTendonAbs;
+    return releaseCounts > 0 ? releaseCounts : 0;
 }
 
-static int32_t stepTowardInt32Local(int32_t current, int32_t target, int32_t maxStep)
+// 将多圈 ABS 压入飞特位置命令的 int16 安全范围。
+static int32_t clampToServoPosLocal(int32_t value)
 {
-    if (maxStep <= 0 || current == target) {
-        return current;
-    }
-    if (current < target) {
-        const int32_t delta = target - current;
-        return delta <= maxStep ? target : current + maxStep;
-    }
-    const int32_t delta = current - target;
-    return delta <= maxStep ? target : current - maxStep;
+    // 标定轨迹使用 P4 逻辑 ABS，实际舵机行程由通信任务结合单路
+    // logicalOffset 做最终校验，不能在这里按固定七圈截断。
+    return value;
 }
 
-
-static int16_t clampToServoPosLocal(int32_t value)
-{
-    if (value > 30719) {
-        return 30719;
-    }
-    if (value < -30719) {
-        return -30719;
-    }
-    return (int16_t)value;
-}
-
+// 与上函数相同，但保留 int32 返回类型，便于后续差值计算。
 static int32_t clampToServoAbsRangeLocal(int32_t value)
 {
     return (int32_t)clampToServoPosLocal(value);
 }
 
+// 根据紧端 ABS 登记一个保守的五圈电机工作区，并增加 500 counts 紧端余量。
 static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
                                        uint8_t motorChannel,
                                        int32_t tightAbs)
@@ -207,6 +221,7 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
                    (long)kCalibratedMotorAbsMaxMarginCounts);
 }
 
+// 单腱标定完成后，以 LUT 实测包络登记电机 ABS 工作区。
 static void setSingleTendonLutAbsLimit(TaskSharedData_t* sharedData,
                                       uint8_t motorChannel,
                                       int32_t lutMinAbs,
@@ -257,6 +272,7 @@ static void setSingleTendonLutAbsLimit(TaskSharedData_t* sharedData,
         (long)kCalibratedMotorAbsMaxMarginCounts);
 }
 
+// 清除指定关节所有执行器的旧 ABS 限位，避免新标定被旧范围拦截。
 static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
                                                   uint8_t jointIndex)
 {
@@ -301,6 +317,7 @@ static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
                   (unsigned long)clearedMask);
 }
 
+// 把任意舵机位置折回 0..4095 的单圈 raw。
 static int16_t normalizeServoRawSingleTurn(int32_t value)
 {
     int32_t raw = value % 4096;
@@ -310,12 +327,14 @@ static int16_t normalizeServoRawSingleTurn(int32_t value)
     return (int16_t)raw;
 }
 
+// 从多圈 ABS 中提取有符号圈数，负数采用向下取整语义。
 static int32_t servoTurnFromAbs(int32_t abs)
 {
     const int32_t raw = normalizeServoRawSingleTurn(abs);
     return (abs - raw) / 4096;
 }
 
+// 飞特负载高位带方向，标定判定只使用 0..1023 幅值。
 static int16_t servoLoadMagnitude(int16_t rawLoad)
 {
     int16_t mag = rawLoad;
@@ -325,6 +344,7 @@ static int16_t servoLoadMagnitude(int16_t rawLoad)
     return (int16_t)(mag & 0x03FF);
 }
 
+// 原子写入一次结构化标定失败诊断，供上位机弹窗解释具体阶段与对象。
 static void setCalibrationDiag(TaskSharedData_t* sharedData,
                                uint8_t reason,
                                uint8_t phase,
@@ -357,6 +377,7 @@ static void setCalibrationDiag(TaskSharedData_t* sharedData,
     }
 }
 
+// 清空上一轮标定诊断，防止旧错误污染本轮结果。
 static void clearCalibrationDiag(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -368,6 +389,7 @@ static void clearCalibrationDiag(TaskSharedData_t* sharedData)
     sharedData->calibration_diag.sequence = nextSequence;
 }
 
+// 判断当前是否已经记录了有效诊断原因。
 static bool hasCalibrationDiag(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -377,6 +399,7 @@ static bool hasCalibrationDiag(TaskSharedData_t* sharedData)
     return sharedData->calibration_diag.valid != 0;
 }
 
+// 读取当前结构化诊断原因。
 static uint8_t calibrationDiagReason(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -388,6 +411,7 @@ static uint8_t calibrationDiagReason(TaskSharedData_t* sharedData)
         : CALIB_DIAG_REASON_NONE;
 }
 
+// 检查磁编在线位、错误位和样本新鲜度。
 static bool encoderOnlineAndHealthy(TaskSharedData_t* sharedData, uint32_t bit)
 {
     if (!sharedData) {
@@ -399,6 +423,7 @@ static bool encoderOnlineAndHealthy(TaskSharedData_t* sharedData, uint32_t bit)
     return (onlineMask & bit) != 0 && (faultMask & bit) == 0;
 }
 
+// 标定循环每帧检查状态机 owner，失去控制权后立即停止发命令。
 static bool autoCalibrationStillOwnsControl(TaskSharedData_t* sharedData)
 {
     return sharedData &&
@@ -407,16 +432,47 @@ static bool autoCalibrationStillOwnsControl(TaskSharedData_t* sharedData)
            sharedData->control_enabled == 0;
 }
 
-static bool isServoCommandInsideLimit(int32_t commandAbs)
+// 读取单台舵机当前上电会话的 logical ABS 可达范围。范围由通信任务依据
+// logicalOffset 独立生成，因此一台舵机掉电重建不会改变其他26台舵机。
+static bool getServoLogicalCommandRange(TaskSharedData_t* sharedData,
+                                        uint8_t motorChannel,
+                                        int32_t* outMin,
+                                        int32_t* outMax)
 {
-    return commandAbs >= -30719 && commandAbs <= 30719;
+    if (!sharedData || motorChannel >= SERVO_TOTAL_NUM ||
+        !outMin || !outMax) {
+        return false;
+    }
+    const uint32_t bit = 1UL << motorChannel;
+    SharedSafetyGuard guard;
+    if ((sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap) &
+         bit) == 0) {
+        return false;
+    }
+    *outMin = sharedData->servo_logical_range_min[motorChannel];
+    *outMax = sharedData->servo_logical_range_max[motorChannel];
+    return *outMin <= *outMax;
 }
 
+// 检查标定命令能否转换成该舵机当前会话的真实硬件多圈目标。
+static bool isServoCommandInsideLimit(TaskSharedData_t* sharedData,
+                                      uint8_t motorChannel,
+                                      int32_t commandAbs)
+{
+    int32_t rangeMin = 0;
+    int32_t rangeMax = 0;
+    return getServoLogicalCommandRange(
+               sharedData, motorChannel, &rangeMin, &rangeMax) &&
+           commandAbs >= rangeMin && commandAbs <= rangeMax;
+}
+
+// 根据 bus/id 查找扁平化电机通道 Mxx。
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
     return findMotorChannelByBusId(bus, id);
 }
 
+// 检查单关节主执行器的多圈状态是否可信。
 static bool isJointPrimaryServoMultiTurnKnown(TaskSharedData_t* sharedData, uint8_t jointIndex)
 {
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
@@ -431,37 +487,217 @@ static bool isJointPrimaryServoMultiTurnKnown(TaskSharedData_t* sharedData, uint
             (1UL << ch)) == 0;
 }
 
-static void clearJointServoMultiTurnUnknown(TaskSharedData_t* sharedData, uint8_t jointIndex)
+// 汇总指定关节实际使用的执行器。双腱关节返回两台电机，单腱关节返回主电机。
+static uint32_t calibrationJointMotorMask(uint8_t jointIndex)
 {
-    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
-        return;
+    if (jointIndex >= ENCODER_TOTAL_NUM) {
+        return 0;
     }
-    uint32_t clearMask = 0;
+    uint32_t motorMask = 0;
     JointActuatorGroup group;
     if (getJointActuatorGroup(jointIndex, &group)) {
         for (uint8_t i = 0; i < group.count; i++) {
             const uint8_t motorChannel = group.actuators[i].motorChannel;
             if (motorChannel < SERVO_TOTAL_NUM && isMotorChannelValid(motorChannel)) {
-                clearMask |= (1UL << motorChannel);
+                motorMask |= (1UL << motorChannel);
             }
         }
     } else {
         const int primaryCh = findMotorChannel(jointMap[jointIndex].busIndex,
                                                jointMap[jointIndex].servoID);
         if (primaryCh >= 0 && primaryCh < SERVO_TOTAL_NUM) {
-            clearMask |= (1UL << primaryCh);
+            motorMask |= (1UL << primaryCh);
         }
     }
-
-    if (clearMask != 0) {
-        sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~clearMask);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] MULTITURN_KNOWN J%02u clearMask=0x%08lX unknown=0x%08lX\r\n",
-                      jointIndex,
-                      (unsigned long)clearMask,
-                      (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
-    }
+    return motorMask & validMotorChannelMask();
 }
 
+// 标定开始前等待热插拔恢复闭环完成。该函数只观察共享状态，不发送任何运动目标。
+static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
+                                            uint32_t requiredMask)
+{
+    if (!sharedData || requiredMask == 0) {
+        return false;
+    }
+    requiredMask &= validMotorChannelMask();
+    const uint32_t beginMs = millis();
+    uint32_t lastLogMs = 0;
+    uint32_t lastFeedbackTimestamp = 0;
+    uint8_t stableSamples = 0;
+
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        const uint32_t nowMs = millis();
+        const uint32_t onlineMask =
+            sharedAtomicLoad(&sharedData->servo_online_bitmap);
+        const uint32_t configuredMask =
+            sharedAtomicLoad(&sharedData->servo_multiturn_configured_bitmap);
+        const uint32_t pendingMask =
+            sharedAtomicLoad(&sharedData->servo_recovery_pending_bitmap);
+        const uint32_t failedMask =
+            sharedAtomicLoad(&sharedData->servo_recovery_failed_bitmap);
+
+        ServoAngleData_t snapshot;
+        const bool hasSnapshot =
+            sharedData->servoFeedbackQueue &&
+            xQueuePeek(sharedData->servoFeedbackQueue, &snapshot, 0) == pdTRUE;
+        const bool freshSnapshot =
+            hasSnapshot &&
+            (uint32_t)(nowMs - snapshot.timestamp) <=
+                kAutoFeedbackReadyServoTimeoutMs;
+        uint32_t snapshotOnlineMask = 0;
+        if (freshSnapshot) {
+            for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                if (snapshot.onlineStatus[ch] != 0) {
+                    snapshotOnlineMask |= (1UL << ch);
+                }
+            }
+        }
+
+        const bool allOnline =
+            (onlineMask & requiredMask) == requiredMask &&
+            (snapshotOnlineMask & requiredMask) == requiredMask;
+        const bool allConfigured =
+            (configuredMask & requiredMask) == requiredMask;
+        const bool recoveryIdle = (pendingMask & requiredMask) == 0;
+        const bool recoveryFailed = (failedMask & requiredMask) != 0;
+        const bool ready =
+            freshSnapshot && allOnline && allConfigured &&
+            recoveryIdle && !recoveryFailed;
+
+        // 只按新的舵机快照累计稳定帧，避免同一帧被 10 ms 循环重复计数。
+        if (ready && snapshot.timestamp != lastFeedbackTimestamp) {
+            lastFeedbackTimestamp = snapshot.timestamp;
+            if (stableSamples < kCalibrationServoRecoveryStableSamples) {
+                stableSamples++;
+            }
+            if (stableSamples >= kCalibrationServoRecoveryStableSamples) {
+                FW_LOG_INFO_PRINTF(
+                    "[AUTO CALIB] SERVO_RECOVERY_READY required=0x%08lX "
+                    "online=0x%08lX configured=0x%08lX\r\n",
+                    (unsigned long)requiredMask,
+                    (unsigned long)onlineMask,
+                    (unsigned long)configuredMask);
+                return true;
+            }
+        } else if (!ready) {
+            stableSamples = 0;
+        }
+
+        if (recoveryFailed ||
+            (uint32_t)(nowMs - beginMs) >=
+                kCalibrationServoRecoveryTimeoutMs) {
+            const uint32_t unresolvedMask =
+                requiredMask &
+                (failedMask | pendingMask | ~onlineMask | ~configuredMask);
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
+                               CALIB_DIAG_PHASE_INIT,
+                               0xFF,
+                               0xFF,
+                               (int32_t)onlineMask,
+                               (int32_t)configuredMask,
+                               (int32_t)pendingMask,
+                               unresolvedMask);
+            FW_LOG_WARN_PRINTF(
+                "[AUTO CALIB] SERVO_RECOVERY_FAIL required=0x%08lX "
+                "online=0x%08lX configured=0x%08lX pending=0x%08lX "
+                "failed=0x%08lX unresolved=0x%08lX\r\n",
+                (unsigned long)requiredMask,
+                (unsigned long)onlineMask,
+                (unsigned long)configuredMask,
+                (unsigned long)pendingMask,
+                (unsigned long)failedMask,
+                (unsigned long)unresolvedMask);
+            return false;
+        }
+
+        if ((uint32_t)(nowMs - lastLogMs) >=
+            kCalibrationServoRecoveryLogIntervalMs) {
+            lastLogMs = nowMs;
+            FW_LOG_INFO_PRINTF(
+                "[AUTO CALIB] SERVO_RECOVERY_WAIT required=0x%08lX "
+                "online=0x%08lX configured=0x%08lX pending=0x%08lX "
+                "failed=0x%08lX fresh=%u stable=%u/%u\r\n",
+                (unsigned long)requiredMask,
+                (unsigned long)onlineMask,
+                (unsigned long)configuredMask,
+                (unsigned long)pendingMask,
+                (unsigned long)failedMask,
+                freshSnapshot ? 1U : 0U,
+                (unsigned)stableSamples,
+                (unsigned)kCalibrationServoRecoveryStableSamples);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return false;
+}
+
+// 标定成功后由舵机通信任务提交本关节的可信状态，避免只改共享位图而驱动仍拒绝多圈 ABS。
+static bool commitJointServoMultiTurnTrust(TaskSharedData_t* sharedData,
+                                           uint8_t jointIndex)
+{
+    if (!sharedData) {
+        return false;
+    }
+    const uint32_t requestMask = calibrationJointMotorMask(jointIndex);
+    if (requestMask == 0) {
+        return false;
+    }
+
+    sharedAtomicStore(&sharedData->calibration_trust_request_mask,
+                      requestMask);
+    sharedAtomicStore(&sharedData->calibration_trust_accepted_mask,
+                      (uint32_t)0);
+    const uint32_t token =
+        sharedAtomicAddFetch(&sharedData->calibration_trust_request_token,
+                             (uint32_t)1);
+    const uint32_t beginMs = millis();
+    while (autoCalibrationStillOwnsControl(sharedData) &&
+           (uint32_t)(millis() - beginMs) <
+               kCalibrationTrustCommitTimeoutMs) {
+        if (sharedAtomicLoad(&sharedData->calibration_trust_result_token) ==
+            token) {
+            const uint32_t acceptedMask =
+                sharedAtomicLoad(
+                    &sharedData->calibration_trust_accepted_mask);
+            if ((acceptedMask & requestMask) == requestMask) {
+                FW_LOG_INFO_PRINTF(
+                    "[AUTO CALIB] MULTITURN_TRUST J%02u mask=0x%08lX "
+                    "unknown=0x%08lX\r\n",
+                    (unsigned)jointIndex,
+                    (unsigned long)requestMask,
+                    (unsigned long)sharedAtomicLoad(
+                        &sharedData->multi_turn_unknown_bitmap));
+                return true;
+            }
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+
+    const uint32_t acceptedMask =
+        sharedAtomicLoad(&sharedData->calibration_trust_accepted_mask);
+    setCalibrationDiag(sharedData,
+                       CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
+                       CALIB_DIAG_PHASE_SEQUENCE,
+                       jointIndex,
+                       0xFF,
+                       (int32_t)token,
+                       (int32_t)sharedAtomicLoad(
+                           &sharedData->calibration_trust_result_token),
+                       (int32_t)acceptedMask,
+                       requestMask & ~acceptedMask);
+    FW_LOG_WARN_PRINTF(
+        "[AUTO CALIB] MULTITURN_TRUST_FAIL J%02u token=%lu "
+        "request=0x%08lX accepted=0x%08lX\r\n",
+        (unsigned)jointIndex,
+        (unsigned long)token,
+        (unsigned long)requestMask,
+        (unsigned long)acceptedMask);
+    return false;
+}
+
+// 读取最新磁编原始值，同时校验关节索引、在线状态、错误位和样本年龄。
 static bool readLatestEncoderSample(TaskSharedData_t* sharedData,
                                     uint8_t jointIndex,
                                     uint16_t* outRaw,
@@ -488,6 +724,7 @@ static bool readLatestEncoderSample(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 读取最新磁编并按当前安装方向转换为递增坐标。
 static bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
                                       uint8_t jointIndex,
                                       int32_t* outEncoder)
@@ -496,6 +733,7 @@ static bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
     return readLatestEncoderSample(sharedData, jointIndex, &raw, outEncoder);
 }
 
+// 按 bus/id 读取在线舵机的多圈 ABS。
 static bool readLatestServoAbs(TaskSharedData_t* sharedData,
                                uint8_t bus,
                                uint8_t id,
@@ -520,6 +758,7 @@ static bool readLatestServoAbs(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 按 bus/id 读取在线舵机的单圈 raw。
 static bool readLatestServoRaw(TaskSharedData_t* sharedData,
                                uint8_t bus,
                                uint8_t id,
@@ -544,6 +783,7 @@ static bool readLatestServoRaw(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 按 bus/id 读取最新舵机负载原始值。
 static bool readLatestServoLoad(TaskSharedData_t* sharedData,
                                 uint8_t bus,
                                 uint8_t id,
@@ -571,6 +811,7 @@ static bool readLatestServoLoad(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 按 Mxx 通道读取在线舵机的多圈 ABS。
 static bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
                                     uint8_t motorChannel,
                                     int32_t* outAbs)
@@ -590,25 +831,7 @@ static bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
     return true;
 }
 
-static bool readLatestMotorServoRaw(TaskSharedData_t* sharedData,
-                                    uint8_t motorChannel,
-                                    int16_t* outRaw)
-{
-    if (!sharedData || !outRaw || !isMotorChannelValid(motorChannel)) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[motorChannel] == 0) {
-        return false;
-    }
-
-    *outRaw = normalizeServoRawSingleTurn(servoData.servoRawPositions[motorChannel]);
-    return true;
-}
-
+// 按 Mxx 通道读取最新舵机负载原始值。
 static bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
                                      uint8_t motorChannel,
                                      int16_t* outLoad)
@@ -631,6 +854,7 @@ static bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 在发布一批标定目标前检查涉及电机的负载；任一路达到 800 即拒绝整批。
 static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
                                          const ServoTargetBatch_t* batch)
 {
@@ -675,6 +899,7 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 初始反馈等待失败时，集中打印磁编、舵机和队列新鲜度，便于定位链路问题。
 static void logAutoInitialFeedbackDiag(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t bus,
@@ -738,22 +963,19 @@ static void logAutoInitialFeedbackDiag(TaskSharedData_t* sharedData,
                   (int)servoRaw);
 }
 
+// float 四舍五入为 int32，正负数保持对称。
 static int32_t roundToInt32Local(float value)
 {
     return (int32_t)(value + (value >= 0.0f ? 0.5f : -0.5f));
 }
 
+// 计算两个方向坐标间的最短有符号磁编差。
 static int32_t signedEncoderDeltaLocal(int32_t fromEncoder, int32_t toEncoder)
 {
     return calibrationWrapEncoderDelta(toEncoder, fromEncoder);
 }
 
-static int32_t encoderTravelCountLocal(int32_t fromEncoder, int32_t toEncoder, int8_t travelSign)
-{
-    const int32_t signedDelta = signedEncoderDeltaLocal(fromEncoder, toEncoder);
-    return (travelSign < 0) ? -signedDelta : signedDelta;
-}
-
+// 当实际机械正方向与原始方向坐标相反时镜像坐标，统一 LUT 正行程方向。
 static int32_t encoderForPositiveTravelResult(int32_t encoder, int8_t travelSign)
 {
     if (travelSign >= 0) {
@@ -762,6 +984,7 @@ static int32_t encoderForPositiveTravelResult(int32_t encoder, int8_t travelSign
     return calibrationWrapEncoderCount(kCalibrationEncoderModulo - encoder);
 }
 
+// 清空一次 LUT 原始采样缓冲。
 static void resetTendonRawFitBuffer(TendonRawFitBuffer* buffer)
 {
     if (!buffer) {
@@ -770,6 +993,7 @@ static void resetTendonRawFitBuffer(TendonRawFitBuffer* buffer)
     memset(buffer, 0, sizeof(*buffer));
 }
 
+// 追加一个去重后的磁编/舵机 ABS 样本；相同三元组不会重复占用容量。
 static bool appendTendonRawFitSample(TendonRawFitBuffer* buffer,
                                          int32_t encoder,
                                          int32_t primaryAbs,
@@ -793,6 +1017,7 @@ static bool appendTendonRawFitSample(TendonRawFitBuffer* buffer,
     return true;
 }
 
+// 当磁编行程跨过下一个 5° 采样点时，记录当前单/双电机 ABS。
 static void maybeAppendTendonTravelFitSample(TendonRawFitBuffer* buffer,
                                                  float travelDeg,
                                                  int32_t encoder,
@@ -811,6 +1036,7 @@ static void maybeAppendTendonTravelFitSample(TendonRawFitBuffer* buffer,
     appendTendonRawFitSample(buffer, encoder, primaryAbs, secondaryAbs);
 }
 
+// 将原始样本的磁编位置转换为 LUT 内部轨迹角。
 static float tendonFitSampleAngleDeg(const JointCalibrationResult& result,
                                    int32_t encoder)
 {
@@ -824,6 +1050,7 @@ static float tendonFitSampleAngleDeg(const JointCalibrationResult& result,
         ((float)delta / (float)result.encoderSpan) * result.totalDeg;
 }
 
+// 在原始样本中按角度线性插值，得到指定执行器的理论 ABS。
 static bool interpolateTendonFitAbs(float targetDeg,
                                   const float* sampleDeg,
                                   const int32_t* sampleAbs,
@@ -857,6 +1084,7 @@ static bool interpolateTendonFitAbs(float targetDeg,
 
 // 单、双腱共用同一套固定两行存储：单电机只写第 0 行，第 1 行保持
 // motor=0xFF；双电机同时写两行。LUT 保存的是舵机 raw ABS counts。
+// 将不等间隔原始样本重采样为固定 5° 步长 Tendon LUT。
 static bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
                                          uint8_t primaryMotor,
                                          uint8_t secondaryMotor,
@@ -967,6 +1195,7 @@ static bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
     return true;
 }
 
+// 由松端/紧端、舵机 ABS 和 Manual 参考构造完整 V3 标定结果。
 static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
                                                          int32_t tautEncoder,
                                                          int32_t zeroEncoder,
@@ -1023,11 +1252,10 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     out->totalDeg = totalDeg;
     out->scaled = true;
 
-    // The legacy calibration fields above use direction-oriented encoder
-    // coordinates. V3 autoMinRaw/autoMaxRaw are a wire/NVS contract and must
-    // contain the physical 14-bit raw values. calibrationOrientEncoderRaw()
-    // is self-inverse for direction=-1, so applying it here converts the
-    // oriented endpoints back to raw without changing direction=+1 joints.
+    // 上面的历史标定字段使用按关节方向统一后的磁编坐标；V3 的
+    // autoMinRaw/autoMaxRaw 属于通信与 NVS 契约，必须保存物理 14-bit raw。
+    // calibrationOrientEncoderRaw() 在 direction=-1 时是自逆变换，因此这里
+    // 再调用一次即可还原物理 raw，同时不会改变 direction=+1 的关节。
     const int8_t encoderDirection = g_encoderDirection[jointIndex];
     const uint16_t autoMinRaw = (uint16_t)calibrationOrientEncoderRaw(
         (uint16_t)calibrationWrapEncoderCount(tautEncoder), encoderDirection);
@@ -1048,6 +1276,7 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     return true;
 }
 
+// 单电机关节结果构造包装：使用当前 URDF 上限和 Manual 条目。
 static bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                                 int32_t tautEncoder,
                                                 int32_t zeroEncoder,
@@ -1068,6 +1297,7 @@ static bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                                         out);
 }
 
+// 双腱关节结果构造包装：两路舵机共享同一磁编 Auto Min/Max。
 static bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                                 int32_t startEncoder,
                                                 int32_t zeroEncoder,
@@ -1088,6 +1318,7 @@ static bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                                         out);
 }
 
+// 从 active_joint_mask 生成本轮关节列表，并拒绝缺失 Manual 的活动关节。
 static uint8_t buildAutoCalibrationJointListFromActiveScope(TaskSharedData_t* sharedData,
                                                             uint8_t* outJoints,
                                                             uint8_t maxCount)
@@ -1142,6 +1373,7 @@ static uint8_t buildAutoCalibrationJointListFromActiveScope(TaskSharedData_t* sh
     return count;
 }
 
+// 原子更新某关节目标角和命令 token，使标定完成后的 UI/PID 目标同步到实测角。
 static void syncJointTargetToDeg(TaskSharedData_t* sharedData,
                                  uint8_t jointIndex,
                                  float targetDeg)
@@ -1163,11 +1395,7 @@ static void syncJointTargetToDeg(TaskSharedData_t* sharedData,
     }
 }
 
-static void syncJointTargetToZero(TaskSharedData_t* sharedData, uint8_t jointIndex)
-{
-    syncJointTargetToDeg(sharedData, jointIndex, 0.0f);
-}
-
+// 构造默认标定参数；所有单/双电机状态机共享这组周期和停稳判据。
 AutoCalibrationParams defaultAutoCalibrationParams(void)
 {
     AutoCalibrationParams params;
@@ -1186,6 +1414,7 @@ AutoCalibrationParams defaultAutoCalibrationParams(void)
     return params;
 }
 
+// 单电机关节的非阻塞标定状态。
 enum AutoCalibState {
     AUTO_CALIB_STATE_IDLE = 0,
     AUTO_CALIB_STATE_INIT,
@@ -1195,52 +1424,54 @@ enum AutoCalibState {
     AUTO_CALIB_STATE_FAILED
 };
 
+// 单电机标定上下文。所有跨帧变量均集中在这里，状态机每 20 ms 推进一步。
 struct JointCalibContext {
-    AutoCalibState state;
-    uint8_t jointIndex;
-    uint8_t bus;
-    uint8_t servoId;
-    uint8_t motorChannel;
-    int32_t directionSign;
-    int8_t encoderTravelSign;
-    uint16_t commandSpeed;
-    uint8_t commandAcc;
-    uint32_t stateBeginMs;
-    uint32_t lastCommandMs;
-    uint32_t lastTraceMs;
-    int32_t commandAbs;
-    int32_t commandRemainder;
-    int32_t targetAbs;
-    int16_t baselineLoad;
-    bool startFound;
-    bool zeroFound;
-    uint8_t startLoadStable;
-    uint16_t startSearchRaw;
-    int32_t startSearchEncoder;
-    int32_t startSearchAbs;
-    int32_t startEncoder;
-    int32_t startServoAbs;
-    int32_t zeroEncoder;
-    int32_t zeroServoAbs;
-    int32_t windowStartEncoder;
-    int32_t windowStartAbs;
-    uint32_t windowStartMs;
-    JointCalibrationResult result;
-    bool resultValid;
-    bool initStarted;
-    bool releaseCommandStarted;
-    int32_t preReleaseSyncTargetAbs;
-    int32_t preReleaseSyncWindowStartAbs;
-    uint32_t preReleaseSyncWindowStartMs;
-    uint8_t preReleaseSyncStableSamples;
-    uint8_t releaseAngleStallStable;
-    TendonRawFitBuffer fitSamples;
+    AutoCalibState state;       // 当前状态。
+    uint8_t jointIndex;         // J00~J20。
+    uint8_t bus;                // 主舵机总线。
+    uint8_t servoId;            // 主舵机总线 ID。
+    uint8_t motorChannel;       // 扁平化 Mxx 通道。
+    int32_t directionSign;      // 舵机收绳时 ABS 增减方向。
+    int8_t encoderTravelSign;   // 本轮磁编实测行程方向。
+    uint16_t commandSpeed;      // 舵机命令速度。
+    uint8_t commandAcc;         // 舵机命令加速度。
+    uint32_t stateBeginMs;      // 当前状态开始时间。
+    uint32_t lastCommandMs;     // 上次推进目标时间。
+    uint32_t lastTraceMs;       // 上次低频日志时间。
+    int32_t commandAbs;         // 当前逐步推进的命令 ABS。
+    int32_t commandRemainder;   // counts/s 换算到单帧后的余数累积。
+    int32_t targetAbs;          // 当前阶段最终目标 ABS。
+    int16_t baselineLoad;       // 起始负载基线。
+    bool startFound;            // 紧端是否找到。
+    bool zeroFound;             // 内部零点是否找到。
+    uint8_t startLoadStable;    // 紧端负载连续稳定计数。
+    uint16_t startSearchRaw;    // 搜索开始时磁编 raw。
+    int32_t startSearchEncoder; // 搜索开始时方向坐标。
+    int32_t startSearchAbs;     // 搜索开始时舵机 ABS。
+    int32_t startEncoder;       // 找到紧端后的磁编方向坐标。
+    int32_t startServoAbs;      // 找到紧端后的舵机 ABS。
+    int32_t zeroEncoder;        // 找到 Auto Min 时的磁编方向坐标。
+    int32_t zeroServoAbs;       // 找到 Auto Min 时的舵机 ABS。
+    int32_t windowStartEncoder; // 机械停稳窗口起始磁编坐标。
+    int32_t windowStartAbs;     // 机械停稳窗口起始舵机 ABS。
+    uint32_t windowStartMs;     // 机械停稳窗口起始时间。
+    JointCalibrationResult result; // 本轮待提交结果。
+    bool resultValid;           // result 是否已通过全部校验。
+    bool initStarted;           // 初始反馈等待是否已启动。
+    bool releaseCommandStarted; // 松绳阶段是否已发出首帧命令。
+    int32_t preReleaseSyncTargetAbs; // 松绳前锁定的当前 ABS。
+    int32_t preReleaseSyncWindowStartAbs; // 同步窗口起始 ABS。
+    uint32_t preReleaseSyncWindowStartMs; // 同步窗口起始时间。
+    uint8_t preReleaseSyncStableSamples;  // 同步连续稳定帧数。
+    uint8_t releaseAngleStallStable;      // 松端角度停稳连续帧数。
+    TendonRawFitBuffer fitSamples;        // 本轮 Tendon LUT 原始样本。
 };
 
+// 向批次追加或覆盖同一 bus/id 的目标，保证每帧每台舵机只有一条命令。
 static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
                                    uint8_t busIndex,
                                    uint8_t servoId,
-                                   int16_t position,
+                                   int32_t position,
                                    uint16_t speed,
                                    uint8_t acc)
 {
@@ -1268,44 +1499,26 @@ static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
     return true;
 }
 
-// 将当前非阻塞标定步骤的主电机目标写入批次；速度和加速度直接来自
-// AutoCalibrationParams，双执行器映射存在时同时追加副电机目标。
+// 将单电机关节的标定目标写入批次。
+// 双腱关节由专用状态机显式生成两路目标，不能在这里叠加旧主从映射。
 static bool appendJointCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                                 uint8_t jointIndex,
-                                                int16_t primaryTarget,
+                                                int32_t primaryTarget,
                                                 uint16_t speed,
                                                 uint8_t acc)
 {
     if (!batch || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
-    const uint8_t originalCount = batch->count;
-    if (!appendServoTargetLocal(batch,
-                                jointMap[jointIndex].busIndex,
-                                jointMap[jointIndex].servoID,
-                                primaryTarget,
-                                speed,
-                                acc)) {
-        return false;
-    }
-
-    JointDualServoConstraint dualCfg;
-    int16_t secondaryTarget = 0;
-    if (getJointDualServoConstraint(jointIndex, &dualCfg) &&
-        computeSecondaryServoTargetForJoint(jointIndex, primaryTarget, &secondaryTarget)) {
-        if (!appendServoTargetLocal(batch,
-                                    dualCfg.secondaryBusIndex,
-                                    dualCfg.secondaryServoID,
-                                    secondaryTarget,
-                                    speed,
-                                    acc)) {
-            batch->count = originalCount;
-            return false;
-        }
-    }
-    return true;
+    return appendServoTargetLocal(batch,
+                                  jointMap[jointIndex].busIndex,
+                                  jointMap[jointIndex].servoID,
+                                  primaryTarget,
+                                  speed,
+                                  acc);
 }
 
+// 发布 CALIBRATION owner 的目标批次；发布前再次执行负载硬保护。
 static bool publishCalibrationBatch(TaskSharedData_t* sharedData, ServoTargetBatch_t* batch)
 {
     if (!sharedData || !batch || batch->count == 0) {
@@ -1323,6 +1536,7 @@ static bool publishCalibrationBatch(TaskSharedData_t* sharedData, ServoTargetBat
     return xQueueOverwrite(sharedData->servoTargetQueue, batch) == pdTRUE;
 }
 
+// 串行标定时给非活动关节追加“保持当前 ABS”，防止共享绳路被当前动作带动。
 static bool appendCalibrationHoldTargetsExcept(TaskSharedData_t* sharedData,
                                                ServoTargetBatch_t* batch,
                                                const uint8_t* jointList,
@@ -1395,12 +1609,13 @@ static bool appendCalibrationHoldTargetsExcept(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 从 HardwareMap 读取双腱关节的主/副电机 Mxx；单电机关节返回 false。
 static bool getDualAntagonistAutoCalibrationMotors(uint8_t jointIndex,
                                                    uint8_t* primaryMotor,
                                                    uint8_t* secondaryMotor)
 {
-    // Apply the antagonist calibration flow to every dual-actuator joint
-    // described by jointActuatorGroups, including thumb J16/J20.
+    // 所有由 jointActuatorGroups 描述的双执行器关节都走拮抗双腱标定流程，
+    // 包括拇指 J16/J20。
     if (!primaryMotor || !secondaryMotor || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
@@ -1422,6 +1637,7 @@ static bool getDualAntagonistAutoCalibrationMotors(uint8_t jointIndex,
     return true;
 }
 
+// 按 Mxx 将一个多圈 ABS 目标写入标定批次。
 static bool appendMotorCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                                 uint8_t motorChannel,
                                                 int32_t targetAbs,
@@ -1439,12 +1655,13 @@ static bool appendMotorCalibrationTargetToBatch(ServoTargetBatch_t* batch,
                                   params.servoAcc);
 }
 
+// 发布单台电机目标，并可选择同时保持另一台电机。
 static bool publishMotorCalibrationTarget(TaskSharedData_t* sharedData,
                                           uint8_t motorChannel,
                                           int32_t targetAbs,
                                           const AutoCalibrationParams& params)
 {
-    if (!isServoCommandInsideLimit(targetAbs)) {
+    if (!isServoCommandInsideLimit(sharedData, motorChannel, targetAbs)) {
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL motor target outside limit M%02u target=%ld\r\n",
                       motorChannel,
                       (long)targetAbs);
@@ -1461,14 +1678,14 @@ static bool publishMotorCalibrationTarget(TaskSharedData_t* sharedData,
     return publishCalibrationBatch(sharedData, &batch);
 }
 
-// Explicit calibration target publishing: do not rewrite the target from
-// feedback here; trajectory generation owns the command.
+// 显式发布标定目标：目标值归轨迹生成逻辑所有，不能在这里用反馈值重写。
+// 直接发布单台电机目标，不附带另一电机保持命令。
 static bool publishMotorCalibrationTargetDirect(TaskSharedData_t* sharedData,
                                                 uint8_t motorChannel,
                                                 int32_t targetAbs,
                                                 const AutoCalibrationParams& params)
 {
-    if (!isServoCommandInsideLimit(targetAbs)) {
+    if (!isServoCommandInsideLimit(sharedData, motorChannel, targetAbs)) {
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL motor target outside limit M%02u target=%ld\r\n",
                       motorChannel,
                       (long)targetAbs);
@@ -1485,6 +1702,7 @@ static bool publishMotorCalibrationTargetDirect(TaskSharedData_t* sharedData,
     return publishCalibrationBatch(sharedData, &batch);
 }
 
+// 双电机目标发布包装：只移动 movingMotor，可选固定 holdMotor。
 static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                uint8_t movingMotor,
                                                int32_t movingTargetAbs,
@@ -1492,6 +1710,7 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                int32_t holdTargetAbs,
                                                const AutoCalibrationParams& params);
 
+// 双电机目标发布实现，统一检查范围、owner、负载和批次数量。
 static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                uint8_t movingMotor,
                                                int32_t movingTargetAbs,
@@ -1499,8 +1718,12 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
                                                int32_t holdTargetAbs,
                                                const AutoCalibrationParams& params)
 {
-    if (!isServoCommandInsideLimit(movingTargetAbs) ||
-        !isServoCommandInsideLimit(holdTargetAbs)) {
+    if (!isServoCommandInsideLimit(sharedData,
+                                   movingMotor,
+                                   movingTargetAbs) ||
+        !isServoCommandInsideLimit(sharedData,
+                                   holdMotor,
+                                   holdTargetAbs)) {
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL dual target outside limit moving=M%02u target=%ld hold=M%02u target=%ld\r\n",
                       movingMotor,
                       (long)movingTargetAbs,
@@ -1523,6 +1746,7 @@ static bool publishDualMotorCalibrationTargets(TaskSharedData_t* sharedData,
     return publishCalibrationBatch(sharedData, &batch);
 }
 
+// 等待一台电机到达目标容差并停稳；超时或 owner 丢失时返回 false。
 static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
                                    uint8_t jointIndex,
                                    const char* phase,
@@ -1532,9 +1756,8 @@ static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
 {
     uint32_t lastTraceMs = 0;
     while (autoCalibrationStillOwnsControl(sharedData)) {
-        // This helper is only used by DUAL_SLACK_SECONDARY. The 3200-count
-        // release is an explicitly bounded trajectory generated by the
-        // calibration state machine.
+        // 此辅助函数只服务于 DUAL_SLACK_SECONDARY。放绳 3200 counts 是
+        // 标定状态机生成的有明确终点的轨迹，不允许在此继续扩展目标。
         if (!publishMotorCalibrationTargetDirect(sharedData,
                                                  motorChannel,
                                                  targetAbs,
@@ -1575,568 +1798,7 @@ static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
     return false;
 }
 
-struct DualCenterFeedback {
-    int32_t primaryAbs;
-    int32_t secondaryAbs;
-    int16_t primaryLoad;
-    int16_t secondaryLoad;
-};
-
-static void setDualCenterDiagIfUnset(TaskSharedData_t* sharedData,
-                                     uint8_t reason,
-                                     uint8_t jointIndex,
-                                     uint8_t motor,
-                                     int32_t valueA,
-                                     int32_t valueB,
-                                     int32_t valueC,
-                                     uint32_t bitmap)
-{
-    if (!hasCalibrationDiag(sharedData)) {
-        setCalibrationDiag(sharedData,
-                           reason,
-                           CALIB_DIAG_PHASE_SEQUENCE,
-                           jointIndex,
-                           motor,
-                           valueA,
-                           valueB,
-                           valueC,
-                           bitmap);
-    }
-}
-
-static bool readDualCenterFeedback(TaskSharedData_t* sharedData,
-                                   uint8_t jointIndex,
-                                   uint8_t primaryMotor,
-                                   uint8_t secondaryMotor,
-                                   DualCenterFeedback* out)
-{
-    if (!out) {
-        return false;
-    }
-
-    int16_t primaryLoadRaw = 0;
-    int16_t secondaryLoadRaw = 0;
-    const bool primaryAbsOk =
-        readLatestMotorServoAbs(sharedData, primaryMotor, &out->primaryAbs);
-    const bool secondaryAbsOk =
-        readLatestMotorServoAbs(sharedData, secondaryMotor, &out->secondaryAbs);
-    const bool primaryLoadOk =
-        readLatestMotorServoLoad(sharedData, primaryMotor, &primaryLoadRaw);
-    const bool secondaryLoadOk =
-        readLatestMotorServoLoad(sharedData, secondaryMotor, &secondaryLoadRaw);
-    if (!primaryAbsOk || !secondaryAbsOk ||
-        !primaryLoadOk || !secondaryLoadOk) {
-        const uint32_t motorMask =
-            (1UL << primaryMotor) | (1UL << secondaryMotor);
-        const uint8_t failedMotor = !primaryAbsOk || !primaryLoadOk
-            ? primaryMotor : secondaryMotor;
-        const int32_t statusBitmap =
-            (primaryAbsOk ? 1 : 0) |
-            (secondaryAbsOk ? 2 : 0) |
-            (primaryLoadOk ? 4 : 0) |
-            (secondaryLoadOk ? 8 : 0);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL feedback lost J%02u M%02u/M%02u status=0x%02lX\r\n",
-                           (unsigned)jointIndex,
-                           (unsigned)primaryMotor,
-                           (unsigned)secondaryMotor,
-                           (unsigned long)statusBitmap);
-        setDualCenterDiagIfUnset(sharedData,
-                                 CALIB_DIAG_REASON_FEEDBACK_LOST,
-                                 jointIndex,
-                                 failedMotor,
-                                 statusBitmap,
-                                 primaryMotor,
-                                 secondaryMotor,
-                                 motorMask);
-        return false;
-    }
-
-    out->primaryLoad = servoLoadMagnitude(primaryLoadRaw);
-    out->secondaryLoad = servoLoadMagnitude(secondaryLoadRaw);
-    return true;
-}
-
-static bool publishDualCenterTargets(TaskSharedData_t* sharedData,
-                                     uint8_t jointIndex,
-                                     uint8_t firstMotor,
-                                     int32_t firstTargetAbs,
-                                     uint8_t secondMotor,
-                                     int32_t secondTargetAbs,
-                                     const AutoCalibrationParams& params)
-{
-    const int32_t firstCommandAbs = clampToServoAbsRangeLocal(firstTargetAbs);
-    const int32_t secondCommandAbs = clampToServoAbsRangeLocal(secondTargetAbs);
-    if (firstCommandAbs != firstTargetAbs || secondCommandAbs != secondTargetAbs) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_CLAMP_TARGET J%02u M%02u %ld->%ld M%02u %ld->%ld\r\n",
-                           (unsigned)jointIndex,
-                           (unsigned)firstMotor,
-                           (long)firstTargetAbs,
-                           (long)firstCommandAbs,
-                           (unsigned)secondMotor,
-                           (long)secondTargetAbs,
-                           (long)secondCommandAbs);
-    }
-    if (!publishDualMotorCalibrationTargets(sharedData,
-                                            firstMotor,
-                                            firstCommandAbs,
-                                            secondMotor,
-                                            secondCommandAbs,
-                                            params)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL publish failed J%02u M%02u=%ld M%02u=%ld\r\n",
-                           (unsigned)jointIndex,
-                           (unsigned)firstMotor,
-                           (long)firstCommandAbs,
-                           (unsigned)secondMotor,
-                           (long)secondCommandAbs);
-        setDualCenterDiagIfUnset(sharedData,
-                                 CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                                 jointIndex,
-                                 firstMotor,
-                                 firstCommandAbs,
-                                 secondCommandAbs,
-                                 0,
-                                 (1UL << firstMotor) | (1UL << secondMotor));
-        return false;
-    }
-    return true;
-}
-
-static bool releaseDualCenterMotorIfNeeded(TaskSharedData_t* sharedData,
-                                           uint8_t jointIndex,
-                                           const char* phase,
-                                           uint8_t releaseMotor,
-                                           int32_t releaseTargetAbs,
-                                           uint8_t holdMotor,
-                                           const AutoCalibrationParams& params)
-{
-    const int32_t tolerance = params.zeroReachAbsTolerance;
-    const int32_t releaseTargetTendon =
-        motorRawAbsToTendonAbs(releaseMotor, releaseTargetAbs);
-    int32_t commandTendon = 0;
-    bool commandInitialized = false;
-    int32_t commandRemainder = 0;
-    uint32_t lastCommandMs = millis();
-    uint32_t lastTraceMs = 0;
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_BEGIN J%02u release=M%02u target=%ld hold=M%02u tolerance=%ld\r\n",
-                       phase,
-                       (unsigned)jointIndex,
-                       (unsigned)releaseMotor,
-                       (long)releaseTargetAbs,
-                       (unsigned)holdMotor,
-                       (long)tolerance);
-
-    while (autoCalibrationStillOwnsControl(sharedData)) {
-        DualCenterFeedback feedback;
-        if (!readDualCenterFeedback(sharedData,
-                                    jointIndex,
-                                    releaseMotor,
-                                    holdMotor,
-                                    &feedback)) {
-            return false;
-        }
-
-        const int32_t releaseAbs = feedback.primaryAbs;
-        const int32_t holdAbs = feedback.secondaryAbs;
-        const int32_t currentTendon =
-            motorRawAbsToTendonAbs(releaseMotor, releaseAbs);
-        const int32_t excessTendon = currentTendon - releaseTargetTendon;
-        if (excessTendon <= tolerance) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_REACHED J%02u release=M%02u abs=%ld target=%ld excess=%ld/%ld hold=M%02u abs=%ld load=%d/%d\r\n",
-                               phase,
-                               (unsigned)jointIndex,
-                               (unsigned)releaseMotor,
-                               (long)releaseAbs,
-                               (long)releaseTargetAbs,
-                               (long)excessTendon,
-                               (long)tolerance,
-                               (unsigned)holdMotor,
-                               (long)holdAbs,
-                               (int)feedback.primaryLoad,
-                               (int)feedback.secondaryLoad);
-            return true;
-        }
-
-        if (!commandInitialized || commandTendon > currentTendon) {
-            commandTendon = currentTendon;
-            commandInitialized = true;
-        }
-
-        const uint32_t nowMs = millis();
-        const uint32_t dtMs = nowMs - lastCommandMs;
-        if (dtMs >= params.loopMs) {
-            const int32_t numerator =
-                (int32_t)dtMs * params.tightenSpeedCountsPerSec +
-                commandRemainder;
-            const int32_t stepCounts = numerator / 1000;
-            commandRemainder = numerator % 1000;
-            if (stepCounts > 0) {
-                commandTendon = stepTowardInt32Local(commandTendon,
-                                                     releaseTargetTendon,
-                                                     stepCounts);
-                if (commandTendon > currentTendon) {
-                    commandTendon = currentTendon;
-                }
-            }
-            lastCommandMs = nowMs;
-        }
-
-        const int32_t commandAbs =
-            motorTendonAbsToRawAbs(releaseMotor, commandTendon);
-        if (!publishDualCenterTargets(sharedData,
-                                      jointIndex,
-                                      releaseMotor,
-                                      commandAbs,
-                                      holdMotor,
-                                      holdAbs,
-                                      params)) {
-            return false;
-        }
-
-        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
-            lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_WAIT J%02u release=M%02u cmd=%ld abs=%ld target=%ld excess=%ld/%ld load=%d hold=M%02u abs=%ld load=%d\r\n",
-                               phase,
-                               (unsigned)jointIndex,
-                               (unsigned)releaseMotor,
-                               (long)commandAbs,
-                               (long)releaseAbs,
-                               (long)releaseTargetAbs,
-                               (long)excessTendon,
-                               (long)tolerance,
-                               (int)feedback.primaryLoad,
-                               (unsigned)holdMotor,
-                               (long)holdAbs,
-                               (int)feedback.secondaryLoad);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
-    }
-
-    setDualCenterDiagIfUnset(sharedData,
-                             CALIB_DIAG_REASON_CONTROL_LOST,
-                             jointIndex,
-                             releaseMotor,
-                             sharedData ? sharedData->system_state : -1,
-                             sharedData ? sharedData->servo_target_owner : -1,
-                             sharedData ? sharedData->control_enabled : -1,
-                             sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL %s cancel J%02u release=M%02u state=%u owner=%u enabled=%u\r\n",
-                       phase,
-                       (unsigned)jointIndex,
-                       (unsigned)releaseMotor,
-                       sharedData ? (unsigned)sharedData->system_state : 255U,
-                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
-                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
-    return false;
-}
-
-static bool approachDualCenterTargets(TaskSharedData_t* sharedData,
-                                      uint8_t jointIndex,
-                                      uint8_t primaryMotor,
-                                      int32_t primaryTargetAbs,
-                                      uint8_t secondaryMotor,
-                                      int32_t secondaryTargetAbs,
-                                      const AutoCalibrationParams& params)
-{
-    const int32_t tolerance = params.zeroReachAbsTolerance;
-    const int32_t primaryTargetTendon =
-        motorRawAbsToTendonAbs(primaryMotor, primaryTargetAbs);
-    const int32_t secondaryTargetTendon =
-        motorRawAbsToTendonAbs(secondaryMotor, secondaryTargetAbs);
-    int32_t primaryCommandTendon = 0;
-    int32_t secondaryCommandTendon = 0;
-    bool commandInitialized = false;
-    int32_t commandRemainder = 0;
-    uint32_t lastCommandMs = millis();
-    uint32_t lastTraceMs = 0;
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_APPROACH_BEGIN J%02u primary=M%02u target=%ld secondary=M%02u target=%ld tolerance=%ld\r\n",
-                       (unsigned)jointIndex,
-                       (unsigned)primaryMotor,
-                       (long)primaryTargetAbs,
-                       (unsigned)secondaryMotor,
-                       (long)secondaryTargetAbs,
-                       (long)tolerance);
-
-    while (autoCalibrationStillOwnsControl(sharedData)) {
-        DualCenterFeedback feedback;
-        if (!readDualCenterFeedback(sharedData,
-                                    jointIndex,
-                                    primaryMotor,
-                                    secondaryMotor,
-                                    &feedback)) {
-            return false;
-        }
-
-        const int32_t primaryErr = abs32(feedback.primaryAbs - primaryTargetAbs);
-        const int32_t secondaryErr = abs32(feedback.secondaryAbs - secondaryTargetAbs);
-        if (primaryErr <= tolerance && secondaryErr <= tolerance) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_REACHED J%02u primary=M%02u abs=%ld target=%ld err=%ld/%ld load=%d secondary=M%02u abs=%ld target=%ld err=%ld/%ld load=%d\r\n",
-                               (unsigned)jointIndex,
-                               (unsigned)primaryMotor,
-                               (long)feedback.primaryAbs,
-                               (long)primaryTargetAbs,
-                               (long)primaryErr,
-                               (long)tolerance,
-                               (int)feedback.primaryLoad,
-                               (unsigned)secondaryMotor,
-                               (long)feedback.secondaryAbs,
-                               (long)secondaryTargetAbs,
-                               (long)secondaryErr,
-                               (long)tolerance,
-                               (int)feedback.secondaryLoad);
-            return true;
-        }
-
-        if (!commandInitialized) {
-            primaryCommandTendon =
-                motorRawAbsToTendonAbs(primaryMotor, feedback.primaryAbs);
-            secondaryCommandTendon =
-                motorRawAbsToTendonAbs(secondaryMotor, feedback.secondaryAbs);
-            commandInitialized = true;
-        }
-
-        const uint32_t nowMs = millis();
-        const uint32_t dtMs = nowMs - lastCommandMs;
-        if (dtMs >= params.loopMs) {
-            const int32_t numerator =
-                (int32_t)dtMs * params.tightenSpeedCountsPerSec +
-                commandRemainder;
-            const int32_t stepCounts = numerator / 1000;
-            commandRemainder = numerator % 1000;
-            if (stepCounts > 0) {
-                primaryCommandTendon = stepTowardInt32Local(primaryCommandTendon,
-                                                            primaryTargetTendon,
-                                                            stepCounts);
-                secondaryCommandTendon = stepTowardInt32Local(secondaryCommandTendon,
-                                                              secondaryTargetTendon,
-                                                              stepCounts);
-            }
-            lastCommandMs = nowMs;
-        }
-
-        const int32_t primaryCommandAbs =
-            motorTendonAbsToRawAbs(primaryMotor, primaryCommandTendon);
-        const int32_t secondaryCommandAbs =
-            motorTendonAbsToRawAbs(secondaryMotor, secondaryCommandTendon);
-        if (!publishDualCenterTargets(sharedData,
-                                      jointIndex,
-                                      primaryMotor,
-                                      primaryCommandAbs,
-                                      secondaryMotor,
-                                      secondaryCommandAbs,
-                                      params)) {
-            return false;
-        }
-
-        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
-            lastTraceMs = nowMs;
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_APPROACH_WAIT J%02u primary=M%02u cmd=%ld abs=%ld target=%ld err=%ld/%ld load=%d secondary=M%02u cmd=%ld abs=%ld target=%ld err=%ld/%ld load=%d\r\n",
-                               (unsigned)jointIndex,
-                               (unsigned)primaryMotor,
-                               (long)primaryCommandAbs,
-                               (long)feedback.primaryAbs,
-                               (long)primaryTargetAbs,
-                               (long)primaryErr,
-                               (long)tolerance,
-                               (int)feedback.primaryLoad,
-                               (unsigned)secondaryMotor,
-                               (long)secondaryCommandAbs,
-                               (long)feedback.secondaryAbs,
-                               (long)secondaryTargetAbs,
-                               (long)secondaryErr,
-                               (long)tolerance,
-                               (int)feedback.secondaryLoad);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
-    }
-
-    setDualCenterDiagIfUnset(sharedData,
-                             CALIB_DIAG_REASON_CONTROL_LOST,
-                             jointIndex,
-                             primaryMotor,
-                             sharedData ? sharedData->system_state : -1,
-                             sharedData ? sharedData->servo_target_owner : -1,
-                             sharedData ? sharedData->control_enabled : -1,
-                             sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL approach cancel J%02u state=%u owner=%u enabled=%u\r\n",
-                       (unsigned)jointIndex,
-                       sharedData ? (unsigned)sharedData->system_state : 255U,
-                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
-                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
-    return false;
-}
-
-static void syncDualCenterJointTargetFromFeedback(TaskSharedData_t* sharedData,
-                                                  uint8_t jointIndex,
-                                                  const JointCalibrationResult& result)
-{
-    uint16_t centeredRaw = 0;
-    int32_t centeredEncoder = 0;
-    if (!readLatestEncoderSample(sharedData,
-                                 jointIndex,
-                                 &centeredRaw,
-                                 &centeredEncoder)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC_SKIP J%02u missing encoder\r\n",
-                           (unsigned)jointIndex);
-        return;
-    }
-
-    EncoderUrdfMapResult centerMap = {};
-    if (mapManualScaledEncoderToUrdf(jointIndex,
-                                     result,
-                                     g_manualEncoderReference[jointIndex],
-                                     centeredRaw,
-                                     g_encoderDirection[jointIndex],
-                                     &centerMap) &&
-        centerMap.valid) {
-        syncJointTargetToDeg(sharedData, jointIndex, centerMap.urdfDeg);
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC J%02u raw=%u oriented=%ld deg=%.3f outside=%ld\r\n",
-                           (unsigned)jointIndex,
-                           (unsigned)centeredRaw,
-                           (long)centeredEncoder,
-                           centerMap.urdfDeg,
-                           (long)centerMap.outsideCounts);
-    } else {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC_SKIP J%02u raw=%u oriented=%ld map invalid\r\n",
-                           (unsigned)jointIndex,
-                           (unsigned)centeredRaw,
-                           (long)centeredEncoder);
-    }
-}
-
-static bool centerDualJointAfterCalibration(TaskSharedData_t* sharedData,
-                                            uint8_t jointIndex,
-                                            uint8_t primaryMotor,
-                                            int32_t primaryReadyAbs,
-                                            int32_t primaryTargetAbs,
-                                            uint8_t secondaryMotor,
-                                            int32_t secondaryReadyAbs,
-                                            int32_t secondaryTargetAbs,
-                                            const JointCalibrationResult& result,
-                                            const AutoCalibrationParams& params)
-{
-    const int32_t tolerance = params.zeroReachAbsTolerance;
-    const uint32_t motorMask =
-        (1UL << primaryMotor) | (1UL << secondaryMotor);
-    if (!isServoCommandInsideLimit(primaryTargetAbs) ||
-        !isServoCommandInsideLimit(secondaryTargetAbs)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL target outside limit J%02u primary=%ld secondary=%ld\r\n",
-                           (unsigned)jointIndex,
-                           (long)primaryTargetAbs,
-                           (long)secondaryTargetAbs);
-        setDualCenterDiagIfUnset(sharedData,
-                                 CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
-                                 jointIndex,
-                                 primaryMotor,
-                                 primaryTargetAbs,
-                                 secondaryTargetAbs,
-                                 0,
-                                 motorMask);
-        return false;
-    }
-
-    DualCenterFeedback initialFeedback;
-    if (!readDualCenterFeedback(sharedData,
-                                jointIndex,
-                                primaryMotor,
-                                secondaryMotor,
-                                &initialFeedback)) {
-        return false;
-    }
-
-    const int32_t primaryExcess =
-        motorRawAbsToTendonAbs(primaryMotor, initialFeedback.primaryAbs) -
-        motorRawAbsToTendonAbs(primaryMotor, primaryTargetAbs);
-    const int32_t secondaryExcess =
-        motorRawAbsToTendonAbs(secondaryMotor, initialFeedback.secondaryAbs) -
-        motorRawAbsToTendonAbs(secondaryMotor, secondaryTargetAbs);
-    const bool primaryNeedsRelease = primaryExcess > tolerance;
-    const bool secondaryNeedsRelease = secondaryExcess > tolerance;
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_BEGIN J%02u primary=M%02u ready=%ld current=%ld target=%ld excess=%ld load=%d secondary=M%02u ready=%ld current=%ld target=%ld excess=%ld load=%d tolerance=%ld\r\n",
-                       (unsigned)jointIndex,
-                       (unsigned)primaryMotor,
-                       (long)primaryReadyAbs,
-                       (long)initialFeedback.primaryAbs,
-                       (long)primaryTargetAbs,
-                       (long)primaryExcess,
-                       (int)initialFeedback.primaryLoad,
-                       (unsigned)secondaryMotor,
-                       (long)secondaryReadyAbs,
-                       (long)initialFeedback.secondaryAbs,
-                       (long)secondaryTargetAbs,
-                       (long)secondaryExcess,
-                       (int)initialFeedback.secondaryLoad,
-                       (long)tolerance);
-
-    bool primaryFirst = true;
-    if (primaryNeedsRelease && secondaryNeedsRelease) {
-        if (initialFeedback.secondaryLoad > initialFeedback.primaryLoad ||
-            (initialFeedback.secondaryLoad == initialFeedback.primaryLoad &&
-             secondaryExcess > primaryExcess)) {
-            primaryFirst = false;
-        }
-    } else if (!primaryNeedsRelease && secondaryNeedsRelease) {
-        primaryFirst = false;
-    }
-
-    if (primaryFirst) {
-        if (!releaseDualCenterMotorIfNeeded(sharedData,
-                                            jointIndex,
-                                            "DUAL_CENTER_RELEASE_PRIMARY",
-                                            primaryMotor,
-                                            primaryTargetAbs,
-                                            secondaryMotor,
-                                            params)) {
-            return false;
-        }
-        if (!releaseDualCenterMotorIfNeeded(sharedData,
-                                            jointIndex,
-                                            "DUAL_CENTER_RELEASE_SECONDARY",
-                                            secondaryMotor,
-                                            secondaryTargetAbs,
-                                            primaryMotor,
-                                            params)) {
-            return false;
-        }
-    } else {
-        if (!releaseDualCenterMotorIfNeeded(sharedData,
-                                            jointIndex,
-                                            "DUAL_CENTER_RELEASE_SECONDARY",
-                                            secondaryMotor,
-                                            secondaryTargetAbs,
-                                            primaryMotor,
-                                            params)) {
-            return false;
-        }
-        if (!releaseDualCenterMotorIfNeeded(sharedData,
-                                            jointIndex,
-                                            "DUAL_CENTER_RELEASE_PRIMARY",
-                                            primaryMotor,
-                                            primaryTargetAbs,
-                                            secondaryMotor,
-                                            params)) {
-            return false;
-        }
-    }
-
-    if (!approachDualCenterTargets(sharedData,
-                                   jointIndex,
-                                   primaryMotor,
-                                   primaryTargetAbs,
-                                   secondaryMotor,
-                                   secondaryTargetAbs,
-                                   params)) {
-        return false;
-    }
-
-    syncDualCenterJointTargetFromFeedback(sharedData, jointIndex, result);
-    return true;
-}
-
+// 双腱标定开始前等待磁编、两路 ABS 和在线状态同时有效。
 static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                                     uint8_t jointIndex,
                                     uint8_t primaryMotor,
@@ -2148,7 +1810,6 @@ static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                                     const AutoCalibrationParams& params)
 {
     (void)params;
-    const uint32_t startMs = millis();
     uint32_t lastTraceMs = 0;
     while (autoCalibrationStillOwnsControl(sharedData)) {
         const bool primaryOk =
@@ -2172,37 +1833,12 @@ static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                           secondaryOk ? 1 : 0,
                           encoderOk ? 1 : 0);
         }
-        if ((uint32_t)(nowMs - startMs) >= kAutoInitialFeedbackWaitMs) {
-            const uint32_t missingMotorMask =
-                (primaryOk ? 0UL : (1UL << primaryMotor)) |
-                (secondaryOk ? 0UL : (1UL << secondaryMotor));
-            const uint8_t failedMotor = !primaryOk
-                ? primaryMotor
-                : (!secondaryOk ? secondaryMotor : 0xFF);
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_INIT_TIMEOUT J%02u M%02u=%u M%02u=%u encoder=%u timeout=%lu\r\n",
-                               (unsigned)jointIndex,
-                               (unsigned)primaryMotor,
-                               primaryOk ? 1U : 0U,
-                               (unsigned)secondaryMotor,
-                               secondaryOk ? 1U : 0U,
-                               encoderOk ? 1U : 0U,
-                               (unsigned long)kAutoInitialFeedbackWaitMs);
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_FEEDBACK_LOST,
-                               CALIB_DIAG_PHASE_INIT,
-                               jointIndex,
-                               failedMotor,
-                               primaryOk ? 1 : 0,
-                               secondaryOk ? 1 : 0,
-                               encoderOk ? 1 : 0,
-                               missingMotorMask);
-            return false;
-        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     return false;
 }
 
+// 沿收绳方向逐步推进指定电机，直到负载阈值或机械角停稳条件成立。
 static bool findDualTightPoint(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                const char* phase,
@@ -2400,6 +2036,7 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 把 J00/J04/J08/J12 映射到工作空间缓存索引。
 static int8_t workspaceCacheIndex(uint8_t jointIndex)
 {
     for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
@@ -2410,16 +2047,19 @@ static int8_t workspaceCacheIndex(uint8_t jointIndex)
     return -1;
 }
 
+// 判断关节是否属于四指侧摆工作空间规划集合。
 static bool isWorkspaceDualJoint(uint8_t jointIndex)
 {
     return workspaceCacheIndex(jointIndex) >= 0;
 }
 
+// 每轮标定开始时清空 RAM 姿态缓存，禁止跨任务复用旧机械姿态。
 static void clearDualWorkspaceCache(void)
 {
     memset(g_dualWorkspaceCache, 0, sizeof(g_dualWorkspaceCache));
 }
 
+// 一对辅助双腱执行器在预检阶段的可用性分类。
 enum DualWorkspacePairAvailability : uint8_t {
     DUAL_WORKSPACE_PAIR_READY = 0,
     DUAL_WORKSPACE_PAIR_ALL_OFFLINE,
@@ -2429,6 +2069,7 @@ enum DualWorkspacePairAvailability : uint8_t {
     DUAL_WORKSPACE_PAIR_MAP_INVALID,
 };
 
+// 检查辅助关节两台电机是否全在线、反馈新鲜且多圈可信。
 static DualWorkspacePairAvailability classifyDualWorkspacePair(
     TaskSharedData_t* sharedData,
     uint8_t jointIndex,
@@ -2472,6 +2113,7 @@ static DualWorkspacePairAvailability classifyDualWorkspacePair(
     return DUAL_WORKSPACE_PAIR_READY;
 }
 
+// 将工作空间可用性枚举转换为日志文本。
 static const char* workspacePairAvailabilityText(
     DualWorkspacePairAvailability availability)
 {
@@ -2485,6 +2127,7 @@ static const char* workspacePairAvailabilityText(
     }
 }
 
+// 只把本轮目标关节和真正参与让位的在线辅助电机加入标定读取范围。
 static bool buildDynamicWorkspaceMotorMask(
     TaskSharedData_t* sharedData,
     const uint8_t* activeJoints,
@@ -2509,6 +2152,28 @@ static bool buildDynamicWorkspaceMotorMask(
                                           &pairMask);
             if (availability == DUAL_WORKSPACE_PAIR_READY) {
                 motorMask |= pairMask;
+                continue;
+            }
+            // 目标关节允许通过自动标定重建 Turn Unknown；但前提是热插拔恢复和多圈模式配置已经完成。
+            const bool targetCanRebuildTurn =
+                candidateJoint == targetJoint &&
+                availability == DUAL_WORKSPACE_PAIR_TURN_UNKNOWN &&
+                (sharedAtomicLoad(
+                    &sharedData->servo_multiturn_configured_bitmap) &
+                 pairMask) == pairMask &&
+                (sharedAtomicLoad(
+                    &sharedData->servo_recovery_pending_bitmap) &
+                 pairMask) == 0 &&
+                (sharedAtomicLoad(
+                    &sharedData->servo_recovery_failed_bitmap) &
+                 pairMask) == 0;
+            if (targetCanRebuildTurn) {
+                motorMask |= pairMask;
+                FW_LOG_INFO_PRINTF(
+                    "[AUTO CALIB] WORKSPACE_MASK_TARGET_REBUILD "
+                    "target=J%02u mask=0x%08lX\r\n",
+                    (unsigned)targetJoint,
+                    (unsigned long)pairMask);
                 continue;
             }
             if (candidateJoint != targetJoint &&
@@ -2548,6 +2213,7 @@ static bool buildDynamicWorkspaceMotorMask(
     return true;
 }
 
+// 原子更新标定期间需持续读取的辅助电机位图。
 static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
                                             uint32_t motorMask)
 {
@@ -2559,9 +2225,9 @@ static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
                       motorMask & validMotorChannelMask());
 }
 
+// 根据目标侧摆关节生成最短 A/B 姿态序列；已缓存正确姿态的步骤会跳过。
 static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
                                       uint8_t targetJoint,
-                                      uint32_t centeredJointMask,
                                       DualWorkspacePlanStep* steps,
                                       uint8_t capacity)
 {
@@ -2571,20 +2237,13 @@ static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
     }
 
     uint8_t count = 0;
-    // Establish all non-target fingers first. Lower-index fingers move from
-    // low to high into A; higher-index fingers move from high to low into B.
-    // The target is deliberately excluded: its calibration routine performs
-    // the required slack/primary-tight sequence itself, or reuses an existing
-    // B cache established earlier as a helper.
+    // 先为所有非目标手指建立工作空间：编号较小的手指按升序进入 A，
+    // 编号较大的手指按降序进入 B。目标关节有意排除在这里之外：
+    // 它会在自身标定流程中执行放绳/主电机收紧，或复用先前作为辅助关节
+    // 已建立的 B 姿态缓存。
     for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
         const uint8_t jointIndex = kWorkspaceDualJoints[i];
         if (jointIndex >= targetJoint) {
-            continue;
-        }
-        if ((centeredJointMask & (1UL << jointIndex)) != 0) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=already-centered\r\n",
-                               (unsigned)targetJoint,
-                               (unsigned)jointIndex);
             continue;
         }
         const DualWorkspacePairAvailability availability =
@@ -2610,12 +2269,6 @@ static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
         if (jointIndex <= targetJoint) {
             continue;
         }
-        if ((centeredJointMask & (1UL << jointIndex)) != 0) {
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=already-centered\r\n",
-                               (unsigned)targetJoint,
-                               (unsigned)jointIndex);
-            continue;
-        }
         const DualWorkspacePairAvailability availability =
             classifyDualWorkspacePair(sharedData, jointIndex, NULL, NULL, NULL);
         if (availability == DUAL_WORKSPACE_PAIR_ALL_OFFLINE) {
@@ -2637,6 +2290,7 @@ static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
     return count;
 }
 
+// 把工作空间预检/执行失败写成结构化标定诊断。
 static void setWorkspacePlanFailureDiag(TaskSharedData_t* sharedData,
                                         uint8_t targetJoint,
                                         uint8_t helperJoint,
@@ -2668,6 +2322,7 @@ static void setWorkspacePlanFailureDiag(TaskSharedData_t* sharedData,
                        motorMask);
 }
 
+// 输出最终工作空间计划，便于核对各手指实际动作顺序。
 static void logDualWorkspacePlan(uint8_t targetJoint,
                                  const DualWorkspacePlanStep* steps,
                                  uint8_t count)
@@ -2683,6 +2338,7 @@ static void logDualWorkspacePlan(uint8_t targetJoint,
     }
 }
 
+// 等待一对辅助电机到达 A/B 目标 ABS，并要求误差连续进入 60 counts 窗口。
 static bool waitDualWorkspaceTargets(TaskSharedData_t* sharedData,
                                      uint8_t jointIndex,
                                      const char* phase,
@@ -2779,6 +2435,7 @@ static bool waitDualWorkspaceTargets(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 等待工作空间涉及电机全部上线且多圈可信。
 static bool waitWorkspaceFeedbackKnown(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t primaryMotor,
@@ -2861,6 +2518,7 @@ static bool waitWorkspaceFeedbackKnown(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 在任何机械动作前完成全部辅助关节预检，避免执行到一半才发现部分离线。
 static bool preflightDualWorkspacePlan(TaskSharedData_t* sharedData,
                                        uint8_t targetJoint,
                                        const DualWorkspacePlanStep* steps,
@@ -2912,6 +2570,7 @@ static bool preflightDualWorkspacePlan(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 收紧一台辅助电机到 load 190，同时保持同关节另一台电机不动。
 static bool tightenWorkspaceMotor(TaskSharedData_t* sharedData,
                                   uint8_t jointIndex,
                                   const char* phase,
@@ -3030,6 +2689,7 @@ static bool tightenWorkspaceMotor(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 将一个辅助双腱关节调整到指定 A/B 姿态，并把实测 ABS 写入 RAM 缓存。
 static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
                                     uint8_t jointIndex,
                                     DualWorkspacePose desiredPose,
@@ -3073,8 +2733,8 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
         const int32_t secondaryError = abs32(secondaryAbs - secondaryTarget);
         if (primaryError <= kWorkspaceTargetToleranceCounts &&
             secondaryError <= kWorkspaceTargetToleranceCounts) {
-            // The pose was already reached by an earlier workspace step or a
-            // completed calibration. Reuse it without issuing servo targets.
+            // 该姿态已由前序工作空间步骤或已完成的标定建立；直接复用，
+            // 不再重复发送舵机目标。
             FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_REUSE_NO_COMMAND J%02u pose=%c M%02u=%ld/%ld err=%ld M%02u=%ld/%ld err=%ld\r\n",
                                (unsigned)jointIndex,
                                desiredPose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B',
@@ -3089,9 +2749,8 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
             return true;
         }
 
-        // The RAM cache cannot describe the current mechanical pose anymore.
-        // Rebuild the requested pose from measured feedback instead of issuing
-        // targets from stale cached ABS values.
+        // RAM 缓存已不能准确描述当前机械姿态。使缓存失效，并依据实测反馈
+        // 重新建立目标姿态，禁止使用过期 ABS 缓存继续下发。
         FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_REUSE_INVALIDATE J%02u pose=%c M%02u err=%ld M%02u err=%ld tolerance=%ld\r\n",
                            (unsigned)jointIndex,
                            desiredPose == DUAL_WORKSPACE_POSE_A ? 'A' : 'B',
@@ -3141,12 +2800,9 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
         return true;
     }
 
-    // No trusted in-sequence cache exists. Establish the requested workspace
-    // directly from the measured pose: release one tendon by 3200 counts
-    // first, keep its antagonist fixed, then tighten that antagonist to the
-    // workspace load threshold. This keeps the physical sequence consistent
-    // with the requested A/B pose and avoids an unintended pre-tighten of the
-    // tendon that is supposed to be released.
+    // 当前序列没有可信姿态缓存，必须从实测姿态建立工作空间：先将一侧肌腱
+    // 放绳 3200 counts，同时保持拮抗侧不动，再把拮抗侧收紧到工作空间
+    // 负载阈值。该顺序与目标 A/B 姿态一致，可避免本应放松的肌腱被提前收紧。
     const uint8_t releaseMotor = desiredPose == DUAL_WORKSPACE_POSE_A
         ? primaryMotor : secondaryMotor;
     const uint8_t tightenMotor = desiredPose == DUAL_WORKSPACE_POSE_A
@@ -3158,15 +2814,21 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
     const int32_t releaseTargetAbs = motorApplyTendonDelta(releaseMotor,
                                                             releaseStartAbs,
                                                             -kWorkspaceReleaseCounts);
-    if (!isServoCommandInsideLimit(releaseTargetAbs)) {
+    if (!isServoCommandInsideLimit(sharedData,
+                                   releaseMotor,
+                                   releaseTargetAbs)) {
+        int32_t rangeMin = 0;
+        int32_t rangeMax = 0;
+        getServoLogicalCommandRange(
+            sharedData, releaseMotor, &rangeMin, &rangeMax);
         setCalibrationDiag(sharedData,
                            CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
                            CALIB_DIAG_PHASE_DUAL_PRELOAD,
                            jointIndex,
                            releaseMotor,
                            releaseTargetAbs,
-                           -30719,
-                           30719,
+                           rangeMin,
+                           rangeMax,
                            1UL << releaseMotor);
         return false;
     }
@@ -3220,9 +2882,9 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 为当前目标关节执行工作空间预检、计划生成和必要的辅助姿态动作。
 static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
                                                uint8_t targetJoint,
-                                               uint32_t centeredJointMask,
                                                const AutoCalibrationParams& params)
 {
     if (!isWorkspaceDualJoint(targetJoint)) {
@@ -3261,7 +2923,6 @@ static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
     DualWorkspacePlanStep steps[kWorkspaceDualHelperCount] = {};
     const uint8_t stepCount = buildDualWorkspacePlan(sharedData,
                                                       targetJoint,
-                                                      centeredJointMask,
                                                       steps,
                                                       kWorkspaceDualHelperCount);
     if (stepCount == 0xFF) {
@@ -3277,9 +2938,8 @@ static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
     }
 
     logDualWorkspacePlan(targetJoint, steps, stepCount);
-    // Do not move a helper until target and all helper pairs have known,
-    // readable ABS/load feedback. A missing channel must not leave a partial
-    // workspace arrangement behind.
+    // 目标关节及全部辅助双电机都必须具备可信且可读的 ABS/load 反馈，
+    // 才允许移动任何辅助关节，避免通道缺失时留下半完成的工作空间姿态。
     if (!preflightDualWorkspacePlan(sharedData, targetJoint, steps, stepCount)) {
         return false;
     }
@@ -3313,6 +2973,7 @@ static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 主电机保持紧端时，逐步收紧副电机到预紧负载 190。
 static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
                                           uint8_t jointIndex,
                                           uint8_t secondaryMotor,
@@ -3332,8 +2993,8 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
     int32_t commandRemainder = 0;
     uint32_t lastCommandMs = millis();
 
-    // Match the CUI trajectory: start from measured ABS and progressively
-    // advance by the configured speed step, without a remote preload target.
+    // 与 CUI 版本轨迹保持一致：从实测 ABS 起步，按配置速度逐步推进，
+    // 不预先设置远距离预紧目标。
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_PRELOAD_SECONDARY_BEGIN J%02u secondary=M%02u startAbs=%ld shortenSign=%d primaryHold=M%02u holdAbs=%ld loadThreshold=%d\r\n",
                   jointIndex,
                   secondaryMotor,
@@ -3441,6 +3102,7 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 副电机已达到最终 250 后，仅补紧主电机到最终阈值并验证 ABS 稳定。
 static bool finishDualTendonReadyPreload(TaskSharedData_t* sharedData,
                                          uint8_t jointIndex,
                                          uint8_t primaryMotor,
@@ -3470,9 +3132,8 @@ static bool finishDualTendonReadyPreload(TaskSharedData_t* sharedData,
                        secondaryMotor,
                        (long)secondaryStartAbs);
 
-    // Synchronize both commands to the measured exchange endpoint before the
-    // primary motor starts tightening. This prevents a stale exchange target
-    // from surviving into the final preload phase.
+    // 主电机开始收紧前，先把两台电机命令同步到交换阶段的实测终点，
+    // 防止旧交换目标残留到最终预紧阶段。
     if (!publishDualMotorCalibrationTargets(sharedData,
                                             primaryMotor,
                                             primaryCommandAbs,
@@ -3618,6 +3279,7 @@ static bool finishDualTendonReadyPreload(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 主放/副收同步交换，直到副电机达到最终负载且磁编行程满足要求。
 static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
                                        uint8_t jointIndex,
                                        uint8_t secondaryMotor,
@@ -3844,6 +3506,9 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
     return false;
 }
 
+// 双腱关节完整标定流程：
+// 主紧端 -> 副松 3200 -> 副预紧 190 -> 主放副收至副 250 ->
+// 主补紧 -> 构建 V3 映射与两路 Tendon LUT -> 登记 READY 姿态。
 static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                                   uint8_t jointIndex,
                                                   const AutoCalibrationParams& params,
@@ -3934,9 +3599,8 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         primary80Abs = primaryAbs;
         primary80Raw = initialRaw;
         primary80Encoder = initialEncoder;
-        // B is a position cache. The servo's instantaneous load commonly
-        // returns to zero after the prior tightening command has settled, so
-        // only the verified ABS pose decides whether it can be reused.
+        // B 是位置姿态缓存。上一条收紧命令稳定后，舵机瞬时 load 常会回到零，
+        // 因此是否允许复用只由已验证的 ABS 姿态决定，不能用瞬时负载否定缓存。
         primary80Load = primaryLoadAvailable ? servoLoadMagnitude(primaryLoadRaw) : 0;
         FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_WORKSPACE_B_REUSE J%02u primary=M%02u abs=%ld load=%d available=%u secondary=M%02u abs=%ld; ABS matched, skip duplicate slack/POS80\r\n",
                            (unsigned)jointIndex,
@@ -4062,10 +3726,9 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                                  primaryNeg3Abs,
                                  secondaryNeg3Abs);
 
-    // Preserve the mechanical Auto Min/LUT endpoint above. READY must use a
-    // different final pose in which both tendons are loaded: secondary has
-    // already reached 250, then primary is restored to 240 while secondary
-    // remains at the exchange endpoint command.
+    // 上面记录的机械 Auto Min/LUT 端点必须保留。READY 使用另一套双绳均有
+    // 张力的最终姿态：副电机已达到 250，随后保持副电机交换终点命令，
+    // 再把主电机恢复到负载 240。
     int32_t primaryReadyAbs = primaryNeg3Abs;
     int32_t secondaryReadyAbs = secondaryNeg3Abs;
     uint16_t readyRaw = neg3Raw;
@@ -4182,30 +3845,12 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   primaryMotor,
                   secondaryMotor);
 
-    const int32_t primaryCenterAbs =
-        midpointInt32Local(primary80Abs, primaryNeg3Abs);
-    const int32_t secondaryCenterAbs =
-        midpointInt32Local(secondaryPreloadAbs, secondaryNeg3Abs);
-    if (!centerDualJointAfterCalibration(sharedData,
-                                         jointIndex,
-                                         primaryMotor,
-                                         primaryReadyAbs,
-                                         primaryCenterAbs,
-                                         secondaryMotor,
-                                         secondaryReadyAbs,
-                                         secondaryCenterAbs,
-                                         result,
-                                         params)) {
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL J%02u primaryTarget=%ld secondaryTarget=%ld; calibration result not committed\r\n",
-                           (unsigned)jointIndex,
-                           (long)primaryCenterAbs,
-                           (long)secondaryCenterAbs);
-        if (workspaceState) {
-            workspaceState->valid = 0;
-        }
+    g_jointCalibResult[jointIndex] = result;
+    updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
+    syncJointTargetToDeg(sharedData, jointIndex, readyMap.urdfDeg);
+    if (!commitJointServoMultiTurnTrust(sharedData, jointIndex)) {
         return false;
     }
-
     const int32_t primaryLimitTightAbs =
         motorRawAbsToTendonAbs(primaryMotor, primaryReadyAbs) >
                 motorRawAbsToTendonAbs(primaryMotor, primary80Abs)
@@ -4218,14 +3863,17 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
             : secondaryNeg3Abs;
     setCalibratedMotorAbsLimit(sharedData, primaryMotor, primaryLimitTightAbs);
     setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryLimitTightAbs);
-    g_jointCalibResult[jointIndex] = result;
-    updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
-    g_encoderOffsetManual[jointIndex] = result.offset;
-    clearJointServoMultiTurnUnknown(sharedData, jointIndex);
 
     if (workspaceState) {
-        memset(workspaceState, 0, sizeof(*workspaceState));
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CENTER_CACHE_CLEAR J%02u primary=M%02u:%ld secondary=M%02u:%ld load=%d/%d\r\n",
+        // 缓存最终双绳预紧姿态，而不是主电机处于放绳状态的早期机械端点。
+        // 后续关节可直接复用该 A 姿态，不会再次引入松绳。
+        workspaceState->primaryMotor = primaryMotor;
+        workspaceState->secondaryMotor = secondaryMotor;
+        workspaceState->primaryReleaseAbs = primaryReadyAbs;
+        workspaceState->secondaryTightAbs = secondaryReadyAbs;
+        workspaceState->currentPose = DUAL_WORKSPACE_POSE_A;
+        workspaceState->valid = 1;
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE J%02u pose=A primaryReady=M%02u:%ld secondaryReady=M%02u:%ld load=%d/%d\r\n",
                            (unsigned)jointIndex,
                            (unsigned)primaryMotor,
                            (long)primaryReadyAbs,
@@ -4270,6 +3918,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 将单电机上下文置为失败并记录简短日志。
 static void failAutoCalibContext(JointCalibContext* ctx, const char* reason)
 {
     if (!ctx || ctx->state == AUTO_CALIB_STATE_FAILED) {
@@ -4281,6 +3930,7 @@ static void failAutoCalibContext(JointCalibContext* ctx, const char* reason)
     ctx->state = AUTO_CALIB_STATE_FAILED;
 }
 
+// 将单电机上下文置为失败，同时写入上位机可解析的结构化诊断。
 static void failAutoCalibContextWithDiag(JointCalibContext* ctx,
                                          TaskSharedData_t* sharedData,
                                          const char* reasonText,
@@ -4307,6 +3957,7 @@ static void failAutoCalibContextWithDiag(JointCalibContext* ctx,
     failAutoCalibContext(ctx, reasonText);
 }
 
+// 首帧反馈有效后初始化紧端搜索基线、命令方向和停稳窗口。
 static bool initTightenStateFromFeedback(JointCalibContext* ctx,
                                          TaskSharedData_t* sharedData,
                                          const AutoCalibrationParams& params)
@@ -4364,6 +4015,7 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     return true;
 }
 
+// 初始化一个单电机标定上下文，不读取硬件、不发送命令。
 static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
 {
     if (!ctx) {
@@ -4380,7 +4032,9 @@ static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
 // stepAutoCalibrationJoint - 单关节自动标定的并行状态机步进函数
 // ============================================================================
 // 核心逻辑（非阻塞）：
-// 在每一帧定时调度中被调用。它将原先阻塞式的“死循环拉绳”重构成了状态机步进�?// 主要卡点判定条件 (AUTO_CALIB_STATE_TIGHTEN)�?// 1) 舵机在指定的时间窗口内，绝对位置必须移动了一定的距离，否则认为拉紧停滞�?// 2) 电流反馈 (load) 必须达到并稳定超过设定的阈�?(tightLoadHigh)�?// 3) 磁编码器的角度必须在连续多次采样中变化小于容�?(stallActualDeg)，证明机械已经完全抵住死区�?// 只有当以上条件同时满足时，才判定为“成功寻找到物理零位”，进而校准磁编与舵机�?// ============================================================================
+// 单电机非阻塞状态机单步函数。
+// INIT 等待首帧；TIGHTEN 搜索负载/角度停稳的紧端；PRE_RELEASE_SYNC 把目标
+// 锁回实际 ABS 并停稳；随后反向松到机械端点，生成 V3 映射和单路 Tendon LUT。
 static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                      TaskSharedData_t* sharedData,
                                      const AutoCalibrationParams& params,
@@ -4545,6 +4199,33 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             const bool loadHigh = hasLoad && loadMag >= params.tightLoadHigh;
 
             if (ctx->startFound) {
+                const int32_t actualReleaseCounts =
+                    singleTendonReleaseCounts(ctx->motorChannel,
+                                              ctx->startServoAbs,
+                                              currentAbs);
+                if (actualReleaseCounts > kSingleTendonMaxReleaseCounts) {
+                    // 超限后只保持实测 ABS，不再沿旧的松绳目标继续推进。
+                    ctx->commandAbs = currentAbs;
+                    appendJointCalibrationTargetToBatch(
+                        batch,
+                        ctx->jointIndex,
+                        clampToServoPosLocal(currentAbs),
+                        ctx->commandSpeed,
+                        ctx->commandAcc);
+                    failAutoCalibContextWithDiag(
+                        ctx,
+                        sharedData,
+                        "single tendon release exceeded two turns",
+                        CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
+                        CALIB_DIAG_PHASE_RELEASE,
+                        ctx->motorChannel,
+                        actualReleaseCounts,
+                        kSingleTendonMaxReleaseCounts,
+                        actualReleaseCounts,
+                        1UL << ctx->motorChannel);
+                    return;
+                }
+
                 // 单电机从紧端向松端运动期间，约每 5 度保存一次磁编位置与
                 // 舵机 raw ABS，供标定结束后重采样成等间隔 Tendon LUT。
                 const int32_t releaseDelta =
@@ -4677,7 +4358,16 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
                                                                 ctx->commandAbs,
                                                                 stepCounts);
-                        if (!isServoCommandInsideLimit(ctx->commandAbs)) {
+                        if (!isServoCommandInsideLimit(sharedData,
+                                                       ctx->motorChannel,
+                                                       ctx->commandAbs)) {
+                            int32_t rangeMin = 0;
+                            int32_t rangeMax = 0;
+                            getServoLogicalCommandRange(
+                                sharedData,
+                                ctx->motorChannel,
+                                &rangeMin,
+                                &rangeMax);
                             appendJointCalibrationTargetToBatch(batch,
                                                                 ctx->jointIndex,
                                                                 clampToServoPosLocal(ctx->commandAbs),
@@ -4685,13 +4375,13 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                                 ctx->commandAcc);
                             failAutoCalibContextWithDiag(ctx,
                                                          sharedData,
-                                                         "find max command outside +/-30719",
+                                                         "find max command outside session range",
                                                          CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
                                                          CALIB_DIAG_PHASE_FIND_MAX,
                                                          ctx->motorChannel,
                                                          ctx->commandAbs,
-                                                         -30719,
-                                                         30719,
+                                                         rangeMin,
+                                                         rangeMax,
                                                          0);
                             return;
                         }
@@ -4722,12 +4412,53 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 const int32_t numerator =
                     (int32_t)dtMs * params.tightenSpeedCountsPerSec + ctx->commandRemainder;
                 const int32_t stepCounts = numerator / 1000;
-                    ctx->commandRemainder = numerator % 1000;
-                    if (stepCounts > 0) {
-                        ctx->commandAbs = motorApplyTendonDelta(ctx->motorChannel,
-                                                            ctx->commandAbs,
-                                                            -stepCounts);
-                    if (!isServoCommandInsideLimit(ctx->commandAbs)) {
+                ctx->commandRemainder = numerator % 1000;
+                if (stepCounts > 0) {
+                    const int32_t nextCommandAbs =
+                        motorApplyTendonDelta(ctx->motorChannel,
+                                             ctx->commandAbs,
+                                             -stepCounts);
+                    const int32_t actualReleaseCounts =
+                        singleTendonReleaseCounts(ctx->motorChannel,
+                                                  ctx->startServoAbs,
+                                                  currentAbs);
+                    const int32_t commandReleaseCounts =
+                        singleTendonReleaseCounts(ctx->motorChannel,
+                                                  ctx->startServoAbs,
+                                                  nextCommandAbs);
+                    if (commandReleaseCounts > kSingleTendonMaxReleaseCounts) {
+                        // 在下一帧目标越过两圈前终止，避免 cmd 领先实际 ABS 后继续放绳。
+                        ctx->commandAbs = currentAbs;
+                        appendJointCalibrationTargetToBatch(
+                            batch,
+                            ctx->jointIndex,
+                            clampToServoPosLocal(currentAbs),
+                            ctx->commandSpeed,
+                            ctx->commandAcc);
+                        failAutoCalibContextWithDiag(
+                            ctx,
+                            sharedData,
+                            "single tendon release command would exceed two turns",
+                            CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
+                            CALIB_DIAG_PHASE_RELEASE,
+                            ctx->motorChannel,
+                            actualReleaseCounts,
+                            kSingleTendonMaxReleaseCounts,
+                            commandReleaseCounts,
+                            1UL << ctx->motorChannel);
+                        return;
+                    }
+                    ctx->commandAbs = nextCommandAbs;
+                    if (!isServoCommandInsideLimit(sharedData,
+                                                   ctx->motorChannel,
+                                                   ctx->commandAbs)) {
+                        int32_t rangeMin = 0;
+                        int32_t rangeMax = 0;
+                        getServoLogicalCommandRange(
+                            sharedData,
+                            ctx->motorChannel,
+                            &rangeMin,
+                            &rangeMax);
                         appendJointCalibrationTargetToBatch(batch,
                                                             ctx->jointIndex,
                                                             clampToServoPosLocal(ctx->commandAbs),
@@ -4735,13 +4466,13 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                             ctx->commandAcc);
                         failAutoCalibContextWithDiag(ctx,
                                                      sharedData,
-                                                     "release command outside +/-30719",
+                                                     "release command outside session range",
                                                      CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
                                                      CALIB_DIAG_PHASE_RELEASE,
                                                      ctx->motorChannel,
                                                      ctx->commandAbs,
-                                                     -30719,
-                                                     30719,
+                                                     rangeMin,
+                                                     rangeMax,
                                                      0);
                         return;
                     }
@@ -4966,14 +4697,18 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     updateCalibrationAssemblyWarning(sharedData,
                                                      ctx->jointIndex,
                                                      result);
-                    g_encoderOffsetManual[ctx->jointIndex] = result.offset;
                     ctx->result = result;
                     ctx->resultValid = true;
                     ctx->targetAbs = currentAbs;
                     syncJointTargetToDeg(sharedData,
                                          ctx->jointIndex,
                                          result.currentMinDeg);
-                    clearJointServoMultiTurnUnknown(sharedData, ctx->jointIndex);
+                    if (!commitJointServoMultiTurnTrust(sharedData,
+                                                        ctx->jointIndex)) {
+                        failAutoCalibContext(ctx,
+                                             "multi-turn trust commit failed");
+                        return;
+                    }
                     setSingleTendonLutAbsLimit(
                         sharedData,
                         ctx->motorChannel,
@@ -5075,8 +4810,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             const int32_t targetError =
                 abs32(currentAbs - ctx->preReleaseSyncTargetAbs);
             if (targetError > kPreReleaseSyncTargetToleranceCounts) {
-                // A previous tighten trajectory is still being executed.  Replace
-                // the hold target with the measured ABS and restart settling.
+                // 前一段收紧轨迹仍在执行。将保持目标更新为当前实测 ABS，
+                // 并重新开始停稳计时。
                 ctx->preReleaseSyncTargetAbs = currentAbs;
                 ctx->preReleaseSyncWindowStartAbs = currentAbs;
                 ctx->preReleaseSyncWindowStartMs = nowMs;
@@ -5165,6 +4900,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
     }
 }
 
+// 单关节同步包装，内部仍使用统一串行序列，确保初始化与诊断行为一致。
 bool runAutoCalibrationJoint(TaskSharedData_t* sharedData,
                              uint8_t jointIndex,
                              const AutoCalibrationParams& params)
@@ -5172,6 +4908,11 @@ bool runAutoCalibrationJoint(TaskSharedData_t* sharedData,
     return runAutoCalibrationSequence(sharedData, &jointIndex, 1, params);
 }
 
+// 自动标定总调度：
+// 1. 校验并按机械规则重排关节；
+// 2. 双腱关节执行工作空间规划和专用流程；
+// 3. 单电机关节逐帧运行非阻塞状态机；
+// 4. 成功结果逐关节保留，失败位图用于下次只重标失败关节。
 bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                                 const uint8_t* jointList,
                                 uint8_t jointCount,
@@ -5237,11 +4978,9 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
         }
     }
 
-    // Serial calibration is intentional: tightening one tendon changes the
-    // mechanical load and encoder angle of neighboring joints, so parallel
-    // calibration can bias the detected zero/tight points. Keep the per-joint
-    // non-blocking state machine, but run one context to completion before the
-    // next joint starts.
+    // 标定刻意采用串行方式：收紧一根肌腱会改变相邻关节的机械负载和磁编角度，
+    // 并行标定可能使检测到的零点/紧端产生偏差。单关节内部仍使用非阻塞状态机，
+    // 但必须等当前关节完整结束后再启动下一个关节。
     uint32_t completedJointMask = 0;
     uint32_t failedJointMask = 0;
     uint8_t firstFailedJoint = 0xFF;
@@ -5258,7 +4997,6 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
             if (isWorkspaceTarget) {
                 if (!prepareWorkspaceForDualCalibration(sharedData,
                                                         orderedJoints[i],
-                                                        completedJointMask,
                                                         params)) {
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL workspace failed J%02u; stop remaining sequence\r\n",
                                        orderedJoints[i]);
@@ -5448,6 +5186,7 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
     return true;
 }
 
+// 创建 FreeRTOS 自动标定任务，并注册运行时/堆栈监控。
 static bool startAutoCalibrationTaskInternal(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -5475,15 +5214,36 @@ static bool startAutoCalibrationTaskInternal(TaskSharedData_t* sharedData)
     return ok == pdPASS;
 }
 
+// 对外启动接口，保留单一创建路径。
 bool startAutoCalibrationTask(TaskSharedData_t* sharedData)
 {
     return startAutoCalibrationTaskInternal(sharedData);
 }
 
+// 将本次 active joint 列表转换成真正参与标定的电机位图，供热插拔恢复门禁使用。
+static uint32_t buildCalibrationMotorMask(const uint8_t* joints,
+                                          uint8_t jointCount)
+{
+    if (!joints || jointCount == 0) {
+        return 0;
+    }
+    uint32_t motorMask = 0;
+    for (uint8_t i = 0; i < jointCount; i++) {
+        motorMask |= calibrationJointMotorMask(joints[i]);
+    }
+    return motorMask & validMotorChannelMask();
+}
+
+// FreeRTOS 任务入口：读取 active scope、执行标定、更新状态并释放 owner。
 void autoCalibrationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     const AutoCalibrationParams params = defaultAutoCalibrationParams();
+    if (sharedData) {
+        // 预检期间禁止通信任务把热插拔恢复误判为“标定运动中”而跳过。
+        sharedAtomicStore(&sharedData->calibration_motion_started,
+                          (uint8_t)0);
+    }
 
     uint8_t activeJoints[ENCODER_TOTAL_NUM] = {0};
     const uint8_t activeJointCount =
@@ -5540,6 +5300,13 @@ void autoCalibrationTask(void* parameter)
         FW_LOG_INFO_PRINTLN(activeScopeLog);
     }
 
+    const uint32_t selectedMotorMask =
+        buildCalibrationMotorMask(activeJoints, activeJointCount);
+    const bool selectedRecoveryReady =
+        activeJointCount > 0 &&
+        selectedMotorMask != 0 &&
+        waitForCalibrationServoRecovery(sharedData, selectedMotorMask);
+
     bool needsWorkspaceReadMask = false;
     for (uint8_t i = 0; i < activeJointCount; ++i) {
         if (isWorkspaceDualJoint(activeJoints[i])) {
@@ -5549,19 +5316,34 @@ void autoCalibrationTask(void* parameter)
     }
     uint32_t workspaceReadMask = 0;
     const bool workspaceReady =
-        !needsWorkspaceReadMask ||
-        buildDynamicWorkspaceMotorMask(sharedData,
-                                       activeJoints,
-                                       activeJointCount,
-                                       &workspaceReadMask);
+        selectedRecoveryReady &&
+        (!needsWorkspaceReadMask ||
+         buildDynamicWorkspaceMotorMask(sharedData,
+                                        activeJoints,
+                                        activeJointCount,
+                                        &workspaceReadMask));
     setCalibrationWorkspaceReadMask(sharedData,
                                     workspaceReady ? workspaceReadMask : 0);
+    const uint32_t requiredRecoveryMask =
+        (selectedMotorMask | workspaceReadMask) & validMotorChannelMask();
+    const bool allRecoveryReady =
+        workspaceReady &&
+        waitForCalibrationServoRecovery(sharedData, requiredRecoveryMask);
+    if (allRecoveryReady && sharedData) {
+        // 从这一刻起标定状态机才允许发布电机目标；掉线将恢复为正常运动故障。
+        sharedAtomicStore(&sharedData->calibration_motion_started,
+                          (uint8_t)1);
+    }
     const bool ok = (activeJointCount > 0) &&
-                    workspaceReady &&
+                    allRecoveryReady &&
                     runAutoCalibrationSequence(sharedData,
                                                activeJoints,
                                                activeJointCount,
                                                params);
+    if (sharedData) {
+        sharedAtomicStore(&sharedData->calibration_motion_started,
+                          (uint8_t)0);
+    }
     setCalibrationWorkspaceReadMask(sharedData, 0);
 
     if (!ok && sharedData && !hasCalibrationDiag(sharedData)) {

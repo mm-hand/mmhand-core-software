@@ -14,6 +14,7 @@ from .ui_control_common import (
     Signal,
     TEST_DEFAULT_HOLD_S,
     TEST_TICK_MS,
+    TRI_TEST_DEFAULT_FREQ_HZ,
     Tuple,
     WORKSPACE_MAPPING_VERSION,
     WORKSPACE_URDF_CRC,
@@ -112,7 +113,8 @@ class ControlPanel(
         """Initialize motor table state and direct-control caches."""
         self.motor_turn_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
-        self.motor_hw_items: List[QtWidgets.QTableWidgetItem] = []
+        # FlashRaw 用于比较当前单圈位置和最近一次可信 NVS 锚点。
+        self.motor_flash_raw_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_abs_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_load_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_joint_items: List[QtWidgets.QTableWidgetItem] = []
@@ -150,12 +152,16 @@ class ControlPanel(
         """Initialize manual test timers and cached test parameters."""
         self._test_running = False
         self._ff_test_running = False
+        self._tri_test_running = False
         self._test_timer = QtCore.QTimer(self)
         self._test_timer.setInterval(TEST_TICK_MS)
         self._test_timer.timeout.connect(self._test_tick)
         self._ff_test_timer = QtCore.QTimer(self)
         self._ff_test_timer.setInterval(TEST_TICK_MS)
         self._ff_test_timer.timeout.connect(self._ff_test_tick)
+        self._tri_test_timer = QtCore.QTimer(self)
+        self._tri_test_timer.setInterval(TEST_TICK_MS)
+        self._tri_test_timer.timeout.connect(self._tri_test_tick)
         self._p4_rope_init_phase = "idle"
         self._p4_rope_init_joint_mask = 0
         self._p4_rope_init_requested_at = 0.0
@@ -170,6 +176,11 @@ class ControlPanel(
         self._ff_test_idx = 0
         self._ff_test_t_accum = 0.0
         self._ff_test_last_ts = 0.0
+        self._tri_test_joint_idx = 0
+        self._tri_test_min_deg = 0.0
+        self._tri_test_max_deg = 0.0
+        self._tri_test_freq_hz = float(TRI_TEST_DEFAULT_FREQ_HZ)
+        self._tri_test_t0 = 0.0
 
     def _init_body_state(self) -> None:
         """Initialize active body/view bookkeeping."""

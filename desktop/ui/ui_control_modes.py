@@ -41,42 +41,52 @@ class ManualControlView(_ModeBody):
         wf_layout = QtWidgets.QHBoxLayout(workflow)
         panel.manual_check = QtWidgets.QCheckBox("Control Enable")
         panel.manual_check.setChecked(False)
-        panel.send_all_btn = QtWidgets.QPushButton("Send All")
         panel.new_device_reset_btn = QtWidgets.QPushButton("New Device Reset")
         panel.new_device_reset_btn.setToolTip(
-            "Clear saved multi-turn data and set each online motor's current raw position as turn0"
+            "Repair only online Turn Unknown motors, then guide single-joint recalibration"
         )
         panel.calib_load_btn = QtWidgets.QPushButton("Calib Load")
         panel.calib_load_btn.setToolTip("Load the last saved calibration snapshot when mechanics have not changed")
+        panel.calib_import_btn = QtWidgets.QPushButton("Import Calib")
+        panel.calib_import_btn.setToolTip(
+            "Import and activate a portable MMHand calibration bundle"
+        )
+        panel.calib_export_btn = QtWidgets.QPushButton("Export Calib")
+        panel.calib_export_btn.setToolTip(
+            "Export the active calibration bundle to another computer"
+        )
         panel.open_btn = QtWidgets.QPushButton("Open Pose")
         panel.release_half_turn_btn = QtWidgets.QPushButton("Release Half Turn")
         panel.tighten_half_turn_btn = QtWidgets.QPushButton("Tighten Half Turn")
         panel.fist_btn = QtWidgets.QPushButton("Fist Pose")
-        panel.zero_btn = QtWidgets.QPushButton("Zero Pose")
         wf_layout.addWidget(panel.manual_check)
         wf_layout.addStretch(1)
         for btn in [
             panel.new_device_reset_btn,
             panel.calib_load_btn,
+            panel.calib_import_btn,
+            panel.calib_export_btn,
             panel.open_btn,
             panel.release_half_turn_btn,
             panel.tighten_half_turn_btn,
             panel.fist_btn,
-            panel.zero_btn,
-            panel.send_all_btn,
         ]:
             wf_layout.addWidget(btn)
         layout.addWidget(workflow)
 
         panel.manual_check.toggled.connect(panel._apply_interaction_enabled)
-        panel.send_all_btn.clicked.connect(lambda _checked=False: panel.send_all())
         panel.new_device_reset_btn.clicked.connect(lambda _checked=False: panel.new_device_reset())
         panel.calib_load_btn.clicked.connect(lambda _checked=False: panel.load_calibration_snapshot())
+        panel.calib_import_btn.clicked.connect(
+            lambda _checked=False: panel.import_calibration_snapshot()
+        )
+        panel.calib_export_btn.clicked.connect(
+            lambda _checked=False: panel.export_calibration_snapshot()
+        )
         panel.open_btn.clicked.connect(lambda _checked=False: panel.apply_open_pose())
         panel.release_half_turn_btn.clicked.connect(lambda _checked=False: panel.release_all_motors_half_turn())
         panel.tighten_half_turn_btn.clicked.connect(lambda _checked=False: panel.tighten_all_motors_half_turn())
         panel.fist_btn.clicked.connect(lambda _checked=False: panel.apply_fist_pose())
-        panel.zero_btn.clicked.connect(lambda _checked=False: panel.apply_zero_pose())
 
         panel.tabs = QtWidgets.QTabWidget()
         panel.device_check_view = DeviceCheckView(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import zlib
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable, Mapping
@@ -24,6 +25,7 @@ class UrdfMappingIdentity:
     mapping_id: str
     mapping_version: int
     urdf_config_crc: int
+    joint_order_crc: int
 
 
 @dataclass(frozen=True)
@@ -58,10 +60,35 @@ _LEGACY_JOINT_ALIASES = {
 def active_mapping_identity() -> UrdfMappingIdentity:
     data = json.loads(angle_mapping.URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
     version, crc = angle_mapping.urdf_manual_scaled_mapping_metadata()
+    entries = list(data.get("joints") or [])
+    entries_by_index = {
+        int(entry.get("joint_index", -1)): entry
+        for entry in entries
+    }
+    expected_indices = set(range(ENCODER_COUNT))
+    if len(entries) != ENCODER_COUNT or set(entries_by_index) != expected_indices:
+        raise ValueError(
+            "URDF joint order must define each J00-J20 index exactly once"
+        )
+    order_payload = [
+        {
+            "joint_index": joint,
+            "urdf_joint_name": str(entry.get("urdf_joint_name", "")),
+        }
+        for joint, entry in sorted(entries_by_index.items())
+    ]
+    # 只对 J 索引到 URDF 名称的语义映射签名，JSON排列和角度范围变化不会改变该 CRC。
+    order_bytes = json.dumps(
+        order_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return UrdfMappingIdentity(
         mapping_id=str(data.get("mapping_id", "active_urdf")),
         mapping_version=int(version),
         urdf_config_crc=int(crc) & 0xFFFFFFFF,
+        joint_order_crc=zlib.crc32(order_bytes) & 0xFFFFFFFF,
     )
 
 

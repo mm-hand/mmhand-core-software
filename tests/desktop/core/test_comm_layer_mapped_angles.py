@@ -10,6 +10,7 @@ from desktop.core.protocol import (
     ENCODER_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_SENSOR,
+    parse_servo_raw_packet,
     parse_servo_telem_packet,
 )
 
@@ -48,6 +49,23 @@ def test_servo_telemetry_packet_includes_signed_current() -> None:
         [36, 40],
         [True, False],
     )
+
+
+def test_servo_raw_packet_contains_current_and_flash_raw() -> None:
+    payload = (
+        struct.pack(">hh", 12, 4090)
+        + struct.pack(">hh", 4000, 8)
+        + bytes((1, 0))
+    )
+
+    parsed = parse_servo_raw_packet(payload)
+
+    assert parsed == ([12, 4090], [4000, 8], [True, False])
+
+
+def test_servo_raw_packet_rejects_removed_legacy_layouts() -> None:
+    assert parse_servo_raw_packet(bytes(2 * 3)) is None
+    assert parse_servo_raw_packet(bytes(2 * 7)) is None
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():

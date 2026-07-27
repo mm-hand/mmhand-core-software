@@ -228,18 +228,9 @@ static void resetCommandState(TaskSharedData_t* sharedData)
     sharedData->pending_direct_require_can = 0;
     sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
     sharedData->control_mode = CONTROL_MODE_JOINT;
-    sharedData->sine_test_enabled = 0;
-    sharedData->sine_test_request_token++;
-    sharedData->sine_test_start_ms = 0;
-    sharedData->sine_test_joint_mask = 0;
-    sharedData->sine_test_hold_ms = 0;
     sharedAtomicStore(&sharedData->feedback_recovery_pending, (uint8_t)0);
     sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                       (uint32_t)0);
-    memset(sharedData->sine_test_center_deg, 0, sizeof(sharedData->sine_test_center_deg));
-    memset(sharedData->sine_test_amp_deg, 0, sizeof(sharedData->sine_test_amp_deg));
-    memset(sharedData->sine_test_freq_hz, 0, sizeof(sharedData->sine_test_freq_hz));
-    memset(sharedData->sine_test_phase_rad, 0, sizeof(sharedData->sine_test_phase_rad));
 
     if (lock) {
         xSemaphoreGive(lock);
@@ -654,6 +645,7 @@ static void enterFaultHold(TaskSharedData_t* sharedData, uint32_t faultBits)
     sharedAtomicFetchOr(&sharedData->system_fault_bitmap, latchedFaults);
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
+    sharedAtomicStore(&sharedData->calibration_motion_started, (uint8_t)0);
     if (interruptedState == SYSTEM_STATE_CALIBRATION_RUNNING) {
         setCalibrationStatus(CALIB_STATUS_FAILED, true);
         sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
@@ -1568,6 +1560,13 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                               (uint8_t)0);
             sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                               (uint32_t)0);
+            // 刚进入 CALIBRATION_RUNNING 时仍处于无运动预检，允许舵机通信任务完成热插拔恢复。
+            sharedAtomicStore(&sharedData->calibration_motion_started,
+                              (uint8_t)0);
+            sharedAtomicStore(&sharedData->calibration_trust_request_mask,
+                              (uint32_t)0);
+            sharedAtomicStore(&sharedData->calibration_trust_accepted_mask,
+                              (uint32_t)0);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
             sharedData->control_enabled = 0;
             sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
@@ -1590,6 +1589,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 }
                 setCalibrationStatus(CALIB_STATUS_FAILED, true);
                 sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
+                sharedAtomicStore(&sharedData->calibration_motion_started,
+                                  (uint8_t)0);
                 requestServoEmergencyTorqueOff(sharedData);
                 setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             }
@@ -1730,9 +1731,9 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            sharedAtomicStore(&sharedData->calibration_motion_started,
+                              (uint8_t)0);
             sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
-            sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
-                                 ~readyServoRequiredMask(sharedData));
             setCalibrationStatus(
                 sharedAtomicLoad(&sharedData->calibration_warning_bitmap) != 0
                     ? CALIB_STATUS_WARN
@@ -1770,6 +1771,8 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
             }
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            sharedAtomicStore(&sharedData->calibration_motion_started,
+                              (uint8_t)0);
             sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
             setCalibrationStatus(CALIB_STATUS_FAILED, true);
             requestServoEmergencyTorqueOff(sharedData);
@@ -1848,7 +1851,9 @@ static uint32_t collectSystemFaults(TaskSharedData_t* sharedData)
     return faults;
 }
 
-static uint32_t blockingFaultsForState(uint8_t state, uint32_t faults)
+static uint32_t blockingFaultsForState(TaskSharedData_t* sharedData,
+                                       uint8_t state,
+                                       uint32_t faults)
 {
     // 不同运动态依赖不同传感器：直控忽略 CAN；自动标定允许重建多圈参考。
     switch (state) {
@@ -1860,6 +1865,14 @@ static uint32_t blockingFaultsForState(uint8_t state, uint32_t faults)
         case SYSTEM_STATE_CALIBRATION_RUNNING:
             // 自动标定会主动重建多圈参考，因此标定期间出现 Turn Unknown
             // 不能作为终止本次标定的条件。
+            // 预检尚未完成时也暂时忽略舵机离线，让通信任务有时间完成重连和多圈模式配置；
+            // 一旦真正开始运动，舵机离线立即恢复为阻断故障。
+            if (sharedAtomicLoad(
+                    &sharedData->calibration_motion_started) == 0) {
+                return faults &
+                       ~(SYSTEM_FAULT_MULTITURN_UNKNOWN |
+                         SYSTEM_FAULT_SERVO_OFFLINE);
+            }
             return faults & ~SYSTEM_FAULT_MULTITURN_UNKNOWN;
         default:
             return 0;
@@ -1925,7 +1938,9 @@ void stateMachineTask(void* parameter)
         sharedAtomicStore(&sharedData->system_fault_bitmap, faults);
 
         const uint32_t blockingFaults =
-            blockingFaultsForState(sharedData->system_state, faults);
+            blockingFaultsForState(sharedData,
+                                   sharedData->system_state,
+                                   faults);
         if (stateOwnsMotionResources(sharedData) && blockingFaults != 0) {
             enterFaultHold(sharedData, blockingFaults);
         } else if (!stateOwnsMotionResources(sharedData)) {

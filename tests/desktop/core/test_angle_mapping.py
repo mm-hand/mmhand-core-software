@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from desktop.core import angle_mapping
+from desktop.core.calibration_snapshot import seal_snapshot
+from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 from desktop.paths import DEFAULT_URDF_PATH, URDF_JOINT_MAPPING_PATH
 from desktop.teleop import manus_calibration
 from desktop.teleop import manus_raw_skeleton_retarget
@@ -115,18 +117,31 @@ def test_bad_direction_negative_v3_endpoints_are_not_loaded(tmp_path):
         "angleMax": 88.0,
     }
     snapshot = tmp_path / "bad_snapshot.json"
-    snapshot.write_text(
-        json.dumps({"joint_calib_results": results}), encoding="utf-8"
-    )
+    def write_current_snapshot():
+        payload = seal_snapshot({
+            "format": "mmhand_calibration_bundle",
+            "schema_version": 5,
+            "active_joint_mask": 1 << 14,
+            "active_motor_mask": 1 << 18,
+            "motor_abs_limit_valid_bitmap": 1 << 18,
+            "motor_abs_limit_locked_bitmap": 0,
+            "motor_abs_limit_min": [0] * MOTOR_COUNT,
+            "motor_abs_limit_max": [0] * MOTOR_COUNT,
+            "manual_reference_valid_bitmap": (1 << ENCODER_COUNT) - 1,
+            "manual_reference_min_raw": [0] * ENCODER_COUNT,
+            "manual_reference_max_raw": [1] * ENCODER_COUNT,
+            "joint_calib_results": results,
+        })
+        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+
+    write_current_snapshot()
 
     assert 14 not in angle_mapping.load_calibrated_ranges(snapshot)
 
     results[14]["autoMinRaw"] = 9986
     results[14]["autoMaxRaw"] = 5786
     results[14]["angleMin"] = -8.609
-    snapshot.write_text(
-        json.dumps({"joint_calib_results": results}), encoding="utf-8"
-    )
+    write_current_snapshot()
     assert angle_mapping.load_calibrated_ranges(snapshot)[14] == pytest.approx(
         (-8.609, 88.0)
     )

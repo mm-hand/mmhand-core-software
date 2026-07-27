@@ -562,8 +562,8 @@ class _TactileHand3DWidget(QtWidgets.QWidget):
         def visit(parent_name: str) -> None:
             for joint in children.get(parent_name, []):
                 rot = np.eye(4, dtype=float)
-                # Tactile view is a stable monitor; use the open zero pose for
-                # the body mesh and let the tactile colors carry live feedback.
+                # Tactile view is a stable monitor; keep the body mesh at its
+                # neutral URDF pose and let tactile colors carry live feedback.
                 if joint["type"] == "revolute":
                     rot[:3, :3] = cls._rodrigues(joint["axis"], 0.0)
                 child_name = joint["child"]

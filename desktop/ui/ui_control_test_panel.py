@@ -10,6 +10,7 @@ from .ui_control_common import (
     TEST_DEFAULT_HOLD_S,
     TEST_DEFAULT_PHASE_DEG,
     TEST_ROW_COUNT,
+    TRI_TEST_DEFAULT_FREQ_HZ,
 )
 
 
@@ -22,6 +23,7 @@ class ManualTestPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(box)
         layout.addWidget(ManualTestPanel.sine_test_box(panel))
         layout.addWidget(ManualTestPanel.feedforward_test_box(panel))
+        layout.addWidget(ManualTestPanel.triangle_test_box(panel))
         layout.addStretch(1)
         return box
 
@@ -103,6 +105,57 @@ class ManualTestPanel(QtWidgets.QWidget):
         panel._control_widgets.extend([
             panel.ff_joint_combo, panel.ff_targets_edit, panel.ff_step_spin, panel.ff_start_btn, panel.ff_stop_btn,
         ])
+        return group
+
+    @staticmethod
+    def triangle_test_box(panel) -> QtWidgets.QGroupBox:
+        """构建上位机三角波测试控件，目标仍通过正式关节角链路发送。"""
+        group = QtWidgets.QGroupBox("Triangle Wave Test")
+        layout = QtWidgets.QGridLayout(group)
+        panel.tri_joint_combo = QtWidgets.QComboBox()
+        panel.tri_joint_combo.addItems(ManualTestPanel.joint_choices())
+        panel.tri_joint_combo.currentTextChanged.connect(
+            lambda _text: panel._refresh_single_test_workspace("triangle")
+        )
+        panel.tri_min_spin = ManualTestPanel.make_float_spin(0.0, 120.0, 0.0, 2)
+        panel.tri_max_spin = ManualTestPanel.make_float_spin(0.0, 120.0, 10.0, 2)
+        panel.tri_freq_spin = ManualTestPanel.make_float_spin(
+            0.001, 100.0, TRI_TEST_DEFAULT_FREQ_HZ, 4
+        )
+        panel.tri_start_btn = QtWidgets.QPushButton("Start Triangle Test")
+        panel.tri_stop_btn = QtWidgets.QPushButton("Stop Triangle Test")
+        panel.tri_start_btn.clicked.connect(
+            lambda _checked=False: panel._on_start_tri_test()
+        )
+        panel.tri_stop_btn.clicked.connect(
+            lambda _checked=False: panel._on_stop_tri_test()
+        )
+        for col, text in enumerate(["Joint", "Min(deg)", "Max(deg)", "Freq(Hz)"]):
+            layout.addWidget(QtWidgets.QLabel(text), 0, col)
+        for col, widget in enumerate(
+            [
+                panel.tri_joint_combo,
+                panel.tri_min_spin,
+                panel.tri_max_spin,
+                panel.tri_freq_spin,
+            ]
+        ):
+            layout.addWidget(widget, 1, col)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(panel.tri_start_btn)
+        row.addWidget(panel.tri_stop_btn)
+        row.addStretch(1)
+        layout.addLayout(row, 2, 0, 1, 4)
+        panel._control_widgets.extend(
+            [
+                panel.tri_joint_combo,
+                panel.tri_min_spin,
+                panel.tri_max_spin,
+                panel.tri_freq_spin,
+                panel.tri_start_btn,
+                panel.tri_stop_btn,
+            ]
+        )
         return group
 
     @staticmethod

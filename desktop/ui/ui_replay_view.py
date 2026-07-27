@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from desktop.algorithm.replay_controller import replay_start_state_allowed
-from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK
+from desktop.core.protocol import (
+    ENCODER_COUNT,
+    SYSTEM_STATE_READY,
+    SYSTEM_STATE_RUN_FEEDBACK,
+)
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -133,13 +137,14 @@ class ReplayView(QtWidgets.QWidget):
             else "使用P4当前active scope"
         )
         self.summary_label.setText(
-            f"数据：{'实际关节角' if trace.data_kind == 'actual' else '动作指令'}    "
+            f"数据：{'实际关节角' if trace.data_kind == 'joint_actual' else '动作指令'}    "
             f"来源：{trace.source or '-'}    记录帧数：{trace.frame_count}    "
             f"时长：{trace.duration_s:.3f} s    平均频率：{trace.average_hz:.2f} Hz\n"
             f"开始时间：{trace.start_host_time or '-'}    最大帧间隔："
             f"{trace.max_gap_s:.3f} s    Active：{scope}\n"
             f"Mapping：{trace.mapping_id or '-'} v{trace.mapping_version}    "
             f"URDF CRC：0x{trace.urdf_crc:08X}    "
+            f"Order CRC：0x{trace.joint_order_crc:08X}    "
             f"过滤行数：{trace.dropped_row_count}/{trace.raw_row_count}"
         )
         self.warning_label.setText(
@@ -148,7 +153,9 @@ class ReplayView(QtWidgets.QWidget):
 
     def _refresh_status(self) -> None:
         state = self.context.get_state()
-        system_state = int(getattr(state, "system_state", -1)) if state is not None else -1
+        system_state = (
+            int(getattr(state, "system_state", -1)) if state is not None else -1
+        )
         start_allowed = replay_start_state_allowed(system_state)
         if system_state == SYSTEM_STATE_READY:
             state_text = "READY"
@@ -158,12 +165,39 @@ class ReplayView(QtWidgets.QWidget):
             state_text = "NOT READY"
         self.ready_status.setText(f"P4: {state_text}")
         self.ready_status.setStyleSheet(
-            "font-weight:700;color:#1b7f3a;" if start_allowed else "font-weight:700;color:#b71c1c;"
+            "font-weight:700;color:#1b7f3a;"
+            if start_allowed
+            else "font-weight:700;color:#b71c1c;"
         )
 
         status = self.service.status()
         running = self.service.is_running()
-        self.replay_status.setText(status.message)
+        runtime_detail = ""
+        if status.effective_joint_mask:
+            runtime_detail = (
+                f" | 源{self._mask_count(status.source_joint_mask)}关节"
+                f" → 实际{self._mask_count(status.effective_joint_mask)}关节"
+            )
+            if status.skipped_joint_mask:
+                runtime_detail += (
+                    f" | 跳过 {self._format_joint_mask(status.skipped_joint_mask)}"
+                )
+            if status.clamped_sample_count:
+                runtime_detail += (
+                    f" | 钳位{status.clamped_sample_count}个关键帧"
+                )
+            if status.timeline_rebase_count:
+                runtime_detail += (
+                    f" | 时间轴重定位{status.timeline_rebase_count}次/"
+                    f"{status.timeline_shift_s * 1000.0:.0f}ms"
+                )
+        self.replay_status.setText(status.message + runtime_detail)
+        trace = self.service.trace()
+        warnings = list(getattr(trace, "warnings", []) or []) if trace is not None else []
+        warnings.extend(list(status.warnings or ()))
+        self.warning_label.setText(
+            "" if not warnings else "注意：" + "；".join(dict.fromkeys(warnings))
+        )
         if status.duration_s > 0.0:
             ratio = max(0.0, min(1.0, status.elapsed_s / status.duration_s))
         elif status.total_frames > 0:
@@ -181,7 +215,9 @@ class ReplayView(QtWidgets.QWidget):
         self.send_btn.setStyleSheet(
             "font-weight:700;color:#b71c1c;" if running else "font-weight:700;"
         )
-        self.send_btn.setEnabled(running or (self.service.trace() is not None and start_allowed))
+        self.send_btn.setEnabled(
+            running or (self.service.trace() is not None and start_allowed)
+        )
         self._refresh_joint_feedback(state, status)
 
     def _refresh_joint_feedback(self, state, replay_status) -> None:
@@ -242,11 +278,42 @@ class ReplayView(QtWidgets.QWidget):
                 if target_valid:
                     target = float(targets[joint])
                     target_item.setText(f"{target:.3f}")
+                    target_item.setForeground(
+                        QtGui.QBrush(
+                            QtGui.QColor(
+                                "#d89b00"
+                                if replay_status.clamped_joint_mask & (1 << joint)
+                                else "#000000"
+                            )
+                        )
+                    )
                     error_item.setText(
                         f"{target - current:.3f}" if current is not None else "-"
                     )
+                elif replay_status.skipped_joint_mask & (1 << joint):
+                    target_item.setText("SKIP")
+                    target_item.setForeground(
+                        QtGui.QBrush(QtGui.QColor("#d89b00"))
+                    )
+                    error_item.setText("-")
                 else:
                     target_item.setText("-")
+                    target_item.setForeground(
+                        QtGui.QBrush(QtGui.QColor("#9aa0a6"))
+                    )
                     error_item.setText("-")
         finally:
             self.preview_table.setUpdatesEnabled(True)
+
+    @staticmethod
+    def _mask_count(mask: int) -> int:
+        return int(mask).bit_count()
+
+    @staticmethod
+    def _format_joint_mask(mask: int) -> str:
+        labels = [
+            f"J{joint:02d}"
+            for joint in range(ENCODER_COUNT)
+            if int(mask) & (1 << joint)
+        ]
+        return ",".join(labels) if labels else "-"

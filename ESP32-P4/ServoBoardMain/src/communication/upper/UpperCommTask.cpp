@@ -461,7 +461,7 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
         return;
     }
 
-    uint8_t buffer[132];
+    uint8_t buffer[240];
     size_t idx = 0;
     uint32_t validBitmap = 0;
     uint32_t lockedBitmap = 0;
@@ -487,12 +487,46 @@ static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
     buffer[idx++] = (uint8_t)((lockedBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(lockedBitmap & 0xFF);
     for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
-        const int16_t minAbs = (int16_t)limitMin[i];
-        const int16_t maxAbs = (int16_t)limitMax[i];
-        buffer[idx++] = (uint8_t)(((uint16_t)minAbs >> 8) & 0xFF);
-        buffer[idx++] = (uint8_t)((uint16_t)minAbs & 0xFF);
-        buffer[idx++] = (uint8_t)(((uint16_t)maxAbs >> 8) & 0xFF);
-        buffer[idx++] = (uint8_t)((uint16_t)maxAbs & 0xFF);
+        appendI32BigEndian(buffer, &idx, limitMin[i]);
+        appendI32BigEndian(buffer, &idx, limitMax[i]);
+    }
+    appendU32BigEndian(buffer, &idx, millis());
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    FW_SERIAL_WRITE(buffer, idx);
+}
+
+// 上报每台舵机独立的动态逻辑行程。单台舵机掉电重建 offset 后，只有
+// 对应 Mxx 的 min/max 会变化，其他26路保持原值。
+static void sendServoLogicalRangePacket(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+    uint8_t buffer[240];
+    size_t idx = 0;
+    uint32_t validBitmap = 0;
+    int32_t rangeMin[SERVO_TOTAL_NUM] = {0};
+    int32_t rangeMax[SERVO_TOTAL_NUM] = {0};
+    {
+        SharedSafetyGuard guard;
+        validBitmap =
+            sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap);
+        memcpy(rangeMin,
+               sharedData->servo_logical_range_min,
+               sizeof(rangeMin));
+        memcpy(rangeMax,
+               sharedData->servo_logical_range_max,
+               sizeof(rangeMax));
+    }
+
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_SERVO_LOGICAL_RANGE;
+    appendU32BigEndian(buffer, &idx, validBitmap);
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        appendI32BigEndian(buffer, &idx, rangeMin[ch]);
+        appendI32BigEndian(buffer, &idx, rangeMax[ch]);
     }
     appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
@@ -507,7 +541,9 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     }
 
     const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
-    uint8_t buffer[224];
+    // V4 基础快照 209 bytes，附加13 bytes装配告警、4 bytes时间戳和
+    // 帧头尾后共230 bytes；预留到240，避免局部数组越界。
+    uint8_t buffer[240];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -522,9 +558,9 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendI32BigEndian(buffer, &idx, result.tightEncoder);
     appendI32BigEndian(buffer, &idx, result.zeroEncoder);
     appendI32BigEndian(buffer, &idx, result.encoderSpan);
-    appendI16BigEndian(buffer, &idx, clampI16Local(result.startServoAbs));
-    appendI16BigEndian(buffer, &idx, clampI16Local(result.tightServoAbs));
-    appendI16BigEndian(buffer, &idx, clampI16Local(result.zeroServoAbs));
+    appendI32BigEndian(buffer, &idx, result.startServoAbs);
+    appendI32BigEndian(buffer, &idx, result.tightServoAbs);
+    appendI32BigEndian(buffer, &idx, result.zeroServoAbs);
     appendFloatBigEndian(buffer, &idx, result.startDeg);
     appendFloatBigEndian(buffer, &idx, result.tightDeg);
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
@@ -537,10 +573,29 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.tendonLutAngleStartDeg);
     appendFloatBigEndian(buffer, &idx, result.tendonLutAngleStepDeg);
     for (uint8_t actuator = 0; actuator < TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+        // 以有效样本 min/max 中点作为锚点，可保证 ST3215 整个硬件行程内
+        // 的相对量落入 int16；未使用样本统一写 0 相对量。
+        int32_t anchor = 0;
+        const uint8_t count =
+            min(result.tendonLutCount, (uint8_t)TENDON_LUT_MAX_SAMPLES);
+        if (count > 0) {
+            int32_t minAbs = result.tendonLutMotorAbs[actuator][0];
+            int32_t maxAbs = minAbs;
+            for (uint8_t sample = 1; sample < count; sample++) {
+                minAbs = min(minAbs, result.tendonLutMotorAbs[actuator][sample]);
+                maxAbs = max(maxAbs, result.tendonLutMotorAbs[actuator][sample]);
+            }
+            anchor = minAbs + (maxAbs - minAbs) / 2;
+        }
+        appendI32BigEndian(buffer, &idx, anchor);
         for (uint8_t sample = 0; sample < TENDON_LUT_MAX_SAMPLES; sample++) {
+            const int32_t delta =
+                sample < count
+                    ? result.tendonLutMotorAbs[actuator][sample] - anchor
+                    : 0;
             appendI16BigEndian(buffer,
                                &idx,
-                               clampI16Local(result.tendonLutMotorAbs[actuator][sample]));
+                               clampI16Local(delta));
         }
     }
     buffer[idx++] = result.mappingVersion;
@@ -748,6 +803,9 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
     else if (pServoRaw)
     {
+        static_assert(
+            3 + SERVO_TOTAL_NUM * 5 + 4 + 1 <= 256,
+            "servo raw/FlashRaw packet exceeds serial buffer");
         p4TimestampMs = pServoRaw->timestamp;
         buffer[idx++] = PACKET_TYPE_SERVO_RAW;
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
@@ -758,11 +816,11 @@ static void sendDataPacket(ServoStatus_t* pServo,
         }
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
-            const int32_t hw = pServoRaw->servoHardwarePositions[i];
-            buffer[idx++] = (uint8_t)((hw >> 24) & 0xFF);
-            buffer[idx++] = (uint8_t)((hw >> 16) & 0xFF);
-            buffer[idx++] = (uint8_t)((hw >> 8) & 0xFF);
-            buffer[idx++] = (uint8_t)(hw & 0xFF);
+            // 第二段固定为最近一次成功写入 Flash 的单圈 raw。
+            const uint16_t flashRaw =
+                (uint16_t)pServoRaw->servoFlashRawPositions[i];
+            buffer[idx++] = (uint8_t)((flashRaw >> 8) & 0xFF);
+            buffer[idx++] = (uint8_t)(flashRaw & 0xFF);
         }
         for (int i = 0; i < SERVO_TOTAL_NUM; i++)
         {
@@ -936,6 +994,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return 0;
         case CMD_MULTITURN_NVS_CONTROL:
             return kMultiTurnNvsControlPayloadBytes;
+        case CMD_CLEAR_CALIBRATION_SCOPE:
+            return kClearCalibrationScopePayloadBytes;
         case CMD_MANUAL_ENCODER_REFERENCE:
             return kManualEncoderReferencePayloadBytes;
         case CMD_MANUAL_ENCODER_SINGLE:
@@ -951,7 +1011,7 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_MOTOR_POS_SWEEP:
             return kMotorPosPayloadBytes;
         case CMD_MOTOR_POS_ABS:
-            return kMotorPosPayloadBytes;
+            return kMotorPosAbsPayloadBytes;
         case CMD_MOTOR_POS_ABS_ONE:
             return kMotorPosAbsOnePayloadBytes;
 
@@ -962,14 +1022,9 @@ static size_t getCommandPayloadLength(uint8_t cmd)
         case CMD_MOTOR_ABS_LIMIT_LOCK:
             return kMotorAbsLimitLockPayloadBytes;
         case CMD_CALIB_LOAD_JOINT:
-            return kCalibLoadJointV3PayloadBytes;
+            return kCalibLoadJointPayloadBytes;
         case CMD_CALIB_LOAD_LIMITS:
             return kCalibLoadLimitsPayloadBytes;
-        case CMD_LOCAL_TEST_PARAMS:
-            return kLocalTestParamsPayloadBytes;
-        case CMD_LOCAL_TEST_START:
-        case CMD_LOCAL_TEST_STOP:
-            return 0;
         default:
             return (size_t)-1;
     }
@@ -982,7 +1037,6 @@ static bool commandRequiresManualReference(uint8_t cmd)
         case CMD_RUN_FEEDBACK:
         case CMD_ANGLE_CTRL:
         case CMD_ANGLE_CTRL_MASKED:
-        case CMD_LOCAL_TEST_START:
             return true;
         default:
             return false;
@@ -1037,6 +1091,47 @@ static uint32_t motorMaskForJoint(uint8_t jointIndex)
     return motorMask;
 }
 
+// 解析 P4 逻辑多圈 ABS。逻辑坐标可能因单台舵机掉电后的 offset 平移
+// 超过 int16 范围，因此绝对位置命令统一使用大端 int32。
+static bool parseInt32ArrayBigEndian(const uint8_t* payload,
+                                     size_t payloadLen,
+                                     int32_t* outValues,
+                                     uint8_t count)
+{
+    if (!payload || !outValues) {
+        return false;
+    }
+    const size_t required = (size_t)count * sizeof(int32_t);
+    if (payloadLen < required) {
+        return false;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        const uint8_t* p = payload + (size_t)i * 4;
+        const uint32_t raw =
+            ((uint32_t)p[0] << 24) |
+            ((uint32_t)p[1] << 16) |
+            ((uint32_t)p[2] << 8) |
+            (uint32_t)p[3];
+        outValues[i] = (int32_t)raw;
+    }
+    return true;
+}
+
+// P4 的 HardwareMap 是电机归属关系的唯一权威来源。上位机只发送需要
+// 重建 turn0 的电机，P4 在这里推导必须重新标定的完整关节；双腱关节
+// 任意一台电机丢圈，都会使整个关节的 LUT 失效。
+static uint32_t jointMaskForMotorMask(uint32_t motorMask)
+{
+    motorMask &= validMotorChannelMask();
+    uint32_t jointMask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        if ((motorMaskForJoint(joint) & motorMask) != 0) {
+            jointMask |= (1UL << joint);
+        }
+    }
+    return jointMask & kManualEncoderReferenceFullMask;
+}
+
 static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
                                            uint32_t jointMask)
 {
@@ -1047,7 +1142,6 @@ static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
         if ((jointMask & (1UL << joint)) == 0) continue;
         memset(&g_jointCalibResult[joint], 0,
                sizeof(g_jointCalibResult[joint]));
-        g_encoderOffsetManual[joint] = 0;
         motorMask |= motorMaskForJoint(joint);
     }
 
@@ -1157,7 +1251,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             status = PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED;
         } else if ((autoCalibrationValidMask(sharedData) & requestedMask) !=
                    requestedMask) {
-            status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
+            status = PROTO_ACK_STATUS_CALIBRATION_REQUIRED;
         } else if (sharedData->system_state != SYSTEM_STATE_IDLE &&
                    sharedData->system_state != SYSTEM_STATE_READY &&
                    sharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED) {
@@ -1243,7 +1337,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_STOP)
     {
         taskRuntimeMarkStopReceived();
-        sharedData->sine_test_enabled = 0;
         const bool accepted = requestEmergencyStop(sharedData);
         sendProtoAckPacket(CMD_STOP,
                            sharedData->system_state,
@@ -1254,7 +1347,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     if (cmd == CMD_RESET)
     {
-        sharedData->sine_test_enabled = 0;
         postSystemEvent(sharedData, SYSTEM_EVENT_RESET);
         sendProtoAckPacket(CMD_RESET, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
         return;
@@ -1313,7 +1405,10 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_MOTOR_POS_ABS)
     {
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
-        if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
+        if (parseInt32ArrayBigEndian(frame + 1,
+                                     frameLen - 1,
+                                     motorTargets,
+                                     SERVO_TOTAL_NUM)) {
             upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM, MOTOR_DIRECT_SOURCE_ABSOLUTE);
         }
         return;
@@ -1323,98 +1418,14 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     {
         if (frameLen >= 1 + kMotorPosAbsOnePayloadBytes) {
             const uint8_t motorIndex = frame[1];
-            const uint16_t raw = ((uint16_t)frame[2] << 8) | frame[3];
             upperApplySingleMotorTarget(sharedData,
                                         motorIndex,
-                                        (int16_t)raw,
+                                        readI32BigEndian(frame + 2),
                                         MOTOR_DIRECT_SOURCE_ABSOLUTE);
         }
         return;
     }
 
-
-    if (cmd == CMD_LOCAL_TEST_PARAMS)
-    {
-        const float freqHz = decodeFloatLittleEndian(frame + 1);
-        const float amplitudeDeg = decodeFloatLittleEndian(frame + 5);
-        const bool ok = isfinite(freqHz) && isfinite(amplitudeDeg) && freqHz > 0.0f;
-        if (ok) {
-            SemaphoreHandle_t lock = sharedData->commandStateMutex;
-            if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-                const uint32_t jointMask =
-                    sharedAtomicLoad(&sharedData->active_joint_mask) &
-                    ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-                sharedData->sine_test_joint_mask = jointMask;
-                sharedData->sine_test_hold_ms = 0;
-                for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
-                    sharedData->sine_test_center_deg[i] = sharedData->targetAngles[i];
-                    sharedData->sine_test_amp_deg[i] =
-                        ((jointMask & (1UL << i)) != 0) ? amplitudeDeg : 0.0f;
-                    sharedData->sine_test_freq_hz[i] =
-                        ((jointMask & (1UL << i)) != 0) ? freqHz : 0.0f;
-                    sharedData->sine_test_phase_rad[i] = 0.0f;
-                }
-                xSemaphoreGive(lock);
-            }
-        }
-        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_PARAMS freq=%.4f amp=%.3f mask=0x%08lX ok=%u\r\n",
-                      (double)freqHz,
-                      (double)amplitudeDeg,
-                      (unsigned long)sharedData->sine_test_joint_mask,
-                      ok ? 1U : 0U);
-        sendProtoAckPacket(CMD_LOCAL_TEST_PARAMS,
-                           sharedData->system_state,
-                           ok ? PROTO_ACK_STATUS_OK : PROTO_ACK_STATUS_UNSUPPORTED_MODE);
-        return;
-    }
-
-    if (cmd == CMD_LOCAL_TEST_START)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        SemaphoreHandle_t lock = sharedData->commandStateMutex;
-        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            if (sharedData->sine_test_joint_mask == 0) {
-                sharedData->sine_test_joint_mask =
-                    sharedAtomicLoad(&sharedData->active_joint_mask) &
-                    ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-            }
-            sharedData->sine_test_enabled = 1;
-            sharedData->sine_test_start_ms = millis();
-            sharedData->sine_test_request_token++;
-            sharedData->joint_command_token++;
-            if (lock) {
-                xSemaphoreGive(lock);
-            }
-        }
-        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_START enabled=%u token=%lu mask=0x%08lX status=%u\r\n",
-                      sharedData->sine_test_enabled ? 1U : 0U,
-                      (unsigned long)sharedData->sine_test_request_token,
-                      (unsigned long)sharedData->sine_test_joint_mask,
-                      (unsigned)status);
-        sendProtoAckPacket(cmd, sharedData->system_state, status);
-        return;
-    }
-
-    if (cmd == CMD_LOCAL_TEST_STOP)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        SemaphoreHandle_t lock = sharedData->commandStateMutex;
-        if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            sharedData->sine_test_enabled = 0;
-            sharedData->sine_test_request_token++;
-            sharedData->joint_command_token++;
-            if (lock) {
-                xSemaphoreGive(lock);
-            }
-        }
-        FW_LOG_INFO_PRINTF("[UPPER] LOCAL_TEST_STOP status=%u\r\n", (unsigned)status);
-        sendProtoAckPacket(cmd, sharedData->system_state, status);
-        return;
-    }
 
     if (cmd == CMD_ACTIVE_SCOPE)
     {
@@ -1455,11 +1466,47 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 "[UPPER] RESTORE_MULTITURN rejected: all motor turns are already trusted");
         } else {
             const uint32_t motorMask = readU32BigEndian(frame + 1);
+            const uint32_t unknownMask =
+                sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
+                validMotorChannelMask();
+            const uint32_t onlineMask =
+                sharedAtomicLoad(&sharedData->servo_online_bitmap) &
+                validMotorChannelMask();
+            const uint32_t configuredMask =
+                sharedAtomicLoad(&sharedData->servo_multiturn_configured_bitmap) &
+                validMotorChannelMask();
+            const uint32_t recoveryPendingMask =
+                sharedAtomicLoad(&sharedData->servo_recovery_pending_bitmap) &
+                validMotorChannelMask();
+            const uint32_t recoveryFailedMask =
+                sharedAtomicLoad(&sharedData->servo_recovery_failed_bitmap) &
+                validMotorChannelMask();
+            // 自动恢复仍在重试时不能插入人工 turn0，避免两条恢复路径竞争。
+            // 已经明确失败的舵机必须允许 New Device Reset 接管，否则
+            // recoveryFailed 会把唯一的人工恢复入口永久锁死。
+            const uint32_t recoveryBusyMask =
+                recoveryPendingMask & ~recoveryFailedMask;
             int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
-            if (!parseInt16ArrayBigEndian(frame + 5,
-                                          frameLen - 5,
-                                          motorAbs,
-                                          SERVO_TOTAL_NUM)) {
+            // 局部 New Device 只处理“在线、多圈模式已配置、当前确实 Unknown”
+            // 的舵机；自动恢复失败允许人工接管，但正常可信舵机仍不能重定义 turn0。
+            if (motorMask == 0 ||
+                (motorMask & ~unknownMask) != 0 ||
+                (motorMask & ~onlineMask) != 0 ||
+                (motorMask & ~configuredMask) != 0 ||
+                (motorMask & recoveryBusyMask) != 0) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+                FW_LOG_WARN_PRINTF(
+                    "[UPPER] RESTORE_MULTITURN scoped reject request=0x%08lX unknown=0x%08lX online=0x%08lX configured=0x%08lX recoveryBusy=0x%08lX recoveryFailed=0x%08lX\r\n",
+                    (unsigned long)motorMask,
+                    (unsigned long)unknownMask,
+                    (unsigned long)onlineMask,
+                    (unsigned long)configuredMask,
+                    (unsigned long)recoveryBusyMask,
+                    (unsigned long)recoveryFailedMask);
+            } else if (!parseInt32ArrayBigEndian(frame + 5,
+                                                 frameLen - 5,
+                                                 motorAbs,
+                                                 SERVO_TOTAL_NUM)) {
                 status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
             } else {
                 SemaphoreHandle_t lock = sharedData->commandStateMutex;
@@ -1521,7 +1568,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIB_LOAD_LIMITS)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kCalibLoadLimitsPayloadBytes) {
+        if (frameLen != 1 + kCalibLoadLimitsPayloadBytes) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
@@ -1529,29 +1576,52 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                    sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
-            const uint32_t validMask = readU32BigEndian(frame + 1) & validMotorChannelMask();
-            const uint32_t lockedMask = readU32BigEndian(frame + 5) & validMotorChannelMask();
+            const uint32_t updateMask =
+                readU32BigEndian(frame + 1) & validMotorChannelMask();
+            const uint32_t validMask =
+                readU32BigEndian(frame + 5) & validMotorChannelMask();
+            const uint32_t lockedMask =
+                readU32BigEndian(frame + 9) & validMotorChannelMask();
             int32_t loadedMin[SERVO_TOTAL_NUM] = {0};
             int32_t loadedMax[SERVO_TOTAL_NUM] = {0};
-            const uint8_t* p = frame + 9;
+            const uint8_t* p = frame + 13;
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-                loadedMin[ch] = readI16BigEndian(p);
-                p += 2;
-                loadedMax[ch] = readI16BigEndian(p);
-                p += 2;
+                loadedMin[ch] = readI32BigEndian(p);
+                p += 4;
+                loadedMax[ch] = readI32BigEndian(p);
+                p += 4;
             }
-            const uint32_t appliedLockedMask = lockedMask & validMask;
-            {
+            if (updateMask == 0) {
+                status = PROTO_ACK_STATUS_INVALID_DATA;
+            } else {
+                // 只覆盖快照声明的电机，保留其余关节已经加载或刚标定的 ABS 限位。
                 SharedSafetyGuard guard;
-                memcpy(sharedData->motor_abs_limit_min, loadedMin, sizeof(loadedMin));
-                memcpy(sharedData->motor_abs_limit_max, loadedMax, sizeof(loadedMax));
-                sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap, validMask);
+                const uint32_t previousValid =
+                    sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
+                const uint32_t previousLocked =
+                    sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
+                for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                    if ((updateMask & (1UL << ch)) == 0) {
+                        continue;
+                    }
+                    sharedData->motor_abs_limit_min[ch] = loadedMin[ch];
+                    sharedData->motor_abs_limit_max[ch] = loadedMax[ch];
+                }
+                const uint32_t appliedValidMask =
+                    (previousValid & ~updateMask) | (validMask & updateMask);
+                const uint32_t appliedLockedMask =
+                    (previousLocked & ~updateMask) |
+                    (lockedMask & validMask & updateMask);
+                sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
+                                  appliedValidMask);
                 sharedAtomicStore(&sharedData->motor_abs_limit_locked_bitmap,
                                   appliedLockedMask);
+                FW_LOG_INFO_PRINTF(
+                    "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX locked=0x%08lX\r\n",
+                    (unsigned long)updateMask,
+                    (unsigned long)appliedValidMask,
+                    (unsigned long)appliedLockedMask);
             }
-            FW_LOG_INFO_PRINTF("[UPPER] CALIB_LOAD_LIMITS valid=0x%08lX locked=0x%08lX\r\n",
-                          (unsigned long)validMask,
-                          (unsigned long)appliedLockedMask);
         }
         sendProtoAckPacket(CMD_CALIB_LOAD_LIMITS, sharedData->system_state, status);
         return;
@@ -1560,8 +1630,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     if (cmd == CMD_CALIB_LOAD_JOINT)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kCalibLoadJointV3PayloadBytes) {
-            status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
+        if (frameLen != 1 + kCalibLoadJointPayloadBytes) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
                    sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
@@ -1584,9 +1654,9 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 result.tightEncoder = readI32BigEndian(p); p += 4;
                 result.zeroEncoder = readI32BigEndian(p); p += 4;
                 result.encoderSpan = readI32BigEndian(p); p += 4;
-                result.startServoAbs = readI16BigEndian(p); p += 2;
-                result.tightServoAbs = readI16BigEndian(p); p += 2;
-                result.zeroServoAbs = readI16BigEndian(p); p += 2;
+                result.startServoAbs = readI32BigEndian(p); p += 4;
+                result.tightServoAbs = readI32BigEndian(p); p += 4;
+                result.zeroServoAbs = readI32BigEndian(p); p += 4;
                 result.startDeg = readFloatBigEndian(p); p += 4;
                 result.tightDeg = readFloatBigEndian(p); p += 4;
                 result.totalDeg = readFloatBigEndian(p); p += 4;
@@ -1600,11 +1670,14 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 result.tendonLutAngleStepDeg = readFloatBigEndian(p); p += 4;
                 for (uint8_t actuator = 0;
                      actuator < TENDON_LUT_ACTUATOR_COUNT; actuator++) {
+                    const int32_t anchor = readI32BigEndian(p);
+                    p += 4;
                     for (uint8_t sample = 0;
                          sample < TENDON_LUT_MAX_SAMPLES; sample++) {
-                        result.tendonLutMotorAbs[actuator][sample] =
-                            readI16BigEndian(p);
+                        const int16_t encoded = readI16BigEndian(p);
                         p += 2;
+                        result.tendonLutMotorAbs[actuator][sample] =
+                            anchor + (int32_t)encoded;
                     }
                 }
                 const uint8_t incomingMappingVersion = *p++;
@@ -1642,7 +1715,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 if (incomingMappingVersion !=
                         kManualScaledUrdfFeedbackMappingVersion ||
                     incomingUrdfCrc != kManualScaledUrdfConfigCrc) {
-                    status = PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED;
+                    status = PROTO_ACK_STATUS_CALIBRATION_REQUIRED;
                 } else if (incomingManualCrc != localManualEntryCrc) {
                     status = PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH;
                 } else if ((localValidMask & (1UL << jointIndex)) == 0) {
@@ -1650,7 +1723,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 } else if (autoMinRaw != expectedAutoMinRaw ||
                            autoMaxRaw != expectedAutoMaxRaw) {
                     FW_LOG_WARN_PRINTF(
-                        "[UPPER] CALIB_LOAD_V3 reject J%02u raw endpoint "
+                        "[UPPER] CALIB_LOAD reject J%02u raw endpoint "
                         "contract: incoming=%u->%u expected=%u->%u dir=%d; "
                         "recalibration required\r\n",
                         (unsigned)jointIndex,
@@ -1679,8 +1752,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else {
                     g_jointCalibResult[jointIndex] = result;
-                    g_encoderOffsetManual[jointIndex] =
-                        result.success ? result.offset : 0;
                     setRuntimeEncoderDirection(jointIndex, direction);
                     if (result.success) {
                         updateCalibrationAssemblyWarning(
@@ -1698,7 +1769,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                             (uint32_t)~SYSTEM_FAULT_CALIBRATION);
                     }
                     FW_LOG_INFO_PRINTF(
-                        "[UPPER] CALIB_LOAD_V3 J%02u auto=%u->%u manualCrc=0x%08lX current=%.3f..%.3f\r\n",
+                        "[UPPER] CALIB_LOAD J%02u auto=%u->%u manualCrc=0x%08lX current=%.3f..%.3f\r\n",
                         (unsigned)jointIndex,
                         (unsigned)result.autoMinRaw,
                         (unsigned)result.autoMaxRaw,
@@ -1859,7 +1930,6 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                 memset(sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
             }
             memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
-            memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
             clearCalibrationAssemblyWarnings(
                 sharedData, kManualEncoderReferenceFullMask);
             g_calibrationStatus = CALIB_STATUS_IDLE;
@@ -1871,6 +1941,46 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             FW_LOG_INFO_PRINTLN("[UPPER] CLEAR_CALIBRATION: joint calibration and ABS limits cleared");
         }
         sendProtoAckPacket(CMD_CLEAR_CALIBRATION, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_CLEAR_CALIBRATION_SCOPE)
+    {
+        uint8_t status = PROTO_ACK_STATUS_OK;
+        const uint32_t motorMask =
+            frameLen >= 1 + kClearCalibrationScopePayloadBytes
+                ? (readU32BigEndian(frame + 1) & validMotorChannelMask())
+                : 0;
+        const uint32_t restoredMask =
+            sharedAtomicLoad(&sharedData->restore_multi_turn_restored_mask) &
+            validMotorChannelMask();
+        const uint32_t jointMask = jointMaskForMotorMask(motorMask);
+        if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
+            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
+            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (motorMask == 0 || jointMask == 0 ||
+                   (motorMask & ~restoredMask) != 0) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+            FW_LOG_WARN_PRINTF(
+                "[UPPER] CLEAR_CALIBRATION_SCOPE reject motors=0x%08lX restored=0x%08lX joints=0x%08lX\r\n",
+                (unsigned long)motorMask,
+                (unsigned long)restoredMask,
+                (unsigned long)jointMask);
+        } else {
+            invalidateAutomaticCalibration(sharedData, jointMask);
+            sharedAtomicFetchAnd(
+                &sharedData->restore_multi_turn_restored_mask, ~motorMask);
+            postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+            FW_LOG_INFO_PRINTF(
+                "[UPPER] CLEAR_CALIBRATION_SCOPE motors=0x%08lX joints=0x%08lX remainingAuto=0x%08lX\r\n",
+                (unsigned long)motorMask,
+                (unsigned long)jointMask,
+                (unsigned long)autoCalibrationValidMask(sharedData));
+        }
+        sendProtoAckPacket(
+            CMD_CLEAR_CALIBRATION_SCOPE, sharedData->system_state, status);
         return;
     }
 
@@ -1891,6 +2001,9 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                     sharedData->multiturn_nvs_enabled = 0;
                     sharedData->multiturn_nvs_snapshot_valid = 0;
                     sharedData->multiturn_nvs_save_valid_mask = 0;
+                    memset(sharedData->multiturn_nvs_snapshot_raw,
+                           0,
+                           sizeof(sharedData->multiturn_nvs_snapshot_raw));
                 } else {
                     status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
                 }
@@ -1960,6 +2073,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastMotorAbsLimitSentMs = 0;
     uint32_t lastMotorAbsLimitValidSent = 0xFFFFFFFFUL;
     uint32_t lastMotorAbsLimitLockedSent = 0xFFFFFFFFUL;
+    uint32_t lastServoLogicalRangeSentMs = 0;
+    uint32_t lastServoLogicalRangeValidSent = 0xFFFFFFFFUL;
     uint32_t lastJointCalibSnapshotSentMs = 0;
     uint8_t nextJointCalibSnapshotIndex = 0;
     uint32_t lastCalibrationDiagSequenceSent = 0;
@@ -2029,10 +2144,7 @@ void upperCommunicationTask(void* parameter)
             const size_t payloadLen = (size_t)wireLen - 2; // CMD + payload + tail
             const size_t expectedPayloadLen = getCommandPayloadLength(cmd);
             if (cmd == CMD_CALIB_LOAD_JOINT) {
-                if (payloadLen != kCalibLoadJointLegacyPayloadBytes &&
-                    payloadLen != kCalibLoadJointPayloadBytes &&
-                    payloadLen != kCalibLoadJointV2PayloadBytes &&
-                    payloadLen != kCalibLoadJointV3PayloadBytes) {
+                if (payloadLen != kCalibLoadJointPayloadBytes) {
                     parseOffset += frameLen;
                     continue;
                 }
@@ -2198,6 +2310,16 @@ void upperCommunicationTask(void* parameter)
             lastMotorAbsLimitValidSent = limitValidBitmap;
             lastMotorAbsLimitLockedSent = limitLockedBitmap;
             lastMotorAbsLimitSentMs = nowMs;
+        }
+
+        const uint32_t logicalRangeValidBitmap =
+            sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap);
+        if (logicalRangeValidBitmap != lastServoLogicalRangeValidSent ||
+            (uint32_t)(nowMs - lastServoLogicalRangeSentMs) >=
+                kServoLogicalRangeHeartbeatMs) {
+            sendServoLogicalRangePacket(sharedData);
+            lastServoLogicalRangeValidSent = logicalRangeValidBitmap;
+            lastServoLogicalRangeSentMs = nowMs;
         }
 
         if (calibrationStatusHasUsableResult(g_calibrationStatus) &&

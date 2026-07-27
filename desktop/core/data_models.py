@@ -441,7 +441,7 @@ class JointWorkspaceRange:
         return max(self.current_min_deg, min(self.current_max_deg, target))
 
     def open_pose_target(self, offset_deg: float = 5.0) -> float:
-        """Return the calibrated open/zero pose inside the dynamic workspace."""
+        """Return the calibrated open pose inside the dynamic workspace."""
         if not self.ready or self.current_min_deg is None:
             raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
         try:
@@ -597,7 +597,7 @@ class HandModel:
     encoder_raw_last_rx_ts: float = 0.0
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
-    has_servo_hardware_data: bool = False
+    has_servo_flash_raw_data: bool = False
     has_system_status_data: bool = False
     system_status_last_rx_ts: float = 0.0
     system_state: int = 0
@@ -663,6 +663,12 @@ class HandModel:
     motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    # 每台舵机当前上电会话的 logical ABS 可达范围。该范围由
+    # logicalOffset + ST3215 硬件多圈行程得到，单台舵机掉电只改变对应一项。
+    servo_logical_range_valid_bitmap: int = 0
+    servo_logical_range_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_logical_range_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    has_servo_logical_range_status: bool = False
     joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
     calib_diag_valid: bool = False
     calib_diag_reason: int = 0
@@ -680,9 +686,9 @@ class HandModel:
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
-    # 伺服单圈原始位置与在线状态（来自 PACKET_TYPE_SERVO_RAW，单位：单圈计数）
+    # 伺服当前单圈 raw、最近一次 Flash 快照 raw 与在线状态。
     servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    servo_hardware_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_flash_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
 
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
@@ -757,7 +763,7 @@ class HandModel:
         self.servo_angles = list(other.servo_angles)
         self.servo_online = list(other.servo_online)
         self.servo_raw_positions = list(other.servo_raw_positions)
-        self.servo_hardware_positions = list(getattr(other, "servo_hardware_positions", self.servo_raw_positions))
+        self.servo_flash_raw_positions = list(other.servo_flash_raw_positions)
         self.servo_raw_online = list(other.servo_raw_online)
         self.servo_speed = list(other.servo_speed)
         self.servo_load = list(other.servo_load)
@@ -781,7 +787,7 @@ class HandModel:
         self.encoder_raw_last_rx_ts = float(getattr(other, "encoder_raw_last_rx_ts", 0.0) or 0.0)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
-        self.has_servo_hardware_data = bool(getattr(other, "has_servo_hardware_data", False))
+        self.has_servo_flash_raw_data = bool(other.has_servo_flash_raw_data)
         self.has_system_status_data = bool(other.has_system_status_data)
         self.system_status_last_rx_ts = float(getattr(other, "system_status_last_rx_ts", 0.0) or 0.0)
         self.system_state = int(other.system_state)
@@ -891,6 +897,18 @@ class HandModel:
         self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
+        self.servo_logical_range_valid_bitmap = int(
+            getattr(other, "servo_logical_range_valid_bitmap", 0)
+        )
+        self.servo_logical_range_min = list(
+            getattr(other, "servo_logical_range_min", [0] * MOTOR_COUNT)
+        )
+        self.servo_logical_range_max = list(
+            getattr(other, "servo_logical_range_max", [0] * MOTOR_COUNT)
+        )
+        self.has_servo_logical_range_status = bool(
+            getattr(other, "has_servo_logical_range_status", False)
+        )
         self.joint_calib_results = [
             dict(item) if isinstance(item, dict) else None
             for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)

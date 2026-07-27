@@ -9,6 +9,7 @@
 static_assert(kManualScaledUrdfFeedbackMappingVersion == 3,
               "Manual-scaled calibration contract must remain v3");
 
+// 按固定安装方向归一化原始磁编值，使“关节正方向”始终对应坐标增加。
 int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
     int32_t oriented = (int32_t)rawValue & (kCalibrationEncoderModulo - 1);
@@ -18,6 +19,7 @@ int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction)
     return oriented;
 }
 
+// 环形取模，兼容负数输入。
 int32_t calibrationWrapEncoderCount(int32_t value)
 {
     value %= kCalibrationEncoderModulo;
@@ -27,11 +29,13 @@ int32_t calibrationWrapEncoderCount(int32_t value)
     return value;
 }
 
+// 计算环形正向距离。
 int32_t calibrationForwardEncoderDelta(int32_t from, int32_t to)
 {
     return calibrationWrapEncoderCount(to - from);
 }
 
+// 直接在原始磁编值上按安装方向计算正向距离。
 int32_t calibrationDirectedEncoderDelta(uint16_t fromRaw,
                                         uint16_t toRaw,
                                         int8_t direction)
@@ -46,6 +50,7 @@ int32_t calibrationDirectedEncoderDelta(uint16_t fromRaw,
         : calibrationWrapEncoderCount(from - to);
 }
 
+// 把正向距离折算为半圈内的最短有符号位移。
 int32_t calibrationSignedDirectedEncoderDelta(uint16_t fromRaw,
                                               uint16_t toRaw,
                                               int8_t direction)
@@ -60,6 +65,7 @@ int32_t calibrationSignedDirectedEncoderDelta(uint16_t fromRaw,
         : forward;
 }
 
+// 计算两个环形坐标之间的最短有符号差。
 int32_t calibrationWrapEncoderDelta(int32_t target, int32_t actual)
 {
     int32_t delta = target - actual;
@@ -72,17 +78,20 @@ int32_t calibrationWrapEncoderDelta(int32_t target, int32_t actual)
     return delta;
 }
 
+// 仅按编码器物理分辨率换算角度，不代表标定区间内的真实机械比例。
 float calibrationEncoderCountToDeg(int32_t count)
 {
     return (float)count * 360.0f / (float)kCalibrationEncoderModulo;
 }
 
+// 将诊断角度换算为磁编 counts，并四舍五入到整数。
 int32_t calibrationDegToEncoderCount(float deg)
 {
     const float scaled = deg * (float)kCalibrationEncoderModulo / 360.0f;
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
 }
 
+// V2 历史快照的端点线性映射。
 bool mapEncoderWindowToUrdf(int32_t orientedRaw,
                             int32_t encoderAtUrdfMin,
                             int32_t encoderAtUrdfMax,
@@ -104,9 +113,7 @@ bool mapEncoderWindowToUrdf(int32_t orientedRaw,
     const int32_t maxEncoder = calibrationWrapEncoderCount(encoderAtUrdfMax);
     const int32_t span = calibrationForwardEncoderDelta(minEncoder, maxEncoder);
 
-    // The signed-distance representation is unambiguous only below half a
-    // magnetic encoder revolution. Auto calibration will enforce the same
-    // limit before it writes a v2 result.
+    // V2 只保存两个方向坐标，没有连续圈数；跨度达到半圈后无法唯一判断区间内外。
     if (span <= 0 || span >= kCalibrationEncoderHalfTurn) {
         return false;
     }
@@ -138,6 +145,7 @@ bool mapEncoderWindowToUrdf(int32_t orientedRaw,
     return true;
 }
 
+// 校验 V2 快照版本、URDF CRC 和角度端点后执行映射。
 bool mapJointCalibrationEncoderToUrdf(uint8_t jointIndex,
                                       const JointCalibrationResult& calibration,
                                       int32_t orientedRaw,
@@ -163,41 +171,7 @@ bool mapJointCalibrationEncoderToUrdf(uint8_t jointIndex,
                                   out);
 }
 
-bool applyGeneratedUrdfMappingToCalibration(uint8_t jointIndex,
-                                            int32_t encoderAtUrdfMin,
-                                            int32_t encoderAtUrdfMax,
-                                            JointCalibrationResult* result)
-{
-    if (!result || jointIndex >= ENCODER_TOTAL_NUM) {
-        return false;
-    }
-
-    const int32_t minEncoder = calibrationWrapEncoderCount(encoderAtUrdfMin);
-    const int32_t maxEncoder = calibrationWrapEncoderCount(encoderAtUrdfMax);
-    const int32_t span = calibrationForwardEncoderDelta(minEncoder, maxEncoder);
-    const UrdfJointLimitDeg& limit = kUrdfJointLimits[jointIndex];
-    const float urdfSpanDeg = limit.maxDeg - limit.minDeg;
-    if (span <= 0 || span >= kCalibrationEncoderHalfTurn ||
-        !isfinite(limit.minDeg) || !isfinite(limit.maxDeg) ||
-        !isfinite(urdfSpanDeg) || urdfSpanDeg <= 0.0f) {
-        return false;
-    }
-
-    result->mappingVersion = kUrdfFeedbackMappingVersion;
-    result->encoderAtUrdfMin = minEncoder;
-    result->encoderAtUrdfMax = maxEncoder;
-    result->angleMin = limit.minDeg;
-    result->angleMax = limit.maxDeg;
-    result->urdfConfigCrc = kUrdfJointLimitConfigCrc;
-
-    // Keep legacy start/tight/zero/total fields unchanged. The current
-    // calibration return path and dual-tendon LUT still use that internal
-    // coordinate system; runtime v2 mapping uses only the additive fields.
-    result->encoderMin = minEncoder;
-    result->encoderMax = maxEncoder;
-    return true;
-}
-
+// 依据人工机械行程与自动标定行程的比例生成 V3 动态 Current Min。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,
@@ -275,6 +249,7 @@ bool applyManualScaledUrdfMappingToCalibration(
     return true;
 }
 
+// 把环形 raw 转成以窗口起点为 0 的有符号坐标，用于正确处理跨零和窗口外反馈。
 static int32_t signedDirectedCoordinateFromWindowStart(
     uint16_t windowStartRaw,
     uint16_t currentRaw,
@@ -292,6 +267,7 @@ static int32_t signedDirectedCoordinateFromWindowStart(
     return belowWindow < aboveWindow ? -belowWindow : forward;
 }
 
+// V3 实时映射：Auto 区间内采用 Manual 比例，区间外按 16384 counts/360° 外推。
 bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   const JointCalibrationResult& calibration,
                                   const ManualEncoderReference& manual,
@@ -349,10 +325,8 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
         kUrdfJointLimits[jointIndex].minDeg;
     const float manualDegPerCount =
         urdfSpanDeg / (float)calibration.manualSpanCounts;
-    // Express both samples in one signed coordinate system. A raw sample just
-    // below Manual Min must be -N, not 16384-N. The old unsigned-forward
-    // representation made J13's -100 count Auto Min look like +16284 counts
-    // and shifted the live Current angle by almost one full revolution.
+    // Manual 当前值和 Auto Min 必须落在同一有符号坐标系。否则 Manual Min
+    // 下方 -100 counts 会被误写成 +16284 counts，实时角会偏移接近一整圈。
     const int32_t manualCoordinate =
         signedDirectedCoordinateFromWindowStart(
             manual.minRaw, currentRaw, direction,
@@ -364,9 +338,8 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
 
     float mappedDeg = 0.0f;
     if (belowMinCounts == 0 && aboveMaxCounts == 0) {
-        // The calibrated Auto window is authoritative: its endpoints must map
-        // exactly to currentMin/currentMax even when Auto extends slightly
-        // outside the manually measured window.
+        // Auto 窗口是控制权威边界，即使略超 Manual 端点，也必须精确映射到
+        // currentMin/currentMax。
         mappedDeg = calibration.currentMinDeg +
             (float)signedTravel * manualDegPerCount;
     } else if (manualCoordinate >= 0 &&

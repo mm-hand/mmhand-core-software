@@ -58,6 +58,15 @@ static void publishNvsSaveResult(TaskSharedData_t* sharedData,
         sharedData->multiturn_nvs_save_result_token = result->requestToken;
     }
     if (result->success) {
+        // 复制期间先撤销有效位，最后一次性发布新 mask，避免上位机看到半新半旧的一帧。
+        sharedData->multiturn_nvs_save_valid_mask = 0;
+        // 先更新各通道 raw，最后发布 valid mask，避免上位机把尚未复制完成的数据当成有效快照。
+        for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+            if ((result->validMask & (1UL << ch)) != 0) {
+                sharedData->multiturn_nvs_snapshot_raw[ch] =
+                    result->motorRaw[ch];
+            }
+        }
         sharedData->multiturn_nvs_save_valid_mask = result->validMask;
         sharedData->multiturn_nvs_snapshot_valid = 1;
     } else {

@@ -4,7 +4,7 @@
 
 ## 1. 电机直控与姿态按钮
 
-- `Joint Channels` 中的 `Open Pose` / `Fist Pose` / `Zero Pose` 仍然走关节负反馈目标。
+- `Joint Channels` 中的 `Open Pose` / `Fist Pose` 走关节负反馈目标。
 - `Motor Channels` / 直控模式中的全局按钮和关节模式区分语义，直控侧用于电机原始控制。
 - 直控模式的 `Release Half Turn` 会让当前 active/选中的电机松半圈绳，未选中的电机不动作。
 - 直控模式每个 `Send` 只控制对应舵机，发送后清空 UI 输入，避免影响下一次指令。

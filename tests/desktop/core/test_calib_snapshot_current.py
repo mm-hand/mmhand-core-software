@@ -7,17 +7,47 @@ from desktop.core.protocol import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
     CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
+    CMD_CALIB_LOAD_LIMITS,
     CMD_CALIB_LOAD_JOINT,
+    MOTOR_COUNT,
     TENDON_LUT_ACTUATOR_COUNT,
     TENDON_LUT_MAX_SAMPLES,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     build_calib_load_joint_cmd,
+    build_calib_load_limits_cmd,
     parse_joint_calib_snapshot_packet,
 )
 
 
-def test_joint_calibration_v3_protocol_round_trip():
+def test_motor_limit_load_is_scoped_to_update_bitmap():
+    mins = [-1000 - i for i in range(MOTOR_COUNT)]
+    maxs = [2000 + i for i in range(MOTOR_COUNT)]
+    update_mask = (1 << 5) | (1 << 6)
+    valid_mask = update_mask | (1 << 1)
+    locked_mask = 1 << 6
+
+    frame = build_calib_load_limits_cmd(
+        update_mask,
+        valid_mask,
+        locked_mask,
+        mins,
+        maxs,
+    )
+
+    assert frame[0] == PROTOCOL_HEADER
+    assert frame[2] == CMD_CALIB_LOAD_LIMITS
+    assert frame[-1] == PROTOCOL_TAIL
+    payload = frame[3:-1]
+    assert struct.unpack(">III", payload[:12]) == (
+        update_mask,
+        valid_mask,
+        locked_mask,
+    )
+    assert len(payload) == 12 + MOTOR_COUNT * 8
+
+
+def test_joint_calibration_current_protocol_round_trip():
     mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
     result = {
         "joint": 4,
@@ -85,24 +115,47 @@ def test_joint_calibration_v3_protocol_round_trip():
     assert parsed["tendonLutMotor"] == [5, 6]
     assert parsed["tendonLutMotorAbs"][0][:3] == [0, 1, 2]
 
-    # 旧 JSON 快照使用 dualTendonLut* 键；写回 P4 时继续兼容读取，
-    # 但新上行包和新保存文件统一输出 tendonLut*。
-    legacy_result = dict(result)
-    for generic_name in (
-        "tendonLutValid",
-        "tendonLutCount",
-        "tendonLutMotor",
-        "tendonLutAngleStartDeg",
-        "tendonLutAngleStepDeg",
-        "tendonLutMotorAbs",
-    ):
-        legacy_name = "dualTendonLut" + generic_name[len("tendonLut"):]
-        legacy_result[legacy_name] = legacy_result.pop(generic_name)
-    legacy_frame = build_calib_load_joint_cmd(legacy_result)
-    legacy_parsed = parse_joint_calib_snapshot_packet(legacy_frame[3:-1])
-    assert legacy_parsed is not None
-    assert legacy_parsed["tendonLutValid"] is True
-    assert legacy_parsed["tendonLutMotor"] == [5, 6]
+def test_joint_calibration_preserves_large_logical_abs():
+    """舵机单独掉电重建 offset 后，logical ABS 超过 int16 仍须无损恢复。"""
+    mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
+    result = {
+        "joint": 4,
+        "success": True,
+        "encoderDirection": 1,
+        "mappingVersion": mapping_version,
+        "urdfConfigCrc": mapping_crc,
+        "autoMinRaw": 100,
+        "autoMaxRaw": 200,
+        "startEncoder": 100,
+        "tightEncoder": 200,
+        "startServoAbs": 40000,
+        "tightServoAbs": 43000,
+        "zeroServoAbs": 41000,
+        "tendonLutValid": True,
+        "tendonLutCount": 3,
+        "tendonLutMotor": [5, 6],
+        "tendonLutMotorAbs": [
+            [40000, 41000, 43000],
+            [-42000, -41000, -39000],
+        ],
+    }
+
+    frame = build_calib_load_joint_cmd(result)
+    parsed = parse_joint_calib_snapshot_packet(frame[3:-1])
+
+    assert parsed is not None
+    assert parsed["startServoAbs"] == 40000
+    assert parsed["tightServoAbs"] == 43000
+    assert parsed["zeroServoAbs"] == 41000
+    assert parsed["tendonLutMotorAbs"][0][:3] == [40000, 41000, 43000]
+    assert parsed["tendonLutMotorAbs"][1][:3] == [-42000, -41000, -39000]
+
+
+def test_legacy_joint_payload_lengths_are_rejected():
+    assert parse_joint_calib_snapshot_packet(bytes(54)) is None
+    assert parse_joint_calib_snapshot_packet(bytes(162)) is None
+    assert parse_joint_calib_snapshot_packet(bytes(179)) is None
+    assert parse_joint_calib_snapshot_packet(bytes(195)) is None
 
 
 def test_joint_calibration_snapshot_parses_optional_warning_details():
@@ -160,7 +213,7 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
     assert parsed["hasAssemblySpanComparisonFields"] is True
 
 
-def test_direction_negative_v3_snapshot_requires_physical_raw_endpoints():
+def test_direction_negative_snapshot_requires_physical_raw_endpoints():
     mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
     result = {
         "joint": 14,

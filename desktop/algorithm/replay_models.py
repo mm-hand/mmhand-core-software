@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
-from typing import Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 from desktop.core.protocol import ENCODER_COUNT
 
@@ -32,6 +32,8 @@ class ReplayFrame:
     source_kind: str = ""
     stream_id: str = ""
     command_joint_mask: int = 0
+    # 21 槽位始终保留固定 J00-J20 语义；该 mask 标识 CSV 中真正有数值的关节。
+    joint_value_mask: int = ALL_JOINTS_MASK
 
     def validate(self) -> None:
         if not math.isfinite(float(self.time_s)) or float(self.time_s) < 0.0:
@@ -41,6 +43,28 @@ class ReplayFrame:
             raise ValueError(f"不支持的Replay帧类型：{self.frame_kind}")
         if int(self.command_joint_mask) & ~ALL_JOINTS_MASK:
             raise ValueError("Replay帧包含越界的关节mask")
+        if int(self.joint_value_mask) & ~ALL_JOINTS_MASK:
+            raise ValueError("Replay帧包含越界的数值有效mask")
+
+
+@dataclass(frozen=True)
+class ReplayPreparation:
+    """一次 Replay 启动时，根据当前 P4 状态生成的降级播放方案。"""
+
+    source_joint_mask: int
+    current_active_mask: int
+    workspace_ready_mask: int
+    effective_joint_mask: int
+    skipped_joint_mask: int
+    uncalibrated_joint_mask: int
+    clamped_joint_mask: int = 0
+    clamped_sample_count: int = 0
+    clamped_counts_by_joint: Tuple[Tuple[int, int], ...] = ()
+    warnings: Tuple[str, ...] = ()
+
+    @property
+    def clamped_counts(self) -> Dict[int, int]:
+        return dict(self.clamped_counts_by_joint)
 
 
 @dataclass
@@ -55,6 +79,7 @@ class ReplayTrace:
     mapping_id: str = ""
     mapping_version: int = 0
     urdf_crc: int = 0
+    joint_order_crc: int = 0
     raw_row_count: int = 0
     dropped_row_count: int = 0
     max_gap_s: float = 0.0

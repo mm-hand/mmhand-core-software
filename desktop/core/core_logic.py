@@ -10,12 +10,18 @@ from typing import List, Optional, Tuple
 from desktop.paths import PACKAGE_DIR
 
 from .angle_mapping import urdf_manual_scaled_mapping_metadata
+from .calibration_snapshot import (
+    CALIBRATION_SNAPSHOT_SCHEMA_VERSION,
+    CalibrationSnapshotError,
+    validate_snapshot,
+)
 from .comm_layer import LowerComputerComm, list_ports
 from .data_models import HandModel
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CLEAR_CALIBRATION,
+    CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MOTOR_ABS_LIMIT_LOCK,
@@ -148,11 +154,28 @@ class HandController:
     def _clamp_motor_abs(value: int) -> int:
         return max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(value)))
 
-    @staticmethod
-    def _is_motor_abs_at_limit(value: int) -> bool:
-        margin = 16
-        value = int(value)
-        return value >= (MOTOR_ABS_CMD_MAX - margin) or value <= (MOTOR_ABS_CMD_MIN + margin)
+    def _clamp_motor_abs_for_current_session(
+        self, motor_index: int, value: int
+    ) -> int:
+        """按单台舵机当前上电会话的动态 logical 行程钳位直控目标。"""
+        idx = int(motor_index)
+        target = self._clamp_motor_abs(value)
+        with self.state_lock:
+            state = self.current_state
+            valid_bitmap = int(
+                getattr(state, "servo_logical_range_valid_bitmap", 0) or 0
+            )
+            mins = list(getattr(state, "servo_logical_range_min", []) or [])
+            maxs = list(getattr(state, "servo_logical_range_max", []) or [])
+        if (
+            0 <= idx < MOTOR_COUNT
+            and (valid_bitmap & (1 << idx)) != 0
+            and idx < len(mins)
+            and idx < len(maxs)
+            and int(mins[idx]) <= int(maxs[idx])
+        ):
+            target = max(int(mins[idx]), min(int(maxs[idx]), target))
+        return target
 
     @staticmethod
     def _raw_single_turn(value: int) -> int:
@@ -326,7 +349,9 @@ class HandController:
                 raw_single = self._raw_single_turn(servo_raw[i])
             if has_abs and i < len(servo_abs) and i < len(servo_online) and servo_online[i]:
                 abs_value = self._clamp_motor_abs(servo_abs[i])
-                target = raw_single if raw_single is not None and self._is_motor_abs_at_limit(abs_value) else abs_value
+                # logical ABS 已使用 int32 且由 P4 上报动态行程，不再把合法的
+                # 会话边界误认为旧 int16 饱和值并退回单圈 raw。
+                target = abs_value
             elif raw_single is not None:
                 target = raw_single
 
@@ -623,12 +648,15 @@ class HandController:
             self.comm.send_command(("motor_pos_sweep", raw))
 
     def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
-        """多圈绝对位置（CMD_MOTOR_POS_ABS），与下位机 clampServoPos 范围一致。"""
+        """下发27路 logical ABS；每路先按 P4 当前会话动态行程独立钳位。"""
         if self._paused:
             return
         if len(motor_abs) != MOTOR_COUNT:
             raise ValueError(f"需要 {MOTOR_COUNT} 个绝对位置值")
-        raw = [max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(v))) for v in motor_abs]
+        raw = [
+            self._clamp_motor_abs_for_current_session(i, value)
+            for i, value in enumerate(motor_abs)
+        ]
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs", raw))
 
@@ -638,7 +666,7 @@ class HandController:
         idx = int(motor_index)
         if idx < 0 or idx >= MOTOR_COUNT:
             raise ValueError(f"motor index out of range: {idx}")
-        raw = max(MOTOR_ABS_CMD_MIN, min(MOTOR_ABS_CMD_MAX, int(motor_abs)))
+        raw = self._clamp_motor_abs_for_current_session(idx, motor_abs)
         if self.comm and self._control_mode == ControlMode.DIRECT_MOTOR:
             self.comm.send_command(("motor_pos_abs_one", idx, raw))
 
@@ -966,9 +994,23 @@ class HandController:
 
         return False, "NVS save confirmation timeout"
 
-    def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
+    @staticmethod
+    def _joint_mask_for_motor_mask(motor_mask: int) -> int:
+        """由桌面映射预览受影响关节；P4 仍会用 HardwareMap 再次校验。"""
+        joint_mask = 0
+        for motor_idx, joint_idx in enumerate(MOTOR_TO_JOINT_INDEX[:MOTOR_COUNT]):
+            if (int(motor_mask) & (1 << motor_idx)) == 0:
+                continue
+            if 0 <= int(joint_idx) < ENCODER_COUNT:
+                joint_mask |= 1 << int(joint_idx)
+        return joint_mask & ((1 << ENCODER_COUNT) - 1)
+
+    def reset_multiturn_baseline_for_new_device(
+        self,
+    ) -> Tuple[bool, str, int, int]:
+        """仅修复在线且 Turn Unknown 的舵机，并失效其所属关节标定。"""
         if not self.comm:
-            return False, "serial not connected"
+            return False, "serial not connected", 0, 0
         with self.state_lock:
             state = self.current_state
             has_raw = bool(getattr(state, "has_servo_raw_data", False))
@@ -981,56 +1023,67 @@ class HandController:
             )
 
         if unknown_mask == 0:
-            return False, "all motor turns are already trusted; New Device Reset is not allowed"
+            return (
+                False,
+                "all motor turns are already trusted; New Device Reset is not allowed",
+                0,
+                0,
+            )
 
         if not has_raw:
-            return False, "waiting for servo raw feedback"
+            return False, "waiting for servo raw feedback", 0, 0
 
         restore_abs = [0] * MOTOR_COUNT
         restore_mask = 0
         for i in range(MOTOR_COUNT):
-            if i >= len(raw_positions) or i >= len(raw_online) or not bool(raw_online[i]):
+            bit = 1 << i
+            if (
+                (unknown_mask & bit) == 0
+                or i >= len(raw_positions)
+                or i >= len(raw_online)
+                or not bool(raw_online[i])
+            ):
                 continue
             restore_abs[i] = self._raw_single_turn(int(raw_positions[i]))
-            restore_mask |= (1 << i)
+            restore_mask |= bit
 
         if restore_mask == 0:
-            return False, "no online motor raw feedback"
+            return False, "Turn Unknown motors are offline; reconnect servo power first", 0, 0
+
+        affected_joint_mask = self._joint_mask_for_motor_mask(restore_mask)
+        if affected_joint_mask == 0:
+            return False, "cannot map Turn Unknown motors to joints", 0, 0
 
         self.stop()
-        # Let STOP and a simultaneous servo hotplug burst settle before the
-        # Flash command; otherwise the binary ACK can be lost among diagnostics.
+        # 先等待 STOP 状态和热插拔配置事务稳定，再发送恢复命令；
+        # 否则二进制 ACK 可能与舵机重连诊断日志同时到达，造成误判超时。
         time.sleep(NEW_DEVICE_RESET_SETTLE_S)
-
-        if not self.set_multiturn_nvs_enabled(False):
-            detail = self.last_multiturn_nvs_error or "unknown NVS control error"
-            rollback = ""
-            if flash_was_enabled:
-                if self.set_multiturn_nvs_enabled(True):
-                    rollback = "; Flash restored to ON after uncertain clear result"
-                else:
-                    rollback_detail = self.last_multiturn_nvs_error or "unknown NVS control error"
-                    rollback = f"; Flash restore also failed: {rollback_detail}"
-            return False, f"failed to clear lower Flash snapshots: {detail}{rollback}"
-
-        flash_restore_warning = ""
-        if flash_was_enabled and not self.set_multiturn_nvs_enabled(True):
-            detail = self.last_multiturn_nvs_error or "unknown NVS control error"
-            flash_restore_warning = f"; Flash re-enable failed: {detail}"
 
         with self.state_lock:
             baseline_save_request_token = int(getattr(self.current_state, "multiturn_nvs_save_request_token", 0) or 0)
             baseline_save_fail_count = int(getattr(self.current_state, "multiturn_nvs_save_fail_count", 0) or 0)
 
-        restore_sent_at = time.time()
-        self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
-        ack = self.comm.wait_for_ack(
-            CMD_RESTORE_MULTITURN,
-            MULTITURN_RESTORE_ACK_TIMEOUT_S,
-            received_after=restore_sent_at,
-        )
+        # 热插拔恢复需要先关闭扭矩并重新配置舵机多圈模式。最多重试数次，
+        # 但每次仍由 P4 硬门禁确认“在线 + configured + Turn Unknown”。
+        ack = None
+        for _attempt in range(5):
+            restore_sent_at = time.time()
+            self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
+            ack = self.comm.wait_for_ack(
+                CMD_RESTORE_MULTITURN,
+                MULTITURN_RESTORE_ACK_TIMEOUT_S,
+                received_after=restore_sent_at,
+            )
+            if ack is not None and int(ack[2]) == 0:
+                break
+            time.sleep(0.20)
         if ack is None or int(ack[2]) != 0:
-            return False, "restore turn0 request ACK timeout/reject" + flash_restore_warning
+            return (
+                False,
+                "scoped turn0 restore rejected; wait for servo hotplug recovery/configuration",
+                restore_mask,
+                affected_joint_mask,
+            )
 
         verified = False
         deadline = time.time() + 1.5
@@ -1058,10 +1111,15 @@ class HandController:
             time.sleep(0.02)
         if not verified:
             self._clear_trusted_multiturn_cache()
-            return False, "restore turn0 request accepted, but feedback did not confirm the new baseline"
+            return (
+                False,
+                "restore turn0 request accepted, but feedback did not confirm the new baseline",
+                restore_mask,
+                affected_joint_mask,
+            )
 
         nvs_save_message = ""
-        if flash_was_enabled and not flash_restore_warning:
+        if flash_was_enabled:
             save_ok, save_message = self._wait_for_multiturn_nvs_save(
                 baseline_save_request_token,
                 baseline_save_fail_count,
@@ -1069,44 +1127,62 @@ class HandController:
             )
             if not save_ok:
                 self._clear_trusted_multiturn_cache()
-                return False, f"turn0 reset confirmed, but Flash snapshot was not saved: {save_message}"
+                return (
+                    False,
+                    f"turn0 reset confirmed, but Flash snapshot was not saved: {save_message}",
+                    restore_mask,
+                    affected_joint_mask,
+                )
             nvs_save_message = f"; {save_message}"
+        else:
+            nvs_save_message = "; Flash OFF, new turn0 exists only in P4 RAM"
 
         clear_sent_at = time.time()
-        self.comm.send_command("clear_calibration")
+        self.comm.send_command(("clear_calibration_scope", restore_mask))
         ack = self.comm.wait_for_ack(
-            CMD_CLEAR_CALIBRATION,
+            CMD_CLEAR_CALIBRATION_SCOPE,
             CLEAR_CALIBRATION_ACK_TIMEOUT_S,
             received_after=clear_sent_at,
         )
         if ack is None or int(ack[2]) != 0:
             self._clear_trusted_multiturn_cache()
-            return False, "turn0 reset confirmed, but calibration/ABS limit clear ACK timeout/reject"
+            return (
+                False,
+                "turn0 reset confirmed, but scoped calibration clear ACK timeout/reject",
+                restore_mask,
+                affected_joint_mask,
+            )
 
         self._clear_trusted_multiturn_cache()
 
         count = bin(restore_mask).count("1")
-        flash_text = "Flash ON" if flash_was_enabled and not flash_restore_warning else "Flash OFF"
+        flash_text = "Flash ON" if flash_was_enabled else "Flash OFF"
         return True, (
-            f"reset {count} motor(s) to current raw as turn0; "
-            f"cleared calibration/ABS limits; {flash_text}{flash_restore_warning}{nvs_save_message}"
-        )
+            f"reset {count} Turn Unknown motor(s) to current raw as turn0; "
+            f"invalidated only affected joint calibration/ABS limits; "
+            f"{flash_text}{nvs_save_message}"
+        ), restore_mask, affected_joint_mask
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         if not self.comm:
             return False, "serial not connected"
         try:
+            validate_snapshot(snapshot)
+        except CalibrationSnapshotError as exc:
+            return False, str(exc)
+        try:
             valid_bitmap = int(str(snapshot.get("motor_abs_limit_valid_bitmap", "0")), 0)
             active_joint_mask = int(str(snapshot.get("active_joint_mask", "0")), 0)
             mins = [int(v) for v in snapshot.get("motor_abs_limit_min", [])]
             maxs = [int(v) for v in snapshot.get("motor_abs_limit_max", [])]
-            schema_version = int(snapshot.get("schema_version", 1) or 1)
-            if schema_version >= 2:
-                locked_bitmap = int(str(snapshot.get("motor_abs_limit_locked_bitmap", "0")), 0)
-            else:
-                locked_bitmap = 0
+            schema_version = int(snapshot.get("schema_version", 0) or 0)
+            locked_bitmap = int(
+                str(snapshot.get("motor_abs_limit_locked_bitmap", "0")), 0
+            )
         except (TypeError, ValueError) as exc:
             return False, f"invalid motor ABS limits: {exc}"
+        if schema_version != CALIBRATION_SNAPSHOT_SCHEMA_VERSION:
+            return False, f"unsupported snapshot schema v{schema_version}"
         if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
             return False, f"invalid motor ABS limit count: {len(mins)}/{len(maxs)}"
 
@@ -1214,7 +1290,19 @@ class HandController:
 
         locked_bitmap &= valid_bitmap
         limits_sent_at = time.time()
-        self.comm.send_command(("calib_load_limits", valid_bitmap, locked_bitmap, mins, maxs))
+        # 标定加载只覆盖快照实际包含的电机，P4 上其他已生效关节保持不变。
+        self.comm.send_command(
+            (
+                "calib_load_limits",
+                int(snapshot.get("active_motor_mask", "0"), 0)
+                if isinstance(snapshot.get("active_motor_mask"), str)
+                else int(snapshot.get("active_motor_mask", 0) or 0),
+                valid_bitmap,
+                locked_bitmap,
+                mins,
+                maxs,
+            )
+        )
         ack = self.comm.wait_for_ack(
             CMD_CALIB_LOAD_LIMITS,
             CALIB_LOAD_ACK_TIMEOUT_S,

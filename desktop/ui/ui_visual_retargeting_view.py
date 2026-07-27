@@ -404,9 +404,14 @@ class VisualRetargetingView(QtWidgets.QWidget):
         return targets, []
 
     def _on_joints_ready(self, targets: list, timestamp_ms: int) -> None:
+        # 视觉节点输出必须先经过统一21关节适配器；禁止错误长度静默补零，
+        # 也禁止NaN/Inf进入负反馈链路。
         try:
             raw_visual_targets = [float(v) for v in list(targets)]
-            adaptation = adapt_joint_targets(raw_visual_targets, source_space=URDF_DEG)
+            adaptation = adapt_joint_targets(
+                raw_visual_targets,
+                source_space=URDF_DEG,
+            )
         except (TypeError, ValueError) as exc:
             self._on_status_changed(f"Visual Retargeting target dropped: {exc}")
             return

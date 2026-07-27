@@ -13,23 +13,16 @@
 
 namespace {
 
+// 非空表示 Rope Init 已在运行，防止按钮重复创建任务。
 static TaskHandle_t g_ropeInitTaskHandle = NULL;
-static const uint32_t kLoopMs = 50;
-static const uint32_t kTimeoutMs = 8000;
-static const uint32_t kFeedbackMaxAgeMs = 500;
-static const int32_t kTightenStepCounts = 60;
-static const int32_t kReleaseStepCounts = 30;
-static const uint8_t kInsideStableSamples = 3;
-static const int32_t kServoAbsMin = -30719;
-static const int32_t kServoAbsMax = 30719;
+static const uint32_t kLoopMs = 50;          // 任务控制周期。
+static const uint32_t kTimeoutMs = 8000;     // 整次 Rope Init 最长运行时间。
+static const uint32_t kFeedbackMaxAgeMs = 500; // 角度/舵机快照最大允许年龄。
+static const int32_t kTightenStepCounts = 60;  // 主执行器每帧收绳步长。
+static const int32_t kReleaseStepCounts = 30;  // 双腱副执行器每帧同步放绳步长。
+static const uint8_t kInsideStableSamples = 3; // 连续位于工作区的确认帧数。
 
-static int32_t clampServoAbs(int32_t value)
-{
-    if (value < kServoAbsMin) return kServoAbsMin;
-    if (value > kServoAbsMax) return kServoAbsMax;
-    return value;
-}
-
+// 检查该关节 Auto V3 是否仍与当前 Manual 条目和 URDF 契约匹配。
 static bool calibrationMatchesManual(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) return false;
@@ -42,6 +35,7 @@ static bool calibrationMatchesManual(uint8_t jointIndex)
            result.manualReferenceCrc == manualEntryCrc;
 }
 
+// 把一个电机 ABS 目标追加到本帧批次。
 static bool appendMotorTarget(ServoTargetBatch_t* batch,
                               uint8_t motorChannel,
                               int32_t targetAbs)
@@ -54,12 +48,15 @@ static bool appendMotorTarget(ServoTargetBatch_t* batch,
     ServoTargetCommand_t& command = batch->commands[batch->count++];
     command.busIndex = map.busIndex;
     command.servoId = map.servoID;
-    command.position = (int16_t)clampServoAbs(targetAbs);
+    // targetAbs 是 P4 逻辑多圈坐标。最终下发前由通信任务按这一台舵机
+    // 自己的 logicalOffset 转为硬件坐标并检查实际行程。
+    command.position = targetAbs;
     command.speed = SERVO_TARGET_SPEED_DEFAULT;
     command.acc = SERVO_TARGET_ACC_DEFAULT;
     return true;
 }
 
+// Rope Init 只有在状态机仍授予 CALIBRATION owner 时才可继续发命令。
 static bool taskStillOwnsControl(TaskSharedData_t* sharedData)
 {
     return sharedData &&
@@ -68,6 +65,11 @@ static bool taskStillOwnsControl(TaskSharedData_t* sharedData)
            sharedData->control_enabled == 0;
 }
 
+// Rope Init 主循环：
+// 1. 读取活动关节的 V3 映射与舵机反馈；
+// 2. 仅移动低于 Auto Min 容差的关节；
+// 3. 单腱收绳，双腱按主收/副放配对推进；
+// 4. 连续三帧进入工作区后向状态机报告完成。
 static void ropeInitTask(void* parameter)
 {
     TaskSharedData_t* sharedData = static_cast<TaskSharedData_t*>(parameter);
@@ -221,11 +223,13 @@ static void ropeInitTask(void* parameter)
 
 } // namespace
 
+// 快速布尔接口，内部复用统一拒绝原因检查。
 bool ropeInitActiveScopeReady(TaskSharedData_t* sharedData)
 {
     return ropeInitActiveScopeRejectReason(sharedData) == ROPE_INIT_REASON_NONE;
 }
 
+// 校验活动范围是否具备完整 Manual NVS 和匹配的 Auto V3。
 uint8_t ropeInitActiveScopeRejectReason(TaskSharedData_t* sharedData)
 {
     if (!sharedData || !sharedData->manual_reference_nvs_valid) {
@@ -246,6 +250,7 @@ uint8_t ropeInitActiveScopeRejectReason(TaskSharedData_t* sharedData)
     return ROPE_INIT_REASON_NONE;
 }
 
+// 创建 Rope Init 任务；同一时刻只允许存在一个实例。
 bool startRopeInitTask(TaskSharedData_t* sharedData)
 {
     if (!sharedData || g_ropeInitTaskHandle != NULL) return false;

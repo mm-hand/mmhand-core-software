@@ -28,6 +28,7 @@ def _write_csv(path, rows):
         "mapping_id",
         "mapping_version",
         "urdf_config_crc",
+        "joint_order_crc",
         "output_joint_targets_json",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -153,7 +154,7 @@ def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_p
     assert trace.frame_count == 2
     assert trace.duration_s == pytest.approx(0.05)
     assert any("sent_to_backend" in warning for warning in trace.warnings)
-    assert any("active scope" in warning for warning in trace.warnings)
+    assert trace.active_joint_mask == (1 << ENCODER_COUNT) - 1
 
 
 def test_loader_accepts_visual_retargeting_continuous_stream(tmp_path):
@@ -251,3 +252,87 @@ def test_loader_accepts_joint_wide_current_csv(tmp_path):
     assert trace.data_kind == "joint_actual"
     assert trace.active_joint_mask == 1
     assert [frame.target_urdf_deg[0] for frame in trace.frames] == [10.0, 11.0]
+
+
+def test_loader_accepts_sparse_named_target_columns_and_holds_blank_cells(tmp_path):
+    path = tmp_path / "sparse_targets.csv"
+    fieldnames = [
+        "host_time",
+        "source",
+        "valid",
+        "sent_to_backend",
+        "active_joint_mask",
+        "J00_target_deg",
+        "J02_target_deg",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "host_time": "2026-07-23 10:00:00.000",
+                "source": "UI Feedback",
+                "valid": 1,
+                "sent_to_backend": 1,
+                "active_joint_mask": "0x5",
+                "J00_target_deg": 10.0,
+                "J02_target_deg": 20.0,
+            }
+        )
+        writer.writerow(
+            {
+                "host_time": "2026-07-23 10:00:00.050",
+                "source": "UI Feedback",
+                "valid": 1,
+                "sent_to_backend": 1,
+                "active_joint_mask": "0x5",
+                "J00_target_deg": 11.0,
+                "J02_target_deg": "",
+            }
+        )
+
+    trace = load_replay_csv(path)
+
+    assert trace.active_joint_mask == 0x5
+    assert trace.frames[0].joint_value_mask == 0x5
+    assert trace.frames[1].joint_value_mask == 0x5
+    assert trace.frames[1].target_urdf_deg[0] == 11.0
+    assert trace.frames[1].target_urdf_deg[2] == 20.0
+
+
+def test_loader_accepts_joint_current_csv_with_only_one_named_joint(tmp_path):
+    path = tmp_path / "partial_joint_state.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "host_time",
+                "J14_current_deg",
+                "J14_current_valid",
+                "J14_active",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "host_time": "2026-07-23 10:00:00.000",
+                "J14_current_deg": 6.0,
+                "J14_current_valid": 1,
+                "J14_active": 1,
+            }
+        )
+        writer.writerow(
+            {
+                "host_time": "2026-07-23 10:00:00.050",
+                "J14_current_deg": 7.0,
+                "J14_current_valid": 1,
+                "J14_active": 1,
+            }
+        )
+
+    trace = load_replay_csv(path)
+
+    assert trace.data_kind == "joint_actual"
+    assert trace.active_joint_mask == (1 << 14)
+    assert trace.frames[0].joint_value_mask == (1 << 14)
+    assert trace.frames[-1].target_urdf_deg[14] == 7.0

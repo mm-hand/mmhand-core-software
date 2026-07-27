@@ -5,17 +5,16 @@
 static const int32_t kServoSingleTurnModulo = 4096;
 static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
 
-// 限制到舵机协议接受的有符号多圈范围。
-int16_t clampServoPos(int32_t value)
+// 统一保留 logical ABS 的 int32 坐标；真实硬件范围由逐电机动态边界处理。
+int32_t clampServoPos(int32_t value)
 {
-    if (value > 30719) return 30719;
-    if (value < -30719) return -30719;
-    return (int16_t)value;
+    // P4 内部逻辑 ABS 使用 int32_t，不再在控制层按固定七圈截断。
+    return value;
 }
 
-int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
-                                     uint8_t motorChannel,
-                                     int32_t value)
+int32_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
+                                    uint8_t motorChannel,
+                                    int32_t value)
 {
     // 限位数组由标定和状态机代码共享，先在安全保护下拷贝，
     // 再在本地执行限制。
@@ -43,7 +42,25 @@ int16_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,
             if (clamped > hi) clamped = hi;
         }
     }
-    return clampServoPos(clamped);
+    // LOCK/LUT 限位之后，再限制到该台舵机当前上电会话的动态逻辑行程。
+    if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
+        const uint32_t bit = (1UL << motorChannel);
+        uint32_t rangeValidBitmap = 0;
+        int32_t sessionLo = 0;
+        int32_t sessionHi = 0;
+        {
+            SharedSafetyGuard guard;
+            rangeValidBitmap = sharedAtomicLoad(
+                &sharedData->servo_logical_range_valid_bitmap);
+            sessionLo = sharedData->servo_logical_range_min[motorChannel];
+            sessionHi = sharedData->servo_logical_range_max[motorChannel];
+        }
+        if ((rangeValidBitmap & bit) != 0 && sessionLo <= sessionHi) {
+            if (clamped < sessionLo) clamped = sessionLo;
+            if (clamped > sessionHi) clamped = sessionHi;
+        }
+    }
+    return clamped;
 }
 
 // 将单圈 raw 舵机位置限制到 0..4095。
@@ -55,7 +72,7 @@ int16_t clampServoSingleTurnRaw(int32_t value)
 }
 
 // 将单圈目标展开为最近的等价多圈位置。
-int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
+int32_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
 {
     const int32_t baseTarget = (int32_t)clampServoSingleTurnRaw(singleTurnRaw);
     int32_t bestTarget = baseTarget;
@@ -77,7 +94,7 @@ int16_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleT
         }
     }
 
-    return clampServoPos(bestTarget);
+    return bestTarget;
 }
 
 // 将 sweep 模式锚定到当前多圈位置。
@@ -153,7 +170,7 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
 bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint8_t busIndex,
                        uint8_t servoId,
-                       int16_t position,
+                       int32_t position,
                        uint16_t speed,
                        uint8_t acc)
 {

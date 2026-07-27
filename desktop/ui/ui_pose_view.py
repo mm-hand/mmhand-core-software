@@ -63,6 +63,7 @@ class Pose3DView(QtWidgets.QWidget):
         return self.reload_urdf(reset_angles=True)
 
     def reload_urdf(self, *, reset_angles: bool = False) -> bool:
+        """重新读取当前软链接指向的 URDF，并清理旧模型留下的 OpenGL 对象。"""
         urdf_path = str(DEFAULT_URDF_PATH)
         self._clear_scene()
         if reset_angles or self._last_angles is None:
@@ -116,6 +117,7 @@ class Pose3DView(QtWidgets.QWidget):
             pass
 
     def _clear_scene(self) -> None:
+        """仅清除模型线段和节点，保留网格，避免重复 Reload 后叠加旧模型。"""
         if self._gl is not None:
             for item in list(getattr(self._gl, "items", [])):
                 if item is self._grid_item:

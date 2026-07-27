@@ -119,7 +119,6 @@ class ControlPanelManualMixin:
             self.backend.set_pid_control(bool(self._interaction_enabled))
 
     def _update_manual_action_buttons(self) -> None:
-        """Handle update manual action buttons behavior for the control panel."""
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         interaction = bool(self._interaction_enabled)
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
@@ -128,12 +127,6 @@ class ControlPanelManualMixin:
         if getattr(self, "manual_check", None) is not None:
             self.manual_check.setVisible(mode != "device_check")
             self.manual_check.setEnabled(mode != "device_check")
-        for btn in [getattr(self, "send_all_btn", None)]:
-            if btn is not None:
-                btn.setVisible(mode != "motor")
-                # Keep the action reachable so its command guard can report why
-                # feedback is not ready instead of leaving a silent grey button.
-                btn.setEnabled(interaction and mode != "motor" and joint_workspace_ready)
         if getattr(self, "open_btn", None) is not None:
             self.open_btn.setVisible(mode in ("joint", "test"))
             self.open_btn.setEnabled(mode in ("joint", "test") and joint_workspace_ready)
@@ -150,6 +143,16 @@ class ControlPanelManualMixin:
                 system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
             )
             self.calib_load_btn.setEnabled(can_load)
+        if getattr(self, "calib_import_btn", None) is not None:
+            self.calib_import_btn.setEnabled(
+                system_state not in (
+                    SYSTEM_STATE_RUN_DIRECT,
+                    SYSTEM_STATE_RUN_FEEDBACK,
+                    SYSTEM_STATE_CALIBRATION_RUNNING,
+                )
+            )
+        if getattr(self, "calib_export_btn", None) is not None:
+            self.calib_export_btn.setEnabled(CALIB_LOAD_SNAPSHOT_PATH.exists())
         if getattr(self, "new_device_reset_btn", None) is not None:
             multi_turn_unknown_mask = (
                 int(getattr(self._state, "multi_turn_unknown_bitmap", 0) or 0)
@@ -161,10 +164,11 @@ class ControlPanelManualMixin:
                 system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
             )
             self.new_device_reset_btn.setEnabled(can_reset_device)
-        for btn in [getattr(self, "fist_btn", None), getattr(self, "zero_btn", None)]:
-            if btn is not None:
-                btn.setVisible(mode in ("joint", "test"))
-                btn.setEnabled(mode in ("joint", "test") and joint_workspace_ready)
+        if getattr(self, "fist_btn", None) is not None:
+            self.fist_btn.setVisible(mode in ("joint", "test"))
+            self.fist_btn.setEnabled(
+                mode in ("joint", "test") and joint_workspace_ready
+            )
         if getattr(self, "rope_init_btn", None) is not None:
             self.rope_init_btn.setEnabled(
                 interaction and
@@ -318,7 +322,7 @@ class ControlPanelManualMixin:
             self.motor_target_spins[idx].blockSignals(False)
 
     def resolved_joint_targets(self) -> List[float]:
-        """读取全部编辑框目标，仅用于 Send All、整手姿态和测试算法。"""
+        """读取全部编辑框目标，供整手姿态、Replay 预览和测试功能复用。"""
         targets = []
         for i in range(ENCODER_COUNT):
             if i < len(self._joint_target_user_set) and self._joint_target_user_set[i]:
@@ -396,23 +400,6 @@ class ControlPanelManualMixin:
             if self._active_scope_multiturn_unknown_mask() == 0:
                 self._set_status(f"Motor absolute command sent (M{idx})")
 
-    def send_all(self) -> None:
-        """Send the all command to the backend."""
-        if not self._interaction_enabled:
-            return
-        try:
-            if self._manual_submode() == "motor":
-                for idx in range(MOTOR_COUNT):
-                    self._sync_motor_abs_from_slider_before_send(idx)
-                if self._send_motor_abs_from_ui("Send All"):
-                    self._set_status(f"Sent {MOTOR_COUNT} motor absolute targets")
-            else:
-                if not self._guard_joint_command_started():
-                    return
-                self.context.send_joint_targets(self.resolved_joint_targets(), source="Send All", live=False)
-                self._set_status(f"Sent {ENCODER_COUNT} joint targets")
-        except Exception as exc:
-            self._error("Send Failed", f"{type(exc).__name__}: {exc}")
 
     def release_all_motors_half_turn(self) -> None:
         """Run the release all motors half turn workflow."""
@@ -596,10 +583,9 @@ class ControlPanelManualMixin:
         self.context.draw_pose_angles(clamped_angles)
 
     def _build_current_min_open_pose_targets(self) -> Optional[Tuple[List[float], List[int]]]:
-        """Build the current min open pose targets UI section."""
         joints = self._active_scope_joint_indices()
         if not joints:
-            self._set_status("Open/Zero Pose blocked: no active joints selected")
+            self._set_status("Open Pose blocked: no active joints selected")
             return None
         targets = self.resolved_joint_targets()
         missing: List[str] = []
@@ -613,7 +599,7 @@ class ControlPanelManualMixin:
             detail = "; ".join(missing[:4])
             if len(missing) > 4:
                 detail += f"; +{len(missing) - 4} more"
-            self._set_status(f"Open/Zero Pose blocked: {detail}")
+            self._set_status(f"Open Pose blocked: {detail}")
             return None
         return targets, joints
 
@@ -638,6 +624,8 @@ class ControlPanelManualMixin:
                 missing.append(f"J{joint:02d} {workspace.reason}")
                 continue
             if self._joint_uses_dual_motors(joint):
+                # 双腱关节在 Current Min 附近容易与预紧/防松绳约束打架，
+                # Open Pose 改用动态工作空间中点，给两根腱都留下调节余量。
                 targets[joint] = workspace.clamp(
                     (workspace.current_min_deg + workspace.current_max_deg) * 0.5
                 )
@@ -665,19 +653,6 @@ class ControlPanelManualMixin:
             f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
         )
 
-    def apply_zero_pose(self) -> None:
-        """Apply the zero pose command to the UI or backend."""
-        pose = self._build_current_min_open_pose_targets()
-        if pose is None:
-            return
-        targets, joints = pose
-        self._apply_and_send_joint_pose(
-            targets,
-            joints,
-            "Zero Pose",
-            "active Current Min + "
-            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
-        )
 
     def apply_fist_pose(self) -> None:
         """Apply the fist pose command to the UI or backend."""

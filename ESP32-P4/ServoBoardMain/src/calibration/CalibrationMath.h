@@ -3,46 +3,48 @@
 
 #include "CalibrationTask.h"
 
+// 14 位磁编码器一圈的计数和半圈阈值。
 static const int32_t kCalibrationEncoderModulo = 16384;
 static const int32_t kCalibrationEncoderHalfTurn = kCalibrationEncoderModulo / 2;
+// Rope Init/READY 允许落在 Auto Min 外侧的最大容差。
 static const int32_t kFeedbackReadyEnterOutsideToleranceCounts = 24;
 
-
-
+// 按安装方向把 0..16383 原始值变成“正方向递增”的环形坐标。
 int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction);
+// 将任意整数折回 0..16383。
 int32_t calibrationWrapEncoderCount(int32_t value);
+// 计算环形坐标中 from 到 to 的正向距离，结果为 0..16383。
 int32_t calibrationForwardEncoderDelta(int32_t from, int32_t to);
+// 计算 target-actual 的最短有符号环形差，结果位于 [-8192,8192]。
 int32_t calibrationWrapEncoderDelta(int32_t target, int32_t actual);
+// 按 16384 counts/360° 在 counts 与角度之间换算，仅用于区间外诊断。
 float calibrationEncoderCountToDeg(int32_t count);
 int32_t calibrationDegToEncoderCount(float deg);
 
-// Result of mapping one direction-oriented magnetic encoder sample through a
-// v2 calibration window. outsideCounts is signed: negative means the sample
-// is below the URDF-min endpoint, positive means it is above the URDF-max
-// endpoint. It must never be converted to an absolute value.
+// 单次磁编到 URDF 角度映射结果。
+// outsideCounts 必须保留符号：负数表示低于 Auto Min，正数表示高于 Auto Max。
 struct EncoderUrdfMapResult {
-    bool valid;
-    bool insideCalibratedWindow;
-    bool feedbackReady;
-    int32_t signedTravelCounts;
-    int32_t outsideCounts;
-    int32_t belowMinCounts;
-    int32_t aboveMaxCounts;
-    float urdfDeg;
+    bool valid;                    // 输入和标定契约是否有效。
+    bool insideCalibratedWindow;   // 当前 raw 是否在 Auto Min/Max 内。
+    bool feedbackReady;            // 是否满足 READY 下边界要求。
+    int32_t signedTravelCounts;    // 相对 Auto Min 的有符号正向坐标。
+    int32_t outsideCounts;         // 区间外有符号距离。
+    int32_t belowMinCounts;        // 低于 Auto Min 的距离，否则为 0。
+    int32_t aboveMaxCounts;        // 高于 Auto Max 的距离，否则为 0。
+    float urdfDeg;                 // 区间内线性映射、区间外诊断外推角度。
 };
 
-// Positive travel following the configured encoder direction. Endpoints are
-// raw 14-bit values and may cross zero.
+// 沿安装正方向计算两个原始端点的距离；端点允许跨 0/16383。
 int32_t calibrationDirectedEncoderDelta(uint16_t fromRaw,
                                         uint16_t toRaw,
                                         int8_t direction);
 
-// Shortest signed displacement following the configured positive encoder
-// direction. Raw endpoints may cross 0/16383.
+// 沿安装正方向计算最短有符号位移，正数为同向，负数为反向。
 int32_t calibrationSignedDirectedEncoderDelta(uint16_t fromRaw,
                                               uint16_t toRaw,
                                               int8_t direction);
 
+// 由 Manual/Auto 端点生成当前 V3 动态角度映射，并绑定单关节 Manual CRC。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,
@@ -52,9 +54,8 @@ bool applyManualScaledUrdfMappingToCalibration(
     uint32_t manualEntryCrc,
     JointCalibrationResult* result);
 
-// Above-max feedback remains valid but is reported separately. The runtime
-// controller will later clamp commands and emit a warning without leaving
-// READY solely because the upper boundary was exceeded.
+// 使用 V3 标定把实时 raw 映射到角度。超过 Auto Max 仍可显示并告警；
+// 只有低于 Auto Min 才会令 feedbackReady=false。
 bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   const JointCalibrationResult& calibration,
                                   const ManualEncoderReference& manual,
@@ -62,10 +63,8 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   int8_t direction,
                                   EncoderUrdfMapResult* out);
 
-// Map a direction-oriented encoder raw value into a complete URDF degree
-// interval. Inside the measured endpoint window this is a direct linear fit.
-// Outside the window urdfDeg is only a signed 16384-count diagnostic
-// extrapolation from the nearest endpoint; callers must not use it for PID.
+// V2 快照兼容映射：把方向坐标中的实测端点线性映射到完整 URDF 区间。
+// 区间外角度只用于诊断，当前 V3 标定流程不会生成这种结果。
 bool mapEncoderWindowToUrdf(int32_t orientedRaw,
                             int32_t encoderAtUrdfMin,
                             int32_t encoderAtUrdfMax,
@@ -73,21 +72,10 @@ bool mapEncoderWindowToUrdf(int32_t orientedRaw,
                             float urdfMaxDeg,
                             EncoderUrdfMapResult* out);
 
-// Convenience wrapper for the staged v2 JointCalibrationResult fields.
+// 校验 V2 模型 CRC 后执行兼容映射；ControlTask 仍用它读取历史快照。
 bool mapJointCalibrationEncoderToUrdf(uint8_t jointIndex,
                                       const JointCalibrationResult& calibration,
                                       int32_t orientedRaw,
                                       EncoderUrdfMapResult* out);
-
-// Bind a measured, direction-oriented endpoint pair to the generated URDF
-// interval for one joint. This converts the result to mapping v2 and stamps
-// the generated config CRC. Spans at or above half a revolution are rejected
-// until continuous unwrapped encoder tracking is available.
-bool applyGeneratedUrdfMappingToCalibration(uint8_t jointIndex,
-                                            int32_t encoderAtUrdfMin,
-                                            int32_t encoderAtUrdfMax,
-                                            JointCalibrationResult* result);
-
-
 
 #endif // CALIBRATION_MATH_H

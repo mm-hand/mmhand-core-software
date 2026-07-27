@@ -204,6 +204,7 @@ def _field_dtype_kind(field: str) -> str:
         "mapping_id",
         "mapping_version",
         "urdf_config_crc",
+        "joint_order_crc",
         "raw_joint_targets_json",
         "input_joint_targets_json",
         "output_joint_targets_json",

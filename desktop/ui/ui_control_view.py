@@ -192,17 +192,16 @@ class ControlPanelViewMixin:
         self._reset_manual_widget_refs()
 
     def _reset_manual_widget_refs(self) -> None:
-        """Reset the manual widget refs state."""
         self._control_widgets = []
         self.manual_check = None
-        self.send_all_btn = None
         self.new_device_reset_btn = None
         self.calib_load_btn = None
+        self.calib_import_btn = None
+        self.calib_export_btn = None
         self.open_btn = None
         self.release_half_turn_btn = None
         self.tighten_half_turn_btn = None
         self.fist_btn = None
-        self.zero_btn = None
         self.tabs = None
         self.device_check_view = None
         self.joint_table = None
@@ -216,6 +215,16 @@ class ControlPanelViewMixin:
         self.ff_joint_combo = None
         self.ff_targets_edit = None
         self.ff_step_spin = None
+        self.tri_start_btn = None
+        self.tri_stop_btn = None
+        self.tri_joint_combo = None
+        self.tri_min_spin = None
+        self.tri_max_spin = None
+        self.tri_freq_spin = None
+        self.local_start_btn = None
+        self.local_stop_btn = None
+        self.local_freq = None
+        self.local_amp = None
         self.test_joint_combos = []
         self.test_min_spins = []
         self.test_max_spins = []
@@ -238,7 +247,7 @@ class ControlPanelViewMixin:
         self._joint_target_user_set = []
         self.motor_turn_items = []
         self.motor_raw_items = []
-        self.motor_hw_items = []
+        self.motor_flash_raw_items = []
         self.motor_abs_items = []
         self.motor_load_items = []
         self.motor_joint_items = []

@@ -202,6 +202,39 @@ def test_backend_forwards_single_joint_command_mask_to_controller():
     assert controller.sent[-1][2] == (1 << 3)
 
 
+def test_backend_masked_command_ignores_uncalibrated_active_joint():
+    state = _ready_state(joint_idx=0, current_min=5.0)
+    state.active_joint_mask = 0b11
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+
+    result = backend.send_joint_targets(
+        [10.0] * ENCODER_COUNT,
+        source="masked sparse command",
+        command_joint_mask=1,
+    )
+
+    assert result.sent
+    assert result.blocked == []
+    assert controller.sent[-1][2] == 1
+
+
+def test_backend_rejects_command_mask_outside_current_active_scope():
+    state = _ready_state(joint_idx=0, current_min=5.0)
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+
+    result = backend.send_joint_targets(
+        [10.0] * ENCODER_COUNT,
+        source="bad mask",
+        command_joint_mask=0b10,
+    )
+
+    assert not result.sent
+    assert result.blocked == [1]
+    assert controller.sent == []
+
+
 def _arm_ros2_backend(backend):
     backend.is_comm_connected = lambda: True
     backend.is_started = lambda: True

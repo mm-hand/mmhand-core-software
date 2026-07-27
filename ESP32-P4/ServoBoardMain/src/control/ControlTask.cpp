@@ -60,10 +60,6 @@ static const uint8_t kUpperWorkspaceWarningStableFrames = 3;
 // 碰撞检测只在实际舵机进入 LUT 边界附近时排除“工作空间耗尽”。
 // 不能使用 PID 计算目标被钳位作为证据，否则双电机大误差时会大量漏检。
 static const int32_t kCollisionLutBoundaryToleranceCounts = 32;
-static const float kLocalTestTwoPi = 6.28318530717958647692f;
-static const float kLocalTestMinFreqHz = 0.001f;
-static const float kLocalTestMaxFreqHz = 100.0f;
-static const float kLocalTestMaxAbsAmpDeg = 180.0f;
 
 static bool shouldLogControlPidDiag(uint8_t jointIndex,
                                     uint32_t nowMs,
@@ -134,33 +130,6 @@ static bool isActualAbsAtDirectionalLutBoundary(int32_t actualAbs,
             (lutMinAbs + kCollisionLutBoundaryToleranceCounts);
     }
     return false;
-}
-
-static float sanitizeLocalTestFreq(float freqHz)
-{
-    // 保证生成的正弦轨迹有限，并且频率不会超出固件控制环可承受范围。
-    if (!isfinite(freqHz) || freqHz < kLocalTestMinFreqHz) {
-        return kLocalTestMinFreqHz;
-    }
-    if (freqHz > kLocalTestMaxFreqHz) {
-        return kLocalTestMaxFreqHz;
-    }
-    return freqHz;
-}
-
-static float sanitizeLocalTestAmp(float ampDeg)
-{
-    // 幅值允许带符号，便于操作端不改 phaseRad 也能翻转相位。
-    if (!isfinite(ampDeg)) {
-        return 0.0f;
-    }
-    if (ampDeg > kLocalTestMaxAbsAmpDeg) {
-        return kLocalTestMaxAbsAmpDeg;
-    }
-    if (ampDeg < -kLocalTestMaxAbsAmpDeg) {
-        return -kLocalTestMaxAbsAmpDeg;
-    }
-    return ampDeg;
 }
 
 // 协议字段使用 int16，保留 +32767 作为哨兵/无效值。
@@ -743,15 +712,6 @@ static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlComm
     out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
     out->motorDirectCommandSource = sharedData->motor_direct_command_source;
     out->controlMode = sharedData->control_mode;
-    out->sineTestEnabled = sharedData->sine_test_enabled;
-    out->sineTestRequestToken = sharedData->sine_test_request_token;
-    out->sineTestStartMs = sharedData->sine_test_start_ms;
-    out->sineTestJointMask = sharedData->sine_test_joint_mask;
-    out->sineTestHoldMs = sharedData->sine_test_hold_ms;
-    memcpy(out->sineTestCenterDeg, sharedData->sine_test_center_deg, sizeof(out->sineTestCenterDeg));
-    memcpy(out->sineTestAmpDeg, sharedData->sine_test_amp_deg, sizeof(out->sineTestAmpDeg));
-    memcpy(out->sineTestFreqHz, sharedData->sine_test_freq_hz, sizeof(out->sineTestFreqHz));
-    memcpy(out->sineTestPhaseRad, sharedData->sine_test_phase_rad, sizeof(out->sineTestPhaseRad));
     if (lock) {
         xSemaphoreGive(lock);
     }
@@ -835,9 +795,6 @@ void controlTask(void* parameter)
     bool feedbackRunTracking = false;
     bool feedbackRunDoneEventQueued = false;
     bool feedbackRunTimeoutEventQueued = false;
-    uint32_t lastSineTestRequestToken = commandSnapshot.sineTestRequestToken;
-    bool sineTestActive = false;
-    uint32_t sineTestStartMs = 0;
 
     while (1)
     {
@@ -908,7 +865,7 @@ void controlTask(void* parameter)
         // 每个循环生成一个 batch 并用 overwrite 发布，下游始终看到最新完整命令集。
         targetBatch.timestamp = millis();
         targetBatch.source = SERVO_TARGET_OWNER_CONTROL;
-        int16_t jointCmdPos[ENCODER_TOTAL_NUM] = {0};
+        int32_t jointCmdPos[ENCODER_TOTAL_NUM] = {0};
         uint8_t jointCmdValid[ENCODER_TOTAL_NUM] = {0};
 
         ServoAngleData_t servoData;
@@ -1088,48 +1045,6 @@ void controlTask(void* parameter)
         }
 
         memcpy(localTargets, commandSnapshot.targetAngles, sizeof(localTargets));
-        const bool sineTestEnabled =
-            commandSnapshot.sineTestEnabled != 0 &&
-            commandSnapshot.controlMode == CONTROL_MODE_JOINT;
-        if (sineTestEnabled)
-        {
-            // 本地正弦测试会覆盖选中关节的上位机目标，
-            // 但仍复用正常关节 PID 和安全流水线。
-            const uint32_t sineTestToken = commandSnapshot.sineTestRequestToken;
-            if (!sineTestActive || sineTestToken != lastSineTestRequestToken)
-            {
-                sineTestStartMs = commandSnapshot.sineTestStartMs != 0
-                                      ? commandSnapshot.sineTestStartMs
-                                      : millis();
-                sineTestActive = true;
-                lastSineTestRequestToken = sineTestToken;
-                feedbackRunDoneStableCount = 0;
-            }
-
-            const float elapsedSec =
-                (float)((uint32_t)(millis() - sineTestStartMs)) * 0.001f;
-            const float waveSec =
-                elapsedSec > ((float)commandSnapshot.sineTestHoldMs * 0.001f)
-                    ? elapsedSec - ((float)commandSnapshot.sineTestHoldMs * 0.001f)
-                    : 0.0f;
-            const uint32_t activeJointMask = commandSnapshot.sineTestJointMask;
-            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
-            {
-                if ((activeJointMask & (1UL << jointIndex)) != 0)
-                {
-                    const float freqHz = sanitizeLocalTestFreq(commandSnapshot.sineTestFreqHz[jointIndex]);
-                    const float ampDeg = sanitizeLocalTestAmp(commandSnapshot.sineTestAmpDeg[jointIndex]);
-                    const float phaseRad = commandSnapshot.sineTestPhaseRad[jointIndex];
-                    localTargets[jointIndex] =
-                        commandSnapshot.sineTestCenterDeg[jointIndex] +
-                        ampDeg * sinf(kLocalTestTwoPi * freqHz * waveSec + phaseRad);
-                }
-            }
-        }
-        else
-        {
-            sineTestActive = false;
-        }
         const bool hostControlEnabled = (sharedData->control_enabled != 0);
         const uint8_t systemState = sharedData->system_state;
         const uint8_t targetOwner = sharedData->servo_target_owner;
@@ -1211,12 +1126,10 @@ void controlTask(void* parameter)
         const uint32_t activeJointMask =
             sharedAtomicLoad(&sharedData->active_joint_mask) &
             ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-        // 本地正弦测试有自己的关节选择；普通 UI/算法/遥操则使用最近一帧
-        // 角度命令携带的控制掩码。这样单行控制不会影响测试或整手实时流。
+        // 普通 UI、测试、算法和遥操统一使用最近一帧角度命令携带的控制掩码，
+        // 避免单行指令意外影响未选中的关节。
         const uint32_t feedbackCommandJointMask =
-            (sineTestActive
-                ? commandSnapshot.sineTestJointMask
-                : commandSnapshot.feedbackCommandJointMask) &
+            commandSnapshot.feedbackCommandJointMask &
             activeJointMask;
         const bool feedbackCollisionContextValid =
             feedbackOutputState &&
@@ -1371,8 +1284,7 @@ void controlTask(void* parameter)
         }
         const bool feedbackOneShotActive =
             feedbackRunningState &&
-            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
-            !sineTestActive;
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT;
         if (feedbackOneShotActive) {
             // 为本次命令 generation 记录限幅后的目标快照。
             // 完成判定必须针对一个稳定目标，而不是后续 UI 更新。
@@ -1443,7 +1355,7 @@ void controlTask(void* parameter)
                         continue;
                     }
 
-                    int16_t targetPos = clampServoPos(servoData.servoAngles[ch]);
+                    int32_t targetPos = clampServoPos(servoData.servoAngles[ch]);
                     if (!hotplugHoldMotor[ch]) {
                         if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
                             // sweep 目标是单圈 raw 值，通过增量展开实现连续旋转。
@@ -1533,7 +1445,7 @@ void controlTask(void* parameter)
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
-                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
+                    const int32_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                     jointCmdPos[jointIndex] = holdPos;
@@ -1547,7 +1459,7 @@ void controlTask(void* parameter)
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
-                    const int16_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
+                    const int32_t holdPos = clampServoPos(absolutePositionRaw[jointIndex]);
                     appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                     jointCmdPos[jointIndex] = holdPos;
@@ -1595,7 +1507,7 @@ void controlTask(void* parameter)
                     continue;
                 }
 
-                int16_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
+                int32_t targetPos = clampServoPos(absolutePositionRaw[jointIndex]);
 
                 // 只有激活关节才跟随 PID 并输出舵机目标。
                 const bool dualTendonJoint = isDualTendonJoint(jointIndex);

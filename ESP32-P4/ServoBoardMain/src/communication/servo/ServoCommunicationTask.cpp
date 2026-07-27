@@ -6,6 +6,7 @@
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/TaskRuntimeMonitor.h"
+#include "ServoPositionRange.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../persistence/MultiTurnNvsStore.h"
 #endif
@@ -25,6 +26,10 @@
 static const uint8_t kServoOfflineInvalidateMisses = 3;
 static const uint8_t kServoOnlineConfirmReads = 2;
 static const uint32_t kServoOfflineProbeIntervalMs = 50;
+// 同一次上线周期内最多尝试三次恢复事务；失败后等待再次掉线/上线，
+// 避免总线或供电异常时反复写舵机 EEPROM。
+static const uint8_t kServoRecoveryMaxAttempts = 3;
+static const uint32_t kServoRecoveryRetryIntervalMs = 100;
 
 static const uint32_t kServoLoopGapLogThresholdMs = 50;
 static const uint32_t kServoApplyStallLogThresholdMs = 50;
@@ -38,15 +43,6 @@ static const uint16_t kNvsRestoreRawToleranceCounts = 256;
 static const int16_t kNvsTurnEdgeRawMargin = 256;
 static const int32_t kNvsMoveAbsThreshold = 64;
 #endif
-static const int32_t kServoAbsLimit = 30719;
-
-static int16_t clampServoAbsLocal(int32_t value)
-{
-    if (value > kServoAbsLimit) return (int16_t)kServoAbsLimit;
-    if (value < -kServoAbsLimit) return (int16_t)-kServoAbsLimit;
-    return (int16_t)value;
-}
-
 static int16_t normalizeServoRawSingleTurn(int32_t value)
 {
     int32_t raw = value % 4096;
@@ -68,7 +64,6 @@ static uint16_t singleTurnDistanceCounts(int16_t a, int16_t b)
 
 // Per-servo feedback cache used inside the servo communication layer.
 struct ServoFeedbackInternal {
-    int16_t presentPosition;
     int16_t rawPosition;
     int16_t speed;
     int16_t load;
@@ -89,6 +84,18 @@ struct ServoFeedbackInternal {
     uint8_t missedReadCount;
     uint8_t successfulReadCount;
     bool onlineTransitionPending;
+    // 热插拔恢复失败不会立即丢弃 pending；通信任务按间隔重试，
+    // 达到上限后设置 recoveryFailed，等待下一次重新上线再清零。
+    uint8_t recoveryAttemptCount;
+    bool recoveryFailed;
+    uint32_t nextRecoveryAttemptMs;
+    // 舵机离线前最后一次可信的逻辑多圈位置。掉线时先冻结到这里，
+    // 后台 NVS 任务随后写 Flash，避免离线通道从在线快照中消失。
+    int32_t offlineLastTrustedAbs;
+    int16_t offlineLastTrustedRaw;
+    int16_t offlineLastTrustedTurn;
+    uint32_t offlineLastTrustedTimestampMs;
+    bool offlineTrustedSnapshotPending;
     uint32_t lastUpdate;
 };
 
@@ -142,14 +149,24 @@ public:
         return ok;
     }
 
-    void setTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
+    bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc)
     {
-        queueTarget(id, logicalToHardwareTarget(id, position), speed, acc);
+        int16_t hardwarePosition = 0;
+        if (!logicalToHardwareTarget(id, logicalPosition, &hardwarePosition)) {
+            return false;
+        }
+        queueTarget(id, hardwarePosition, speed, acc);
+        return true;
     }
 
-    void setHardwareTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
+    bool setHardwareTarget(uint8_t id, int32_t position, uint16_t speed, uint8_t acc)
     {
-        queueTarget(id, clampServoAbsLocal(position), speed, acc);
+        if (position < kServoHardwareCommandMin ||
+            position > kServoHardwareCommandMax) {
+            return false;
+        }
+        queueTarget(id, (int16_t)position, speed, acc);
+        return true;
     }
 
     void queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
@@ -267,12 +284,6 @@ public:
         return fb.absolutePosition + fb.logicalOffset;
     }
 
-    int16_t getPresentPosition(uint8_t id) const
-    {
-        if (id > MAX_SERVO_ID) return 0;
-        return _feedback[id].presentPosition;
-    }
-
     const ServoFeedbackInternal& getFeedback(uint8_t id) const
     {
         static ServoFeedbackInternal dummy;
@@ -306,13 +317,64 @@ public:
                _feedback[id].missedReadCount >= kServoOfflineInvalidateMisses;
     }
 
-    bool consumeOnlineTransition(uint8_t id)
+    bool hasOnlineTransitionPending(uint8_t id) const
     {
-        if (id > MAX_SERVO_ID || !_feedback[id].onlineTransitionPending) {
+        return id <= MAX_SERVO_ID &&
+               _feedback[id].online &&
+               _feedback[id].onlineTransitionPending;
+    }
+
+    int32_t getLogicalOffset(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID ? _feedback[id].logicalOffset : 0;
+    }
+
+    ServoLogicalRange getLogicalRange(uint8_t id) const
+    {
+        return servoLogicalRangeFromOffset(getLogicalOffset(id));
+    }
+
+    bool isRecoveryAttemptDue(uint8_t id, uint32_t nowMs) const
+    {
+        if (!hasOnlineTransitionPending(id) || _feedback[id].recoveryFailed) {
             return false;
         }
-        _feedback[id].onlineTransitionPending = false;
-        return true;
+        return (int32_t)(nowMs - _feedback[id].nextRecoveryAttemptMs) >= 0;
+    }
+
+    bool isRecoveryFailed(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID && _feedback[id].recoveryFailed;
+    }
+
+    uint8_t recoveryAttemptCount(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID ? _feedback[id].recoveryAttemptCount : 0;
+    }
+
+    // 只有扭矩关闭和多圈模式配置都成功后才消费上线事件。失败时保留
+    // pending 并延迟重试，避免一次串口瞬态错误永久跳过恢复。
+    void finishRecoveryAttempt(uint8_t id, bool success, uint32_t nowMs)
+    {
+        if (id > MAX_SERVO_ID) {
+            return;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        if (success) {
+            fb.onlineTransitionPending = false;
+            fb.recoveryAttemptCount = 0;
+            fb.recoveryFailed = false;
+            fb.nextRecoveryAttemptMs = 0;
+            return;
+        }
+
+        if (fb.recoveryAttemptCount < 0xFF) {
+            fb.recoveryAttemptCount++;
+        }
+        fb.nextRecoveryAttemptMs = nowMs + kServoRecoveryRetryIntervalMs;
+        if (fb.recoveryAttemptCount >= kServoRecoveryMaxAttempts) {
+            fb.recoveryFailed = true;
+        }
     }
 
     bool isMultiTurnConfigured(uint8_t id) const
@@ -356,10 +418,9 @@ public:
             return false;
         }
 
-        const int32_t restoredLogicalAbs = clampServoAbsLocal(absPosition);
-        // New-device reset sends the current single-turn raw as turn0. If the
-        // servo power was cycled while P4 stayed on, the previous software
-        // multi-turn anchor is stale and must not be reused here.
+        const int32_t restoredLogicalAbs = absPosition;
+        // New Device Reset 会把当前单圈 raw 作为 turn0。若仅舵机掉电而
+        // P4 持续运行，旧的软件多圈锚点已经失效，这里禁止继续复用。
         const bool restoreToCurrentSingleTurn =
             (restoredLogicalAbs >= 0 && restoredLogicalAbs < 4096);
         const int32_t hardwareAbs = restoreToCurrentSingleTurn
@@ -379,6 +440,45 @@ public:
                       (long)hardwareAbs,
                       (long)fb.logicalOffset,
                       (int)currentRaw);
+        return true;
+    }
+
+    // 自动标定已经重新建立机械端点后，当前 power-session ABS 可作为新的
+    // 可信基准。这里不平移坐标，也不修改 logicalOffset，只闭合驱动内部
+    // absoluteReliable 与共享 Turn Known 状态。
+    bool acceptCurrentSessionAsTrusted(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID || !_feedback[id].online ||
+            !_multiTurnConfigured[id] ||
+            _feedback[id].onlineTransitionPending ||
+            _feedback[id].recoveryFailed) {
+            return false;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        fb.initialized = true;
+        fb.absoluteReliable = true;
+        fb.lastUpdate = millis();
+        return true;
+    }
+
+    // 通信任务消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
+    // 只产生一条 NVS 保存请求。
+    bool consumeOfflineTrustedSnapshot(uint8_t id,
+                                       int32_t* logicalAbs,
+                                       int16_t* raw,
+                                       int16_t* turn,
+                                       uint32_t* timestampMs)
+    {
+        if (id > MAX_SERVO_ID || !logicalAbs || !raw || !turn ||
+            !timestampMs || !_feedback[id].offlineTrustedSnapshotPending) {
+            return false;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        *logicalAbs = fb.offlineLastTrustedAbs;
+        *raw = fb.offlineLastTrustedRaw;
+        *turn = fb.offlineLastTrustedTurn;
+        *timestampMs = fb.offlineLastTrustedTimestampMs;
+        fb.offlineTrustedSnapshotPending = false;
         return true;
     }
 
@@ -406,7 +506,22 @@ private:
         if (!wasOnline && fb.successfulReadCount >= kServoOnlineConfirmReads) {
             fb.online = true;
             fb.onlineTransitionPending = true;
+            fb.recoveryAttemptCount = 0;
+            fb.recoveryFailed = false;
+            fb.nextRecoveryAttemptMs = 0;
             FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] id=%u communication restored\r\n", (unsigned)id);
+        }
+        // 只有已经建立过可信多圈基准的反馈，才能作为掉电恢复锚点。
+        // 初次发现的新舵机仍保持 Turn Unknown，不能把未知圈数写入 Flash。
+        if (fb.absoluteReliable) {
+            const int32_t logicalAbs = fb.absolutePosition + fb.logicalOffset;
+            const int16_t trustedRaw =
+                normalizeServoRawSingleTurn(fb.rawPosition);
+            fb.offlineLastTrustedAbs = logicalAbs;
+            fb.offlineLastTrustedRaw = trustedRaw;
+            fb.offlineLastTrustedTurn =
+                (int16_t)((logicalAbs - trustedRaw) / 4096);
+            fb.offlineLastTrustedTimestampMs = millis();
         }
         fb.lastUpdate = millis();
     }
@@ -422,8 +537,25 @@ private:
             fb.missedReadCount++;
         }
         if (fb.missedReadCount >= kServoOfflineInvalidateMisses && fb.online) {
+            // 在清除 logicalOffset/turnCount 之前冻结最后可信反馈。这里只写
+            // RAM，不在舵机总线任务里直接写 Flash。
+            if (fb.absoluteReliable) {
+                const int32_t logicalAbs =
+                    fb.absolutePosition + fb.logicalOffset;
+                const int16_t trustedRaw =
+                    normalizeServoRawSingleTurn(fb.rawPosition);
+                fb.offlineLastTrustedAbs = logicalAbs;
+                fb.offlineLastTrustedRaw = trustedRaw;
+                fb.offlineLastTrustedTurn =
+                    (int16_t)((logicalAbs - trustedRaw) / 4096);
+                fb.offlineLastTrustedTimestampMs = fb.lastUpdate;
+                fb.offlineTrustedSnapshotPending = true;
+            }
             fb.online = false;
             fb.onlineTransitionPending = false;
+            fb.recoveryAttemptCount = 0;
+            fb.recoveryFailed = false;
+            fb.nextRecoveryAttemptMs = 0;
             _multiTurnConfigured[id] = false;
             invalidateMultiTurnTrust(id);
         }
@@ -447,13 +579,17 @@ private:
         }
     }
 
-    int16_t logicalToHardwareTarget(uint8_t id, int32_t logicalPosition) const
+    bool logicalToHardwareTarget(uint8_t id,
+                                 int32_t logicalPosition,
+                                 int16_t* outHardwarePosition) const
     {
-        if (id > MAX_SERVO_ID) {
-            return 0;
+        if (id > MAX_SERVO_ID || !outHardwarePosition) {
+            return false;
         }
         const ServoFeedbackInternal& fb = _feedback[id];
-        return clampServoAbsLocal(logicalPosition - fb.logicalOffset);
+        return servoLogicalToHardwareAbs(logicalPosition,
+                                         fb.logicalOffset,
+                                         outHardwarePosition);
     }
 
     static int32_t expandSingleTurnRawNearAnchor(int16_t rawSingleTurn, int32_t anchor)
@@ -465,7 +601,7 @@ private:
         while ((anchor - candidate) > 2048) {
             candidate += 4096;
         }
-        return clampServoAbsLocal(candidate);
+        return candidate;
     }
 
     static int16_t decodeSigned(uint8_t lo, uint8_t hi)
@@ -487,10 +623,9 @@ private:
         int32_t absPos = 0;
         int16_t rawSingleTurn = 0;
 
-        fb.presentPosition = newRawPos;
         const bool servoProvidedMultiTurnAbs = (newRawPos < 0 || newRawPos >= 4096);
         if (servoProvidedMultiTurnAbs) {
-            absPos = clampServoAbsLocal((int32_t)newRawPos);
+            absPos = (int32_t)newRawPos;
             rawSingleTurn = normalizeServoRawSingleTurn(absPos);
         } else {
             rawSingleTurn = normalizeServoRawSingleTurn(newRawPos);
@@ -579,6 +714,7 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
                                           uint32_t motorMask,
                                           const int32_t* motorAbs,
                                           uint16_t rawToleranceCounts,
+                                          bool clearRecoveryTransaction,
                                           uint32_t* restoredMask,
                                           uint32_t* rejectedMask)
 {
@@ -605,6 +741,12 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
             !bus->restoreAbsolutePosition(id, motorAbs[ch], rawToleranceCounts)) {
             rejected |= bit;
             continue;
+        }
+        if (clearRecoveryTransaction) {
+            // New Device Reset 是用户确认“当前 raw 即新 turn0”的显式恢复。
+            // 恢复成功后必须同时结束热插拔事务并清除 recoveryFailed；
+            // 否则共享 Unknown 虽已清除，状态机仍会被旧失败位图阻塞。
+            bus->finishRecoveryAttempt(id, true, millis());
         }
         restored |= bit;
     }
@@ -676,7 +818,46 @@ static void configureMappedServosForMultiTurn()
 #endif
 }
 
-static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
+static void recordServoRangeReject(TaskSharedData_t* sharedData,
+                                   uint8_t motorChannel,
+                                   int32_t logicalTarget,
+                                   int32_t logicalOffset)
+{
+    if (!sharedData || motorChannel >= SERVO_TOTAL_NUM) {
+        return;
+    }
+    const ServoLogicalRange range =
+        servoLogicalRangeFromOffset(logicalOffset);
+    int64_t hardwareTarget =
+        (int64_t)logicalTarget - (int64_t)logicalOffset;
+    if (hardwareTarget > INT32_MAX) hardwareTarget = INT32_MAX;
+    if (hardwareTarget < INT32_MIN) hardwareTarget = INT32_MIN;
+    {
+        SharedSafetyGuard guard;
+        sharedData->servo_range_reject_motor = motorChannel;
+        sharedData->servo_range_reject_logical_target = logicalTarget;
+        sharedData->servo_range_reject_hardware_target =
+            (int32_t)hardwareTarget;
+        sharedData->servo_range_reject_logical_min = range.minAbs;
+        sharedData->servo_range_reject_logical_max = range.maxAbs;
+        sharedAtomicAddFetch(&sharedData->servo_range_reject_sequence,
+                             (uint32_t)1);
+    }
+    FW_LOG_WARN_PRINTF(
+        "[SERVO RANGE REJECT] M%02u logical=%ld hardware=%ld offset=%ld "
+        "logicalRange=[%ld,%ld] hardwareRange=[%ld,%ld]\r\n",
+        (unsigned)motorChannel,
+        (long)logicalTarget,
+        (long)hardwareTarget,
+        (long)logicalOffset,
+        (long)range.minAbs,
+        (long)range.maxAbs,
+        (long)kServoHardwareCommandMin,
+        (long)kServoHardwareCommandMax);
+}
+
+static void applyServoTargetBatch(TaskSharedData_t* sharedData,
+                                  const ServoTargetBatch_t& batch)
 {
     bool busWritePending[NUM_BUSES] = {false};
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
@@ -685,8 +866,21 @@ static void applyServoTargetBatch(const ServoTargetBatch_t& batch)
         if (!bus) {
             continue;
         }
-        bus->setTarget(cmd.servoId, cmd.position, cmd.speed, cmd.acc);
-        busWritePending[cmd.busIndex] = true;
+        if (bus->setTarget(cmd.servoId,
+                           cmd.position,
+                           cmd.speed,
+                           cmd.acc)) {
+            busWritePending[cmd.busIndex] = true;
+        } else {
+            const int motorChannel =
+                findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
+            if (motorChannel >= 0) {
+                recordServoRangeReject(sharedData,
+                                       (uint8_t)motorChannel,
+                                       cmd.position,
+                                       bus->getLogicalOffset(cmd.servoId));
+            }
+        }
     }
 
     for (uint8_t busIndex = 0; busIndex < NUM_BUSES; busIndex++) {
@@ -770,8 +964,14 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
     uint32_t onlineMask = 0;
+    uint32_t rangeValidMask = 0;
+    int32_t logicalRangeMin[SERVO_TOTAL_NUM] = {0};
+    int32_t logicalRangeMax[SERVO_TOTAL_NUM] = {0};
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        // FlashRaw 与舵机在线状态无关：它表示 P4 最近一次成功落盘的恢复锚点。
+        servoRawData.servoFlashRawPositions[ch] =
+            sharedData->multiturn_nvs_snapshot_raw[ch];
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
         ServoBusDriver* bus = getBusByIndex(busIndex);
@@ -779,9 +979,7 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             const ServoFeedbackInternal& fb = bus->getFeedback(id);
             servoData.servoAngles[ch] = bus->getAbsolutePosition(id);
             servoData.servoRawPositions[ch] = bus->getRawPosition(id);
-            servoData.servoHardwarePositions[ch] = bus->getPresentPosition(id);
             servoRawData.servoRawPositions[ch] = bus->getRawPosition(id);
-            servoRawData.servoHardwarePositions[ch] = bus->getPresentPosition(id);
             servoData.onlineStatus[ch] = 1;
             servoRawData.onlineStatus[ch] = 1;
             onlineMask |= (1UL << ch);
@@ -791,6 +989,14 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
             telemetryData.voltage[ch] = fb.voltage;
             telemetryData.temperature[ch] = fb.temperature;
             telemetryData.onlineStatus[ch] = 1;
+            if (bus->isMultiTurnConfigured(id) &&
+                !bus->hasOnlineTransitionPending(id) &&
+                !bus->isRecoveryFailed(id)) {
+                const ServoLogicalRange range = bus->getLogicalRange(id);
+                logicalRangeMin[ch] = range.minAbs;
+                logicalRangeMax[ch] = range.maxAbs;
+                rangeValidMask |= (1UL << ch);
+            }
             if (bus->isAbsoluteReliable(id)) {
                 const uint32_t bit = (1UL << ch);
                 if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & bit) != 0) {
@@ -816,6 +1022,17 @@ static void publishServoFeedback(TaskSharedData_t* sharedData)
     }
     sharedAtomicStore(&sharedData->servo_online_bitmap,
                       onlineMask & validMotorChannelMask());
+    {
+        SharedSafetyGuard guard;
+        memcpy(sharedData->servo_logical_range_min,
+               logicalRangeMin,
+               sizeof(logicalRangeMin));
+        memcpy(sharedData->servo_logical_range_max,
+               logicalRangeMax,
+               sizeof(logicalRangeMax));
+        sharedAtomicStore(&sharedData->servo_logical_range_valid_bitmap,
+                          rangeValidMask & validMotorChannelMask());
+    }
 
     if (sharedData->servoFeedbackQueue) {
         xQueueOverwrite(sharedData->servoFeedbackQueue, &servoData);
@@ -864,6 +1081,7 @@ static void processHostMultiTurnRestore(TaskSharedData_t* sharedData, uint32_t* 
                                   motorMask,
                                   motorAbs,
                                   256,
+                                  true,
                                   &restoredMask,
                                   &rejectedMask);
     sharedData->restore_multi_turn_restored_mask = restoredMask;
@@ -875,6 +1093,87 @@ static void processHostMultiTurnRestore(TaskSharedData_t* sharedData, uint32_t* 
         sharedAtomicAddFetch(&sharedData->multiturn_nvs_save_request_token, (uint32_t)1);
     }
 #endif
+}
+
+// 把驱动内部的恢复状态发布到共享位图。标定预检只读取这些位图，
+// 不跨任务直接访问 UART 驱动对象。
+static void publishServoRecoveryState(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+    uint32_t pendingMask = 0;
+    uint32_t configuredMask = 0;
+    uint32_t failedMask = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus) {
+            continue;
+        }
+        const uint32_t bit = 1UL << ch;
+        if (bus->hasOnlineTransitionPending(id)) {
+            pendingMask |= bit;
+        }
+        if (bus->isMultiTurnConfigured(id)) {
+            configuredMask |= bit;
+        }
+        if (bus->isRecoveryFailed(id)) {
+            failedMask |= bit;
+        }
+    }
+    sharedAtomicStore(&sharedData->servo_recovery_pending_bitmap,
+                      pendingMask & validMotorChannelMask());
+    sharedAtomicStore(&sharedData->servo_multiturn_configured_bitmap,
+                      configuredMask & validMotorChannelMask());
+    sharedAtomicStore(&sharedData->servo_recovery_failed_bitmap,
+                      failedMask & validMotorChannelMask());
+}
+
+// 标定成功后由唯一拥有舵机驱动的通信任务提交可信状态。只有在线、
+// 多圈模式已配置且没有恢复事务悬空的电机才会被接受。
+static void processCalibrationTrustCommit(TaskSharedData_t* sharedData,
+                                          uint32_t* lastToken)
+{
+    if (!sharedData || !lastToken) {
+        return;
+    }
+    const uint32_t token =
+        sharedAtomicLoad(&sharedData->calibration_trust_request_token);
+    if (token == *lastToken) {
+        return;
+    }
+    *lastToken = token;
+
+    const uint32_t requestMask =
+        sharedAtomicLoad(&sharedData->calibration_trust_request_mask) &
+        validMotorChannelMask();
+    uint32_t acceptedMask = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = 1UL << ch;
+        if ((requestMask & bit) == 0) {
+            continue;
+        }
+        ServoBusDriver* bus = getBusByIndex(motorMap[ch].busIndex);
+        if (bus && bus->acceptCurrentSessionAsTrusted(motorMap[ch].servoID)) {
+            acceptedMask |= bit;
+        }
+    }
+    if (acceptedMask != 0) {
+        sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
+                             ~acceptedMask);
+    }
+    sharedAtomicStore(&sharedData->calibration_trust_accepted_mask,
+                      acceptedMask);
+    sharedAtomicStore(&sharedData->calibration_trust_result_token, token);
+    FW_LOG_INFO_PRINTF(
+        "[SERVO CALIB TRUST] token=%lu request=0x%08lX accepted=0x%08lX "
+        "unknown=0x%08lX\r\n",
+        (unsigned long)token,
+        (unsigned long)requestMask,
+        (unsigned long)acceptedMask,
+        (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
 }
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
@@ -907,6 +1206,24 @@ struct MultiTurnNvsRuntimeState {
     uint8_t deferredReason;
     uint8_t deferredTurnChanged;
     uint8_t deferredEdgeChanged;
+};
+
+// P4 持续供电而舵机单独掉电时使用的 RAM 恢复锚点。
+// 该状态与 Flash 开关独立：Flash OFF 只禁止跨 P4 掉电持久化，
+// 不能丢弃本次 P4 上电会话内已经冻结的可信多圈位置。
+struct ServoHotplugRecoveryAnchors {
+    uint32_t validMask;
+    int32_t logicalAbs[SERVO_TOTAL_NUM];
+    int16_t raw[SERVO_TOTAL_NUM];
+    uint32_t capturedAtMs[SERVO_TOTAL_NUM];
+};
+
+enum ServoRecoveryAnchorSource : uint8_t {
+    SERVO_RECOVERY_ANCHOR_NONE = 0,
+    SERVO_RECOVERY_ANCHOR_RAM_POWER_LOSS = 1,
+    SERVO_RECOVERY_ANCHOR_NVS_DEFERRED = 2,
+    SERVO_RECOVERY_ANCHOR_NVS_PENDING = 3,
+    SERVO_RECOVERY_ANCHOR_NVS_STORED = 4,
 };
 
 static bool isMultiTurnMotionState(uint8_t state)
@@ -996,21 +1313,75 @@ static void seedNvsRuntimeStateFromSnapshot(MultiTurnNvsRuntimeState* state,
     }
 }
 
-static void processServoOnlineTransitions(TaskSharedData_t* sharedData,
-                                          const MultiTurnNvsRuntimeState* nvsState,
-                                          bool nvsEnabled)
+// 为重新上线的单台舵机选择最新可信锚点。刚冻结的 RAM 锚点优先于
+// 异步 NVS 队列，避免舵机恢复速度快于 Flash 提交时出现 anchor=0。
+static bool resolveServoRecoveryAnchor(
+    TaskSharedData_t* sharedData,
+    const MultiTurnNvsRuntimeState* nvsState,
+    const ServoHotplugRecoveryAnchors* hotplugAnchors,
+    uint8_t channel,
+    int32_t* logicalAbs,
+    ServoRecoveryAnchorSource* source)
 {
-    if (!sharedData) {
+    if (!sharedData || !nvsState || !hotplugAnchors ||
+        !logicalAbs || !source || channel >= SERVO_TOTAL_NUM) {
+        return false;
+    }
+
+    const uint32_t bit = 1UL << channel;
+    if ((hotplugAnchors->validMask & bit) != 0) {
+        *logicalAbs = hotplugAnchors->logicalAbs[channel];
+        *source = SERVO_RECOVERY_ANCHOR_RAM_POWER_LOSS;
+        return true;
+    }
+
+    // Flash 被运行时关闭后，持久化快照已经被清除，不能继续复用任务启动时
+    // 留下的 NVS 缓存；但上面的本次会话 RAM 锚点仍然可以安全使用。
+    if (sharedData->multiturn_nvs_enabled == 0) {
+        return false;
+    }
+    if ((nvsState->deferredValidMask & bit) != 0) {
+        *logicalAbs = nvsState->deferredAbs[channel];
+        *source = SERVO_RECOVERY_ANCHOR_NVS_DEFERRED;
+        return true;
+    }
+    if ((nvsState->pendingValidMask & bit) != 0) {
+        *logicalAbs = nvsState->pendingAbs[channel];
+        *source = SERVO_RECOVERY_ANCHOR_NVS_PENDING;
+        return true;
+    }
+    if (nvsState->initialized &&
+        (nvsState->lastValidMask & bit) != 0) {
+        *logicalAbs = nvsState->lastAbs[channel];
+        *source = SERVO_RECOVERY_ANCHOR_NVS_STORED;
+        return true;
+    }
+    return false;
+}
+
+static void processServoOnlineTransitions(
+    TaskSharedData_t* sharedData,
+    const MultiTurnNvsRuntimeState* nvsState,
+    ServoHotplugRecoveryAnchors* hotplugAnchors)
+{
+    if (!sharedData || !nvsState || !hotplugAnchors) {
         return;
     }
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+    static uint8_t nextChannel = 0;
+    const uint32_t nowMs = millis();
+    // 每个 10 ms 周期最多处理一台舵机，避免多台同时上线时连续 EEPROM
+    // 事务长时间占用总线并拖慢反馈循环。
+    for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; offset++) {
+        const uint8_t ch =
+            (uint8_t)((nextChannel + offset) % SERVO_TOTAL_NUM);
         const uint32_t bit = (1UL << ch);
         const uint8_t busIndex = motorMap[ch].busIndex;
         const uint8_t id = motorMap[ch].servoID;
         ServoBusDriver* bus = getBusByIndex(busIndex);
-        if (!bus || !bus->consumeOnlineTransition(id)) {
+        if (!bus || !bus->isRecoveryAttemptDue(id, nowMs)) {
             continue;
         }
+        nextChannel = (uint8_t)((ch + 1) % SERVO_TOTAL_NUM);
 
         const bool torqueOffOk = bus->setTorqueEnabled(id, false);
         bool configured = bus->isMultiTurnConfigured(id);
@@ -1019,29 +1390,61 @@ static void processServoOnlineTransitions(TaskSharedData_t* sharedData,
         }
 
         bool trusted = bus->isAbsoluteReliable(id);
-        const bool hasAnchor = nvsEnabled && nvsState && nvsState->initialized &&
-            ((nvsState->lastValidMask & bit) != 0);
+        int32_t recoveryLogicalAbs = 0;
+        ServoRecoveryAnchorSource anchorSource =
+            SERVO_RECOVERY_ANCHOR_NONE;
+        const bool hasAnchor = resolveServoRecoveryAnchor(
+            sharedData,
+            nvsState,
+            hotplugAnchors,
+            ch,
+            &recoveryLogicalAbs,
+            &anchorSource);
         if (!trusted && torqueOffOk && configured && hasAnchor) {
             trusted = bus->restoreAbsolutePosition(id,
-                                                   nvsState->lastAbs[ch],
+                                                   recoveryLogicalAbs,
                                                    kNvsRestoreRawToleranceCounts);
         }
 
-        if (trusted) {
-            sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
-        } else {
-            sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
+        const uint8_t attemptNumber =
+            (uint8_t)(bus->recoveryAttemptCount(id) + 1U);
+        const bool recoveryReady = torqueOffOk && configured;
+        // 无锚点的新舵机只需完成多圈模式配置并保持 Turn Unknown，后续允许
+        // New Device/自动标定重建基准；已有锚点但 raw 校验失败才属于恢复失败，
+        // 此时保留 pending 重试，不能把失败事务误当成成功消费。
+        const bool recoveryTransactionComplete =
+            recoveryReady && (trusted || !hasAnchor);
+        bus->finishRecoveryAttempt(id, recoveryTransactionComplete, nowMs);
+        if (recoveryReady) {
+            if (trusted) {
+                sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
+                                     ~bit);
+                hotplugAnchors->validMask &= ~bit;
+            } else {
+                // 多圈模式已配置但旧锚点无法证明时保持 Turn Unknown；
+                // 自动标定可以在安全预检后从当前 power-session ABS 重建。
+                sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap,
+                                    bit);
+            }
         }
-        FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u torque_off=%u configured=%u anchor=%u trusted=%u raw=%d unknown=0x%08lX\r\n",
+        FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u "
+                      "torque_off=%u configured=%u anchor=%u anchor_src=%u trusted=%u "
+                      "ready=%u failed=%u raw=%d unknown=0x%08lX\r\n",
                       (unsigned)ch,
                       (unsigned)busIndex,
                       (unsigned)id,
+                      (unsigned)attemptNumber,
+                      (unsigned)kServoRecoveryMaxAttempts,
                       torqueOffOk ? 1U : 0U,
                       configured ? 1U : 0U,
                       hasAnchor ? 1U : 0U,
+                      (unsigned)anchorSource,
                       trusted ? 1U : 0U,
+                      recoveryReady ? 1U : 0U,
+                      bus->isRecoveryFailed(id) ? 1U : 0U,
                       (int)bus->getRawPosition(id),
                       (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
+        break;
     }
 }
 
@@ -1122,21 +1525,112 @@ static void cacheDeferredMultiTurnSnapshot(MultiTurnNvsRuntimeState* state,
         return;
     }
 
+    // 不能整块覆盖 deferred 快照：一台舵机掉线后，常规在线快照会少
+    // 一个 bit；若直接赋值，刚冻结的掉电前位置会被后续循环抹掉。
+    // 这里按通道合并，旧通道仅在有新可信样本时才更新。
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = 1UL << ch;
+        if ((validMask & bit) == 0) {
+            continue;
+        }
+        state->deferredAbs[ch] = motorAbs[ch];
+        state->deferredRaw[ch] = motorRaw[ch];
+        state->deferredTurn[ch] = motorTurn[ch];
+    }
     state->deferredSavePending = true;
-    state->deferredValidMask = validMask;
-    memcpy(state->deferredAbs, motorAbs, sizeof(state->deferredAbs));
-    memcpy(state->deferredRaw, motorRaw, sizeof(state->deferredRaw));
-    memcpy(state->deferredTurn, motorTurn, sizeof(state->deferredTurn));
+    state->deferredValidMask |= validMask;
     state->deferredTurnChanged =
         (state->deferredTurnChanged || turnChanged) ? 1U : 0U;
     state->deferredEdgeChanged =
         (state->deferredEdgeChanged || edgeChanged) ? 1U : 0U;
 
-    // An explicit state-machine request owns the final reason/token. Automatic
-    // RAM refreshes may update the snapshot but must not overwrite that request.
-    if (requestToken != 0 || state->deferredRequestToken == 0) {
+    // 显式状态机保存请求拥有最终 reason/token。后台 RAM 快照仍可刷新各通道
+    // 数据，但不能覆盖尚未落盘的显式请求；掉电快照原因也需保留到真正写盘。
+    const bool preservePowerLossReason =
+        state->deferredReason == MULTITURN_NVS_SAVE_REASON_SERVO_POWER_LOSS &&
+        reason != MULTITURN_NVS_SAVE_REASON_SERVO_POWER_LOSS &&
+        requestToken == 0;
+    if (!preservePowerLossReason &&
+        (requestToken != 0 || state->deferredRequestToken == 0)) {
         state->deferredReason = reason;
         state->deferredRequestToken = requestToken;
+    }
+}
+
+// 收集各总线刚刚冻结的掉电前可信位置，并合并进 deferred NVS 快照。
+// P4 仍有电时，这份 RAM 快照会在状态机退出运动所有权后由后台任务写入
+// Flash；P4 与舵机同时掉电时仍只能依赖此前已经落盘的快照。
+static void cacheServoPowerLossSnapshots(
+    TaskSharedData_t* sharedData,
+    MultiTurnNvsRuntimeState* state,
+    ServoHotplugRecoveryAnchors* hotplugAnchors)
+{
+    if (!sharedData || !state || !hotplugAnchors) {
+        return;
+    }
+
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus) {
+            continue;
+        }
+
+        int32_t logicalAbs = 0;
+        int16_t raw = 0;
+        int16_t turn = 0;
+        uint32_t sampleTimestampMs = 0;
+        if (!bus->consumeOfflineTrustedSnapshot(
+                id, &logicalAbs, &raw, &turn, &sampleTimestampMs)) {
+            continue;
+        }
+
+        const uint32_t bit = 1UL << ch;
+        hotplugAnchors->logicalAbs[ch] = logicalAbs;
+        hotplugAnchors->raw[ch] = raw;
+        hotplugAnchors->capturedAtMs[ch] = sampleTimestampMs;
+        hotplugAnchors->validMask |= bit;
+        FW_LOG_WARN_PRINTF(
+            "[SERVO HOTPLUG ANCHOR] M%02u logical=%ld raw=%d turn=%d ageMs=%lu\r\n",
+            (unsigned)ch,
+            (long)logicalAbs,
+            (int)raw,
+            (int)turn,
+            (unsigned long)(millis() - sampleTimestampMs));
+
+        if (!sharedData->multiturn_nvs_enabled) {
+            FW_LOG_INFO_PRINTF(
+                "[NVS MULTITURN] servo power-loss Flash save skipped; RAM anchor kept M%02u abs=%ld raw=%d\r\n",
+                (unsigned)ch,
+                (long)logicalAbs,
+                (int)raw);
+            continue;
+        }
+
+        int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
+        int16_t motorRaw[SERVO_TOTAL_NUM] = {0};
+        int16_t motorTurn[SERVO_TOTAL_NUM] = {0};
+        motorAbs[ch] = logicalAbs;
+        motorRaw[ch] = raw;
+        motorTurn[ch] = turn;
+        cacheDeferredMultiTurnSnapshot(
+            state,
+            bit,
+            motorAbs,
+            motorRaw,
+            motorTurn,
+            MULTITURN_NVS_SAVE_REASON_SERVO_POWER_LOSS,
+            0,
+            false,
+            isRawNearTurnEdge(raw));
+        FW_LOG_WARN_PRINTF(
+            "[NVS MULTITURN] servo power-loss frozen M%02u abs=%ld raw=%d turn=%d ageMs=%lu\r\n",
+            (unsigned)ch,
+            (long)logicalAbs,
+            (int)raw,
+            (int)turn,
+            (unsigned long)(millis() - sampleTimestampMs));
     }
 }
 
@@ -1531,10 +2025,11 @@ static void processBootNvsRestore(TaskSharedData_t* sharedData,
 
     uint32_t restoredMask = 0;
     uint32_t rejectedMask = 0;
-        restoreServoMultiTurnFromHost(sharedData,
+    restoreServoMultiTurnFromHost(sharedData,
                                   requestMask & onlineMask,
                                   motorAbs,
                                   kNvsRestoreRawToleranceCounts,
+                                  false,
                                   &restoredMask,
                                   &rejectedMask);
     FW_LOG_INFO_PRINTF("[NVS MULTITURN] boot restore seq=%lu request=0x%08lX online=0x%08lX restored=0x%08lX rejected=0x%08lX\r\n",
@@ -1565,6 +2060,8 @@ void servoCommunicationTask(void* parameter)
         sharedAtomicLoad(&sharedData->servo_emergency_stop_token);
     uint32_t lastRestoreToken =
         sharedAtomicLoad(&sharedData->restore_multi_turn_request_token);
+    uint32_t lastCalibrationTrustToken =
+        sharedAtomicLoad(&sharedData->calibration_trust_request_token);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
     uint32_t lastNvsSaveToken =
         sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token);
@@ -1580,10 +2077,26 @@ void servoCommunicationTask(void* parameter)
     MultiTurnNvsSnapshot bootNvsSnapshot;
     const bool hasBootNvsSnapshot = nvsEnabled && multiTurnNvsLoadLatest(&bootNvsSnapshot);
     sharedData->multiturn_nvs_snapshot_valid = hasBootNvsSnapshot ? 1 : 0;
+    sharedData->multiturn_nvs_save_valid_mask =
+        hasBootNvsSnapshot
+            ? (bootNvsSnapshot.validMask & validMotorChannelMask())
+            : 0;
+    if (hasBootNvsSnapshot) {
+        // 启动恢复与 UI 必须引用同一份已通过 CRC 校验的 Flash 快照。
+        memcpy(sharedData->multiturn_nvs_snapshot_raw,
+               bootNvsSnapshot.raw,
+               sizeof(sharedData->multiturn_nvs_snapshot_raw));
+    } else {
+        memset(sharedData->multiturn_nvs_snapshot_raw,
+               0,
+               sizeof(sharedData->multiturn_nvs_snapshot_raw));
+    }
     bool bootNvsRestoreDone = !hasBootNvsSnapshot;
     MultiTurnNvsRuntimeState nvsSaveState;
     memset(&nvsSaveState, 0, sizeof(nvsSaveState));
     nvsSaveState.hostWasOnline = true;
+    ServoHotplugRecoveryAnchors hotplugRecoveryAnchors;
+    memset(&hotplugRecoveryAnchors, 0, sizeof(hotplugRecoveryAnchors));
     if (!nvsEnabled) {
         FW_LOG_INFO_PRINTLN("[NVS MULTITURN] disabled by user, boot restore skipped");
     } else if (hasBootNvsSnapshot) {
@@ -1630,16 +2143,18 @@ void servoCommunicationTask(void* parameter)
         }
 
         processHostMultiTurnRestore(sharedData, &lastRestoreToken);
+        processCalibrationTrustCommit(sharedData, &lastCalibrationTrustToken);
         const bool calibrationMotionActive =
             sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING &&
-            sharedData->servo_target_owner == SERVO_TARGET_OWNER_CALIBRATION;
+            sharedData->servo_target_owner == SERVO_TARGET_OWNER_CALIBRATION &&
+            sharedAtomicLoad(&sharedData->calibration_motion_started) != 0;
         ServoTargetBatch_t batch;
         while (sharedData->servoTargetQueue &&
                xQueueReceive(sharedData->servoTargetQueue, &batch, 0) == pdTRUE) {
             const uint8_t owner = sharedData->servo_target_owner;
             if (owner != SERVO_TARGET_OWNER_NONE && batch.source == owner) {
                 const uint32_t applyBeginMs = millis();
-                applyServoTargetBatch(batch);
+                applyServoTargetBatch(sharedData, batch);
                 const uint32_t applyElapsedMs = millis() - applyBeginMs;
                 if (applyElapsedMs > kServoApplyStallLogThresholdMs) {
                     FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=apply_target elapsedMs=%lu source=%u owner=%u ageMs=%lu count=%u\r\n",
@@ -1711,14 +2226,22 @@ void servoCommunicationTask(void* parameter)
         }
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
+        // 掉线检测会在 sync read 中冻结最后可信反馈。必须先把它搬入独立
+        // RAM 锚点，再处理重新上线事务，避免快速断电重启时恢复抢在保存前面。
+        cacheServoPowerLossSnapshots(
+            sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
+        // 先吸收异步 Flash 写入结果，使恢复逻辑能看到最新已提交快照。
+        processMultiTurnNvsSaveResults(sharedData, &nvsSaveState);
         processBootNvsRestore(sharedData,
                               hasBootNvsSnapshot ? &bootNvsSnapshot : NULL,
                               &bootNvsRestoreDone,
                               nvsRestoreDeadlineMs);
         if (!calibrationMotionActive) {
-            processServoOnlineTransitions(sharedData, &nvsSaveState, nvsEnabled);
+            processServoOnlineTransitions(
+                sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
         }
 #endif
+        publishServoRecoveryState(sharedData);
         publishServoFeedback(sharedData);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);

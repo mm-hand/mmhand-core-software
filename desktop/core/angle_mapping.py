@@ -29,6 +29,7 @@ from desktop.paths import (
     CALIB_LOAD_SNAPSHOT_PATH as DEFAULT_CALIB_LOAD_SNAPSHOT_PATH,
     URDF_JOINT_MAPPING_PATH as DEFAULT_URDF_JOINT_MAPPING_PATH,
 )
+from .calibration_snapshot import validate_snapshot
 
 from .protocol import ENCODER_COUNT
 
@@ -317,6 +318,7 @@ def load_calibrated_ranges(
     ranges: Dict[int, tuple[float, float]] = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        validate_snapshot(data)
         results = data.get("joint_calib_results", [])
         expected_version, expected_crc = urdf_manual_scaled_mapping_metadata()
     except Exception:
@@ -394,7 +396,7 @@ def urdf_to_calibrated(
     """URDF rad -> calibrated/hardware command degrees.
 
     This is a temporary linear mapping framework. The measured calibration
-    range is read from calib_load_snapshot.json as [0, angleMax]. If no
+    range is read from the active V5 calibration bundle. If no
     calibrated range is available and allow_default is False, this raises.
     """
     idx = resolve_joint(joint)

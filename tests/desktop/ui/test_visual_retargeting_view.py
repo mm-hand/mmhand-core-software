@@ -10,8 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from desktop.core.protocol import ENCODER_COUNT
 from desktop.teleop.joint_target_adapter import URDF_DEG
 import desktop.ui.ui_visual_retargeting_view as visual_module
-from desktop.ui.ui_visual_retargeting_view import VisualRetargetingView
 from desktop.ui.ui_qt_compat import ensure_app
+from desktop.ui.ui_visual_retargeting_view import VisualRetargetingView
 
 
 _APP = ensure_app()
@@ -48,7 +48,10 @@ class _Context:
 def _view(mask: int | None = None) -> tuple[VisualRetargetingView, _Context]:
     context = _Context()
     getter = None if mask is None else (lambda: int(mask))
-    view = VisualRetargetingView(context, selected_joint_mask_getter=getter)
+    view = VisualRetargetingView(
+        context,
+        selected_joint_mask_getter=getter,
+    )
     return view, context
 
 
@@ -68,20 +71,24 @@ def test_visual_targets_are_adapted_before_send(monkeypatch):
 
     monkeypatch.setattr(visual_module, "adapt_joint_targets", fake_adapt)
     view, context = _view()
-    view._set_send_targets_enabled(True)
+    try:
+        view._set_send_targets_enabled(True)
+        view._on_joints_ready(raw, 1234)
 
-    view._on_joints_ready(raw, 1234)
+        assert calls == [(tuple(raw), URDF_DEG)]
+        targets, kwargs = context.calls[-1]
+        assert targets == pytest.approx(adapted)
+        assert kwargs["input_space"] == URDF_DEG
+        assert list(kwargs["raw_targets"]) == raw
+        assert view._last_targets == pytest.approx(adapted)
+        assert view.angle_table.item(0, 1).text() == "100.00"
+    finally:
+        view.close()
 
-    assert calls == [(tuple(raw), URDF_DEG)]
-    targets, kwargs = context.calls[-1]
-    assert targets == pytest.approx(adapted)
-    assert kwargs["input_space"] == URDF_DEG
-    assert list(kwargs["raw_targets"]) == raw
-    assert view._last_targets == pytest.approx(adapted)
-    assert view.angle_table.item(0, 1).text() == "100.00"
 
-
-def test_selected_joints_use_adapted_targets_and_unselected_hold_feedback(monkeypatch):
+def test_selected_joints_use_adapted_targets_and_unselected_hold_feedback(
+    monkeypatch,
+):
     raw = [float(idx) for idx in range(ENCODER_COUNT)]
     adapted = [value + 10.0 for value in raw]
 
@@ -95,16 +102,18 @@ def test_selected_joints_use_adapted_targets_and_unselected_hold_feedback(monkey
 
     monkeypatch.setattr(visual_module, "adapt_joint_targets", fake_adapt)
     view, context = _view(mask=1 << 3)
-    view._feedback_angles = [50.0 + idx for idx in range(ENCODER_COUNT)]
-    view._set_send_targets_enabled(True)
+    try:
+        view._feedback_angles = [50.0 + idx for idx in range(ENCODER_COUNT)]
+        view._set_send_targets_enabled(True)
+        view._on_joints_ready(raw, 2345)
 
-    view._on_joints_ready(raw, 2345)
-
-    targets, kwargs = context.calls[-1]
-    assert targets[3] == pytest.approx(adapted[3])
-    assert targets[2] == pytest.approx(52.0)
-    assert targets[4] == pytest.approx(54.0)
-    assert list(kwargs["raw_targets"]) == raw
+        targets, kwargs = context.calls[-1]
+        assert targets[3] == pytest.approx(adapted[3])
+        assert targets[2] == pytest.approx(52.0)
+        assert targets[4] == pytest.approx(54.0)
+        assert list(kwargs["raw_targets"]) == raw
+    finally:
+        view.close()
 
 
 @pytest.mark.parametrize(
@@ -117,11 +126,13 @@ def test_selected_joints_use_adapted_targets_and_unselected_hold_feedback(monkey
 )
 def test_invalid_visual_targets_are_dropped(bad_targets):
     view, context = _view()
-    view._set_send_targets_enabled(True)
+    try:
+        view._set_send_targets_enabled(True)
+        view._on_joints_ready(bad_targets, 3456)
 
-    view._on_joints_ready(bad_targets, 3456)
-
-    assert context.calls == []
-    assert context.statuses
-    assert "Visual Retargeting target dropped" in context.statuses[-1]
-    assert view.frame_label.text() == "Frame: -"
+        assert context.calls == []
+        assert context.statuses
+        assert "Visual Retargeting target dropped" in context.statuses[-1]
+        assert view.frame_label.text() == "Frame: -"
+    finally:
+        view.close()

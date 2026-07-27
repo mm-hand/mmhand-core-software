@@ -286,6 +286,7 @@ class HandBackend:
         targets: Iterable[float],
         *,
         source: str,
+        command_joint_mask: Optional[int] = None,
     ) -> Tuple[List[float], List[int], List[int], str]:
         values = list(targets)
         if len(values) != ENCODER_COUNT:
@@ -304,12 +305,38 @@ class HandBackend:
         if active_mask == 0:
             blocked = list(range(ENCODER_COUNT))
             return [], blocked, [], "Joint command blocked: active joint scope is empty"
+        if command_joint_mask is None:
+            guard_mask = active_mask
+        else:
+            requested_mask = int(command_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+            outside_mask = requested_mask & ~active_mask
+            if outside_mask:
+                blocked = [
+                    joint
+                    for joint in range(ENCODER_COUNT)
+                    if outside_mask & (1 << joint)
+                ]
+                return (
+                    [],
+                    blocked,
+                    [],
+                    "Joint command blocked: command mask exceeds active joint scope",
+                )
+            guard_mask = requested_mask & active_mask
+            if guard_mask == 0:
+                return (
+                    [],
+                    list(range(ENCODER_COUNT)),
+                    [],
+                    "Joint command blocked: command joint mask is empty",
+                )
 
         blocked: List[int] = []
         clamped: List[int] = []
         reasons: List[str] = []
         for joint_idx in range(ENCODER_COUNT):
-            if (active_mask & (1 << joint_idx)) == 0:
+            # 单行UI、Replay和ROS2均只校验本帧真正控制的关节，未参与关节不应拖垮整包。
+            if (guard_mask & (1 << joint_idx)) == 0:
                 continue
             spec = get_spec(joint_idx)
             workspace = resolve_joint_workspace_range(
@@ -401,6 +428,7 @@ class HandBackend:
             "mapping_id": mapping.mapping_id,
             "mapping_version": mapping.mapping_version,
             "urdf_config_crc": mapping.urdf_config_crc,
+            "joint_order_crc": mapping.joint_order_crc,
             "command_joint_mask": (
                 None if command_joint_mask is None else int(command_joint_mask)
             ),
@@ -409,6 +437,7 @@ class HandBackend:
             state,
             input_targets,
             source=source,
+            command_joint_mask=command_joint_mask,
         )
         if workspace_blocked:
             result = JointCommandResult(
@@ -643,6 +672,9 @@ class HandBackend:
             state,
             values,
             source="Replay teleop preview",
+            command_joint_mask=int(
+                getattr(state, "active_joint_mask", 0) or 0
+            ),
         )
         frame: Dict[str, object] = {
             "monotonic_ts": time.monotonic(),
@@ -843,7 +875,10 @@ class HandBackend:
     def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
         return self._controller.set_multiturn_nvs_enabled(enabled)
 
-    def reset_multiturn_baseline_for_new_device(self) -> Tuple[bool, str]:
+    def reset_multiturn_baseline_for_new_device(
+        self,
+    ) -> Tuple[bool, str, int, int]:
+        """局部重建 Turn Unknown 舵机，返回电机和受影响关节掩码。"""
         return self._controller.reset_multiturn_baseline_for_new_device()
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:

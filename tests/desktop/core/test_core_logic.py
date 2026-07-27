@@ -4,10 +4,13 @@ import pytest
 from unittest.mock import MagicMock, call
 
 import desktop.core.core_logic as core_logic
+from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.core_logic import HandController
 from desktop.core.protocol import (
+    CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
+    CMD_RESTORE_MULTITURN,
     ControlMode,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -62,6 +65,29 @@ class TestSetMotorPositionsAbsolute:
         raw = call_args[1]
         for i, expected in enumerate(motor_abs):
             assert raw[i] == expected
+
+    def test_each_motor_uses_its_own_current_session_range(
+        self, controller, mock_comm
+    ):
+        controller.comm = mock_comm
+        controller._control_mode = ControlMode.DIRECT_MOTOR
+        controller.current_state.servo_logical_range_valid_bitmap = (
+            (1 << 0) | (1 << 1)
+        )
+        controller.current_state.servo_logical_range_min[0] = -100
+        controller.current_state.servo_logical_range_max[0] = 200
+        controller.current_state.servo_logical_range_min[1] = 1000
+        controller.current_state.servo_logical_range_max[1] = 2000
+
+        targets = [0] * MOTOR_COUNT
+        targets[0] = 500
+        targets[1] = 500
+        controller.set_motor_positions_absolute(targets)
+
+        sent = mock_comm.send_command.call_args[0][0][1]
+        assert sent[0] == 200
+        assert sent[1] == 1000
+        assert sent[2] == 0
 
     # --- Paused State Tests ---
 
@@ -274,11 +300,63 @@ class TestResetMultiturnBaselineForNewDevice:
         controller.current_state.servo_raw_positions = [1000] * MOTOR_COUNT
         controller.current_state.servo_raw_online = [True] * MOTOR_COUNT
 
-        ok, message = controller.reset_multiturn_baseline_for_new_device()
+        ok, message, motor_mask, joint_mask = (
+            controller.reset_multiturn_baseline_for_new_device()
+        )
 
         assert ok is False
         assert "already trusted" in message
+        assert motor_mask == 0
+        assert joint_mask == 0
         controller.comm.send_command.assert_not_called()
+
+    def test_repairs_only_unknown_motor_and_returns_its_joint(self, monkeypatch):
+        controller = HandController()
+        controller.comm = MagicMock()
+        state = controller.current_state
+        state.multi_turn_unknown_bitmap = 1 << 3
+        state.has_servo_raw_data = True
+        state.servo_raw_positions = [1000] * MOTOR_COUNT
+        state.servo_raw_positions[3] = 1234
+        state.servo_raw_online = [True] * MOTOR_COUNT
+        state.multiturn_nvs_enabled = False
+        state.has_servo_angle_data = False
+        state.servo_angles = [0] * MOTOR_COUNT
+        state.servo_online = [True] * MOTOR_COUNT
+
+        monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
+
+        def wait_for_ack(cmd, _timeout, received_after=None):
+            del received_after
+            if cmd == CMD_RESTORE_MULTITURN:
+                state.multi_turn_unknown_bitmap = 0
+                state.has_servo_angle_data = True
+                state.servo_angles[3] = 1234
+                return (cmd, 1, 0, 1.0)
+            if cmd == CMD_CLEAR_CALIBRATION_SCOPE:
+                return (cmd, 1, 0, 2.0)
+            return None
+
+        controller.comm.wait_for_ack.side_effect = wait_for_ack
+
+        ok, message, motor_mask, joint_mask = (
+            controller.reset_multiturn_baseline_for_new_device()
+        )
+
+        assert ok is True
+        assert motor_mask == (1 << 3)
+        assert joint_mask == (1 << 2)
+        assert "affected joint" in message
+        assert call(
+            ("restore_multiturn", 1 << 3, [0, 0, 0, 1234] + [0] * (MOTOR_COUNT - 4))
+        ) in controller.comm.send_command.call_args_list
+        assert call(
+            ("clear_calibration_scope", 1 << 3)
+        ) in controller.comm.send_command.call_args_list
+        assert not any(
+            args and args[0] == "clear_calibration"
+            for args, _kwargs in controller.comm.send_command.call_args_list
+        )
 
 
 class TestLoadCalibrationSnapshot:
@@ -332,15 +410,21 @@ class TestLoadCalibrationSnapshot:
                     [0] * TENDON_LUT_MAX_SAMPLES,
                 ],
             }
-        snapshot = {
-            "schema_version": 3,
+        snapshot = seal_snapshot({
+            "format": "mmhand_calibration_bundle",
+            "schema_version": 5,
+            "hand_profile": "v2",
             "active_joint_mask": (1 << 9) | (1 << 10),
-            "motor_abs_limit_valid_bitmap": 0,
+            "active_motor_mask": (1 << 12) | (1 << 13),
+            "motor_abs_limit_valid_bitmap": (1 << 12) | (1 << 13),
             "motor_abs_limit_locked_bitmap": 0,
             "motor_abs_limit_min": [0] * MOTOR_COUNT,
             "motor_abs_limit_max": [0] * MOTOR_COUNT,
+            "manual_reference_valid_bitmap": (1 << 9) | (1 << 10),
+            "manual_reference_min_raw": [1000] * ENCODER_COUNT,
+            "manual_reference_max_raw": [5000] * ENCODER_COUNT,
             "joint_calib_results": joint_results,
-        }
+        })
 
         ok, message = controller.load_calibration_snapshot(snapshot)
 

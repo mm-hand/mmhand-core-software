@@ -1,15 +1,24 @@
 import json
 import math
+import shutil
 import threading
 import time
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MOTOR_MID_CALIB_PATH
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MOTOR_MID_CALIB_PATH, PROJECT_ROOT
 from desktop.core.angle_mapping import (
     get_spec,
     urdf_manual_scaled_mapping_metadata,
+)
+from desktop.core.calibration_snapshot import (
+    CalibrationSnapshotError,
+    atomic_write_snapshot,
+    merge_snapshot,
+    read_snapshot,
+    validate_snapshot,
 )
 from desktop.core.data_models import (
     HandModel,
@@ -79,14 +88,14 @@ from .ui_control_target_model import JointTargetModel
 MOTOR_TARGET_SCALE_LO = 0
 MOTOR_TARGET_SCALE_HI = 4095
 MOTOR_SINGLE_TURN_STEPS = 4096
-MOTOR_RAW_HW_MISMATCH_TOL = 64
+# 当前单圈 raw 与 Flash 快照的环形差达到该值时提示恢复锚点可能失配。
+MOTOR_FLASH_RAW_WARN_COUNTS = 256
 MOTOR_RELEASE_HALF_TURN_COUNTS = MOTOR_SINGLE_TURN_STEPS // 2
 MOTOR_JUMP_RESYNC_THRESH = 2048
 MOTOR_SLIDER_WRAP_MARGIN = 512
 MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
-MOTOR_ABS_LIMIT_RECOVER_MARGIN = 16
 ROPE_INIT_START_TIMEOUT_S = 3.0
 ROPE_INIT_REASON_LABELS = {
     ROPE_INIT_REASON_NONE: "no error",
@@ -108,6 +117,7 @@ TEST_DEFAULT_PHASE_DEG = 0.0
 TEST_DEFAULT_HOLD_S = 0.0
 FF_TEST_DEFAULT_TARGETS_DEG = "20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40"
 FF_TEST_DEFAULT_STEP_S = 1.0
+TRI_TEST_DEFAULT_FREQ_HZ = 0.20
 JOINT_TARGET_MIN_DEG_BY_INDEX = [get_spec(i).urdf_range_deg[0] for i in range(ENCODER_COUNT)]
 JOINT_TARGET_MAX_DEG_BY_INDEX = [get_spec(i).urdf_range_deg[1] for i in range(ENCODER_COUNT)]
 try:
@@ -144,6 +154,7 @@ __all__ = [
     "CALIB_WARN_AUTO_MAX_SHORTFALL",
     "CALIB_WARN_AUTO_MIN_OFFSET",
     "CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH",
+    "CalibrationSnapshotError",
     "ControlMode",
     "ControlScopeModel",
     "DUAL_TENDON_JOINT_INDICES",
@@ -160,13 +171,12 @@ __all__ = [
     "List",
     "MOTOR_ABS_CMD_MAX",
     "MOTOR_ABS_CMD_MIN",
-    "MOTOR_ABS_LIMIT_RECOVER_MARGIN",
     "MOTOR_COUNT",
     "MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES",
     "MOTOR_DIR_HINT_CLEAR_TOL",
     "MOTOR_JUMP_RESYNC_THRESH",
+    "MOTOR_FLASH_RAW_WARN_COUNTS",
     "MOTOR_MID_CALIB_PATH",
-    "MOTOR_RAW_HW_MISMATCH_TOL",
     "MOTOR_RELEASE_HALF_TURN_COUNTS",
     "MOTOR_SINGLE_TURN_STEPS",
     "MOTOR_SLIDER_MAX_TARGET_DELTA",
@@ -176,6 +186,8 @@ __all__ = [
     "MOTOR_TO_JOINT_INDEX",
     "OPEN_POSE_CURRENT_MIN_OFFSET_DEG",
     "Optional",
+    "PROJECT_ROOT",
+    "Path",
     "QtCore",
     "QtGui",
     "QtWidgets",
@@ -202,6 +214,7 @@ __all__ = [
     "TEST_DEFAULT_PHASE_DEG",
     "TEST_ROW_COUNT",
     "TEST_TICK_MS",
+    "TRI_TEST_DEFAULT_FREQ_HZ",
     "TeleopView",
     "Tuple",
     "VALID_MOTOR_MASK",
@@ -209,17 +222,22 @@ __all__ = [
     "WORKSPACE_URDF_CRC",
     "_ModeBody",
     "_motor_channel_valid",
+    "atomic_write_snapshot",
     "clamp_motor_abs",
     "directed_encoder_delta",
     "json",
     "manual_encoder_reference_entry_crc",
     "math",
+    "merge_snapshot",
     "motor_abs_after_tendon_action",
     "motor_target_from_servo_feedback",
     "motor_tendon_shorten_abs_sign",
     "np",
+    "read_snapshot",
+    "shutil",
     "tendon_lut_field",
     "threading",
     "time",
     "urdf_manual_scaled_mapping_metadata",
+    "validate_snapshot",
 ]

@@ -61,10 +61,10 @@ class ManualTestPanelMixin:
         self._joint_index_from_combo(combo)
 
     def _refresh_test_workspace_ranges(self) -> None:
-        """Refresh the test workspace ranges display or controls."""
         for row_idx in range(len(getattr(self, "test_joint_combos", []))):
             self._on_test_joint_changed(row_idx)
-        self._refresh_feedforward_test_workspace()
+        self._refresh_single_test_workspace("feedforward")
+        self._refresh_single_test_workspace("triangle")
 
     def _test_workspace_ready(self, joint_idx: int, title: str, show_message: bool) -> bool:
         """Run or update the workspace ready test workflow."""
@@ -106,12 +106,16 @@ class ManualTestPanelMixin:
         return active or None
 
     def _set_test_button_states(self) -> None:
-        """Update the test button states value or state."""
-        any_running = self._test_running or self._ff_test_running
+        any_running = (
+            self._test_running
+            or self._ff_test_running
+            or self._tri_test_running
+        )
         manual = bool(self._interaction_enabled)
         for btn, running in [
             (getattr(self, "test_stop_btn", None), self._test_running),
             (getattr(self, "ff_stop_btn", None), self._ff_test_running),
+            (getattr(self, "tri_stop_btn", None), self._tri_test_running),
         ]:
             if btn is not None:
                 try:
@@ -121,6 +125,7 @@ class ManualTestPanelMixin:
         for btn, running in [
             (getattr(self, "test_start_btn", None), self._test_running),
             (getattr(self, "ff_start_btn", None), self._ff_test_running),
+            (getattr(self, "tri_start_btn", None), self._tri_test_running),
         ]:
             if btn is not None:
                 try:
@@ -318,3 +323,104 @@ class ManualTestPanelMixin:
             self.joint_sliders[idx].setValue(int(round(float(value) * 100.0)))
         finally:
             self._updating = False
+
+
+    def _refresh_single_test_workspace(self, test_kind: str) -> None:
+        if test_kind == "triangle":
+            combo = getattr(self, "tri_joint_combo", None)
+            min_spin = getattr(self, "tri_min_spin", None)
+            max_spin = getattr(self, "tri_max_spin", None)
+        else:
+            combo = getattr(self, "ff_joint_combo", None)
+            min_spin = None
+            max_spin = None
+        if combo is None:
+            return
+        joint_idx = self._joint_index_from_combo(combo)
+        if joint_idx is None:
+            return
+        workspace = self._joint_workspace_range(joint_idx, self._state)
+        if min_spin is not None and max_spin is not None:
+            lo = workspace.current_min_deg if workspace.ready else self._joint_default_target_min_deg(joint_idx)
+            hi = self._joint_target_max_deg(joint_idx)
+            self._set_spin_range_if_changed(min_spin, lo, hi)
+            self._set_spin_range_if_changed(max_spin, lo, hi)
+
+    def _validate_tri_test_config(self, show_message: bool = True) -> Optional[Tuple[int, float, float, float]]:
+        joint_idx = self._joint_index_from_combo(self.tri_joint_combo)
+        if joint_idx is None:
+            if show_message:
+                self._warn("Triangle Wave Test", "Select one valid joint.")
+            return None
+        if not self._test_workspace_ready(joint_idx, "Triangle Wave Test", show_message):
+            return None
+        lo = self._clamp_joint_target_deg(joint_idx, self.tri_min_spin.value())
+        hi = self._clamp_joint_target_deg(joint_idx, self.tri_max_spin.value())
+        if hi < lo:
+            lo, hi = hi, lo
+        freq = float(self.tri_freq_spin.value())
+        if not np.isfinite(freq) or freq <= 0:
+            if show_message:
+                self._warn("Triangle Wave Test", "Frequency must be finite and > 0.")
+            return None
+        return joint_idx, lo, hi, freq
+
+    def _on_start_tri_test(self) -> None:
+        if not self._interaction_enabled:
+            self._set_status("Triangle Wave Test blocked: Control Enable must be ON")
+            return
+        if self._manual_submode() != "test" and hasattr(self, "tabs"):
+            self.tabs.setCurrentWidget(self.test_panel)
+        validated = self._validate_tri_test_config(True)
+        if validated is None:
+            return
+        self.stop_all_tests("restarted by triangle test", update_status=False)
+        if not self._guard_joint_command_started():
+            return
+        if not self._start_test_recording("triangle test"):
+            return
+        self._tri_test_joint_idx, self._tri_test_min_deg, self._tri_test_max_deg, self._tri_test_freq_hz = validated
+        self._tri_test_t0 = time.time()
+        self._tri_test_running = True
+        self._set_test_button_states()
+        self.context.emit_action(f"Triangle Wave Test started on J{self._tri_test_joint_idx:02d}")
+        self._tri_test_tick()
+        self._tri_test_timer.start()
+
+    def _on_stop_tri_test(self, reason: str = "stopped by triangle test", update_status: bool = True) -> None:
+        was_running = self._tri_test_running
+        self._tri_test_running = False
+        self._tri_test_timer.stop()
+        self._tri_test_t0 = 0.0
+        self._set_test_button_states()
+        if was_running:
+            self.context.stop_recording_for_test(reason)
+            if update_status:
+                self.context.emit_action(f"Triangle Wave Test stopped ({reason})")
+
+    def _tri_test_tick(self) -> None:
+        if not self._tri_test_running:
+            return
+        if self._manual_submode() != "test":
+            self._on_stop_tri_test("stopped on mode switch", update_status=False)
+            return
+        if not self._interaction_enabled:
+            self._on_stop_tri_test("stopped: Control Enable OFF")
+            return
+        if not self.backend.is_started():
+            self._on_stop_tri_test("stopped: press Enable to start controller")
+            return
+        elapsed = max(0.0, time.time() - self._tri_test_t0)
+        phase = (elapsed * self._tri_test_freq_hz) % 1.0
+        tri = 4.0 * abs(phase - 0.5) - 1.0
+        center = 0.5 * (self._tri_test_min_deg + self._tri_test_max_deg)
+        amp = 0.5 * (self._tri_test_max_deg - self._tri_test_min_deg)
+        target = self._clamp_joint_target_deg(self._tri_test_joint_idx, center + amp * tri)
+        angles = self.resolved_joint_targets()
+        angles[self._tri_test_joint_idx] = target
+        self._set_joint_target_widget(self._tri_test_joint_idx, target)
+        self._joint_target_user_set[self._tri_test_joint_idx] = True
+        try:
+            self.context.send_joint_targets(angles, source="Triangle Wave Test", live=True)
+        except Exception as exc:
+            self._on_stop_tri_test(f"stopped by send error: {exc}")

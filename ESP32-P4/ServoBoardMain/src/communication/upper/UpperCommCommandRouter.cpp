@@ -9,11 +9,11 @@
 #include "../../system/StateMachineTask.h"
 
 // Clamp a host absolute motor command to the firmware multi-turn range.
-int16_t clampServoAbsCommand(int32_t value)
+int32_t clampServoAbsCommand(int32_t value)
 {
-    if (value > 30719) return 30719;
-    if (value < -30719) return -30719;
-    return (int16_t)value;
+    // 上位机传入的是 P4 逻辑多圈 ABS。每台舵机的实际行程校验统一在
+    // ServoCommunicationTask 中结合该电机自己的 logicalOffset 完成。
+    return value;
 }
 
 // A direct command is staged before the state machine accepts RUN_DIRECT.

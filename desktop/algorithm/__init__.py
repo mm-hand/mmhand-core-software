@@ -2,12 +2,13 @@
 
 from .replay_controller import ReplayController, ReplayStatus
 from .replay_csv_loader import load_replay_csv
-from .replay_models import ReplayFrame, ReplayTrace
+from .replay_models import ReplayFrame, ReplayPreparation, ReplayTrace
 from .replay_service import ReplayService
 
 __all__ = [
     "ReplayController",
     "ReplayFrame",
+    "ReplayPreparation",
     "ReplayService",
     "ReplayStatus",
     "ReplayTrace",

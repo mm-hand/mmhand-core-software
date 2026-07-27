@@ -25,6 +25,8 @@
 #define PACKET_TYPE_CALIB_DIAG 0x10
 #define PACKET_TYPE_TASK_DIAG 0x11
 #define PACKET_TYPE_MANUAL_ENCODER_REFERENCE 0x12
+// 27 路舵机当前上电会话的动态逻辑范围，按 motor channel 独立上报。
+#define PACKET_TYPE_SERVO_LOGICAL_RANGE 0x13
 
 #define PROTOCOL_DISCONNECT_SENTINEL ((int16_t)0x7FFF)
 
@@ -53,9 +55,6 @@ static const size_t kP4TimestampBytes = sizeof(uint32_t);
 #define CMD_HOST_HEARTBEAT 0xDC
 #define CMD_CALIB_LOAD_JOINT 0xDF
 #define CMD_CALIB_LOAD_LIMITS 0xE0
-#define CMD_LOCAL_TEST_PARAMS 0xE1
-#define CMD_LOCAL_TEST_START 0xE2
-#define CMD_LOCAL_TEST_STOP 0xE3
 
 #define CMD_CLEAR_CALIBRATION 0xE5
 #define CMD_MANUAL_ENCODER_REFERENCE 0xE6
@@ -63,6 +62,8 @@ static const size_t kP4TimestampBytes = sizeof(uint32_t);
 #define CMD_MANUAL_ENCODER_SINGLE 0xE8
 #define CMD_ROPE_INIT 0xE9
 #define CMD_ANGLE_CTRL_MASKED 0xEA
+// 按发生多圈重建的电机掩码，只失效其所属关节的 Auto/LUT/ABS Limit。
+#define CMD_CLEAR_CALIBRATION_SCOPE 0xEB
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -71,7 +72,7 @@ static const size_t kP4TimestampBytes = sizeof(uint32_t);
 #define PROTO_ACK_STATUS_INVALID_DATA 4
 #define PROTO_ACK_STATUS_NVS_FAILURE 5
 #define PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH 6
-#define PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED 7
+#define PROTO_ACK_STATUS_CALIBRATION_REQUIRED 7
 
 #define MANUAL_SAVE_STATUS_NONE 0
 #define MANUAL_SAVE_STATUS_OK 1
@@ -83,30 +84,30 @@ static const size_t kP4TimestampBytes = sizeof(uint32_t);
 static const size_t kFloatPayloadBytes = ENCODER_TOTAL_NUM * sizeof(float);
 static const size_t kMaskedFloatPayloadBytes = sizeof(uint32_t) + kFloatPayloadBytes;
 static const size_t kMotorPosPayloadBytes = SERVO_TOTAL_NUM * sizeof(uint16_t);
-static const size_t kMotorPosAbsOnePayloadBytes = 3;
+static const size_t kMotorPosAbsPayloadBytes = SERVO_TOTAL_NUM * sizeof(int32_t);
+static const size_t kMotorPosAbsOnePayloadBytes = 1 + sizeof(int32_t);
 static const size_t kActiveScopePayloadBytes = 9;
-static const size_t kRestoreMultiTurnPayloadBytes = 4 + SERVO_TOTAL_NUM * sizeof(uint16_t);
+static const size_t kRestoreMultiTurnPayloadBytes =
+    4 + SERVO_TOTAL_NUM * sizeof(int32_t);
 static const size_t kMotorAbsLimitLockPayloadBytes = 5;
 static const size_t kMultiTurnNvsControlPayloadBytes = 1;
-static const size_t kCalibLoadJointLegacyPayloadBytes = 54;
-static const size_t kCalibLoadJointPayloadBytes =
-    kCalibLoadJointLegacyPayloadBytes + 108;
-static const size_t kCalibLoadJointV2PayloadBytes =
-    kCalibLoadJointPayloadBytes + 17;
-static const size_t kCalibLoadJointV3PayloadBytes =
-    kCalibLoadJointV2PayloadBytes + 16;
-static const size_t kCalibLoadLimitsPayloadBytes = 8 + SERVO_TOTAL_NUM * 4;
-static const size_t kLocalTestParamsPayloadBytes = 2 * sizeof(float);
+// 当前唯一支持的 Calib Load 关节格式：关键 logical ABS 使用 int32，
+// 每路 LUT 使用“int32 锚点 + 24 个 int16 相对量”。旧版长度不再接受。
+static const size_t kCalibLoadJointPayloadBytes = 209;
+static const size_t kCalibLoadLimitsPayloadBytes =
+    3 * sizeof(uint32_t) + SERVO_TOTAL_NUM * 2 * sizeof(int32_t);
 static const size_t kManualEncoderReferencePayloadBytes =
     1 + ENCODER_TOTAL_NUM * 2 * sizeof(uint16_t);
 static const size_t kManualEncoderSinglePayloadBytes = 5;
 static const size_t kRopeInitPayloadBytes = sizeof(uint32_t);
+static const size_t kClearCalibrationScopePayloadBytes = sizeof(uint32_t);
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;
 static const uint32_t kSystemStatusHeartbeatMs = 100;
 static const uint32_t kTaskDiagHeartbeatMs = 250;
 static const uint32_t kMotorAbsLimitHeartbeatMs = 500;
+static const uint32_t kServoLogicalRangeHeartbeatMs = 500;
 static const uint32_t kJointCalibSnapshotHeartbeatMs = 1000;
 static const uint32_t kManualEncoderReferenceHeartbeatMs = 1000;
 

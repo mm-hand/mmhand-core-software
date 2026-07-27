@@ -37,29 +37,22 @@ from desktop.core.protocol import (
     CALIB_DIAG_PHASE_SEQUENCE,
     CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
     CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY,
-    CALIB_DIAG_REASON_ANGLE_NOT_MOVING,
-    CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_CONTROL_LOST,
     CALIB_DIAG_REASON_DUPLICATE_JOINT,
     CALIB_DIAG_REASON_ENCODER_ERROR,
     CALIB_DIAG_REASON_FEEDBACK_LOST,
     CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
-    CALIB_DIAG_REASON_INTERNAL_ERROR,
     CALIB_DIAG_REASON_JOINT_LIST_INVALID,
     CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-    CALIB_DIAG_REASON_LOAD_NOT_REACHED,
     CALIB_DIAG_REASON_OVERLOAD,
-    CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
+    CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
+    CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
     CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_TASK_START_FAILED,
-    CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
-    CALIB_DIAG_REASON_TURN_UNKNOWN,
     CALIB_DIAG_REASON_WRAP_TOO_LARGE,
-    CALIB_DIAG_REASON_WRONG_DIRECTION,
     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
-    CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT,
     DUAL_TENDON_JOINT_INDICES,
     ENCODER_COUNT,
     FEEDBACK_ADMISSION_REJECTED,
@@ -127,7 +120,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._qt_app = ensure_app()
         configure_qt_application(self._qt_app)
         super().__init__()
-        self.backend = backend
+        self.backend = backend if isinstance(backend, HandBackend) else HandBackend(backend)
         self.current_port = current_port or ""
         self.current_mode = self._normalize_mode(current_mode or "Monitor")
         self._on_close_extra = on_close_extra
@@ -722,7 +715,7 @@ class HandGUI(QtWidgets.QMainWindow):
         state: HandModel,
         system_status_fresh: bool,
     ) -> tuple[str, str, bool, bool]:
-        """Return the top-strip feedback collision summary fields."""
+        """只使用 P4 上报状态显示碰撞监测，避免 UI 本地猜测控制状态。"""
         if not system_status_fresh or not bool(
             getattr(state, "has_feedback_collision_status", False)
         ):
@@ -855,7 +848,6 @@ class HandGUI(QtWidgets.QMainWindow):
             False,
             True,
         )
-
     @staticmethod
     def _packet_status_fresh(
         state: HandModel,
@@ -992,30 +984,23 @@ class HandGUI(QtWidgets.QMainWindow):
 
         reason_names = {
             CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY: "没有可标定的 active 关节",
-            CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT: "CAN/磁编码器反馈超时",
-            CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT: "舵机反馈超时",
-            CALIB_DIAG_REASON_TELEMETRY_TIMEOUT: "舵机遥测反馈超时",
             CALIB_DIAG_REASON_ENCODER_ERROR: "磁编码器反馈无效",
             CALIB_DIAG_REASON_SERVO_OFFLINE: "舵机反馈缺失",
-            CALIB_DIAG_REASON_TURN_UNKNOWN: "多圈位置未知",
             CALIB_DIAG_REASON_OVERLOAD: "标定中过载",
-            CALIB_DIAG_REASON_LOAD_NOT_REACHED: "未达到预期负载",
-            CALIB_DIAG_REASON_ANGLE_NOT_MOVING: "角度没有按预期变化",
-            CALIB_DIAG_REASON_WRONG_DIRECTION: "方向错误",
-            CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT: "回零超时",
             CALIB_DIAG_REASON_ZERO_CROSS_INVALID: "零点推算无效",
             CALIB_DIAG_REASON_WRAP_TOO_LARGE: "编码器跨度接近整圈",
             CALIB_DIAG_REASON_ABS_LIMIT_INVALID: "舵机目标超过安全绝对范围",
             CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED: "标定目标发送失败",
             CALIB_DIAG_REASON_FEEDBACK_LOST: "标定过程中反馈丢失",
             CALIB_DIAG_REASON_TASK_START_FAILED: "标定任务启动失败",
-            CALIB_DIAG_REASON_INTERNAL_ERROR: "标定内部错误",
             CALIB_DIAG_REASON_CONTROL_LOST: "标定控制权丢失",
             CALIB_DIAG_REASON_HOLD_TARGET_FAILED: "保持其他关节失败",
             CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
             CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
             CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: "标定工作空间准备失败",
             CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
+            CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT: "舵机热插拔恢复超时",
+            CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: "单电机关节松绳超过两圈",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -1045,33 +1030,15 @@ class HandGUI(QtWidgets.QMainWindow):
                 suggestions.append("先停止控制并卸载机械外力；检查绳索是否过紧、机构是否卡住，再 Clear Fault 后重新标定。")
             elif reason in {
                 CALIB_DIAG_REASON_ENCODER_ERROR,
-                CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT,
             }:
                 lines.append(f"数据：encoder_ok={value_a}, abs_ok={value_b}, raw_ok={value_c}, bitmap=0x{bitmap:08X}")
                 suggestions.append("检查对应磁编码器供电、SPI/CAN 接线、S3/P4 通信和传感器板状态；恢复有效反馈后再标定。")
             elif reason in {
                 CALIB_DIAG_REASON_SERVO_OFFLINE,
-                CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT,
-                CALIB_DIAG_REASON_TELEMETRY_TIMEOUT,
                 CALIB_DIAG_REASON_FEEDBACK_LOST,
             }:
                 lines.append(f"数据：abs_ok={value_a}, raw_ok={value_b}, telem_ok={value_c}, bitmap=0x{bitmap:08X}")
                 suggestions.append("检查对应舵机电源、串口总线、ID 映射和接线；反馈稳定后 Clear Fault 并重新标定。")
-            elif reason == CALIB_DIAG_REASON_TURN_UNKNOWN:
-                lines.append(f"数据：unknown_mask=0x{bitmap:08X}")
-                suggestions.append("不要继续发送运动命令。若换过机械/舵机/映射或舵机单独断电，先 New Device Reset，再 Clear Fault 和重新标定。")
-            elif reason == CALIB_DIAG_REASON_WRONG_DIRECTION:
-                if phase == CALIB_DIAG_PHASE_DUAL_EXCHANGE and motor == 0xFF:
-                    lines.append(
-                        f"数据：signed_span={value_a}, default_dir={value_b}, runtime_dir={value_c}, joint_mask=0x{bitmap:08X}"
-                    )
-                    suggestions.append("双电机方向一致性检查失败。检查该关节磁编码器方向表、主/副舵机 M/J 映射、tendon 收放方向和绳路是否反绕；方向修正后重新标定。")
-                else:
-                    lines.append(f"数据：actual_delta={value_a}, expected_delta={value_b}, threshold={value_c}")
-                    suggestions.append("检查磁编码器方向、M/J 映射、tendon 收绳方向和绳路是否反绕；方向修正后重新 Rope Init/标定。")
-            elif reason == CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT:
-                lines.append(f"数据：abs_error={value_a}, required_travel={value_b}, zero_deg_x100={value_c}")
-                suggestions.append("检查回零目标是否被机械限位阻挡、绳索是否太紧、zero pull 参数是否过大；释放机构后重试。")
             elif reason == CALIB_DIAG_REASON_ZERO_CROSS_INVALID:
                 lines.append(f"数据：taut={value_a}, zero={value_b}, tight={value_c}")
                 suggestions.append("零点不在有效区间内。检查编码器方向、标定起始姿态和绳索预紧；必要时 New Device Reset 后重新标定。")
@@ -1101,6 +1068,30 @@ class HandGUI(QtWidgets.QMainWindow):
             elif reason == CALIB_DIAG_REASON_DUPLICATE_JOINT:
                 lines.append(f"数据：duplicate_index={value_a}, joint_count={value_b}, seen_mask=0x{bitmap:08X}")
                 suggestions.append("同一个关节被重复加入标定序列。重新勾选关节后再标定；如果还出现，检查 active scope 到标定列表的构造逻辑。")
+            elif reason == CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT:
+                lines.append(
+                    f"数据：online_mask=0x{value_a & 0xFFFFFFFF:08X}, "
+                    f"configured_mask=0x{value_b & 0xFFFFFFFF:08X}, "
+                    f"pending_mask=0x{value_c & 0xFFFFFFFF:08X}, "
+                    f"unresolved_mask=0x{bitmap:08X}"
+                )
+                suggestions.append(
+                    "标定尚未开始运动：P4 等待舵机重新上线、关闭扭矩并切回多圈模式时超时。"
+                )
+                suggestions.append(
+                    "检查 unresolved_mask 对应舵机的电源和总线后重新标定；"
+                    "若固件日志出现 recovery failed，请重新给该舵机上电。"
+                )
+            elif reason == CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS:
+                lines.append(
+                    f"数据：实际放绳={value_a} counts，限制={value_b} counts，"
+                    f"下一命令放绳={value_c} counts，电机位图=0x{bitmap:08X}"
+                )
+                suggestions.append(
+                    "单电机关节从紧端放绳已达到两圈安全边界，标定已停止。"
+                    "请检查绳索是否脱落、断裂、绕线方向错误或磁编码器未随机械运动；"
+                    "确认机械安全后 Clear Fault，再重新标定。"
+                )
             elif reason == CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED:
                 workspace_stage_names = {
                     101: "动作前反馈预检查",
@@ -1125,12 +1116,6 @@ class HandGUI(QtWidgets.QMainWindow):
                     f"selected_count={value_c}, failed_mask_dup=0x{bitmap:08X}"
                 )
                 suggestions.append("本次已成功的关节结果会保留；下次只勾选 failed_mask 对应的失败关节重新标定。若需要细节，请查看前后几行 [AUTO CALIB] 日志。")
-            elif reason in {
-                CALIB_DIAG_REASON_LOAD_NOT_REACHED,
-                CALIB_DIAG_REASON_ANGLE_NOT_MOVING,
-            }:
-                lines.append(f"数据：valueA={value_a}, valueB={value_b}, valueC={value_c}")
-                suggestions.append("检查绳索是否打滑、过松、未连接或关节被卡住；确认负载和角度都有响应后重新标定。")
             else:
                 lines.append(f"数据：valueA={value_a}, valueB={value_b}, valueC={value_c}, bitmap=0x{bitmap:08X}")
                 suggestions.append("记录当前日志，检查对应阶段的反馈、映射、方向和机械状态后重新标定。")
@@ -1549,6 +1534,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "mapping_id": payload.get("mapping_id", ""),
             "mapping_version": payload.get("mapping_version", ""),
             "urdf_config_crc": payload.get("urdf_config_crc", ""),
+            "joint_order_crc": payload.get("joint_order_crc", ""),
             "clamped_joints_json": json.dumps(
                 clamped_list, ensure_ascii=False, default=str
             ),
@@ -1733,7 +1719,6 @@ class HandGUI(QtWidgets.QMainWindow):
             return bool(thread is not None and thread.is_alive())
 
     def finish_test_recording_stop(self, path: str, reason: str) -> None:
-        """Finalize test recording and emit the completion signal."""
         error = ""
         try:
             self._data_logger.stop()
@@ -1951,6 +1936,8 @@ class HandGUI(QtWidgets.QMainWindow):
         for i in range(MOTOR_COUNT):
             joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
             load_value = self._seq_value(getattr(state, "servo_load", []), i)
+            flash_raw = self._servo_flash_raw_value(state, i)
+            flash_raw_diff = self._servo_flash_raw_diff(state, i, flash_raw)
             self._data_logger.write(
                 "servo_state",
                 {
@@ -1963,7 +1950,8 @@ class HandGUI(QtWidgets.QMainWindow):
                     "motor_target_abs": motor_targets[i] if i < len(motor_targets) else "",
                     "servo_raw": self._seq_value(getattr(state, "servo_raw_positions", []), i),
                     "servo_abs": self._seq_value(getattr(state, "servo_angles", []), i),
-                    "servo_hardware_pos": self._seq_value(getattr(state, "servo_hardware_positions", []), i),
+                    "servo_flash_raw": flash_raw,
+                    "servo_flash_raw_diff": flash_raw_diff,
                     "online": 1 if i < len(getattr(state, "servo_online", [])) and state.servo_online[i] else 0,
                     "raw_online": (
                         1 if i < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[i] else 0
@@ -2066,11 +2054,15 @@ class HandGUI(QtWidgets.QMainWindow):
             label = f"M{i:02d}"
             joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
             load_value = self._seq_value(getattr(state, "servo_load", []), i)
+            flash_raw = self._servo_flash_raw_value(state, i)
             row[f"{label}_joint_index"] = joint_idx
             row[f"{label}_target_abs"] = motor_targets[i] if i < len(motor_targets) else ""
             row[f"{label}_raw"] = self._seq_value(getattr(state, "servo_raw_positions", []), i)
             row[f"{label}_abs"] = self._seq_value(getattr(state, "servo_angles", []), i)
-            row[f"{label}_hardware_pos"] = self._seq_value(getattr(state, "servo_hardware_positions", []), i)
+            row[f"{label}_flash_raw"] = flash_raw
+            row[f"{label}_flash_raw_diff"] = self._servo_flash_raw_diff(
+                state, i, flash_raw
+            )
             row[f"{label}_load"] = load_value
             row[f"{label}_load_mag"] = self._servo_load_mag(load_value)
             row[f"{label}_load_dir"] = self._servo_load_dir(load_value)
@@ -2122,6 +2114,39 @@ class HandGUI(QtWidgets.QMainWindow):
         if raw < 0:
             return -1
         return 0
+
+    @staticmethod
+    def _servo_flash_raw_value(state: HandModel, motor_index: int) -> object:
+        """返回有效 Flash 快照 raw；valid mask 未覆盖该电机时保持 CSV 空白。"""
+        valid_mask = int(
+            getattr(state, "multiturn_nvs_save_valid_mask", 0) or 0
+        )
+        if (valid_mask & (1 << int(motor_index))) == 0:
+            return ""
+        values = getattr(state, "servo_flash_raw_positions", []) or []
+        if motor_index < 0 or motor_index >= len(values):
+            return ""
+        return int(values[motor_index]) % 4096
+
+    @staticmethod
+    def _servo_flash_raw_diff(
+        state: HandModel, motor_index: int, flash_raw: object
+    ) -> object:
+        """按 4096-count 环形坐标计算 RawNow 与 FlashRaw 的最短距离。"""
+        if flash_raw == "" or not bool(getattr(state, "has_servo_raw_data", False)):
+            return ""
+        online = getattr(state, "servo_raw_online", []) or []
+        raw_values = getattr(state, "servo_raw_positions", []) or []
+        if (
+            motor_index < 0
+            or motor_index >= len(online)
+            or motor_index >= len(raw_values)
+            or not online[motor_index]
+        ):
+            return ""
+        raw_now = int(raw_values[motor_index]) % 4096
+        direct_diff = abs(raw_now - int(flash_raw))
+        return min(direct_diff, 4096 - direct_diff)
 
     def _start_joint_debug_packet_log(self) -> None:
         """Joint Debug 只进入统一多 topic 记录器，避免再生成一份旧格式重复 CSV。"""
@@ -2434,7 +2459,6 @@ class HandGUI(QtWidgets.QMainWindow):
 
     @staticmethod
     def event_type_from_message(msg: str) -> str:
-        """Return the run-data event type inferred from an action message."""
         text = str(msg or "").strip()
         lower = text.lower()
         if lower.startswith("start"):

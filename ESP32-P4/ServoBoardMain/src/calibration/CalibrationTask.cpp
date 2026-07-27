@@ -13,15 +13,16 @@
 // 2) 提供标定结果告警、编码器方向和双执行器映射等公共能力；
 // 3) 实际机械搜索由 AutoCalibrationTask 的非阻塞状态机执行。
 //
-// 数据来源约束�?
-// - 编码器原始值来�?canRxQueue（RemoteSensorData_t）；
-// - 舵机运动与反馈通过 servoCommunicationTask 的队�?快照交互�?
-// - 标定生命周期�?UI 状态由 StateMachineTask 统一管理�?
+// 数据来源约束：
+// - 编码器原始值来自 canRxQueue（RemoteSensorData_t）；
+// - 舵机运动与反馈通过 servoCommunicationTask 的队列快照交互；
+// - 标定生命周期与 UI 状态由 StateMachineTask 统一管理。
 
 // 全局标定结果（按关节索引 0~ENCODER_TOTAL_NUM-1）。
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
+// 计算 Auto Min 相对 Manual Min 的有符号正向偏移，供装配告警显示。
 int32_t calibrationAutoMinManualOffsetCounts(
     uint8_t jointIndex,
     const JointCalibrationResult& result)
@@ -37,6 +38,7 @@ int32_t calibrationAutoMinManualOffsetCounts(
         g_encoderDirection[jointIndex]);
 }
 
+// 汇总单关节的三项装配偏差；这里只计算告警，不改变标定成功状态。
 bool evaluateCalibrationAssemblyWarning(
     uint8_t jointIndex,
     const JointCalibrationResult& result,
@@ -87,6 +89,7 @@ bool evaluateCalibrationAssemblyWarning(
     return true;
 }
 
+// 清除指定关节的装配告警位和对应诊断值。
 void clearCalibrationAssemblyWarnings(TaskSharedData_t* sharedData,
                                       uint32_t jointMask)
 {
@@ -103,6 +106,7 @@ void clearCalibrationAssemblyWarnings(TaskSharedData_t* sharedData,
     }
 }
 
+// 将最新装配告警写入共享状态，并输出一条可追溯的诊断日志。
 bool updateCalibrationAssemblyWarning(
     TaskSharedData_t* sharedData,
     uint8_t jointIndex,
@@ -152,6 +156,7 @@ bool updateCalibrationAssemblyWarning(
         warning ? 1U : 0U);
     return warning;
 }
+// 21 路磁编固定安装方向：+1 表示 raw 增加为关节正向，-1 表示 raw 减少。
 extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
     -1, -1, -1,  1,
     -1, -1, -1,  1,
@@ -160,10 +165,8 @@ extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
     -1,  -1, -1, 1, -1
 };
 
-// Runtime encoder direction. It starts from the default installation table, and
-// automatic calibration resets the active joint to that fixed table instead of
-// learning direction from noisy travel samples. Angle display, manual
-// calibration, and PID all read this table.
+// 运行期磁编方向表。自动标定不从噪声行程“学习方向”，而是恢复固定安装表；
+// 角度显示、Manual/Auto 跨度计算和 PID 反馈映射都读取这张表。
 int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
     -1, -1, -1,  1,
     -1, -1, -1,  1,
@@ -172,11 +175,13 @@ int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
     -1, -1, -1,  1, -1
 };
 
+// 将全部运行期方向恢复为固定安装方向。
 void resetEncoderDirectionsToDefault(void)
 {
     memcpy(g_encoderDirection, kDefaultEncoderDirection, sizeof(g_encoderDirection));
 }
 
+// 修改单关节运行期方向；输入只接受 ±1。
 bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM || direction == 0) {
@@ -186,71 +191,11 @@ bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
     return true;
 }
 
-// 手工回退 offset 表：
-// 当自动标定结果不可用时，控制任务会读取该表作为零偏�?
-int32_t g_encoderOffsetManual[ENCODER_TOTAL_NUM] = {0};
-
-static const uint8_t kJoint16Index = 16;
-
-
-// joint16 双舵机标定约束默认配置：
-// 主舵?bus3-id17，副舵机 bus3-id18，默认偏置为0�?
-JointDualServoConstraint g_joint16DualServoConstraint = {
-    0,
-    kJoint16Index,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0
-};
-
-// 获取关节双舵机约束：
-// - 当前�?joint16 返回有效约束�?
-// - 其余关节返回 false，调用方按单舵机流程处理�?
-bool getJointDualServoConstraint(uint8_t jointIndex, JointDualServoConstraint* out) {
-    if (!out) {
-        return false;
-    }
-    JointActuatorItem primary;
-    JointActuatorItem secondary;
-    if (!getJointActuator(jointIndex, 0, &primary) ||
-        !getJointActuator(jointIndex, 1, &secondary)) {
-        return false;
-    }
-    const MotorMapItem& p = motorMap[primary.motorChannel];
-    const MotorMapItem& s = motorMap[secondary.motorChannel];
-    out->enabled = 1;
-    out->jointIndex = jointIndex;
-    out->primaryBusIndex = p.busIndex;
-    out->primaryServoID = p.servoID;
-    out->secondaryBusIndex = s.busIndex;
-    out->secondaryServoID = s.servoID;
-    out->secondaryOffset = secondary.offset;
-    out->tensionBias = secondary.tensionBias;
-    return true;
-}
-
-bool computeSecondaryServoTargetForJoint(uint8_t jointIndex,
-                                         int32_t primaryTarget,
-                                         int16_t* outSecondaryTarget) {
-    (void)jointIndex;
-    (void)primaryTarget;
-    if (outSecondaryTarget) {
-        *outSecondaryTarget = 0;
-    }
-    return false;
-}
-
-// 初始化运行期标定存储。当前非阻塞自动标定状态机直接使用
-// AutoCalibrationParams，不再装载旧的逐关节静态 Profile。
+// 初始化标定 RAM。这里只清空内存；Manual NVS 和 Calib Load 会在启动流程中
+// 按各自校验结果恢复数据。
 void initializeCalibrationRuntimeState(void) {
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));
-    memset(g_encoderOffsetManual, 0, sizeof(g_encoderOffsetManual));
 
     FW_LOG_INFO_PRINTLN("[BOOT CALIB] runtime state cleared; auto calibration pending");
-
-    getJointDualServoConstraint(kJoint16Index, &g_joint16DualServoConstraint);
 }

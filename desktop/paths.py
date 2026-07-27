@@ -15,7 +15,9 @@ JOINT_SEQUENCE_EXAMPLE_PATH = RESOURCE_DIR / "joint_sequence_example.txt"
 HAND_GEO_PATH = CONFIG_DIR / "hand_geo.json"
 LEGACY_CALIB_DEG_PATH = CONFIG_DIR / "legacy_calib_deg.json"
 CALIB_DEG_PATH = CONFIG_DIR / "calib_deg.json"
-CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calib_load_snapshot.json"
+# 唯一受支持的便携式 Calib Load V5 快照。旧 calib_load_snapshot.json
+# 不再作为活动配置读取，避免旧格式被误加载或覆盖新格式。
+CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calibration_bundle.mmcal.json"
 MANUS_CALIBRATION_PATH = CONFIG_DIR / "manus_calibration.json"
 MOTOR_MID_CALIB_PATH = CONFIG_DIR / "motor_mid_calib.json"
 RAW_IK_Q_TARGET_PATH = CONFIG_DIR / "raw_ik_q_target.json"

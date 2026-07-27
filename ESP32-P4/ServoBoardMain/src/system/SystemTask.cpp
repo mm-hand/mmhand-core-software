@@ -83,6 +83,19 @@ void System_Init() {
     memset(sharedData.motorTargetRaw, 0, sizeof(sharedData.motorTargetRaw));
     memset(sharedData.motorSweepTargetRaw, 0, sizeof(sharedData.motorSweepTargetRaw));
     memset(sharedData.pendingMotorTargetRaw, 0, sizeof(sharedData.pendingMotorTargetRaw));
+    memset(sharedData.servo_logical_range_min,
+           0,
+           sizeof(sharedData.servo_logical_range_min));
+    memset(sharedData.servo_logical_range_max,
+           0,
+           sizeof(sharedData.servo_logical_range_max));
+    sharedData.servo_logical_range_valid_bitmap = 0;
+    sharedData.servo_range_reject_sequence = 0;
+    sharedData.servo_range_reject_motor = 0xFF;
+    sharedData.servo_range_reject_logical_target = 0;
+    sharedData.servo_range_reject_hardware_target = 0;
+    sharedData.servo_range_reject_logical_min = 0;
+    sharedData.servo_range_reject_logical_max = 0;
     memset(sharedData.pendingMotorSweepTargetRaw, 0, sizeof(sharedData.pendingMotorSweepTargetRaw));
     memset(sharedData.restore_multi_turn_abs, 0, sizeof(sharedData.restore_multi_turn_abs));
 
@@ -101,15 +114,6 @@ void System_Init() {
     sharedData.pending_direct_joint_mask = 0;
     sharedData.pending_direct_require_can = 0;
     sharedData.direct_reject_reason = DIRECT_REJECT_NONE;
-    sharedData.sine_test_enabled = 0;
-    sharedData.sine_test_request_token = 0;
-    sharedData.sine_test_start_ms = 0;
-    sharedData.sine_test_joint_mask = 0;
-    sharedData.sine_test_hold_ms = 0;
-    memset(sharedData.sine_test_center_deg, 0, sizeof(sharedData.sine_test_center_deg));
-    memset(sharedData.sine_test_amp_deg, 0, sizeof(sharedData.sine_test_amp_deg));
-    memset(sharedData.sine_test_freq_hz, 0, sizeof(sharedData.sine_test_freq_hz));
-    memset(sharedData.sine_test_phase_rad, 0, sizeof(sharedData.sine_test_phase_rad));
 
     // 上电默认不允许任何任务拥有舵机输出；状态机完成硬件/标定门禁后再进入 IDLE/READY。
     sharedData.control_enabled = 0;
@@ -145,6 +149,16 @@ void System_Init() {
     // 所有有效舵机上电先视为多圈未知，只有 NVS 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     sharedData.servo_online_bitmap = 0;
+    // 上电时尚未收到任何舵机反馈，因此没有 pending 事务，也没有已配置电机。
+    // 舵机连续上线两帧后，ServoCommunicationTask 会建立 pending 并完成恢复。
+    sharedData.servo_recovery_pending_bitmap = 0;
+    sharedData.servo_multiturn_configured_bitmap = 0;
+    sharedData.servo_recovery_failed_bitmap = 0;
+    sharedData.calibration_motion_started = 0;
+    sharedData.calibration_trust_request_mask = 0;
+    sharedData.calibration_trust_request_token = 0;
+    sharedData.calibration_trust_result_token = 0;
+    sharedData.calibration_trust_accepted_mask = 0;
     sharedData.encoder_online_bitmap = 0;
     sharedData.encoder_warn_bitmap = 0;
     sharedData.encoder_fault_bitmap = 0;
@@ -163,6 +177,9 @@ void System_Init() {
     sharedData.multiturn_nvs_save_fail_count = 0;
     sharedData.multiturn_nvs_enabled = 1;
     sharedData.multiturn_nvs_snapshot_valid = 0;
+    memset(sharedData.multiturn_nvs_snapshot_raw,
+           0,
+           sizeof(sharedData.multiturn_nvs_snapshot_raw));
     sharedData.host_rx_heartbeat_ms = millis();
 
     // Manual 磁编参考必须从 P4 NVS 恢复；缺失时仅禁止反馈/标定，不禁止直控。

@@ -1,0 +1,87 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "P4: Verify Debug Environment",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\p4_debug\\verify_debug_env.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "P4: Arduino Debug Build",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\p4_debug\\build_debug.ps1"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "P4: Arduino Debug Upload",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\p4_debug\\upload_debug.ps1",
+        "-Port",
+        "${input:p4SerialPort}"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "P4: Start OpenOCD",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tools\\p4_debug\\start_openocd.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "p4-openocd",
+        "pattern": [
+          {
+            "regexp": "^(.*)$",
+            "message": 1
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Open On-Chip Debugger",
+          "endsPattern": "Listening on port 3333 for gdb connections"
+        }
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "p4SerialPort",
+      "type": "promptString",
+      "description": "ESP32-P4 Arduino upload port, for example COM7",
+      "default": "COM7"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ PACKET_TYPE_TACTILE_FULL = 0x0F
 PACKET_TYPE_CALIB_DIAG = 0x10
 PACKET_TYPE_TASK_DIAG = 0x11
 PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12
+PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13
 
 # 当前 P4 上行协议在以下包的业务负载末尾追加 4 字节大端毫秒时间戳。
 # 标定诊断、任务诊断和 Joint Debug 已在业务结构内携带时间，不重复追加。
@@ -49,6 +50,7 @@ P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset(
         PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
         PACKET_TYPE_TACTILE_FULL,
         PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
+        PACKET_TYPE_SERVO_LOGICAL_RANGE,
     }
 )
 
@@ -102,6 +104,8 @@ CMD_MANUAL_ENCODER_QUERY = 0xE7
 CMD_MANUAL_ENCODER_SINGLE = 0xE8
 CMD_ROPE_INIT = 0xE9
 CMD_ANGLE_CTRL_MASKED = 0xEA
+# 按电机掩码局部失效标定；P4 根据 HardwareMap 计算实际关节范围。
+CMD_CLEAR_CALIBRATION_SCOPE = 0xEB
 
 
 PROTO_ACK_STATUS_OK = 0
@@ -111,7 +115,7 @@ PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED = 3
 PROTO_ACK_STATUS_INVALID_DATA = 4
 PROTO_ACK_STATUS_NVS_FAILURE = 5
 PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6
-PROTO_ACK_STATUS_LEGACY_SNAPSHOT_REJECTED = 7
+PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7
 
 SYSTEM_STATE_UNCONTROLLABLE = 0
 SYSTEM_STATE_IDLE = 1
@@ -166,30 +170,23 @@ SYSTEM_FAULT_MULTITURN_UNKNOWN = 1 << 6
 
 CALIB_DIAG_REASON_NONE = 0
 CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY = 1
-CALIB_DIAG_REASON_CAN_FEEDBACK_TIMEOUT = 2
-CALIB_DIAG_REASON_SERVO_FEEDBACK_TIMEOUT = 3
-CALIB_DIAG_REASON_TELEMETRY_TIMEOUT = 4
 CALIB_DIAG_REASON_ENCODER_ERROR = 5
 CALIB_DIAG_REASON_SERVO_OFFLINE = 6
-CALIB_DIAG_REASON_TURN_UNKNOWN = 7
 CALIB_DIAG_REASON_OVERLOAD = 8
-CALIB_DIAG_REASON_LOAD_NOT_REACHED = 9
-CALIB_DIAG_REASON_ANGLE_NOT_MOVING = 10
-CALIB_DIAG_REASON_WRONG_DIRECTION = 11
-CALIB_DIAG_REASON_ZERO_RETURN_TIMEOUT = 12
 CALIB_DIAG_REASON_ZERO_CROSS_INVALID = 13
 CALIB_DIAG_REASON_WRAP_TOO_LARGE = 14
 CALIB_DIAG_REASON_ABS_LIMIT_INVALID = 15
 CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED = 16
 CALIB_DIAG_REASON_FEEDBACK_LOST = 17
 CALIB_DIAG_REASON_TASK_START_FAILED = 18
-CALIB_DIAG_REASON_INTERNAL_ERROR = 19
 CALIB_DIAG_REASON_CONTROL_LOST = 20
 CALIB_DIAG_REASON_HOLD_TARGET_FAILED = 21
 CALIB_DIAG_REASON_JOINT_LIST_INVALID = 22
 CALIB_DIAG_REASON_DUPLICATE_JOINT = 23
 CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED = 24
 CALIB_DIAG_REASON_JOINT_STEP_FAILED = 25
+CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT = 26
+CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS = 27
 
 CALIB_DIAG_PHASE_NONE = 0
 CALIB_DIAG_PHASE_INIT = 1
@@ -223,12 +220,7 @@ TACTILE_FULL_PACKET_MAGIC = b"T2"
 
 
 def tendon_lut_field(result: dict, field_name: str, default=None):
-    """读取通用 Tendon LUT 字段，同时兼容旧快照的 dualTendonLut 键。"""
-    if field_name in result:
-        return result[field_name]
-    if field_name.startswith("tendonLut"):
-        legacy_name = "dualTendonLut" + field_name[len("tendonLut"):]
-        return result.get(legacy_name, default)
+    """读取当前唯一的 Tendon LUT 字段，不再兼容旧键名。"""
     return result.get(field_name, default)
 HAND_PROFILE = "v2"
 VALID_MOTOR_COUNT_V1 = 22
@@ -477,24 +469,37 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
 
 
 def parse_motor_abs_limit_packet(payload: bytes) -> Optional[Tuple[int, int, List[int], List[int]]]:
-    required = 4 + MOTOR_COUNT * 4
+    required = 8 + MOTOR_COUNT * 8
     if len(payload) < required:
         return None
     valid_bitmap = struct.unpack(">I", payload[:4])[0]
-    if len(payload) >= 8 + MOTOR_COUNT * 4:
-        locked_bitmap = struct.unpack(">I", payload[4:8])[0]
-        offset = 8
-    else:
-        # Backward compatibility with older firmware: default to unlocked.
-        locked_bitmap = 0
-        offset = 4
+    locked_bitmap = struct.unpack(">I", payload[4:8])[0]
+    offset = 8
     mins: List[int] = []
     maxs: List[int] = []
     for _ in range(MOTOR_COUNT):
-        mins.append(struct.unpack(">h", payload[offset:offset + 2])[0])
-        maxs.append(struct.unpack(">h", payload[offset + 2:offset + 4])[0])
-        offset += 4
+        mins.append(struct.unpack(">i", payload[offset:offset + 4])[0])
+        maxs.append(struct.unpack(">i", payload[offset + 4:offset + 8])[0])
+        offset += 8
     return valid_bitmap, locked_bitmap, mins, maxs
+
+
+def parse_servo_logical_range_packet(
+    payload: bytes,
+) -> Optional[Tuple[int, List[int], List[int]]]:
+    """解析27路舵机当前上电会话的独立逻辑行程。"""
+    required = 4 + MOTOR_COUNT * 8
+    if len(payload) < required:
+        return None
+    valid_bitmap = struct.unpack(">I", payload[:4])[0]
+    offset = 4
+    mins: List[int] = []
+    maxs: List[int] = []
+    for _ in range(MOTOR_COUNT):
+        mins.append(struct.unpack(">i", payload[offset:offset + 4])[0])
+        maxs.append(struct.unpack(">i", payload[offset + 4:offset + 8])[0])
+        offset += 8
+    return valid_bitmap, mins, maxs
 
 
 def parse_manual_encoder_reference_packet(payload: bytes) -> Optional[dict]:
@@ -554,8 +559,8 @@ def _unpack_float_be(data: bytes) -> float:
 
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
-    # One joint per frame keeps the existing 1-byte LEN protocol unchanged.
-    if len(payload) < 54:
+    """解析当前唯一快照格式；209 为下发体，222 为带装配告警的上行体。"""
+    if len(payload) not in (209, 222):
         return None
     idx = 0
     joint = payload[idx]
@@ -577,8 +582,8 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
         result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
         idx += 4
     for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
-        result[key] = struct.unpack(">h", payload[idx:idx + 2])[0]
-        idx += 2
+        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
     for key in ("startDeg", "tightDeg", "totalDeg"):
         result[key] = _unpack_float_be(payload[idx:idx + 4])
         idx += 4
@@ -586,26 +591,50 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     idx += 1
     result["encoderDirection"] = -1 if struct.unpack(">b", payload[idx:idx + 1])[0] < 0 else 1
     idx += 1
-    result["tendonLutValid"] = False
-    result["tendonLutCount"] = 0
-    result["tendonLutMotor"] = [0xFF, 0xFF]
-    result["tendonLutAngleStartDeg"] = 0.0
-    result["tendonLutAngleStepDeg"] = 0.0
-    result["tendonLutMotorAbs"] = [
-        [0] * TENDON_LUT_MAX_SAMPLES
-        for _ in range(TENDON_LUT_ACTUATOR_COUNT)
-    ]
-    result["mappingVersion"] = 0
-    result["encoderAtUrdfMin"] = 0
-    result["encoderAtUrdfMax"] = 0
-    result["angleMin"] = 0.0
-    result["urdfConfigCrc"] = 0
-    result["autoMinRaw"] = 0
-    result["autoMaxRaw"] = 0
-    result["manualReferenceCrc"] = 0
-    result["currentMinDeg"] = 0.0
-    result["currentMaxDeg"] = 0.0
-    result["hasManualScaledV3Fields"] = False
+    result["tendonLutValid"] = bool(payload[idx])
+    idx += 1
+    result["tendonLutCount"] = int(payload[idx])
+    idx += 1
+    result["tendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
+    idx += 2
+    result["tendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    result["tendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    motor_abs: List[List[int]] = []
+    for _actuator in range(TENDON_LUT_ACTUATOR_COUNT):
+        anchor = struct.unpack(">i", payload[idx:idx + 4])[0]
+        idx += 4
+        row: List[int] = []
+        for _sample in range(TENDON_LUT_MAX_SAMPLES):
+            encoded = struct.unpack(">h", payload[idx:idx + 2])[0]
+            idx += 2
+            row.append(anchor + encoded)
+        motor_abs.append(row)
+    result["tendonLutMotorAbs"] = motor_abs
+
+    result["mappingVersion"] = int(payload[idx])
+    idx += 1
+    result["encoderAtUrdfMin"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["encoderAtUrdfMax"] = struct.unpack(">i", payload[idx:idx + 4])[0]
+    idx += 4
+    result["angleMin"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    result["urdfConfigCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["autoMinRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+    idx += 2
+    result["autoMaxRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
+    idx += 2
+    result["manualReferenceCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["currentMinDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    result["currentMaxDeg"] = _unpack_float_be(payload[idx:idx + 4])
+    idx += 4
+    result["hasManualScaledV3Fields"] = True
+
     result["assemblyWarningReason"] = CALIB_WARN_NONE
     result["autoMinOffsetCounts"] = 0
     result["autoMaxShortfallCounts"] = 0
@@ -615,85 +644,35 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["assemblySpanDifferenceCounts"] = 0
     result["hasAssemblyWarningFields"] = False
     result["hasAssemblySpanComparisonFields"] = False
-    extended_len = 54 + 1 + 1 + 2 + 4 + 4 + (
-        TENDON_LUT_ACTUATOR_COUNT * TENDON_LUT_MAX_SAMPLES * 2
-    )
-    if len(payload) >= extended_len:
-        result["tendonLutValid"] = bool(payload[idx])
+    if len(payload) == 222:
+        result["assemblyWarningReason"] = int(payload[idx])
         idx += 1
-        result["tendonLutCount"] = int(payload[idx])
-        idx += 1
-        result["tendonLutMotor"] = [int(payload[idx]), int(payload[idx + 1])]
+        result["autoMinOffsetCounts"] = struct.unpack(
+            ">h", payload[idx:idx + 2]
+        )[0]
         idx += 2
-        result["tendonLutAngleStartDeg"] = _unpack_float_be(payload[idx:idx + 4])
-        idx += 4
-        result["tendonLutAngleStepDeg"] = _unpack_float_be(payload[idx:idx + 4])
-        idx += 4
-        motor_abs: List[List[int]] = []
-        for _actuator in range(TENDON_LUT_ACTUATOR_COUNT):
-            row: List[int] = []
-            for _sample in range(TENDON_LUT_MAX_SAMPLES):
-                row.append(struct.unpack(">h", payload[idx:idx + 2])[0])
-                idx += 2
-            motor_abs.append(row)
-        result["tendonLutMotorAbs"] = motor_abs
-        v2_len = extended_len + 17
-        if len(payload) >= v2_len:
-            result["mappingVersion"] = int(payload[idx])
-            idx += 1
-            result["encoderAtUrdfMin"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-            idx += 4
-            result["encoderAtUrdfMax"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-            idx += 4
-            result["angleMin"] = _unpack_float_be(payload[idx:idx + 4])
-            idx += 4
-            result["urdfConfigCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-            idx += 4
-            v3_len = v2_len + 16
-            if len(payload) >= v3_len:
-                result["autoMinRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
-                idx += 2
-                result["autoMaxRaw"] = struct.unpack(">H", payload[idx:idx + 2])[0]
-                idx += 2
-                result["manualReferenceCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
-                idx += 4
-                result["currentMinDeg"] = _unpack_float_be(payload[idx:idx + 4])
-                idx += 4
-                result["currentMaxDeg"] = _unpack_float_be(payload[idx:idx + 4])
-                idx += 4
-                result["hasManualScaledV3Fields"] = True
-                warning_len = v3_len + 7
-                if len(payload) >= warning_len:
-                    result["assemblyWarningReason"] = int(payload[idx])
-                    idx += 1
-                    result["autoMinOffsetCounts"] = struct.unpack(
-                        ">h", payload[idx:idx + 2]
-                    )[0]
-                    idx += 2
-                    result["autoMaxShortfallCounts"] = struct.unpack(
-                        ">h", payload[idx:idx + 2]
-                    )[0]
-                    idx += 2
-                    result["assemblyAutoSpanCounts"] = struct.unpack(
-                        ">H", payload[idx:idx + 2]
-                    )[0]
-                    idx += 2
-                    result["hasAssemblyWarningFields"] = True
-                    span_comparison_len = warning_len + 6
-                    if len(payload) >= span_comparison_len:
-                        result["assemblyManualSpanCounts"] = struct.unpack(
-                            ">H", payload[idx:idx + 2]
-                        )[0]
-                        idx += 2
-                        result["assemblyUrdfSpanCounts"] = struct.unpack(
-                            ">H", payload[idx:idx + 2]
-                        )[0]
-                        idx += 2
-                        result["assemblySpanDifferenceCounts"] = struct.unpack(
-                            ">H", payload[idx:idx + 2]
-                        )[0]
-                        idx += 2
-                        result["hasAssemblySpanComparisonFields"] = True
+        result["autoMaxShortfallCounts"] = struct.unpack(
+            ">h", payload[idx:idx + 2]
+        )[0]
+        idx += 2
+        result["assemblyAutoSpanCounts"] = struct.unpack(
+            ">H", payload[idx:idx + 2]
+        )[0]
+        idx += 2
+        result["assemblyManualSpanCounts"] = struct.unpack(
+            ">H", payload[idx:idx + 2]
+        )[0]
+        idx += 2
+        result["assemblyUrdfSpanCounts"] = struct.unpack(
+            ">H", payload[idx:idx + 2]
+        )[0]
+        idx += 2
+        result["assemblySpanDifferenceCounts"] = struct.unpack(
+            ">H", payload[idx:idx + 2]
+        )[0]
+        idx += 2
+        result["hasAssemblyWarningFields"] = True
+        result["hasAssemblySpanComparisonFields"] = True
     return result
 
 
@@ -843,18 +822,12 @@ def parse_servo_telem_packet(
     return speeds, loads, currents, volts, temps, online
 
 
-def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool], bool]]:
-    if not payload:
+def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool]]]:
+    """解析 RawNow、FlashRaw 和在线位；旧硬件位置/精简包不再兼容。"""
+    if not payload or (len(payload) % 5) != 0:
         return None
 
-    if (len(payload) % 7) == 0:
-        channel_count = len(payload) // 7
-        has_hardware_positions = True
-    elif (len(payload) % 3) == 0:
-        channel_count = len(payload) // 3
-        has_hardware_positions = False
-    else:
-        return None
+    channel_count = len(payload) // 5
     if channel_count <= 0:
         return None
 
@@ -863,18 +836,17 @@ def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int
         start = i * 2
         raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
 
-    hardware_positions: List[int] = []
-    hw_base = channel_count * 2
-    online_base = channel_count * 6 if has_hardware_positions else channel_count * 2
-    if has_hardware_positions:
-        for i in range(channel_count):
-            start = hw_base + i * 4
-            hardware_positions.append(struct.unpack(">i", payload[start:start + 4])[0])
+    flash_raw_positions: List[int] = []
+    flash_raw_base = channel_count * 2
+    for i in range(channel_count):
+        start = flash_raw_base + i * 2
+        flash_raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
 
     online_flags: List[bool] = []
+    online_base = channel_count * 4
     for i in range(channel_count):
         online_flags.append(payload[online_base + i] == 1)
-    return raw_positions, hardware_positions, online_flags, has_hardware_positions
+    return raw_positions, flash_raw_positions, online_flags
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
@@ -1088,12 +1060,7 @@ def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) ->
     payload = bytearray()
     payload.extend(struct.pack(">I", int(active_motor_mask) & 0xFFFFFFFF))
     for value in motor_abs:
-        v = int(value)
-        if v < MOTOR_ABS_CMD_MIN:
-            v = MOTOR_ABS_CMD_MIN
-        elif v > MOTOR_ABS_CMD_MAX:
-            v = MOTOR_ABS_CMD_MAX
-        payload.extend(struct.pack(">h", v))
+        payload.extend(struct.pack(">i", int(value)))
     return _build_command_frame(CMD_RESTORE_MULTITURN, bytes(payload))
 
 
@@ -1119,14 +1086,28 @@ def _clamp_i16(value: int) -> int:
     return v
 
 
-def build_calib_load_limits_cmd(valid_bitmap: int, locked_bitmap: int, mins: List[int], maxs: List[int]) -> bytes:
+def build_calib_load_limits_cmd(
+    update_bitmap: int,
+    valid_bitmap: int,
+    locked_bitmap: int,
+    mins: List[int],
+    maxs: List[int],
+) -> bytes:
+    """构造按电机作用域更新的 ABS Limit 命令，未选电机保持 P4 原值。"""
     if len(mins) != MOTOR_COUNT or len(maxs) != MOTOR_COUNT:
         raise ValueError(f"need exactly {MOTOR_COUNT} motor limit values")
     payload = bytearray()
-    payload.extend(struct.pack(">II", int(valid_bitmap) & 0xFFFFFFFF, int(locked_bitmap) & 0xFFFFFFFF))
+    payload.extend(
+        struct.pack(
+            ">III",
+            int(update_bitmap) & 0xFFFFFFFF,
+            int(valid_bitmap) & 0xFFFFFFFF,
+            int(locked_bitmap) & 0xFFFFFFFF,
+        )
+    )
     for i in range(MOTOR_COUNT):
-        payload.extend(struct.pack(">h", _clamp_i16(mins[i])))
-        payload.extend(struct.pack(">h", _clamp_i16(maxs[i])))
+        payload.extend(struct.pack(">i", int(mins[i])))
+        payload.extend(struct.pack(">i", int(maxs[i])))
     return _build_command_frame(CMD_CALIB_LOAD_LIMITS, bytes(payload))
 
 
@@ -1136,7 +1117,7 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
         raise ValueError(f"invalid joint index {joint}")
     if int(result.get("mappingVersion", 0)) != 3:
         raise ValueError(
-            f"J{joint:02d} legacy calibration snapshot is view-only; v3 is required"
+            f"J{joint:02d} mapping version mismatch; current mapping v3 is required"
         )
     payload = bytearray()
     payload.append(joint & 0xFF)
@@ -1147,7 +1128,7 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
         payload.extend(struct.pack(">i", int(result.get(key, 0))))
     for key in ("startServoAbs", "tightServoAbs", "zeroServoAbs"):
-        payload.extend(struct.pack(">h", _clamp_i16(result.get(key, 0))))
+        payload.extend(struct.pack(">i", int(result.get(key, 0))))
     for key in ("startDeg", "tightDeg", "totalDeg"):
         payload.extend(_pack_float_be(float(result.get(key, 0.0))))
     payload.append(1 if bool(result.get("scaled", False)) else 0)
@@ -1165,9 +1146,27 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     motor_abs = tendon_lut_field(result, "tendonLutMotorAbs", [])
     for actuator in range(TENDON_LUT_ACTUATOR_COUNT):
         row = motor_abs[actuator] if actuator < len(motor_abs) else []
+        valid_count = min(
+            max(0, int(tendon_lut_field(result, "tendonLutCount", 0))),
+            TENDON_LUT_MAX_SAMPLES,
+            len(row),
+        )
+        if valid_count > 0:
+            valid_values = [int(row[i]) for i in range(valid_count)]
+            anchor = min(valid_values) + (
+                max(valid_values) - min(valid_values)
+            ) // 2
+        else:
+            anchor = 0
+        payload.extend(struct.pack(">i", anchor))
         for sample in range(TENDON_LUT_MAX_SAMPLES):
-            value = row[sample] if sample < len(row) else 0
-            payload.extend(struct.pack(">h", _clamp_i16(value)))
+            delta = int(row[sample]) - anchor if sample < valid_count else 0
+            if delta < -32768 or delta > 32767:
+                raise ValueError(
+                    f"J{joint:02d} tendon LUT actuator {actuator} "
+                    f"delta {delta} exceeds int16 compact range"
+                )
+            payload.extend(struct.pack(">h", delta))
     payload.append(int(result.get("mappingVersion", 0)) & 0xFF)
     payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMin", 0))))
     payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMax", 0))))
@@ -1215,6 +1214,17 @@ def build_multiturn_nvs_control_cmd(enabled: bool) -> bytes:
 
 def build_clear_calibration_cmd() -> bytes:
     return _build_command_frame(CMD_CLEAR_CALIBRATION, b"")
+
+
+def build_clear_calibration_scope_cmd(motor_mask: int) -> bytes:
+    """只清除指定电机所属关节的 Auto/LUT/ABS Limit，保留其他关节。"""
+    motor_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+    if motor_mask == 0:
+        raise ValueError("scoped calibration clear requires a non-zero motor mask")
+    return _build_command_frame(
+        CMD_CLEAR_CALIBRATION_SCOPE,
+        struct.pack(">I", motor_mask),
+    )
 
 
 def build_manual_encoder_reference_cmd(
@@ -1341,9 +1351,10 @@ def build_motor_pos_sweep_cmd(motor_pos_raw: List[int]) -> bytes:
     return _build_command_frame(CMD_MOTOR_POS_SWEEP, bytes(payload))
 
 
-# 与下位机 clampServoPos 一致的多圈绝对位置（int16 大端每路）
-MOTOR_ABS_CMD_MIN = -30719
-MOTOR_ABS_CMD_MAX = 30719
+# P4 逻辑多圈坐标使用 int32；实际可达范围由下位机按每台舵机的
+# logicalOffset 独立上报和校验。
+MOTOR_ABS_CMD_MIN = -(2**31)
+MOTOR_ABS_CMD_MAX = 2**31 - 1
 
 
 def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
@@ -1351,12 +1362,7 @@ def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
         raise ValueError(f"need exactly {MOTOR_COUNT} motor absolute values")
     payload = bytearray()
     for value in motor_abs:
-        v = int(value)
-        if v < MOTOR_ABS_CMD_MIN:
-            v = MOTOR_ABS_CMD_MIN
-        elif v > MOTOR_ABS_CMD_MAX:
-            v = MOTOR_ABS_CMD_MAX
-        payload.extend(struct.pack(">h", v))
+        payload.extend(struct.pack(">i", int(value)))
     return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
 
 
@@ -1364,10 +1370,5 @@ def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:
     idx = int(motor_index)
     if idx < 0 or idx >= MOTOR_COUNT:
         raise ValueError(f"motor index out of range: {idx}")
-    v = int(motor_abs)
-    if v < MOTOR_ABS_CMD_MIN:
-        v = MOTOR_ABS_CMD_MIN
-    elif v > MOTOR_ABS_CMD_MAX:
-        v = MOTOR_ABS_CMD_MAX
-    payload = bytes([idx & 0xFF]) + struct.pack(">h", v)
+    payload = bytes([idx & 0xFF]) + struct.pack(">i", int(motor_abs))
     return _build_command_frame(CMD_MOTOR_POS_ABS_ONE, payload)

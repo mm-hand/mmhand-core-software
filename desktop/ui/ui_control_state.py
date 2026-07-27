@@ -9,12 +9,11 @@ from .ui_control_common import (
     List,
     MOTOR_ABS_CMD_MAX,
     MOTOR_ABS_CMD_MIN,
-    MOTOR_ABS_LIMIT_RECOVER_MARGIN,
     MOTOR_COUNT,
     MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES,
     MOTOR_DIR_HINT_CLEAR_TOL,
     MOTOR_JUMP_RESYNC_THRESH,
-    MOTOR_RAW_HW_MISMATCH_TOL,
+    MOTOR_FLASH_RAW_WARN_COUNTS,
     MOTOR_SINGLE_TURN_STEPS,
     MOTOR_SLIDER_MAX_TARGET_DELTA,
     MOTOR_SLIDER_WRAP_MARGIN,
@@ -207,7 +206,6 @@ class ControlPanelStateMixin:
         self._last_encoder_fault_bitmap = encoder_fault_mask
 
     def clear_live_state(self) -> None:
-        """Clear the live state state."""
         self.stop_all_tests("stopped on disconnect", update_status=False)
         self._reset_p4_rope_init_progress()
         self._state = None
@@ -248,7 +246,7 @@ class ControlPanelStateMixin:
             for item in (
                 self.motor_turn_items
                 + self.motor_raw_items
-                + self.motor_hw_items
+                + self.motor_flash_raw_items
                 + self.motor_abs_items
                 + self.motor_load_items
                 + self.motor_joint_items
@@ -263,9 +261,10 @@ class ControlPanelStateMixin:
             self._updating = False
 
     def stop_all_tests(self, reason: str = "stopped", update_status: bool = True) -> None:
-        """Stop the all tests workflow."""
+        """停止全部由上位机生成目标轨迹的测试。"""
         self._on_stop_test(reason=reason, update_status=update_status)
         self._on_stop_ff_test(reason=reason, update_status=update_status)
+        self._on_stop_tri_test(reason=reason, update_status=update_status)
 
     def _guard_joint_command_started(self) -> bool:
         """Check whether the joint command started guard passes."""
@@ -364,11 +363,7 @@ class ControlPanelStateMixin:
         return clamp_motor_abs(candidate)
 
     def _motor_resync_one_channel(self, idx: int) -> None:
-        """Compute or update motor resync one channel data."""
         dev_abs = self._motor_feedback_abs(idx)
-        raw_single = self._motor_raw_single_feedback(idx)
-        if dev_abs is not None and raw_single is not None and self._is_motor_abs_at_limit(dev_abs):
-            dev_abs = raw_single
         if dev_abs is None:
             return
         self._motor_session_origin_abs[idx] = dev_abs
@@ -415,26 +410,7 @@ class ControlPanelStateMixin:
             return None
         return motor_target_from_servo_feedback(state.servo_raw_positions[idx])
 
-    def _motor_hw_feedback(self, idx: int) -> Optional[int]:
-        """Compute or update motor hw feedback data."""
-        state = self._state
-        if idx < 0 or idx >= MOTOR_COUNT or state is None:
-            return None
-        if not self._motor_display_valid(idx, state):
-            return None
-        if not bool(getattr(state, "has_servo_hardware_data", False)):
-            return None
-        if idx >= len(getattr(state, "servo_raw_online", [])) or not state.servo_raw_online[idx]:
-            return None
-        hw_values = getattr(state, "servo_hardware_positions", []) or []
-        if idx < len(hw_values):
-            return clamp_motor_abs(int(hw_values[idx]))
-        return None
 
-    @staticmethod
-    def _is_motor_abs_at_limit(value: int) -> bool:
-        """Handle is motor abs at limit behavior for the control panel."""
-        return int(value) >= (MOTOR_ABS_CMD_MAX - MOTOR_ABS_LIMIT_RECOVER_MARGIN) or int(value) <= (MOTOR_ABS_CMD_MIN + MOTOR_ABS_LIMIT_RECOVER_MARGIN)
 
     @staticmethod
     def _motor_turn_from_abs(value: int) -> int:
@@ -467,16 +443,12 @@ class ControlPanelStateMixin:
         return targets
 
     def _motor_abs_for_command_packet(self, idx: int, state: Optional[HandModel], *, ignore_last_sent: bool = False) -> int:
-        """Compute or update motor abs for command packet data."""
         relative_target = self._motor_abs_pos[idx]
         origin = self._motor_session_origin_abs[idx]
         if origin is None and state is not None and self._motor_display_valid(idx, state):
             if bool(getattr(state, "has_servo_angle_data", False)):
                 if idx < len(getattr(state, "servo_online", [])) and state.servo_online[idx] and idx < len(state.servo_angles):
                     origin = clamp_motor_abs(int(state.servo_angles[idx]))
-                    raw_single = self._motor_raw_single_feedback(idx)
-                    if raw_single is not None and self._is_motor_abs_at_limit(origin):
-                        origin = int(raw_single)
             elif bool(getattr(state, "has_servo_raw_data", False)):
                 if idx < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[idx] and idx < len(state.servo_raw_positions):
                     origin = clamp_motor_abs(motor_target_from_servo_feedback(state.servo_raw_positions[idx]))
@@ -1052,12 +1024,11 @@ class ControlPanelStateMixin:
             item.setToolTip("Joint encoder feedback unavailable")
 
     def _hide_offline_motor_feedback_items(self, motor_idx: int) -> None:
-        """Handle hide offline motor feedback items behavior for the control panel."""
         tip = f"M{motor_idx:02d} offline: stale feedback hidden"
         for items in (
             self.motor_turn_items,
             self.motor_raw_items,
-            self.motor_hw_items,
+            self.motor_flash_raw_items,
             self.motor_abs_items,
             self.motor_load_items,
         ):
@@ -1069,7 +1040,6 @@ class ControlPanelStateMixin:
                     item.setToolTip(tip)
 
     def _refresh_motor_feedback_view(self, sync_target: bool = False) -> None:
-        """Refresh the motor feedback view display or controls."""
         state = self._state
         if state is None:
             return
@@ -1113,11 +1083,23 @@ class ControlPanelStateMixin:
                     raw_item.setText(f"{raw_single:4d}" if raw_single is not None else "-")
                     raw_item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
                     raw_item.setToolTip("Single-turn raw position, 0..4095")
-                hw_abs = self._motor_hw_feedback(i)
-                if i < len(self.motor_hw_items) and self.motor_hw_items[i] is not None:
-                    self.motor_hw_items[i].setText(str(int(hw_abs)) if hw_abs is not None else "-")
-                    self.motor_hw_items[i].setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
-                    self.motor_hw_items[i].setToolTip("Feetech Present Position before P4 logical offset")
+                flash_raw = self._motor_flash_raw_feedback(i)
+                if (
+                    i < len(self.motor_flash_raw_items)
+                    and self.motor_flash_raw_items[i] is not None
+                ):
+                    flash_item = self.motor_flash_raw_items[i]
+                    flash_item.setText(
+                        f"{int(flash_raw):4d}" if flash_raw is not None else "-"
+                    )
+                    flash_item.setForeground(
+                        QtGui.QBrush(QtGui.QColor("#000000"))
+                    )
+                    flash_item.setToolTip(
+                        "P4 最近一次成功写入 Flash 的单圈 raw"
+                        if flash_raw is not None
+                        else "该舵机没有有效的多圈 Flash 快照"
+                    )
                 if i < len(self.motor_abs_items):
                     abs_item = self.motor_abs_items[i]
                     abs_item.setText(str(int(dev_abs)) if dev_abs is not None else "-")
@@ -1129,26 +1111,52 @@ class ControlPanelStateMixin:
                             "Turn UNKNOWN: P4 cannot trust this logical ABS. "
                             "Do not control until multi-turn is recovered."
                         )
-                    elif dev_abs is not None and hw_abs is not None:
-                        offset = int(dev_abs) - int(hw_abs)
-                        abs_item.setToolTip(
-                            "P4 logical ABS used by control. "
-                            f"Logical offset vs Feetech HW: {offset} counts ({offset / MOTOR_SINGLE_TURN_STEPS:.2f} turns)."
+                    range_mask = int(
+                        getattr(state, "servo_logical_range_valid_bitmap", 0)
+                        or 0
+                    )
+                    range_mins = list(
+                        getattr(state, "servo_logical_range_min", []) or []
+                    )
+                    range_maxs = list(
+                        getattr(state, "servo_logical_range_max", []) or []
+                    )
+                    if (
+                        (range_mask & (1 << i)) != 0
+                        and i < len(range_mins)
+                        and i < len(range_maxs)
+                    ):
+                        range_tip = (
+                            f"Current-session logical range: "
+                            f"[{int(range_mins[i])}, {int(range_maxs[i])}]"
                         )
-                if raw_single is not None and hw_abs is not None:
-                    hw_single = int(hw_abs) % MOTOR_SINGLE_TURN_STEPS
-                    raw_hw_diff = self._single_turn_diff(int(raw_single), hw_single)
-                    if raw_hw_diff > MOTOR_RAW_HW_MISMATCH_TOL:
+                        current_tip = abs_item.toolTip()
+                        abs_item.setToolTip(
+                            f"{current_tip}\n{range_tip}"
+                            if current_tip else range_tip
+                        )
+                if raw_single is not None and flash_raw is not None:
+                    flash_diff = self._single_turn_diff(
+                        int(raw_single), int(flash_raw)
+                    )
+                    if flash_diff >= MOTOR_FLASH_RAW_WARN_COUNTS:
                         tip = (
-                            f"Raw/HW single-turn mismatch: RawNow={int(raw_single)}, "
-                            f"HWNow mod 4096={hw_single}, diff={raw_hw_diff} counts."
+                            f"当前 raw 与 Flash 快照偏差过大："
+                            f"RawNow={int(raw_single)}, FlashRaw={int(flash_raw)}, "
+                            f"环形差值={flash_diff} counts（阈值 "
+                            f"{MOTOR_FLASH_RAW_WARN_COUNTS}）。"
                         )
                         if i < len(self.motor_raw_items):
                             self.motor_raw_items[i].setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
                             self.motor_raw_items[i].setToolTip(tip)
-                        if i < len(self.motor_hw_items) and self.motor_hw_items[i] is not None:
-                            self.motor_hw_items[i].setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
-                            self.motor_hw_items[i].setToolTip(tip)
+                        if (
+                            i < len(self.motor_flash_raw_items)
+                            and self.motor_flash_raw_items[i] is not None
+                        ):
+                            self.motor_flash_raw_items[i].setForeground(
+                                QtGui.QBrush(QtGui.QColor("#c62828"))
+                            )
+                            self.motor_flash_raw_items[i].setToolTip(tip)
                 if i < len(self.motor_load_items) and self.motor_load_items[i] is not None:
                     item = self.motor_load_items[i]
                     load_text = "-"
@@ -1180,9 +1188,6 @@ class ControlPanelStateMixin:
                     dev_abs = self._motor_feedback_abs(i)
                     if dev_abs is None:
                         continue
-                    raw_single = self._motor_raw_single_feedback(i)
-                    if raw_single is not None and self._is_motor_abs_at_limit(dev_abs):
-                        dev_abs = int(raw_single)
                     self._motor_session_origin_abs[i] = dev_abs
                     self._motor_abs_pos[i] = 0
                     self._set_spin_value_if_changed(self.motor_target_spins[i], 0)
@@ -1372,3 +1377,23 @@ class ControlPanelStateMixin:
         self._mark_motor_target_user_set(idx)
         self._set_motor_relative_target_widget(idx, self._motor_abs_pos[idx])
         self._send_single_motor_abs_from_ui(idx, f"{'Step+' if delta > 0 else 'Step-'} M{idx}")
+
+
+    def _motor_flash_raw_feedback(self, idx: int) -> Optional[int]:
+        """仅返回有效 NVS 快照中的单圈 raw；无快照的通道显示为 '-'。"""
+        state = self._state
+        if idx < 0 or idx >= MOTOR_COUNT or state is None:
+            return None
+        if not self._motor_display_valid(idx, state):
+            return None
+        if not bool(getattr(state, "has_servo_flash_raw_data", False)):
+            return None
+        valid_mask = int(
+            getattr(state, "multiturn_nvs_save_valid_mask", 0) or 0
+        )
+        if (valid_mask & (1 << idx)) == 0:
+            return None
+        flash_values = getattr(state, "servo_flash_raw_positions", []) or []
+        if idx < len(flash_values):
+            return int(flash_values[idx]) % MOTOR_SINGLE_TURN_STEPS
+        return None

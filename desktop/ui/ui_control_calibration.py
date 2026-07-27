@@ -6,6 +6,7 @@ from .ui_control_common import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
     CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
+    CalibrationSnapshotError,
     ControlMode,
     ControlScopeModel,
     DUAL_TENDON_JOINT_INDICES,
@@ -17,6 +18,8 @@ from .ui_control_common import (
     MOTOR_MID_CALIB_PATH,
     MOTOR_TO_JOINT_INDEX,
     Optional,
+    PROJECT_ROOT,
+    Path,
     QtWidgets,
     ROPE_INIT_REASON_LABELS,
     ROPE_INIT_START_TIMEOUT_S,
@@ -35,13 +38,18 @@ from .ui_control_common import (
     Tuple,
     VALID_MOTOR_MASK,
     _motor_channel_valid,
+    atomic_write_snapshot,
     directed_encoder_delta,
     json,
     manual_encoder_reference_entry_crc,
+    merge_snapshot,
+    read_snapshot,
+    shutil,
     tendon_lut_field,
     threading,
     time,
     urdf_manual_scaled_mapping_metadata,
+    validate_snapshot,
 )
 
 
@@ -372,26 +380,24 @@ class CalibrationWorkflowController:
         return text
 
     def _turn_recovery_guide_text(self, unknown_mask: int, source: str = "") -> str:
-        """Handle turn recovery guide text behavior for the control panel."""
         motors = self._format_motor_mask(unknown_mask)
         source_text = f"{source}\n\n" if source else ""
         return (
             f"{source_text}"
-            "当前存在 Turn UNKNOWN，多圈位置不可信，系统已经阻止继续控制。\n\n"
+            "当前存在 Turn UNKNOWN，多圈位置不可信，系统已阻止相关关节继续控制。\n\n"
             f"受影响电机：{motors}\n"
             f"unknown mask：0x{int(unknown_mask):08X}\n\n"
             "为什么会这样：\n"
-            "- 舵机单独断电后，P4 保存的多圈状态可能和真实单圈 raw 不对应。\n"
-            "- 机构被手动转动、换舵机、换机械或改映射后，旧多圈/旧标定不能继续使用。\n"
-            "- P4 NVS 或旧快照恢复失败时，也会保持 Turn UNKNOWN。\n\n"
+            "- 舵机单独断电后，P4 保存的多圈状态可能与重新上电后的 raw 不匹配。\n"
+            "- 环形 raw 差值超过 256 counts 时，P4 会拒绝自动恢复。\n"
+            "- 机构被手动转动、换舵机或改映射后，旧 LUT 也不能继续使用。\n\n"
             "恢复步骤：\n"
             "1. 停止发送运动命令，必要时点击 E-STOP。\n"
-            "2. 确认舵机电源、总线、ID 映射正常，机构没有继续被手动转动。\n"
-            "3. 点击 New Device Reset，将当前在线舵机 raw 作为新的 turn0。\n"
-            "4. New Device Reset 会清旧 ABS limit、旧关节标定，并归档旧 Calib Load。\n"
-            "5. 若仍有故障锁存，再点击 Clear Fault。\n"
-            "6. 重新 ENABLE，然后执行 Rope Init / Calibrate。\n"
-            "7. 确认 TURN KNOWN、CALIB SUCCESS、OL OK 后再控制。"
+            "2. 确认舵机电源、总线和 ID 映射正常，机构不再被手动转动。\n"
+            "3. 点击 New Device Reset；程序只重建在线 Unknown 舵机的 turn0。\n"
+            "4. 界面会自动勾选受影响关节，按提示点击 Calibrate 做单关节标定。\n"
+            "5. 双电机关节会由两台舵机共同重新标定 LUT，其他关节数据保留。\n"
+            "6. 确认 TURN KNOWN、CALIB SUCCESS、OL OK 后再恢复控制。"
         )
 
     def turn_unknown_popup_seen(self) -> bool:
@@ -992,18 +998,18 @@ class CalibrationWorkflowController:
         return results
 
     def _maybe_save_calibration_snapshot(self, state) -> None:
-        """Handle maybe save calibration snapshot behavior for the control panel."""
         if state is None or str(getattr(state, "calib_status", "IDLE")) not in {"SUCCESS", "WARN"}:
             return
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
         if valid_bitmap == 0:
             return
         active_joint_mask = int(self._pending_calib_joint_mask)
-        active_motor_mask = int(self._pending_calib_motor_mask)
         active_joint_mask &= (1 << ENCODER_COUNT) - 1
-        active_motor_mask &= VALID_MOTOR_MASK
         if active_joint_mask == 0:
             return
+        # 只更新目标关节直接使用的舵机。工作空间辅助电机不属于本轮标定，
+        # 不能借由 pending motor mask 覆盖它们已有的 ABS Limit。
+        active_motor_mask = self._motor_mask_for_joint_mask(active_joint_mask)
         required_motor_mask = active_motor_mask & VALID_MOTOR_MASK
         if required_motor_mask != 0 and (valid_bitmap & required_motor_mask) != required_motor_mask:
             missing_motors = [
@@ -1057,7 +1063,7 @@ class CalibrationWorkflowController:
             missing_mask = active_joint_mask & ~manual_valid_mask
             self._set_status(
                 "Calib snapshot save blocked: Manual missing " +
-                self._format_joint_list(ControlScopeModel.ordered_joint_indices_from_mask(missing_mask))
+                self._format_joint_list(_ordered_joint_indices_from_mask(missing_mask))
             )
             return
         if (
@@ -1099,7 +1105,6 @@ class CalibrationWorkflowController:
             return
 
         payload = {
-            "schema_version": 4,
             "saved_at_host_time": time.time(),
             "hand_profile": HAND_PROFILE,
             "feedback_mapping_version": mapping_version,
@@ -1111,20 +1116,54 @@ class CalibrationWorkflowController:
             "active_joint_mask": f"0x{active_joint_mask:08X}",
             "active_motor_mask": f"0x{active_motor_mask:08X}",
             "motor_abs_limit_valid_bitmap": f"0x{valid_bitmap:08X}",
-            "motor_abs_limit_locked_bitmap": "0x00000000",
+            "motor_abs_limit_locked_bitmap": (
+                f"0x{int(getattr(state, 'motor_abs_limit_locked_bitmap', 0) or 0):08X}"
+            ),
             "motor_abs_limit_min": mins,
             "motor_abs_limit_max": maxs,
+            "manual_reference_valid_bitmap": f"0x{manual_valid_mask:08X}",
+            "manual_reference_min_raw": [
+                int(value) for value in manual_min_values[:ENCODER_COUNT]
+            ],
+            "manual_reference_max_raw": [
+                int(value) for value in manual_max_values[:ENCODER_COUNT]
+            ],
+            "source": {
+                "transport": "P4",
+                "identity_contract": "hand_profile+urdf_crc+manual_entry_crc",
+            },
             "joint_calib_results": joint_results,
         }
+
+        previous_payload = None
+        if CALIB_LOAD_SNAPSHOT_PATH.exists():
+            try:
+                previous_payload = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+            except CalibrationSnapshotError as exc:
+                self._set_status(
+                    f"Calib snapshot save blocked: existing V5 snapshot invalid: {exc}"
+                )
+                return
+
+        try:
+            payload = merge_snapshot(
+                previous_payload,
+                payload,
+                updated_joint_mask=active_joint_mask,
+            )
+        except CalibrationSnapshotError as exc:
+            self._set_status(f"Calib snapshot merge failed: {exc}")
+            return
+
         signature = json.dumps(
             {
                 "active_joint_mask": payload["active_joint_mask"],
                 "active_motor_mask": payload["active_motor_mask"],
                 "valid": payload["motor_abs_limit_valid_bitmap"],
                 "locked": payload["motor_abs_limit_locked_bitmap"],
-                "mins": mins,
-                "maxs": maxs,
-                "joints": joint_results,
+                "mins": payload["motor_abs_limit_min"],
+                "maxs": payload["motor_abs_limit_max"],
+                "joints": payload["joint_calib_results"],
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -1132,12 +1171,8 @@ class CalibrationWorkflowController:
         if signature == self._last_calib_snapshot_signature:
             return
         try:
-            CALIB_LOAD_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-            CALIB_LOAD_SNAPSHOT_PATH.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
+            payload = atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, payload)
+        except (OSError, CalibrationSnapshotError) as exc:
             self._set_status(f"Calib snapshot save failed: {exc}")
             return
         self._last_calib_snapshot_signature = signature
@@ -1147,69 +1182,18 @@ class CalibrationWorkflowController:
         self._set_status(f"Calib snapshot saved to {CALIB_LOAD_SNAPSHOT_PATH.name}")
         self._update_manual_action_buttons()
 
-    def _archive_calib_load_snapshot_for_new_device(self) -> str:
-        """Handle archive calib load snapshot for new device behavior for the control panel."""
-        if not CALIB_LOAD_SNAPSHOT_PATH.exists():
-            return "no Calib Load snapshot"
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        archive_path = CALIB_LOAD_SNAPSHOT_PATH.with_name(
-            f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.before_new_device_{stamp}{CALIB_LOAD_SNAPSHOT_PATH.suffix}"
-        )
-        try:
-            CALIB_LOAD_SNAPSHOT_PATH.replace(archive_path)
-        except OSError as exc:
-            self.context.emit_action(f"Calib snapshot archive failed: {exc}")
-            return f"Calib Load snapshot archive failed: {exc}"
-        self._last_calib_snapshot_signature = None
-        self.context.emit_action(f"Calib snapshot archived: {archive_path.name}")
-        return f"Calib Load snapshot archived: {archive_path.name}"
 
-    def _clear_local_calibration_state_after_new_device(self) -> None:
-        """Clear the local calibration state after new device state."""
-        state = self._state
-        if state is not None:
-            try:
-                state.motor_abs_limit_valid_bitmap = 0
-                state.motor_abs_limit_locked_bitmap = 0
-                state.motor_abs_limit_min = [0] * MOTOR_COUNT
-                state.motor_abs_limit_max = [0] * MOTOR_COUNT
-                state.joint_calib_results = [None] * ENCODER_COUNT
-                state.calib_status = "IDLE"
-            except Exception:
-                pass
-        self._last_calib_snapshot_signature = None
-        self._abs_limit_warning_unlocked_mask = 0
-        for idx in range(ENCODER_COUNT):
-            self._refresh_joint_abs_limit_item(idx, state)
-            if idx < len(self.joint_max_items) and self.joint_max_items[idx] is not None:
-                self._refresh_joint_target_range(idx, state)
 
     def _validate_calibration_snapshot_for_load(self, snapshot: dict) -> Optional[str]:
-        """Validate the calibration snapshot for load input."""
+        try:
+            validate_snapshot(snapshot)
+        except CalibrationSnapshotError as exc:
+            return str(exc)
         snapshot_joint_mask = self._snapshot_mask_value(snapshot.get("active_joint_mask"))
         snapshot_motor_mask = self._snapshot_mask_value(snapshot.get("active_motor_mask")) & VALID_MOTOR_MASK
         valid_motor_mask = self._snapshot_mask_value(
             snapshot.get("motor_abs_limit_valid_bitmap")
         ) & VALID_MOTOR_MASK
-        current_joint_mask = int(self._active_joint_mask_from_ui()) & ((1 << ENCODER_COUNT) - 1)
-        current_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
-
-        if current_joint_mask and snapshot_joint_mask and current_joint_mask != snapshot_joint_mask:
-            current_joints = ControlScopeModel.ordered_joint_indices_from_mask(current_joint_mask)
-            snapshot_joints = ControlScopeModel.ordered_joint_indices_from_mask(snapshot_joint_mask)
-            return (
-                "snapshot active joints do not match current scope: "
-                f"snapshot={self._format_joint_list(snapshot_joints)}, "
-                f"current={self._format_joint_list(current_joints)}"
-            )
-        if current_motor_mask and snapshot_motor_mask and current_motor_mask != snapshot_motor_mask:
-            current_motors = [idx for idx in range(MOTOR_COUNT) if current_motor_mask & (1 << idx)]
-            snapshot_motors = [idx for idx in range(MOTOR_COUNT) if snapshot_motor_mask & (1 << idx)]
-            return (
-                "snapshot active motors do not match current scope: "
-                f"snapshot={self._format_motor_list(snapshot_motors)}, "
-                f"current={self._format_motor_list(current_motors)}"
-            )
 
         joint_results = snapshot.get("joint_calib_results", [])
         if len(joint_results) != ENCODER_COUNT:
@@ -1247,7 +1231,7 @@ class CalibrationWorkflowController:
         ]
         if incompatible_mapping:
             return (
-                "legacy/v1-v2 snapshot is view-only; v3 recalibration required: " +
+                "snapshot mapping/URDF contract mismatch; recalibration required: " +
                 self._format_joint_list(incompatible_mapping)
             )
         missing_tendon_lut = [
@@ -1275,14 +1259,16 @@ class CalibrationWorkflowController:
         return None
 
     def new_device_reset(self) -> None:
-        """Run the new device reset workflow."""
         if not self.context.is_comm_connected():
-            self._warn("New Device Reset", "串口未连接，无法重置多圈基准。")
+            self._warn("New Device Reset", "P4 未连接，无法重置多圈基准。")
             return
         state = self._state
         system_state = getattr(state, "system_state", None) if state is not None else None
         if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
-            self._warn("New Device Reset", "控制正在运行，请先 E-STOP 或 Pause 后再重置。")
+            self._warn(
+                "New Device Reset",
+                "控制正在运行，请先点击 E-STOP 或 Pause 后再重置。",
+            )
             return
         multi_turn_unknown_mask = (
             int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
@@ -1291,24 +1277,60 @@ class CalibrationWorkflowController:
         if multi_turn_unknown_mask == 0:
             self._warn(
                 "New Device Reset",
-                "当前设备多圈圈数可信，禁止执行 New Device Reset。",
+                "当前全部舵机多圈圈数可信，禁止执行 New Device Reset。",
             )
             return
         if state is None or not bool(getattr(state, "has_servo_raw_data", False)):
-            self._warn("New Device Reset", "尚未收到舵机 raw 反馈，无法建立 turn0 基准。")
+            self._warn(
+                "New Device Reset",
+                "尚未收到舵机 raw 反馈，无法建立 turn0 基准。",
+            )
             return
+
+        raw_online = list(getattr(state, "servo_raw_online", []) or [])
+        repair_motor_mask = 0
+        for motor_idx in range(min(MOTOR_COUNT, len(raw_online))):
+            if (
+                multi_turn_unknown_mask & (1 << motor_idx)
+                and bool(raw_online[motor_idx])
+            ):
+                repair_motor_mask |= 1 << motor_idx
+        if repair_motor_mask == 0:
+            self._warn(
+                "New Device Reset",
+                "Turn Unknown 舵机当前不在线，请先恢复舵机供电和总线通信。",
+            )
+            return
+
+        affected_joint_mask = 0
+        for motor_idx, joint_idx in enumerate(
+            MOTOR_TO_JOINT_INDEX[:MOTOR_COUNT]
+        ):
+            if (
+                repair_motor_mask & (1 << motor_idx)
+                and 0 <= int(joint_idx) < ENCODER_COUNT
+            ):
+                affected_joint_mask |= 1 << int(joint_idx)
+        repair_motors = self._format_motor_mask(repair_motor_mask, limit=MOTOR_COUNT)
+        repair_joints = self._format_joint_indices(
+            _ordered_joint_indices_from_mask(affected_joint_mask),
+            limit=ENCODER_COUNT,
+        )
 
         reply = QtWidgets.QMessageBox.question(
             self,
             "New Device Reset",
             (
-                "将为新机械/新舵机/新映射重置多圈基准。\n\n"
-                "此操作会：\n"
+                "将只修复当前在线且 Turn Unknown 的舵机。\n\n"
+                f"故障舵机：{repair_motors}\n"
+                f"需要重新标定的关节：{repair_joints}\n\n"
+                "本次操作会：\n"
                 "- 停止当前控制输出\n"
-                "- 清除 P4 Flash/NVS 旧多圈快照\n"
-                "- 将每个在线电机的当前 raw 作为 turn0\n"
-                "- 清除 UI 电机目标缓存\n\n"
-                "完成后请重新 Rope Init / 标定，并确认 ABS 与 raw 合理。"
+                "- 仅将上述故障舵机的当前 raw 设为 turn0\n"
+                "- 仅清除其所属关节的 Auto/LUT/ABS Limit\n"
+                "- 保留其他关节的多圈和标定数据\n\n"
+                "双电机关节即使只坏一台舵机，也必须整关节重新标定。\n"
+                "完成后界面会自动勾选受影响关节，请再点击 Calibrate。"
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
@@ -1318,30 +1340,64 @@ class CalibrationWorkflowController:
             return
 
         self._set_status("New Device Reset running...")
-        ok, message = self.backend.reset_multiturn_baseline_for_new_device()
+        ok, message, restored_motor_mask, invalidated_joint_mask = (
+            self.backend.reset_multiturn_baseline_for_new_device()
+        )
         if ok:
+            # P4 以“关节”为标定失效单位：双电机关节即使只恢复一台舵机，
+            # 两台舵机共同使用的 LUT/ABS Limit 也必须一起清除。本地状态和
+            # Calib Load 快照必须使用完整关节电机范围，不能留下半份旧数据。
+            invalidated_motor_mask = self._motor_mask_for_joint_mask(
+                invalidated_joint_mask
+            )
             self._joint_target_initialized = False
-            self._reset_motor_target_cache_for_device_epoch("New Device Reset: motor targets cleared")
-            self._clear_local_calibration_state_after_new_device()
-            archive_message = self._archive_calib_load_snapshot_for_new_device()
+            self._reset_motor_target_cache_for_device_epoch(
+                "New Device Reset: motor targets cleared"
+            )
+            self._invalidate_local_calibration_scope(
+                invalidated_motor_mask, invalidated_joint_mask
+            )
+            archive_message = self._backup_and_invalidate_calib_snapshot_scope(
+                invalidated_motor_mask, invalidated_joint_mask
+            )
+            self._select_single_joint_recalibration_scope(
+                invalidated_joint_mask
+            )
             self._last_multi_turn_unknown_bitmap = None
             self.reset_turn_unknown_popup_episode()
-            final_message = f"{message}; {archive_message}; recalibrate required"
+            joint_text = self._format_joint_indices(
+                _ordered_joint_indices_from_mask(invalidated_joint_mask),
+                limit=ENCODER_COUNT,
+            )
+            final_message = (
+                f"{message}; {archive_message}; "
+                f"single-joint recalibration required: {joint_text}"
+            )
             self._set_status(f"New Device Reset success: {final_message}")
             self.context.emit_action(f"New Device Reset success: {final_message}")
+            QtWidgets.QMessageBox.information(
+                self,
+                "New Device Reset 完成",
+                (
+                    "局部多圈基准已经重建。\n\n"
+                    f"已自动切换到 Joint Channels 并只勾选：{joint_text}\n"
+                    "请确认对应手指绳路和运动空间安全，然后点击 Calibrate。\n\n"
+                    "标定完成并显示 TURN KNOWN / CALIB SUCCESS 后，"
+                    "再恢复正常控制。"
+                ),
+            )
         else:
             self._error("New Device Reset", f"重置失败：{message}")
             self._set_status(f"New Device Reset failed: {message}")
         self._update_manual_action_buttons()
 
     def load_calibration_snapshot(self) -> None:
-        """Load the calibration snapshot data."""
         if not CALIB_LOAD_SNAPSHOT_PATH.exists():
             self._warn("Calib Load", "没有找到可加载的标定快照，请先完成 Calibrate。")
             return
         try:
-            snapshot = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+        except CalibrationSnapshotError as exc:
             self._error("Calib Load", f"读取标定快照失败：{exc}")
             return
         if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
@@ -1486,7 +1542,6 @@ class CalibrationWorkflowController:
         ok: bool,
         message: str,
     ) -> None:
-        """Handle the startup device check finished event."""
         if int(epoch) != self._startup_device_check_epoch or not self.context.is_comm_connected():
             return
         if phase == "load":
@@ -1520,7 +1575,7 @@ class CalibrationWorkflowController:
         missing_mask = active_joint_mask if not nvs_valid else active_joint_mask & ~manual_mask
         if missing_mask:
             self._startup_device_check_running = False
-            missing = ControlScopeModel.ordered_joint_indices_from_mask(missing_mask)
+            missing = _ordered_joint_indices_from_mask(missing_mask)
             text = self._format_joint_indices(missing)
             self._set_status(f"Device Check: active scope Manual missing ({text})")
             if not self._startup_missing_warning_shown:
@@ -1538,8 +1593,8 @@ class CalibrationWorkflowController:
             self._set_status("Device Check passed: no calibration snapshot; run automatic calibration")
             return
         try:
-            snapshot = json.loads(CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+        except CalibrationSnapshotError as exc:
             self._startup_device_check_running = False
             self._set_status(f"Startup Calib Load skipped: invalid snapshot ({exc})")
             return
@@ -1559,7 +1614,6 @@ class CalibrationWorkflowController:
             return
 
         def load_worker() -> None:
-            """Load the worker data."""
             try:
                 loaded, load_message = self.backend.load_calibration_snapshot(snapshot)
             except Exception as exc:
@@ -1689,3 +1743,225 @@ class CalibrationWorkflowController:
             ", ".join(event_items)
         )
         self._warn("标定装配警告", message)
+
+
+    def _invalidate_local_calibration_scope(
+        self, motor_mask: int, joint_mask: int
+    ) -> None:
+        """同步局部失效结果，不清除其他关节在 UI 中的标定和限位。"""
+        motor_mask = int(motor_mask) & VALID_MOTOR_MASK
+        joint_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
+        state = self._state
+        if state is not None:
+            try:
+                state.motor_abs_limit_valid_bitmap = (
+                    int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
+                    & ~motor_mask
+                )
+                state.motor_abs_limit_locked_bitmap = (
+                    int(getattr(state, "motor_abs_limit_locked_bitmap", 0) or 0)
+                    & ~motor_mask
+                )
+                mins = list(getattr(state, "motor_abs_limit_min", []) or [])
+                maxs = list(getattr(state, "motor_abs_limit_max", []) or [])
+                while len(mins) < MOTOR_COUNT:
+                    mins.append(0)
+                while len(maxs) < MOTOR_COUNT:
+                    maxs.append(0)
+                for motor_idx in range(MOTOR_COUNT):
+                    if motor_mask & (1 << motor_idx):
+                        mins[motor_idx] = 0
+                        maxs[motor_idx] = 0
+                state.motor_abs_limit_min = mins[:MOTOR_COUNT]
+                state.motor_abs_limit_max = maxs[:MOTOR_COUNT]
+
+                results = list(getattr(state, "joint_calib_results", []) or [])
+                while len(results) < ENCODER_COUNT:
+                    results.append(None)
+                for joint_idx in range(ENCODER_COUNT):
+                    if joint_mask & (1 << joint_idx):
+                        results[joint_idx] = None
+                state.joint_calib_results = results[:ENCODER_COUNT]
+                if not any(
+                    isinstance(item, dict) and bool(item.get("success", False))
+                    for item in state.joint_calib_results
+                ):
+                    state.calib_status = "IDLE"
+            except Exception:
+                pass
+        self._last_calib_snapshot_signature = None
+        self._abs_limit_warning_unlocked_mask &= ~motor_mask
+        for joint_idx in _ordered_joint_indices_from_mask(joint_mask):
+            self._refresh_joint_abs_limit_item(joint_idx, state)
+            if (
+                joint_idx < len(self.joint_max_items)
+                and self.joint_max_items[joint_idx] is not None
+            ):
+                self._refresh_joint_target_range(joint_idx, state)
+
+    def _backup_and_invalidate_calib_snapshot_scope(
+        self, motor_mask: int, joint_mask: int
+    ) -> str:
+        """备份 Calib Load 文件，并只删除受影响关节的数据。"""
+        if not CALIB_LOAD_SNAPSHOT_PATH.exists():
+            return "no Calib Load snapshot"
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        archive_path = CALIB_LOAD_SNAPSHOT_PATH.with_name(
+            f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.before_scoped_new_device_"
+            f"{stamp}{CALIB_LOAD_SNAPSHOT_PATH.suffix}"
+        )
+        try:
+            shutil.copy2(CALIB_LOAD_SNAPSHOT_PATH, archive_path)
+            payload = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+            results = list(payload.get("joint_calib_results", []) or [])
+            while len(results) < ENCODER_COUNT:
+                results.append(None)
+            for joint_idx in range(ENCODER_COUNT):
+                if joint_mask & (1 << joint_idx):
+                    results[joint_idx] = None
+            payload["joint_calib_results"] = results[:ENCODER_COUNT]
+
+            valid_mask = self._snapshot_mask_value(
+                payload.get("motor_abs_limit_valid_bitmap")
+            ) & ~int(motor_mask)
+            locked_mask = self._snapshot_mask_value(
+                payload.get("motor_abs_limit_locked_bitmap")
+            ) & ~int(motor_mask)
+            payload["motor_abs_limit_valid_bitmap"] = f"0x{valid_mask:08X}"
+            payload["motor_abs_limit_locked_bitmap"] = f"0x{locked_mask:08X}"
+
+            mins = list(payload.get("motor_abs_limit_min", []) or [])
+            maxs = list(payload.get("motor_abs_limit_max", []) or [])
+            while len(mins) < MOTOR_COUNT:
+                mins.append(0)
+            while len(maxs) < MOTOR_COUNT:
+                maxs.append(0)
+            for motor_idx in range(MOTOR_COUNT):
+                if motor_mask & (1 << motor_idx):
+                    mins[motor_idx] = 0
+                    maxs[motor_idx] = 0
+            payload["motor_abs_limit_min"] = mins[:MOTOR_COUNT]
+            payload["motor_abs_limit_max"] = maxs[:MOTOR_COUNT]
+
+            active_joint_mask = (
+                self._snapshot_mask_value(payload.get("active_joint_mask"))
+                & ~int(joint_mask)
+            )
+            active_motor_mask = (
+                self._snapshot_mask_value(payload.get("active_motor_mask"))
+                & ~int(motor_mask)
+            )
+            payload["active_joint_mask"] = f"0x{active_joint_mask:08X}"
+            payload["active_motor_mask"] = f"0x{active_motor_mask:08X}"
+            payload["scoped_new_device_invalidated_at"] = time.time()
+            payload["scoped_new_device_motor_mask"] = f"0x{int(motor_mask):08X}"
+            payload["scoped_new_device_joint_mask"] = f"0x{int(joint_mask):08X}"
+
+            if active_joint_mask == 0:
+                CALIB_LOAD_SNAPSHOT_PATH.unlink()
+                result = (
+                    f"snapshot backed up as {archive_path.name}; "
+                    "no unaffected calibration remains"
+                )
+            else:
+                atomic_write_snapshot(
+                    CALIB_LOAD_SNAPSHOT_PATH,
+                    payload,
+                    backup=False,
+                )
+                result = (
+                    f"snapshot backed up as {archive_path.name}; "
+                    "unaffected joints preserved"
+                )
+        except (OSError, ValueError, TypeError, CalibrationSnapshotError) as exc:
+            self.context.emit_action(f"Scoped Calib snapshot update failed: {exc}")
+            return f"Calib snapshot update failed: {exc}"
+        self._last_calib_snapshot_signature = None
+        self.context.emit_action(result)
+        return result
+
+    def _select_single_joint_recalibration_scope(self, joint_mask: int) -> None:
+        """New Device 后只勾选受影响关节，等待用户确认后点击 Calibrate。"""
+        joint_mask = int(joint_mask) & ((1 << ENCODER_COUNT) - 1)
+        self._selected_joint_mask = joint_mask
+        self._scope_update_guard = True
+        try:
+            for joint_idx, check in enumerate(self.joint_use_checks):
+                if check is None:
+                    continue
+                check.blockSignals(True)
+                check.setChecked((joint_mask & (1 << joint_idx)) != 0)
+                check.blockSignals(False)
+        finally:
+            self._scope_update_guard = False
+        self._sync_motor_selection_from_joint_selection()
+        self._sync_scope_group_checks()
+        if getattr(self, "tabs", None) is not None and self.tabs.count() > 1:
+            self.tabs.setCurrentIndex(1)
+        self._apply_active_scope_for_current_mode()
+
+    def export_calibration_snapshot(self) -> None:
+        """导出完整 V5 标定包，供同一只手迁移到另一台电脑。"""
+        if not CALIB_LOAD_SNAPSHOT_PATH.exists():
+            self._warn("Export Calib", "没有可导出的 V5 标定快照。")
+            return
+        try:
+            snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+        except CalibrationSnapshotError as exc:
+            self._error("Export Calib", f"当前快照无效：{exc}")
+            return
+        default_name = (
+            f"mmhand_calibration_{time.strftime('%Y%m%d_%H%M%S')}.mmcal.json"
+        )
+        target, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export MMHand Calibration",
+            str(PROJECT_ROOT / default_name),
+            "MMHand Calibration (*.mmcal.json);;JSON (*.json)",
+        )
+        if not target:
+            return
+        try:
+            atomic_write_snapshot(Path(target), snapshot, backup=False)
+        except (OSError, CalibrationSnapshotError) as exc:
+            self._error("Export Calib", f"导出失败：{exc}")
+            return
+        self.context.emit_action(f"Calib snapshot exported: {target}")
+        self._set_status(f"Calib snapshot exported: {Path(target).name}")
+
+    def import_calibration_snapshot(self) -> None:
+        """导入便携快照并激活到本机；导入本身不会发送运动指令。"""
+        source, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import MMHand Calibration",
+            str(PROJECT_ROOT),
+            "MMHand Calibration (*.mmcal.json);;JSON (*.json)",
+        )
+        if not source:
+            return
+        try:
+            snapshot = read_snapshot(Path(source))
+        except CalibrationSnapshotError as exc:
+            self._error("Import Calib", f"拒绝导入：{exc}")
+            return
+        if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
+            self._error(
+                "Import Calib",
+                f"hand_profile 不匹配：{snapshot.get('hand_profile')} != {HAND_PROFILE}",
+            )
+            return
+        snapshot_error = self._validate_calibration_snapshot_for_load(snapshot)
+        if snapshot_error:
+            self._error("Import Calib", f"拒绝导入：{snapshot_error}")
+            return
+        try:
+            atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, snapshot)
+        except (OSError, CalibrationSnapshotError) as exc:
+            self._error("Import Calib", f"激活快照失败：{exc}")
+            return
+        self._last_calib_snapshot_signature = None
+        self.context.emit_action(f"Calib snapshot imported: {source}")
+        self._set_status(
+            f"Calib snapshot imported: {Path(source).name}; press Calib Load to restore"
+        )
+        self._update_manual_action_buttons()
