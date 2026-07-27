@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from desktop.core.data_models import HandModel
+from desktop.core.data_models import HandModel, JointWorkspaceRange
 from desktop.ui.ui_control_panels import ControlPanel
 from desktop.ui.ui_qt_compat import ensure_app
 
@@ -64,6 +64,22 @@ class _Context:
 def _panel() -> ControlPanel:
     """Construct a ControlPanel with a minimal desktop context."""
     return ControlPanel(_Context())
+
+
+def _ready_workspace(joint: int, current_min: float, current_max: float) -> JointWorkspaceRange:
+    """Build a ready workspace range for pose target tests."""
+    return JointWorkspaceRange(
+        joint_index=joint,
+        urdf_min_deg=-90.0,
+        urdf_max_deg=90.0,
+        current_min_deg=current_min,
+        current_max_deg=current_max,
+        manual_valid=True,
+        auto_valid=True,
+        manual_crc_match=True,
+        mapping_valid=True,
+        ready=True,
+    )
 
 
 def test_spin_change_marks_target_before_state_refresh_can_resync_it():
@@ -144,3 +160,39 @@ def test_send_joint_row_passes_only_clicked_joint_mask():
     panel.send_joint_row(3)
 
     assert panel.context.calls[0][1]["command_joint_mask"] == (1 << 3)
+
+
+def test_open_pose_uses_dual_midpoint_and_single_min_plus_five():
+    panel = _panel()
+    panel._state = HandModel()
+    panel._active_scope_joint_indices = lambda: [0, 1]
+    panel.resolved_joint_targets = lambda: [0.0] * 21
+    workspaces = {
+        0: _ready_workspace(0, 10.0, 50.0),
+        1: _ready_workspace(1, 20.0, 80.0),
+    }
+    panel._joint_workspace_range = lambda joint, _state: workspaces[joint]
+
+    pose = panel._build_open_pose_targets()
+
+    assert pose is not None
+    targets, joints = pose
+    assert joints == [0, 1]
+    assert targets[0] == 30.0
+    assert targets[1] == 25.0
+
+
+def test_current_min_pose_builder_keeps_min_plus_five_for_dual_joint():
+    panel = _panel()
+    panel._state = HandModel()
+    panel._active_scope_joint_indices = lambda: [0]
+    panel.resolved_joint_targets = lambda: [0.0] * 21
+    workspace = _ready_workspace(0, 10.0, 50.0)
+    panel._joint_workspace_range = lambda _joint, _state: workspace
+
+    pose = panel._build_current_min_open_pose_targets()
+
+    assert pose is not None
+    targets, joints = pose
+    assert joints == [0]
+    assert targets[0] == 15.0

@@ -136,6 +136,24 @@ static int32_t abs32(int32_t value)
     return value < 0 ? -value : value;
 }
 
+static int32_t midpointInt32Local(int32_t a, int32_t b)
+{
+    return a + (b - a) / 2;
+}
+
+static int32_t stepTowardInt32Local(int32_t current, int32_t target, int32_t maxStep)
+{
+    if (maxStep <= 0 || current == target) {
+        return current;
+    }
+    if (current < target) {
+        const int32_t delta = target - current;
+        return delta <= maxStep ? target : current + maxStep;
+    }
+    const int32_t delta = current - target;
+    return delta <= maxStep ? target : current - maxStep;
+}
+
 
 static int16_t clampToServoPosLocal(int32_t value)
 {
@@ -1557,6 +1575,568 @@ static bool waitMotorTargetReached(TaskSharedData_t* sharedData,
     return false;
 }
 
+struct DualCenterFeedback {
+    int32_t primaryAbs;
+    int32_t secondaryAbs;
+    int16_t primaryLoad;
+    int16_t secondaryLoad;
+};
+
+static void setDualCenterDiagIfUnset(TaskSharedData_t* sharedData,
+                                     uint8_t reason,
+                                     uint8_t jointIndex,
+                                     uint8_t motor,
+                                     int32_t valueA,
+                                     int32_t valueB,
+                                     int32_t valueC,
+                                     uint32_t bitmap)
+{
+    if (!hasCalibrationDiag(sharedData)) {
+        setCalibrationDiag(sharedData,
+                           reason,
+                           CALIB_DIAG_PHASE_SEQUENCE,
+                           jointIndex,
+                           motor,
+                           valueA,
+                           valueB,
+                           valueC,
+                           bitmap);
+    }
+}
+
+static bool readDualCenterFeedback(TaskSharedData_t* sharedData,
+                                   uint8_t jointIndex,
+                                   uint8_t primaryMotor,
+                                   uint8_t secondaryMotor,
+                                   DualCenterFeedback* out)
+{
+    if (!out) {
+        return false;
+    }
+
+    int16_t primaryLoadRaw = 0;
+    int16_t secondaryLoadRaw = 0;
+    const bool primaryAbsOk =
+        readLatestMotorServoAbs(sharedData, primaryMotor, &out->primaryAbs);
+    const bool secondaryAbsOk =
+        readLatestMotorServoAbs(sharedData, secondaryMotor, &out->secondaryAbs);
+    const bool primaryLoadOk =
+        readLatestMotorServoLoad(sharedData, primaryMotor, &primaryLoadRaw);
+    const bool secondaryLoadOk =
+        readLatestMotorServoLoad(sharedData, secondaryMotor, &secondaryLoadRaw);
+    if (!primaryAbsOk || !secondaryAbsOk ||
+        !primaryLoadOk || !secondaryLoadOk) {
+        const uint32_t motorMask =
+            (1UL << primaryMotor) | (1UL << secondaryMotor);
+        const uint8_t failedMotor = !primaryAbsOk || !primaryLoadOk
+            ? primaryMotor : secondaryMotor;
+        const int32_t statusBitmap =
+            (primaryAbsOk ? 1 : 0) |
+            (secondaryAbsOk ? 2 : 0) |
+            (primaryLoadOk ? 4 : 0) |
+            (secondaryLoadOk ? 8 : 0);
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL feedback lost J%02u M%02u/M%02u status=0x%02lX\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)primaryMotor,
+                           (unsigned)secondaryMotor,
+                           (unsigned long)statusBitmap);
+        setDualCenterDiagIfUnset(sharedData,
+                                 CALIB_DIAG_REASON_FEEDBACK_LOST,
+                                 jointIndex,
+                                 failedMotor,
+                                 statusBitmap,
+                                 primaryMotor,
+                                 secondaryMotor,
+                                 motorMask);
+        return false;
+    }
+
+    out->primaryLoad = servoLoadMagnitude(primaryLoadRaw);
+    out->secondaryLoad = servoLoadMagnitude(secondaryLoadRaw);
+    return true;
+}
+
+static bool publishDualCenterTargets(TaskSharedData_t* sharedData,
+                                     uint8_t jointIndex,
+                                     uint8_t firstMotor,
+                                     int32_t firstTargetAbs,
+                                     uint8_t secondMotor,
+                                     int32_t secondTargetAbs,
+                                     const AutoCalibrationParams& params)
+{
+    const int32_t firstCommandAbs = clampToServoAbsRangeLocal(firstTargetAbs);
+    const int32_t secondCommandAbs = clampToServoAbsRangeLocal(secondTargetAbs);
+    if (firstCommandAbs != firstTargetAbs || secondCommandAbs != secondTargetAbs) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_CLAMP_TARGET J%02u M%02u %ld->%ld M%02u %ld->%ld\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)firstMotor,
+                           (long)firstTargetAbs,
+                           (long)firstCommandAbs,
+                           (unsigned)secondMotor,
+                           (long)secondTargetAbs,
+                           (long)secondCommandAbs);
+    }
+    if (!publishDualMotorCalibrationTargets(sharedData,
+                                            firstMotor,
+                                            firstCommandAbs,
+                                            secondMotor,
+                                            secondCommandAbs,
+                                            params)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL publish failed J%02u M%02u=%ld M%02u=%ld\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)firstMotor,
+                           (long)firstCommandAbs,
+                           (unsigned)secondMotor,
+                           (long)secondCommandAbs);
+        setDualCenterDiagIfUnset(sharedData,
+                                 CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                 jointIndex,
+                                 firstMotor,
+                                 firstCommandAbs,
+                                 secondCommandAbs,
+                                 0,
+                                 (1UL << firstMotor) | (1UL << secondMotor));
+        return false;
+    }
+    return true;
+}
+
+static bool releaseDualCenterMotorIfNeeded(TaskSharedData_t* sharedData,
+                                           uint8_t jointIndex,
+                                           const char* phase,
+                                           uint8_t releaseMotor,
+                                           int32_t releaseTargetAbs,
+                                           uint8_t holdMotor,
+                                           const AutoCalibrationParams& params)
+{
+    const int32_t tolerance = params.zeroReachAbsTolerance;
+    const int32_t releaseTargetTendon =
+        motorRawAbsToTendonAbs(releaseMotor, releaseTargetAbs);
+    int32_t commandTendon = 0;
+    bool commandInitialized = false;
+    int32_t commandRemainder = 0;
+    uint32_t lastCommandMs = millis();
+    uint32_t lastTraceMs = 0;
+
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_BEGIN J%02u release=M%02u target=%ld hold=M%02u tolerance=%ld\r\n",
+                       phase,
+                       (unsigned)jointIndex,
+                       (unsigned)releaseMotor,
+                       (long)releaseTargetAbs,
+                       (unsigned)holdMotor,
+                       (long)tolerance);
+
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        DualCenterFeedback feedback;
+        if (!readDualCenterFeedback(sharedData,
+                                    jointIndex,
+                                    releaseMotor,
+                                    holdMotor,
+                                    &feedback)) {
+            return false;
+        }
+
+        const int32_t releaseAbs = feedback.primaryAbs;
+        const int32_t holdAbs = feedback.secondaryAbs;
+        const int32_t currentTendon =
+            motorRawAbsToTendonAbs(releaseMotor, releaseAbs);
+        const int32_t excessTendon = currentTendon - releaseTargetTendon;
+        if (excessTendon <= tolerance) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_REACHED J%02u release=M%02u abs=%ld target=%ld excess=%ld/%ld hold=M%02u abs=%ld load=%d/%d\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)releaseMotor,
+                               (long)releaseAbs,
+                               (long)releaseTargetAbs,
+                               (long)excessTendon,
+                               (long)tolerance,
+                               (unsigned)holdMotor,
+                               (long)holdAbs,
+                               (int)feedback.primaryLoad,
+                               (int)feedback.secondaryLoad);
+            return true;
+        }
+
+        if (!commandInitialized || commandTendon > currentTendon) {
+            commandTendon = currentTendon;
+            commandInitialized = true;
+        }
+
+        const uint32_t nowMs = millis();
+        const uint32_t dtMs = nowMs - lastCommandMs;
+        if (dtMs >= params.loopMs) {
+            const int32_t numerator =
+                (int32_t)dtMs * params.tightenSpeedCountsPerSec +
+                commandRemainder;
+            const int32_t stepCounts = numerator / 1000;
+            commandRemainder = numerator % 1000;
+            if (stepCounts > 0) {
+                commandTendon = stepTowardInt32Local(commandTendon,
+                                                     releaseTargetTendon,
+                                                     stepCounts);
+                if (commandTendon > currentTendon) {
+                    commandTendon = currentTendon;
+                }
+            }
+            lastCommandMs = nowMs;
+        }
+
+        const int32_t commandAbs =
+            motorTendonAbsToRawAbs(releaseMotor, commandTendon);
+        if (!publishDualCenterTargets(sharedData,
+                                      jointIndex,
+                                      releaseMotor,
+                                      commandAbs,
+                                      holdMotor,
+                                      holdAbs,
+                                      params)) {
+            return false;
+        }
+
+        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
+            lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] %s_WAIT J%02u release=M%02u cmd=%ld abs=%ld target=%ld excess=%ld/%ld load=%d hold=M%02u abs=%ld load=%d\r\n",
+                               phase,
+                               (unsigned)jointIndex,
+                               (unsigned)releaseMotor,
+                               (long)commandAbs,
+                               (long)releaseAbs,
+                               (long)releaseTargetAbs,
+                               (long)excessTendon,
+                               (long)tolerance,
+                               (int)feedback.primaryLoad,
+                               (unsigned)holdMotor,
+                               (long)holdAbs,
+                               (int)feedback.secondaryLoad);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
+    }
+
+    setDualCenterDiagIfUnset(sharedData,
+                             CALIB_DIAG_REASON_CONTROL_LOST,
+                             jointIndex,
+                             releaseMotor,
+                             sharedData ? sharedData->system_state : -1,
+                             sharedData ? sharedData->servo_target_owner : -1,
+                             sharedData ? sharedData->control_enabled : -1,
+                             sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL %s cancel J%02u release=M%02u state=%u owner=%u enabled=%u\r\n",
+                       phase,
+                       (unsigned)jointIndex,
+                       (unsigned)releaseMotor,
+                       sharedData ? (unsigned)sharedData->system_state : 255U,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
+    return false;
+}
+
+static bool approachDualCenterTargets(TaskSharedData_t* sharedData,
+                                      uint8_t jointIndex,
+                                      uint8_t primaryMotor,
+                                      int32_t primaryTargetAbs,
+                                      uint8_t secondaryMotor,
+                                      int32_t secondaryTargetAbs,
+                                      const AutoCalibrationParams& params)
+{
+    const int32_t tolerance = params.zeroReachAbsTolerance;
+    const int32_t primaryTargetTendon =
+        motorRawAbsToTendonAbs(primaryMotor, primaryTargetAbs);
+    const int32_t secondaryTargetTendon =
+        motorRawAbsToTendonAbs(secondaryMotor, secondaryTargetAbs);
+    int32_t primaryCommandTendon = 0;
+    int32_t secondaryCommandTendon = 0;
+    bool commandInitialized = false;
+    int32_t commandRemainder = 0;
+    uint32_t lastCommandMs = millis();
+    uint32_t lastTraceMs = 0;
+
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_APPROACH_BEGIN J%02u primary=M%02u target=%ld secondary=M%02u target=%ld tolerance=%ld\r\n",
+                       (unsigned)jointIndex,
+                       (unsigned)primaryMotor,
+                       (long)primaryTargetAbs,
+                       (unsigned)secondaryMotor,
+                       (long)secondaryTargetAbs,
+                       (long)tolerance);
+
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        DualCenterFeedback feedback;
+        if (!readDualCenterFeedback(sharedData,
+                                    jointIndex,
+                                    primaryMotor,
+                                    secondaryMotor,
+                                    &feedback)) {
+            return false;
+        }
+
+        const int32_t primaryErr = abs32(feedback.primaryAbs - primaryTargetAbs);
+        const int32_t secondaryErr = abs32(feedback.secondaryAbs - secondaryTargetAbs);
+        if (primaryErr <= tolerance && secondaryErr <= tolerance) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_REACHED J%02u primary=M%02u abs=%ld target=%ld err=%ld/%ld load=%d secondary=M%02u abs=%ld target=%ld err=%ld/%ld load=%d\r\n",
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (long)feedback.primaryAbs,
+                               (long)primaryTargetAbs,
+                               (long)primaryErr,
+                               (long)tolerance,
+                               (int)feedback.primaryLoad,
+                               (unsigned)secondaryMotor,
+                               (long)feedback.secondaryAbs,
+                               (long)secondaryTargetAbs,
+                               (long)secondaryErr,
+                               (long)tolerance,
+                               (int)feedback.secondaryLoad);
+            return true;
+        }
+
+        if (!commandInitialized) {
+            primaryCommandTendon =
+                motorRawAbsToTendonAbs(primaryMotor, feedback.primaryAbs);
+            secondaryCommandTendon =
+                motorRawAbsToTendonAbs(secondaryMotor, feedback.secondaryAbs);
+            commandInitialized = true;
+        }
+
+        const uint32_t nowMs = millis();
+        const uint32_t dtMs = nowMs - lastCommandMs;
+        if (dtMs >= params.loopMs) {
+            const int32_t numerator =
+                (int32_t)dtMs * params.tightenSpeedCountsPerSec +
+                commandRemainder;
+            const int32_t stepCounts = numerator / 1000;
+            commandRemainder = numerator % 1000;
+            if (stepCounts > 0) {
+                primaryCommandTendon = stepTowardInt32Local(primaryCommandTendon,
+                                                            primaryTargetTendon,
+                                                            stepCounts);
+                secondaryCommandTendon = stepTowardInt32Local(secondaryCommandTendon,
+                                                              secondaryTargetTendon,
+                                                              stepCounts);
+            }
+            lastCommandMs = nowMs;
+        }
+
+        const int32_t primaryCommandAbs =
+            motorTendonAbsToRawAbs(primaryMotor, primaryCommandTendon);
+        const int32_t secondaryCommandAbs =
+            motorTendonAbsToRawAbs(secondaryMotor, secondaryCommandTendon);
+        if (!publishDualCenterTargets(sharedData,
+                                      jointIndex,
+                                      primaryMotor,
+                                      primaryCommandAbs,
+                                      secondaryMotor,
+                                      secondaryCommandAbs,
+                                      params)) {
+            return false;
+        }
+
+        if ((uint32_t)(nowMs - lastTraceMs) >= params.traceMs) {
+            lastTraceMs = nowMs;
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_APPROACH_WAIT J%02u primary=M%02u cmd=%ld abs=%ld target=%ld err=%ld/%ld load=%d secondary=M%02u cmd=%ld abs=%ld target=%ld err=%ld/%ld load=%d\r\n",
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               (long)primaryCommandAbs,
+                               (long)feedback.primaryAbs,
+                               (long)primaryTargetAbs,
+                               (long)primaryErr,
+                               (long)tolerance,
+                               (int)feedback.primaryLoad,
+                               (unsigned)secondaryMotor,
+                               (long)secondaryCommandAbs,
+                               (long)feedback.secondaryAbs,
+                               (long)secondaryTargetAbs,
+                               (long)secondaryErr,
+                               (long)tolerance,
+                               (int)feedback.secondaryLoad);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(params.loopMs));
+    }
+
+    setDualCenterDiagIfUnset(sharedData,
+                             CALIB_DIAG_REASON_CONTROL_LOST,
+                             jointIndex,
+                             primaryMotor,
+                             sharedData ? sharedData->system_state : -1,
+                             sharedData ? sharedData->servo_target_owner : -1,
+                             sharedData ? sharedData->control_enabled : -1,
+                             sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL approach cancel J%02u state=%u owner=%u enabled=%u\r\n",
+                       (unsigned)jointIndex,
+                       sharedData ? (unsigned)sharedData->system_state : 255U,
+                       sharedData ? (unsigned)sharedData->servo_target_owner : 255U,
+                       sharedData ? (unsigned)sharedData->control_enabled : 255U);
+    return false;
+}
+
+static void syncDualCenterJointTargetFromFeedback(TaskSharedData_t* sharedData,
+                                                  uint8_t jointIndex,
+                                                  const JointCalibrationResult& result)
+{
+    uint16_t centeredRaw = 0;
+    int32_t centeredEncoder = 0;
+    if (!readLatestEncoderSample(sharedData,
+                                 jointIndex,
+                                 &centeredRaw,
+                                 &centeredEncoder)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC_SKIP J%02u missing encoder\r\n",
+                           (unsigned)jointIndex);
+        return;
+    }
+
+    EncoderUrdfMapResult centerMap = {};
+    if (mapManualScaledEncoderToUrdf(jointIndex,
+                                     result,
+                                     g_manualEncoderReference[jointIndex],
+                                     centeredRaw,
+                                     g_encoderDirection[jointIndex],
+                                     &centerMap) &&
+        centerMap.valid) {
+        syncJointTargetToDeg(sharedData, jointIndex, centerMap.urdfDeg);
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC J%02u raw=%u oriented=%ld deg=%.3f outside=%ld\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)centeredRaw,
+                           (long)centeredEncoder,
+                           centerMap.urdfDeg,
+                           (long)centerMap.outsideCounts);
+    } else {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_SYNC_SKIP J%02u raw=%u oriented=%ld map invalid\r\n",
+                           (unsigned)jointIndex,
+                           (unsigned)centeredRaw,
+                           (long)centeredEncoder);
+    }
+}
+
+static bool centerDualJointAfterCalibration(TaskSharedData_t* sharedData,
+                                            uint8_t jointIndex,
+                                            uint8_t primaryMotor,
+                                            int32_t primaryReadyAbs,
+                                            int32_t primaryTargetAbs,
+                                            uint8_t secondaryMotor,
+                                            int32_t secondaryReadyAbs,
+                                            int32_t secondaryTargetAbs,
+                                            const JointCalibrationResult& result,
+                                            const AutoCalibrationParams& params)
+{
+    const int32_t tolerance = params.zeroReachAbsTolerance;
+    const uint32_t motorMask =
+        (1UL << primaryMotor) | (1UL << secondaryMotor);
+    if (!isServoCommandInsideLimit(primaryTargetAbs) ||
+        !isServoCommandInsideLimit(secondaryTargetAbs)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL target outside limit J%02u primary=%ld secondary=%ld\r\n",
+                           (unsigned)jointIndex,
+                           (long)primaryTargetAbs,
+                           (long)secondaryTargetAbs);
+        setDualCenterDiagIfUnset(sharedData,
+                                 CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
+                                 jointIndex,
+                                 primaryMotor,
+                                 primaryTargetAbs,
+                                 secondaryTargetAbs,
+                                 0,
+                                 motorMask);
+        return false;
+    }
+
+    DualCenterFeedback initialFeedback;
+    if (!readDualCenterFeedback(sharedData,
+                                jointIndex,
+                                primaryMotor,
+                                secondaryMotor,
+                                &initialFeedback)) {
+        return false;
+    }
+
+    const int32_t primaryExcess =
+        motorRawAbsToTendonAbs(primaryMotor, initialFeedback.primaryAbs) -
+        motorRawAbsToTendonAbs(primaryMotor, primaryTargetAbs);
+    const int32_t secondaryExcess =
+        motorRawAbsToTendonAbs(secondaryMotor, initialFeedback.secondaryAbs) -
+        motorRawAbsToTendonAbs(secondaryMotor, secondaryTargetAbs);
+    const bool primaryNeedsRelease = primaryExcess > tolerance;
+    const bool secondaryNeedsRelease = secondaryExcess > tolerance;
+
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_BEGIN J%02u primary=M%02u ready=%ld current=%ld target=%ld excess=%ld load=%d secondary=M%02u ready=%ld current=%ld target=%ld excess=%ld load=%d tolerance=%ld\r\n",
+                       (unsigned)jointIndex,
+                       (unsigned)primaryMotor,
+                       (long)primaryReadyAbs,
+                       (long)initialFeedback.primaryAbs,
+                       (long)primaryTargetAbs,
+                       (long)primaryExcess,
+                       (int)initialFeedback.primaryLoad,
+                       (unsigned)secondaryMotor,
+                       (long)secondaryReadyAbs,
+                       (long)initialFeedback.secondaryAbs,
+                       (long)secondaryTargetAbs,
+                       (long)secondaryExcess,
+                       (int)initialFeedback.secondaryLoad,
+                       (long)tolerance);
+
+    bool primaryFirst = true;
+    if (primaryNeedsRelease && secondaryNeedsRelease) {
+        if (initialFeedback.secondaryLoad > initialFeedback.primaryLoad ||
+            (initialFeedback.secondaryLoad == initialFeedback.primaryLoad &&
+             secondaryExcess > primaryExcess)) {
+            primaryFirst = false;
+        }
+    } else if (!primaryNeedsRelease && secondaryNeedsRelease) {
+        primaryFirst = false;
+    }
+
+    if (primaryFirst) {
+        if (!releaseDualCenterMotorIfNeeded(sharedData,
+                                            jointIndex,
+                                            "DUAL_CENTER_RELEASE_PRIMARY",
+                                            primaryMotor,
+                                            primaryTargetAbs,
+                                            secondaryMotor,
+                                            params)) {
+            return false;
+        }
+        if (!releaseDualCenterMotorIfNeeded(sharedData,
+                                            jointIndex,
+                                            "DUAL_CENTER_RELEASE_SECONDARY",
+                                            secondaryMotor,
+                                            secondaryTargetAbs,
+                                            primaryMotor,
+                                            params)) {
+            return false;
+        }
+    } else {
+        if (!releaseDualCenterMotorIfNeeded(sharedData,
+                                            jointIndex,
+                                            "DUAL_CENTER_RELEASE_SECONDARY",
+                                            secondaryMotor,
+                                            secondaryTargetAbs,
+                                            primaryMotor,
+                                            params)) {
+            return false;
+        }
+        if (!releaseDualCenterMotorIfNeeded(sharedData,
+                                            jointIndex,
+                                            "DUAL_CENTER_RELEASE_PRIMARY",
+                                            primaryMotor,
+                                            primaryTargetAbs,
+                                            secondaryMotor,
+                                            params)) {
+            return false;
+        }
+    }
+
+    if (!approachDualCenterTargets(sharedData,
+                                   jointIndex,
+                                   primaryMotor,
+                                   primaryTargetAbs,
+                                   secondaryMotor,
+                                   secondaryTargetAbs,
+                                   params)) {
+        return false;
+    }
+
+    syncDualCenterJointTargetFromFeedback(sharedData, jointIndex, result);
+    return true;
+}
+
 static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                                     uint8_t jointIndex,
                                     uint8_t primaryMotor,
@@ -1568,6 +2148,7 @@ static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                                     const AutoCalibrationParams& params)
 {
     (void)params;
+    const uint32_t startMs = millis();
     uint32_t lastTraceMs = 0;
     while (autoCalibrationStillOwnsControl(sharedData)) {
         const bool primaryOk =
@@ -1590,6 +2171,32 @@ static bool waitDualInitialFeedback(TaskSharedData_t* sharedData,
                           secondaryMotor,
                           secondaryOk ? 1 : 0,
                           encoderOk ? 1 : 0);
+        }
+        if ((uint32_t)(nowMs - startMs) >= kAutoInitialFeedbackWaitMs) {
+            const uint32_t missingMotorMask =
+                (primaryOk ? 0UL : (1UL << primaryMotor)) |
+                (secondaryOk ? 0UL : (1UL << secondaryMotor));
+            const uint8_t failedMotor = !primaryOk
+                ? primaryMotor
+                : (!secondaryOk ? secondaryMotor : 0xFF);
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_INIT_TIMEOUT J%02u M%02u=%u M%02u=%u encoder=%u timeout=%lu\r\n",
+                               (unsigned)jointIndex,
+                               (unsigned)primaryMotor,
+                               primaryOk ? 1U : 0U,
+                               (unsigned)secondaryMotor,
+                               secondaryOk ? 1U : 0U,
+                               encoderOk ? 1U : 0U,
+                               (unsigned long)kAutoInitialFeedbackWaitMs);
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_FEEDBACK_LOST,
+                               CALIB_DIAG_PHASE_INIT,
+                               jointIndex,
+                               failedMotor,
+                               primaryOk ? 1 : 0,
+                               secondaryOk ? 1 : 0,
+                               encoderOk ? 1 : 0,
+                               missingMotorMask);
+            return false;
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -1954,6 +2561,7 @@ static void setCalibrationWorkspaceReadMask(TaskSharedData_t* sharedData,
 
 static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
                                       uint8_t targetJoint,
+                                      uint32_t centeredJointMask,
                                       DualWorkspacePlanStep* steps,
                                       uint8_t capacity)
 {
@@ -1971,6 +2579,12 @@ static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
     for (uint8_t i = 0; i < kWorkspaceDualJointsCount; ++i) {
         const uint8_t jointIndex = kWorkspaceDualJoints[i];
         if (jointIndex >= targetJoint) {
+            continue;
+        }
+        if ((centeredJointMask & (1UL << jointIndex)) != 0) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=already-centered\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex);
             continue;
         }
         const DualWorkspacePairAvailability availability =
@@ -1994,6 +2608,12 @@ static uint8_t buildDualWorkspacePlan(TaskSharedData_t* sharedData,
     for (int8_t i = (int8_t)kWorkspaceDualJointsCount - 1; i >= 0; --i) {
         const uint8_t jointIndex = kWorkspaceDualJoints[(uint8_t)i];
         if (jointIndex <= targetJoint) {
+            continue;
+        }
+        if ((centeredJointMask & (1UL << jointIndex)) != 0) {
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_PLAN_SKIP target=J%02u helper=J%02u reason=already-centered\r\n",
+                               (unsigned)targetJoint,
+                               (unsigned)jointIndex);
             continue;
         }
         const DualWorkspacePairAvailability availability =
@@ -2602,6 +3222,7 @@ static bool ensureWorkspaceDualPose(TaskSharedData_t* sharedData,
 
 static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
                                                uint8_t targetJoint,
+                                               uint32_t centeredJointMask,
                                                const AutoCalibrationParams& params)
 {
     if (!isWorkspaceDualJoint(targetJoint)) {
@@ -2640,6 +3261,7 @@ static bool prepareWorkspaceForDualCalibration(TaskSharedData_t* sharedData,
     DualWorkspacePlanStep steps[kWorkspaceDualHelperCount] = {};
     const uint8_t stepCount = buildDualWorkspacePlan(sharedData,
                                                       targetJoint,
+                                                      centeredJointMask,
                                                       steps,
                                                       kWorkspaceDualHelperCount);
     if (stepCount == 0xFF) {
@@ -3560,11 +4182,30 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   primaryMotor,
                   secondaryMotor);
 
-    g_jointCalibResult[jointIndex] = result;
-    updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
-    g_encoderOffsetManual[jointIndex] = result.offset;
-    syncJointTargetToDeg(sharedData, jointIndex, readyMap.urdfDeg);
-    clearJointServoMultiTurnUnknown(sharedData, jointIndex);
+    const int32_t primaryCenterAbs =
+        midpointInt32Local(primary80Abs, primaryNeg3Abs);
+    const int32_t secondaryCenterAbs =
+        midpointInt32Local(secondaryPreloadAbs, secondaryNeg3Abs);
+    if (!centerDualJointAfterCalibration(sharedData,
+                                         jointIndex,
+                                         primaryMotor,
+                                         primaryReadyAbs,
+                                         primaryCenterAbs,
+                                         secondaryMotor,
+                                         secondaryReadyAbs,
+                                         secondaryCenterAbs,
+                                         result,
+                                         params)) {
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_CENTER_FAIL J%02u primaryTarget=%ld secondaryTarget=%ld; calibration result not committed\r\n",
+                           (unsigned)jointIndex,
+                           (long)primaryCenterAbs,
+                           (long)secondaryCenterAbs);
+        if (workspaceState) {
+            workspaceState->valid = 0;
+        }
+        return false;
+    }
+
     const int32_t primaryLimitTightAbs =
         motorRawAbsToTendonAbs(primaryMotor, primaryReadyAbs) >
                 motorRawAbsToTendonAbs(primaryMotor, primary80Abs)
@@ -3577,18 +4218,14 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
             : secondaryNeg3Abs;
     setCalibratedMotorAbsLimit(sharedData, primaryMotor, primaryLimitTightAbs);
     setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryLimitTightAbs);
+    g_jointCalibResult[jointIndex] = result;
+    updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
+    g_encoderOffsetManual[jointIndex] = result.offset;
+    clearJointServoMultiTurnUnknown(sharedData, jointIndex);
 
     if (workspaceState) {
-        // Cache the final two-tendon preload pose, not the earlier mechanical
-        // endpoint where primary was released. Later joints can reuse this A
-        // pose without introducing slack again.
-        workspaceState->primaryMotor = primaryMotor;
-        workspaceState->secondaryMotor = secondaryMotor;
-        workspaceState->primaryReleaseAbs = primaryReadyAbs;
-        workspaceState->secondaryTightAbs = secondaryReadyAbs;
-        workspaceState->currentPose = DUAL_WORKSPACE_POSE_A;
-        workspaceState->valid = 1;
-        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE J%02u pose=A primaryReady=M%02u:%ld secondaryReady=M%02u:%ld load=%d/%d\r\n",
+        memset(workspaceState, 0, sizeof(*workspaceState));
+        FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_POST_CENTER_CACHE_CLEAR J%02u primary=M%02u:%ld secondary=M%02u:%ld load=%d/%d\r\n",
                            (unsigned)jointIndex,
                            (unsigned)primaryMotor,
                            (long)primaryReadyAbs,
@@ -4621,6 +5258,7 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
             if (isWorkspaceTarget) {
                 if (!prepareWorkspaceForDualCalibration(sharedData,
                                                         orderedJoints[i],
+                                                        completedJointMask,
                                                         params)) {
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL workspace failed J%02u; stop remaining sequence\r\n",
                                        orderedJoints[i]);

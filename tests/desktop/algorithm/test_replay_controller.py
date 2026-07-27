@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from desktop.algorithm.replay_controller import ReplayController
+from desktop.algorithm.replay_controller import ReplayController, replay_start_state_allowed
 from desktop.algorithm.replay_models import ReplayFrame, ReplayTrace
 from desktop.core.protocol import (
     ENCODER_COUNT,
@@ -39,6 +39,8 @@ class _Backend:
         return self.state
 
     def begin_replay_motion(self):
+        self.token += 1
+        self.valid = True
         return True, self.token, "ok"
 
     def replay_motion_token_valid(self, token):
@@ -57,14 +59,21 @@ class _Backend:
         return SimpleNamespace(sent=True, message="")
 
 
-def test_replay_requires_exact_ready(monkeypatch):
-    backend = _Backend(system_state=SYSTEM_STATE_RUN_FEEDBACK)
+def test_replay_start_state_allows_ready_and_run_feedback():
+    assert replay_start_state_allowed(SYSTEM_STATE_READY)
+    assert replay_start_state_allowed(SYSTEM_STATE_RUN_FEEDBACK)
+    assert not replay_start_state_allowed(-1)
+    assert not replay_start_state_allowed("bad")
+
+
+def test_replay_requires_startable_system_state(monkeypatch):
+    backend = _Backend(system_state=-1)
     controller = ReplayController(backend)
 
     ok, message = controller.start(_trace())
 
     assert ok is False
-    assert "READY" in message
+    assert "READY/RUN_FEEDBACK" in message
     assert backend.sent == []
 
 
@@ -88,6 +97,31 @@ def test_replay_sends_complete_trace_and_finishes(monkeypatch):
     assert backend.sent[-1][1]["command_joint_mask"] == 1
     assert controller.status().state == "completed"
     assert controller.status().current_targets[0] == 20.0
+
+
+def test_replay_can_start_again_after_completed_run(monkeypatch):
+    backend = _Backend()
+    controller = ReplayController(backend)
+    monkeypatch.setattr(controller, "_entry_reject_reason", lambda *_: "")
+
+    ok, _ = controller.start(_trace())
+    deadline = time.monotonic() + 1.0
+    while controller.is_running() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    first_count = len(backend.sent)
+
+    assert ok is True
+    assert controller.status().state == "completed"
+    assert backend.state.system_state == SYSTEM_STATE_RUN_FEEDBACK
+
+    ok, _ = controller.start(_trace())
+    deadline = time.monotonic() + 1.0
+    while controller.is_running() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert ok is True
+    assert controller.status().state == "completed"
+    assert len(backend.sent) == first_count * 2
 
 
 def test_collision_hold_keeps_replay_running_for_retreat_frames(monkeypatch):

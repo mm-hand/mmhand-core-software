@@ -1,5 +1,7 @@
 """ControlPanelManualMixin methods for the modular control panel."""
 
+from desktop.core.angle_mapping import get_spec
+
 from .ui_control_common import (
     CALIB_LOAD_SNAPSHOT_PATH,
     ControlMode,
@@ -615,9 +617,43 @@ class ControlPanelManualMixin:
             return None
         return targets, joints
 
+    def _joint_uses_dual_motors(self, joint: int) -> bool:
+        """Return whether a joint is driven by two motor channels."""
+        try:
+            return len(get_spec(joint).motor_indices) >= 2
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def _build_open_pose_targets(self) -> Optional[Tuple[List[float], List[int]]]:
+        """Build open pose targets from each joint's active workspace."""
+        joints = self._active_scope_joint_indices()
+        if not joints:
+            self._set_status("Open Pose blocked: no active joints selected")
+            return None
+        targets = self.resolved_joint_targets()
+        missing: List[str] = []
+        for joint in joints:
+            workspace = self._joint_workspace_range(joint, self._state)
+            if not workspace.ready or workspace.current_min_deg is None:
+                missing.append(f"J{joint:02d} {workspace.reason}")
+                continue
+            if self._joint_uses_dual_motors(joint):
+                targets[joint] = workspace.clamp(
+                    (workspace.current_min_deg + workspace.current_max_deg) * 0.5
+                )
+            else:
+                targets[joint] = workspace.open_pose_target(OPEN_POSE_CURRENT_MIN_OFFSET_DEG)
+        if missing:
+            detail = "; ".join(missing[:4])
+            if len(missing) > 4:
+                detail += f"; +{len(missing) - 4} more"
+            self._set_status(f"Open Pose blocked: {detail}")
+            return None
+        return targets, joints
+
     def apply_open_pose(self) -> None:
         """Apply the open pose command to the UI or backend."""
-        pose = self._build_current_min_open_pose_targets()
+        pose = self._build_open_pose_targets()
         if pose is None:
             return
         targets, joints = pose
@@ -625,7 +661,7 @@ class ControlPanelManualMixin:
             targets,
             joints,
             "Open Pose",
-            "active Current Min + "
+            "dual Current Min/Max midpoint; single Current Min + "
             f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
         )
 

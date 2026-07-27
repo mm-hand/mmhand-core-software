@@ -3,7 +3,7 @@ import traceback
 from typing import Callable, Optional
 
 from desktop.core.protocol import ENCODER_COUNT
-from desktop.teleop.joint_target_adapter import URDF_DEG
+from desktop.teleop.joint_target_adapter import URDF_DEG, adapt_joint_targets
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
@@ -121,9 +121,7 @@ class _PostureMocapRunner:
 
             def on_joints(timestamp_ms: int, joint_names, joint_values, encoder_degrees) -> None:
                 del joint_names, joint_values
-                targets = [float(v) for v in list(encoder_degrees)[:ENCODER_COUNT]]
-                if len(targets) < ENCODER_COUNT:
-                    targets.extend([0.0] * (ENCODER_COUNT - len(targets)))
+                targets = [float(v) for v in list(encoder_degrees)]
                 self.bridge.joints_ready.emit(targets, int(timestamp_ms))
 
             run_mocap_loop(
@@ -406,9 +404,14 @@ class VisualRetargetingView(QtWidgets.QWidget):
         return targets, []
 
     def _on_joints_ready(self, targets: list, timestamp_ms: int) -> None:
-        visual_targets = [float(v) for v in targets[:ENCODER_COUNT]]
-        if len(visual_targets) < ENCODER_COUNT:
-            visual_targets.extend([0.0] * (ENCODER_COUNT - len(visual_targets)))
+        try:
+            raw_visual_targets = [float(v) for v in list(targets)]
+            adaptation = adapt_joint_targets(raw_visual_targets, source_space=URDF_DEG)
+        except (TypeError, ValueError) as exc:
+            self._on_status_changed(f"Visual Retargeting target dropped: {exc}")
+            return
+
+        visual_targets = list(adaptation.urdf_targets_deg)
         self._last_targets = visual_targets
         self._last_timestamp_ms = int(timestamp_ms)
         self.frame_label.setText(f"Frame: {timestamp_ms}")
@@ -433,8 +436,8 @@ class VisualRetargetingView(QtWidgets.QWidget):
                 selected_targets,
                 source="Visual Retargeting",
                 live=True,
-                input_space=URDF_DEG,
-                raw_targets=visual_targets,
+                input_space=adaptation.source_space,
+                raw_targets=adaptation.source_targets,
             )
             if result is False or not bool(getattr(result, "sent", True)):
                 message = str(getattr(result, "message", "") or "")

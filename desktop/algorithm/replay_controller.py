@@ -28,6 +28,16 @@ REPLAY_MAX_SCHEDULING_LAG_SECONDS = 0.25
 REPLAY_OUTPUT_PERIOD_SECONDS = 0.01
 # 大于该间隔视为原动作暂停或采集间断，不跨越空白区缓慢插值。
 REPLAY_MAX_INTERPOLATION_GAP_SECONDS = 0.2
+REPLAY_START_SYSTEM_STATES = (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK)
+
+
+def replay_start_state_allowed(system_state: object) -> bool:
+    """Return whether P4 can accept a Replay start command."""
+    try:
+        value = int(system_state)
+    except (TypeError, ValueError):
+        return False
+    return value in REPLAY_START_SYSTEM_STATES
 
 
 @dataclass(frozen=True)
@@ -152,8 +162,9 @@ class ReplayController:
 
     def _entry_reject_reason(self, trace: ReplayTrace, state, active_mask: int) -> str:
         """播放前一次性检查模型、READY、active scope和整条轨迹工作空间。"""
-        if int(getattr(state, "system_state", -1)) != SYSTEM_STATE_READY:
-            return "P4必须处于READY才能开始Replay"
+        system_state = int(getattr(state, "system_state", -1))
+        if not replay_start_state_allowed(system_state):
+            return "P4必须处于READY/RUN_FEEDBACK才能开始Replay"
         current_active = int(getattr(state, "active_joint_mask", 0) or 0)
         if active_mask == 0:
             return "当前active joint scope为空"

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_READY
+from desktop.algorithm.replay_controller import replay_start_state_allowed
+from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -147,13 +148,17 @@ class ReplayView(QtWidgets.QWidget):
 
     def _refresh_status(self) -> None:
         state = self.context.get_state()
-        ready = (
-            state is not None
-            and int(getattr(state, "system_state", -1)) == SYSTEM_STATE_READY
-        )
-        self.ready_status.setText("P4: READY" if ready else "P4: NOT READY")
+        system_state = int(getattr(state, "system_state", -1)) if state is not None else -1
+        start_allowed = replay_start_state_allowed(system_state)
+        if system_state == SYSTEM_STATE_READY:
+            state_text = "READY"
+        elif system_state == SYSTEM_STATE_RUN_FEEDBACK:
+            state_text = "RUN_FEEDBACK"
+        else:
+            state_text = "NOT READY"
+        self.ready_status.setText(f"P4: {state_text}")
         self.ready_status.setStyleSheet(
-            "font-weight:700;color:#1b7f3a;" if ready else "font-weight:700;color:#b71c1c;"
+            "font-weight:700;color:#1b7f3a;" if start_allowed else "font-weight:700;color:#b71c1c;"
         )
 
         status = self.service.status()
@@ -176,7 +181,7 @@ class ReplayView(QtWidgets.QWidget):
         self.send_btn.setStyleSheet(
             "font-weight:700;color:#b71c1c;" if running else "font-weight:700;"
         )
-        self.send_btn.setEnabled(running or (self.service.trace() is not None and ready))
+        self.send_btn.setEnabled(running or (self.service.trace() is not None and start_allowed))
         self._refresh_joint_feedback(state, status)
 
     def _refresh_joint_feedback(self, state, replay_status) -> None:
