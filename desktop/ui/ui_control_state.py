@@ -633,8 +633,7 @@ class ControlPanelStateMixin:
         )
         suffix = "" if len(hits) <= 4 else f" ... +{len(hits) - 4}"
         self._set_status(f"Feedback ABS out of limit: {preview}{suffix}")
-        QtWidgets.QMessageBox.warning(
-            self,
+        self._warn(
             "Feedback ABS Limit (default unlocked)",
             "RUN_FEEDBACK servo feedback ABS is outside the calibrated 5-turn locked window.\n"
             "Feedback limits are unlocked by default; use LOCK only when you intentionally need this guard.\n"

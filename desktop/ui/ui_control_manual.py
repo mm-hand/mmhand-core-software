@@ -154,16 +154,11 @@ class ControlPanelManualMixin:
         if getattr(self, "calib_export_btn", None) is not None:
             self.calib_export_btn.setEnabled(CALIB_LOAD_SNAPSHOT_PATH.exists())
         if getattr(self, "new_device_reset_btn", None) is not None:
-            multi_turn_unknown_mask = (
-                int(getattr(self._state, "multi_turn_unknown_bitmap", 0) or 0)
-                & VALID_MOTOR_MASK
-            )
-            can_reset_device = (
-                bool(self.context.is_comm_connected()) and
-                multi_turn_unknown_mask != 0 and
-                system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
+            can_reset_device, reset_tip = self._new_device_reset_action_state(
+                self._state
             )
             self.new_device_reset_btn.setEnabled(can_reset_device)
+            self.new_device_reset_btn.setToolTip(reset_tip)
         if getattr(self, "fist_btn", None) is not None:
             self.fist_btn.setVisible(mode in ("joint", "test"))
             self.fist_btn.setEnabled(

@@ -431,8 +431,7 @@ class CalibrationWorkflowController:
         if self.turn_unknown_popup_seen():
             return
         self.mark_turn_unknown_popup_seen(unknown_mask)
-        QtWidgets.QMessageBox.warning(
-            self,
+        self._warn(
             "Turn UNKNOWN",
             self._turn_recovery_guide_text(unknown_mask, source),
         )
@@ -1063,7 +1062,9 @@ class CalibrationWorkflowController:
             missing_mask = active_joint_mask & ~manual_valid_mask
             self._set_status(
                 "Calib snapshot save blocked: Manual missing " +
-                self._format_joint_list(_ordered_joint_indices_from_mask(missing_mask))
+                self._format_joint_list(
+                    ControlScopeModel.ordered_joint_indices_from_mask(missing_mask)
+                )
             )
             return
         if (
@@ -1258,33 +1259,63 @@ class CalibrationWorkflowController:
             )
         return None
 
-    def new_device_reset(self) -> None:
-        if not self.context.is_comm_connected():
-            self._warn("New Device Reset", "P4 未连接，无法重置多圈基准。")
-            return
+    def _latest_new_device_reset_state(self):
+        """读取 New Device Reset 所需的最新状态，避免使用 UI 缓存旧帧。"""
         state = self._state
+        getter = getattr(self.backend, "get_state_snapshot", None)
+        if callable(getter):
+            try:
+                latest = getter()
+                if latest is not None:
+                    state = latest
+                    self._state = latest
+            except Exception:
+                # 串口刚断开时快照可能读取失败，后续门禁仍会给出明确提示。
+                pass
+        return state
+
+    def _new_device_reset_action_state(self, state=None):
+        """统一按钮与点击处理的门禁，返回 (可执行, 原因提示)。"""
+        if not self.context.is_comm_connected():
+            return False, "P4 未连接，无法执行 New Device Reset"
+        if state is None:
+            state = self._state
+        unknown_mask = (
+            int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+            & VALID_MOTOR_MASK
+        )
+        if unknown_mask == 0:
+            return False, "全部舵机圈数可信，禁止执行 New Device Reset"
         system_state = getattr(state, "system_state", None) if state is not None else None
-        if system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK):
-            self._warn(
-                "New Device Reset",
-                "控制正在运行，请先点击 E-STOP 或 Pause 后再重置。",
-            )
+        if system_state in (
+            SYSTEM_STATE_CALIBRATION_RUNNING,
+            SYSTEM_STATE_ROPE_INIT_RUNNING,
+        ):
+            return False, "标定或 Rope Init 正在运行，请等待任务结束"
+        if state is None or not bool(getattr(state, "has_servo_raw_data", False)):
+            return True, "等待舵机 Raw 反馈；点击后可查看具体缺失原因"
+        return True, "修复在线 Turn Unknown 舵机；运行中的控制会先安全停止"
+
+    def new_device_reset(self) -> None:
+        self.context.emit_action("New Device Reset clicked")
+        self._set_status("New Device Reset checking...")
+        state = self._latest_new_device_reset_state()
+        can_reset, blocked_reason = self._new_device_reset_action_state(state)
+        if not can_reset:
+            self._warn("New Device Reset", blocked_reason)
+            self._set_status(f"New Device Reset blocked: {blocked_reason}")
+            self.context.emit_action(f"New Device Reset blocked: {blocked_reason}")
             return
         multi_turn_unknown_mask = (
             int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
             & VALID_MOTOR_MASK
         )
-        if multi_turn_unknown_mask == 0:
-            self._warn(
-                "New Device Reset",
-                "当前全部舵机多圈圈数可信，禁止执行 New Device Reset。",
-            )
-            return
         if state is None or not bool(getattr(state, "has_servo_raw_data", False)):
             self._warn(
                 "New Device Reset",
                 "尚未收到舵机 raw 反馈，无法建立 turn0 基准。",
             )
+            self._set_status("New Device Reset blocked: waiting for servo raw feedback")
             return
 
         raw_online = list(getattr(state, "servo_raw_online", []) or [])
@@ -1313,7 +1344,9 @@ class CalibrationWorkflowController:
                 affected_joint_mask |= 1 << int(joint_idx)
         repair_motors = self._format_motor_mask(repair_motor_mask, limit=MOTOR_COUNT)
         repair_joints = self._format_joint_indices(
-            _ordered_joint_indices_from_mask(affected_joint_mask),
+            ControlScopeModel.ordered_joint_indices_from_mask(
+                affected_joint_mask
+            ),
             limit=ENCODER_COUNT,
         )
 
@@ -1366,7 +1399,9 @@ class CalibrationWorkflowController:
             self._last_multi_turn_unknown_bitmap = None
             self.reset_turn_unknown_popup_episode()
             joint_text = self._format_joint_indices(
-                _ordered_joint_indices_from_mask(invalidated_joint_mask),
+                ControlScopeModel.ordered_joint_indices_from_mask(
+                    invalidated_joint_mask
+                ),
                 limit=ENCODER_COUNT,
             )
             final_message = (
@@ -1575,7 +1610,9 @@ class CalibrationWorkflowController:
         missing_mask = active_joint_mask if not nvs_valid else active_joint_mask & ~manual_mask
         if missing_mask:
             self._startup_device_check_running = False
-            missing = _ordered_joint_indices_from_mask(missing_mask)
+            missing = ControlScopeModel.ordered_joint_indices_from_mask(
+                missing_mask
+            )
             text = self._format_joint_indices(missing)
             self._set_status(f"Device Check: active scope Manual missing ({text})")
             if not self._startup_missing_warning_shown:
@@ -1791,7 +1828,9 @@ class CalibrationWorkflowController:
                 pass
         self._last_calib_snapshot_signature = None
         self._abs_limit_warning_unlocked_mask &= ~motor_mask
-        for joint_idx in _ordered_joint_indices_from_mask(joint_mask):
+        for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(
+            joint_mask
+        ):
             self._refresh_joint_abs_limit_item(joint_idx, state)
             if (
                 joint_idx < len(self.joint_max_items)

@@ -3,11 +3,11 @@
 from .ui_control_common import (
     ControlMode,
     ENCODER_COUNT,
-    QtWidgets,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
     SYSTEM_STATE_PAUSED,
     VALID_MOTOR_MASK,
 )
+from .ui_dialogs import show_scrollable_message
 
 
 class ControlCommandController:
@@ -177,15 +177,19 @@ class ControlCommandController:
             )
             title = "Clear Fault"
             accept_text = "清除"
-        box = QtWidgets.QMessageBox(self)
-        box.setIcon(QtWidgets.QMessageBox.Warning if summary and summary.get("active") else QtWidgets.QMessageBox.Question)
-        box.setWindowTitle(title)
-        box.setText(text)
-        clear_button = box.addButton(accept_text, QtWidgets.QMessageBox.AcceptRole)
-        box.addButton("取消", QtWidgets.QMessageBox.RejectRole)
-        box.setDefaultButton(clear_button)
-        box.exec()
-        if box.clickedButton() is not clear_button:
+        confirmed = show_scrollable_message(
+            self,
+            title,
+            text,
+            severity=(
+                "warning"
+                if summary and summary.get("active")
+                else "question"
+            ),
+            accept_text=accept_text,
+            reject_text="取消",
+        )
+        if not confirmed:
             self._set_status("Clear Fault cancelled")
             return
 

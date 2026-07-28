@@ -4,8 +4,12 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from desktop.core.data_models import HandModel, JointWorkspaceRange
+from desktop.core.protocol import (
+    SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_RUN_FEEDBACK,
+)
 from desktop.ui.ui_control_panels import ControlPanel
-from desktop.ui.ui_qt_compat import ensure_app
+from desktop.ui.ui_qt_compat import QtWidgets, ensure_app
 
 
 _APP = ensure_app()
@@ -22,6 +26,10 @@ class _Backend:
 
     def set_pid_control(self, _enabled):
         """Accept PID policy updates during ControlPanel construction."""
+        return None
+
+    def set_control_mode(self, _mode):
+        """Accept control-mode updates during mode-switch tests."""
         return None
 
 
@@ -80,6 +88,117 @@ def _ready_workspace(joint: int, current_min: float, current_max: float) -> Join
         mapping_valid=True,
         ready=True,
     )
+
+
+def test_manual_workflow_buttons_keep_signals_after_module_split():
+    """模块拆分后，工作流按钮仍应调用 ControlPanel 上的最新方法。"""
+    panel = _panel()
+    calls = []
+    actions = (
+        ("new_device_reset_btn", "new_device_reset", "new-device"),
+        ("calib_load_btn", "load_calibration_snapshot", "load"),
+        ("calib_import_btn", "import_calibration_snapshot", "import"),
+        ("calib_export_btn", "export_calibration_snapshot", "export"),
+        ("open_btn", "apply_open_pose", "open"),
+        ("release_half_turn_btn", "release_all_motors_half_turn", "release"),
+        ("tighten_half_turn_btn", "tighten_all_motors_half_turn", "tighten"),
+        ("fist_btn", "apply_fist_pose", "fist"),
+    )
+    for button_name, method_name, marker in actions:
+        setattr(panel, method_name, lambda value=marker: calls.append(value))
+        button = getattr(panel, button_name)
+        button.setEnabled(True)
+        button.click()
+
+    assert calls == [item[2] for item in actions]
+
+
+def test_manual_workflow_signal_survives_mode_body_rebuild():
+    """切换页面并重建 Manual body 后，按钮必须重新连接到当前控制器。"""
+    panel = _panel()
+    panel.sync_app_mode("teleop")
+    panel.sync_app_mode("monitor")
+    calls = []
+    panel.new_device_reset = lambda: calls.append("new-device")
+    panel.new_device_reset_btn.setEnabled(True)
+
+    panel.new_device_reset_btn.click()
+
+    assert calls == ["new-device"]
+
+
+def test_new_device_reset_available_while_feedback_is_running():
+    """Turn Unknown 恢复可从负反馈状态发起，后端会先执行安全 STOP。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    state = HandModel()
+    state.system_state = SYSTEM_STATE_RUN_FEEDBACK
+    state.multi_turn_unknown_bitmap = 1
+    state.has_servo_raw_data = True
+    panel._state = state
+
+    panel._update_manual_action_buttons()
+
+    assert panel.new_device_reset_btn.isEnabled()
+    assert "安全停止" in panel.new_device_reset_btn.toolTip()
+
+
+def test_new_device_reset_stays_disabled_when_turns_are_trusted_or_task_busy():
+    """可信圈数和标定任务运行时仍保持硬门禁。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    state = HandModel()
+    state.multi_turn_unknown_bitmap = 0
+    panel._state = state
+    panel._update_manual_action_buttons()
+    assert not panel.new_device_reset_btn.isEnabled()
+    assert "圈数可信" in panel.new_device_reset_btn.toolTip()
+
+    state.multi_turn_unknown_bitmap = 1
+    state.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
+    panel._update_manual_action_buttons()
+    assert not panel.new_device_reset_btn.isEnabled()
+    assert "正在运行" in panel.new_device_reset_btn.toolTip()
+
+
+def test_new_device_reset_reads_fresh_backend_snapshot():
+    """点击恢复前必须绕过旧 UI 帧并读取后端的最新 Turn Unknown 状态。"""
+    panel = _panel()
+    stale = HandModel()
+    stale.multi_turn_unknown_bitmap = 0
+    fresh = HandModel()
+    fresh.multi_turn_unknown_bitmap = 1 << 24
+    panel._state = stale
+    panel.backend.get_state_snapshot = lambda: fresh
+
+    assert panel._latest_new_device_reset_state() is fresh
+    assert panel._state is fresh
+
+
+def test_new_device_reset_reaches_backend_after_confirmation(monkeypatch):
+    """完整走过关节掩码转换，防止拆分后的缺失辅助函数再次漏测。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    state = HandModel()
+    state.multi_turn_unknown_bitmap = 1 << 4
+    state.has_servo_raw_data = True
+    state.servo_raw_online[4] = True
+    panel.backend.get_state_snapshot = lambda: state
+    calls = []
+    panel.backend.reset_multiturn_baseline_for_new_device = lambda: (
+        calls.append("reset") or (False, "test stop", 1 << 4, 1 << 3)
+    )
+    panel._warn = lambda *_args: None
+    panel._error = lambda *_args: None
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.Yes,
+    )
+
+    panel.new_device_reset()
+
+    assert calls == ["reset"]
 
 
 def test_spin_change_marks_target_before_state_refresh_can_resync_it():

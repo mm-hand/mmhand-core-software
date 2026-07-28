@@ -82,6 +82,7 @@ from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
+from .ui_dialogs import show_scrollable_message
 from .ui_services import LatestStateBuffer, clone_hand_model
 from .ui_style import apply_main_window_defaults, configure_qt_application
 from .ui_task_runtime import TaskRuntimeWindow
@@ -954,12 +955,13 @@ class HandGUI(QtWidgets.QMainWindow):
             return
         detail = "\n".join(f"M{i:02d}: 触发负载 {load}" for i, load in items)
         log_session("OVERLOAD", "; ".join(f"M{i:02d} load={load}" for i, load in items))
-        QtWidgets.QMessageBox.warning(
+        show_scrollable_message(
             self,
             "电机过载保护",
             "检测到电机过载，控制已进入保护状态。\n\n"
             f"{detail}\n\n"
             "请检查机构受力和绳索状态，确认安全后点击 Clear Fault 恢复。",
+            severity="warning",
         )
 
     @staticmethod
@@ -1310,12 +1312,13 @@ class HandGUI(QtWidgets.QMainWindow):
         self._fault_dialog_active = True
         try:
             log_session("FAULT", self._fault_body_text(summary).replace("\n", " | "))
-            QtWidgets.QMessageBox.warning(
+            show_scrollable_message(
                 self,
                 "系统故障保护",
                 "检测到系统故障，控制已停止。\n\n"
                 f"{self._fault_body_text(summary)}\n\n"
                 "确认机械和接线安全后，点击 Clear Fault 清除故障。",
+                severity="warning",
             )
         finally:
             self._fault_dialog_active = False

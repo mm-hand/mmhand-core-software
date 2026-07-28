@@ -18,6 +18,7 @@ from .ui_control_device import DeviceControlBar
 from .ui_control_tables import JointChannelTable, MotorChannelTable
 from .ui_control_test_panel import ManualTestPanel
 from .ui_control_modes import ManualControlView, TeleopControlView
+from .ui_dialogs import show_scrollable_message
 
 
 class ControlPanelViewMixin:
@@ -388,8 +389,18 @@ class ControlPanelViewMixin:
 
     def _warn(self, title: str, text: str) -> None:
         """Handle warn behavior for the control panel."""
-        QtWidgets.QMessageBox.warning(self, title, text)
+        show_scrollable_message(
+            self,
+            title,
+            text,
+            severity="warning",
+        )
 
     def _error(self, title: str, text: str) -> None:
         """Handle error behavior for the control panel."""
-        QtWidgets.QMessageBox.critical(self, title, text)
+        show_scrollable_message(
+            self,
+            title,
+            text,
+            severity="critical",
+        )
