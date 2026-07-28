@@ -32,6 +32,7 @@ from .protocol import (
     CMD_ROPE_INIT,
     CMD_PAUSE,
     CMD_RESTORE_MULTITURN,
+    CMD_SERVO_RESET_ZERO,
     DUAL_TENDON_JOINT_INDICES,
     TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
@@ -66,6 +67,8 @@ MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
 MULTITURN_RESTORE_RAW_TOL_COUNTS = 256
 MULTITURN_RESTORE_RETRY_S = 0.75
 MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S = 2.0
+SERVO_RESET_ZERO_ACK_TIMEOUT_S = 1.5
+SERVO_RESET_ZERO_RESULT_TIMEOUT_S = 4.0
 MULTITURN_CACHE_PATH = PACKAGE_DIR / "multiturn_cache.json"
 MULTITURN_CACHE_SAVE_INTERVAL_S = 0.5
 HOST_MULTITURN_CACHE_ENABLE = False
@@ -1162,6 +1165,123 @@ class HandController:
             f"invalidated only affected joint calibration/ABS limits; "
             f"{flash_text}{nvs_save_message}"
         ), restore_mask, affected_joint_mask
+
+    def reset_overflow_servo_turns(
+        self,
+    ) -> Tuple[bool, str, int, int, int]:
+        """重置硬件 ABS 严格越过 ±30715 的舵机，并等待 P4 完成 Flash 闭环。"""
+        if not self.comm:
+            return False, "serial not connected", 0, 0, 0
+
+        with self.state_lock:
+            state = self.current_state
+            if not bool(getattr(state, "has_servo_reset_zero_status", False)):
+                return (
+                    False,
+                    "P4 firmware does not report Reset Zero status; update firmware first",
+                    0,
+                    0,
+                    0,
+                )
+            overflow_mask = (
+                int(getattr(state, "servo_turn_overflow_bitmap", 0) or 0)
+                & ((1 << MOTOR_COUNT) - 1)
+            )
+            flash_enabled = bool(getattr(state, "multiturn_nvs_enabled", True))
+            baseline_result_token = int(
+                getattr(state, "servo_reset_zero_result_token", 0) or 0
+            )
+            reset_status = int(
+                getattr(state, "servo_reset_zero_status", 0) or 0
+            )
+
+        if overflow_mask == 0:
+            return False, "no servo hardware ABS exceeds ±30715", 0, 0, 0
+        if not flash_enabled:
+            return (
+                False,
+                "Flash is OFF; enable Flash before Reset Zero so the new turn0 can be persisted",
+                0,
+                0,
+                0,
+            )
+        if reset_status == 1:
+            return False, "another Reset Zero transaction is running", 0, 0, 0
+
+        self.stop()
+        time.sleep(NEW_DEVICE_RESET_SETTLE_S)
+        sent_at = time.time()
+        self.comm.send_command(("servo_reset_zero", overflow_mask))
+        ack = self.comm.wait_for_ack(
+            CMD_SERVO_RESET_ZERO,
+            SERVO_RESET_ZERO_ACK_TIMEOUT_S,
+            received_after=sent_at,
+        )
+        if ack is None or int(ack[2]) not in (0, 2):
+            status = "timeout" if ack is None else str(int(ack[2]))
+            return (
+                False,
+                f"Reset Zero command rejected (status={status})",
+                0,
+                overflow_mask,
+                0,
+            )
+
+        # ACK 仅表示事务已受理。必须等 result token 前进后再读取成功掩码，
+        # 避免 UI 把“硬件已清零、Flash 尚未替换”误认为完整成功。
+        deadline = time.time() + SERVO_RESET_ZERO_RESULT_TIMEOUT_S
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                result_token = int(
+                    getattr(state, "servo_reset_zero_result_token", 0) or 0
+                )
+                success_mask = int(
+                    getattr(state, "servo_reset_zero_success_mask", 0) or 0
+                ) & ((1 << MOTOR_COUNT) - 1)
+                failed_mask = int(
+                    getattr(state, "servo_reset_zero_failed_mask", 0) or 0
+                ) & ((1 << MOTOR_COUNT) - 1)
+                invalid_joint_mask = int(
+                    getattr(
+                        state,
+                        "servo_reset_zero_invalidated_joint_mask",
+                        0,
+                    )
+                    or 0
+                ) & ((1 << ENCODER_COUNT) - 1)
+                status = int(
+                    getattr(state, "servo_reset_zero_status", 0) or 0
+                )
+            if result_token != baseline_result_token and status in (2, 3):
+                self._clear_trusted_multiturn_cache()
+                completed = success_mask & overflow_mask
+                missing = overflow_mask & ~completed
+                if status == 2 and failed_mask == 0 and missing == 0:
+                    return (
+                        True,
+                        f"Reset Zero completed for {completed.bit_count()} motor(s)",
+                        completed,
+                        0,
+                        invalid_joint_mask,
+                    )
+                failed = failed_mask | missing
+                return (
+                    False,
+                    "some servos were reset but the transaction was not fully persisted",
+                    completed,
+                    failed,
+                    invalid_joint_mask,
+                )
+            time.sleep(0.02)
+
+        return (
+            False,
+            "Reset Zero ACK received, but result status timed out",
+            0,
+            overflow_mask,
+            0,
+        )
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         if not self.comm:

@@ -5,6 +5,7 @@
 #include "../../hardware/HardwareMap.h"
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
+#include "../../system/StateMachineTask.h"
 #include "../../system/TaskRuntimeMonitor.h"
 #include "ServoPositionRange.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
@@ -284,6 +285,12 @@ public:
         return fb.absolutePosition + fb.logicalOffset;
     }
 
+    // hardware ABS 是舵机本次上电会话直接返回的坐标，不叠加 P4 logicalOffset。
+    int32_t getHardwareAbsolutePosition(uint8_t id) const
+    {
+        return id <= MAX_SERVO_ID ? _feedback[id].absolutePosition : 0;
+    }
+
     const ServoFeedbackInternal& getFeedback(uint8_t id) const
     {
         static ServoFeedbackInternal dummy;
@@ -392,6 +399,62 @@ public:
             _torqueDisabled[id] = !enabled;
         }
         return ok;
+    }
+
+    // 重置一台 ST3215 的内部圈数，并在保持力矩关闭的前提下重新建立 turn0。
+    // RESET 绝不使用广播 ID；复位后重新配置多圈模式，防止状态重置同时恢复角度限位。
+    bool resetTurnCounter(uint8_t id, int16_t* outRaw)
+    {
+        if (!_serial || id > MAX_SERVO_ID || !outRaw ||
+            !_feedback[id].online) {
+            return false;
+        }
+        if (!setTorqueEnabled(id, false)) {
+            return false;
+        }
+        if (_sms.Reset(id) <= 0) {
+            return false;
+        }
+        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+
+        ServoFeedbackInternal& fb = _feedback[id];
+        fb.initialized = false;
+        fb.absoluteReliable = false;
+        fb.logicalOffset = 0;
+        fb.turnCount = 0;
+        _multiTurnConfigured[id] = false;
+        if (!configureMultiTurnMode(id)) {
+            return false;
+        }
+
+        // 必须用 RESET 后重新读取的反馈作为新 turn0，不能沿用命令前缓存。
+        bool feedbackOk = false;
+        for (uint8_t attempt = 0; attempt < 3; attempt++) {
+            if (probeFeedback(id)) {
+                feedbackOk = true;
+                break;
+            }
+            delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        }
+        if (!feedbackOk) {
+            return false;
+        }
+
+        const int16_t raw = normalizeServoRawSingleTurn(fb.rawPosition);
+        fb.rawPosition = raw;
+        fb.lastRawPosition = raw;
+        fb.absolutePosition = raw;
+        fb.logicalOffset = 0;
+        fb.turnCount = 0;
+        fb.initialized = true;
+        fb.absoluteReliable = true;
+        fb.onlineTransitionPending = false;
+        fb.recoveryAttemptCount = 0;
+        fb.recoveryFailed = false;
+        fb.nextRecoveryAttemptMs = 0;
+        fb.lastUpdate = millis();
+        *outRaw = raw;
+        return true;
     }
 
     bool restoreAbsolutePosition(uint8_t id, int32_t absPosition, uint16_t rawToleranceCounts)
@@ -860,10 +923,22 @@ static void applyServoTargetBatch(TaskSharedData_t* sharedData,
                                   const ServoTargetBatch_t& batch)
 {
     bool busWritePending[NUM_BUSES] = {false};
+    const uint32_t overflowMask = sharedData
+        ? sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap)
+        : 0;
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
         const ServoTargetCommand_t& cmd = batch.commands[i];
         ServoBusDriver* bus = getBusByIndex(cmd.busIndex);
         if (!bus) {
+            continue;
+        }
+        const int motorChannel =
+            findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
+        if (motorChannel >= 0 &&
+            (overflowMask & (1UL << (uint8_t)motorChannel)) != 0) {
+            // hardware ABS 已越过 ST3215 的实际多圈行程，禁止任何控制命令
+            // 再次打开力矩；用户必须先执行 Reset Zero。
+            bus->setTorqueEnabled(cmd.servoId, false);
             continue;
         }
         if (bus->setTarget(cmd.servoId,
@@ -872,8 +947,6 @@ static void applyServoTargetBatch(TaskSharedData_t* sharedData,
                            cmd.acc)) {
             busWritePending[cmd.busIndex] = true;
         } else {
-            const int motorChannel =
-                findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
             if (motorChannel >= 0) {
                 recordServoRangeReject(sharedData,
                                        (uint8_t)motorChannel,
@@ -1261,6 +1334,62 @@ static uint32_t collectOnlineMotorMask()
     return mask & validMotorChannelMask();
 }
 
+// 只检查舵机本次上电会话的 hardware ABS，不使用 logicalOffset。
+// Reset Zero 在 [-30715, 30715] 外提前触发；底层命令硬边界仍是 ±30719。
+// 等于 ±30715 时仍然合法，严格越界才置位。
+static uint32_t collectServoTurnOverflowMask()
+{
+    uint32_t overflowMask = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint8_t busIndex = motorMap[ch].busIndex;
+        const uint8_t id = motorMap[ch].servoID;
+        ServoBusDriver* bus = getBusByIndex(busIndex);
+        if (!bus || !bus->isOnline(id)) {
+            continue;
+        }
+        const int32_t hardwareAbs = bus->getHardwareAbsolutePosition(id);
+        if (hardwareAbs < kServoResetZeroTriggerMin ||
+            hardwareAbs > kServoResetZeroTriggerMax) {
+            overflowMask |= (1UL << ch);
+            bus->setTorqueEnabled(id, false);
+        }
+    }
+    return overflowMask & validMotorChannelMask();
+}
+
+static void publishServoTurnOverflowState(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+    const uint32_t previousMask =
+        sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
+    const uint32_t currentMask = collectServoTurnOverflowMask();
+    sharedAtomicStore(
+        &sharedData->servo_turn_overflow_bitmap, currentMask);
+
+    const uint32_t enteredMask = currentMask & ~previousMask;
+    const uint32_t clearedMask = previousMask & ~currentMask;
+    if (enteredMask != 0) {
+        // 清空尚未下发的目标并退出当前控制状态，避免下一帧重新使能力矩。
+        if (sharedData->servoTargetQueue) {
+            xQueueReset(sharedData->servoTargetQueue);
+        }
+        postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
+        FW_LOG_WARN_PRINTF(
+            "[SERVO TURN OVERFLOW] entered=0x%08lX hardwareRange=[%ld,%ld]\r\n",
+            (unsigned long)enteredMask,
+            (long)kServoResetZeroTriggerMin,
+            (long)kServoResetZeroTriggerMax);
+    }
+    if (clearedMask != 0) {
+        FW_LOG_INFO_PRINTF(
+            "[SERVO TURN OVERFLOW] cleared=0x%08lX remaining=0x%08lX\r\n",
+            (unsigned long)clearedMask,
+            (unsigned long)currentMask);
+    }
+}
+
 static bool collectTrustedMultiTurnSnapshot(TaskSharedData_t* sharedData,
                                             int32_t* motorAbs,
                                             int16_t* motorRaw,
@@ -1503,12 +1632,20 @@ static bool snapshotMatchesPending(const MultiTurnNvsRuntimeState& state,
         memcmp(state.pendingTurn, motorTurn, sizeof(state.pendingTurn)) == 0;
 }
 
-static void queueLatestMultiTurnNvsJob(QueueHandle_t queue, const MultiTurnNvsSaveJob_t* job)
+static bool queueLatestMultiTurnNvsJob(QueueHandle_t queue,
+                                       const MultiTurnNvsSaveJob_t* job)
 {
     if (!queue || !job) {
-        return;
+        return false;
     }
-    xQueueOverwrite(queue, job);
+    MultiTurnNvsSaveJob_t queuedJob;
+    if (job->operation != MULTITURN_NVS_OPERATION_RESET_ZERO &&
+        xQueuePeek(queue, &queuedJob, 0) == pdTRUE &&
+        queuedJob.operation == MULTITURN_NVS_OPERATION_RESET_ZERO) {
+        // Reset Zero 必须先把新 turn0 落盘，普通周期快照不得覆盖该事务。
+        return false;
+    }
+    return xQueueOverwrite(queue, job) == pdPASS;
 }
 
 static void cacheDeferredMultiTurnSnapshot(MultiTurnNvsRuntimeState* state,
@@ -1661,13 +1798,17 @@ static bool enqueueMultiTurnNvsSnapshot(TaskSharedData_t* sharedData,
     job.validMask = validMask;
     job.queuedAtMs = millis();
     job.reason = reason;
+    job.operation = MULTITURN_NVS_OPERATION_SAVE;
     job.turnChanged = turnChanged ? 1U : 0U;
     job.edgeChanged = edgeChanged ? 1U : 0U;
     memcpy(job.motorAbs, motorAbs, sizeof(job.motorAbs));
     memcpy(job.motorRaw, motorRaw, sizeof(job.motorRaw));
     memcpy(job.motorTurn, motorTurn, sizeof(job.motorTurn));
 
-    queueLatestMultiTurnNvsJob(sharedData->multiturnNvsSaveQueue, &job);
+    if (!queueLatestMultiTurnNvsJob(
+            sharedData->multiturnNvsSaveQueue, &job)) {
+        return false;
+    }
     state->saveQueued = true;
     state->pendingRequestToken = requestToken;
     state->pendingQueuedAtMs = job.queuedAtMs;
@@ -1679,6 +1820,132 @@ static bool enqueueMultiTurnNvsSnapshot(TaskSharedData_t* sharedData,
     memcpy(state->pendingRaw, motorRaw, sizeof(state->pendingRaw));
     memcpy(state->pendingTurn, motorTurn, sizeof(state->pendingTurn));
     return true;
+}
+
+static bool resetZeroStateIsSafe(const TaskSharedData_t* sharedData)
+{
+    if (!sharedData || sharedData->control_enabled != 0 ||
+        sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE) {
+        return false;
+    }
+    const uint8_t state = sharedData->system_state;
+    return state == SYSTEM_STATE_UNCONTROLLABLE ||
+           state == SYSTEM_STATE_IDLE ||
+           state == SYSTEM_STATE_READY ||
+           state == SYSTEM_STATE_RECOVERY_REQUIRED;
+}
+
+// 执行单台或少量越界舵机的 Reset Zero。硬件复位成功后先保持力矩关闭，
+// 再把新的 raw/turn0 交给独立 NVS 任务；Flash 完成前不发布最终成功。
+static void processServoResetZeroRequest(TaskSharedData_t* sharedData,
+                                         uint32_t* lastRequestToken)
+{
+    if (!sharedData || !lastRequestToken) {
+        return;
+    }
+    const uint32_t token =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_request_token);
+    if (token == *lastRequestToken) {
+        return;
+    }
+    *lastRequestToken = token;
+
+    const uint32_t requestedMask =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_request_mask) &
+        validMotorChannelMask();
+    const uint32_t overflowMask =
+        sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
+    const uint32_t onlineMask = collectOnlineMotorMask();
+    const uint32_t executableMask =
+        requestedMask & overflowMask & onlineMask;
+
+    sharedAtomicStore(
+        &sharedData->servo_reset_zero_success_mask, (uint32_t)0);
+    sharedAtomicStore(
+        &sharedData->servo_reset_zero_failed_mask,
+        requestedMask & ~executableMask);
+    sharedAtomicStore(
+        &sharedData->servo_reset_zero_status,
+        (uint8_t)SERVO_RESET_ZERO_STATUS_RUNNING);
+
+    if (token == 0 || requestedMask == 0 || executableMask == 0 ||
+        !resetZeroStateIsSafe(sharedData) ||
+        !sharedData->multiturn_nvs_enabled ||
+        !sharedData->multiturnNvsSaveQueue) {
+        sharedAtomicFetchOr(
+            &sharedData->servo_reset_zero_failed_mask, requestedMask);
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_status,
+            (uint8_t)SERVO_RESET_ZERO_STATUS_FAILED);
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_result_token, token);
+        return;
+    }
+
+    MultiTurnNvsSaveJob_t job;
+    memset(&job, 0, sizeof(job));
+    job.operation = MULTITURN_NVS_OPERATION_RESET_ZERO;
+    job.reason = MULTITURN_NVS_SAVE_REASON_SERVO_RESET_ZERO;
+    job.requestToken = token;
+    job.queuedAtMs = millis();
+
+    uint32_t hardwareResetMask = 0;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = 1UL << ch;
+        if ((executableMask & bit) == 0) {
+            continue;
+        }
+        ServoBusDriver* bus =
+            getBusByIndex(motorMap[ch].busIndex);
+        int16_t raw = 0;
+        if (!bus ||
+            !bus->resetTurnCounter(motorMap[ch].servoID, &raw)) {
+            sharedAtomicFetchOr(
+                &sharedData->servo_reset_zero_failed_mask, bit);
+            continue;
+        }
+        hardwareResetMask |= bit;
+        job.motorRaw[ch] = raw;
+        job.motorTurn[ch] = 0;
+        job.motorAbs[ch] = raw;
+        FW_LOG_WARN_PRINTF(
+            "[SERVO RESET ZERO] hardware reset M%02u raw=%d token=%lu\r\n",
+            (unsigned)ch,
+            (int)raw,
+            (unsigned long)token);
+    }
+
+    if (hardwareResetMask == 0) {
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_status,
+            (uint8_t)SERVO_RESET_ZERO_STATUS_FAILED);
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_result_token, token);
+        return;
+    }
+
+    job.validMask = hardwareResetMask;
+    // 即使随后 Flash 写入失败，硬件坐标已经改变，也必须让上位机/P4
+    // 失效对应关节标定；failed mask 用于额外表示持久化未闭环。
+    sharedAtomicStore(
+        &sharedData->servo_reset_zero_success_mask, hardwareResetMask);
+    sharedAtomicFetchAnd(
+        &sharedData->multi_turn_unknown_bitmap, ~hardwareResetMask);
+    sharedAtomicFetchAnd(
+        &sharedData->servo_turn_overflow_bitmap, ~hardwareResetMask);
+
+    if (!queueLatestMultiTurnNvsJob(
+            sharedData->multiturnNvsSaveQueue, &job)) {
+        sharedAtomicFetchOr(
+            &sharedData->servo_reset_zero_failed_mask, hardwareResetMask);
+        sharedAtomicFetchOr(
+            &sharedData->multi_turn_unknown_bitmap, hardwareResetMask);
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_status,
+            (uint8_t)SERVO_RESET_ZERO_STATUS_FAILED);
+        sharedAtomicStore(
+            &sharedData->servo_reset_zero_result_token, token);
+    }
 }
 
 static bool flushDeferredMultiTurnSnapshot(TaskSharedData_t* sharedData,
@@ -1745,6 +2012,22 @@ static void processMultiTurnNvsSaveResults(TaskSharedData_t* sharedData,
     while (xQueueReceive(sharedData->multiturnNvsResultQueue, &result, 0) == pdTRUE) {
         if (state->saveQueued && result.queuedAtMs == state->pendingQueuedAtMs) {
             state->saveQueued = false;
+        }
+        if (result.operation == MULTITURN_NVS_OPERATION_RESET_ZERO &&
+            state->saveQueued) {
+            MultiTurnNvsSaveJob_t queuedJob;
+            const bool trackedOrdinarySaveStillQueued =
+                xQueuePeek(
+                    sharedData->multiturnNvsSaveQueue,
+                    &queuedJob,
+                    0) == pdTRUE &&
+                queuedJob.operation == MULTITURN_NVS_OPERATION_SAVE &&
+                queuedJob.queuedAtMs == state->pendingQueuedAtMs;
+            if (!trackedOrdinarySaveStillQueued) {
+                // Reset Zero 可能覆盖队列中尚未执行的普通快照。若不清除此标志，
+                // 后续普通保存会一直误认为旧请求仍在队列中。
+                state->saveQueued = false;
+            }
         }
 
         if (result.success) {
@@ -2063,6 +2346,8 @@ void servoCommunicationTask(void* parameter)
     uint32_t lastCalibrationTrustToken =
         sharedAtomicLoad(&sharedData->calibration_trust_request_token);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
+    uint32_t lastServoResetZeroToken =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_request_token);
     uint32_t lastNvsSaveToken =
         sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token);
 #endif
@@ -2240,6 +2525,11 @@ void servoCommunicationTask(void* parameter)
             processServoOnlineTransitions(
                 sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
         }
+#endif
+        publishServoTurnOverflowState(sharedData);
+#if MULTITURN_NVS_PERSISTENCE_ENABLE
+        processServoResetZeroRequest(
+            sharedData, &lastServoResetZeroToken);
 #endif
         publishServoRecoveryState(sharedData);
         publishServoFeedback(sharedData);

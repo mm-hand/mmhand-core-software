@@ -417,6 +417,44 @@ class CalibrationWorkflowController:
         self._turn_recovery_popup_episode_active = False
         self._turn_recovery_popup_episode_mask = 0
 
+    def reset_servo_turn_overflow_popup_episode(self) -> None:
+        """越界全部解除后，允许下一次硬件圈数越界再次弹窗。"""
+        self._servo_turn_overflow_popup_episode_active = False
+        self._servo_turn_overflow_popup_episode_mask = 0
+
+    def _show_servo_turn_overflow_guide(
+        self, overflow_mask: int, source: str = "Servo feedback"
+    ) -> None:
+        """每次越界事件只提示一次，引导用户到 Motor Channels 执行 Reset Zero。"""
+        overflow_mask = int(overflow_mask) & VALID_MOTOR_MASK
+        if overflow_mask == 0:
+            self.reset_servo_turn_overflow_popup_episode()
+            return
+        new_mask = overflow_mask & ~int(
+            self._servo_turn_overflow_popup_episode_mask
+        )
+        if self._servo_turn_overflow_popup_episode_active and new_mask == 0:
+            return
+        self._servo_turn_overflow_popup_episode_active = True
+        self._servo_turn_overflow_popup_episode_mask |= overflow_mask
+        motor_text = self._format_motor_mask(overflow_mask, limit=MOTOR_COUNT)
+        self.context.emit_action(
+            f"{source}: servo hardware ABS overflow mask=0x{overflow_mask:08X}"
+        )
+        self._warn(
+            "Servo Turn Overflow",
+            (
+                "检测到舵机内部硬件 ABS 严格越过 Reset Zero 阈值 "
+                "[-30715, +30715]。\n"
+                "底层命令硬边界仍为 [-30719, +30719]，当前保护会提前触发。\n\n"
+                f"越界舵机：{motor_text}\n\n"
+                "P4 已停止这些舵机的目标输出。请确认机构和绳路安全，"
+                "打开 Motor Channels，保持 Flash ON，然后点击 Reset Zero。\n"
+                "Reset Zero 只处理越界舵机；完成后对应关节的 Auto/LUT/"
+                "ABS Limit 会失效，必须按界面自动勾选范围重新标定。"
+            ),
+        )
+
     def _show_turn_recovery_guide(self, unknown_mask: int, source: str = "") -> None:
         """Show the turn recovery guide UI message."""
         unknown_mask = int(unknown_mask) & VALID_MOTOR_MASK
@@ -1426,6 +1464,107 @@ class CalibrationWorkflowController:
             self._set_status(f"New Device Reset failed: {message}")
         self._update_manual_action_buttons()
 
+    def reset_overflow_servo_zero(self) -> None:
+        """执行硬件 RESET、Flash 通道替换，并同步失效受影响关节的标定。"""
+        state = self._state
+        overflow_mask = (
+            int(getattr(state, "servo_turn_overflow_bitmap", 0) or 0)
+            & VALID_MOTOR_MASK
+            if state is not None
+            else 0
+        )
+        if overflow_mask == 0:
+            self._warn("Reset Zero", "当前没有硬件 ABS 越过 ±30715 的舵机。")
+            return
+        motor_text = self._format_motor_mask(overflow_mask, limit=MOTOR_COUNT)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Reset Zero",
+            (
+                f"将重置以下越界舵机的内部圈数：{motor_text}\n\n"
+                "该操作会：\n"
+                "1. 停止控制并关闭目标舵机扭矩；\n"
+                "2. 向舵机发送 RESET(0x0A)，将硬件圈数清零；\n"
+                "3. 用复位后 raw 仅替换这些舵机的 P4 Flash 通道；\n"
+                "4. 清除其所属关节的 Auto/LUT/ABS Limit。\n\n"
+                "双电机关节只要一台舵机被重置，整个关节都必须重新标定。"
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._set_status(f"Reset Zero running: {motor_text}")
+        ok, message, success_mask, failed_mask, joint_mask = (
+            self.backend.reset_overflow_servo_turns()
+        )
+
+        # 只要硬件 RESET 已成功，就不能再保留该关节旧标定；即使 Flash 写入失败，
+        # 本地快照也必须失效，防止下次 Calib Load 把旧 LUT 重新灌回 P4。
+        if success_mask:
+            if joint_mask == 0:
+                for motor_idx, joint_idx in enumerate(
+                    MOTOR_TO_JOINT_INDEX[:MOTOR_COUNT]
+                ):
+                    if (
+                        success_mask & (1 << motor_idx)
+                        and 0 <= int(joint_idx) < ENCODER_COUNT
+                    ):
+                        joint_mask |= 1 << int(joint_idx)
+            invalidated_motor_mask = self._motor_mask_for_joint_mask(joint_mask)
+            self._joint_target_initialized = False
+            self._reset_motor_target_cache_for_device_epoch(
+                "Reset Zero: motor targets cleared"
+            )
+            self._invalidate_local_calibration_scope(
+                invalidated_motor_mask, joint_mask
+            )
+            archive_message = self._backup_and_invalidate_calib_snapshot_scope(
+                invalidated_motor_mask,
+                joint_mask,
+                reason="reset_zero",
+            )
+            self._select_single_joint_recalibration_scope(joint_mask)
+        else:
+            archive_message = "no hardware reset completed"
+
+        if ok:
+            self.reset_servo_turn_overflow_popup_episode()
+            joint_text = self._format_joint_indices(
+                ControlScopeModel.ordered_joint_indices_from_mask(joint_mask),
+                limit=ENCODER_COUNT,
+            )
+            final_message = (
+                f"{message}; {archive_message}; recalibrate {joint_text}"
+            )
+            self._set_status(f"Reset Zero success: {final_message}")
+            self.context.emit_action(f"Reset Zero success: {final_message}")
+            QtWidgets.QMessageBox.information(
+                self,
+                "Reset Zero completed",
+                (
+                    f"{message}\n\n"
+                    f"受影响关节：{joint_text}\n"
+                    "界面已自动切换并勾选这些关节，请重新执行 Calibrate。"
+                ),
+            )
+        else:
+            failed_text = self._format_motor_mask(
+                failed_mask, limit=MOTOR_COUNT
+            )
+            self._error(
+                "Reset Zero",
+                (
+                    f"{message}\n"
+                    f"失败/未完成舵机：{failed_text}\n"
+                    f"{archive_message}\n\n"
+                    "如部分舵机已完成硬件 RESET，其所属关节仍必须重新标定。"
+                ),
+            )
+            self._set_status(f"Reset Zero failed: {message}")
+        self._update_manual_action_buttons()
+
     def load_calibration_snapshot(self) -> None:
         if not CALIB_LOAD_SNAPSHOT_PATH.exists():
             self._warn("Calib Load", "没有找到可加载的标定快照，请先完成 Calibrate。")
@@ -1839,14 +1978,21 @@ class CalibrationWorkflowController:
                 self._refresh_joint_target_range(joint_idx, state)
 
     def _backup_and_invalidate_calib_snapshot_scope(
-        self, motor_mask: int, joint_mask: int
+        self,
+        motor_mask: int,
+        joint_mask: int,
+        reason: str = "new_device",
     ) -> str:
         """备份 Calib Load 文件，并只删除受影响关节的数据。"""
         if not CALIB_LOAD_SNAPSHOT_PATH.exists():
             return "no Calib Load snapshot"
+        reason_tag = (
+            "reset_zero" if str(reason).strip().lower() == "reset_zero"
+            else "new_device"
+        )
         stamp = time.strftime("%Y%m%d_%H%M%S")
         archive_path = CALIB_LOAD_SNAPSHOT_PATH.with_name(
-            f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.before_scoped_new_device_"
+            f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.before_scoped_{reason_tag}_"
             f"{stamp}{CALIB_LOAD_SNAPSHOT_PATH.suffix}"
         )
         try:
@@ -1892,9 +2038,13 @@ class CalibrationWorkflowController:
             )
             payload["active_joint_mask"] = f"0x{active_joint_mask:08X}"
             payload["active_motor_mask"] = f"0x{active_motor_mask:08X}"
-            payload["scoped_new_device_invalidated_at"] = time.time()
-            payload["scoped_new_device_motor_mask"] = f"0x{int(motor_mask):08X}"
-            payload["scoped_new_device_joint_mask"] = f"0x{int(joint_mask):08X}"
+            payload[f"scoped_{reason_tag}_invalidated_at"] = time.time()
+            payload[f"scoped_{reason_tag}_motor_mask"] = (
+                f"0x{int(motor_mask):08X}"
+            )
+            payload[f"scoped_{reason_tag}_joint_mask"] = (
+                f"0x{int(joint_mask):08X}"
+            )
 
             if active_joint_mask == 0:
                 CALIB_LOAD_SNAPSHOT_PATH.unlink()

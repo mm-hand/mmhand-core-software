@@ -881,6 +881,12 @@ class HandBackend:
         """局部重建 Turn Unknown 舵机，返回电机和受影响关节掩码。"""
         return self._controller.reset_multiturn_baseline_for_new_device()
 
+    def reset_overflow_servo_turns(
+        self,
+    ) -> Tuple[bool, str, int, int, int]:
+        """重置超出 ST3215 七圈安全范围的舵机，并返回局部失效范围。"""
+        return self._controller.reset_overflow_servo_turns()
+
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         return self._controller.load_calibration_snapshot(snapshot)
 

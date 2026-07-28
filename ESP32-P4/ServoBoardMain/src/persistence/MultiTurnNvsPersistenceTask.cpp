@@ -1,6 +1,7 @@
 #include "MultiTurnNvsPersistenceTask.h"
 
 #include "MultiTurnNvsStore.h"
+#include "../shared/SharedSafetyState.h"
 
 #include <string.h>
 
@@ -15,8 +16,24 @@ static bool flashSaveBlockedByMotion(const TaskSharedData_t* sharedData)
            state == SYSTEM_STATE_CALIBRATION_RUNNING;
 }
 
-static void waitForMotionCompleteAndKeepLatestJob(TaskSharedData_t* sharedData,
-                                                  MultiTurnNvsSaveJob_t* job)
+static void keepHigherPriorityJob(MultiTurnNvsSaveJob_t* current,
+                                  const MultiTurnNvsSaveJob_t& candidate)
+{
+    if (!current) {
+        return;
+    }
+    // Reset Zero 已改变舵机硬件坐标，必须优先提交新的 turn0。
+    // 普通周期快照不能在等待期间覆盖这项事务。
+    if (current->operation == MULTITURN_NVS_OPERATION_RESET_ZERO &&
+        candidate.operation != MULTITURN_NVS_OPERATION_RESET_ZERO) {
+        return;
+    }
+    *current = candidate;
+}
+
+static void waitForMotionCompleteAndKeepLatestJob(
+    TaskSharedData_t* sharedData,
+    MultiTurnNvsSaveJob_t* job)
 {
     if (!sharedData || !job || !sharedData->multiturnNvsSaveQueue) {
         return;
@@ -28,12 +45,11 @@ static void waitForMotionCompleteAndKeepLatestJob(TaskSharedData_t* sharedData,
             if (xQueueReceive(sharedData->multiturnNvsSaveQueue,
                               &newerJob,
                               pdMS_TO_TICKS(20)) == pdTRUE) {
-                *job = newerJob;
+                keepHigherPriorityJob(job, newerJob);
             }
         }
 
-        // Let the servo task publish the completion snapshot after the state
-        // transition, then collapse all waiting requests to the newest one.
+        // 退出运动状态后再等待一帧，让舵机任务发布最终反馈快照。
         vTaskDelay(pdMS_TO_TICKS(20));
         if (flashSaveBlockedByMotion(sharedData)) {
             continue;
@@ -41,7 +57,7 @@ static void waitForMotionCompleteAndKeepLatestJob(TaskSharedData_t* sharedData,
         while (xQueueReceive(sharedData->multiturnNvsSaveQueue,
                              &newerJob,
                              0) == pdTRUE) {
-            *job = newerJob;
+            keepHigherPriorityJob(job, newerJob);
         }
         return;
     }
@@ -54,13 +70,14 @@ static void publishNvsSaveResult(TaskSharedData_t* sharedData,
         return;
     }
 
-    if (result->requestToken != 0) {
+    const bool ordinarySave =
+        result->operation == MULTITURN_NVS_OPERATION_SAVE;
+    if (ordinarySave && result->requestToken != 0) {
         sharedData->multiturn_nvs_save_result_token = result->requestToken;
     }
     if (result->success) {
-        // 复制期间先撤销有效位，最后一次性发布新 mask，避免上位机看到半新半旧的一帧。
+        // 先撤销有效位，再更新 raw，最后一次性发布新 mask。
         sharedData->multiturn_nvs_save_valid_mask = 0;
-        // 先更新各通道 raw，最后发布 valid mask，避免上位机把尚未复制完成的数据当成有效快照。
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
             if ((result->validMask & (1UL << ch)) != 0) {
                 sharedData->multiturn_nvs_snapshot_raw[ch] =
@@ -69,7 +86,8 @@ static void publishNvsSaveResult(TaskSharedData_t* sharedData,
         }
         sharedData->multiturn_nvs_save_valid_mask = result->validMask;
         sharedData->multiturn_nvs_snapshot_valid = 1;
-    } else {
+    } else if (ordinarySave) {
+        // Reset Zero 使用独立状态和失败掩码，不污染普通保存失败计数。
         sharedData->multiturn_nvs_save_fail_count++;
     }
 
@@ -89,7 +107,9 @@ void multiTurnNvsPersistenceTask(void* parameter)
     MultiTurnNvsSaveJob_t job;
     MultiTurnNvsSaveResult_t result;
     for (;;) {
-        if (xQueueReceive(sharedData->multiturnNvsSaveQueue, &job, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(sharedData->multiturnNvsSaveQueue,
+                          &job,
+                          portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
@@ -101,6 +121,7 @@ void multiTurnNvsPersistenceTask(void* parameter)
         result.reason = job.reason;
         result.turnChanged = job.turnChanged;
         result.edgeChanged = job.edgeChanged;
+        result.operation = job.operation;
         result.queuedAtMs = job.queuedAtMs;
         memcpy(result.motorAbs, job.motorAbs, sizeof(result.motorAbs));
         memcpy(result.motorRaw, job.motorRaw, sizeof(result.motorRaw));
@@ -110,12 +131,22 @@ void multiTurnNvsPersistenceTask(void* parameter)
         uint32_t storedValidMask = job.validMask;
         MultiTurnNvsSnapshot storedSnapshot;
         memset(&storedSnapshot, 0, sizeof(storedSnapshot));
-        result.success = multiTurnNvsSaveSnapshot(job.validMask,
-                                                  job.motorAbs,
-                                                  job.motorRaw,
-                                                  &sequence,
-                                                  &storedValidMask,
-                                                  &storedSnapshot) ? 1U : 0U;
+        if (job.operation == MULTITURN_NVS_OPERATION_RESET_ZERO) {
+            result.success = multiTurnNvsReplaceChannelsWithTurnZero(
+                job.validMask,
+                job.motorRaw,
+                &sequence,
+                &storedValidMask,
+                &storedSnapshot) ? 1U : 0U;
+        } else {
+            result.success = multiTurnNvsSaveSnapshot(
+                job.validMask,
+                job.motorAbs,
+                job.motorRaw,
+                &sequence,
+                &storedValidMask,
+                &storedSnapshot) ? 1U : 0U;
+        }
         result.sequence = sequence;
         if (result.success) {
             result.validMask = storedValidMask;
@@ -125,10 +156,32 @@ void multiTurnNvsPersistenceTask(void* parameter)
                 }
                 result.motorRaw[ch] = storedSnapshot.raw[ch];
                 result.motorTurn[ch] = storedSnapshot.turns[ch];
-                result.motorAbs[ch] = multiTurnSnapshotAbsForChannel(storedSnapshot, ch);
+                result.motorAbs[ch] =
+                    multiTurnSnapshotAbsForChannel(storedSnapshot, ch);
             }
         }
         result.completedAtMs = millis();
+
+        if (job.operation == MULTITURN_NVS_OPERATION_RESET_ZERO) {
+            // 硬件 RESET 已执行，因此无论 Flash 成败都保留 success mask，
+            // 供上层失效对应关节标定；failed mask 表示持久化是否闭环。
+            sharedData->servo_reset_zero_success_mask = job.validMask;
+            if (result.success) {
+                sharedData->servo_reset_zero_failed_mask &= ~job.validMask;
+                sharedData->servo_reset_zero_status =
+                    SERVO_RESET_ZERO_STATUS_SUCCESS;
+            } else {
+                sharedData->servo_reset_zero_failed_mask |= job.validMask;
+                sharedData->servo_reset_zero_status =
+                    SERVO_RESET_ZERO_STATUS_FAILED;
+                sharedAtomicFetchOr(
+                    &sharedData->multi_turn_unknown_bitmap, job.validMask);
+            }
+            // 最终 token 必须最后发布，作为上位机读取整组结果的提交点。
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_result_token,
+                job.requestToken);
+        }
         publishNvsSaveResult(sharedData, &result);
     }
 }

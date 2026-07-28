@@ -43,6 +43,13 @@ class ControlPanelStateMixin:
         unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & VALID_MOTOR_MASK
         if unknown_bitmap == 0:
             self.reset_turn_unknown_popup_episode()
+        overflow_bitmap = int(
+            getattr(state, "servo_turn_overflow_bitmap", 0) or 0
+        ) & VALID_MOTOR_MASK
+        if overflow_bitmap == 0:
+            self.reset_servo_turn_overflow_popup_episode()
+        else:
+            self._show_servo_turn_overflow_guide(overflow_bitmap)
         self._handle_firmware_epoch_change(state)
         self._handle_connectivity_transitions(state)
         self._update_p4_rope_init_progress(state)
@@ -1050,6 +1057,9 @@ class ControlPanelStateMixin:
         self._updating = True
         try:
             unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+            overflow_mask = int(
+                getattr(state, "servo_turn_overflow_bitmap", 0) or 0
+            )
             overload_flags = getattr(state, "servo_overload_fault", []) or []
             overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
             for i in range(MOTOR_COUNT):
@@ -1065,14 +1075,18 @@ class ControlPanelStateMixin:
                     continue
                 dev_abs = self._motor_feedback_abs(i)
                 turn_unknown = ((unknown_mask & (1 << i)) != 0)
+                turn_overflow = ((overflow_mask & (1 << i)) != 0)
                 if i < len(self.motor_turn_items):
                     turn_item = self.motor_turn_items[i]
                     turn_item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
                     turn_item.setToolTip("P4 logical turn count")
                     turn_item.setText(str(self._motor_turn_from_abs(dev_abs)) if dev_abs is not None and not turn_unknown else "-")
-                    if turn_unknown:
+                    if turn_unknown or turn_overflow:
                         turn_item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
                         turn_item.setToolTip(
+                            "Hardware ABS exceeds ±30715: use Motor Channels / Reset Zero."
+                            if turn_overflow
+                            else
                             "Turn UNKNOWN: P4 cannot trust the multi-turn position. "
                             "Use New Device Reset or restore multi-turn before control."
                         )
@@ -1104,9 +1118,13 @@ class ControlPanelStateMixin:
                     abs_item.setText(str(int(dev_abs)) if dev_abs is not None else "-")
                     abs_item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
                     abs_item.setToolTip("P4 logical ABS used by control")
-                    if turn_unknown:
+                    if turn_unknown or turn_overflow:
                         abs_item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
                         abs_item.setToolTip(
+                            "Hardware ABS exceeds ±30715; P4 has stopped this servo. "
+                            "Use Reset Zero and recalibrate."
+                            if turn_overflow
+                            else
                             "Turn UNKNOWN: P4 cannot trust this logical ABS. "
                             "Do not control until multi-turn is recovered."
                         )

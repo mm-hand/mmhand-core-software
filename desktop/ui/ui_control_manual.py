@@ -38,7 +38,7 @@ class ControlPanelManualMixin:
         widget = self.tabs.currentWidget()
         if widget is getattr(self, "device_check_view", None):
             return "device_check"
-        if widget is getattr(self, "motor_table", None):
+        if widget is getattr(self, "motor_page", None):
             return "motor"
         if widget is getattr(self, "test_panel", None):
             return "test"
@@ -159,6 +159,47 @@ class ControlPanelManualMixin:
             )
             self.new_device_reset_btn.setEnabled(can_reset_device)
             self.new_device_reset_btn.setToolTip(reset_tip)
+        if getattr(self, "reset_zero_btn", None) is not None:
+            state = self._state
+            overflow_mask = (
+                int(getattr(state, "servo_turn_overflow_bitmap", 0) or 0)
+                & VALID_MOTOR_MASK
+                if state is not None
+                else 0
+            )
+            reset_running = (
+                int(getattr(state, "servo_reset_zero_status", 0) or 0) == 1
+                if state is not None
+                else False
+            )
+            flash_enabled = bool(
+                getattr(state, "multiturn_nvs_enabled", True)
+            ) if state is not None else False
+            safe_state = system_state not in (
+                SYSTEM_STATE_RUN_DIRECT,
+                SYSTEM_STATE_RUN_FEEDBACK,
+                SYSTEM_STATE_CALIBRATION_RUNNING,
+                SYSTEM_STATE_ROPE_INIT_RUNNING,
+            )
+            can_reset_zero = (
+                mode == "motor"
+                and bool(self.context.is_comm_connected())
+                and overflow_mask != 0
+                and flash_enabled
+                and safe_state
+                and not reset_running
+            )
+            self.reset_zero_btn.setVisible(mode == "motor")
+            self.reset_zero_btn.setEnabled(can_reset_zero)
+            if overflow_mask:
+                self.reset_zero_btn.setToolTip(
+                    "Reset overflow servos: "
+                    + self._format_motor_mask(overflow_mask, limit=MOTOR_COUNT)
+                )
+            else:
+                self.reset_zero_btn.setToolTip(
+                    "No servo hardware ABS strictly exceeds ±30715"
+                )
         if getattr(self, "fist_btn", None) is not None:
             self.fist_btn.setVisible(mode in ("joint", "test"))
             self.fist_btn.setEnabled(

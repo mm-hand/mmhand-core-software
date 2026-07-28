@@ -64,6 +64,8 @@ static const size_t kP4TimestampBytes = sizeof(uint32_t);
 #define CMD_ANGLE_CTRL_MASKED 0xEA
 // 按发生多圈重建的电机掩码，只失效其所属关节的 Auto/LUT/ABS Limit。
 #define CMD_CLEAR_CALIBRATION_SCOPE 0xEB
+// 将 hardware ABS 严格越过 Reset Zero 阈值 ±30715 的指定舵机重置为 turn0。
+#define CMD_SERVO_RESET_ZERO 0xEC
 
 #define PROTO_ACK_STATUS_OK 0
 #define PROTO_ACK_STATUS_UNSUPPORTED_MODE 1
@@ -101,6 +103,7 @@ static const size_t kManualEncoderReferencePayloadBytes =
 static const size_t kManualEncoderSinglePayloadBytes = 5;
 static const size_t kRopeInitPayloadBytes = sizeof(uint32_t);
 static const size_t kClearCalibrationScopePayloadBytes = sizeof(uint32_t);
+static const size_t kServoResetZeroPayloadBytes = sizeof(uint32_t);
 static const size_t kSerialRxBufferSize = 512;
 static const int32_t kEncoderModulo = 16384;
 static const uint32_t kFaultStatusHeartbeatMs = 200;

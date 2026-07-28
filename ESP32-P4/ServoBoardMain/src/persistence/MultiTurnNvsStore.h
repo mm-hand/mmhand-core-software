@@ -29,6 +29,14 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
                               uint32_t* outSequence,
                               uint32_t* outStoredValidMask = NULL,
                               MultiTurnNvsSnapshot* outStoredSnapshot = NULL);
+// 将指定通道原子替换为 reset 后的 turn0/raw，保留其余通道和 A/B 冗余。
+// 这会删除旧圈数，同时允许下一次上电从新的 turn0 快照恢复。
+bool multiTurnNvsReplaceChannelsWithTurnZero(
+    uint32_t resetMask,
+    const int16_t* motorRaw,
+    uint32_t* outSequence,
+    uint32_t* outStoredValidMask = NULL,
+    MultiTurnNvsSnapshot* outStoredSnapshot = NULL);
 // Persistent user switch. Disabled means do not boot-restore and do not save.
 bool multiTurnNvsLoadEnabled(bool* outEnabled);
 bool multiTurnNvsSetEnabled(bool enabled);

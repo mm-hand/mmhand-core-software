@@ -106,6 +106,8 @@ CMD_ROPE_INIT = 0xE9
 CMD_ANGLE_CTRL_MASKED = 0xEA
 # 按电机掩码局部失效标定；P4 根据 HardwareMap 计算实际关节范围。
 CMD_CLEAR_CALIBRATION_SCOPE = 0xEB
+# 重置 hardware ABS 严格越过 ±30715 的舵机圈数。
+CMD_SERVO_RESET_ZERO = 0xEC
 
 
 PROTO_ACK_STATUS_OK = 0
@@ -410,6 +412,34 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         struct.unpack(">I", payload[162:166])[0]
         if has_feedback_collision_status else 0
     )
+    has_servo_reset_zero_status = len(payload) >= 191
+    servo_turn_overflow_bitmap = (
+        struct.unpack(">I", payload[166:170])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_request_token = (
+        struct.unpack(">I", payload[170:174])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_result_token = (
+        struct.unpack(">I", payload[174:178])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_success_mask = (
+        struct.unpack(">I", payload[178:182])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_failed_mask = (
+        struct.unpack(">I", payload[182:186])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_invalidated_joint_mask = (
+        struct.unpack(">I", payload[186:190])[0]
+        if has_servo_reset_zero_status else 0
+    )
+    servo_reset_zero_status = (
+        payload[190] if has_servo_reset_zero_status else 0
+    )
     return (
         system_state,
         control_enabled,
@@ -454,6 +484,14 @@ def parse_system_status_packet(payload: bytes) -> Optional[tuple]:
         applied_direct_generation,
         direct_reject_reason,
         has_motion_result_status,
+        servo_turn_overflow_bitmap,
+        servo_reset_zero_request_token,
+        servo_reset_zero_result_token,
+        servo_reset_zero_success_mask,
+        servo_reset_zero_failed_mask,
+        servo_reset_zero_invalidated_joint_mask,
+        servo_reset_zero_status,
+        has_servo_reset_zero_status,
         feedback_admission_sequence,
         feedback_admission_status,
         feedback_reject_reason,
@@ -1223,6 +1261,17 @@ def build_clear_calibration_scope_cmd(motor_mask: int) -> bytes:
         raise ValueError("scoped calibration clear requires a non-zero motor mask")
     return _build_command_frame(
         CMD_CLEAR_CALIBRATION_SCOPE,
+        struct.pack(">I", motor_mask),
+    )
+
+
+def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
+    """请求 P4 仅复位 hardware ABS 已越过 ±30715 的舵机。"""
+    motor_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+    if motor_mask == 0:
+        raise ValueError("Reset Zero requires a non-zero motor mask")
+    return _build_command_frame(
+        CMD_SERVO_RESET_ZERO,
         struct.pack(">I", motor_mask),
     )
 

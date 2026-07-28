@@ -196,6 +196,7 @@ class ControlPanelViewMixin:
         self._control_widgets = []
         self.manual_check = None
         self.new_device_reset_btn = None
+        self.reset_zero_btn = None
         self.calib_load_btn = None
         self.calib_import_btn = None
         self.calib_export_btn = None
@@ -206,6 +207,7 @@ class ControlPanelViewMixin:
         self.tabs = None
         self.device_check_view = None
         self.joint_table = None
+        self.motor_page = None
         self.motor_table = None
         self.test_panel = None
         self.test_start_btn = None

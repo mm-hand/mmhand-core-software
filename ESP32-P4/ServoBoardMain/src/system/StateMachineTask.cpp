@@ -38,6 +38,7 @@ enum FeedbackReadyRejectLogReason : uint8_t {
     FEEDBACK_READY_REJECT_CALIBRATION_MISMATCH = 8,
     FEEDBACK_READY_REJECT_ENCODER_CAN = 9,
     FEEDBACK_READY_REJECT_SYSTEM_FAULT = 10,
+    FEEDBACK_READY_REJECT_SERVO_TURN_OVERFLOW = 11,
 };
 static uint32_t collectSystemFaults(TaskSharedData_t* sharedData);
 static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData);
@@ -489,7 +490,10 @@ static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
     // 只检查 active scope；未参与本次动作的离线舵机不阻塞单指测试。
     const uint32_t activeMask = readyServoRequiredMask(sharedData);
     return activeMask != 0 &&
-           ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & activeMask) == 0);
+           ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
+             activeMask) == 0) &&
+           ((sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
+             activeMask) == 0);
 }
 
 static bool activeMotorsAbsLimitsCalibrated(TaskSharedData_t* sharedData)
@@ -609,6 +613,13 @@ static void logFeedbackReadyReject(TaskSharedData_t* sharedData,
         case FEEDBACK_READY_REJECT_SYSTEM_FAULT:
             FW_LOG_INFO_PRINTF("[STATE] feedback ready rejected: system fault=0x%08lX\r\n",
                           (unsigned long)a);
+            break;
+        case FEEDBACK_READY_REJECT_SERVO_TURN_OVERFLOW:
+            FW_LOG_WARN_PRINTF(
+                "[STATE] feedback ready rejected: servo hardware ABS overflow "
+                "active=0x%08lX overflow=0x%08lX\r\n",
+                (unsigned long)a,
+                (unsigned long)b);
             break;
         default:
             FW_LOG_INFO_PRINTLN("[STATE] feedback ready rejected: unknown reason");
@@ -765,6 +776,10 @@ static bool directMotorMaskReady(TaskSharedData_t* sharedData,
     if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & requiredMask) != 0) {
         return false;
     }
+    if ((sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
+         requiredMask) != 0) {
+        return false;
+    }
 
     // 新直控命令已经按 pending scope 独立检查舵机在线、CAN 依赖和多圈可信；
     // 此处忽略旧 scope 遗留的 CAN/SERVO/MULTITURN 位，只保留与 scope
@@ -820,9 +835,24 @@ static bool activeJointsInControlWorkspace(TaskSharedData_t* sharedData,
         return false;
     }
     if (!activeMotorsMultiTurnKnown(sharedData)) {
+        const uint32_t activeMotorMask =
+            readyServoRequiredMask(sharedData);
+        const uint32_t overflowMask =
+            sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
+            activeMotorMask;
+        if (overflowMask != 0) {
+            logFeedbackReadyReject(
+                sharedData,
+                FEEDBACK_READY_REJECT_SERVO_TURN_OVERFLOW,
+                activeMotorMask,
+                overflowMask,
+                0,
+                0);
+            return false;
+        }
         logFeedbackReadyReject(sharedData,
                                FEEDBACK_READY_REJECT_MULTITURN,
-                               readyServoRequiredMask(sharedData),
+                               activeMotorMask,
                                sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap),
                                0,
                                0);

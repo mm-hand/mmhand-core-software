@@ -144,6 +144,26 @@ static bool loadSlot(nvs_handle_t handle, const char* key, MultiTurnNvsSnapshot*
     return true;
 }
 
+// A/B 槽统一从这里提交，避免普通保存与 Reset Zero 维护两套写入/CRC 逻辑。
+static bool writeSnapshot(const MultiTurnNvsSnapshot& snapshot)
+{
+    if (!ensureNvsReady()) {
+        return false;
+    }
+
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+        return false;
+    }
+    const char* key = (snapshot.sequence & 1U) ? kSlot1Key : kSlot0Key;
+    esp_err_t err = nvs_set_blob(handle, key, &snapshot, sizeof(snapshot));
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err == ESP_OK;
+}
+
 bool multiTurnNvsLoadEnabled(bool* outEnabled)
 {
     if (!outEnabled) {
@@ -305,23 +325,7 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
     }
     snapshot.crc32 = snapshotCrc(snapshot);
 
-    if (!ensureNvsReady()) {
-        return false;
-    }
-
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) {
-        return false;
-    }
-
-    const char* key = (snapshot.sequence & 1U) ? kSlot1Key : kSlot0Key;
-    esp_err_t err = nvs_set_blob(handle, key, &snapshot, sizeof(snapshot));
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    nvs_close(handle);
-
-    const bool ok = (err == ESP_OK);
+    const bool ok = writeSnapshot(snapshot);
     if (ok && outSequence) {
         *outSequence = snapshot.sequence;
     }
@@ -329,6 +333,68 @@ bool multiTurnNvsSaveSnapshot(uint32_t validMask,
         *outStoredSnapshot = snapshot;
     }
     return ok;
+}
+
+bool multiTurnNvsReplaceChannelsWithTurnZero(
+    uint32_t resetMask,
+    const int16_t* motorRaw,
+    uint32_t* outSequence,
+    uint32_t* outStoredValidMask,
+    MultiTurnNvsSnapshot* outStoredSnapshot)
+{
+    resetMask &= validMotorChannelMask();
+    if (resetMask == 0 || !motorRaw) {
+        return false;
+    }
+
+    bool enabled = true;
+    if (!multiTurnNvsLoadEnabled(&enabled) || !enabled) {
+        return false;
+    }
+
+    MultiTurnNvsSnapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    MultiTurnNvsSnapshot previous;
+    const bool hasPrevious = multiTurnNvsLoadLatest(&previous);
+    if (hasPrevious) {
+        snapshot = previous;
+    } else {
+        snapshot.magic = kMagic;
+        snapshot.version = kVersion;
+        snapshot.motorCount = SERVO_TOTAL_NUM;
+        snapshot.mappingSignature = mappingSignature();
+    }
+
+    snapshot.sequence = hasPrevious ? previous.sequence + 1U : 1U;
+    snapshot.validMask =
+        (hasPrevious ? previous.validMask : 0U) | resetMask;
+    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+        const uint32_t bit = 1UL << ch;
+        if ((resetMask & bit) == 0) {
+            continue;
+        }
+        // RESET 只清圈数，不改变机械单圈位置；必须保存复位后重新读取的 raw。
+        const int16_t raw =
+            (int16_t)(((int32_t)motorRaw[ch] % 4096 + 4096) % 4096);
+        snapshot.turns[ch] = 0;
+        snapshot.raw[ch] = raw;
+    }
+    snapshot.crc32 = snapshotCrc(snapshot);
+
+    const bool ok = writeSnapshot(snapshot);
+    if (!ok) {
+        return false;
+    }
+    if (outSequence) {
+        *outSequence = snapshot.sequence;
+    }
+    if (outStoredValidMask) {
+        *outStoredValidMask = snapshot.validMask;
+    }
+    if (outStoredSnapshot) {
+        *outStoredSnapshot = snapshot;
+    }
+    return true;
 }
 
 #endif // MULTITURN_NVS_PERSISTENCE_ENABLE

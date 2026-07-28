@@ -148,6 +148,7 @@ void System_Init() {
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
     // 所有有效舵机上电先视为多圈未知，只有 NVS 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
+    sharedData.servo_turn_overflow_bitmap = 0;
     sharedData.servo_online_bitmap = 0;
     // 上电时尚未收到任何舵机反馈，因此没有 pending 事务，也没有已配置电机。
     // 舵机连续上线两帧后，ServoCommunicationTask 会建立 pending 并完成恢复。
@@ -168,6 +169,13 @@ void System_Init() {
     sharedData.restore_multi_turn_result_token = 0;
     sharedData.restore_multi_turn_restored_mask = 0;
     sharedData.restore_multi_turn_rejected_mask = 0;
+    sharedData.servo_reset_zero_request_mask = 0;
+    sharedData.servo_reset_zero_request_token = 0;
+    sharedData.servo_reset_zero_result_token = 0;
+    sharedData.servo_reset_zero_success_mask = 0;
+    sharedData.servo_reset_zero_failed_mask = 0;
+    sharedData.servo_reset_zero_invalidated_joint_mask = 0;
+    sharedData.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_IDLE;
 
     // 多圈 NVS 保存由独立低优先级任务执行，控制任务只递增请求 token。
     sharedData.multiturn_nvs_save_request_token = 0;

@@ -215,7 +215,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
         return false;
     }
 
-    uint8_t buffer[180];
+    uint8_t buffer[224];
     size_t idx = 0;
     uint32_t faultBitmap = 0;
     uint32_t unknownBitmap = 0;
@@ -334,6 +334,28 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->feedback_collision_armed_bitmap));
+    // Reset Zero 状态固定追加在旧状态字段之后，旧上位机仍可按原长度解析。
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->servo_reset_zero_request_token));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->servo_reset_zero_success_mask));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(&sharedData->servo_reset_zero_failed_mask));
+    appendU32BigEndian(
+        buffer, &idx,
+        sharedAtomicLoad(
+            &sharedData->servo_reset_zero_invalidated_joint_mask));
+    buffer[idx++] =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_status);
     // 状态包时间表示本次状态快照在 P4 侧被序列化的时刻。
     appendU32BigEndian(buffer, &idx, millis());
     buffer[idx++] = PROTOCOL_TAIL;
@@ -996,6 +1018,8 @@ static size_t getCommandPayloadLength(uint8_t cmd)
             return kMultiTurnNvsControlPayloadBytes;
         case CMD_CLEAR_CALIBRATION_SCOPE:
             return kClearCalibrationScopePayloadBytes;
+        case CMD_SERVO_RESET_ZERO:
+            return kServoResetZeroPayloadBytes;
         case CMD_MANUAL_ENCODER_REFERENCE:
             return kManualEncoderReferencePayloadBytes;
         case CMD_MANUAL_ENCODER_SINGLE:
@@ -1174,6 +1198,44 @@ static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
         (unsigned long)jointMask,
         (unsigned long)motorMask,
         (unsigned long)autoCalibrationValidMask(sharedData));
+}
+
+static void processServoResetZeroResult(TaskSharedData_t* sharedData,
+                                        uint32_t* lastResultToken)
+{
+    if (!sharedData || !lastResultToken) {
+        return;
+    }
+    const uint32_t resultToken =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
+    if (resultToken == 0 || resultToken == *lastResultToken) {
+        return;
+    }
+    *lastResultToken = resultToken;
+
+    // success mask 表示硬件坐标已经被重置；即使 Flash 随后失败，
+    // 原 Auto/LUT/ABS Limit 也不能继续搭配新的 turn0 使用。
+    const uint32_t resetMotorMask =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_success_mask) &
+        validMotorChannelMask();
+    const uint32_t jointMask = jointMaskForMotorMask(resetMotorMask);
+    sharedAtomicStore(
+        &sharedData->servo_reset_zero_invalidated_joint_mask,
+        jointMask);
+    if (jointMask != 0) {
+        invalidateAutomaticCalibration(sharedData, jointMask);
+        postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+    }
+    FW_LOG_WARN_PRINTF(
+        "[SERVO RESET ZERO] result token=%lu motors=0x%08lX "
+        "failed=0x%08lX invalidatedJoints=0x%08lX status=%u\r\n",
+        (unsigned long)resultToken,
+        (unsigned long)resetMotorMask,
+        (unsigned long)sharedAtomicLoad(
+            &sharedData->servo_reset_zero_failed_mask),
+        (unsigned long)jointMask,
+        (unsigned)sharedAtomicLoad(
+            &sharedData->servo_reset_zero_status));
 }
 
 static uint8_t commitManualReferences(
@@ -1984,6 +2046,63 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
         return;
     }
 
+    if (cmd == CMD_SERVO_RESET_ZERO)
+    {
+        const uint32_t requestedMask =
+            readU32BigEndian(frame + 1) & validMotorChannelMask();
+        const uint32_t overflowMask =
+            sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
+            validMotorChannelMask();
+        const uint32_t onlineMask =
+            sharedAtomicLoad(&sharedData->servo_online_bitmap) &
+            validMotorChannelMask();
+        uint8_t status = PROTO_ACK_STATUS_QUEUED;
+        const bool safeState =
+            sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||
+            sharedData->system_state == SYSTEM_STATE_IDLE ||
+            sharedData->system_state == SYSTEM_STATE_READY ||
+            sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED;
+        if (requestedMask == 0 ||
+            (requestedMask & ~overflowMask) != 0 ||
+            (requestedMask & ~onlineMask) != 0) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+        } else if (!safeState ||
+                   sharedData->control_enabled != 0 ||
+                   sharedData->servo_target_owner !=
+                       SERVO_TARGET_OWNER_NONE) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (!sharedData->multiturn_nvs_enabled ||
+                   !sharedData->multiturnNvsSaveQueue) {
+            status = PROTO_ACK_STATUS_NVS_FAILURE;
+        } else if (sharedAtomicLoad(
+                       &sharedData->servo_reset_zero_status) ==
+                   SERVO_RESET_ZERO_STATUS_RUNNING) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else {
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_request_mask,
+                requestedMask);
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_success_mask,
+                (uint32_t)0);
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_failed_mask,
+                (uint32_t)0);
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_invalidated_joint_mask,
+                (uint32_t)0);
+            sharedAtomicStore(
+                &sharedData->servo_reset_zero_status,
+                (uint8_t)SERVO_RESET_ZERO_STATUS_RUNNING);
+            sharedAtomicAddFetch(
+                &sharedData->servo_reset_zero_request_token,
+                (uint32_t)1);
+        }
+        sendProtoAckPacket(
+            CMD_SERVO_RESET_ZERO, sharedData->system_state, status);
+        return;
+    }
+
     if (cmd == CMD_MULTITURN_NVS_CONTROL)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
@@ -2081,6 +2200,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastCalibrationDiagSentMs = 0;
     uint32_t lastTaskDiagSentMs = 0;
     uint8_t nextTaskDiagId = 0;
+    uint32_t lastServoResetZeroResultToken =
+        sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t taskPeriodTicks = pdMS_TO_TICKS(5);
 
@@ -2166,6 +2287,9 @@ void upperCommunicationTask(void* parameter)
             }
             rxLen = remain;
         }
+
+        processServoResetZeroResult(
+            sharedData, &lastServoResetZeroResultToken);
 
         bool sentPacket = false;
         if (sharedData->mappedAngleQueue &&

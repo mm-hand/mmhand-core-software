@@ -47,6 +47,7 @@ from .protocol import (
     build_calibrate_cmd,
     build_clear_calibration_cmd,
     build_clear_calibration_scope_cmd,
+    build_servo_reset_zero_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
     build_motor_pos_cmd,
@@ -68,6 +69,7 @@ from .protocol import (
     CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION,
     CMD_CLEAR_CALIBRATION_SCOPE,
+    CMD_SERVO_RESET_ZERO,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_ACTIVE_SCOPE,
@@ -1588,6 +1590,14 @@ class LowerComputerComm:
                         applied_direct_generation,
                         direct_reject_reason,
                         has_motion_result_status,
+                        servo_turn_overflow_bitmap,
+                        servo_reset_zero_request_token,
+                        servo_reset_zero_result_token,
+                        servo_reset_zero_success_mask,
+                        servo_reset_zero_failed_mask,
+                        servo_reset_zero_invalidated_joint_mask,
+                        servo_reset_zero_status,
+                        has_servo_reset_zero_status,
                         feedback_admission_sequence,
                         feedback_admission_status,
                         feedback_reject_reason,
@@ -1673,6 +1683,30 @@ class LowerComputerComm:
                     )
                     model.has_feedback_collision_status = bool(
                         has_feedback_collision_status
+                    )
+                    model.servo_turn_overflow_bitmap = int(
+                        servo_turn_overflow_bitmap
+                    )
+                    model.servo_reset_zero_request_token = int(
+                        servo_reset_zero_request_token
+                    )
+                    model.servo_reset_zero_result_token = int(
+                        servo_reset_zero_result_token
+                    )
+                    model.servo_reset_zero_success_mask = int(
+                        servo_reset_zero_success_mask
+                    )
+                    model.servo_reset_zero_failed_mask = int(
+                        servo_reset_zero_failed_mask
+                    )
+                    model.servo_reset_zero_invalidated_joint_mask = int(
+                        servo_reset_zero_invalidated_joint_mask
+                    )
+                    model.servo_reset_zero_status = int(
+                        servo_reset_zero_status
+                    )
+                    model.has_servo_reset_zero_status = bool(
+                        has_servo_reset_zero_status
                     )
                     model.has_system_status_data = True
                     model.system_status_last_rx_ts = time.time()
@@ -1870,6 +1904,7 @@ class LowerComputerComm:
                         CMD_CALIBRATE,
                         CMD_CLEAR_CALIBRATION,
                         CMD_CLEAR_CALIBRATION_SCOPE,
+                        CMD_SERVO_RESET_ZERO,
                     ):
                         self._auto_calib_logger.log(
                             "ACK",
@@ -1962,6 +1997,8 @@ class LowerComputerComm:
                         elif ack_cmd == CMD_CLEAR_CALIBRATION_SCOPE:
                             # 局部清除的准确 joint/motor mask 由后续 P4 状态包
                             # 回读，不能像全局清除一样在通信层把 21 路全部归零。
+                            pass
+                        elif ack_cmd == CMD_SERVO_RESET_ZERO:
                             pass
                     emitted = True
 
@@ -2240,6 +2277,11 @@ class LowerComputerComm:
             and cmd[0] == "clear_calibration_scope"
         ):
             return build_clear_calibration_scope_cmd(cmd[1])
+        if (
+            isinstance(cmd, tuple) and len(cmd) == 2
+            and cmd[0] == "servo_reset_zero"
+        ):
+            return build_servo_reset_zero_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
             return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":

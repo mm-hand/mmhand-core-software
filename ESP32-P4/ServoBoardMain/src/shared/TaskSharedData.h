@@ -69,6 +69,16 @@
 #define MULTITURN_NVS_SAVE_REASON_OFFLINE_TURN_EDGE 7
 // 舵机单独掉电时，保存掉线前最后一次可信反馈；Flash 写入仍由后台任务完成。
 #define MULTITURN_NVS_SAVE_REASON_SERVO_POWER_LOSS 8
+// Reset Zero 成功后只替换指定舵机的 Flash 圈数，不能覆盖其他通道。
+#define MULTITURN_NVS_SAVE_REASON_SERVO_RESET_ZERO 9
+
+#define MULTITURN_NVS_OPERATION_SAVE 0
+#define MULTITURN_NVS_OPERATION_RESET_ZERO 1
+
+#define SERVO_RESET_ZERO_STATUS_IDLE 0
+#define SERVO_RESET_ZERO_STATUS_RUNNING 1
+#define SERVO_RESET_ZERO_STATUS_SUCCESS 2
+#define SERVO_RESET_ZERO_STATUS_FAILED 3
 
 // 顶层系统状态：
 // UNCONTROLLABLE: 输出关闭/硬件门禁未满足；IDLE: 仅直控条件满足；
@@ -347,6 +357,8 @@ typedef struct {
     uint8_t reason;
     uint8_t turnChanged;
     uint8_t edgeChanged;
+    // 普通快照保存与 Reset Zero 原子替换共用队列，用 operation 区分语义。
+    uint8_t operation;
 } MultiTurnNvsSaveJob_t;
 
 typedef struct {
@@ -362,6 +374,7 @@ typedef struct {
     uint8_t success;
     uint8_t turnChanged;
     uint8_t edgeChanged;
+    uint8_t operation;
 } MultiTurnNvsSaveResult_t;
 
 typedef struct {
@@ -440,6 +453,9 @@ typedef struct {
     volatile uint32_t calibration_aux_motor_mask;
     volatile uint32_t active_joint_mask;
     volatile uint32_t multi_turn_unknown_bitmap;
+    // 当前上电会话的 hardware ABS 严格越过 Reset Zero 阈值 ±30715 时置位。
+    // 该位图不使用 logicalOffset，防止软件坐标平移掩盖真实硬件超圈。
+    volatile uint32_t servo_turn_overflow_bitmap;
     volatile uint32_t servo_online_bitmap;
     // 舵机热插拔恢复分为三个独立维度：
     // pending 表示仍需执行扭矩关闭/多圈模式配置；configured 表示本次上电会话
@@ -480,6 +496,15 @@ typedef struct {
     volatile uint32_t restore_multi_turn_result_token;
     volatile uint32_t restore_multi_turn_restored_mask;
     volatile uint32_t restore_multi_turn_rejected_mask;
+
+    // Reset Zero 事务由上位机请求、舵机通信任务执行，最终由 NVS 任务确认。
+    volatile uint32_t servo_reset_zero_request_mask;
+    volatile uint32_t servo_reset_zero_request_token;
+    volatile uint32_t servo_reset_zero_result_token;
+    volatile uint32_t servo_reset_zero_success_mask;
+    volatile uint32_t servo_reset_zero_failed_mask;
+    volatile uint32_t servo_reset_zero_invalidated_joint_mask;
+    volatile uint8_t servo_reset_zero_status;
 
     volatile uint32_t multiturn_nvs_save_request_token;
     volatile uint8_t multiturn_nvs_save_reason;

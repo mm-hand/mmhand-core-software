@@ -658,6 +658,15 @@ class HandModel:
     feedback_collision_hold_bitmap: int = 0
     feedback_collision_transition_count: int = 0
     has_feedback_collision_status: bool = False
+    # hardware ABS 严格越过 ±30715 时触发 Reset Zero 事务。
+    servo_turn_overflow_bitmap: int = 0
+    servo_reset_zero_request_token: int = 0
+    servo_reset_zero_result_token: int = 0
+    servo_reset_zero_success_mask: int = 0
+    servo_reset_zero_failed_mask: int = 0
+    servo_reset_zero_invalidated_joint_mask: int = 0
+    servo_reset_zero_status: int = 0
+    has_servo_reset_zero_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_locked_bitmap: int = 0
@@ -842,6 +851,30 @@ class HandModel:
         )
         self.has_feedback_collision_status = bool(
             getattr(other, "has_feedback_collision_status", False)
+        )
+        self.servo_turn_overflow_bitmap = int(
+            getattr(other, "servo_turn_overflow_bitmap", 0) or 0
+        )
+        self.servo_reset_zero_request_token = int(
+            getattr(other, "servo_reset_zero_request_token", 0) or 0
+        )
+        self.servo_reset_zero_result_token = int(
+            getattr(other, "servo_reset_zero_result_token", 0) or 0
+        )
+        self.servo_reset_zero_success_mask = int(
+            getattr(other, "servo_reset_zero_success_mask", 0) or 0
+        )
+        self.servo_reset_zero_failed_mask = int(
+            getattr(other, "servo_reset_zero_failed_mask", 0) or 0
+        )
+        self.servo_reset_zero_invalidated_joint_mask = int(
+            getattr(other, "servo_reset_zero_invalidated_joint_mask", 0) or 0
+        )
+        self.servo_reset_zero_status = int(
+            getattr(other, "servo_reset_zero_status", 0) or 0
+        )
+        self.has_servo_reset_zero_status = bool(
+            getattr(other, "has_servo_reset_zero_status", False)
         )
         self.manual_reference_last_rx_time = float(
             getattr(other, "manual_reference_last_rx_time", 0.0) or 0.0

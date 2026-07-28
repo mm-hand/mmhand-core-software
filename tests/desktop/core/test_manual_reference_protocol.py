@@ -4,11 +4,13 @@ import pytest
 
 from desktop.core.protocol import (
     CMD_MANUAL_ENCODER_REFERENCE,
+    CMD_SERVO_RESET_ZERO,
     ENCODER_COUNT,
     PROTOCOL_HEADER,
     PROTOCOL_TAIL,
     build_clear_manual_encoder_reference_cmd,
     build_manual_encoder_reference_cmd,
+    build_servo_reset_zero_cmd,
     directed_encoder_delta,
     parse_manual_encoder_reference_packet,
     parse_system_status_packet,
@@ -115,6 +117,45 @@ def test_system_status_parses_feedback_collision_extension():
         9,
         True,
     )
+
+
+def test_system_status_parses_servo_reset_zero_extension():
+    payload = bytearray(191)
+    overflow_mask = (1 << 2) | (1 << 24)
+    success_mask = 1 << 24
+    failed_mask = 1 << 2
+    invalidated_joint_mask = (1 << 19) | (1 << 20)
+    payload[166:170] = struct.pack(">I", overflow_mask)
+    payload[170:174] = struct.pack(">I", 7)
+    payload[174:178] = struct.pack(">I", 6)
+    payload[178:182] = struct.pack(">I", success_mask)
+    payload[182:186] = struct.pack(">I", failed_mask)
+    payload[186:190] = struct.pack(">I", invalidated_joint_mask)
+    payload[190] = 3
+
+    parsed = parse_system_status_packet(bytes(payload))
+
+    assert parsed is not None
+    assert parsed[43:51] == (
+        overflow_mask,
+        7,
+        6,
+        success_mask,
+        failed_mask,
+        invalidated_joint_mask,
+        3,
+        True,
+    )
+
+
+def test_servo_reset_zero_command_contains_big_endian_motor_mask():
+    motor_mask = (1 << 0) | (1 << 16) | (1 << 26)
+    frame = build_servo_reset_zero_cmd(motor_mask)
+
+    assert frame[0] == PROTOCOL_HEADER
+    assert frame[2] == CMD_SERVO_RESET_ZERO
+    assert frame[-1] == PROTOCOL_TAIL
+    assert struct.unpack(">I", frame[3:-1])[0] == motor_mask
 
 
 def test_manual_reference_snapshot_parses_all_21_pairs():

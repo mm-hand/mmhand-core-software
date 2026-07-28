@@ -141,6 +141,8 @@ class ControlPanel(
         self._last_multi_turn_unknown_bitmap: Optional[int] = None
         self._turn_recovery_popup_episode_active = False
         self._turn_recovery_popup_episode_mask = 0
+        self._servo_turn_overflow_popup_episode_active = False
+        self._servo_turn_overflow_popup_episode_mask = 0
         self._last_servo_online_bitmap: Optional[int] = None
         self._last_encoder_online_bitmap: Optional[int] = None
         self._last_encoder_warn_bitmap: Optional[int] = None

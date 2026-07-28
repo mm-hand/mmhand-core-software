@@ -9,6 +9,14 @@
 static const int32_t kServoHardwareCommandMin = -30719;
 static const int32_t kServoHardwareCommandMax = 30719;
 
+// 部分 ST3215 在接近硬件端点时会停在约 ±30717，无法继续越过 ±30719。
+// 因此 Reset Zero 提前 4 counts 触发，给检测和复位流程保留可达余量。
+static const int32_t kServoResetZeroTriggerMin = -30715;
+static const int32_t kServoResetZeroTriggerMax = 30715;
+static_assert(kServoResetZeroTriggerMin > kServoHardwareCommandMin &&
+                  kServoResetZeroTriggerMax < kServoHardwareCommandMax,
+              "Reset Zero trigger must stay inside the hardware command range");
+
 struct ServoLogicalRange {
     int32_t minAbs;
     int32_t maxAbs;
