@@ -1,3 +1,7 @@
+/**
+ * @file UpperCommCommandRouter.h
+ * @brief 声明上位机命令到内部控制接口的路由函数。
+ */
 #ifndef UPPER_COMM_COMMAND_ROUTER_H
 #define UPPER_COMM_COMMAND_ROUTER_H
 

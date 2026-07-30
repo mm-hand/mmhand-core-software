@@ -1,3 +1,7 @@
+/**
+ * @file UpperCommProtocol.h
+ * @brief 定义当前上位机协议命令编号、状态位和固定包布局。
+ */
 #ifndef UPPER_COMM_PROTOCOL_H
 #define UPPER_COMM_PROTOCOL_H
 

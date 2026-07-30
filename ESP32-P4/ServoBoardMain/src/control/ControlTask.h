@@ -1,3 +1,7 @@
+/**
+ * @file ControlTask.h
+ * @brief 声明 100 Hz 关节反馈与舵机直控任务入口。
+ */
 #ifndef CONTROL_TASK_H
 #define CONTROL_TASK_H
 

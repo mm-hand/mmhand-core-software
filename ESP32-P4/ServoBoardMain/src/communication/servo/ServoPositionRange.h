@@ -1,3 +1,7 @@
+/**
+ * @file ServoPositionRange.h
+ * @brief 定义飞特舵机硬件多圈位置的绝对安全范围。
+ */
 #ifndef SERVO_POSITION_RANGE_H
 #define SERVO_POSITION_RANGE_H
 

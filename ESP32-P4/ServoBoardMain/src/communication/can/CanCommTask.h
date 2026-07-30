@@ -1,3 +1,7 @@
+/**
+ * @file CanCommTask.h
+ * @brief 声明 P4 与 S3 之间的 CAN 通信任务。
+ */
 #ifndef CAN_COMM_TASK_H
 #define CAN_COMM_TASK_H
 

@@ -1,3 +1,7 @@
+/**
+ * @file TendonCalibrationLut.h
+ * @brief 定义 Tendon LUT 访问接口和边界钳位结果。
+ */
 #ifndef TENDON_CALIBRATION_LUT_H
 #define TENDON_CALIBRATION_LUT_H
 

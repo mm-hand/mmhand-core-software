@@ -22,6 +22,7 @@
 #include "../hardware/servo/ServoValue.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
+#include "../platform/AtomicValue.h"
 #include "../platform/TaskFactory.h"
 #include "../actuator/ActuatorCommandGateway.h"
 #include "../system/FirmwareLog.h"
@@ -742,7 +743,8 @@ static void syncJointTargetToDeg(TaskSharedData_t* sharedData,
     }
 
     sharedData->targetAngles[jointIndex] = targetDeg;
-    sharedData->joint_command_token++;
+    p4::platform::atomicAddFetch(&sharedData->joint_command_token,
+                                 (uint32_t)1);
 
     if (lock) {
         xSemaphoreGive(lock);

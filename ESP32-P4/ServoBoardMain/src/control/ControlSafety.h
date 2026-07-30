@@ -1,3 +1,7 @@
+/**
+ * @file ControlSafety.h
+ * @brief 声明控制安全判定结果与边界检查接口。
+ */
 #ifndef CONTROL_SAFETY_H
 #define CONTROL_SAFETY_H
 

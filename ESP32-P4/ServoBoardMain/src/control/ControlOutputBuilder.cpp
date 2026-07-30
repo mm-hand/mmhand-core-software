@@ -1,3 +1,7 @@
+/**
+ * @file ControlOutputBuilder.cpp
+ * @brief 把关节控制结果组装为统一舵机目标批次。
+ */
 #include "ControlOutputBuilder.h"
 #include "../hardware/HardwareMap.h"
 #include "../shared/SharedSafetyState.h"

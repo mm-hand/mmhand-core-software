@@ -1,3 +1,7 @@
+/**
+ * @file CalibrationMath.cpp
+ * @brief 实现磁编跨圈、Manual 比例和 URDF 动态角度映射数学。
+ */
 #include "CalibrationMath.h"
 
 #include <math.h>

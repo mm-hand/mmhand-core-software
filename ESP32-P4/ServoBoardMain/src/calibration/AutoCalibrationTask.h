@@ -1,3 +1,7 @@
+/**
+ * @file AutoCalibrationTask.h
+ * @brief 声明自动标定任务、参数和启动接口。
+ */
 #ifndef AUTO_CALIBRATION_TASK_H
 #define AUTO_CALIBRATION_TASK_H
 

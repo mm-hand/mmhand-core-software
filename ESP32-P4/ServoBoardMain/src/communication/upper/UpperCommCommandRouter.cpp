@@ -1,9 +1,14 @@
+/**
+ * @file UpperCommCommandRouter.cpp
+ * @brief 把已解析的上位机控制命令写入共享命令邮箱。
+ */
 #include "UpperCommCommandRouter.h"
 
 #include <math.h>
 #include <string.h>
 
 #include "../../hardware/HardwareMap.h"
+#include "../../platform/AtomicValue.h"
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
@@ -77,7 +82,8 @@ void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->feedback_command_joint_mask = appliedMask;
-        sharedData->joint_command_token++;
+        p4::platform::atomicAddFetch(&sharedData->joint_command_token,
+                                     (uint32_t)1);
         xSemaphoreGive(lock);
         if (previousMask != appliedMask) {
             FW_LOG_INFO_PRINTF(

@@ -1,3 +1,7 @@
+/**
+ * @file StateMachineTask.cpp
+ * @brief 运行 P4 总状态机，处理事件、READY 门禁、故障和运动 owner 切换。
+ */
 #include "StateMachineTask.h"
 #include "DirectCommandCoordinator.h"
 #include "SystemStatePolicy.h"
@@ -12,6 +16,7 @@
 #include "../calibration/RopeInitTask.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
+#include "../platform/AtomicValue.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "FirmwareLog.h"
@@ -195,7 +200,8 @@ static void setSystemState(TaskSharedData_t* sharedData, uint8_t state)
     // 统一维护 transition_count，禁止其他模块直接“顺手”改 system_state。
     if (sharedData->system_state != state) {
         sharedData->system_state = state;
-        sharedData->state_transition_count++;
+        p4::platform::atomicAddFetch(&sharedData->state_transition_count,
+                                     (uint32_t)1);
     }
 }
 
@@ -866,7 +872,8 @@ static bool beginRopeInitMotion(TaskSharedData_t* sharedData,
     }
     // Rope Init 临时借用 CALIBRATION 输出所有权，但 system_state 使用独立状态，
     // 便于 UI、故障处理和完成事件区分自动标定。
-    sharedData->rope_init_sequence++;
+    p4::platform::atomicAddFetch(&sharedData->rope_init_sequence,
+                                 (uint32_t)1);
     sharedData->rope_init_joint_mask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         kManualEncoderReferenceFullMask;

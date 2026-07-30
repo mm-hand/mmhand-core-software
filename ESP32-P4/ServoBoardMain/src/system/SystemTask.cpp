@@ -1,3 +1,7 @@
+/**
+ * @file SystemTask.cpp
+ * @brief 创建系统共享对象、队列、互斥锁及各 FreeRTOS 任务。
+ */
 #include "SystemTask.h"
 #include "../calibration/CalibrationTask.h"
 #include "../communication/can/CanCommTask.h"

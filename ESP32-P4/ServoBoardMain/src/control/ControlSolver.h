@@ -1,3 +1,7 @@
+/**
+ * @file ControlSolver.h
+ * @brief 声明单腱关节位置 PID 求解器。
+ */
 #ifndef CONTROL_SOLVER_H
 #define CONTROL_SOLVER_H
 

@@ -1,3 +1,7 @@
+/**
+ * @file UpperCommTask.h
+ * @brief 声明上位机通信任务入口。
+ */
 #ifndef UPPER_COMM_TASK_H
 #define UPPER_COMM_TASK_H
 

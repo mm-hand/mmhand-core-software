@@ -1,3 +1,7 @@
+/**
+ * @file RopeInitTask.h
+ * @brief 声明 Rope Init 任务、拒绝原因和生命周期接口。
+ */
 #ifndef ROPE_INIT_TASK_H
 #define ROPE_INIT_TASK_H
 

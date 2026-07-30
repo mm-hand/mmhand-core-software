@@ -1,3 +1,7 @@
+/**
+ * @file DualTendonControl.h
+ * @brief 声明双腱 LUT 位置环控制器及运行目标结构。
+ */
 #ifndef DUAL_TENDON_CONTROL_H
 #define DUAL_TENDON_CONTROL_H
 

@@ -1,3 +1,7 @@
+/**
+ * @file CalibrationMath.h
+ * @brief 声明标定坐标转换和动态角度映射纯函数。
+ */
 #ifndef CALIBRATION_MATH_H
 #define CALIBRATION_MATH_H
 

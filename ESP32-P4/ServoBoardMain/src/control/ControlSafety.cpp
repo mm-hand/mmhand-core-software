@@ -1,3 +1,7 @@
+/**
+ * @file ControlSafety.cpp
+ * @brief 实现控制输出的通用安全检查和硬边界钳位。
+ */
 #include "ControlSafety.h"
 
 bool shouldEmergencyStop(bool canBusOnline,

@@ -1,3 +1,7 @@
+/**
+ * @file ManualCalibrationNvsStore.cpp
+ * @brief 实现 21 路 Manual Min/Max 的双槽 NVS 持久化。
+ */
 #include "ManualCalibrationNvsStore.h"
 
 #include <stddef.h>

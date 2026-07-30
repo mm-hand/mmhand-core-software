@@ -1,3 +1,7 @@
+/**
+ * @file ManualCalibrationNvsStore.h
+ * @brief 定义 Manual 标定 NVS 读写、CRC 和有效位接口。
+ */
 #ifndef MANUAL_CALIBRATION_NVS_STORE_H
 #define MANUAL_CALIBRATION_NVS_STORE_H
 

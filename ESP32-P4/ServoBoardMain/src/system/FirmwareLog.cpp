@@ -1,3 +1,7 @@
+/**
+ * @file FirmwareLog.cpp
+ * @brief 实现固件日志输出门禁和低频诊断辅助功能。
+ */
 #include "FirmwareLog.h"
 
 SemaphoreHandle_t fwSerialMutex()

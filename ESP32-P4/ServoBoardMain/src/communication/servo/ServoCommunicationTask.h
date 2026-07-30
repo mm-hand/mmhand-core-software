@@ -1,3 +1,7 @@
+/**
+ * @file ServoCommunicationTask.h
+ * @brief 声明舵机总线通信任务和恢复命令入口。
+ */
 #ifndef SERVO_COMMUNICATION_TASK_H
 #define SERVO_COMMUNICATION_TASK_H
 #include <Arduino.h>

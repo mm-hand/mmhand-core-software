@@ -1,3 +1,7 @@
+/**
+ * @file HardwareMap.h
+ * @brief 声明硬件映射表及关节到执行器查询接口。
+ */
 #ifndef HARDWARE_MAP_H
 #define HARDWARE_MAP_H
 

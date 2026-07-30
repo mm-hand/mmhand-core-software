@@ -1,3 +1,7 @@
+/**
+ * @file MultiTurnNvsStore.cpp
+ * @brief 实现 27 路舵机多圈快照的双槽 NVS 存储。
+ */
 #include "MultiTurnNvsStore.h"
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE

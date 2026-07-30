@@ -34,10 +34,15 @@ void resetCommandState(TaskSharedData_t* sharedData)
         sharedData->pendingMotorTargetRaw[i] = 0;
         sharedData->pendingMotorSweepTargetRaw[i] = 0;
     }
-    sharedData->motor_command_token++;
-    sharedData->motor_sweep_command_token++;
-    sharedData->joint_command_token++;
-    sharedData->motor_direct_command_generation++;
+    p4::platform::atomicAddFetch(&sharedData->motor_command_token,
+                                 (uint32_t)1);
+    p4::platform::atomicAddFetch(&sharedData->motor_sweep_command_token,
+                                 (uint32_t)1);
+    p4::platform::atomicAddFetch(&sharedData->joint_command_token,
+                                 (uint32_t)1);
+    p4::platform::atomicAddFetch(
+        &sharedData->motor_direct_command_generation,
+        (uint32_t)1);
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData->pending_direct_generation = sharedData->motor_direct_command_generation;
     sharedData->applied_direct_generation = sharedData->motor_direct_command_generation;
@@ -204,12 +209,15 @@ bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
         memcpy(sharedData->motorSweepTargetRaw,
                sharedData->pendingMotorSweepTargetRaw,
                sizeof(sharedData->motorSweepTargetRaw));
-        sharedData->motor_sweep_command_token++;
+        p4::platform::atomicAddFetch(
+            &sharedData->motor_sweep_command_token,
+            (uint32_t)1);
     } else {
         memcpy(sharedData->motorTargetRaw,
                sharedData->pendingMotorTargetRaw,
                sizeof(sharedData->motorTargetRaw));
-        sharedData->motor_command_token++;
+        p4::platform::atomicAddFetch(&sharedData->motor_command_token,
+                                     (uint32_t)1);
     }
     sharedData->motor_direct_command_generation = generation;
     sharedData->motor_direct_command_source = source;

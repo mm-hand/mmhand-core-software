@@ -1,3 +1,7 @@
+/**
+ * @file TendonCalibrationLut.cpp
+ * @brief 实现单腱和双腱标定 LUT 的校验、查表与插值。
+ */
 #include "TendonCalibrationLut.h"
 
 #include <math.h>

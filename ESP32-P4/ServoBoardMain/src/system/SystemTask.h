@@ -1,3 +1,7 @@
+/**
+ * @file SystemTask.h
+ * @brief 声明 P4 系统初始化入口和全局共享运行上下文。
+ */
 #ifndef SYSTEM_TASK_H
 #define SYSTEM_TASK_H
 

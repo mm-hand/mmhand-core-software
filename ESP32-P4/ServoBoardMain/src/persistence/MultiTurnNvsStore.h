@@ -1,3 +1,7 @@
+/**
+ * @file MultiTurnNvsStore.h
+ * @brief 定义多圈快照格式、保存结果和恢复接口。
+ */
 #ifndef MULTI_TURN_NVS_STORE_H
 #define MULTI_TURN_NVS_STORE_H
 

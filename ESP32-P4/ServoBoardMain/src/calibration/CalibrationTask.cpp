@@ -1,3 +1,7 @@
+/**
+ * @file CalibrationTask.cpp
+ * @brief 维护 Manual/Auto 标定运行数据及动态角度映射。
+ */
 #include "CalibrationTask.h"
 
 #include <string.h>

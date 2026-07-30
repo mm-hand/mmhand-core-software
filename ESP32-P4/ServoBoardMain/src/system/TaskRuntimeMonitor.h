@@ -1,3 +1,7 @@
+/**
+ * @file TaskRuntimeMonitor.h
+ * @brief 定义任务运行时监测数据结构及记录接口。
+ */
 #pragma once
 
 #include <Arduino.h>

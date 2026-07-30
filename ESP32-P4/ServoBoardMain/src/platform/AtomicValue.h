@@ -40,6 +40,12 @@ inline T atomicAddFetch(volatile T* value, T increment)
     return __atomic_add_fetch(value, increment, __ATOMIC_ACQ_REL);
 }
 
+template <typename T>
+inline T atomicSubFetch(volatile T* value, T decrement)
+{
+    return __atomic_sub_fetch(value, decrement, __ATOMIC_ACQ_REL);
+}
+
 } // namespace p4::platform
 
 #endif // P4_PLATFORM_ATOMIC_VALUE_H

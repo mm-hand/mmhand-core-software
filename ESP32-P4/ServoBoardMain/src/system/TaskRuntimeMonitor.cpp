@@ -1,3 +1,7 @@
+/**
+ * @file TaskRuntimeMonitor.cpp
+ * @brief 采集各实时任务的周期、执行时间、堆栈和超限统计。
+ */
 #include "TaskRuntimeMonitor.h"
 
 #include <esp_timer.h>

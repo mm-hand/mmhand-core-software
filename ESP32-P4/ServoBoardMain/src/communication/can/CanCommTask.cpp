@@ -1,3 +1,7 @@
+/**
+ * @file CanCommTask.cpp
+ * @brief 接收 S3 CAN 触觉与磁编数据并发布一致性快照。
+ */
 #include "CanCommTask.h"
 #include "driver/twai.h"
 #include "esp_err.h"

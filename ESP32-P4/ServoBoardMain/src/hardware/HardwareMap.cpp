@@ -1,3 +1,7 @@
+/**
+ * @file HardwareMap.cpp
+ * @brief 实现 21 关节、27 舵机、总线及双腱执行器映射。
+ */
 #include "HardwareMap.h"
 
 // Primary joint -> servo map. Keep this table for legacy code paths and for the

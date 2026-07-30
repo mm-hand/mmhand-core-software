@@ -1,3 +1,7 @@
+/**
+ * @file UpperCommTask.cpp
+ * @brief 负责上位机串口收包、命令分发和状态遥测发包。
+ */
 #include "UpperCommTask.h"
 #include "UpperCommCodec.h"
 #include "../can/CanCommTask.h"
@@ -7,6 +11,7 @@
 #include "../../calibration/CalibrationTask.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../hardware/HardwareMap.h"
+#include "../../platform/AtomicValue.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
 #include "../../system/SystemTask.h"
@@ -129,8 +134,10 @@ static uint8_t takeCalibrationAckStatusForPacket()
         return CALIB_STATUS_IDLE;
     }
     const uint8_t status = g_calibrationAckStatus;
-    g_calibrationAckRepeatRemaining--;
-    if (g_calibrationAckRepeatRemaining == 0) {
+    const uint8_t remaining =
+        p4::platform::atomicSubFetch(&g_calibrationAckRepeatRemaining,
+                                     (uint8_t)1);
+    if (remaining == 0) {
         g_calibrationAckStatus = CALIB_STATUS_IDLE;
     }
     return status;

@@ -1,3 +1,7 @@
+/**
+ * @file StateMachineTask.h
+ * @brief 声明 P4 总状态机任务、系统事件入口和紧急停止接口。
+ */
 #ifndef STATE_MACHINE_TASK_H
 #define STATE_MACHINE_TASK_H
 

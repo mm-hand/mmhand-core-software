@@ -1,3 +1,7 @@
+/**
+ * @file RopeInitTask.cpp
+ * @brief 实现 active scope 关节从 IDLE 正向进入 READY 工作区。
+ */
 #include "RopeInitTask.h"
 
 #include <string.h>

@@ -1,6 +1,11 @@
+/**
+ * @file MultiTurnNvsPersistenceTask.cpp
+ * @brief 异步执行多圈 NVS 保存请求并发布保存结果。
+ */
 #include "MultiTurnNvsPersistenceTask.h"
 
 #include "MultiTurnNvsStore.h"
+#include "../platform/AtomicValue.h"
 #include "../shared/SharedSafetyState.h"
 
 #include <string.h>
@@ -88,7 +93,9 @@ static void publishNvsSaveResult(TaskSharedData_t* sharedData,
         sharedData->multiturn_nvs_snapshot_valid = 1;
     } else if (ordinarySave) {
         // Reset Zero 使用独立状态和失败掩码，不污染普通保存失败计数。
-        sharedData->multiturn_nvs_save_fail_count++;
+        p4::platform::atomicAddFetch(
+            &sharedData->multiturn_nvs_save_fail_count,
+            (uint32_t)1);
     }
 
     if (sharedData->multiturnNvsResultQueue) {

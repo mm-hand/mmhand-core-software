@@ -1,3 +1,7 @@
+/**
+ * @file ControlOutputBuilder.h
+ * @brief 声明舵机目标批次构建接口。
+ */
 #ifndef CONTROL_OUTPUT_BUILDER_H
 #define CONTROL_OUTPUT_BUILDER_H
 

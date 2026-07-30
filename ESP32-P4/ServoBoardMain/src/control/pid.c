@@ -1,3 +1,7 @@
+/**
+ * @file pid.c
+ * @brief 实现标准离散 PID 的初始化、复位和单步计算。
+ */
 #include "pid.h"
 
 #include <math.h>

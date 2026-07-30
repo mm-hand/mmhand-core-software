@@ -1,3 +1,7 @@
+/**
+ * @file CalibrationTask.h
+ * @brief 定义标定结果、Manual 参考、LUT 和诊断协议结构。
+ */
 #ifndef CALIBRATION_TASK_H
 #define CALIBRATION_TASK_H
 

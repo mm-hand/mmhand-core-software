@@ -1,3 +1,7 @@
+/**
+ * @file FeedbackCollisionGuard.h
+ * @brief 声明基于磁编进展窗口的碰撞保持小状态机。
+ */
 #ifndef FEEDBACK_COLLISION_GUARD_H
 #define FEEDBACK_COLLISION_GUARD_H
 

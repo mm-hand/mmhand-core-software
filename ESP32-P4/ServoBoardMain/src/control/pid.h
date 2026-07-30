@@ -1,3 +1,7 @@
+/**
+ * @file pid.h
+ * @brief 声明单腱控制使用的标准离散 PID 数据结构。
+ */
 #ifndef MMHAND_PID_H
 #define MMHAND_PID_H
 
