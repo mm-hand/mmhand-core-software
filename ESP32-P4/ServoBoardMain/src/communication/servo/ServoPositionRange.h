@@ -7,19 +7,13 @@
 
 #include <Arduino.h>
 #include <limits.h>
+#include "../../config/SafetyConfig.h"
 
-// ST3215 多圈模式在单次上电会话内使用有符号位置命令。这里的端点只约束
-// 舵机硬件坐标，不再约束 P4 的逻辑多圈坐标。
-static const int32_t kServoHardwareCommandMin = -30719;
-static const int32_t kServoHardwareCommandMax = 30719;
-
-// 部分 ST3215 在接近硬件端点时会停在约 ±30717，无法继续越过 ±30719。
-// 因此 Reset Zero 提前 4 counts 触发，给检测和复位流程保留可达余量。
-static const int32_t kServoResetZeroTriggerMin = -30715;
-static const int32_t kServoResetZeroTriggerMax = 30715;
-static_assert(kServoResetZeroTriggerMin > kServoHardwareCommandMin &&
-                  kServoResetZeroTriggerMax < kServoHardwareCommandMax,
-              "Reset Zero trigger must stay inside the hardware command range");
+// 保留原符号名，调用点无需知道配置文件布局；唯一数值来源是 SafetyConfig。
+using mmhand::config::safety::kServoHardwareCommandMin;
+using mmhand::config::safety::kServoHardwareCommandMax;
+using mmhand::config::safety::kServoResetZeroTriggerMin;
+using mmhand::config::safety::kServoResetZeroTriggerMax;
 
 struct ServoLogicalRange {
     int32_t minAbs;

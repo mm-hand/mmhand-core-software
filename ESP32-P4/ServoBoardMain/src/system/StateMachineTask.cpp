@@ -14,6 +14,7 @@
 #include "../calibration/CalibrationMath.h"
 #include "../calibration/CalibrationTask.h"
 #include "../calibration/RopeInitTask.h"
+#include "../config/SafetyConfig.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../hardware/HardwareMap.h"
 #include "../platform/AtomicValue.h"
@@ -25,9 +26,7 @@
 
 using namespace mmhand::system;
 
-// 通信/反馈新鲜度门限：超过该时间即视为链路离线。
-static const uint32_t kStateCanOfflineTimeoutMs = 1000;
-static const uint32_t kStateServoFeedbackTimeoutMs = 500;
+using namespace mmhand::config::safety;
 // READY 下边界迟滞：进入允许低 24 counts，退出必须连续低于 48 counts。
 static const int32_t kReadyEnterOutsideToleranceCounts = 24;
 static const int32_t kReadyExitOutsideToleranceCounts = 48;

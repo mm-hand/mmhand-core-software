@@ -5,8 +5,17 @@
 #ifndef MMHAND_DIAGNOSTICS_CONFIG_H
 #define MMHAND_DIAGNOSTICS_CONFIG_H
 
+#include <stdint.h>
+
 namespace mmhand::config::diagnostics {
-// 诊断参数在 FirmwareLog/TaskRuntimeMonitor 拆分时迁入。
+
+/** 舵机通信循环相邻两次调度超过该值时记录卡顿日志。 */
+inline constexpr uint32_t kServoLoopGapLogThresholdMs = 50;
+/** 应用一批舵机目标耗时超过该值时记录发送卡顿日志。 */
+inline constexpr uint32_t kServoApplyStallLogThresholdMs = 50;
+/** owner 不匹配导致命令丢弃时的日志节流间隔。 */
+inline constexpr uint32_t kServoQueueDropLogIntervalMs = 200;
+
 }
 
 #endif // MMHAND_DIAGNOSTICS_CONFIG_H

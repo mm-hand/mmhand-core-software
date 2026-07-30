@@ -10,6 +10,8 @@
 #include <string.h>
 
 #include "../../hardware/HardwareMap.h"
+#include "../../config/DiagnosticsConfig.h"
+#include "../../config/ServoConfig.h"
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
@@ -27,17 +29,8 @@
 #include "../../actuator/ActuatorCommandGateway.h"
 
 
-static const uint32_t kServoLoopGapLogThresholdMs = 50;
-static const uint32_t kServoApplyStallLogThresholdMs = 50;
-static const uint32_t kServoQueueDropLogIntervalMs = 200;
-#if MULTITURN_NVS_PERSISTENCE_ENABLE
-static const uint32_t kNvsRestoreWaitWindowMs = 3000;
-static const uint32_t kHostHeartbeatOfflineMs = 1000;
-static const uint32_t kNvsSaveMinIntervalMs = 500;
-static const uint32_t kNvsOfflinePeriodicSaveMs = 2000;
-static const uint16_t kNvsRestoreRawToleranceCounts = 256;
-static const int32_t kNvsMoveAbsThreshold = 64;
-#endif
+using namespace mmhand::config::diagnostics;
+using namespace mmhand::config::servo;
 
 using p4::recovery::completedMotionSaveReason;
 using p4::recovery::isMultiTurnMotionState;

@@ -3,6 +3,7 @@
  * @brief 接收 S3 CAN 触觉与磁编数据并发布一致性快照。
  */
 #include "CanCommTask.h"
+#include "../../config/SafetyConfig.h"
 #include "driver/twai.h"
 #include "esp_err.h"
 #include "esp_ldo_regulator.h"
@@ -89,7 +90,7 @@ static esp_ldo_channel_handle_t s_canVo4Ldo = NULL;
 
 static const uint8_t kEncoderOnlineGoodFrames = 3;
 static const uint8_t kEncoderFaultBadFrames = 5;
-static const uint32_t kEncoderFaultTimeoutMs = 300;
+using mmhand::config::safety::kEncoderFaultTimeoutMs;
 static const uint32_t kEncoderWarnHoldMs = 800;
 
 static bool twaiUsesVo4Domain(void) {
