@@ -1,3 +1,10 @@
+/**
+ * @file DualTendonControl.cpp
+ * @brief 使用自动标定 LUT 计算双腱关节两台舵机的位置环目标。
+ *
+ * 两路 motorRef 与 motorFbModel 均来自同一份标定 LUT；本模块只计算，
+ * 不读取系统 owner，也不直接发布舵机命令。
+ */
 #include "DualTendonControl.h"
 
 #include <math.h>
@@ -6,9 +13,12 @@
 #include "ControlSafety.h"
 #include "TendonCalibrationLut.h"
 #include "../calibration/CalibrationTask.h"
+#include "../config/ControlConfig.h"
 #include "../hardware/HardwareMap.h"
 
 namespace {
+
+using namespace mmhand::config::control;
 
 // 单个双腱关节的静态调参与配置。当前值来自固件常量，
 // 结构上保留了后续从 EEPROM/配置加载的可能。
@@ -32,15 +42,8 @@ struct DualTendonJointState {
 
 static DualTendonJointState g_dualTendonState[ENCODER_TOTAL_NUM];
 
-static const float kControlPeriodSec = 0.010f;
-static const float kDefaultDualTendonKp = 0.60f;
-static const float kDefaultDualTendonKi = 0.0f;
-static const float kDefaultDualTendonKd = 0.0f;
-static const float kDefaultDualTendonIntegralLimit = 0.0f;
-static const float kDefaultDualTendonDTermLimitCounts = 100.0f;
-static const float kDualTendonVelocityFilterTauSec = 0.050f;
 static const float kDualTendonVelocityFilterAlpha =
-    kControlPeriodSec / (kDualTendonVelocityFilterTauSec + kControlPeriodSec);
+    kPeriodSec / (kDualTendonVelocityFilterTauSec + kPeriodSec);
 static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 {
     if (!out) {
@@ -51,16 +54,16 @@ static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
     out->enabled = 1;
 
     // All supported dual-tendon joints currently share the same controller gains.
-    out->kp[0] = kDefaultDualTendonKp;
-    out->kp[1] = kDefaultDualTendonKp;
-    out->ki[0] = kDefaultDualTendonKi;
-    out->ki[1] = kDefaultDualTendonKi;
-    out->kd[0] = kDefaultDualTendonKd;
-    out->kd[1] = kDefaultDualTendonKd;
-    out->integralLimit[0] = kDefaultDualTendonIntegralLimit;
-    out->integralLimit[1] = kDefaultDualTendonIntegralLimit;
-    out->dTermLimit[0] = kDefaultDualTendonDTermLimitCounts;
-    out->dTermLimit[1] = kDefaultDualTendonDTermLimitCounts;
+    out->kp[0] = kDualTendonKp;
+    out->kp[1] = kDualTendonKp;
+    out->ki[0] = kDualTendonKi;
+    out->ki[1] = kDualTendonKi;
+    out->kd[0] = kDualTendonKd;
+    out->kd[1] = kDualTendonKd;
+    out->integralLimit[0] = kDualTendonIntegralLimit;
+    out->integralLimit[1] = kDualTendonIntegralLimit;
+    out->dTermLimit[0] = kDualTendonDTermLimitCounts;
+    out->dTermLimit[1] = kDualTendonDTermLimitCounts;
     switch (jointIndex) {
         case 0:
         case 4:
@@ -236,18 +239,18 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         const float motorCurrent = (float)servoData->servoAngles[motorChannel];
         const float refVelocity = resetState
             ? 0.0f
-            : (outTargets->motorRef[i] - state.prevMotorRef[i]) / kControlPeriodSec;
+            : (outTargets->motorRef[i] - state.prevMotorRef[i]) / kPeriodSec;
         const float fbVelocity = resetState
             ? 0.0f
             : (outTargets->motorFbModel[i] - state.prevMotorFbModel[i]) /
-                  kControlPeriodSec;
+                  kPeriodSec;
         const float velocityError = refVelocity - fbVelocity;
 
         state.filteredVelocityError[i] +=
             kDualTendonVelocityFilterAlpha *
             (velocityError - state.filteredVelocityError[i]);
 
-        state.integral[i] += outTargets->motorErr[i] * kControlPeriodSec;
+        state.integral[i] += outTargets->motorErr[i] * kPeriodSec;
         state.integral[i] = constrainFloat(state.integral[i],
                                            -cfg.integralLimit[i],
                                            cfg.integralLimit[i]);

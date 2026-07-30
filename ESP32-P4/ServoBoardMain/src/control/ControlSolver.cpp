@@ -1,6 +1,12 @@
+/**
+ * @file ControlSolver.cpp
+ * @brief 实现单腱关节的标准离散位置 PID，输出舵机 ABS 增量。
+ */
 #include "ControlSolver.h"
 
 #include <string.h>
+
+#include "../config/ControlConfig.h"
 
 // 构造阶段只清空缓存，不依赖 Arduino/FreeRTOS 资源，保证静态对象可安全初始化。
 ControlSolver::ControlSolver() : _initialized(false)
@@ -25,10 +31,14 @@ void ControlSolver::begin()
     }
     init(zeros, ratios, dirs);
 
-    // 2026-07-19: 弹簧加载的单电机关节在正向紧绳负反馈时实测存在约 1.5 deg 静差。
-    // 当前先保持 Ki/Kd 为 0，待阶跃数据确认后再按标准离散 PID 参数调节。
+    using namespace mmhand::config::control;
     float pidConfigs[PID_PARAMETER_NUM] = {
-        5.7f, 0.0f, 0.0f, 0.0f, 100.0f, 600.0f
+        kSingleTendonKp,
+        kSingleTendonKi,
+        kSingleTendonKd,
+        kSingleTendonDeadbandDeg,
+        kSingleTendonIntegralLimit,
+        kSingleTendonOutputLimitCounts
     };
     setPIDParams(pidConfigs);
 }

@@ -1,3 +1,10 @@
+/**
+ * @file AutoCalibrationTask.cpp
+ * @brief 编排单腱与双腱关节自动标定、工作空间准备和标定结果提交。
+ *
+ * 本任务拥有标定期间的舵机命令 owner。底层舵机通信统一经
+ * ActuatorCommandGateway，Manual/Auto 数据格式和协议布局保持不变。
+ */
 #include "AutoCalibrationTask.h"
 
 #include <math.h>
@@ -8,6 +15,7 @@
 #include "CalibrationTask.h"
 #include "../control/ControlTask.h"
 #include "../control/TendonCalibrationLut.h"
+#include "../config/CalibrationConfig.h"
 #include "../hardware/HardwareMap.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
@@ -16,6 +24,8 @@
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
 #include "../system/TaskRuntimeMonitor.h"
+
+using namespace mmhand::config::calibration;
 
 // 非空表示自动标定任务正在运行，用于拒绝重复创建。
 static TaskHandle_t g_autoCalibrationTaskHandle = NULL;
@@ -63,44 +73,12 @@ static uint8_t autoCalibrationSequenceRank(uint8_t jointIndex)
 }
 
 // 反馈新鲜度、行程合法性和机械搜索参数。
-static const uint32_t kAutoFeedbackReadyServoTimeoutMs = 500; // 舵机快照最大年龄。
-static const uint32_t kAutoEncoderTrustedSampleMaxAgeMs = 300; // 磁编可信样本最大年龄。
-static const uint32_t kAutoInitialFeedbackWaitMs = 1200; // 启动时等待首帧反馈时间。
 // 热插拔恢复预检期间不发送任何舵机目标；只有驱动恢复、多圈模式配置和反馈连续稳定后才允许运动。
-static const uint32_t kCalibrationServoRecoveryTimeoutMs = 5000;
-static const uint32_t kCalibrationServoRecoveryLogIntervalMs = 500;
-static const uint8_t kCalibrationServoRecoveryStableSamples = 3;
 // 单关节标定成功后，通过舵机通信任务提交本次会话可信状态的最长等待时间。
-static const uint32_t kCalibrationTrustCommitTimeoutMs = 1000;
-static const float kAutoCalibrationMinTravelDeg = 10.0f; // 有效标定最小磁编行程。
-static const float kAutoCalibrationMaxTravelDeg = 359.0f; // 有效标定最大磁编行程。
 // 接近整圈时端点方向会产生歧义，因此拒绝跨度大于 15360 counts 的结果。
-static const int32_t kAutoCalibrationRejectNearFullWrapSpan =
-    kCalibrationEncoderModulo - 1024;
-static const float kAutoCalibrationStartDeg = -5.0f; // LUT 内部松端起始角。
-static const float kAutoCalibrationZeroDeg = 0.0f;    // LUT 内部零点角。
-static const int32_t kAutoServoZeroPullCounts = 500;  // 紧端回退到内部零点的舵机量。
-static const int32_t kDualAutoSlackCounts = 3200;     // 双腱初始副电机放绳量。
-static const int32_t kCalibratedMotorAbsWindowCounts = 4096 * 5; // 多圈 ABS 总窗口。
-static const int32_t kCalibratedMotorAbsMaxMarginCounts = 500;   // 紧端附加余量。
-static const int16_t kAutoCalibrationOverloadLoadThreshold = 800; // 标定硬过载阈值。
-static const int16_t kDualPrimaryTightLoadThreshold = 190;        // 主电机初次紧绳。
-static const int16_t kDualSecondaryPreloadLoadThreshold = 190;    // 副电机预紧。
-static const int16_t kDualSecondaryFinalLoadThreshold = 250;      // 副电机最终紧端。
-static const int16_t kDualPrimaryFinalLoadThreshold = 120;        // 主电机 READY 补紧。
-static const int16_t kWorkspaceTightLoadThreshold = 190;          // 辅助手指紧绳阈值。
-static const int32_t kWorkspaceReleaseCounts = 3200;              // 辅助手指放绳量。
-static const int32_t kWorkspaceTargetToleranceCounts = 60;        // 姿态复用 ABS 容差。
-static const float kReverseMinFollowDeg = 12.0f;                  // 双腱交换最小角行程。
-static const float kTendonFitSampleStepDeg = 5.0f;                // LUT 采样角步长。
-static const int32_t kSingleTendonMaxReleaseCounts = 4096 * 2;    // 单腱从紧端最多放绳两圈。
 // 原始缓冲容量为最终 LUT 的三倍，为不等速采样和端点样本预留空间。
 static const uint8_t kTendonRawSampleCapacity =
     TENDON_LUT_MAX_SAMPLES * 3;
-static const uint8_t kAngleStallStableSamples = 2; // 角度停稳连续确认帧数。
-static const int32_t kPreReleaseSyncTargetToleranceCounts = 40; // 松绳前目标误差窗。
-static const int32_t kPreReleaseSyncSettleDeltaCounts = 20; // 松绳前窗口内 ABS 变化。
-static const uint8_t kPreReleaseSyncStableSamples = 2; // 松绳前连续稳定帧数。
 
 // 一次原始 LUT 采样：磁编方向坐标和两路舵机多圈 ABS。
 struct TendonRawFitSample {
@@ -199,11 +177,11 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
 
     const int32_t tightClamped = clampToServoAbsRangeLocal(tightAbs);
     const int32_t slackClamped = clampToServoAbsRangeLocal(
-        motorApplyTendonDelta(motorChannel, tightClamped, -kCalibratedMotorAbsWindowCounts));
+        motorApplyTendonDelta(motorChannel, tightClamped, -kMotorAbsWindowCounts));
     const int32_t minAbs = (slackClamped < tightClamped) ? slackClamped : tightClamped;
     const int32_t baseMaxAbs = (slackClamped > tightClamped) ? slackClamped : tightClamped;
     const int32_t maxAbs = clampToServoAbsRangeLocal(
-        baseMaxAbs + kCalibratedMotorAbsMaxMarginCounts);
+        baseMaxAbs + kMotorAbsMaxMarginCounts);
     {
         SharedSafetyGuard guard;
         sharedData->motor_abs_limit_min[motorChannel] = minAbs;
@@ -219,8 +197,8 @@ static void setCalibratedMotorAbsLimit(TaskSharedData_t* sharedData,
                    (long)tightClamped,
                    (long)slackClamped,
                    (int)getMotorTendonShortenAbsSign(motorChannel),
-                   (long)kCalibratedMotorAbsWindowCounts,
-                   (long)kCalibratedMotorAbsMaxMarginCounts);
+                   (long)kMotorAbsWindowCounts,
+                   (long)kMotorAbsMaxMarginCounts);
 }
 
 // 单腱标定完成后，以 LUT 实测包络登记电机 ABS 工作区。
@@ -248,7 +226,7 @@ static void setSingleTendonLutAbsLimit(TaskSharedData_t* sharedData,
     const int32_t tightWithMargin = clampToServoAbsRangeLocal(
         motorApplyTendonDelta(motorChannel,
                               lutTightAbs,
-                              kCalibratedMotorAbsMaxMarginCounts));
+                              kMotorAbsMaxMarginCounts));
     int32_t limitMin = lutMinAbs;
     int32_t limitMax = lutMaxAbs;
     if (tightWithMargin < limitMin) limitMin = tightWithMargin;
@@ -271,7 +249,7 @@ static void setSingleTendonLutAbsLimit(TaskSharedData_t* sharedData,
         (long)limitMin,
         (long)limitMax,
         (long)lutTightAbs,
-        (long)kCalibratedMotorAbsMaxMarginCounts);
+        (long)kMotorAbsMaxMarginCounts);
 }
 
 // 清除指定关节所有执行器的旧 ABS 限位，避免新标定被旧范围拦截。
@@ -545,7 +523,7 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
         const bool freshSnapshot =
             hasSnapshot &&
             (uint32_t)(nowMs - snapshot.timestamp) <=
-                kAutoFeedbackReadyServoTimeoutMs;
+                kFeedbackReadyServoTimeoutMs;
         uint32_t snapshotOnlineMask = 0;
         if (freshSnapshot) {
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
@@ -569,10 +547,10 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
         // 只按新的舵机快照累计稳定帧，避免同一帧被 10 ms 循环重复计数。
         if (ready && snapshot.timestamp != lastFeedbackTimestamp) {
             lastFeedbackTimestamp = snapshot.timestamp;
-            if (stableSamples < kCalibrationServoRecoveryStableSamples) {
+            if (stableSamples < kServoRecoveryStableSamples) {
                 stableSamples++;
             }
-            if (stableSamples >= kCalibrationServoRecoveryStableSamples) {
+            if (stableSamples >= kServoRecoveryStableSamples) {
                 FW_LOG_INFO_PRINTF(
                     "[AUTO CALIB] SERVO_RECOVERY_READY required=0x%08lX "
                     "online=0x%08lX configured=0x%08lX\r\n",
@@ -587,7 +565,7 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
 
         if (recoveryFailed ||
             (uint32_t)(nowMs - beginMs) >=
-                kCalibrationServoRecoveryTimeoutMs) {
+                kServoRecoveryTimeoutMs) {
             const uint32_t unresolvedMask =
                 requiredMask &
                 (failedMask | pendingMask | ~onlineMask | ~configuredMask);
@@ -614,7 +592,7 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
         }
 
         if ((uint32_t)(nowMs - lastLogMs) >=
-            kCalibrationServoRecoveryLogIntervalMs) {
+            kServoRecoveryLogIntervalMs) {
             lastLogMs = nowMs;
             FW_LOG_INFO_PRINTF(
                 "[AUTO CALIB] SERVO_RECOVERY_WAIT required=0x%08lX "
@@ -627,7 +605,7 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
                 (unsigned long)failedMask,
                 freshSnapshot ? 1U : 0U,
                 (unsigned)stableSamples,
-                (unsigned)kCalibrationServoRecoveryStableSamples);
+                (unsigned)kServoRecoveryStableSamples);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -656,7 +634,7 @@ static bool commitJointServoMultiTurnTrust(TaskSharedData_t* sharedData,
     const uint32_t beginMs = millis();
     while (autoCalibrationStillOwnsControl(sharedData) &&
            (uint32_t)(millis() - beginMs) <
-               kCalibrationTrustCommitTimeoutMs) {
+               kTrustCommitTimeoutMs) {
         if (sharedAtomicLoad(&sharedData->calibration_trust_result_token) ==
             token) {
             const uint32_t acceptedMask =
@@ -715,7 +693,7 @@ static bool readLatestEncoderSample(TaskSharedData_t* sharedData,
     if (!sharedData->canRxQueue ||
         xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE ||
         !sensorData.isValid ||
-        (uint32_t)(nowMs - sensorData.timestamp) > kAutoEncoderTrustedSampleMaxAgeMs ||
+        (uint32_t)(nowMs - sensorData.timestamp) > kEncoderTrustedSampleMaxAgeMs ||
         !encoderOnlineAndHealthy(sharedData, bit)) {
         return false;
     }
@@ -875,7 +853,7 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
             continue;
         }
         const int16_t loadMag = servoLoadMagnitude(loadRaw);
-        if (loadMag >= kAutoCalibrationOverloadLoadThreshold) {
+        if (loadMag >= kOverloadLoadThreshold) {
             const uint32_t bit = 1UL << (uint8_t)ch;
             {
                 SharedSafetyGuard guard;
@@ -885,14 +863,14 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
             FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL OVERLOAD M%02d load=%d threshold=%d\r\n",
                           ch,
                           loadMag,
-                          kAutoCalibrationOverloadLoadThreshold);
+                          kOverloadLoadThreshold);
             setCalibrationDiag(sharedData,
                                CALIB_DIAG_REASON_OVERLOAD,
                                CALIB_DIAG_PHASE_SEQUENCE,
                                0xFF,
                                (uint8_t)ch,
                                loadMag,
-                               kAutoCalibrationOverloadLoadThreshold,
+                               kOverloadLoadThreshold,
                                loadRaw,
                                bit);
             return false;
@@ -1220,14 +1198,14 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     const float totalDeg = calibrationEncoderCountToDeg(startToTightSpan);
     if (startToTightSpan <= 0 ||
         !isfinite(totalDeg) ||
-        totalDeg < kAutoCalibrationMinTravelDeg ||
-        totalDeg >= kAutoCalibrationMaxTravelDeg) {
+        totalDeg < kMinTravelDeg ||
+        totalDeg >= kMaxTravelDeg) {
         return false;
     }
     const float tightDeg = startDeg + totalDeg;
 
     const float zeroFraction =
-        (kAutoCalibrationZeroDeg - startDeg) / totalDeg;
+        (kLutZeroDeg - startDeg) / totalDeg;
     if (zeroFraction <= 0.0f || zeroFraction >= 1.0f) {
         return false;
     }
@@ -1295,7 +1273,7 @@ static bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                                         tautServoAbs,
                                                         zeroServoAbs,
                                                         tightServoAbs,
-                                                        kAutoCalibrationStartDeg,
+                                                        kLutStartDeg,
                                                         out);
 }
 
@@ -1316,7 +1294,7 @@ static bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                                         startServoAbs,
                                                         zeroServoAbs,
                                                         tightServoAbs,
-                                                        kAutoCalibrationStartDeg,
+                                                        kLutStartDeg,
                                                         out);
 }
 
@@ -2097,7 +2075,7 @@ static DualWorkspacePairAvailability classifyDualWorkspacePair(
     if (!sharedData->servoFeedbackQueue ||
         xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
         (uint32_t)(millis() - servoData.timestamp) >
-            kAutoFeedbackReadyServoTimeoutMs) {
+            kFeedbackReadyServoTimeoutMs) {
         return DUAL_WORKSPACE_PAIR_FEEDBACK_STALE;
     }
 
@@ -2478,7 +2456,7 @@ static bool waitWorkspaceFeedbackKnown(TaskSharedData_t* sharedData,
             return true;
         }
 
-        if ((uint32_t)(millis() - startMs) >= kAutoInitialFeedbackWaitMs) {
+        if ((uint32_t)(millis() - startMs) >= kInitialFeedbackWaitMs) {
             const uint32_t missingMask =
                 (primaryOk && primaryLoadOk ? 0UL : (1UL << primaryMotor)) |
                 (secondaryOk && secondaryLoadOk ? 0UL : (1UL << secondaryMotor));
@@ -3556,12 +3534,12 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                   (int)primaryShortenSign,
                   secondaryMotor,
                   (int)secondaryShortenSign,
-                  (long)kDualAutoSlackCounts,
+                  (long)kDualInitialSlackCounts,
                    primaryTightLoadThreshold,
                    secondaryPreloadLoadThreshold,
                    secondaryFinalLoadThreshold,
                    primaryFinalLoadThreshold,
-                   kAutoCalibrationStartDeg,
+                   kLutStartDeg,
                   (long)initialEncoder,
                   (long)primaryAbs,
                   (long)secondaryAbs);
@@ -3614,7 +3592,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
                            (long)secondaryAbs);
     } else {
         const int32_t secondarySlackTarget =
-            motorApplyTendonDelta(secondaryMotor, secondaryAbs, -kDualAutoSlackCounts);
+            motorApplyTendonDelta(secondaryMotor, secondaryAbs, -kDualInitialSlackCounts);
         FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_SLACK_SECONDARY_BEGIN J%02u M%02u targetAbs=%ld from=%ld shortenSign=%d\r\n",
                       jointIndex,
                       secondaryMotor,
@@ -3762,7 +3740,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         encoderForPositiveTravelResult(primary80Encoder, encoderTravelSign);
     const int32_t resultSpan =
         calibrationForwardEncoderDelta(resultStartEncoder, resultTightEncoder);
-    if (resultSpan <= 0 || resultSpan >= kAutoCalibrationRejectNearFullWrapSpan) {
+    if (resultSpan <= 0 || resultSpan >= kRejectNearFullWrapSpanCounts) {
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_RESULT J%02u invalid span=%ld neg3=%ld pos80=%ld signed=%ld\r\n",
                       jointIndex,
                       (long)resultSpan,
@@ -3775,7 +3753,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
     const float dynamicDualTotalDeg = calibrationEncoderCountToDeg(resultSpan);
     const float zeroFraction =
         (dynamicDualTotalDeg > 0.0f)
-            ? ((kAutoCalibrationZeroDeg - kAutoCalibrationStartDeg) /
+            ? ((kLutZeroDeg - kLutStartDeg) /
                dynamicDualTotalDeg)
             : 0.0f;
     const int32_t resultZeroEncoder =
@@ -4003,7 +3981,7 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC_BEGIN J%02u startDeg=%.3f tightDeg=dynamic totalDeg=dynamic angleMax=dynamic\r\n",
                   ctx->jointIndex,
-                  kAutoCalibrationStartDeg);
+                  kLutStartDeg);
     FW_LOG_INFO_PRINTF("[AUTO CALIB] START J%02u bus%u id%u abs=%ld raw=%u oriented=%ld dir=%d baselineLoad=%d speedCps=%ld\r\n",
                   ctx->jointIndex,
                   ctx->bus,
@@ -4119,7 +4097,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                absOk,
                                                rawOk);
                 }
-                if ((uint32_t)(nowMs - ctx->stateBeginMs) < kAutoInitialFeedbackWaitMs) {
+                if ((uint32_t)(nowMs - ctx->stateBeginMs) < kInitialFeedbackWaitMs) {
                     return;
                 }
                 logAutoInitialFeedbackDiag(sharedData,
@@ -4503,7 +4481,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                       (long)ctx->commandAbs,
                                       (long)stepCounts,
                                       (long)ctx->directionSign,
-                                      kAutoCalibrationStartDeg);
+                                      kLutStartDeg);
                     }
                 }
                 ctx->lastCommandMs = nowMs;
@@ -4580,7 +4558,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     const float dynamicTotalDeg = calibrationEncoderCountToDeg(resultSpan);
                     const float zeroFraction =
                         (dynamicTotalDeg > 0.0f)
-                            ? ((kAutoCalibrationZeroDeg - kAutoCalibrationStartDeg) /
+                            ? ((kLutZeroDeg - kLutStartDeg) /
                                dynamicTotalDeg)
                             : 0.0f;
                     const int32_t resultZeroEncoder =
@@ -4590,7 +4568,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     const int32_t servoZeroAbs =
                         motorApplyTendonDelta(ctx->motorChannel,
                                               tightServoAbs,
-                                              kAutoServoZeroPullCounts);
+                                              kServoZeroPullCounts);
 
                     // 强制记录松端，确保 LUT 同时包含两个机械端点。
                     appendTendonRawFitSample(&ctx->fitSamples,
@@ -4657,7 +4635,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                      lutMaxAbs);
                         return;
                     }
-                    if (result.encoderSpan >= kAutoCalibrationRejectNearFullWrapSpan) {
+                    if (result.encoderSpan >= kRejectNearFullWrapSpanCounts) {
                         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u rejected wrap-like span=%ld start=%ld tight=%ld; endpoint span is invalid\r\n",
                                       ctx->jointIndex,
                                       (long)result.encoderSpan,
@@ -4739,10 +4717,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   (long)result.encoderSpan);
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] ZERO_FOUND J%02u zeroDeg=%.3f encoder=%ld servoZero=%ld formula=tendon(tightAbs)+pullCounts(%ld) shortenSign=%ld\r\n",
                                   ctx->jointIndex,
-                                  kAutoCalibrationZeroDeg,
+                                  kLutZeroDeg,
                                   (long)result.zeroEncoder,
                                   (long)result.zeroServoAbs,
-                                  (long)kAutoServoZeroPullCounts,
+                                  (long)kServoZeroPullCounts,
                                   (long)ctx->directionSign);
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] RESULT J%02u start=%ld zero=%ld tight=%ld span=%ld servoStart=%ld servoZero=%ld servoTight=%ld\r\n",
                                   ctx->jointIndex,

@@ -1,13 +1,82 @@
 /**
  * @file ControlConfig.h
- * @brief 汇总控制周期、PID、死区和碰撞检测配置的公共入口。
- * @details 第一阶段仅建立边界；现有控制参数会在拆分 ControlTask 时迁入。
+ * @brief 集中定义反馈控制、碰撞检测和控制完成判定使用的固定参数。
+ *
+ * 本文件只保存不可变配置，不保存 PID 历史状态。修改这些数值会改变机械行为，
+ * 必须经过日志对比和实机回归；控制算法不得在实现文件中复制同名“临时阈值”。
  */
 #ifndef MMHAND_CONTROL_CONFIG_H
 #define MMHAND_CONTROL_CONFIG_H
 
+#include <stdint.h>
+
 namespace mmhand::config::control {
-// 参数将在保持数值和计算顺序不变的前提下，从各控制实现迁入此命名空间。
-}
+
+/** P4 关节反馈控制任务的固定周期。 */
+inline constexpr uint32_t kPeriodMs = 10;
+inline constexpr float kPeriodSec = 0.010f;
+
+/** 14 bit 磁编码器一圈的原始计数。 */
+inline constexpr int32_t kEncoderModulo = 16384;
+/** 标定行程越过环形零点时允许的约 10 度判断余量。 */
+inline constexpr int32_t kEncoderMarginCounts =
+    (kEncoderModulo * 10 + 180) / 360;
+inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
+
+/** PID 诊断日志采用全 active scope 轮询，避免 J00 长期独占日志。 */
+inline constexpr bool kPidDiagLogEnabled = true;
+inline constexpr uint32_t kPidDiagLogPeriodMs = 50;
+
+inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;
+inline constexpr uint32_t kServoTelemetryTimeoutMs = 500;
+
+/** 直控与反馈模式的硬过载阈值；碰撞检测不使用该负载值。 */
+inline constexpr int16_t kDirectOverloadLoadThreshold = 800;
+inline constexpr int16_t kFeedbackOverloadLoadThreshold = 2000;
+inline constexpr uint8_t kDirectOverloadLatchCycles = 20;
+inline constexpr uint8_t kFeedbackOverloadLatchCycles = 20;
+
+/** 速度 0 表示使用舵机固件默认速度，适合连续反馈控制。 */
+inline constexpr uint16_t kFeedbackServoSpeed = 0;
+
+inline constexpr int32_t kDirectDoneAbsToleranceCounts = 40;
+inline constexpr uint8_t kDirectDoneStableCycles = 5;
+inline constexpr float kFeedbackDoneToleranceDeg = 0.5f;
+inline constexpr uint8_t kFeedbackDoneStableCycles = 10;
+inline constexpr uint32_t kFeedbackRunTimeoutMs = 8000;
+
+inline constexpr int32_t kUpperWorkspaceWarningCounts = 48;
+inline constexpr uint8_t kUpperWorkspaceWarningStableFrames = 3;
+inline constexpr int32_t kCollisionLutBoundaryToleranceCounts = 32;
+
+/**
+ * 单腱关节角度 PID。2026-07-19 实测弹簧紧绳方向约有 1.5 度静差；
+ * 当前保留标准离散 PID 形式，但 Ki/Kd 仍为 0，待实测后再启用。
+ */
+inline constexpr float kSingleTendonKp = 5.7f;
+inline constexpr float kSingleTendonKi = 0.0f;
+inline constexpr float kSingleTendonKd = 0.0f;
+inline constexpr float kSingleTendonDeadbandDeg = 0.0f;
+inline constexpr float kSingleTendonIntegralLimit = 100.0f;
+inline constexpr float kSingleTendonOutputLimitCounts = 600.0f;
+
+/** 双腱位置环参数。误差和输出均在标定 LUT 的舵机 counts 坐标中计算。 */
+inline constexpr float kDualTendonKp = 0.60f;
+inline constexpr float kDualTendonKi = 0.0f;
+inline constexpr float kDualTendonKd = 0.0f;
+inline constexpr float kDualTendonIntegralLimit = 0.0f;
+inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
+inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
+
+/** 碰撞检测状态机参数。 */
+inline constexpr float kCollisionMinErrorDeg = 4.0f;
+inline constexpr float kCollisionTargetResetDeg = 1.0f;
+inline constexpr uint32_t kCollisionVelocityWindowMs = 200;
+inline constexpr float kCollisionArmVelocityDegPerSec = 8.0f;
+inline constexpr uint32_t kCollisionProgressWindowMs = 400;
+inline constexpr float kCollisionMinProgressDeg = 0.4f;
+inline constexpr float kCollisionTargetRetreatReleaseDeg = 1.0f;
+
+} // namespace mmhand::config::control
 
 #endif // MMHAND_CONTROL_CONFIG_H

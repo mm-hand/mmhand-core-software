@@ -1,23 +1,20 @@
+/**
+ * @file FeedbackCollisionGuard.cpp
+ * @brief 实现基于磁编码器运动窗口的关节碰撞检测小状态机。
+ *
+ * 该模块不使用舵机 load 判定碰撞。调用方传入目标、反馈和 LUT 边界状态，
+ * 模块返回 ARMING、MONITORING 或 HOLD 的纯状态结果。
+ */
 #include "FeedbackCollisionGuard.h"
 
 #include <math.h>
 #include <string.h>
 
+#include "../config/ControlConfig.h"
+
 namespace {
 
-// 小于该误差时视为接近到位，不再继承之前的碰撞武装状态。
-static const float kCollisionMinErrorDeg = 4.0f;
-// 单帧目标跳变超过 1 度时，按一条新的运动指令重建时间窗。
-static const float kCollisionTargetResetDeg = 1.0f;
-// 200 ms 速度窗只负责确认关节确实正在向目标运动。
-static const uint32_t kCollisionVelocityWindowMs = 200;
-static const float kCollisionArmVelocityDegPerSec = 8.0f;
-// 武装后在 400 ms 内进展不到 0.4 度，才认为可能受阻。
-static const uint32_t kCollisionProgressWindowMs = 400;
-static const float kCollisionMinProgressDeg = 0.4f;
-// HOLD 后只允许“减小原碰撞目标推进量”的新目标解除保护。
-// 解除基准必须是触发碰撞时的目标，而不是 HOLD 瞬间的反馈角。
-static const float kCollisionTargetRetreatReleaseDeg = 1.0f;
+using namespace mmhand::config::control;
 
 static float directionOf(float value)
 {

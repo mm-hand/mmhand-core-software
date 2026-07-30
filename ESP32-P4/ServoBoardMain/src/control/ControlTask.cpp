@@ -1,3 +1,10 @@
+/**
+ * @file ControlTask.cpp
+ * @brief 运行 P4 的 10 ms 控制编排任务，读取一致快照并调用控制域模块生成舵机目标。
+ *
+ * 本文件只负责周期调度和模式编排。磁编映射、PID/LUT 计算、碰撞状态机、
+ * 输出构建与命令发布分别由独立模块实现，禁止在此直接调用飞特 SDK。
+ */
 #include "ControlTask.h"
 #include "../actuator/ActuatorCommandGateway.h"
 
@@ -6,6 +13,7 @@
 
 #include "../calibration/CalibrationMath.h"
 #include "../calibration/CalibrationTask.h"
+#include "../config/ControlConfig.h"
 #include "../hardware/HardwareMap.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../shared/SharedSafetyState.h"
@@ -13,67 +21,41 @@
 #include "../system/StateMachineTask.h"
 #include "../system/TaskRuntimeMonitor.h"
 #include "ControlOutputBuilder.h"
+#include "ControlRuntimePolicy.h"
 #include "ControlSafety.h"
 #include "ControlSolver.h"
 #include "DualTendonControl.h"
 #include "FeedbackCollisionGuard.h"
+#include "JointAngleMapper.h"
+#include "SingleTendonWorkspace.h"
 #include "TendonCalibrationLut.h"
+
+using namespace mmhand::config::control;
 
 static ControlSolver g_controlSolver;
 // 碰撞检测历史放在静态区，避免挤占 10 ms 控制任务栈。
 static FeedbackCollisionGuard g_feedbackCollisionGuard;
 
-// 磁编码器数值是 14 bit 环形计数。
-static const int32_t kEncoderModulo = 16384;
-// 标定行程溢出判定为回绕前，允许少量边界余量。
-static const int32_t kEncoderMarginCounts = (kEncoderModulo * 10 + 180) / 360;
 // 每个周期只发布少量关节调试数据，避免队列流量过大。
 static const uint8_t kDebugJointIndices[] = {0, 1, 2, 3};
 static const uint8_t kDebugJointCount =
     (uint8_t)(sizeof(kDebugJointIndices) / sizeof(kDebugJointIndices[0]));
 
-#define CONTROL_PID_DIAG_LOG_ENABLE 1
-static const uint32_t kControlPidDiagLogPeriodMs = 50;
 static uint32_t g_controlPidDiagLastLogMs = 0;
 static uint8_t g_controlPidDiagNextJoint = 0;
-
-static const uint32_t kCanBusOfflineTimeoutMs = 1000;
-static const uint32_t kServoTelemetryTimeoutMs = 500;
-// 磁编码器断开时传感器协议使用的标记值。
-static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-// 直控模式对负载尖峰更敏感；关节 PID 模式允许更高负载。
-static const int16_t kControlOverloadLoadThreshold = 800;
-static const int16_t kJointControlOverloadLoadThreshold = 2000;
-// 800/1000 counts 仅用于独立硬过载故障；碰撞保持不再使用负载值判定。
-// 只有连续多个高负载帧后才锁存硬故障。
-static const uint8_t kControlOverloadLatchCycles = 20;
-static const uint8_t kJointControlOverloadLatchCycles = 20;
-// 速度 0 表示让舵机固件使用适合反馈控制的默认速度。
-static const uint16_t kJointControlFeedbackSpeed = 0;
-// 完成判定同时要求位置误差满足容差，并持续稳定若干帧。
-static const int32_t kDirectRunDoneAbsToleranceCounts = 40;
-static const uint8_t kDirectRunDoneStableCycles = 5;
-static const float kFeedbackRunDoneToleranceDeg = 0.5f;
-static const uint8_t kFeedbackRunDoneStableCycles = 10;
-static const uint32_t kFeedbackRunTimeoutMs = 8000;
-static const int32_t kUpperWorkspaceWarningCounts = 48;
-static const uint8_t kUpperWorkspaceWarningStableFrames = 3;
-// 碰撞检测只在实际舵机进入 LUT 边界附近时排除“工作空间耗尽”。
-// 不能使用 PID 计算目标被钳位作为证据，否则双电机大误差时会大量漏检。
-static const int32_t kCollisionLutBoundaryToleranceCounts = 32;
 
 static bool shouldLogControlPidDiag(uint8_t jointIndex,
                                     uint32_t nowMs,
                                     uint32_t activeJointMask)
 {
-#if CONTROL_PID_DIAG_LOG_ENABLE
+    if constexpr (kPidDiagLogEnabled) {
     if (jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
     // 全手控制仍只允许每 50 ms 输出一条 PID 日志，但在 active joint 之间
     // 轮询。旧实现总由循环首位 J00 抢占全局时间槽，导致日志长期只有 M00/M01。
     if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
-        kControlPidDiagLogPeriodMs) {
+        kPidDiagLogPeriodMs) {
         return false;
     }
 
@@ -97,19 +79,15 @@ static bool shouldLogControlPidDiag(uint8_t jointIndex,
         // 被选中的关节可能因离线或保护分支没有进入 PID。超过两个日志周期
         // 后允许下一个实际运行到这里的关节接管，避免诊断轮询永久卡死。
         if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
-            (kControlPidDiagLogPeriodMs * 2U)) {
+            (kPidDiagLogPeriodMs * 2U)) {
             return false;
         }
     }
     g_controlPidDiagLastLogMs = nowMs;
     g_controlPidDiagNextJoint = nextJointAfterLog;
     return true;
-#else
-    (void)jointIndex;
-    (void)nowMs;
-    (void)activeJointMask;
+    }
     return false;
-#endif
 }
 
 // 判断舵机实际 ABS 是否已抵达当前推进方向的 LUT 边界。
@@ -141,140 +119,6 @@ static int16_t clampMappedCountForProtocol(int32_t value)
     return (int16_t)value;
 }
 
-static int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
-{
-    // 应用标定映射前，先统一磁编码器方向。
-    int32_t oriented = (int32_t)rawValue & (kEncoderModulo - 1);
-    if (direction < 0) {
-        oriented = (kEncoderModulo - oriented) & (kEncoderModulo - 1);
-    }
-    return oriented;
-}
-
-static int32_t wrapEncoderCount(int32_t value)
-{
-    // 回绕到 0..16383 编码器计数范围。
-    value %= kEncoderModulo;
-    if (value < 0) value += kEncoderModulo;
-    return value;
-}
-
-static int32_t forwardEncoderDelta(int32_t from, int32_t to)
-{
-    // 从一个 raw 编码器计数到另一个计数的正向环形距离。
-    return wrapEncoderCount(to - from);
-}
-
-// 编码器计数转角度。
-static float convertEncoderCountToDeg(int32_t encoderCount)
-{
-    return (float)encoderCount * 360.0f / (float)kEncoderModulo;
-}
-
-static int32_t degToEncoderCount(float deg)
-{
-    // 按远离 0 的方向取整，使小的正负角度映射保持对称。
-    const float scaled = deg * (float)kEncoderModulo / 360.0f;
-    return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
-}
-
-static float mapCalibratedEncoderToDeg(const JointCalibrationResult& calib, int32_t orientedRaw)
-{
-    // 新版缩放标定使用 startEncoder/encoderSpan/totalDeg 表示实测行程；
-    // 旧版标定回退到 offset 和硬限位最大值。
-    if (calib.scaled && calib.encoderSpan > 0 && calib.totalDeg > 0.0f) {
-        int32_t delta = forwardEncoderDelta(calib.startEncoder, orientedRaw);
-        if (delta > calib.encoderSpan + kEncoderMarginCounts) {
-            delta -= kEncoderModulo;
-        }
-        return ((float)delta / (float)calib.encoderSpan) * calib.totalDeg + calib.startDeg;
-    }
-
-    const int32_t offset = calib.offset;
-    int32_t delta = forwardEncoderDelta(offset, orientedRaw);
-    int32_t hardMaxFromOffset = forwardEncoderDelta(offset, calib.encoderMax);
-    if (hardMaxFromOffset <= 0) {
-        hardMaxFromOffset = degToEncoderCount(calib.angleMax);
-    }
-    if (delta > hardMaxFromOffset + kEncoderMarginCounts) {
-        delta -= kEncoderModulo;
-    }
-    return convertEncoderCountToDeg(delta);
-}
-
-static float clampJointTargetDegByCalib(float targetDeg, uint8_t jointIndex)
-{
-    // 在 PID 接收目标前，先把上位机目标限制到可用标定关节范围。
-    if (!isfinite(targetDeg)) {
-        targetDeg = 0.0f;
-    }
-    if (jointIndex >= ENCODER_TOTAL_NUM) {
-        return 0.0f;
-    }
-
-    float minDeg = 0.0f;
-    float maxDeg = 0.0f;
-    if (g_jointCalibResult[jointIndex].success) {
-        const JointCalibrationResult& calibration = g_jointCalibResult[jointIndex];
-        if (calibration.mappingVersion >= 2) {
-            minDeg = calibration.angleMin;
-        }
-        maxDeg = calibration.angleMax;
-    } else {
-        // 未生成 Auto 结果时仅保留 URDF 静态范围作为输入校验；状态机仍会
-        // 阻止该关节进入负反馈，不能把静态范围误认为有效标定。
-        minDeg = kUrdfJointLimits[jointIndex].minDeg;
-        maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
-    }
-
-    if (!isfinite(maxDeg) || maxDeg <= 0.0f) {
-        return 0.0f;
-    }
-    if (!isfinite(minDeg) || minDeg >= maxDeg) {
-        return 0.0f;
-    }
-    if (targetDeg < minDeg) {
-        return minDeg;
-    }
-    if (targetDeg > maxDeg) {
-        return maxDeg;
-    }
-    return targetDeg;
-}
-
-// 单电机关节的角度 PID 会持续在“当前 ABS + 修正量”上推进，因此仅限制
-// 关节角目标还不够。这里使用自动标定 LUT 的实测 ABS 包络做最终硬钳位，
-// 防止弹簧受阻、静差或累计命令把舵机推出已经验证过的机械工作空间。
-static bool clampSingleTendonTargetByLut(uint8_t jointIndex,
-                                         uint8_t motorChannel,
-                                         int32_t targetRawAbs,
-                                         int32_t* outTargetRawAbs,
-                                         int32_t* outLutMinAbs,
-                                         int32_t* outLutMaxAbs)
-{
-    if (!outTargetRawAbs || !outLutMinAbs || !outLutMaxAbs ||
-        jointIndex >= ENCODER_TOTAL_NUM ||
-        motorChannel >= SERVO_TOTAL_NUM) {
-        return false;
-    }
-
-    const JointCalibrationResult& calibration = g_jointCalibResult[jointIndex];
-    if (calibration.tendonLutMotor[0] != motorChannel ||
-        !tendonCalibrationMotorAbsRange(calibration,
-                                        0,
-                                        outLutMinAbs,
-                                        outLutMaxAbs)) {
-        return false;
-    }
-
-    int32_t clamped = targetRawAbs;
-    if (clamped < *outLutMinAbs) clamped = *outLutMinAbs;
-    if (clamped > *outLutMaxAbs) clamped = *outLutMaxAbs;
-    *outTargetRawAbs = clampServoPos(clamped);
-    return true;
-}
-
-// 根据物理 bus/id 查找 motorMap 通道。
 static int findMotorChannel(uint8_t bus, uint8_t id)
 {
     return findMotorChannelByBusId(bus, id);
@@ -566,159 +410,6 @@ static int16_t servoLoadMagnitude(int16_t rawLoad)
     return (int16_t)(mag & 0x03FF);
 }
 
-static uint32_t activeOverloadMotorMask(TaskSharedData_t* sharedData,
-                                        const ControlCommandSnapshot_t& commandSnapshot)
-{
-    // 过载检查只关注当前控制模式正在主动命令的电机；
-    // 空闲电机的负载可能是旧值或与当前动作无关。
-    if (!sharedData) {
-        return 0;
-    }
-    const uint32_t validMask = validMotorChannelMask();
-    if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
-        return sharedAtomicLoad(&sharedData->active_motor_mask) & validMask;
-    }
-
-    uint32_t mask = 0;
-    const uint32_t activeJointMask =
-        sharedAtomicLoad(&sharedData->active_joint_mask) &
-        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-    for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
-        if ((activeJointMask & (1UL << jointIndex)) == 0) {
-            continue;
-        }
-        const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
-        for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
-            JointActuatorItem actuator;
-            if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
-                actuator.motorChannel < SERVO_TOTAL_NUM) {
-                mask |= (1UL << actuator.motorChannel);
-            }
-        }
-    }
-    return mask & validMask;
-}
-
-static bool jointHasOverloadFault(uint8_t jointIndex, uint32_t overloadFaultBitmap)
-{
-    // 一个关节的任一执行器存在电机故障时，整个关节都应保持。
-    const uint8_t actuatorCount = getJointActuatorCount(jointIndex);
-    for (uint8_t actuatorIndex = 0; actuatorIndex < actuatorCount; actuatorIndex++) {
-        JointActuatorItem actuator;
-        if (getJointActuator(jointIndex, actuatorIndex, &actuator) &&
-            actuator.motorChannel < SERVO_TOTAL_NUM &&
-            (overloadFaultBitmap & (1UL << actuator.motorChannel)) != 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static int32_t abs32Local(int32_t value)
-{
-    // 本地小工具函数，避免嵌入式构建中依赖重载 abs()。
-    return value < 0 ? -value : value;
-}
-
-static bool directAbsoluteTargetsReached(TaskSharedData_t* sharedData,
-                                         const ServoAngleData_t& servoData,
-                                         const ControlCommandSnapshot_t& commandSnapshot)
-{
-    // 直控 RUN 完成判定只对绝对多圈命令有意义。
-    if (!sharedData ||
-        commandSnapshot.controlMode != CONTROL_MODE_DIRECT_MOTOR ||
-        commandSnapshot.motorDirectCommandSource != MOTOR_DIRECT_SOURCE_ABSOLUTE) {
-        return false;
-    }
-
-    const uint32_t requiredMask =
-        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
-    if (requiredMask == 0) {
-        return false;
-    }
-
-    bool checkedAny = false;
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        if (((requiredMask >> ch) & 0x1UL) == 0) {
-            continue;
-        }
-        checkedAny = true;
-        if (servoData.onlineStatus[ch] == 0) {
-            return false;
-        }
-        const int32_t targetAbs =
-            (int32_t)clampServoPos(commandSnapshot.motorTargetRaw[ch]);
-        if (abs32Local(servoData.servoAngles[ch] - targetAbs) > kDirectRunDoneAbsToleranceCounts) {
-            return false;
-        }
-    }
-    return checkedAny;
-}
-
-static bool feedbackJointTargetsReached(TaskSharedData_t* sharedData,
-                                        const MappedAngleData_t& mappedData,
-                                        const float* targetDegs,
-                                        const float* actualDegs,
-                                        uint32_t commandJointMask)
-{
-    // 反馈 RUN 完成要求每个激活关节都有有效映射反馈，
-    // 并连续多个周期保持在角度容差内。
-    if (!sharedData || !targetDegs || !actualDegs || !mappedData.isValid) {
-        return false;
-    }
-
-    const uint32_t requiredMask = commandJointMask &
-        sharedAtomicLoad(&sharedData->active_joint_mask) &
-        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-    if (requiredMask == 0) {
-        return false;
-    }
-
-    bool checkedAny = false;
-    for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
-        if (((requiredMask >> jointIndex) & 0x1UL) == 0) {
-            continue;
-        }
-        checkedAny = true;
-        if (mappedData.validFlags[jointIndex] == 0) {
-            return false;
-        }
-        if (fabsf(actualDegs[jointIndex] - targetDegs[jointIndex]) > kFeedbackRunDoneToleranceDeg) {
-            return false;
-        }
-    }
-
-    return checkedAny;
-}
-
-static bool readControlCommandSnapshot(TaskSharedData_t* sharedData, ControlCommandSnapshot_t* out)
-{
-    // 每个控制周期只读取一次上位机命令，避免混入部分更新。
-    if (!sharedData || !out) {
-        return false;
-    }
-
-    SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(2)) != pdTRUE) {
-        return false;
-    }
-
-    memcpy(out->targetAngles, sharedData->targetAngles, sizeof(out->targetAngles));
-    memcpy(out->motorTargetRaw, sharedData->motorTargetRaw, sizeof(out->motorTargetRaw));
-    memcpy(out->motorSweepTargetRaw, sharedData->motorSweepTargetRaw, sizeof(out->motorSweepTargetRaw));
-    out->motorCommandToken = sharedData->motor_command_token;
-    out->motorSweepCommandToken = sharedData->motor_sweep_command_token;
-    out->jointCommandToken = sharedData->joint_command_token;
-    out->feedbackCommandJointMask = sharedData->feedback_command_joint_mask;
-    out->motorDirectCommandGeneration = sharedData->motor_direct_command_generation;
-    out->motorDirectCommandSource = sharedData->motor_direct_command_source;
-    out->controlMode = sharedData->control_mode;
-    if (lock) {
-        xSemaphoreGive(lock);
-    }
-    return true;
-}
-
 // ============================================================================
 // ControlTask - 核心实时控制任务。
 // ============================================================================
@@ -769,7 +460,7 @@ void controlTask(void* parameter)
     }
     ControlCommandSnapshot_t commandSnapshot;
     memset(&commandSnapshot, 0, sizeof(commandSnapshot));
-    readControlCommandSnapshot(sharedData, &commandSnapshot);
+    p4::control::readCommandSnapshot(sharedData, &commandSnapshot);
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     TickType_t lastPidComputeTick = lastWakeTime;
@@ -800,7 +491,8 @@ void controlTask(void* parameter)
     while (1)
     {
         taskRuntimeMarkLoopStart(TASK_RUNTIME_CONTROL);
-        if (!readControlCommandSnapshot(sharedData, &commandSnapshot)) {
+        if (!p4::control::readCommandSnapshot(
+                sharedData, &commandSnapshot)) {
             // 如果命令互斥锁短暂繁忙，本帧跳过输出，但保持周期调度对齐。
             taskRuntimeMarkLoopEnd(TASK_RUNTIME_CONTROL);
             const TickType_t nextWakeTime = lastWakeTime + solverPeriodTicks;
@@ -958,7 +650,9 @@ void controlTask(void* parameter)
                     continue;
                 }
 
-                const int32_t orientedRaw = orientEncoderRaw(sensorData.encoderValues[i], g_encoderDirection[i]);
+                const int32_t orientedRaw =
+                    p4::control::orientEncoderRaw(
+                        sensorData.encoderValues[i], g_encoderDirection[i]);
                 if (!g_jointCalibResult[i].success) {
                     // 未标定关节故意标记为无效，禁止进入反馈 PID。
                     mappedData.angleValues[i] = 0;
@@ -1031,10 +725,13 @@ void controlTask(void* parameter)
                         upperWorkspaceWarningBitmap &= ~bit;
                     }
                 } else {
-                    mappedDeg = mapCalibratedEncoderToDeg(calib, orientedRaw);
+                    mappedDeg =
+                        p4::control::mapCalibratedEncoderToDeg(
+                            calib, orientedRaw);
                     mappedData.outsideCounts[i] = 0;
                 }
-                const int32_t mappedCount = degToEncoderCount(mappedDeg);
+                const int32_t mappedCount =
+                    p4::control::degToEncoderCount(mappedDeg);
                 mappedData.angleValues[i] = clampMappedCountForProtocol(mappedCount);
                 mappedData.validFlags[i] = 1;
                 magAngles[i] = mappedDeg;
@@ -1065,7 +762,8 @@ void controlTask(void* parameter)
         {
             // 被命令电机持续高负载后锁存过载故障。
             const uint32_t overloadMotorMask =
-                activeOverloadMotorMask(sharedData, commandSnapshot);
+                p4::control::activeOverloadMotorMask(
+                    sharedData, commandSnapshot);
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
             {
                 const uint32_t bit = 1UL << ch;
@@ -1079,11 +777,11 @@ void controlTask(void* parameter)
                 const bool jointControlMode =
                     (commandSnapshot.controlMode == CONTROL_MODE_JOINT);
                 const int16_t overloadThreshold = jointControlMode
-                                                      ? kJointControlOverloadLoadThreshold
-                                                      : kControlOverloadLoadThreshold;
+                                                      ? kFeedbackOverloadLoadThreshold
+                                                      : kDirectOverloadLoadThreshold;
                 const uint8_t overloadLatchCycles = jointControlMode
-                                                        ? kJointControlOverloadLatchCycles
-                                                        : kControlOverloadLatchCycles;
+                                                        ? kFeedbackOverloadLatchCycles
+                                                        : kDirectOverloadLatchCycles;
                 const int16_t loadMag = servoLoadMagnitude(telemetryData.load[ch]);
                 if (loadMag >= overloadThreshold) {
                     if (overloadHighCount[ch] < 255) {
@@ -1120,7 +818,9 @@ void controlTask(void* parameter)
         if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
             // 本地正弦生成后仍要限幅，确保测试轨迹不会请求超出标定关节工作空间。
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
-                localTargets[jointIndex] = clampJointTargetDegByCalib(localTargets[jointIndex], jointIndex);
+                localTargets[jointIndex] =
+                    p4::control::clampJointTargetDeg(
+                        localTargets[jointIndex], jointIndex);
             }
         }
 
@@ -1403,7 +1103,9 @@ void controlTask(void* parameter)
                 const uint8_t id = jointMap[jointIndex].servoID;
                 const int jointMotorCh = findMotorChannel(bus, id);
                 const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
-                bool overloadFaultActive = jointHasOverloadFault(jointIndex, overloadFaultLatched);
+                bool overloadFaultActive =
+                    p4::control::jointHasOverloadFault(
+                        jointIndex, overloadFaultLatched);
 
                 bool emergency =
                     (!normalOutputAllowed) ||
@@ -1498,7 +1200,7 @@ void controlTask(void* parameter)
                         jointIndex,
                         servoData,
                         feedbackCollisionHoldAbs[jointIndex],
-                        kJointControlFeedbackSpeed,
+                        kFeedbackServoSpeed,
                         SERVO_TARGET_ACC_DEFAULT);
                     localTargets[jointIndex] =
                         g_feedbackCollisionGuard.holdAngleDeg(jointIndex);
@@ -1523,7 +1225,7 @@ void controlTask(void* parameter)
                                                 servoData,
                                                 telemetryData,
                                                 telemetryFresh,
-                                                kJointControlFeedbackSpeed,
+                                                kFeedbackServoSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT,
                                                 &feedbackCollisionPidPushActive[jointIndex],
                                                 &feedbackCollisionWorkspaceBoundaryReached[jointIndex]);
@@ -1551,7 +1253,8 @@ void controlTask(void* parameter)
                         rawPidTargetAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
                         int32_t lutClampedTarget = rawPidTargetAbs;
-                        lutWorkspaceValid = clampSingleTendonTargetByLut(
+                        lutWorkspaceValid =
+                            p4::control::clampSingleTendonTargetByLut(
                             jointIndex,
                             motorCh,
                             rawPidTargetAbs,
@@ -1678,7 +1381,7 @@ void controlTask(void* parameter)
                                                    SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 } else {
                     appendJointActuatorTargets(&targetBatch, jointIndex, targetPos,
-                                               jointActive ? kJointControlFeedbackSpeed : SERVO_TARGET_SPEED_DEFAULT,
+                                               jointActive ? kFeedbackServoSpeed : SERVO_TARGET_SPEED_DEFAULT,
                                                SERVO_TARGET_ACC_DEFAULT);
                 }
                 jointCmdPos[jointIndex] = targetPos;
@@ -1739,11 +1442,12 @@ void controlTask(void* parameter)
             commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR &&
             commandSnapshot.motorDirectCommandSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
             // 当所有激活电机连续多个控制帧保持在容差内时，直控 absolute RUN 完成。
-            if (directAbsoluteTargetsReached(sharedData, servoData, commandSnapshot)) {
+            if (p4::control::directTargetsReached(
+                    sharedData, servoData, commandSnapshot)) {
                 if (directRunDoneStableCount < 255) {
                     directRunDoneStableCount++;
                 }
-                if (directRunDoneStableCount >= kDirectRunDoneStableCycles) {
+                if (directRunDoneStableCount >= kDirectDoneStableCycles) {
                     postSystemEventForToken(
                         sharedData,
                         SYSTEM_EVENT_RUN_DIRECT_DONE,
@@ -1760,7 +1464,8 @@ void controlTask(void* parameter)
         if (feedbackOneShotActive && feedbackRunTracking) {
             // 单次 feedback RUN 根据命令开始时捕获的快照判定完成。
             // 正弦测试会一直运行，直到被显式停止。
-            const bool targetsReached = feedbackJointTargetsReached(
+            const bool targetsReached =
+                p4::control::feedbackTargetsReached(
                 sharedData,
                 mappedData,
                 feedbackRunTargetDeg,
@@ -1771,7 +1476,7 @@ void controlTask(void* parameter)
                 if (feedbackRunDoneStableCount < 255) {
                     feedbackRunDoneStableCount++;
                 }
-                if (feedbackRunDoneStableCount >= kFeedbackRunDoneStableCycles &&
+                if (feedbackRunDoneStableCount >= kFeedbackDoneStableCycles &&
                     !feedbackRunDoneEventQueued) {
                     // 队列满是暂态问题；保留完成事件并重试，
                     // 避免丢弃事件导致 RUN_FEEDBACK 一直锁定。
