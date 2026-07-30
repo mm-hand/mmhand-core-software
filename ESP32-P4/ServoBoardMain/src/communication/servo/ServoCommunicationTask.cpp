@@ -15,6 +15,7 @@
 #include "../../system/StateMachineTask.h"
 #include "../../system/TaskRuntimeMonitor.h"
 #include "ServoPositionRange.h"
+#include "ServoFeedbackPublisher.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../persistence/MultiTurnNvsStore.h"
 #endif
@@ -274,110 +275,6 @@ static void emergencyTorqueOffMappedServos(TaskSharedData_t* sharedData)
                   (unsigned long)torqueDisableFailedMask);
 }
 
-static void publishServoFeedback(TaskSharedData_t* sharedData)
-{
-    if (!sharedData) {
-        return;
-    }
-
-    ServoAngleData_t servoData;
-    ServoAngleData_t servoRawData;
-    ServoTelemetryData_t telemetryData;
-    memset(&servoData, 0, sizeof(servoData));
-    memset(&servoRawData, 0, sizeof(servoRawData));
-    memset(&telemetryData, 0, sizeof(telemetryData));
-
-    servoData.timestamp = millis();
-    servoRawData.timestamp = servoData.timestamp;
-    telemetryData.timestamp = servoData.timestamp;
-    uint32_t onlineMask = 0;
-    uint32_t rangeValidMask = 0;
-    int32_t logicalRangeMin[SERVO_TOTAL_NUM] = {0};
-    int32_t logicalRangeMax[SERVO_TOTAL_NUM] = {0};
-
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        // FlashRaw 与舵机在线状态无关：它表示 P4 最近一次成功落盘的恢复锚点。
-        servoRawData.servoFlashRawPositions[ch] =
-            sharedData->multiturn_nvs_snapshot_raw[ch];
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = getBusByIndex(busIndex);
-        if (bus && bus->isOnline(id)) {
-            const ServoFeedbackInternal& fb = bus->getFeedback(id);
-            servoData.servoAngles[ch] = bus->getAbsolutePosition(id);
-            servoData.servoRawPositions[ch] = bus->getRawPosition(id);
-            servoRawData.servoRawPositions[ch] = bus->getRawPosition(id);
-            servoData.onlineStatus[ch] = 1;
-            servoRawData.onlineStatus[ch] = 1;
-            onlineMask |= (1UL << ch);
-            telemetryData.speed[ch] = fb.speed;
-            telemetryData.load[ch] = fb.load;
-            telemetryData.current[ch] = fb.current;
-            telemetryData.voltage[ch] = fb.voltage;
-            telemetryData.temperature[ch] = fb.temperature;
-            telemetryData.onlineStatus[ch] = 1;
-            if (bus->isMultiTurnConfigured(id) &&
-                !bus->hasOnlineTransitionPending(id) &&
-                !bus->isRecoveryFailed(id)) {
-                const ServoLogicalRange range = bus->getLogicalRange(id);
-                logicalRangeMin[ch] = range.minAbs;
-                logicalRangeMax[ch] = range.maxAbs;
-                rangeValidMask |= (1UL << ch);
-            }
-            if (bus->isAbsoluteReliable(id)) {
-                const uint32_t bit = (1UL << ch);
-                if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & bit) != 0) {
-                    sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
-                    FW_LOG_INFO_PRINTF("[SERVO RESTORE] M%02u absolute feedback trusted abs=%ld raw=%d unknown=0x%08lX\r\n",
-                                  (unsigned)ch,
-                                  (long)servoData.servoAngles[ch],
-                                  (int)servoData.servoRawPositions[ch],
-                                  (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
-                }
-            }
-        } else if (!bus || bus->isOfflineInvalidated(id)) {
-            const uint32_t bit = (1UL << ch);
-            if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & bit) == 0) {
-                sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
-                FW_LOG_INFO_PRINTF("[SERVO OFFLINE] M%02u bus=%u id=%u marked Turn UNKNOWN unknown=0x%08lX\r\n",
-                              (unsigned)ch,
-                              (unsigned)busIndex,
-                              (unsigned)id,
-                              (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
-            }
-        }
-    }
-    sharedAtomicStore(&sharedData->servo_online_bitmap,
-                      onlineMask & validMotorChannelMask());
-    {
-        SharedSafetyGuard guard;
-        memcpy(sharedData->servo_logical_range_min,
-               logicalRangeMin,
-               sizeof(logicalRangeMin));
-        memcpy(sharedData->servo_logical_range_max,
-               logicalRangeMax,
-               sizeof(logicalRangeMax));
-        sharedAtomicStore(&sharedData->servo_logical_range_valid_bitmap,
-                          rangeValidMask & validMotorChannelMask());
-    }
-
-    if (sharedData->servoFeedbackQueue) {
-        xQueueOverwrite(sharedData->servoFeedbackQueue, &servoData);
-    }
-    if (sharedData->servoAngleQueue) {
-        xQueueOverwrite(sharedData->servoAngleQueue, &servoData);
-    }
-    if (sharedData->servoRawQueue) {
-        xQueueOverwrite(sharedData->servoRawQueue, &servoRawData);
-    }
-    if (sharedData->servoTelemetryQueue) {
-        xQueueOverwrite(sharedData->servoTelemetryQueue, &telemetryData);
-    }
-    if (sharedData->servoTelemetrySnapshotQueue) {
-        xQueueOverwrite(sharedData->servoTelemetrySnapshotQueue, &telemetryData);
-    }
-}
-
 static void processHostMultiTurnRestore(TaskSharedData_t* sharedData, uint32_t* lastToken)
 {
     if (!sharedData || !lastToken) {
@@ -420,42 +317,6 @@ static void processHostMultiTurnRestore(TaskSharedData_t* sharedData, uint32_t* 
         sharedAtomicAddFetch(&sharedData->multiturn_nvs_save_request_token, (uint32_t)1);
     }
 #endif
-}
-
-// 把驱动内部的恢复状态发布到共享位图。标定预检只读取这些位图，
-// 不跨任务直接访问 UART 驱动对象。
-static void publishServoRecoveryState(TaskSharedData_t* sharedData)
-{
-    if (!sharedData) {
-        return;
-    }
-    uint32_t pendingMask = 0;
-    uint32_t configuredMask = 0;
-    uint32_t failedMask = 0;
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = getBusByIndex(busIndex);
-        if (!bus) {
-            continue;
-        }
-        const uint32_t bit = 1UL << ch;
-        if (bus->hasOnlineTransitionPending(id)) {
-            pendingMask |= bit;
-        }
-        if (bus->isMultiTurnConfigured(id)) {
-            configuredMask |= bit;
-        }
-        if (bus->isRecoveryFailed(id)) {
-            failedMask |= bit;
-        }
-    }
-    sharedAtomicStore(&sharedData->servo_recovery_pending_bitmap,
-                      pendingMask & validMotorChannelMask());
-    sharedAtomicStore(&sharedData->servo_multiturn_configured_bitmap,
-                      configuredMask & validMotorChannelMask());
-    sharedAtomicStore(&sharedData->servo_recovery_failed_bitmap,
-                      failedMask & validMotorChannelMask());
 }
 
 // 标定成功后由唯一拥有舵机驱动的通信任务提交可信状态。只有在线、
@@ -552,74 +413,6 @@ enum ServoRecoveryAnchorSource : uint8_t {
     SERVO_RECOVERY_ANCHOR_NVS_PENDING = 3,
     SERVO_RECOVERY_ANCHOR_NVS_STORED = 4,
 };
-
-static uint32_t collectOnlineMotorMask()
-{
-    uint32_t mask = 0;
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = getBusByIndex(busIndex);
-        if (bus && bus->isOnline(id)) {
-            mask |= (1UL << ch);
-        }
-    }
-    return mask & validMotorChannelMask();
-}
-
-// 只检查舵机本次上电会话的 hardware ABS，不使用 logicalOffset。
-// Reset Zero 在 [-30715, 30715] 外提前触发；底层命令硬边界仍是 ±30719。
-// 等于 ±30715 时仍然合法，严格越界才置位。
-static uint32_t collectServoTurnOverflowMask()
-{
-    uint32_t overflowMask = 0;
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = getBusByIndex(busIndex);
-        if (!bus || !bus->isOnline(id)) {
-            continue;
-        }
-        const int32_t hardwareAbs = bus->getHardwareAbsolutePosition(id);
-        if (hardwareAbs < kServoResetZeroTriggerMin ||
-            hardwareAbs > kServoResetZeroTriggerMax) {
-            overflowMask |= (1UL << ch);
-            bus->setTorqueEnabled(id, false);
-        }
-    }
-    return overflowMask & validMotorChannelMask();
-}
-
-static void publishServoTurnOverflowState(TaskSharedData_t* sharedData)
-{
-    if (!sharedData) {
-        return;
-    }
-    const uint32_t previousMask =
-        sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
-    const uint32_t currentMask = collectServoTurnOverflowMask();
-    sharedAtomicStore(
-        &sharedData->servo_turn_overflow_bitmap, currentMask);
-
-    const uint32_t enteredMask = currentMask & ~previousMask;
-    const uint32_t clearedMask = previousMask & ~currentMask;
-    if (enteredMask != 0) {
-        // 清空尚未下发的目标并退出当前控制状态，避免下一帧重新使能力矩。
-        p4::actuator::clearPending(sharedData);
-        postSystemEvent(sharedData, SYSTEM_EVENT_STOP);
-        FW_LOG_WARN_PRINTF(
-            "[SERVO TURN OVERFLOW] entered=0x%08lX hardwareRange=[%ld,%ld]\r\n",
-            (unsigned long)enteredMask,
-            (long)kServoResetZeroTriggerMin,
-            (long)kServoResetZeroTriggerMax);
-    }
-    if (clearedMask != 0) {
-        FW_LOG_INFO_PRINTF(
-            "[SERVO TURN OVERFLOW] cleared=0x%08lX remaining=0x%08lX\r\n",
-            (unsigned long)clearedMask,
-            (unsigned long)currentMask);
-    }
-}
 
 static bool collectTrustedMultiTurnSnapshot(TaskSharedData_t* sharedData,
                                             int32_t* motorAbs,
@@ -1086,7 +879,8 @@ static void processServoResetZeroRequest(TaskSharedData_t* sharedData,
         validMotorChannelMask();
     const uint32_t overflowMask =
         sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
-    const uint32_t onlineMask = collectOnlineMotorMask();
+    const uint32_t onlineMask =
+        p4::servo::collectOnlineMotorMask();
     const uint32_t executableMask =
         requestedMask & overflowMask & onlineMask;
 
@@ -1525,7 +1319,8 @@ static void processBootNvsRestore(TaskSharedData_t* sharedData,
         return;
     }
 
-    const uint32_t onlineMask = collectOnlineMotorMask();
+    const uint32_t onlineMask =
+        p4::servo::collectOnlineMotorMask();
     const uint32_t nowMs = millis();
     if ((onlineMask & requestMask) != requestMask &&
         (int32_t)(nowMs - restoreDeadlineMs) <= 0) {
@@ -1756,13 +1551,13 @@ void servoCommunicationTask(void* parameter)
                 sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
         }
 #endif
-        publishServoTurnOverflowState(sharedData);
+        p4::servo::publishTurnOverflowState(sharedData);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         processServoResetZeroRequest(
             sharedData, &lastServoResetZeroToken);
 #endif
-        publishServoRecoveryState(sharedData);
-        publishServoFeedback(sharedData);
+        p4::servo::publishRecoveryState(sharedData);
+        p4::servo::publishFeedback(sharedData);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         processMultiTurnNvsSave(sharedData, &nvsSaveState, &lastNvsSaveToken);
 #endif
