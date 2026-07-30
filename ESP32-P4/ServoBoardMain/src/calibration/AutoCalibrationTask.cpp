@@ -12,6 +12,7 @@
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "../platform/TaskFactory.h"
+#include "../actuator/ActuatorCommandGateway.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
 #include "../system/TaskRuntimeMonitor.h"
@@ -1534,7 +1535,7 @@ static bool publishCalibrationBatch(TaskSharedData_t* sharedData, ServoTargetBat
     }
     batch->source = SERVO_TARGET_OWNER_CALIBRATION;
     batch->timestamp = millis();
-    return xQueueOverwrite(sharedData->servoTargetQueue, batch) == pdTRUE;
+    return p4::actuator::publishLatest(sharedData, *batch);
 }
 
 // 串行标定时给非活动关节追加“保持当前 ABS”，防止共享绳路被当前动作带动。

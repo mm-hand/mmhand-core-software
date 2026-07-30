@@ -1,4 +1,6 @@
 #include "StateMachineTask.h"
+#include "SystemStatePolicy.h"
+#include "../actuator/ActuatorCommandGateway.h"
 
 #include <math.h>
 #include <string.h>
@@ -420,9 +422,7 @@ static bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
 
 static void resetServoTargetQueue(TaskSharedData_t* sharedData)
 {
-    if (sharedData && sharedData->servoTargetQueue) {
-        xQueueReset(sharedData->servoTargetQueue);
-    }
+    p4::actuator::clearPending(sharedData);
 }
 
 static void setFeedbackAdmissionResult(TaskSharedData_t* sharedData,
@@ -446,40 +446,6 @@ static void requestServoEmergencyTorqueOff(TaskSharedData_t* sharedData)
     if (sharedData) {
         sharedAtomicAddFetch(&sharedData->servo_emergency_stop_token, (uint32_t)1);
     }
-}
-
-static bool canAcceptStart(uint8_t state)
-{
-    // START 只负责恢复 PAUSED 或重新评估空闲态，不直接进入某种控制模式。
-    return state == SYSTEM_STATE_UNCONTROLLABLE ||
-           state == SYSTEM_STATE_IDLE ||
-           state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RECOVERY_REQUIRED ||
-           state == SYSTEM_STATE_PAUSED;
-}
-
-static bool canAcceptRunDirect(uint8_t state)
-{
-    return state == SYSTEM_STATE_IDLE ||
-           state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RECOVERY_REQUIRED ||
-           state == SYSTEM_STATE_RUN_DIRECT;
-}
-
-static bool canAcceptRunFeedback(uint8_t state)
-{
-    // 普通反馈只能从 READY 进入；RECOVERY_REQUIRED 另走自动 Rope Init 分支。
-    return state == SYSTEM_STATE_READY;
-}
-
-static bool canAcceptCalibrate(uint8_t state)
-{
-    // 未生成 Auto 结果时系统可能保持 UNCONTROLLABLE。Manual 门禁会先检查，
-    // 因此必须允许从 UNCONTROLLABLE 启动标定来创建 Auto 结果。
-    return state == SYSTEM_STATE_UNCONTROLLABLE ||
-           state == SYSTEM_STATE_IDLE ||
-           state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RECOVERY_REQUIRED;
 }
 
 static bool activeMotorsMultiTurnKnown(TaskSharedData_t* sharedData)
@@ -1214,7 +1180,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
     switch (event.event)
     {
         case SYSTEM_EVENT_START:
-            if (!canAcceptStart(sharedData->system_state)) {
+            if (!p4::system::canAcceptStart(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject START in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 break;
@@ -1310,7 +1276,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                                    (unsigned)sharedData->pending_direct_valid);
                 break;
             }
-            if (!canAcceptRunDirect(sharedData->system_state)) {
+            if (!p4::system::canAcceptRunDirect(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_DIRECT in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 rejectPendingDirectCommand(sharedData,
@@ -1460,7 +1426,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                     break;
                 }
             }
-            if (!canAcceptRunFeedback(sharedData->system_state)) {
+            if (!p4::system::canAcceptRunFeedback(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject RUN_FEEDBACK in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 setFeedbackAdmissionResult(sharedData, event.token,
@@ -1580,7 +1546,7 @@ static void handleSystemEvent(TaskSharedData_t* sharedData, const SystemEvent_t&
                 setCalibrationStatus(CALIB_STATUS_FAILED, true);
                 break;
             }
-            if (!canAcceptCalibrate(sharedData->system_state)) {
+            if (!p4::system::canAcceptCalibration(sharedData->system_state)) {
                 FW_LOG_INFO_PRINTF("[STATE] reject CALIBRATE in state=%u\r\n",
                               (unsigned)sharedData->system_state);
                 break;

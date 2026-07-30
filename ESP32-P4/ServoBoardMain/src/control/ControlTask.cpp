@@ -1,4 +1,5 @@
 #include "ControlTask.h"
+#include "../actuator/ActuatorCommandGateway.h"
 
 #include <math.h>
 #include <string.h>
@@ -1731,7 +1732,7 @@ void controlTask(void* parameter)
             targetBatch.count > 0 &&
             controlTargetPublishAllowed) {
             // 发布前再次检查 owner/state，防止状态切换时泄漏过期的 CONTROL 目标 batch。
-            xQueueOverwrite(sharedData->servoTargetQueue, &targetBatch);
+            p4::actuator::publishLatest(sharedData, targetBatch);
         }
 
         if (directRunningState &&

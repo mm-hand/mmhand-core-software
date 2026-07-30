@@ -9,6 +9,7 @@
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "../platform/TaskFactory.h"
+#include "../actuator/ActuatorCommandGateway.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
 
@@ -188,7 +189,7 @@ static void ropeInitTask(void* parameter)
         }
         insideStableSamples = 0;
         if (batch.count == 0 ||
-            xQueueOverwrite(sharedData->servoTargetQueue, &batch) != pdTRUE) {
+            !p4::actuator::publishLatest(sharedData, batch)) {
             FW_LOG_INFO_PRINTLN("[ROPE INIT] target publish failed");
             failureReason = ROPE_INIT_REASON_TARGET_PUBLISH_FAILED;
             ok = false;

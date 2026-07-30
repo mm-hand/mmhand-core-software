@@ -14,5 +14,7 @@
 inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3;
 inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400;
 inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200;
+/** NVS 快照在单圈零点两侧该距离内时，额外触发一次边界保存。 */
+inline constexpr int16_t kMultiTurnEdgeRawMarginCounts = 256;
 
 #endif // MMHAND_SERVO_CONFIG_H
