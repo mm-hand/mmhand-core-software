@@ -12,11 +12,13 @@
 #include <string.h>
 
 #include "CalibrationMath.h"
+#include "CalibrationFeedbackReader.h"
 #include "CalibrationTask.h"
 #include "../control/ControlTask.h"
 #include "../control/TendonCalibrationLut.h"
 #include "../config/CalibrationConfig.h"
 #include "../hardware/HardwareMap.h"
+#include "../hardware/servo/ServoValue.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
 #include "../platform/TaskFactory.h"
@@ -26,6 +28,7 @@
 #include "../system/TaskRuntimeMonitor.h"
 
 using namespace mmhand::config::calibration;
+using namespace mmhand::calibration;
 
 // 非空表示自动标定任务正在运行，用于拒绝重复创建。
 static TaskHandle_t g_autoCalibrationTaskHandle = NULL;
@@ -297,31 +300,11 @@ static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
                   (unsigned long)clearedMask);
 }
 
-// 把任意舵机位置折回 0..4095 的单圈 raw。
-static int16_t normalizeServoRawSingleTurn(int32_t value)
-{
-    int32_t raw = value % 4096;
-    if (raw < 0) {
-        raw += 4096;
-    }
-    return (int16_t)raw;
-}
-
 // 从多圈 ABS 中提取有符号圈数，负数采用向下取整语义。
 static int32_t servoTurnFromAbs(int32_t abs)
 {
-    const int32_t raw = normalizeServoRawSingleTurn(abs);
+    const int32_t raw = mmhand::servo::normalizeRawSingleTurn(abs);
     return (abs - raw) / 4096;
-}
-
-// 飞特负载高位带方向，标定判定只使用 0..1023 幅值。
-static int16_t servoLoadMagnitude(int16_t rawLoad)
-{
-    int16_t mag = rawLoad;
-    if (mag < 0) {
-        mag = -mag;
-    }
-    return (int16_t)(mag & 0x03FF);
 }
 
 // 原子写入一次结构化标定失败诊断，供上位机弹窗解释具体阶段与对象。
@@ -389,18 +372,6 @@ static uint8_t calibrationDiagReason(TaskSharedData_t* sharedData)
     return sharedData->calibration_diag.valid
         ? sharedData->calibration_diag.reason
         : CALIB_DIAG_REASON_NONE;
-}
-
-// 检查磁编在线位、错误位和样本新鲜度。
-static bool encoderOnlineAndHealthy(TaskSharedData_t* sharedData, uint32_t bit)
-{
-    if (!sharedData) {
-        return false;
-    }
-    SharedSafetyGuard guard;
-    const uint32_t onlineMask = sharedAtomicLoad(&sharedData->encoder_online_bitmap);
-    const uint32_t faultMask = sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
-    return (onlineMask & bit) != 0 && (faultMask & bit) == 0;
 }
 
 // 标定循环每帧检查状态机 owner，失去控制权后立即停止发命令。
@@ -677,163 +648,6 @@ static bool commitJointServoMultiTurnTrust(TaskSharedData_t* sharedData,
     return false;
 }
 
-// 读取最新磁编原始值，同时校验关节索引、在线状态、错误位和样本年龄。
-static bool readLatestEncoderSample(TaskSharedData_t* sharedData,
-                                    uint8_t jointIndex,
-                                    uint16_t* outRaw,
-                                    int32_t* outOriented)
-{
-    if (!sharedData || !outRaw || !outOriented || jointIndex >= ENCODER_TOTAL_NUM) {
-        return false;
-    }
-
-    RemoteSensorData_t sensorData;
-    const uint32_t nowMs = millis();
-    const uint32_t bit = (1UL << jointIndex);
-    if (!sharedData->canRxQueue ||
-        xQueuePeek(sharedData->canRxQueue, &sensorData, 0) != pdTRUE ||
-        !sensorData.isValid ||
-        (uint32_t)(nowMs - sensorData.timestamp) > kEncoderTrustedSampleMaxAgeMs ||
-        !encoderOnlineAndHealthy(sharedData, bit)) {
-        return false;
-    }
-
-    *outRaw = sensorData.encoderValues[jointIndex];
-    *outOriented = calibrationOrientEncoderRaw(sensorData.encoderValues[jointIndex],
-                                               g_encoderDirection[jointIndex]);
-    return true;
-}
-
-// 读取最新磁编并按当前安装方向转换为递增坐标。
-static bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
-                                      uint8_t jointIndex,
-                                      int32_t* outEncoder)
-{
-    uint16_t raw = 0;
-    return readLatestEncoderSample(sharedData, jointIndex, &raw, outEncoder);
-}
-
-// 按 bus/id 读取在线舵机的多圈 ABS。
-static bool readLatestServoAbs(TaskSharedData_t* sharedData,
-                               uint8_t bus,
-                               uint8_t id,
-                               int32_t* outAbs)
-{
-    if (!sharedData || !outAbs) {
-        return false;
-    }
-    const int ch = findMotorChannel(bus, id);
-    if (ch < 0) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[ch] == 0) {
-        return false;
-    }
-
-    *outAbs = servoData.servoAngles[ch];
-    return true;
-}
-
-// 按 bus/id 读取在线舵机的单圈 raw。
-static bool readLatestServoRaw(TaskSharedData_t* sharedData,
-                               uint8_t bus,
-                               uint8_t id,
-                               int16_t* outRaw)
-{
-    if (!sharedData || !outRaw) {
-        return false;
-    }
-    const int ch = findMotorChannel(bus, id);
-    if (ch < 0) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[ch] == 0) {
-        return false;
-    }
-
-    *outRaw = normalizeServoRawSingleTurn(servoData.servoRawPositions[ch]);
-    return true;
-}
-
-// 按 bus/id 读取最新舵机负载原始值。
-static bool readLatestServoLoad(TaskSharedData_t* sharedData,
-                                uint8_t bus,
-                                uint8_t id,
-                                int16_t* outLoad)
-{
-    if (!sharedData || !outLoad) {
-        return false;
-    }
-    const int ch = findMotorChannel(bus, id);
-    if (ch < 0) {
-        return false;
-    }
-
-    ServoTelemetryData_t telemetry;
-    QueueHandle_t queue = sharedData->servoTelemetrySnapshotQueue
-        ? sharedData->servoTelemetrySnapshotQueue
-        : sharedData->servoTelemetryQueue;
-    if (!queue ||
-        xQueuePeek(queue, &telemetry, 0) != pdTRUE ||
-        telemetry.onlineStatus[ch] == 0) {
-        return false;
-    }
-
-    *outLoad = telemetry.load[ch];
-    return true;
-}
-
-// 按 Mxx 通道读取在线舵机的多圈 ABS。
-static bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
-                                    uint8_t motorChannel,
-                                    int32_t* outAbs)
-{
-    if (!sharedData || !outAbs || !isMotorChannelValid(motorChannel)) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[motorChannel] == 0) {
-        return false;
-    }
-
-    *outAbs = servoData.servoAngles[motorChannel];
-    return true;
-}
-
-// 按 Mxx 通道读取最新舵机负载原始值。
-static bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
-                                     uint8_t motorChannel,
-                                     int16_t* outLoad)
-{
-    if (!sharedData || !outLoad || !isMotorChannelValid(motorChannel)) {
-        return false;
-    }
-
-    ServoTelemetryData_t telemetry;
-    QueueHandle_t queue = sharedData->servoTelemetrySnapshotQueue
-        ? sharedData->servoTelemetrySnapshotQueue
-        : sharedData->servoTelemetryQueue;
-    if (!queue ||
-        xQueuePeek(queue, &telemetry, 0) != pdTRUE ||
-        telemetry.onlineStatus[motorChannel] == 0) {
-        return false;
-    }
-
-    *outLoad = telemetry.load[motorChannel];
-    return true;
-}
-
 // 在发布一批标定目标前检查涉及电机的负载；任一路达到 800 即拒绝整批。
 static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
                                          const ServoTargetBatch_t* batch)
@@ -852,7 +666,7 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
         if (!readLatestMotorServoLoad(sharedData, (uint8_t)ch, &loadRaw)) {
             continue;
         }
-        const int16_t loadMag = servoLoadMagnitude(loadRaw);
+        const int16_t loadMag = mmhand::servo::loadMagnitude(loadRaw);
         if (loadMag >= kOverloadLoadThreshold) {
             const uint32_t bit = 1UL << (uint8_t)ch;
             {
@@ -877,70 +691,6 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
         }
     }
     return true;
-}
-
-// 初始反馈等待失败时，集中打印磁编、舵机和队列新鲜度，便于定位链路问题。
-static void logAutoInitialFeedbackDiag(TaskSharedData_t* sharedData,
-                                       uint8_t jointIndex,
-                                       uint8_t bus,
-                                       uint8_t id,
-                                       bool encoderOk,
-                                       bool absOk,
-                                       bool rawOk)
-{
-    const int ch = findMotorChannel(bus, id);
-    const uint32_t nowMs = millis();
-    bool sensorQueueOk = false;
-    bool sensorValid = false;
-    uint8_t sensorErr = 0xFF;
-    uint32_t sensorAge = 0xFFFFFFFFUL;
-    RemoteSensorData_t sensorData;
-    if (sharedData &&
-        sharedData->canRxQueue &&
-        xQueuePeek(sharedData->canRxQueue, &sensorData, 0) == pdTRUE) {
-        sensorQueueOk = true;
-        sensorValid = sensorData.isValid;
-        if (jointIndex < ENCODER_TOTAL_NUM) {
-            sensorErr = sensorData.errorFlags[jointIndex];
-        }
-        sensorAge = nowMs - sensorData.timestamp;
-    }
-
-    bool servoQueueOk = false;
-    uint8_t servoOnline = 0;
-    uint32_t servoAge = 0xFFFFFFFFUL;
-    int32_t servoAbs = 0;
-    int16_t servoRaw = 0;
-    ServoAngleData_t servoData;
-    if (sharedData &&
-        sharedData->servoFeedbackQueue &&
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) == pdTRUE) {
-        servoQueueOk = true;
-        servoAge = nowMs - servoData.timestamp;
-        if (ch >= 0 && ch < SERVO_TOTAL_NUM) {
-            servoOnline = servoData.onlineStatus[ch];
-            servoAbs = servoData.servoAngles[ch];
-            servoRaw = servoData.servoRawPositions[ch];
-        }
-    }
-
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] INIT_FEEDBACK J%02u bus%u id%u ch=%d encoderOk=%u absOk=%u rawOk=%u sensorQ=%u valid=%u err=0x%02X age=%lu servoQ=%u online=%u age=%lu abs=%ld raw=%d\r\n",
-                  jointIndex,
-                  bus,
-                  id,
-                  ch,
-                  encoderOk ? 1 : 0,
-                  absOk ? 1 : 0,
-                  rawOk ? 1 : 0,
-                  sensorQueueOk ? 1 : 0,
-                  sensorValid ? 1 : 0,
-                  sensorErr,
-                  (unsigned long)sensorAge,
-                  servoQueueOk ? 1 : 0,
-                  servoOnline,
-                  (unsigned long)servoAge,
-                  (long)servoAbs,
-                  (int)servoRaw);
 }
 
 // float 四舍五入为 int32，正负数保持对称。
@@ -1861,7 +1611,7 @@ static bool findDualTightPoint(TaskSharedData_t* sharedData,
 
         int16_t loadRaw = 0;
         const bool hasLoad = readLatestMotorServoLoad(sharedData, motorChannel, &loadRaw);
-        const int16_t loadMag = hasLoad ? servoLoadMagnitude(loadRaw) : 0;
+        const int16_t loadMag = hasLoad ? mmhand::servo::loadMagnitude(loadRaw) : 0;
         const int32_t totalAbsDelta = abs32(currentAbs - startAbs);
         const int32_t totalEncoderDelta =
             calibrationWrapEncoderDelta(currentEncoder, startEncoder);
@@ -2575,7 +2325,7 @@ static bool tightenWorkspaceMotor(TaskSharedData_t* sharedData,
             !readLatestMotorServoLoad(sharedData, motor, &loadRaw)) {
             return false;
         }
-        const int16_t loadMag = servoLoadMagnitude(loadRaw);
+        const int16_t loadMag = mmhand::servo::loadMagnitude(loadRaw);
         if (loadMag >= kWorkspaceTightLoadThreshold) {
             if (!publishDualMotorCalibrationTargets(sharedData,
                                                     motor,
@@ -3000,7 +2750,7 @@ static bool findDualSecondaryPreloadPoint(TaskSharedData_t* sharedData,
         int16_t loadRaw = 0;
         const bool hasLoad =
             readLatestMotorServoLoad(sharedData, secondaryMotor, &loadRaw);
-        const int16_t loadMag = hasLoad ? servoLoadMagnitude(loadRaw) : 0;
+        const int16_t loadMag = hasLoad ? mmhand::servo::loadMagnitude(loadRaw) : 0;
         if (hasLoad && loadMag >= loadThreshold) {
             if (outPreloadAbs) {
                 *outPreloadAbs = currentAbs;
@@ -3163,8 +2913,8 @@ static bool finishDualTendonReadyPreload(TaskSharedData_t* sharedData,
             return false;
         }
 
-        const int16_t primaryLoad = servoLoadMagnitude(primaryLoadRaw);
-        const int16_t secondaryLoad = servoLoadMagnitude(secondaryLoadRaw);
+        const int16_t primaryLoad = mmhand::servo::loadMagnitude(primaryLoadRaw);
+        const int16_t secondaryLoad = mmhand::servo::loadMagnitude(secondaryLoadRaw);
         const bool primaryReady = primaryLoad > primaryLoadThreshold;
         if (primaryReady) {
             if (outPrimaryAbs) {
@@ -3320,7 +3070,7 @@ static bool findDualExchangeLimitPoint(TaskSharedData_t* sharedData,
         int16_t loadRaw = 0;
         const bool hasLoad =
             readLatestMotorServoLoad(sharedData, secondaryMotor, &loadRaw);
-        const int16_t loadMag = hasLoad ? servoLoadMagnitude(loadRaw) : 0;
+        const int16_t loadMag = hasLoad ? mmhand::servo::loadMagnitude(loadRaw) : 0;
         const bool secondaryLoadHigh = hasLoad && loadMag >= finalLoadThreshold;
         const int32_t totalEncoderDelta =
             calibrationWrapEncoderDelta(currentEncoder, startEncoder);
@@ -3581,7 +3331,7 @@ static bool runDualAntagonistAutoCalibrationJoint(TaskSharedData_t* sharedData,
         primary80Encoder = initialEncoder;
         // B 是位置姿态缓存。上一条收紧命令稳定后，舵机瞬时 load 常会回到零，
         // 因此是否允许复用只由已验证的 ABS 姿态决定，不能用瞬时负载否定缓存。
-        primary80Load = primaryLoadAvailable ? servoLoadMagnitude(primaryLoadRaw) : 0;
+        primary80Load = primaryLoadAvailable ? mmhand::servo::loadMagnitude(primaryLoadRaw) : 0;
         FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_WORKSPACE_B_REUSE J%02u primary=M%02u abs=%ld load=%d available=%u secondary=M%02u abs=%ld; ABS matched, skip duplicate slack/POS80\r\n",
                            (unsigned)jointIndex,
                            (unsigned)primaryMotor,
@@ -3957,7 +3707,7 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     int16_t baselineLoadRaw = 0;
     const bool hasBaselineLoad =
         readLatestServoLoad(sharedData, ctx->bus, ctx->servoId, &baselineLoadRaw);
-    ctx->baselineLoad = hasBaselineLoad ? servoLoadMagnitude(baselineLoadRaw) : 0;
+    ctx->baselineLoad = hasBaselineLoad ? mmhand::servo::loadMagnitude(baselineLoadRaw) : 0;
     ctx->startSearchRaw = raw;
     ctx->startSearchEncoder = encoder;
     ctx->startSearchAbs = absNow;
@@ -4089,7 +3839,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             if (!encoderOk || !absOk || !rawOk) {
                 if ((nowMs - ctx->lastTraceMs) >= params.traceMs) {
                     ctx->lastTraceMs = nowMs;
-                    logAutoInitialFeedbackDiag(sharedData,
+                    logInitialFeedbackDiagnostic(sharedData,
                                                ctx->jointIndex,
                                                ctx->bus,
                                                ctx->servoId,
@@ -4100,7 +3850,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 if ((uint32_t)(nowMs - ctx->stateBeginMs) < kInitialFeedbackWaitMs) {
                     return;
                 }
-                logAutoInitialFeedbackDiag(sharedData,
+                logInitialFeedbackDiagnostic(sharedData,
                                            ctx->jointIndex,
                                            ctx->bus,
                                            ctx->servoId,
@@ -4170,7 +3920,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
             int16_t loadRaw = 0;
             const bool hasLoad = readLatestServoLoad(sharedData, ctx->bus, ctx->servoId, &loadRaw);
-            const int16_t loadMag = hasLoad ? servoLoadMagnitude(loadRaw) : 0;
+            const int16_t loadMag = hasLoad ? mmhand::servo::loadMagnitude(loadRaw) : 0;
             const int32_t totalAbsDelta = abs32(currentAbs - ctx->startSearchAbs);
             const int32_t totalEncoderDelta =
                 calibrationWrapEncoderDelta(currentEncoder, ctx->startSearchEncoder);

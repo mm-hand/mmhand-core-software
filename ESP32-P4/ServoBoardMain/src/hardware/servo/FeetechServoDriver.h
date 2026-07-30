@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "ServoValue.h"
 #include "../libraries/FTServo_Arduino/src/SMS_STS.h"
 #include "../../communication/servo/ServoPositionRange.h"
 #include "../HardwareMap.h"
@@ -29,21 +30,12 @@ inline constexpr uint32_t kServoRecoveryRetryIntervalMs = 100;
 
 inline int16_t normalizeServoRawSingleTurn(int32_t value)
 {
-    int32_t raw = value % 4096;
-    if (raw < 0) {
-        raw += 4096;
-    }
-    return static_cast<int16_t>(raw);
+    return mmhand::servo::normalizeRawSingleTurn(value);
 }
 
 inline uint16_t singleTurnDistanceCounts(int16_t a, int16_t b)
 {
-    int32_t diff = abs(static_cast<int32_t>(normalizeServoRawSingleTurn(a)) -
-                       static_cast<int32_t>(normalizeServoRawSingleTurn(b))) % 4096;
-    if (diff > 2048) {
-        diff = 4096 - diff;
-    }
-    return static_cast<uint16_t>(diff);
+    return static_cast<uint16_t>(mmhand::servo::circularRawDistance(a, b));
 }
 
 /** 单台舵机的驱动内部反馈状态；不得直接暴露为跨任务共享可写数据。 */

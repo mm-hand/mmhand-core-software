@@ -15,6 +15,7 @@
 #include "../calibration/CalibrationTask.h"
 #include "../config/ControlConfig.h"
 #include "../hardware/HardwareMap.h"
+#include "../hardware/servo/ServoValue.h"
 #include "../generated/UrdfJointLimits.generated.h"
 #include "../shared/SharedSafetyState.h"
 #include "../system/FirmwareLog.h"
@@ -124,7 +125,6 @@ static int findMotorChannel(uint8_t bus, uint8_t id)
     return findMotorChannelByBusId(bus, id);
 }
 
-static int16_t servoLoadMagnitude(int16_t rawLoad);
 
 static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
                                               uint8_t jointIndex,
@@ -354,8 +354,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         const uint8_t m1 = runtimeTargets[1].motorChannel;
         const int32_t abs0 = servoData.servoAngles[m0];
         const int32_t abs1 = servoData.servoAngles[m1];
-        const int16_t load0 = telemetryFresh ? servoLoadMagnitude(telemetryData.load[m0]) : 0;
-        const int16_t load1 = telemetryFresh ? servoLoadMagnitude(telemetryData.load[m1]) : 0;
+        const int16_t load0 = telemetryFresh ? mmhand::servo::loadMagnitude(telemetryData.load[m0]) : 0;
+        const int16_t load1 = telemetryFresh ? mmhand::servo::loadMagnitude(telemetryData.load[m1]) : 0;
         const int16_t speed0 = telemetryFresh ? telemetryData.speed[m0] : 0;
         const int16_t speed1 = telemetryFresh ? telemetryData.speed[m1] : 0;
         const uint32_t lockedBitmap =
@@ -398,16 +398,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     }
 
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
-}
-
-static int16_t servoLoadMagnitude(int16_t rawLoad)
-{
-    // 舵机负载的符号/高位编码方向；故障逻辑只关心 10 bit 幅值。
-    int16_t mag = rawLoad;
-    if (mag < 0) {
-        mag = -mag;
-    }
-    return (int16_t)(mag & 0x03FF);
 }
 
 // ============================================================================
@@ -782,7 +772,7 @@ void controlTask(void* parameter)
                 const uint8_t overloadLatchCycles = jointControlMode
                                                         ? kFeedbackOverloadLatchCycles
                                                         : kDirectOverloadLatchCycles;
-                const int16_t loadMag = servoLoadMagnitude(telemetryData.load[ch]);
+                const int16_t loadMag = mmhand::servo::loadMagnitude(telemetryData.load[ch]);
                 if (loadMag >= overloadThreshold) {
                     if (overloadHighCount[ch] < 255) {
                         overloadHighCount[ch]++;
@@ -1308,7 +1298,7 @@ void controlTask(void* parameter)
                                 ? telemetryData.load[jointMotorCh]
                                 : 0;
                         const int16_t loadMag = telemetryFresh
-                            ? servoLoadMagnitude(rawLoad)
+                            ? mmhand::servo::loadMagnitude(rawLoad)
                             : 0;
                         const int16_t servoSpeed =
                             (telemetryFresh && jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
