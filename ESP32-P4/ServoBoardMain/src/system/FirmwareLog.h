@@ -1,3 +1,10 @@
+/**
+ * @file FirmwareLog.h
+ * @brief 提供与上位机二进制协议共用串口时的线程安全固件日志接口。
+ *
+ * 日志函数使用固定栈缓冲区并受同一串口互斥量保护。实时任务获取互斥量超时
+ * 时会丢弃日志，绝不能让诊断输出反向阻塞控制链路。
+ */
 #pragma once
 
 #include <Arduino.h>
@@ -18,13 +25,13 @@
 #define FW_LOG_LEVEL FW_LOG_LEVEL_INFO
 #endif
 
-// 编译期日志等级。低于当前等级的调用会被内联函数立即过滤。
+/** 编译期日志等级；高于当前等级的调用会被内联函数立即过滤。 */
 #define FW_LOG_ENABLED(level) (FW_LOG_LEVEL >= (level))
 
-// 二进制上位机协议和文本日志共用 Serial，所有写操作必须经过同一互斥量。
+/** 二进制协议和文本日志共用 Serial，所有写操作必须经过该互斥量。 */
 SemaphoreHandle_t fwSerialMutex();
 
-// 最多等待 50 ms 获取串口；超时后丢弃本条日志，不能反向阻塞实时控制任务。
+/** 最多等待 50 ms 获取串口；超时丢日志，不能反向阻塞实时任务。 */
 static inline bool fwSerialTake()
 {
     SemaphoreHandle_t mutex = fwSerialMutex();
@@ -75,7 +82,7 @@ static inline void fwLogPrintln(uint8_t level, const char* text)
     fwSerialGive(locked);
 }
 
-// 使用固定栈缓冲格式化日志，避免实时任务中动态分配内存。
+/** 使用固定栈缓冲区格式化日志，避免实时任务动态分配内存。 */
 static inline void fwLogPrintf(uint8_t level, const char* fmt, ...)
 {
     if (!FW_LOG_ENABLED(level) || !fmt) {
@@ -98,9 +105,14 @@ static inline void fwLogPrintf(uint8_t level, const char* fmt, ...)
 #define FW_LOG_PRINTF(level, ...) fwLogPrintf((level), __VA_ARGS__)
 #define FW_LOG_PRINTLN(level, text) fwLogPrintln((level), (text))
 
+#define FW_LOG_ERROR_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_ERROR, __VA_ARGS__)
 #define FW_LOG_WARN_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_WARN, __VA_ARGS__)
 #define FW_LOG_INFO_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_INFO, __VA_ARGS__)
 #define FW_LOG_DEBUG_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define FW_LOG_TRACE_PRINTF(...) FW_LOG_PRINTF(FW_LOG_LEVEL_TRACE, __VA_ARGS__)
 
+#define FW_LOG_ERROR_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_ERROR, text)
+#define FW_LOG_WARN_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_WARN, text)
 #define FW_LOG_INFO_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_INFO, text)
+#define FW_LOG_DEBUG_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_DEBUG, text)
+#define FW_LOG_TRACE_PRINTLN(text) FW_LOG_PRINTLN(FW_LOG_LEVEL_TRACE, text)

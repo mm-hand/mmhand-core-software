@@ -8,6 +8,7 @@
 #include "../hardware/HardwareMap.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
+#include "../platform/TaskFactory.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
 
@@ -254,10 +255,11 @@ uint8_t ropeInitActiveScopeRejectReason(TaskSharedData_t* sharedData)
 bool startRopeInitTask(TaskSharedData_t* sharedData)
 {
     if (!sharedData || g_ropeInitTaskHandle != NULL) return false;
-    return xTaskCreate(ropeInitTask,
-                       "ropeInitTask",
-                       AUTO_CALIB_TASK_STACK_SIZE,
-                       sharedData,
-                       TASK_AUTO_CALIB_PRIORITY,
-                       &g_ropeInitTaskHandle) == pdPASS;
+    return p4::platform::createTask(
+        {ropeInitTask,
+         "ropeInitTask",
+         AUTO_CALIB_TASK_STACK_SIZE,
+         sharedData,
+         TASK_AUTO_CALIB_PRIORITY},
+        &g_ropeInitTaskHandle);
 }

@@ -1,0 +1,94 @@
+/**
+ * @file SystemTypes.h
+ * @brief 定义顶层状态机事件、系统状态及运行模式的稳定内部 ABI。
+ * @details
+ * - 数值必须保持不变，避免状态包和任务间事件语义发生漂移。
+ * - 本文件不包含状态转移逻辑，转移规则由 system 层实现。
+ */
+#ifndef MMHAND_SYSTEM_TYPES_H
+#define MMHAND_SYSTEM_TYPES_H
+
+#include <stdint.h>
+
+inline constexpr uint8_t CONTROL_MODE_JOINT = 0;
+inline constexpr uint8_t CONTROL_MODE_DIRECT_MOTOR = 1;
+
+inline constexpr uint8_t MOTOR_DIRECT_SOURCE_NONE = 0;
+inline constexpr uint8_t MOTOR_DIRECT_SOURCE_TARGET = 1;
+inline constexpr uint8_t MOTOR_DIRECT_SOURCE_SWEEP = 2;
+inline constexpr uint8_t MOTOR_DIRECT_SOURCE_ABSOLUTE = 3;
+
+inline constexpr uint8_t SYSTEM_EVENT_START = 1;
+inline constexpr uint8_t SYSTEM_EVENT_STOP = 2;
+inline constexpr uint8_t SYSTEM_EVENT_RESET = 3;
+inline constexpr uint8_t SYSTEM_EVENT_CALIBRATE = 4;
+inline constexpr uint8_t SYSTEM_EVENT_CALIBRATION_DONE = 5;
+inline constexpr uint8_t SYSTEM_EVENT_CALIBRATION_FAILED = 6;
+inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT = 7;
+inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT_DONE = 8;
+inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK = 9;
+inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_DONE = 10;
+inline constexpr uint8_t SYSTEM_EVENT_PAUSE = 11;
+inline constexpr uint8_t SYSTEM_EVENT_REEVALUATE_READY = 14;
+inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT = 15;
+inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT = 16;
+inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_DONE = 17;
+inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_FAILED = 18;
+
+inline constexpr uint8_t SYSTEM_STATE_UNCONTROLLABLE = 0;
+inline constexpr uint8_t SYSTEM_STATE_IDLE = 1;
+inline constexpr uint8_t SYSTEM_STATE_RUN_FEEDBACK = 2;
+inline constexpr uint8_t SYSTEM_STATE_CALIBRATION_RUNNING = 4;
+inline constexpr uint8_t SYSTEM_STATE_READY = 5;
+inline constexpr uint8_t SYSTEM_STATE_RUN_DIRECT = 6;
+inline constexpr uint8_t SYSTEM_STATE_PAUSED = 7;
+inline constexpr uint8_t SYSTEM_STATE_ROPE_INIT_RUNNING = 8;
+inline constexpr uint8_t SYSTEM_STATE_RECOVERY_REQUIRED = 9;
+
+inline constexpr uint8_t ROPE_INIT_STATUS_IDLE = 0;
+inline constexpr uint8_t ROPE_INIT_STATUS_RUNNING = 1;
+inline constexpr uint8_t ROPE_INIT_STATUS_SUCCESS = 2;
+inline constexpr uint8_t ROPE_INIT_STATUS_FAILED = 3;
+
+inline constexpr uint8_t ROPE_INIT_REASON_NONE = 0;
+inline constexpr uint8_t ROPE_INIT_REASON_TIMEOUT = 1;
+inline constexpr uint8_t ROPE_INIT_REASON_FEEDBACK_STALE = 2;
+inline constexpr uint8_t ROPE_INIT_REASON_SERVO_OFFLINE = 3;
+inline constexpr uint8_t ROPE_INIT_REASON_MULTITURN_UNKNOWN = 4;
+inline constexpr uint8_t ROPE_INIT_REASON_MANUAL_REQUIRED = 5;
+inline constexpr uint8_t ROPE_INIT_REASON_AUTO_REQUIRED = 6;
+inline constexpr uint8_t ROPE_INIT_REASON_TARGET_PUBLISH_FAILED = 7;
+inline constexpr uint8_t ROPE_INIT_REASON_SYSTEM_FAULT = 8;
+inline constexpr uint8_t ROPE_INIT_REASON_CANCELLED = 9;
+inline constexpr uint8_t ROPE_INIT_REASON_TASK_START_FAILED = 10;
+
+inline constexpr uint8_t DIRECT_REJECT_NONE = 0;
+inline constexpr uint8_t DIRECT_REJECT_STATE = 1;
+inline constexpr uint8_t DIRECT_REJECT_HARDWARE = 2;
+inline constexpr uint8_t DIRECT_REJECT_MULTITURN = 3;
+inline constexpr uint8_t DIRECT_REJECT_EVENT_QUEUE = 4;
+inline constexpr uint8_t DIRECT_REJECT_STALE = 5;
+inline constexpr uint8_t DIRECT_REJECT_FAULT = 6;
+
+inline constexpr uint8_t FEEDBACK_ADMISSION_IDLE = 0;
+inline constexpr uint8_t FEEDBACK_ADMISSION_PENDING = 1;
+inline constexpr uint8_t FEEDBACK_ADMISSION_ACCEPTED = 2;
+inline constexpr uint8_t FEEDBACK_ADMISSION_REJECTED = 3;
+
+inline constexpr uint8_t FEEDBACK_REJECT_NONE = 0;
+inline constexpr uint8_t FEEDBACK_REJECT_MANUAL_REFERENCE = 1;
+inline constexpr uint8_t FEEDBACK_REJECT_STATE = 2;
+inline constexpr uint8_t FEEDBACK_REJECT_WORKSPACE = 3;
+inline constexpr uint8_t FEEDBACK_REJECT_MULTITURN = 4;
+inline constexpr uint8_t FEEDBACK_REJECT_ABS_LIMIT = 5;
+inline constexpr uint8_t FEEDBACK_REJECT_MODE_SWITCH = 6;
+inline constexpr uint8_t FEEDBACK_REJECT_EVENT_QUEUE = 7;
+
+struct SystemEvent_t {
+    uint8_t event;
+    uint32_t timestamp;
+    // 完成事件携带命令代次，防止旧任务完成事件释放较新的控制命令。
+    uint32_t token;
+};
+
+#endif // MMHAND_SYSTEM_TYPES_H

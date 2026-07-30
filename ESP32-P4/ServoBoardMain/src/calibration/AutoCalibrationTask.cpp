@@ -11,6 +11,7 @@
 #include "../hardware/HardwareMap.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../shared/SharedSafetyState.h"
+#include "../platform/TaskFactory.h"
 #include "../system/FirmwareLog.h"
 #include "../system/StateMachineTask.h"
 #include "../system/TaskRuntimeMonitor.h"
@@ -5198,20 +5199,21 @@ static bool startAutoCalibrationTaskInternal(TaskSharedData_t* sharedData)
     }
     clearCalibrationDiag(sharedData);
 
-    const BaseType_t ok = xTaskCreate(autoCalibrationTask,
-                                      "autoCalibrationTask",
-                                      AUTO_CALIB_TASK_STACK_SIZE,
-                                      sharedData,
-                                      TASK_AUTO_CALIB_PRIORITY,
-                                      &g_autoCalibrationTaskHandle);
-    if (ok == pdPASS) {
+    const bool created = p4::platform::createTask(
+        {autoCalibrationTask,
+         "autoCalibrationTask",
+         AUTO_CALIB_TASK_STACK_SIZE,
+         sharedData,
+         TASK_AUTO_CALIB_PRIORITY},
+        &g_autoCalibrationTaskHandle);
+    if (created) {
         taskRuntimeRegister(
             TASK_RUNTIME_AUTO_CALIB,
             g_autoCalibrationTaskHandle,
             AUTO_CALIB_TASK_STACK_SIZE
         );
     }
-    return ok == pdPASS;
+    return created;
 }
 
 // 对外启动接口，保留单一创建路径。

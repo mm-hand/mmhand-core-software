@@ -11,6 +11,7 @@
 #include "../persistence/MultiTurnNvsPersistenceTask.h"
 #include "../persistence/ManualCalibrationNvsStore.h"
 #include "../communication/upper/UpperCommProtocol.h"
+#include "../platform/TaskFactory.h"
 #include "../shared/TaskSharedData.h"
 
 #include <string.h>
@@ -243,59 +244,64 @@ void System_Init() {
     }
 
     // 任务按“通信与采样 -> 状态仲裁 -> 控制 -> 持久化/监控”职责拆分。
-    xTaskCreate(
-        upperCommunicationTask,
-        "upperCommunicationTask",
-        UPPER_COMM_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_UPPER_COMM_PRIORITY,
-        &upperCommTaskHandle
-    );
+    bool tasksCreated = p4::platform::createTask(
+        {upperCommunicationTask,
+         "upperCommunicationTask",
+         UPPER_COMM_TASK_STACK_SIZE,
+         &sharedData,
+         TASK_UPPER_COMM_PRIORITY},
+        &upperCommTaskHandle);
 
-    xTaskCreate(
-        stateMachineTask,
-        "stateMachineTask",
-        STATE_MACHINE_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_STATE_MACHINE_PRIORITY,
-        &stateMachineTaskHandle
-    );
+    tasksCreated = p4::platform::createTask(
+                       {stateMachineTask,
+                        "stateMachineTask",
+                        STATE_MACHINE_TASK_STACK_SIZE,
+                        &sharedData,
+                        TASK_STATE_MACHINE_PRIORITY},
+                       &stateMachineTaskHandle) &&
+                   tasksCreated;
 
-    xTaskCreate(
-        canCommunicationTask,
-        "canCommunicationTask",
-        CAN_COMM_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_CAN_COMM_PRIORITY,
-        &canCommTaskHandle
-    );
+    tasksCreated = p4::platform::createTask(
+                       {canCommunicationTask,
+                        "canCommunicationTask",
+                        CAN_COMM_TASK_STACK_SIZE,
+                        &sharedData,
+                        TASK_CAN_COMM_PRIORITY},
+                       &canCommTaskHandle) &&
+                   tasksCreated;
 
-    xTaskCreate(
-        servoCommunicationTask,
-        "servoCommunicationTask",
-        SERVO_COMM_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_SERVO_COMM_PRIORITY,
-        &servoCommTaskHandle
-    );
+    tasksCreated = p4::platform::createTask(
+                       {servoCommunicationTask,
+                        "servoCommunicationTask",
+                        SERVO_COMM_TASK_STACK_SIZE,
+                        &sharedData,
+                        TASK_SERVO_COMM_PRIORITY},
+                       &servoCommTaskHandle) &&
+                   tasksCreated;
 
-    xTaskCreate(
-        controlTask,
-        "controlTask",
-        CONTROL_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_CONTROL_PRIORITY,
-        &controlTaskHandle
-    );
+    tasksCreated = p4::platform::createTask(
+                       {controlTask,
+                        "controlTask",
+                        CONTROL_TASK_STACK_SIZE,
+                        &sharedData,
+                        TASK_CONTROL_PRIORITY},
+                       &controlTaskHandle) &&
+                   tasksCreated;
 
-    xTaskCreate(
-        multiTurnNvsPersistenceTask,
-        "multiTurnNvsPersist",
-        NVS_PERSIST_TASK_STACK_SIZE,
-        &sharedData,
-        TASK_NVS_PERSIST_PRIORITY,
-        &nvsPersistTaskHandle
-    );
+    tasksCreated = p4::platform::createTask(
+                       {multiTurnNvsPersistenceTask,
+                        "multiTurnNvsPersist",
+                        NVS_PERSIST_TASK_STACK_SIZE,
+                        &sharedData,
+                        TASK_NVS_PERSIST_PRIORITY},
+                       &nvsPersistTaskHandle) &&
+                   tasksCreated;
+    if (!tasksCreated) {
+        FW_LOG_ERROR_PRINTLN("[SYSTEM] critical task creation failed; halt");
+        while (true) {
+            delay(1000);
+        }
+    }
 
     // 注册业务任务后，TaskRuntimeMonitor 才能统计周期、执行时间和栈余量。
     taskRuntimeRegister(TASK_RUNTIME_UPPER_COMM, upperCommTaskHandle, UPPER_COMM_TASK_STACK_SIZE);
@@ -304,14 +310,13 @@ void System_Init() {
     taskRuntimeRegister(TASK_RUNTIME_SERVO_COMM, servoCommTaskHandle, SERVO_COMM_TASK_STACK_SIZE);
     taskRuntimeRegister(TASK_RUNTIME_CONTROL, controlTaskHandle, CONTROL_TASK_STACK_SIZE);
 
-    xTaskCreate(
-        taskRuntimeMonitorTask,
-        "taskRuntimeMonitor",
-        TASK_MONITOR_STACK_SIZE,
-        &sharedData,
-        TASK_MONITOR_PRIORITY,
-        &taskMonitorTaskHandle
-    );
+    p4::platform::createTask(
+        {taskRuntimeMonitorTask,
+         "taskRuntimeMonitor",
+         TASK_MONITOR_STACK_SIZE,
+         &sharedData,
+         TASK_MONITOR_PRIORITY},
+        &taskMonitorTaskHandle);
     taskRuntimeRegister(TASK_RUNTIME_MONITOR, taskMonitorTaskHandle, TASK_MONITOR_STACK_SIZE);
 
     FW_LOG_INFO_PRINTLN("FreeRTOS tasks created successfully.");
