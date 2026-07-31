@@ -397,20 +397,14 @@ static bool isServoCommandInsideLimit(TaskSharedData_t* sharedData,
            commandAbs >= rangeMin && commandAbs <= rangeMax;
 }
 
-// 根据 bus/id 查找扁平化电机通道 Mxx。
-static int findMotorChannel(uint8_t bus, uint8_t id)
-{
-    return findMotorChannelByBusId(bus, id);
-}
-
 // 检查单关节主执行器的多圈状态是否可信。
 static bool isJointPrimaryServoMultiTurnKnown(TaskSharedData_t* sharedData, uint8_t jointIndex)
 {
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
-    const int ch = findMotorChannel(jointMap[jointIndex].busIndex,
-                                    jointMap[jointIndex].servoID);
+    const int ch = findMotorChannelByBusId(jointMap[jointIndex].busIndex,
+                                           jointMap[jointIndex].servoID);
     if (ch < 0 || ch >= SERVO_TOTAL_NUM) {
         return false;
     }
@@ -434,8 +428,9 @@ static uint32_t calibrationJointMotorMask(uint8_t jointIndex)
             }
         }
     } else {
-        const int primaryCh = findMotorChannel(jointMap[jointIndex].busIndex,
-                                               jointMap[jointIndex].servoID);
+        const int primaryCh =
+            findMotorChannelByBusId(jointMap[jointIndex].busIndex,
+                                    jointMap[jointIndex].servoID);
         if (primaryCh >= 0 && primaryCh < SERVO_TOTAL_NUM) {
             motorMask |= (1UL << primaryCh);
         }
@@ -637,7 +632,7 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
     }
     for (uint8_t i = 0; i < batch->count; i++) {
         const ServoTargetCommand_t& cmd = batch->commands[i];
-        const int ch = findMotorChannel(cmd.busIndex, cmd.servoId);
+        const int ch = findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
         if (ch < 0 || ch >= SERVO_TOTAL_NUM || !isMotorChannelValid((uint8_t)ch)) {
             continue;
         }
@@ -3429,7 +3424,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             ctx->commandAcc = params.servoAcc;
             ctx->bus = jointMap[ctx->jointIndex].busIndex;
             ctx->servoId = jointMap[ctx->jointIndex].servoID;
-            const int motorChannel = findMotorChannel(ctx->bus, ctx->servoId);
+            const int motorChannel =
+                findMotorChannelByBusId(ctx->bus, ctx->servoId);
             if (motorChannel < 0 || motorChannel >= SERVO_TOTAL_NUM) {
                 failAutoCalibContext(ctx, "primary motor channel not mapped");
                 return;

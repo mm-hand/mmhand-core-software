@@ -14,34 +14,41 @@
 
 namespace mmhand::calibration {
 
+/** 读取最新磁编 raw 和按安装方向归一化后的环形坐标；反馈过期、离线或故障时返回 false。 */
 bool readLatestEncoderSample(TaskSharedData_t* sharedData,
                              uint8_t jointIndex,
                              uint16_t* outRaw,
                              int32_t* outOriented);
 
+/** 仅读取方向归一化磁编坐标，校验规则与 readLatestEncoderSample 相同。 */
 bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                int32_t* outEncoder);
 
+/** 按 bus/id 读取 P4 logical ABS；该值包含多圈恢复 offset，不是舵机单圈 raw。 */
 bool readLatestServoAbs(TaskSharedData_t* sharedData,
                         uint8_t bus,
                         uint8_t id,
                         int32_t* outAbs);
 
+/** 按 bus/id 读取归一化到 0..4095 的舵机单圈 raw。 */
 bool readLatestServoRaw(TaskSharedData_t* sharedData,
                         uint8_t bus,
                         uint8_t id,
                         int16_t* outRaw);
 
+/** 按 bus/id 读取飞特有符号 load 原值；调用方自行决定取方向或幅值。 */
 bool readLatestServoLoad(TaskSharedData_t* sharedData,
                          uint8_t bus,
                          uint8_t id,
                          int16_t* outLoad);
 
+/** 按扁平 Mxx 通道读取 P4 logical ABS，避免调用方重复做 bus/id 映射。 */
 bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
                              uint8_t motorChannel,
                              int32_t* outAbs);
 
+/** 按扁平 Mxx 通道读取飞特有符号 load 原值。 */
 bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
                               uint8_t motorChannel,
                               int16_t* outLoad);

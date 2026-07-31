@@ -23,7 +23,9 @@ int32_t wrapEncoderCount(int32_t value);
 /** 计算环形编码器从 from 沿正方向到 to 的距离。 */
 int32_t forwardEncoderDelta(int32_t from, int32_t to);
 
+/** 按 16384 counts = 360 degree 把带符号编码器增量换算为角度。 */
 float encoderCountToDeg(int32_t encoderCount);
+/** 将角度换算为最近的 14 bit 编码器 counts，结果允许带符号。 */
 int32_t degToEncoderCount(float deg);
 
 /**

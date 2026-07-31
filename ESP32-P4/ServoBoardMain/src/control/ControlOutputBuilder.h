@@ -12,17 +12,17 @@
 // 拮抗双腱关节由 DualTendonControl 显式给出两个电机目标，
 // 不能简单镜像生成第二个电机目标。
 struct JointActuatorRuntimeTarget {
-    uint8_t motorChannel;
-    uint8_t busIndex;
-    uint8_t servoId;
-    int8_t sign;
-    int32_t targetAbs;
+    uint8_t motorChannel; ///< 逻辑 Mxx。
+    uint8_t busIndex;     ///< 物理 UART 总线。
+    uint8_t servoId;      ///< 飞特物理 ID。
+    int8_t sign;          ///< 腱绳方向符号。
+    int32_t targetAbs;    ///< P4 logical ABS。
 };
 
 // ControlOutputBuilder 负责把控制器输出转换成舵机总线目标：
 // - 所有绝对位置都会限制在舵机多圈命令范围内；
 // - 单圈 raw 目标可围绕当前绝对位置锚点展开；
-// - 关节执行器辅助函数向 PID 隐藏 V1/V2 单电机/双电机差异。
+// - 关节执行器辅助函数向 PID 隐藏单腱/双腱硬件拓扑差异。
 int32_t clampServoPos(int32_t value);
 // 只有电机限位处于锁定状态时，才应用标定得到的 ABS 最小/最大值。
 int32_t clampServoPosByMotorAbsLimit(TaskSharedData_t* sharedData,

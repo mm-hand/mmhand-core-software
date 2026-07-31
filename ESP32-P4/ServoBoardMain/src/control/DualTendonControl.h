@@ -18,23 +18,23 @@ struct DualTendonMotorTargets {
     // 尚未经过 LUT 工作空间钳位的 PID 原始目标，用于诊断和判断实际是否抵达边界。
     int32_t rawTargetAbs[2];
     // 由标定 LUT 预测的目标和反馈电机位置。
-    float motorRef[2];
-    float motorFbModel[2];
+    float motorRef[2];     ///< qRef 经 LUT 插值得到的模型舵机 ABS。
+    float motorFbModel[2]; ///< qFb 经同一 LUT 插值得到的模型舵机 ABS。
     // 单电机稳定器使用的位置误差和速度项。
-    float motorErr[2];
-    float refVelocity[2];
-    float fbVelocity[2];
-    float velocityError[2];
-    float filteredVelocityError[2];
-    float pTerm[2];
-    float iTerm[2];
-    float dTerm[2];
-    float pidCorrection[2];
+    float motorErr[2];     ///< motorRef-motorFbModel，单位 counts。
+    float refVelocity[2];  ///< 模型目标变化率，单位 counts/s。
+    float fbVelocity[2];   ///< 模型反馈变化率，单位 counts/s。
+    float velocityError[2]; ///< refVelocity-fbVelocity。
+    float filteredVelocityError[2]; ///< 一阶低通后的速度误差。
+    float pTerm[2];        ///< Kp*motorErr。
+    float iTerm[2];        ///< Ki*误差时间积分。
+    float dTerm[2];        ///< Kd*filteredVelocityError。
+    float pidCorrection[2]; ///< 最终叠加到实际舵机 ABS 的 PID 修正量。
     // PID 原始目标是否被自动标定 LUT 边界截断。该标志只用于诊断，
     // 不能直接作为碰撞检测的否决条件。
     uint8_t lutTargetClamped[2];
-    int32_t lutMinAbs[2];
-    int32_t lutMaxAbs[2];
+    int32_t lutMinAbs[2]; ///< 本次标定 LUT 的舵机下边界。
+    int32_t lutMaxAbs[2]; ///< 本次标定 LUT 的舵机上边界。
     // 上述数组中有效的电机条目数量。
     uint8_t count;
 };
@@ -44,6 +44,7 @@ bool isDualTendonJoint(uint8_t jointIndex);
 // 清空指定关节的 PID 历史；输出关闭或反馈无效时调用。
 void resetDualTendonController(uint8_t jointIndex);
 
+/** 用 qRef/qFb 经同一标定 LUT 生成两台舵机的增量 PID 目标。 */
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,

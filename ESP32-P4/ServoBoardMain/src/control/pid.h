@@ -21,26 +21,26 @@ typedef enum {
 } PID_Status_e;
 
 typedef struct {
-    float kp;
-    float ki;
-    float kd;
-    float Deadband;
-    float limitIntegral;
-    float limitOutput;
+    float kp;            ///< 比例增益，乘当前角度误差。
+    float ki;            ///< 积分增益，乘误差时间积分。
+    float kd;            ///< 微分增益，乘误差变化率。
+    float Deadband;      ///< 绝对误差小于该角度时保持上一输出。
+    float limitIntegral; ///< 积分状态绝对限幅。
+    float limitOutput;   ///< 最终舵机 counts 修正量绝对限幅。
 } PID_Parameter_Typedef;
 
 // 当前固件只使用位置式 PID，因此只保留位置误差所需的运行状态。
 typedef struct {
-    float error;
-    float previousError;
-    float Integral;
-    float Pout;
-    float Iout;
-    float Dout;
-    float Output;
-    uint8_t derivativeInitialized;
-    PID_Parameter_Typedef param;
-    PID_Status_e status;
+    float error;         ///< 当前误差 target-measure。
+    float previousError; ///< 上个有效周期误差。
+    float Integral;      ///< 已乘 dt、尚未乘 Ki 的误差积分。
+    float Pout;          ///< 本周期比例项。
+    float Iout;          ///< 本周期积分项。
+    float Dout;          ///< 本周期误差微分项。
+    float Output;        ///< 限幅后的总输出，单位舵机 counts。
+    uint8_t derivativeInitialized; ///< 是否已有 previousError 可用于微分。
+    PID_Parameter_Typedef param;   ///< 固定控制参数。
+    PID_Status_e status;           ///< 最近一次初始化/计算状态。
 } PID_Info_TypeDef;
 
 // 初始化控制器并加载六个 PID 参数。

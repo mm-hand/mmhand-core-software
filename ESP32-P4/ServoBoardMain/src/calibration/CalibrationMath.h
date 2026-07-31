@@ -23,6 +23,7 @@ int32_t calibrationForwardEncoderDelta(int32_t from, int32_t to);
 int32_t calibrationWrapEncoderDelta(int32_t target, int32_t actual);
 // 按 16384 counts/360° 在 counts 与角度之间换算，仅用于区间外诊断。
 float calibrationEncoderCountToDeg(int32_t count);
+// 角度换算为磁编 counts，使用同一诊断比例并四舍五入。
 int32_t calibrationDegToEncoderCount(float deg);
 
 // 单次磁编到 URDF 角度映射结果。

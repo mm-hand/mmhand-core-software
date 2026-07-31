@@ -50,43 +50,43 @@ static bool shouldLogControlPidDiag(uint8_t jointIndex,
                                     uint32_t activeJointMask)
 {
     if constexpr (kPidDiagLogEnabled) {
-    if (jointIndex >= ENCODER_TOTAL_NUM) {
-        return false;
-    }
-    // 全手控制仍只允许每 50 ms 输出一条 PID 日志，但在 active joint 之间
-    // 轮询。旧实现总由循环首位 J00 抢占全局时间槽，导致日志长期只有 M00/M01。
-    if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
-        kPidDiagLogPeriodMs) {
-        return false;
-    }
-
-    const uint32_t validMask = activeJointMask &
-        ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-    if (validMask == 0) {
-        return false;
-    }
-    uint8_t selectedJoint = ENCODER_TOTAL_NUM;
-    for (uint8_t offset = 0; offset < ENCODER_TOTAL_NUM; offset++) {
-        const uint8_t candidate =
-            (uint8_t)((g_controlPidDiagNextJoint + offset) % ENCODER_TOTAL_NUM);
-        if ((validMask & (1UL << candidate)) != 0) {
-            selectedJoint = candidate;
-            break;
-        }
-    }
-    const uint8_t nextJointAfterLog =
-        (uint8_t)((selectedJoint + 1U) % ENCODER_TOTAL_NUM);
-    if (jointIndex != selectedJoint) {
-        // 被选中的关节可能因离线或保护分支没有进入 PID。超过两个日志周期
-        // 后允许下一个实际运行到这里的关节接管，避免诊断轮询永久卡死。
-        if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
-            (kPidDiagLogPeriodMs * 2U)) {
+        if (jointIndex >= ENCODER_TOTAL_NUM) {
             return false;
         }
-    }
-    g_controlPidDiagLastLogMs = nowMs;
-    g_controlPidDiagNextJoint = nextJointAfterLog;
-    return true;
+        // 全手控制仍只允许每 50 ms 输出一条 PID 日志，但在 active joint 之间
+        // 轮询。旧实现总由循环首位 J00 抢占全局时间槽，导致日志长期只有 M00/M01。
+        if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
+            kPidDiagLogPeriodMs) {
+            return false;
+        }
+
+        const uint32_t validMask = activeJointMask &
+            ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+        if (validMask == 0) {
+            return false;
+        }
+        uint8_t selectedJoint = ENCODER_TOTAL_NUM;
+        for (uint8_t offset = 0; offset < ENCODER_TOTAL_NUM; offset++) {
+            const uint8_t candidate =
+                (uint8_t)((g_controlPidDiagNextJoint + offset) % ENCODER_TOTAL_NUM);
+            if ((validMask & (1UL << candidate)) != 0) {
+                selectedJoint = candidate;
+                break;
+            }
+        }
+        const uint8_t nextJointAfterLog =
+            (uint8_t)((selectedJoint + 1U) % ENCODER_TOTAL_NUM);
+        if (jointIndex != selectedJoint) {
+            // 被选中的关节可能因离线或保护分支没有进入 PID。超过两个日志周期
+            // 后允许下一个实际运行到这里的关节接管，避免诊断轮询永久卡死。
+            if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
+                (kPidDiagLogPeriodMs * 2U)) {
+                return false;
+            }
+        }
+        g_controlPidDiagLastLogMs = nowMs;
+        g_controlPidDiagNextJoint = nextJointAfterLog;
+        return true;
     }
     return false;
 }
@@ -119,12 +119,6 @@ static int16_t clampMappedCountForProtocol(int32_t value)
     if (value < -32768) return -32768;
     return (int16_t)value;
 }
-
-static int findMotorChannel(uint8_t bus, uint8_t id)
-{
-    return findMotorChannelByBusId(bus, id);
-}
-
 
 static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
                                               uint8_t jointIndex,
@@ -454,7 +448,7 @@ void controlTask(void* parameter)
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     TickType_t lastPidComputeTick = lastWakeTime;
-    const TickType_t solverPeriodTicks = pdMS_TO_TICKS(10);
+    const TickType_t solverPeriodTicks = pdMS_TO_TICKS(kPeriodMs);
     // 新上线电机会保持一个命令周期，避免 direct/joint 模式立即跳到过期 UI 目标。
     bool prevMotorOnline[SERVO_TOTAL_NUM] = {false};
     bool hotplugHoldMotor[SERVO_TOTAL_NUM] = {false};
@@ -595,7 +589,7 @@ void controlTask(void* parameter)
         {
             const uint8_t bus = jointMap[jointIndex].busIndex;
             const uint8_t id = jointMap[jointIndex].servoID;
-            const int ch = findMotorChannel(bus, id);
+            const int ch = findMotorChannelByBusId(bus, id);
             if (ch >= 0 && servoData.onlineStatus[ch]) {
                 const int32_t rawAbs = servoData.servoAngles[ch];
                 absolutePositionRaw[jointIndex] = rawAbs;
@@ -1091,7 +1085,7 @@ void controlTask(void* parameter)
                 // 关节模式会对每个关节独立决定：保持、使用双腱控制或输出普通 PID 目标。
                 const uint8_t bus = jointMap[jointIndex].busIndex;
                 const uint8_t id = jointMap[jointIndex].servoID;
-                const int jointMotorCh = findMotorChannel(bus, id);
+                const int jointMotorCh = findMotorChannelByBusId(bus, id);
                 const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
                 bool overloadFaultActive =
                     p4::control::jointHasOverloadFault(
