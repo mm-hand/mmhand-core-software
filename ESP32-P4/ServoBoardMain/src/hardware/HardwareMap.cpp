@@ -4,9 +4,7 @@
  */
 #include "HardwareMap.h"
 
-// Primary joint -> servo map. Keep this table for legacy code paths and for the
-// primary actuator of each joint. Multi-actuator ownership lives in
-// jointActuatorGroups below.
+// 关节到主舵机映射供单腱和兼容查询使用；双腱完整所有权见 jointActuatorGroups。
 JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
     {0, 0},  {0, 2},  {0, 3},  {0, 4},
     {0, 5},  {0, 7},  {1, 8},  {2, 9},
@@ -15,7 +13,7 @@ JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
     {3, 20}, {3, 22}, {3, 23}, {3, 24}, {3, 25}
 };
 
-// Motor channel -> physical bus/id. Servo IDs are zero-based and match Mxx.
+// Mxx 到物理总线/ID 的唯一映射；当前硬件 ID 与 Mxx 编号相同。
 MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
     {0, 0},  {0, 1},  {0, 2},  {0, 3},  {0, 4},
     {0, 5},  {0, 6},  {0, 7},  {1, 8},  {2, 9},
@@ -25,9 +23,7 @@ MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
     {3, 25}, {3, 26}
 };
 
-// Motor channel -> tendon shortening direction in servo absolute counts.
-// +1: increasing ABS shortens the tendon.
-// -1: decreasing ABS shortens the tendon.
+// 舵机 ABS 到腱绳收紧坐标的方向：+1 表示 ABS 增大收绳，-1 表示减小收绳。
 static constexpr int8_t kMotorTendonShortenAbsSign[] = {
     1, 1, 1, 1,
     1, 1, 1, 1,
@@ -45,46 +41,28 @@ static_assert(
 
 #define ACT_NONE {0xFF, 1, 0, 0}
 #define ACT_PRIMARY(ch) {ch, 1, 0, 0}
-#define ACT_SECONDARY_SAME(ch) {ch, 1, 0, 0}
 #define ACT_SECONDARY_OPPOSE(ch) {ch, -1, 0, 0}
 #define GROUP1(ch) {1, {ACT_PRIMARY(ch), ACT_NONE}}
 #define GROUP2(primaryCh, secondaryAct) {2, {ACT_PRIMARY(primaryCh), secondaryAct}}
 
 JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
-#if HAND_PROFILE == HAND_PROFILE_V2
     GROUP2(0, ACT_SECONDARY_OPPOSE(1)),
-#else
-    GROUP1(0),
-#endif
     GROUP1(2),
     GROUP1(3),
     GROUP1(4),
-#if HAND_PROFILE == HAND_PROFILE_V2
     GROUP2(5, ACT_SECONDARY_OPPOSE(6)),
-#else
-    GROUP1(5),
-#endif
     GROUP1(7),
     GROUP1(8),
     GROUP1(9),
-#if HAND_PROFILE == HAND_PROFILE_V2
     GROUP2(10, ACT_SECONDARY_OPPOSE(11)),
-#else
-    GROUP1(10),
-#endif
     GROUP1(12),
     GROUP1(13),
     GROUP1(14),
-#if HAND_PROFILE == HAND_PROFILE_V2
     GROUP2(15, ACT_SECONDARY_OPPOSE(16)),
-#else
-    GROUP1(15),
-#endif
     GROUP1(17),
     GROUP1(18),
     GROUP1(19),
-    // Thumb mapping: J16 -> M20/M21, J17 -> M22, J18 -> M23,
-    // J19 -> M24, J20 -> M25/M26.
+    // 拇指映射：J16->M20/M21，J17->M22，J18->M23，J19->M24，J20->M25/M26。
     GROUP2(20, ACT_SECONDARY_OPPOSE(21)),
     GROUP1(22),
     GROUP1(23),
@@ -95,7 +73,6 @@ JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
 #undef GROUP2
 #undef GROUP1
 #undef ACT_SECONDARY_OPPOSE
-#undef ACT_SECONDARY_SAME
 #undef ACT_PRIMARY
 #undef ACT_NONE
 

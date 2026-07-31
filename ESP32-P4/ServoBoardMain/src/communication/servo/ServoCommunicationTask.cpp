@@ -580,7 +580,7 @@ static void processServoOnlineTransitions(
                       (unsigned)busIndex,
                       (unsigned)id,
                       (unsigned)attemptNumber,
-                      (unsigned)kServoRecoveryMaxAttempts,
+                      (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
                       torqueOffOk ? 1U : 0U,
                       configured ? 1U : 0U,
                       hasAnchor ? 1U : 0U,

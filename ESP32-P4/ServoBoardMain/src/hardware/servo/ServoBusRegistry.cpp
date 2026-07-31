@@ -5,7 +5,10 @@
 #include "ServoBusRegistry.h"
 
 #include "../../config/BoardConfig.h"
+#include "../../config/ServoConfig.h"
 #include "../HardwareMap.h"
+
+using mmhand::config::servo::kOfflineProbeIntervalMs;
 
 ServoBusRegistry& servoBusRegistry()
 {
@@ -72,7 +75,7 @@ void ServoBusRegistry::configureMappedServosForMultiTurn()
 void ServoBusRegistry::probeOneOfflineMappedServo(uint32_t nowMs)
 {
     if (static_cast<uint32_t>(nowMs - lastOfflineProbeMs_) <
-        kServoOfflineProbeIntervalMs) {
+        kOfflineProbeIntervalMs) {
         return;
     }
     lastOfflineProbeMs_ = nowMs;

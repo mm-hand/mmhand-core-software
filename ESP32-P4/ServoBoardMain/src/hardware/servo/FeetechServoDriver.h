@@ -14,19 +14,15 @@
 #include "ServoValue.h"
 #include "../libraries/FTServo_Arduino/src/SMS_STS.h"
 #include "../../communication/servo/ServoPositionRange.h"
+#include "../../config/ServoConfig.h"
 #include "../HardwareMap.h"
 #include "../../system/FirmwareLog.h"
 
-#ifndef SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
-#define SERVO_CONFIGURE_MULTI_TURN_ON_BOOT 1
-#endif
-
-inline constexpr uint32_t SERVO_MULTI_TURN_CONFIG_DELAY_MS = 5;
-inline constexpr uint8_t kServoOfflineInvalidateMisses = 3;
-inline constexpr uint8_t kServoOnlineConfirmReads = 2;
-inline constexpr uint32_t kServoOfflineProbeIntervalMs = 50;
-inline constexpr uint8_t kServoRecoveryMaxAttempts = 3;
-inline constexpr uint32_t kServoRecoveryRetryIntervalMs = 100;
+using mmhand::config::servo::kMultiTurnConfigDelayMs;
+using mmhand::config::servo::kOfflineInvalidateMisses;
+using mmhand::config::servo::kOnlineConfirmReads;
+using mmhand::config::servo::kRecoveryMaxAttempts;
+using mmhand::config::servo::kRecoveryRetryIntervalMs;
 
 inline int16_t normalizeServoRawSingleTurn(int32_t value)
 {
@@ -40,43 +36,44 @@ inline uint16_t singleTurnDistanceCounts(int16_t a, int16_t b)
 
 /** 单台舵机的驱动内部反馈状态；不得直接暴露为跨任务共享可写数据。 */
 struct ServoFeedbackInternal {
-    int16_t rawPosition;
-    int16_t speed;
-    int16_t load;
-    int16_t current;
-    uint8_t voltage;
-    uint8_t temperature;
+    int16_t rawPosition; ///< 归一化后的 0..4095 hardware raw。
+    int16_t speed;       ///< ST3215 Present Speed 原始值。
+    int16_t load;        ///< ST3215 Present Load 有符号值。
+    int16_t current;     ///< ST3215 Present Current 原始值。
+    uint8_t voltage;     ///< ST3215 Present Voltage 原始值。
+    uint8_t temperature; ///< 摄氏温度。
     // 当前舵机上电会话中的硬件多圈坐标；舵机独立掉电后可能退回单圈 raw。
     int32_t absolutePosition;
     // 将当前硬件坐标映射到 P4 恢复的逻辑多圈坐标：
     // logical ABS = hardware ABS + logicalOffset。
     int32_t logicalOffset;
-    int16_t turnCount;
-    int16_t lastRawPosition;
-    bool initialized;
-    bool absoluteReliable;
-    bool online;
-    uint8_t missedReadCount;
-    uint8_t successfulReadCount;
-    bool onlineTransitionPending;
+    int16_t turnCount; ///< logical ABS 对应的诊断圈数。
+    int16_t lastRawPosition; ///< 最近一次参与展开的 raw。
+    bool initialized; ///< hardware ABS 展开器是否已有锚点。
+    bool absoluteReliable; ///< logical ABS 是否可供运动控制。
+    bool online; ///< 已通过连续成功反馈确认在线。
+    uint8_t missedReadCount; ///< 连续同步读失败计数。
+    uint8_t successfulReadCount; ///< 连续同步读成功计数。
+    bool onlineTransitionPending; ///< 上线恢复事务尚未完成。
     // 热插拔恢复失败不会立即丢弃 pending；通信任务按间隔重试，
     // 达到上限后设置 recoveryFailed，等待下一次重新上线再清零。
-    uint8_t recoveryAttemptCount;
-    bool recoveryFailed;
-    uint32_t nextRecoveryAttemptMs;
+    uint8_t recoveryAttemptCount; ///< 当前上线事件已尝试恢复次数。
+    bool recoveryFailed; ///< 达到最大重试次数后的锁存状态。
+    uint32_t nextRecoveryAttemptMs; ///< 下一次允许重试的绝对毫秒时间。
     // 舵机离线前最后一次可信的逻辑多圈位置。掉线时先冻结到这里，
     // 后台 NVS 任务随后写 Flash，避免离线通道从在线快照中消失。
-    int32_t offlineLastTrustedAbs;
-    int16_t offlineLastTrustedRaw;
-    int16_t offlineLastTrustedTurn;
-    uint32_t offlineLastTrustedTimestampMs;
-    bool offlineTrustedSnapshotPending;
-    uint32_t lastUpdate;
+    int32_t offlineLastTrustedAbs; ///< 离线前最后可信 logical ABS。
+    int16_t offlineLastTrustedRaw; ///< 离线前最后可信 hardware raw。
+    int16_t offlineLastTrustedTurn; ///< 离线前最后可信诊断圈数。
+    uint32_t offlineLastTrustedTimestampMs; ///< 上述快照的采样时间。
+    bool offlineTrustedSnapshotPending; ///< 后台 NVS 尚未消费冻结快照。
+    uint32_t lastUpdate; ///< 最近一次有效反馈时间。
 };
 
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
 public:
+    /** 构造空驱动；必须先调用 begin() 绑定一条硬件 UART。 */
     FeetechServoDriver()
         : _serial(NULL),
           _writeCount(0),
@@ -88,6 +85,7 @@ public:
         memset(_multiTurnConfigured, 0, sizeof(_multiTurnConfigured));
     }
 
+    /** 绑定总线索引和串口引脚，不扫描舵机，也不改变舵机 EEPROM。 */
     void begin(uint8_t busIndex, int rxPin, int txPin, uint32_t baud)
     {
         HardwareSerial* serial = NULL;
@@ -104,6 +102,7 @@ public:
         _sms.pSerial = _serial;
     }
 
+    /** 清除角度限制以启用 ST3215 多圈模式；会解锁并写入舵机 EEPROM。 */
     bool configureMultiTurnMode(uint8_t id)
     {
         if (!_serial || id > MAX_SERVO_ID) {
@@ -113,17 +112,18 @@ public:
         uint8_t zeroLimits[4] = {0, 0, 0, 0};
         bool ok = true;
         ok = (_sms.unLockEprom(id) >= 0) && ok;
-        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        delay(kMultiTurnConfigDelayMs);
         ok = (_sms.genWrite(id, SMS_STS_MIN_ANGLE_LIMIT_L, zeroLimits, sizeof(zeroLimits)) >= 0) && ok;
-        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        delay(kMultiTurnConfigDelayMs);
         ok = (_sms.LockEprom(id) >= 0) && ok;
-        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        delay(kMultiTurnConfigDelayMs);
         if (ok) {
             _multiTurnConfigured[id] = true;
         }
         return ok;
     }
 
+    /** 将 logical ABS 转换为本次上电会话 hardware ABS 后加入同步写批次。 */
     bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc)
     {
         int16_t hardwarePosition = 0;
@@ -134,6 +134,7 @@ public:
         return true;
     }
 
+    /** 仅供恢复事务使用：绕过 logicalOffset，直接提交 hardware ABS。 */
     bool setHardwareTarget(uint8_t id, int32_t position, uint16_t speed, uint8_t acc)
     {
         if (position < kServoHardwareCommandMin ||
@@ -144,6 +145,7 @@ public:
         return true;
     }
 
+    /** 追加一台舵机到本总线同步写缓存；必要时自动重新使能力矩。 */
     void queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
     {
         if (id > MAX_SERVO_ID || _writeCount >= MAX_SERVOS_PER_BUS) {
@@ -161,6 +163,7 @@ public:
         _writeCount++;
     }
 
+    /** 一次性发送当前缓存并清空批次；空批次不访问 UART。 */
     void syncWriteAll()
     {
         if (_writeCount == 0 || !_serial) {
@@ -170,6 +173,7 @@ public:
         _writeCount = 0;
     }
 
+    /** 同步读取指定 ID 的位置/速度/负载，返回成功反馈的舵机数量。 */
     int syncReadPositions(const uint8_t* ids, uint8_t count)
     {
         if (!_serial || !ids || count == 0) {
@@ -227,6 +231,7 @@ public:
         return successCount;
     }
 
+    /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
     bool probeFeedback(uint8_t id)
     {
         if (!_serial || id > MAX_SERVO_ID) {
@@ -246,12 +251,14 @@ public:
         return true;
     }
 
+    /** 返回 0..4095 hardware raw；非法 ID 返回 -1。 */
     int16_t getRawPosition(uint8_t id) const
     {
         if (id > MAX_SERVO_ID) return -1;
         return _feedback[id].rawPosition;
     }
 
+    /** 返回控制使用的 logical ABS，即 hardware ABS + logicalOffset。 */
     int32_t getAbsolutePosition(uint8_t id) const
     {
         if (id > MAX_SERVO_ID) return 0;
@@ -265,6 +272,7 @@ public:
         return id <= MAX_SERVO_ID ? _feedback[id].absolutePosition : 0;
     }
 
+    /** 返回只读驱动反馈；非法 ID 返回静态零值对象。 */
     const ServoFeedbackInternal& getFeedback(uint8_t id) const
     {
         static ServoFeedbackInternal dummy;
@@ -272,16 +280,19 @@ public:
         return _feedback[id];
     }
 
+    /** 表示通信在线，不等价于多圈可信。 */
     bool isOnline(uint8_t id) const
     {
         return id <= MAX_SERVO_ID && _feedback[id].online;
     }
 
+    /** 表示 logical ABS 已由 NVS、New Device 或标定重新建立可信基准。 */
     bool isAbsoluteReliable(uint8_t id) const
     {
         return id <= MAX_SERVO_ID && _feedback[id].absoluteReliable;
     }
 
+    /** 判断该舵机在掉线前是否曾建立过多圈基准。 */
     bool hadMultiTurnTrust(uint8_t id) const
     {
         if (id > MAX_SERVO_ID) {
@@ -291,13 +302,15 @@ public:
         return fb.initialized || fb.absoluteReliable || fb.logicalOffset != 0;
     }
 
+    /** 判断连续读失败是否已达到离线失效门槛。 */
     bool isOfflineInvalidated(uint8_t id) const
     {
         return id <= MAX_SERVO_ID &&
                !_feedback[id].online &&
-               _feedback[id].missedReadCount >= kServoOfflineInvalidateMisses;
+               _feedback[id].missedReadCount >= kOfflineInvalidateMisses;
     }
 
+    /** 舵机刚恢复通信但尚未完成扭矩关闭/多圈配置/NVS 对齐。 */
     bool hasOnlineTransitionPending(uint8_t id) const
     {
         return id <= MAX_SERVO_ID &&
@@ -305,16 +318,19 @@ public:
                _feedback[id].onlineTransitionPending;
     }
 
+    /** 返回 hardware ABS 到 logical ABS 的平移量。 */
     int32_t getLogicalOffset(uint8_t id) const
     {
         return id <= MAX_SERVO_ID ? _feedback[id].logicalOffset : 0;
     }
 
+    /** 根据 logicalOffset 计算本次上电会话可安全下发的 logical 范围。 */
     ServoLogicalRange getLogicalRange(uint8_t id) const
     {
         return servoLogicalRangeFromOffset(getLogicalOffset(id));
     }
 
+    /** 判断上线恢复事务是否达到下一次重试时间。 */
     bool isRecoveryAttemptDue(uint8_t id, uint32_t nowMs) const
     {
         if (!hasOnlineTransitionPending(id) || _feedback[id].recoveryFailed) {
@@ -352,8 +368,8 @@ public:
         if (fb.recoveryAttemptCount < 0xFF) {
             fb.recoveryAttemptCount++;
         }
-        fb.nextRecoveryAttemptMs = nowMs + kServoRecoveryRetryIntervalMs;
-        if (fb.recoveryAttemptCount >= kServoRecoveryMaxAttempts) {
+        fb.nextRecoveryAttemptMs = nowMs + kRecoveryRetryIntervalMs;
+        if (fb.recoveryAttemptCount >= kRecoveryMaxAttempts) {
             fb.recoveryFailed = true;
         }
     }
@@ -363,6 +379,7 @@ public:
         return id <= MAX_SERVO_ID && _multiTurnConfigured[id];
     }
 
+    /** 开关单台舵机扭矩，并同步维护驱动侧扭矩缓存。 */
     bool setTorqueEnabled(uint8_t id, bool enabled)
     {
         if (!_serial || id > MAX_SERVO_ID) {
@@ -389,7 +406,7 @@ public:
         if (_sms.Reset(id) <= 0) {
             return false;
         }
-        delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+        delay(kMultiTurnConfigDelayMs);
 
         ServoFeedbackInternal& fb = _feedback[id];
         fb.initialized = false;
@@ -408,7 +425,7 @@ public:
                 feedbackOk = true;
                 break;
             }
-            delay(SERVO_MULTI_TURN_CONFIG_DELAY_MS);
+            delay(kMultiTurnConfigDelayMs);
         }
         if (!feedbackOk) {
             return false;
@@ -431,6 +448,7 @@ public:
         return true;
     }
 
+    /** 使用 NVS logical ABS 和当前 raw 建立 logicalOffset；raw 差值超限则拒绝。 */
     bool restoreAbsolutePosition(uint8_t id, int32_t absPosition, uint16_t rawToleranceCounts)
     {
         if (id > MAX_SERVO_ID) {
@@ -520,6 +538,7 @@ public:
     }
 
 private:
+    /** 合并一帧有效反馈，并执行上线去抖和掉电前可信快照更新。 */
     void recordFeedbackSuccess(uint8_t id,
                                int16_t rawPos,
                                int16_t speed,
@@ -537,10 +556,10 @@ private:
         fb.voltage = voltage;
         fb.temperature = temperature;
         fb.missedReadCount = 0;
-        if (fb.successfulReadCount < kServoOnlineConfirmReads) {
+        if (fb.successfulReadCount < kOnlineConfirmReads) {
             fb.successfulReadCount++;
         }
-        if (!wasOnline && fb.successfulReadCount >= kServoOnlineConfirmReads) {
+        if (!wasOnline && fb.successfulReadCount >= kOnlineConfirmReads) {
             fb.online = true;
             fb.onlineTransitionPending = true;
             fb.recoveryAttemptCount = 0;
@@ -563,6 +582,7 @@ private:
         fb.lastUpdate = millis();
     }
 
+    /** 累计读失败；达到阈值时冻结最后可信位置并撤销多圈可信状态。 */
     void markReadFailure(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {
@@ -573,7 +593,7 @@ private:
         if (fb.missedReadCount < 0xFF) {
             fb.missedReadCount++;
         }
-        if (fb.missedReadCount >= kServoOfflineInvalidateMisses && fb.online) {
+        if (fb.missedReadCount >= kOfflineInvalidateMisses && fb.online) {
             // 在清除 logicalOffset/turnCount 之前冻结最后可信反馈。这里只写
             // RAM，不在舵机总线任务里直接写 Flash。
             if (fb.absoluteReliable) {
@@ -598,6 +618,7 @@ private:
         }
     }
 
+    /** 清除本次上电会话的软件多圈锚点，但保留最后掉线快照。 */
     void invalidateMultiTurnTrust(uint8_t id)
     {
         if (id > MAX_SERVO_ID) {
@@ -616,6 +637,7 @@ private:
         }
     }
 
+    /** 把业务 logical ABS 反算为 ST3215 可接受的 int16 hardware ABS。 */
     bool logicalToHardwareTarget(uint8_t id,
                                  int32_t logicalPosition,
                                  int16_t* outHardwarePosition) const
@@ -629,6 +651,7 @@ private:
                                          outHardwarePosition);
     }
 
+    /** 将单圈 raw 展开到最接近 anchor 的多圈坐标，避免跨零点跳变。 */
     static int32_t expandSingleTurnRawNearAnchor(int16_t rawSingleTurn, int32_t anchor)
     {
         int32_t candidate = rawSingleTurn;
@@ -641,12 +664,14 @@ private:
         return candidate;
     }
 
+    /** 解码飞特“最高位为方向、其余位为幅值”的通用有符号字段。 */
     static int16_t decodeSigned(uint8_t lo, uint8_t hi)
     {
         const uint16_t raw = ((uint16_t)hi << 8) | lo;
         return (raw & (1 << 15)) ? -(int16_t)(raw & ~(1 << 15)) : (int16_t)raw;
     }
 
+    /** 解码 ST3215 10 bit 幅值 + bit10 方向的负载字段。 */
     static int16_t decodeServoLoad(uint8_t lo, uint8_t hi)
     {
         const uint16_t raw = ((uint16_t)hi << 8) | lo;
@@ -654,6 +679,7 @@ private:
         return (raw & (1 << 10)) ? (int16_t)-magnitude : magnitude;
     }
 
+    /** 用最新 raw 更新 hardware ABS，并据 logicalOffset 维护诊断圈数。 */
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)
     {
         ServoFeedbackInternal& fb = _feedback[id];
@@ -680,18 +706,18 @@ private:
         fb.initialized = true;
     }
 
-    SMS_STS _sms;
-    HardwareSerial* _serial;
-    uint8_t _writeIDs[MAX_SERVOS_PER_BUS];
-    int16_t _writePos[MAX_SERVOS_PER_BUS];
-    uint16_t _writeSpd[MAX_SERVOS_PER_BUS];
-    uint8_t _writeAcc[MAX_SERVOS_PER_BUS];
-    uint8_t _writeCount;
-    ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1];
-    bool _torqueDisabled[MAX_SERVO_ID + 1];
-    bool _multiTurnConfigured[MAX_SERVO_ID + 1];
-    uint16_t _syncReadTimeoutMs;
-    uint8_t _currentReadDivider;
+    SMS_STS _sms; ///< 唯一允许接触的飞特 SDK 实例。
+    HardwareSerial* _serial; ///< 当前驱动绑定的 UART，未 begin 时为空。
+    uint8_t _writeIDs[MAX_SERVOS_PER_BUS]; ///< 同步写 ID 缓存。
+    int16_t _writePos[MAX_SERVOS_PER_BUS]; ///< 同步写 hardware ABS 缓存。
+    uint16_t _writeSpd[MAX_SERVOS_PER_BUS]; ///< 同步写速度缓存。
+    uint8_t _writeAcc[MAX_SERVOS_PER_BUS]; ///< 同步写加速度缓存。
+    uint8_t _writeCount; ///< 当前同步写缓存中的有效命令数。
+    ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1]; ///< 按物理 ID 索引的驱动私有状态。
+    bool _torqueDisabled[MAX_SERVO_ID + 1]; ///< 最近一次成功设置的扭矩关闭状态。
+    bool _multiTurnConfigured[MAX_SERVO_ID + 1]; ///< 本次上线是否已完成多圈配置。
+    uint16_t _syncReadTimeoutMs; ///< 单次同步读响应时限。
+    uint8_t _currentReadDivider; ///< 降频读取 Present Current 的分频计数器。
 };
 
 

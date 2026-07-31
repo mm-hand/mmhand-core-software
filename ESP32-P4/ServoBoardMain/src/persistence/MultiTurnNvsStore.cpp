@@ -4,6 +4,7 @@
  */
 #include "MultiTurnNvsStore.h"
 
+#include "../config/BoardConfig.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 
 #include <stddef.h>
@@ -66,7 +67,8 @@ static uint32_t snapshotCrc(const MultiTurnNvsSnapshot& snapshot)
 static uint32_t mappingSignature()
 {
     uint32_t crc = 0;
-    uint8_t byte = (uint8_t)HAND_PROFILE;
+    // 保留原 V2 签名值 2，使重构前写入的快照仍能通过映射校验。
+    uint8_t byte = kHardwareMappingVersion;
     crc = crc32Update(crc, &byte, 1);
     byte = (uint8_t)SERVO_TOTAL_NUM;
     crc = crc32Update(crc, &byte, 1);

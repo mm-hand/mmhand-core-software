@@ -9,37 +9,37 @@
 #include "../config/DimensionsConfig.h"
 #include <stdint.h>
 
-inline constexpr uint8_t SERVO_TARGET_OWNER_NONE = 0;
-inline constexpr uint8_t SERVO_TARGET_OWNER_CONTROL = 1;
-inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2;
-inline constexpr uint8_t SERVO_TARGET_BATCH_MAX = SERVO_TOTAL_NUM;
+inline constexpr uint8_t SERVO_TARGET_OWNER_NONE = 0;        ///< 当前没有任务拥有舵机输出权。
+inline constexpr uint8_t SERVO_TARGET_OWNER_CONTROL = 1;     ///< 控制/直控/Rope Init 共用的执行 owner。
+inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2; ///< 自动标定任务独占 owner。
+inline constexpr uint8_t SERVO_TARGET_BATCH_MAX = SERVO_TOTAL_NUM; ///< 单批最多覆盖全手 27 台舵机。
 
 struct ServoTargetCommand_t {
-    uint8_t busIndex;
-    uint8_t servoId;
-    int32_t position;
-    uint16_t speed;
-    uint8_t acc;
+    uint8_t busIndex;  ///< 目标 UART 总线索引，范围 0..NUM_BUSES-1。
+    uint8_t servoId;   ///< 飞特总线内的物理 ID。
+    int32_t position;  ///< P4 logical ABS counts，不是舵机 hardware ABS。
+    uint16_t speed;    ///< 飞特位置命令速度参数，0 表示固件默认策略。
+    uint8_t acc;       ///< 飞特位置命令加速度参数。
 };
 
 struct ServoTargetBatch_t {
-    uint8_t count;
-    uint8_t source;
-    ServoTargetCommand_t commands[SERVO_TARGET_BATCH_MAX];
-    uint32_t timestamp;
+    uint8_t count;     ///< commands 中有效命令数量。
+    uint8_t source;    ///< SERVO_TARGET_OWNER_*，执行时再次核对 owner。
+    ServoTargetCommand_t commands[SERVO_TARGET_BATCH_MAX]; ///< 同一控制周期的原子目标快照。
+    uint32_t timestamp; ///< 生产者生成批次的单调毫秒时间。
 };
 
 struct ControlCommandSnapshot_t {
-    float targetAngles[ENCODER_TOTAL_NUM];
-    int32_t motorTargetRaw[SERVO_TOTAL_NUM];
-    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];
-    uint32_t motorCommandToken;
-    uint32_t motorSweepCommandToken;
-    uint32_t jointCommandToken;
-    uint32_t feedbackCommandJointMask;
-    uint32_t motorDirectCommandGeneration;
-    uint8_t motorDirectCommandSource;
-    uint8_t controlMode;
+    float targetAngles[ENCODER_TOTAL_NUM];               ///< 关节目标角，单位 degree。
+    int32_t motorTargetRaw[SERVO_TOTAL_NUM];             ///< 单次直控相对目标，单位 counts。
+    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];        ///< 滑条扫动目标，单位 counts。
+    uint32_t motorCommandToken;                          ///< 单次直控命令版本号。
+    uint32_t motorSweepCommandToken;                     ///< 扫动命令版本号。
+    uint32_t jointCommandToken;                          ///< 关节目标命令版本号。
+    uint32_t feedbackCommandJointMask;                   ///< 本次反馈命令实际涉及的关节位图。
+    uint32_t motorDirectCommandGeneration;               ///< 直控会话代次，隔离旧完成事件。
+    uint8_t motorDirectCommandSource;                    ///< MOTOR_DIRECT_SOURCE_*。
+    uint8_t controlMode;                                 ///< CONTROL_MODE_*。
 };
 
 #endif // MMHAND_ACTUATOR_TYPES_H

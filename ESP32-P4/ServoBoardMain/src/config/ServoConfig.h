@@ -11,9 +11,13 @@
 // 该宏参与条件编译，暂时保留宏形式以兼容 Arduino 预处理器。
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
 
-inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3;
-inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400;
-inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200;
+#ifndef SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
+#define SERVO_CONFIGURE_MULTI_TURN_ON_BOOT 1
+#endif
+
+inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3; ///< 同步读单批等待时限。
+inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400; ///< 标定/直控默认速度。
+inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200; ///< 标定/直控默认加速度。
 /** NVS 快照在单圈零点两侧该距离内时，额外触发一次边界保存。 */
 inline constexpr int16_t kMultiTurnEdgeRawMarginCounts = 256;
 
@@ -26,6 +30,12 @@ inline constexpr uint32_t kNvsSaveMinIntervalMs = 500;
 inline constexpr uint32_t kNvsOfflinePeriodicSaveMs = 2000;
 inline constexpr uint16_t kNvsRestoreRawToleranceCounts = 256;
 inline constexpr int32_t kNvsMoveAbsThreshold = 64;
+inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
+inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
+inline constexpr uint8_t kOnlineConfirmReads = 2; ///< 连续成功读取达到此值才判上线。
+inline constexpr uint32_t kOfflineProbeIntervalMs = 50; ///< 每周期仅探测一台离线舵机。
+inline constexpr uint8_t kRecoveryMaxAttempts = 3; ///< 单次上线恢复最大尝试次数。
+inline constexpr uint32_t kRecoveryRetryIntervalMs = 100; ///< 上线恢复重试间隔。
 
 } // namespace mmhand::config::servo
 

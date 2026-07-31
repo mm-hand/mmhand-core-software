@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+/** 标定失败原因编号直接进入上位机协议；空缺值属于已删除旧原因，禁止复用。 */
 inline constexpr uint8_t CALIB_DIAG_REASON_NONE = 0;
 inline constexpr uint8_t CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY = 1;
 inline constexpr uint8_t CALIB_DIAG_REASON_ENCODER_ERROR = 5;
@@ -28,6 +29,7 @@ inline constexpr uint8_t CALIB_DIAG_REASON_JOINT_STEP_FAILED = 25;
 inline constexpr uint8_t CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT = 26;
 inline constexpr uint8_t CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS = 27;
 
+/** 标定阶段用于把同一原因定位到具体动作区间。 */
 inline constexpr uint8_t CALIB_DIAG_PHASE_NONE = 0;
 inline constexpr uint8_t CALIB_DIAG_PHASE_INIT = 1;
 inline constexpr uint8_t CALIB_DIAG_PHASE_FIND_MAX = 2;
@@ -38,17 +40,17 @@ inline constexpr uint8_t CALIB_DIAG_PHASE_DUAL_EXCHANGE = 6;
 inline constexpr uint8_t CALIB_DIAG_PHASE_SEQUENCE = 7;
 
 struct CalibrationDiagData_t {
-    uint8_t valid;
-    uint8_t reason;
-    uint8_t phase;
-    uint8_t joint;
-    uint8_t motor;
-    int32_t valueA;
-    int32_t valueB;
-    int32_t valueC;
-    uint32_t bitmap;
-    uint32_t timestamp;
-    uint32_t sequence;
+    uint8_t valid;     ///< 1 表示其余字段构成有效诊断。
+    uint8_t reason;    ///< CALIB_DIAG_REASON_*。
+    uint8_t phase;     ///< CALIB_DIAG_PHASE_*。
+    uint8_t joint;     ///< 失败关节 Jxx，0xFF 表示不适用。
+    uint8_t motor;     ///< 失败舵机 Mxx，0xFF 表示不适用。
+    int32_t valueA;    ///< 原因相关诊断值，含义由 reason/phase 决定。
+    int32_t valueB;    ///< 原因相关诊断值，含义由 reason/phase 决定。
+    int32_t valueC;    ///< 原因相关诊断值，含义由 reason/phase 决定。
+    uint32_t bitmap;   ///< 失败/依赖关节或舵机位图。
+    uint32_t timestamp; ///< 故障产生时间。
+    uint32_t sequence;  ///< 单调诊断序号，供 UI 去重弹窗。
 };
 
 #endif // MMHAND_CALIBRATION_TYPES_H
