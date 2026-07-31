@@ -10,12 +10,10 @@
 #include "../calibration/CalibrationTask.h"
 
 static const uint32_t kManualEncoderReferenceFullMask =
-    (1UL << ENCODER_TOTAL_NUM) - 1UL;
+    (1UL << ENCODER_TOTAL_NUM) - 1UL; ///< 21 个磁编 Manual 端点全有效位图。
 
-// Validate that operator-entered endpoint pairs are present and in the raw
-// 14-bit range. A zero-span pair is allowed to be persisted so Min and Max can
-// be captured in separate operations. Runtime motion gates separately require
-// a non-zero directed span through manualEncoderReferencesCoverActiveMask().
+// 校验人工端点是否落在 14 位 raw 范围。允许暂存零跨度，便于 Min/Max 分两次采集；
+// 真正进入运动前由 manualEncoderReferencesCoverActiveMask 再要求非零有向跨度。
 bool manualEncoderReferencesValidate(
     const ManualEncoderReference* references,
     uint32_t* outValidMask = NULL);
@@ -29,18 +27,17 @@ uint32_t manualEncoderReferenceEntryCrc(
     uint8_t jointIndex,
     const ManualEncoderReference& reference);
 
-// RAM helpers used by the boot path, protocol handler and hard gates.
+// 启动恢复、协议写入和运动硬门禁共用的 RAM 镜像操作。
 void manualEncoderReferencesClearRam();
 void manualEncoderReferencesApplyRam(
     const ManualEncoderReference* references);
 uint32_t manualEncoderReferencesValidMask();
 bool manualEncoderReferencesComplete();
-// True only when every requested stored pair also has a usable non-zero span.
+// 仅当 requiredMask 每一路都有效且有可用非零跨度时返回 true。
 bool manualEncoderReferencesCoverActiveMask(uint32_t requiredMask);
 
-// Independent A/B NVS snapshot. V2 persists a validity bitmap so one selected
-// hand/finger scope can be commissioned without fabricating the other joints.
-// Legacy V1 full snapshots remain readable.
+// 独立 A/B NVS 快照。当前 V2 保存有效位图，允许只配置一只手指/局部 scope；
+// 仍读取 V1 全量快照，避免升级固件后丢失已录入的人工端点。
 bool manualCalibrationNvsLoadLatest(
     ManualEncoderReference* outReferences,
     uint32_t* outSequence = NULL,

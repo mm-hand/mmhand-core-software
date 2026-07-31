@@ -16,35 +16,35 @@
 
 namespace {
 
-static const char* kNamespace = "manual_cal";
-static const char* kSlot0Key = "slot0";
-static const char* kSlot1Key = "slot1";
-static const uint32_t kMagic = 0x4D43414CUL; // MCAL
-static const uint16_t kVersionV1 = 1;
-static const uint16_t kVersionV2 = 2;
-static bool g_nvsReady = false;
+static const char* kNamespace = "manual_cal"; ///< NVS namespace，升级时不得随意改名。
+static const char* kSlot0Key = "slot0";       ///< A 槽 key。
+static const char* kSlot1Key = "slot1";       ///< B 槽 key。
+static const uint32_t kMagic = 0x4D43414CUL;  ///< ASCII "MCAL"。
+static const uint16_t kVersionV1 = 1;         ///< 历史全量有效布局，只读迁移。
+static const uint16_t kVersionV2 = 2;         ///< 当前带 validMask 的布局。
+static bool g_nvsReady = false;               ///< 本进程是否已成功初始化 NVS。
 
 struct ManualCalibrationNvsSnapshotV1 {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t jointCount;
-    uint32_t sequence;
-    uint16_t minRaw[ENCODER_TOTAL_NUM];
-    uint16_t maxRaw[ENCODER_TOTAL_NUM];
-    uint32_t referenceCrc;
-    uint32_t crc32;
+    uint32_t magic;                         ///< kMagic。
+    uint16_t version;                       ///< 固定为 1。
+    uint16_t jointCount;                    ///< 写入时关节数。
+    uint32_t sequence;                      ///< A/B 槽序号。
+    uint16_t minRaw[ENCODER_TOTAL_NUM];     ///< 人工 Min raw。
+    uint16_t maxRaw[ENCODER_TOTAL_NUM];     ///< 人工 Max raw。
+    uint32_t referenceCrc;                  ///< 端点语义 CRC。
+    uint32_t crc32;                         ///< 结构体内容 CRC。
 };
 
 struct ManualCalibrationNvsSnapshot {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t jointCount;
-    uint32_t sequence;
-    uint32_t validMask;
-    uint16_t minRaw[ENCODER_TOTAL_NUM];
-    uint16_t maxRaw[ENCODER_TOTAL_NUM];
-    uint32_t referenceCrc;
-    uint32_t crc32;
+    uint32_t magic;                         ///< kMagic。
+    uint16_t version;                       ///< 固定为当前 kVersionV2。
+    uint16_t jointCount;                    ///< 必须等于 ENCODER_TOTAL_NUM。
+    uint32_t sequence;                      ///< A/B 槽序号。
+    uint32_t validMask;                     ///< 已人工录入的 Jxx。
+    uint16_t minRaw[ENCODER_TOTAL_NUM];     ///< 人工 Min raw。
+    uint16_t maxRaw[ENCODER_TOTAL_NUM];     ///< 人工 Max raw。
+    uint32_t referenceCrc;                  ///< 端点语义 CRC。
+    uint32_t crc32;                         ///< 除本字段外结构体 CRC。
 };
 
 static_assert(sizeof(ManualCalibrationNvsSnapshotV1) == 104,
@@ -52,6 +52,7 @@ static_assert(sizeof(ManualCalibrationNvsSnapshotV1) == 104,
 static_assert(sizeof(ManualCalibrationNvsSnapshot) == 108,
               "unexpected Manual calibration NVS V2 layout");
 
+/** 初始化 NVS；存储页损坏或版本变化时按 ESP-IDF 建议擦除并重试。 */
 bool ensureNvsReady()
 {
     if (g_nvsReady) {
@@ -69,6 +70,7 @@ bool ensureNvsReady()
     return g_nvsReady;
 }
 
+/** 标准 CRC32 更新，供结构体和端点语义校验复用。 */
 uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len)
 {
     crc = ~crc;
@@ -82,6 +84,7 @@ uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len)
     return ~crc;
 }
 
+/** 计算 V2 快照除 crc32 字段外的完整性 CRC。 */
 uint32_t snapshotCrc(const ManualCalibrationNvsSnapshot& snapshot)
 {
     return crc32Update(
@@ -90,6 +93,7 @@ uint32_t snapshotCrc(const ManualCalibrationNvsSnapshot& snapshot)
         offsetof(ManualCalibrationNvsSnapshot, crc32));
 }
 
+/** 将持久化数组解包成运行时 ManualEncoderReference。 */
 void snapshotToReferences(const ManualCalibrationNvsSnapshot& snapshot,
                           ManualEncoderReference* references)
 {
@@ -101,6 +105,7 @@ void snapshotToReferences(const ManualCalibrationNvsSnapshot& snapshot,
     }
 }
 
+/** 把历史“21 路全有效”V1 内容转换成当前 V2 RAM 表示。 */
 void snapshotV1ToV2(const ManualCalibrationNvsSnapshotV1& source,
                     ManualCalibrationNvsSnapshot* destination)
 {
@@ -115,6 +120,7 @@ void snapshotV1ToV2(const ManualCalibrationNvsSnapshotV1& source,
     destination->referenceCrc = source.referenceCrc;
 }
 
+/** 同时校验布局、结构 CRC、有效位端点和语义 CRC。 */
 bool validateSnapshot(const ManualCalibrationNvsSnapshot& snapshot)
 {
     if (snapshot.magic != kMagic ||
@@ -134,6 +140,7 @@ bool validateSnapshot(const ManualCalibrationNvsSnapshot& snapshot)
            snapshot.referenceCrc == manualEncoderReferencesCrc(references);
 }
 
+/** 读取一个 A/B 槽；V1 仅在通过旧布局校验后转换，V2 走完整校验。 */
 bool loadSlot(nvs_handle_t handle,
               const char* key,
               ManualCalibrationNvsSnapshot* outSnapshot)
@@ -177,6 +184,7 @@ bool loadSlot(nvs_handle_t handle,
     return true;
 }
 
+/** 从两个有效槽中选择 sequence 最新者。 */
 bool loadLatestSnapshot(ManualCalibrationNvsSnapshot* outSnapshot)
 {
     if (!outSnapshot || !ensureNvsReady()) {

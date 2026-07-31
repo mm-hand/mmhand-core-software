@@ -22,25 +22,25 @@ enum TaskRuntimeId : uint8_t {
 
 // 单个任务的累计运行诊断。时间单位除明确标注 Ms 外均为微秒。
 struct TaskRuntimeSnapshot {
-    uint8_t taskId;
-    uint8_t active;
-    uint8_t priority;
-    int8_t coreId;
-    uint32_t stackAllocatedBytes;
-    uint32_t stackCurrentFreeBytes;
-    uint32_t stackMinFreeBytes;
-    uint32_t loopCount;
-    uint32_t maxGapUs;
-    uint32_t maxExecUs;
-    uint32_t overrunCount;
-    uint16_t consecutiveOverruns;
-    uint16_t maxConsecutiveOverruns;
-    uint16_t core0IdlePermille;
-    uint16_t core1IdlePermille;
-    uint32_t systemStatusMaxGapMs;
-    uint32_t stopLastLatencyUs;
-    uint32_t stopMaxLatencyUs;
-    uint32_t timestampMs;
+    uint8_t taskId;                 ///< TASK_RUNTIME_* 固定槽号。
+    uint8_t active;                 ///< 任务是否已注册且句柄有效。
+    uint8_t priority;               ///< FreeRTOS 当前优先级。
+    int8_t coreId;                  ///< -1 未绑定；0/1 为固定核心。
+    uint32_t stackAllocatedBytes;   ///< 创建任务时分配的栈字节数。
+    uint32_t stackCurrentFreeBytes; ///< 最近采样的剩余栈。
+    uint32_t stackMinFreeBytes;     ///< 启动以来最小剩余栈。
+    uint32_t loopCount;             ///< 完成的任务循环总数。
+    uint32_t maxGapUs;              ///< 相邻循环开始的最大间隔。
+    uint32_t maxExecUs;             ///< 单轮循环最大执行时间。
+    uint32_t overrunCount;          ///< 周期超限累计次数。
+    uint16_t consecutiveOverruns;   ///< 当前连续超限次数。
+    uint16_t maxConsecutiveOverruns;///< 历史最大连续超限次数。
+    uint16_t core0IdlePermille;     ///< Core0 idle 千分比。
+    uint16_t core1IdlePermille;     ///< Core1 idle 千分比。
+    uint32_t systemStatusMaxGapMs;  ///< SYSTEM_STATUS 最大发送间隔。
+    uint32_t stopLastLatencyUs;     ///< 最近 STOP 到断扭矩延迟。
+    uint32_t stopMaxLatencyUs;      ///< 历史最大 STOP 延迟。
+    uint32_t timestampMs;           ///< 生成快照的 P4 millis()。
 };
 
 // 任务创建/销毁时登记句柄和分配栈，AutoCalibrationTask 会动态注册和注销。

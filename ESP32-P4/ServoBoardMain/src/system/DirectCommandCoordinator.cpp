@@ -97,7 +97,7 @@ void setCommandModeDirect(TaskSharedData_t* sharedData)
 }
 
 void clearPendingDirectCommand(TaskSharedData_t* sharedData,
-                                      uint8_t rejectReason)
+                               uint8_t rejectReason)
 {
     // 只清 staged 命令，不覆盖已经生效并正在执行的 motorTargetRaw。
     if (!sharedData) {
@@ -119,7 +119,7 @@ void clearPendingDirectCommand(TaskSharedData_t* sharedData,
 }
 
 bool pendingDirectCommandMatches(TaskSharedData_t* sharedData,
-                                        uint32_t generation)
+                                 uint32_t generation)
 {
     if (!sharedData) {
         return false;
@@ -138,7 +138,7 @@ bool pendingDirectCommandMatches(TaskSharedData_t* sharedData,
 }
 
 uint32_t pendingDirectMotorMask(TaskSharedData_t* sharedData,
-                                       uint32_t generation)
+                                uint32_t generation)
 {
     if (!sharedData) {
         return 0;
@@ -159,8 +159,8 @@ uint32_t pendingDirectMotorMask(TaskSharedData_t* sharedData,
 }
 
 void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
-                                       uint32_t generation,
-                                       uint8_t rejectReason)
+                                uint32_t generation,
+                                uint8_t rejectReason)
 {
     // generation 必须匹配，旧事件不能拒绝后来写入的新直控命令。
     if (!sharedData) {
@@ -185,7 +185,7 @@ void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
 }
 
 bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
-                                        uint32_t generation)
+                                 uint32_t generation)
 {
     // 状态/在线/多圈门禁通过后，才把 pending 命令及其 active scope
     // 一次性提升为 ControlTask 可见的正式直控命令。
@@ -244,6 +244,4 @@ bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
     }
     return true;
 }
-
-
 } // namespace mmhand::system

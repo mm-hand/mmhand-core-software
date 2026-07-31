@@ -53,6 +53,7 @@ TaskRuntimeCounterType g_previousTotalRuntime = 0;
 TaskRuntimeCounterType g_previousIdleRuntime[2] = {0, 0};
 #endif
 
+/** 将有符号微秒差安全压入 uint32 诊断字段。 */
 uint32_t clampUs(int64_t value)
 {
     if (value <= 0) return 0;
@@ -60,6 +61,7 @@ uint32_t clampUs(int64_t value)
     return (uint32_t)value;
 }
 
+/** 读取当前任务剩余栈字节；FreeRTOS high-water mark 原始单位为 StackType_t。 */
 uint32_t sampleCurrentTaskStackFreeBytes()
 {
     // 当前栈指针减去栈起始地址，用于估算“此刻剩余栈”；
@@ -75,6 +77,7 @@ uint32_t sampleCurrentTaskStackFreeBytes()
 #endif
 }
 
+/** 采样全部已注册任务的当前/历史最小剩余栈。 */
 void sampleTaskStacks()
 {
     for (uint8_t id = 0; id < TASK_RUNTIME_COUNT; id++) {
@@ -96,6 +99,7 @@ void sampleTaskStacks()
     }
 }
 
+/** 用两个核心 idle hook 的增量估算最近窗口 idle 千分比。 */
 void sampleCoreIdle()
 {
 #if defined(configGENERATE_RUN_TIME_STATS) && (configGENERATE_RUN_TIME_STATS == 1) && \

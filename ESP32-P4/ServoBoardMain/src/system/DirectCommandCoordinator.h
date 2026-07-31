@@ -14,18 +14,26 @@
 
 namespace mmhand::system {
 
+/** 清空关节/直控目标并推进全部 token，使复位前遗留事件失效。 */
 void resetCommandState(TaskSharedData_t* sharedData);
+/** 切换到关节角控制模式；互斥锁超时时返回 false。 */
 bool setCommandModeJoint(TaskSharedData_t* sharedData);
+/** 切换到舵机直控模式，不改变已经应用的目标数组。 */
 void setCommandModeDirect(TaskSharedData_t* sharedData);
+/** 清除任意代际的 pending 直控命令，并保存拒绝原因。 */
 void clearPendingDirectCommand(TaskSharedData_t* sharedData,
                                uint8_t rejectReason);
+/** 检查指定 generation 是否仍是当前待审查命令。 */
 bool pendingDirectCommandMatches(TaskSharedData_t* sharedData,
                                  uint32_t generation);
+/** 读取指定 generation 的舵机范围；代际已过期时返回 0。 */
 uint32_t pendingDirectMotorMask(TaskSharedData_t* sharedData,
                                 uint32_t generation);
+/** 仅在 generation 匹配时拒绝 pending，防止旧事件误伤新命令。 */
 void rejectPendingDirectCommand(TaskSharedData_t* sharedData,
                                 uint32_t generation,
                                 uint8_t rejectReason);
+/** 门禁通过后原子应用 pending 目标、active scope 和控制模式。 */
 bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
                                  uint32_t generation);
 

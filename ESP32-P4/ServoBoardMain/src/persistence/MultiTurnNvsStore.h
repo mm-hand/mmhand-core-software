@@ -9,24 +9,23 @@
 
 #include "../shared/TaskSharedData.h"
 
-// Lower-side multi-turn safety snapshot. It stores turn + raw rather than only
-// ABS, so boot restore can verify the physical single-turn raw before trusting it.
+// 下位机多圈安全快照保存 turn+raw，而不是只保存 ABS；上电时必须先比较
+// 物理单圈 raw，匹配后才允许恢复 logical ABS。
 struct MultiTurnNvsSnapshot {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t motorCount;
-    uint32_t sequence;
-    uint32_t validMask;
-    uint32_t mappingSignature;
-    int16_t turns[SERVO_TOTAL_NUM];
-    int16_t raw[SERVO_TOTAL_NUM];
-    uint32_t crc32;
+    uint32_t magic;                  ///< 固定文件魔数。
+    uint16_t version;                ///< 当前持久化布局版本。
+    uint16_t motorCount;             ///< 写入时固件的舵机通道数。
+    uint32_t sequence;               ///< A/B 双槽单调递增序号。
+    uint32_t validMask;              ///< 本快照可信的 Mxx 位图。
+    uint32_t mappingSignature;       ///< HardwareMap 拓扑签名。
+    int16_t turns[SERVO_TOTAL_NUM];  ///< 每路完整圈数。
+    int16_t raw[SERVO_TOTAL_NUM];    ///< 每路断电前单圈 raw。
+    uint32_t crc32;                  ///< 除本字段外全部内容 CRC32。
 };
 
-// Load the newest valid A/B slot. Bad CRC/version slots are ignored.
+// 读取 A/B 中 sequence 最新且校验通过的槽；坏 CRC/版本会被忽略。
 bool multiTurnNvsLoadLatest(MultiTurnNvsSnapshot* outSnapshot);
-// Save trusted motors. Motors not present in this cycle keep their old values
-// so a local active scope does not erase unrelated channels.
+// 保存可信通道；本轮不在 validMask 中的通道继承旧值，避免局部 scope 擦除其他关节。
 bool multiTurnNvsSaveSnapshot(uint32_t validMask,
                               const int32_t* motorAbs,
                               const int16_t* motorRaw,
@@ -41,12 +40,12 @@ bool multiTurnNvsReplaceChannelsWithTurnZero(
     uint32_t* outSequence,
     uint32_t* outStoredValidMask = NULL,
     MultiTurnNvsSnapshot* outStoredSnapshot = NULL);
-// Persistent user switch. Disabled means do not boot-restore and do not save.
+// 用户持久化开关；关闭时既不在启动时恢复，也不写入新快照。
 bool multiTurnNvsLoadEnabled(bool* outEnabled);
 bool multiTurnNvsSetEnabled(bool enabled);
 bool multiTurnNvsClearSnapshots();
 bool multiTurnNvsHasSnapshot();
-// Rebuild logical ABS from stored turn + raw.
+// 从快照 turn+raw 重建 P4 logical ABS。
 int32_t multiTurnSnapshotAbsForChannel(const MultiTurnNvsSnapshot& snapshot, uint8_t ch);
 
 #endif // MULTI_TURN_NVS_STORE_H

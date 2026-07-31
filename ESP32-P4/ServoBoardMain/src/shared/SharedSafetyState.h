@@ -12,11 +12,11 @@
 
 #include "../platform/AtomicValue.h"
 
-// Serializes short multi-field safety snapshots across the P4 cores. Never
-// perform I/O, queue operations, delays, or NVS access while this lock is held.
+// 串行化跨核的短小多字段安全快照；持锁期间禁止 I/O、队列、delay 和 NVS 操作。
 void sharedSafetyLock(void);
 void sharedSafetyUnlock(void);
 
+/** RAII 临界区，确保所有提前 return 路径都会释放跨核锁。 */
 class SharedSafetyGuard {
 public:
     SharedSafetyGuard() { sharedSafetyLock(); }
