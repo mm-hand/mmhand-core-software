@@ -11,7 +11,7 @@
 
 namespace mmhand::upper {
 
-// Append a float using big-endian wire order.
+// 按协议大端序追加 float 的 IEEE-754 位模式，不做数值格式转换。
 void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
 {
     uint32_t bits = 0;
@@ -68,7 +68,7 @@ uint16_t crc16Ccitt(const uint8_t* data, size_t len)
     return crc;
 }
 
-// Decode a little-endian float from command payload.
+// 从命令 payload 的小端 IEEE-754 位模式还原 float。
 float decodeFloatLittleEndian(const uint8_t* data)
 {
     uint32_t bits = 0;
@@ -81,7 +81,7 @@ float decodeFloatLittleEndian(const uint8_t* data)
     return out;
 }
 
-// Parse a little-endian float array from command payload.
+// 解析固定数量的小端 float；长度不足时整帧拒绝，避免产生半帧关节目标。
 bool parseFloatArrayLittleEndian(const uint8_t* payload, size_t payloadLen, float* outValues, uint8_t count)
 {
     if (!payload || !outValues) {
@@ -98,7 +98,7 @@ bool parseFloatArrayLittleEndian(const uint8_t* payload, size_t payloadLen, floa
     return true;
 }
 
-// Parse a big-endian int16 array from command payload.
+// 解析固定数量的大端 int16，并符号扩展为内部 int32。
 bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, int32_t* outValues, uint8_t count)
 {
     if (!payload || !outValues) {
@@ -142,7 +142,7 @@ float readFloatBigEndian(const uint8_t* p)
     return value;
 }
 
-// Return command payload length, excluding the command byte.
+// 返回命令字节之后的固定 payload 长度；未知命令返回 SIZE_MAX。
 size_t getCommandPayloadLength(uint8_t cmd)
 {
     switch (cmd)

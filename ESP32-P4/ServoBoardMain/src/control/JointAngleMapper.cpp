@@ -15,6 +15,7 @@ using namespace mmhand::config::control;
 
 int32_t orientEncoderRaw(uint16_t rawValue, int8_t direction)
 {
+    // 先折回 14 bit，再把反向安装统一成“机械正方向 raw 增加”。
     int32_t oriented = static_cast<int32_t>(rawValue) & (kEncoderModulo - 1);
     if (direction < 0) {
         oriented = (kEncoderModulo - oriented) & (kEncoderModulo - 1);
@@ -33,6 +34,7 @@ int32_t wrapEncoderCount(int32_t value)
 
 int32_t forwardEncoderDelta(int32_t from, int32_t to)
 {
+    // 结果始终取正向环形距离，跨 16383 -> 0 时仍保持连续。
     return wrapEncoderCount(to - from);
 }
 
@@ -53,12 +55,14 @@ int32_t degToEncoderCount(float deg)
 float mapCalibratedEncoderToDeg(const JointCalibrationResult& calibration,
                                 int32_t orientedRaw)
 {
+    // scaled 模型在 Auto 区间内相信实测跨度；超过末端后按一圈比例连续外推。
     if (calibration.scaled &&
         calibration.encoderSpan > 0 &&
         calibration.totalDeg > 0.0f) {
         int32_t delta =
             forwardEncoderDelta(calibration.startEncoder, orientedRaw);
         if (delta > calibration.encoderSpan + kEncoderMarginCounts) {
+            // 正向距离远超标定末端，实际位置位于起点反方向，改成负值表示。
             delta -= kEncoderModulo;
         }
         return (static_cast<float>(delta) /
@@ -67,6 +71,7 @@ float mapCalibratedEncoderToDeg(const JointCalibrationResult& calibration,
                calibration.startDeg;
     }
 
+    // 非 scaled 路径只服务仍在运行的旧映射版本，不参与当前 V3 Auto 结果生成。
     const int32_t offset = calibration.offset;
     int32_t delta = forwardEncoderDelta(offset, orientedRaw);
     int32_t hardMaxFromOffset =
@@ -88,6 +93,7 @@ float clampJointTargetDeg(float targetDeg, uint8_t jointIndex)
 
     float minDeg = 0.0f;
     float maxDeg = 0.0f;
+    // 有效 Auto 使用动态 Current Min/URDF Max；未标定仅给 UI/诊断提供静态 URDF 范围。
     const JointCalibrationResult& calibration =
         g_jointCalibResult[jointIndex];
     if (calibration.success) {

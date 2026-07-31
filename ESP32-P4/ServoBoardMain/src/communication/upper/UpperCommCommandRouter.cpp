@@ -13,17 +13,8 @@
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
 
-// Clamp a host absolute motor command to the firmware multi-turn range.
-int32_t clampServoAbsCommand(int32_t value)
-{
-    // 上位机传入的是 P4 逻辑多圈 ABS。每台舵机的实际行程校验统一在
-    // ServoCommunicationTask 中结合该电机自己的 logicalOffset 完成。
-    return value;
-}
-
-// A direct command is staged before the state machine accepts RUN_DIRECT.
-// If queuing that event fails, discard only the matching staged generation so
-// a later command is never cancelled accidentally.
+// RUN_DIRECT 被状态机接受前，直控目标只存在 pending 邮箱中。
+// 若事件入队失败，仅撤销同 generation 的目标，避免误删随后到达的新命令。
 static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
                                       uint32_t generation,
                                       uint8_t rejectReason)
@@ -52,6 +43,7 @@ static void cancelStagedDirectCommand(TaskSharedData_t* sharedData,
     }
 }
 
+// 提交一帧关节角目标；jointMask 与当前 active scope 取交集后才会参与 PID。
 void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
                                   const float* angles,
                                   uint8_t count,
@@ -75,7 +67,7 @@ void upperApplyTargetAnglesMasked(TaskSharedData_t* sharedData,
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE)
     {
         const uint32_t previousMask = sharedData->feedback_command_joint_mask;
-        // Write the complete joint target set while the command mutex is held.
+        // 在同一把命令锁内写完整角度数组和 token，ControlTask 不会读到半帧目标。
         for (uint8_t i = 0; i < count; i++) {
             sharedData->targetAngles[i] = angles[i];
         }
@@ -104,6 +96,7 @@ void upperApplyTargetAngles(TaskSharedData_t* sharedData,
     upperApplyTargetAnglesMasked(sharedData, angles, count, activeMask);
 }
 
+// 暂存整组舵机逻辑 ABS，generation 保证状态机只提升最新一帧直控命令。
 bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
                             const int32_t* targets,
                             uint8_t count,
@@ -123,7 +116,7 @@ bool upperApplyMotorTargets(TaskSharedData_t* sharedData,
            sharedData->motorTargetRaw,
            sizeof(sharedData->pendingMotorTargetRaw));
     for (uint8_t i = 0; i < count; i++) {
-        sharedData->pendingMotorTargetRaw[i] = clampServoAbsCommand(targets[i]);
+        sharedData->pendingMotorTargetRaw[i] = targets[i];
     }
     const uint32_t generation = sharedData->pending_direct_generation + 1U;
     sharedData->pending_direct_generation = generation;
@@ -164,13 +157,13 @@ bool upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
     }
     if (sharedData->pending_direct_valid != 0 &&
         sharedData->pending_direct_source != MOTOR_DIRECT_SOURCE_SWEEP) {
-        // Keep other edits from the newest not-yet-applied direct packet.
+        // 保留尚未提升的最新整组直控修改，避免单电机编辑覆盖同帧其他通道。
     } else {
         memcpy(sharedData->pendingMotorTargetRaw,
                sharedData->motorTargetRaw,
                sizeof(sharedData->pendingMotorTargetRaw));
     }
-    sharedData->pendingMotorTargetRaw[motorIndex] = clampServoAbsCommand(target);
+    sharedData->pendingMotorTargetRaw[motorIndex] = target;
     const uint32_t generation = sharedData->pending_direct_generation + 1U;
     sharedData->pending_direct_generation = generation;
     sharedData->pending_direct_source = source;
@@ -184,7 +177,7 @@ bool upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
     }
     FW_LOG_INFO_PRINTF("[UPPER] SINGLE_MOTOR_TARGET M%02u target=%ld mask=0x%08lX\r\n",
                   (unsigned)motorIndex,
-                  (long)clampServoAbsCommand(target),
+                  (long)target,
                   (unsigned long)motorMask);
     if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
         cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
@@ -193,6 +186,7 @@ bool upperApplySingleMotorTarget(TaskSharedData_t* sharedData,
     return true;
 }
 
+// Sweep 输入是单圈 raw，保持独立邮箱，进入 RUN_DIRECT 后再连续展开为多圈目标。
 bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* targets, uint8_t count)
 {
     if (!sharedData || !targets) {
@@ -232,6 +226,7 @@ bool upperApplyMotorSweepTargets(TaskSharedData_t* sharedData, const int32_t* ta
     return true;
 }
 
+// Active scope 仅能在无 owner、控制关闭的静止态修改，并在持锁后复核一次状态。
 bool upperApplyActiveScope(TaskSharedData_t* sharedData,
                            uint32_t activeMotorMask,
                            uint32_t activeJointMask,
@@ -262,9 +257,7 @@ bool upperApplyActiveScope(TaskSharedData_t* sharedData,
         return false;
     }
 
-    // Recheck after taking the command lock. A queued RUN_DIRECT event may
-    // otherwise take ownership between the optimistic check above and this
-    // scope update.
+    // 取锁后再次检查：第一次检查与 scope 写入之间，排队中的 RUN_DIRECT 可能已取得 owner。
     const uint8_t lockedState = sharedData->system_state;
     if (sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
         sharedData->control_enabled != 0 ||

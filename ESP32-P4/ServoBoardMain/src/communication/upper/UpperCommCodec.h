@@ -13,17 +13,21 @@
 
 namespace mmhand::upper {
 
+// append* 把主机标量按大端序追加到 buffer，并同步推进 index。
 void appendFloatBigEndian(uint8_t* buffer, size_t* index, float value);
 void appendI32BigEndian(uint8_t* buffer, size_t* index, int32_t value);
 void appendI16BigEndian(uint8_t* buffer, size_t* index, int16_t value);
 void appendU16BigEndian(uint8_t* buffer, size_t* index, uint16_t value);
 void appendU32BigEndian(uint8_t* buffer, size_t* index, uint32_t value);
+// read* 从固定宽度大端字段解码，不推进外部游标。
 uint32_t readU32BigEndian(const uint8_t* bytes);
 int32_t readI32BigEndian(const uint8_t* bytes);
 uint16_t readU16BigEndian(const uint8_t* bytes);
 float readFloatBigEndian(const uint8_t* bytes);
+// 目标角下行沿用 Python struct.pack("<f")，因此单独保留小端浮点解码。
 float decodeFloatLittleEndian(const uint8_t* bytes);
 
+// 严格检查 payloadLen 后解析固定长度数组；失败时不接受半包。
 bool parseFloatArrayLittleEndian(const uint8_t* payload,
                                  size_t payloadLen,
                                  float* outValues,
@@ -37,7 +41,9 @@ bool parseInt32ArrayBigEndian(const uint8_t* payload,
                               int32_t* outValues,
                               uint8_t count);
 
+// 协议快照/标定块使用的 CRC16-CCITT。
 uint16_t crc16Ccitt(const uint8_t* data, size_t length);
+// 返回 command 对应固定 payload 长度；未知命令返回 SIZE_MAX。
 size_t getCommandPayloadLength(uint8_t command);
 
 } // namespace mmhand::upper

@@ -28,15 +28,13 @@
 
 using namespace mmhand::upper;
 
-// UpperCommTask responsibilities:
-// 1) parse host commands and update shared command state;
-// 2) publish sensor, servo, telemetry, debug, and fault packets;
-// 3) keep protocol ACK and fault heartbeat reporting synchronized.
+// 职责：解析下行命令并更新共享命令状态；发送传感器/舵机/故障遥测；
+// 维护协议 ACK、周期心跳和长触觉包的发送节奏。
+static const uint16_t kEncoderDisconnectRaw = 0xFFFF; ///< CAN 磁编断开原始哨兵。
+static const uint8_t kTactileFullPacketMagic0 = 0x54; ///< 全量触觉分包魔数 'T'。
+static const uint8_t kTactileFullPacketMagic1 = 0x32; ///< 全量触觉分包版本 '2'。
 
-static const uint16_t kEncoderDisconnectRaw = 0xFFFF;
-static const uint8_t kTactileFullPacketMagic0 = 0x54; // 'T'
-static const uint8_t kTactileFullPacketMagic1 = 0x32; // '2'
-
+/** 校验快照 LUT 行数、采样数和 Mxx 归属是否与当前 HardwareMap 一致。 */
 static bool calibrationTendonLutMatchesJoint(
     uint8_t jointIndex,
     const JointCalibrationResult& result)
@@ -73,12 +71,14 @@ static bool calibrationTendonLutMatchesJoint(
     return true;
 }
 
+/** 饱和压入 int16 上行字段，避免调试值溢出后改变符号。 */
 static int16_t clampI16Local(int32_t value)
 {
     if (value > 32767) return 32767;
     if (value < -32768) return -32768;
     return (int16_t)value;
 }
+/** 返回 Manual、V3 Auto、URDF CRC 和单关节 Manual CRC 全部匹配的 Jxx。 */
 static uint32_t autoCalibrationValidMask(TaskSharedData_t* sharedData)
 {
     if (!sharedData) return 0;
@@ -99,6 +99,7 @@ static uint32_t autoCalibrationValidMask(TaskSharedData_t* sharedData)
     return mask;
 }
 
+/** 检查当前 active scope 是否已有 NVS Manual 且每路跨度非零。 */
 static bool activeManualReferencesReady(TaskSharedData_t* sharedData)
 {
     if (!sharedData || !sharedData->manual_reference_nvs_valid) return false;
@@ -108,7 +109,7 @@ static bool activeManualReferencesReady(TaskSharedData_t* sharedData)
     return manualEncoderReferencesCoverActiveMask(activeMask);
 }
 
-// Encode raw CAN magnetic encoder values for the sensor packet.
+// 将 CAN 磁编 raw 转为线上值；无效通道统一发送断开哨兵。
 static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
 {
     if (!channelValid) {
@@ -122,12 +123,14 @@ static uint16_t encodeRawEncoderForWire(uint16_t rawValue, bool channelValid)
     return rawValue;
 }
 
+/** 标定 ACK 是否仍需重复发送，防止上位机漏掉瞬时状态。 */
 static bool calibrationAckPending()
 {
     return g_calibrationAckStatus != CALIB_STATUS_IDLE &&
            g_calibrationAckRepeatRemaining > 0;
 }
 
+/** 消费一次待发标定 ACK；最后一次发送后自动恢复 IDLE。 */
 static uint8_t takeCalibrationAckStatusForPacket()
 {
     if (!calibrationAckPending()) {
@@ -161,7 +164,7 @@ static void sendProtoAckPacket(uint8_t cmd, uint8_t appliedMode, uint8_t status)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
-// Send the current state-machine status.
+// 上报状态机、owner、active scope、在线/故障和事务 token。
 static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -316,6 +319,7 @@ static bool sendSystemStatusPacket(TaskSharedData_t* sharedData)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
+/** 上报 21 路 Manual 端点、有效位、CRC 和 NVS 保存状态。 */
 static bool sendManualEncoderReferencePacket(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -365,6 +369,7 @@ static bool sendManualEncoderReferencePacket(TaskSharedData_t* sharedData)
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
+/** 上报一个 TaskRuntimeSnapshot，字段单位由 TaskRuntimeMonitor.h 约定。 */
 static void sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
 {
     uint8_t buffer[64];
@@ -397,7 +402,7 @@ static void sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
-// Send the servo overload fault bitmap plus the latched trigger load per motor.
+// 上报舵机过载位图和每路锁存的触发 load。
 static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloadFaultBitmap)
 {
     uint8_t buffer[12 + SERVO_TOTAL_NUM * 2];
@@ -428,8 +433,7 @@ static void sendFaultStatusPacket(TaskSharedData_t* sharedData, uint32_t overloa
     buffer[1] = (uint8_t)(idx - 2);
     FW_SERIAL_WRITE(buffer, idx);
 }
-
-
+/** 上报 27 路标定 ABS 边界、有效位和 LOCK 位。 */
 static void sendMotorAbsLimitPacket(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -509,6 +513,7 @@ static void sendServoLogicalRangePacket(TaskSharedData_t* sharedData)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
+/** 上报一个关节的 V3 Auto、Tendon LUT 和动态范围快照。 */
 static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) {
@@ -607,6 +612,7 @@ static void sendJointCalibSnapshotPacket(uint8_t jointIndex)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
+/** 上报最近一次结构化自动标定失败或警告。 */
 static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
 {
     uint8_t buffer[40];
@@ -635,6 +641,7 @@ static void sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
+/** 上报 21 路磁编 raw、有效状态和源快照时间。 */
 static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
 {
     uint8_t buffer[68];
@@ -660,6 +667,7 @@ static void sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
     FW_SERIAL_WRITE(buffer, idx);
 }
 
+/** 把一帧全量触觉拆成串口可承载的小包并保留同一采样时间戳。 */
 static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
 {
     if (!tactile.fullValid) {
@@ -703,7 +711,7 @@ static void sendTactileFullPackets(const RemoteTactileData_t& tactile)
     }
 }
 
-// Serialize one upstream data packet.
+// 汇总并发送一轮常规上行数据；各输入为空时跳过对应包。
 static void sendDataPacket(ServoStatus_t* pServo,
                            RemoteSensorData_t* pSensorRaw,
                            MappedAngleData_t* pMappedAngle,
@@ -870,12 +878,14 @@ static void sendDataPacket(ServoStatus_t* pServo,
     }
 }
 
+/** 解码协议中少量本地使用的 int16 大端字段。 */
 static int16_t readI16BigEndian(const uint8_t* p)
 {
     const uint16_t raw = ((uint16_t)p[0] << 8) | (uint16_t)p[1];
     return (int16_t)raw;
 }
 
+/** 标识必须已有 active scope Manual 才能接受的运动命令。 */
 static bool commandRequiresManualReference(uint8_t cmd)
 {
     switch (cmd) {
@@ -888,6 +898,7 @@ static bool commandRequiresManualReference(uint8_t cmd)
             return false;
     }
 }
+/** Manual 写入仅允许在无运动所有权的静止状态执行。 */
 static bool manualUpdateMotionActive(TaskSharedData_t* sharedData)
 {
     return !sharedData ||
@@ -900,6 +911,7 @@ static bool manualUpdateMotionActive(TaskSharedData_t* sharedData)
            sharedData->system_state == SYSTEM_STATE_PAUSED;
 }
 
+/** 比较写入前后 Manual，返回真正发生变化的 Jxx。 */
 static uint32_t changedManualReferenceMask(
     const ManualEncoderReference before[ENCODER_TOTAL_NUM],
     const ManualEncoderReference after[ENCODER_TOTAL_NUM])
@@ -915,6 +927,7 @@ static uint32_t changedManualReferenceMask(
     return changedMask & kManualEncoderReferenceFullMask;
 }
 
+/** 由 HardwareMap 计算一个 Jxx 对应的全部 Mxx。 */
 static uint32_t motorMaskForJoint(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) return 0;
@@ -952,6 +965,7 @@ static uint32_t jointMaskForMotorMask(uint32_t motorMask)
     return jointMask & kManualEncoderReferenceFullMask;
 }
 
+/** Manual 或 Reset Zero 变化后，只失效受影响 Jxx 的 Auto/LUT/ABS Limit。 */
 static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
                                            uint32_t jointMask)
 {
@@ -996,6 +1010,7 @@ static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
         (unsigned long)autoCalibrationValidMask(sharedData));
 }
 
+/** 消费舵机任务的 Reset Zero 结果，并联动失效关节标定。 */
 static void processServoResetZeroResult(TaskSharedData_t* sharedData,
                                         uint32_t* lastResultToken)
 {
@@ -1034,6 +1049,7 @@ static void processServoResetZeroResult(TaskSharedData_t* sharedData,
             &sharedData->servo_reset_zero_status));
 }
 
+/** 写 Manual 到 A/B NVS，读回 RAM 镜像并按变化范围失效 Auto。 */
 static uint8_t commitManualReferences(
     TaskSharedData_t* sharedData,
     const ManualEncoderReference references[ENCODER_TOTAL_NUM])
@@ -1070,7 +1086,7 @@ static uint8_t commitManualReferences(
     postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
     return PROTO_ACK_STATUS_OK;
 }
-// Apply a parsed downstream command frame.
+// 应用一帧已通过长度检查的下行命令，并返回对应协议 ACK。
 static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* frame, size_t frameLen)
 {
     if (!sharedData || !frame || frameLen == 0) {
@@ -1078,7 +1094,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
     }
 
     const uint8_t cmd = frame[0];
-    // Every valid framed host command refreshes the heartbeat timestamp.
+    // 每一帧通过结构校验的上位机命令都刷新心跳，不要求它一定是运动命令。
     sharedData->host_rx_heartbeat_ms = millis();
 
     if (cmd == CMD_HOST_HEARTBEAT)
@@ -1556,10 +1572,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
                         jointIndex, g_manualEncoderReference[jointIndex]);
                 const uint32_t localValidMask =
                     sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
-                // Legacy calibration coordinates are direction-oriented, while
-                // V3 auto endpoints must be physical 14-bit raw samples. Older
-                // firmware copied oriented values into these fields for
-                // direction=-1 joints and produced a false complement span.
+                // V3 Auto 端点必须是物理 14-bit raw；方向化标定坐标不能写入这些字段，
+                // 否则 direction=-1 关节会产生错误的补码跨度。
                 const uint16_t expectedAutoMinRaw =
                     (uint16_t)calibrationOrientEncoderRaw(
                         (uint16_t)calibrationWrapEncoderCount(
@@ -1938,8 +1952,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
 #endif
         }
-        // Prioritize the machine-readable ACK over diagnostic text. During
-        // servo hotplug recovery several tasks can log at once on this port.
+        // 机器可解析 ACK 优先于诊断文本；热插拔恢复时多个任务可能同时输出日志。
         sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL, sharedData->system_state, status);
         if (frameLen >= 1 + kMultiTurnNvsControlPayloadBytes && frame[1] == 0) {
             if (status == PROTO_ACK_STATUS_OK) {
@@ -1962,7 +1975,7 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
 }
 
-// Serial receive/transmit task.
+// 串口收发主任务：有限状态收包、命令分发、周期遥测和事务结果处理。
 void upperCommunicationTask(void* parameter)
 {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;

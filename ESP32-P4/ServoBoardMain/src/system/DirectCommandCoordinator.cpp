@@ -72,6 +72,7 @@ bool setCommandModeJoint(TaskSharedData_t* sharedData)
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return false;
     }
+    // 清除直控来源，避免 ControlTask 返回负反馈后仍按旧直控 generation 判定。
     sharedData->control_mode = CONTROL_MODE_JOINT;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
     if (lock) {
@@ -128,6 +129,7 @@ bool pendingDirectCommandMatches(TaskSharedData_t* sharedData,
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return false;
     }
+    // generation 是单调递增代际号，防止状态机处理排队事件时接受更早的目标。
     const bool matches =
         sharedData->pending_direct_valid != 0 &&
         sharedData->pending_direct_generation == generation;
@@ -147,6 +149,7 @@ uint32_t pendingDirectMotorMask(TaskSharedData_t* sharedData,
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return 0;
     }
+    // 只有同代际命令可暴露 scope，过期事件看到的 mask 必须为 0。
     const uint32_t motorMask =
         (sharedData->pending_direct_valid != 0 &&
          sharedData->pending_direct_generation == generation)
@@ -205,6 +208,7 @@ bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
     }
 
     const uint8_t source = sharedData->pending_direct_source;
+    // Sweep 与 ABS 使用不同目标邮箱/token，但共享同一代际和状态机门禁。
     if (source == MOTOR_DIRECT_SOURCE_SWEEP) {
         memcpy(sharedData->motorSweepTargetRaw,
                sharedData->pendingMotorSweepTargetRaw,
@@ -223,6 +227,7 @@ bool promotePendingDirectCommand(TaskSharedData_t* sharedData,
     sharedData->motor_direct_command_source = source;
     sharedData->applied_direct_generation = generation;
     {
+        // 目标与 active scope 在同一命令锁内生效，ControlTask 下一帧看到完整版本。
         SharedSafetyGuard guard;
         sharedAtomicStore(&sharedData->active_motor_mask,
                           sharedData->pending_direct_motor_mask & validMotorChannelMask());

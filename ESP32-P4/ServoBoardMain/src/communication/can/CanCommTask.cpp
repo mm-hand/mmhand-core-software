@@ -46,58 +46,60 @@ static_assert(
 static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
 typedef struct {
-    uint8_t active;
-    uint8_t frameMask;
-    uint8_t bytes[CAN_ENC_PAYLOAD_BYTES];
-    uint32_t firstFrameTimeMs;
+    uint8_t active;                       ///< 1 表示正在等待同一批编码器分帧。
+    uint8_t frameMask;                    ///< 已收到的 0x100 起始数据帧位图。
+    uint8_t bytes[CAN_ENC_PAYLOAD_BYTES]; ///< 21 路 uint16 raw 的连续字节。
+    uint32_t firstFrameTimeMs;            ///< 首帧 P4 millis()，用于超时丢包。
 } EncoderReassemblyState;
 
 typedef struct {
-    uint8_t active;
-    uint8_t seq;
-    uint8_t frameMask;
-    uint8_t codes[ENCODER_TOTAL_NUM];
-    uint32_t firstFrameTimeMs;
+    uint8_t active;                    ///< 是否正在重组 error detail。
+    uint8_t seq;                       ///< S3 批次序号，跨批帧不得混合。
+    uint8_t frameMask;                 ///< 三个错误详情帧位图。
+    uint8_t codes[ENCODER_TOTAL_NUM];  ///< 每路 S3 原始错误码。
+    uint32_t firstFrameTimeMs;         ///< 首帧时间。
 } ErrorDetailReassemblyState;
 
 typedef struct {
-    uint8_t active;
-    uint8_t seq;
-    uint8_t frameMask;
-    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES];
-    uint32_t firstFrameTimeMs;
+    uint8_t active;                              ///< 是否正在重组触觉摘要。
+    uint8_t seq;                                 ///< S3 摘要批次序号。
+    uint8_t frameMask;                           ///< 七个摘要帧位图。
+    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES];///< 45 字节摘要+CRC16。
+    uint32_t firstFrameTimeMs;                   ///< 首帧时间。
 } TactileReassemblyState;
 
 typedef struct {
-    uint8_t active;
-    uint8_t seq;
-    uint16_t receivedFrames;
-    uint8_t frameMask[CAN_TAC_FULL_FRAME_MASK_BYTES];
-    uint8_t bytes[TACTILE_FULL_BYTES];
-    uint32_t firstFrameTimeMs;
+    uint8_t active;                                  ///< 是否正在重组全量触觉。
+    uint8_t seq;                                     ///< S3 全量批次序号。
+    uint16_t receivedFrames;                         ///< 已收到的不重复帧数。
+    uint8_t frameMask[CAN_TAC_FULL_FRAME_MASK_BYTES];///< 每帧一位的去重表。
+    uint8_t bytes[TACTILE_FULL_BYTES];               ///< 完整全量触觉字节。
+    uint32_t firstFrameTimeMs;                       ///< 首帧时间。
 } TactileFullReassemblyState;
 
 typedef struct {
-    uint8_t goodCount;
-    uint8_t badCount;
-    uint8_t online;
-    uint8_t fault;
-    uint32_t lastGoodMs;
-    uint32_t warnUntilMs;
+    uint8_t goodCount;       ///< 连续正确快照数，用于确认上线。
+    uint8_t badCount;        ///< 连续错误快照数，用于确认故障。
+    uint8_t online;          ///< 去抖后的在线状态。
+    uint8_t fault;           ///< 去抖后的阻断故障状态。
+    uint32_t lastGoodMs;     ///< 最近正确快照时间。
+    uint32_t warnUntilMs;    ///< 瞬时错误警告保持到该时刻。
 } EncoderHealthState;
 
-static esp_ldo_channel_handle_t s_canVo4Ldo = NULL;
+static esp_ldo_channel_handle_t s_canVo4Ldo = NULL; ///< GPIO47/48 所属 VO4 电源句柄。
 
-static const uint8_t kEncoderOnlineGoodFrames = 3;
-static const uint8_t kEncoderFaultBadFrames = 5;
+static const uint8_t kEncoderOnlineGoodFrames = 3;  ///< 连续正确三帧后判在线。
+static const uint8_t kEncoderFaultBadFrames = 5;    ///< 连续错误五帧后判故障。
 using mmhand::config::safety::kEncoderFaultTimeoutMs;
-static const uint32_t kEncoderWarnHoldMs = 800;
+static const uint32_t kEncoderWarnHoldMs = 800;     ///< 瞬时警告 UI 保持时间。
 
+/** 判断 TWAI 引脚是否使用 ESP32-P4 VO4 独立供电域。 */
 static bool twaiUsesVo4Domain(void) {
     return TWAI_TX_PIN == 47 || TWAI_TX_PIN == 48 ||
            TWAI_RX_PIN == 47 || TWAI_RX_PIN == 48;
 }
 
+/** 使用 GPIO47/48 时启用 3.3 V VO4；普通 GPIO 配置不做额外操作。 */
 static void ensureTwaiGpioPowerReady(void) {
     static bool powered = false;
     if (powered || !twaiUsesVo4Domain()) {
@@ -129,6 +131,7 @@ static void ensureTwaiGpioPowerReady(void) {
     vTaskDelay(pdMS_TO_TICKS(20));
 }
 
+/** 清空错误详情分帧状态，防止超时批次污染下一批。 */
 static inline void resetErrorDetailReassembly(ErrorDetailReassemblyState* state) {
     if (!state) {
         return;
@@ -140,6 +143,7 @@ static inline void resetErrorDetailReassembly(ErrorDetailReassemblyState* state)
     memset(state->codes, 0, sizeof(state->codes));
 }
 
+/** 清空编码器数据分帧状态。 */
 static inline void resetEncoderReassembly(EncoderReassemblyState* state) {
     if (!state) {
         return;
@@ -150,6 +154,7 @@ static inline void resetEncoderReassembly(EncoderReassemblyState* state) {
     memset(state->bytes, 0, sizeof(state->bytes));
 }
 
+/** 清空触觉摘要分帧状态。 */
 static inline void resetTactileReassembly(TactileReassemblyState* state) {
     if (!state) {
         return;
@@ -161,6 +166,7 @@ static inline void resetTactileReassembly(TactileReassemblyState* state) {
     memset(state->packet, 0, sizeof(state->packet));
 }
 
+/** 清空触觉全量分帧状态和逐帧去重位图。 */
 static inline void resetTactileFullReassembly(TactileFullReassemblyState* state) {
     if (!state) {
         return;
@@ -173,14 +179,17 @@ static inline void resetTactileFullReassembly(TactileFullReassemblyState* state)
     memset(state->bytes, 0, sizeof(state->bytes));
 }
 
+/** 检查全量触觉 frameIdx 是否已经写入，避免重复帧重复计数。 */
 static inline bool tactileFullFrameSeen(const TactileFullReassemblyState* state, uint16_t frameIdx) {
     return (state->frameMask[frameIdx >> 3] & (uint8_t)(1U << (frameIdx & 0x07))) != 0;
 }
 
+/** 标记全量触觉 frameIdx 已写入。 */
 static inline void markTactileFullFrameSeen(TactileFullReassemblyState* state, uint16_t frameIdx) {
     state->frameMask[frameIdx >> 3] |= (uint8_t)(1U << (frameIdx & 0x07));
 }
 
+/** 计算 S3 触觉/磁编批次使用的 CRC16-CCITT。 */
 static uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; i++) {
@@ -196,6 +205,7 @@ static uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
     return crc;
 }
 
+/** 触觉队列满时丢弃最旧帧，始终保留最新完整快照。 */
 static void queueLatestTactile(QueueHandle_t queue, const RemoteTactileData_t* data) {
     if (!queue || !data) {
         return;
@@ -207,6 +217,7 @@ static void queueLatestTactile(QueueHandle_t queue, const RemoteTactileData_t* d
     }
 }
 
+/** 将 21 路非零错误码压成 Jxx 位图。 */
 static uint32_t buildErrorBitmap(const uint8_t* codes) {
     if (!codes) {
         return 0;
@@ -220,10 +231,12 @@ static uint32_t buildErrorBitmap(const uint8_t* codes) {
     return bitmap;
 }
 
+/** 返回低 ENCODER_TOTAL_NUM 位有效的 Jxx 掩码。 */
 static uint32_t encoderChannelMask() {
     return (ENCODER_TOTAL_NUM >= 32) ? 0xFFFFFFFFUL : ((1UL << ENCODER_TOTAL_NUM) - 1UL);
 }
 
+/** 把每路去抖健康状态原子发布到共享 online/warn/fault 位图。 */
 static void publishEncoderHealth(TaskSharedData_t* sharedData,
                                  const EncoderHealthState* health,
                                  uint32_t nowMs) {
@@ -255,6 +268,7 @@ static void publishEncoderHealth(TaskSharedData_t* sharedData,
                       (uint8_t)((onlineMask != 0 || warnMask != 0) ? 1 : 0));
 }
 
+/** 一路正确快照：累计上线去抖、清错误计数并刷新 lastGoodMs。 */
 static void updateEncoderHealthGood(EncoderHealthState* health,
                                     uint8_t index,
                                     uint32_t nowMs) {
@@ -270,6 +284,7 @@ static void updateEncoderHealthGood(EncoderHealthState* health,
     }
 }
 
+/** 一路错误快照：保持警告；仅确定性错误才累计到阻断故障。 */
 static void updateEncoderHealthBad(EncoderHealthState* health,
                                    uint8_t index,
                                    uint32_t nowMs,
@@ -286,6 +301,7 @@ static void updateEncoderHealthBad(EncoderHealthState* health,
     }
 }
 
+/** 用一次 CRC 通过的 21 路快照更新全部磁编健康状态。 */
 static void updateEncoderHealthFromSnapshot(TaskSharedData_t* sharedData,
                                             EncoderHealthState* health,
                                             uint32_t validMask,
@@ -301,6 +317,7 @@ static void updateEncoderHealthFromSnapshot(TaskSharedData_t* sharedData,
     publishEncoderHealth(sharedData, health, nowMs);
 }
 
+/** 整批 CRC/分帧失败时把 21 路都计为一次坏快照。 */
 static void markEncoderSnapshotBad(TaskSharedData_t* sharedData,
                                    EncoderHealthState* health,
                                    uint32_t nowMs) {
@@ -310,6 +327,7 @@ static void markEncoderSnapshotBad(TaskSharedData_t* sharedData,
     publishEncoderHealth(sharedData, health, nowMs);
 }
 
+/** 长时间没有正确数据时把对应磁编提升为故障，并返回位图是否变化。 */
 static bool applyEncoderHealthTimeout(TaskSharedData_t* sharedData,
                                       EncoderHealthState* health,
                                       uint32_t nowMs) {
@@ -335,6 +353,7 @@ static bool applyEncoderHealthTimeout(TaskSharedData_t* sharedData,
     return changed;
 }
 
+/** CAN 重启/驱动失败时清内部计数，并把当前需要的磁编标为故障。 */
 static void clearEncoderHealth(TaskSharedData_t* sharedData,
                                EncoderHealthState* health) {
     if (health) {
@@ -356,6 +375,7 @@ static void clearEncoderHealth(TaskSharedData_t* sharedData,
     }
 }
 
+/** 幂等安装并启动 1 Mbit/s TWAI 驱动。 */
 static void setupTwai() {
     static bool installed = false;
     if (installed) {
@@ -388,6 +408,7 @@ static void setupTwai() {
     FW_LOG_INFO_PRINTLN("[CAN] Driver installed and started OK");
 }
 
+/** CAN 接收主循环：分帧重组、CRC 校验、健康去抖并发布最新快照。 */
 void canCommunicationTask(void* parameter) {
     TaskSharedData_t* sharedData = (TaskSharedData_t*)parameter;
     setupTwai();

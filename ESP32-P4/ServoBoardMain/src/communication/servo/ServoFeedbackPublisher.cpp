@@ -18,6 +18,7 @@
 namespace p4::servo {
 namespace {
 
+/** 由 Mxx 映射到其总线驱动；无效通道返回 nullptr。 */
 FeetechServoDriver* driverForMotor(uint8_t motorChannel)
 {
     if (motorChannel >= SERVO_TOTAL_NUM) {
@@ -26,6 +27,7 @@ FeetechServoDriver* driverForMotor(uint8_t motorChannel)
     return servoBusRegistry().driver(motorMap[motorChannel].busIndex);
 }
 
+/** 检查全部在线舵机 hardware ABS，并立即关闭越界通道力矩。 */
 uint32_t collectTurnOverflowMask()
 {
     uint32_t overflowMask = 0;
@@ -50,6 +52,7 @@ uint32_t collectTurnOverflowMask()
 
 } // namespace
 
+// 在线位图直接来自各总线驱动缓存，只统计 HardwareMap 中实际存在的 Mxx。
 uint32_t collectOnlineMotorMask()
 {
     uint32_t mask = 0;
@@ -62,6 +65,7 @@ uint32_t collectOnlineMotorMask()
     return mask & validMotorChannelMask();
 }
 
+// 恢复 pending/success/failed 三个位图来自驱动事务，供状态机和上位机显示。
 void publishRecoveryState(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -97,6 +101,7 @@ void publishRecoveryState(TaskSharedData_t* sharedData)
                       failedMask & validMotorChannelMask());
 }
 
+// 只在越界位图发生变化时记录/停机；持续越界不会每周期重复触发 STOP。
 void publishTurnOverflowState(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {
@@ -129,6 +134,7 @@ void publishTurnOverflowState(TaskSharedData_t* sharedData)
     }
 }
 
+// 每周期生成同一时刻的逻辑位置、物理位置、负载和恢复锚点视图。
 void publishFeedback(TaskSharedData_t* sharedData)
 {
     if (!sharedData) {

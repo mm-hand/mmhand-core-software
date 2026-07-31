@@ -23,6 +23,7 @@ bool readCommandSnapshot(TaskSharedData_t* sharedData,
         return false;
     }
 
+    // 目标数组、模式、mask 和 token 属于同一命令版本，必须在同一临界区复制。
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(2)) != pdTRUE) {
         return false;
@@ -64,6 +65,7 @@ uint32_t activeOverloadMotorMask(
     }
 
     const uint32_t validMask = validMotorChannelMask();
+    // 直控直接使用 active motor；关节闭环则由 HardwareMap 展开为执行器集合。
     if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
         return sharedAtomicLoad(&sharedData->active_motor_mask) & validMask;
     }
@@ -126,6 +128,7 @@ bool directTargetsReached(
         return false;
     }
 
+    // 只有 ABS 直控具有确定的“到位”语义；Sweep 是持续编辑，不自动判定完成。
     const uint32_t requiredMask =
         sharedAtomicLoad(&sharedData->active_motor_mask) &
         validMotorChannelMask();
@@ -170,6 +173,7 @@ bool feedbackTargetsReached(
         return false;
     }
 
+    // 使用本帧 command mask 与 active scope 的交集，未参与本次命令的关节不阻塞 DONE。
     const uint32_t requiredMask =
         commandJointMask &
         sharedAtomicLoad(&sharedData->active_joint_mask) &
