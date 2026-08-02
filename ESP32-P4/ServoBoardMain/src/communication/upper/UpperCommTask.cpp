@@ -10,6 +10,7 @@
 #include "../../calibration/CalibrationMath.h"
 #include "../../calibration/CalibrationTask.h"
 #include "../../generated/UrdfJointLimits.generated.h"
+#include "../../generated/ProductFingerprint.generated.h"
 #include "../../hardware/HardwareMap.h"
 #include "../../platform/AtomicValue.h"
 #include "../../system/FirmwareLog.h"
@@ -1010,6 +1011,35 @@ static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
         (unsigned long)autoCalibrationValidMask(sharedData));
 }
 
+/**
+ * 周期上报当前固件的产品指纹。
+ *
+ * 上位机将这些 CRC 写入每次 run_data 的 meta.json，后续分析可以精确确认
+ * 当时使用的 URDF、舵机映射、控制参数和固件源码是否完全一致。
+ */
+static void sendProductFingerprintPacket()
+{
+    uint8_t buffer[40];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0x00;
+    buffer[idx++] = PACKET_TYPE_PRODUCT_FINGERPRINT;
+    buffer[idx++] = kProductFingerprintSchemaVersion;
+    buffer[idx++] = kUrdfFeedbackMappingVersion;
+    buffer[idx++] = kManualScaledUrdfFeedbackMappingVersion;
+    buffer[idx++] = 0; // 保留字节，后续扩展时不改变当前字段偏移。
+    appendU32BigEndian(buffer, &idx, kProductControlModelCrc);
+    appendU32BigEndian(buffer, &idx, kProductVisualModelCrc);
+    appendU32BigEndian(buffer, &idx, kProductHardwareMapCrc);
+    appendU32BigEndian(buffer, &idx, kProductParameterCrc);
+    appendU32BigEndian(buffer, &idx, kProductFirmwareSourceCrc);
+    appendU32BigEndian(buffer, &idx, kProductStructureCommitCrc);
+    appendU32BigEndian(buffer, &idx, millis());
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = (uint8_t)(idx - 2);
+    FW_SERIAL_WRITE(buffer, idx);
+}
+
 /** 消费舵机任务的 Reset Zero 结果，并联动失效关节标定。 */
 static void processServoResetZeroResult(TaskSharedData_t* sharedData,
                                         uint32_t* lastResultToken)
@@ -1095,7 +1125,8 @@ static void handleParsedCommand(TaskSharedData_t* sharedData, const uint8_t* fra
 
     const uint8_t cmd = frame[0];
     // 每一帧通过结构校验的上位机命令都刷新心跳，不要求它一定是运动命令。
-    sharedData->host_rx_heartbeat_ms = millis();
+    // StateMachineTask 在另一核心读取该字段，统一走原子接口避免租约边界读到撕裂值。
+    sharedAtomicStore(&sharedData->host_rx_heartbeat_ms, millis());
 
     if (cmd == CMD_HOST_HEARTBEAT)
     {
@@ -2008,6 +2039,7 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastCalibrationDiagSequenceSent = 0;
     uint32_t lastCalibrationDiagSentMs = 0;
     uint32_t lastTaskDiagSentMs = 0;
+    uint32_t lastProductFingerprintSentMs = 0;
     uint8_t nextTaskDiagId = 0;
     uint32_t lastServoResetZeroResultToken =
         sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
@@ -2166,6 +2198,12 @@ void upperCommunicationTask(void* parameter)
         }
 
         const uint32_t nowMs = millis();
+        if (lastProductFingerprintSentMs == 0 ||
+            (uint32_t)(nowMs - lastProductFingerprintSentMs) >=
+                kProductFingerprintHeartbeatMs) {
+            sendProductFingerprintPacket();
+            lastProductFingerprintSentMs = nowMs;
+        }
         const uint32_t faultBitmap =
             sharedAtomicLoad(&sharedData->overload_fault_bitmap);
         const bool bitmapChanged =

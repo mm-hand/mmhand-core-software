@@ -121,7 +121,11 @@ class ControlCommandController:
             self.backend.hold_current_motor_positions(delay_s=0.25)
         except Exception:
             pass
-        self.context.disconnect_current_port("Safe closed: holding current motor targets, then STOP", stop_lower=True)
+        # “安全关闭”是可恢复的正常断开；真正急停只由 Stop 按钮发送锁存式 STOP。
+        self.context.disconnect_current_port(
+            "Safe closed: current motor targets submitted; P4 lease Hold armed",
+            stop_lower=False,
+        )
 
     def clear_fault_with_confirm(self) -> None:
         """Clear the fault with confirm state."""

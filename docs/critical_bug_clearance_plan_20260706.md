@@ -1,5 +1,7 @@
 # 灵巧手危机 BUG 清除计划（S3 / P4 / 上位机 / ROS2 全链路版）
 
+> 文档状态（2026-08-01）：历史风险清单和测试计划，保留问题发现过程，不把正文中的 P0/P1 标签当作当前未完成列表。HardwareMap、产品指纹、协议 schema、ROS2 输出授权门、ServoSafetyPolicy 和多圈 NVS 异步任务已经落地；外层串口缺少通用 CRC/seq、ROS2 自定义契约/新鲜度 watchdog 和实机端到端时延统计仍是有效改进项。当前结论见[当前文档索引](README.md)。
+
 日期：2026-07-06  
 目标：从 `ESP32-S3`、`ESP32-P4`、上位机、`ROS2` 四个角度重新梳理当前代码中可能导致“卡顿、标定失败、多圈恢复异常、负反馈不稳、链路难排查”的严重问题，并给出后续代码修改路线与 Kingst 逻辑分析仪实测方案。
 
@@ -24,7 +26,7 @@
    当前上位机命令帧主要靠头、长度、尾判断，没有 CRC。对于 `ANGLE_CTRL`、`MOTOR_POS_ABS`、`CALIB_LOAD_JOINT`、`RESTORE_MULTITURN` 这类关键命令，串口干扰、丢字节、错帧后很难做到强校验和可追踪。
 
 5. **ROS2 链路已经能发 21 个角度，但还缺少工程化输入保护**  
-   `/mmhand/joint_targets` 和 `/raw_ik_target` 当前主要做 21 个 float、finite 校验，然后直接 `backend.send_joint_targets(... live=True)`。还缺少角度范围、速率限制、超时归零/保持、频率统计、消息时间戳/seq 诊断。
+   `/mmhand/joint_targets` 和 `/raw_ik_target` 当前先做 21 个 float、finite/坐标适配，再经过 `HandBackend.send_ros2_joint_targets()` 的 armed、串口、controller、scope 与 workspace 门禁。仍缺消息时间戳/seq、独立 staleness watchdog 和完整频率诊断。
 
 ---
 
@@ -158,7 +160,7 @@ Kingst 验证：
 
 ---
 
-### P0-03：ROS2 21 角输入没有速率、范围、超时保护
+### P0-03：ROS2 已补授权/范围门禁，仍缺消息级 staleness/sequence/速率诊断
 
 代码证据：
 
@@ -167,7 +169,7 @@ Kingst 验证：
 - `JointTargetCommandHandler.handle_values()` 当前主要校验：
   - 数量必须为 21。
   - 每个值必须是 finite。
-  - 然后调用 `backend.send_joint_targets(... live=True)`。
+  - 然后调用 `backend.send_ros2_joint_targets(...)`，不能绕过 ROS2 输出授权门。
 
 风险：
 
@@ -188,7 +190,7 @@ Kingst 验证：
    - 被 clamp 的关节索引和值。
    - 最近一次消息年龄。
 3. `/mmhand/joint_targets` 保持最终控制输入。
-4. `/raw_ik_target` 保持 MANUS/IK 外部节点输入，短期可直接调用 backend，长期建议增加可选 relay 模式用于调试。
+4. `/raw_ik_target` 保持 MANUS/IK/Wuji 外部节点输入，但必须经 backend 的 ROS2 授权门；可增加 relay/diagnostics 用于调试。
 
 ---
 

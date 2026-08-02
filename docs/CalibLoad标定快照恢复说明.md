@@ -1,5 +1,7 @@
 # Calib Load 标定快照恢复说明
 
+> 当前专项文档，最后核对：2026-08-01。CalibLoad 恢复的是 Auto/LUT/ABS-limit 软件快照，不等于恢复飞特舵机的物理多圈坐标；后者见[持久化与掉电恢复](持久化与掉电恢复.md)。恢复前仍须匹配 Manual 条目 CRC、URDF 配置 CRC、mapping version 和 active scope。
+
 本文说明上位机 `Calib Load` 按钮的使用场景、用户操作方法，以及后续开发者维护该功能时需要理解的数据流和协议。
 
 ## 1. 功能目的

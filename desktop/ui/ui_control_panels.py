@@ -136,6 +136,9 @@ class ControlPanel(
         self._motor_last_slider: List[Optional[int]] = [None] * MOTOR_COUNT
         self._motor_slider_dragging: List[bool] = [False] * MOTOR_COUNT
         self._motor_last_sent_abs: List[Optional[int]] = [None] * MOTOR_COUNT
+        # 下位机直控准入是异步事务；记录已经展示过的 generation，避免每个
+        # SYSTEM_STATUS 周期重复提示同一次执行/拒绝结果。
+        self._last_reported_direct_generation: Optional[int] = None
         self._motor_run_states = [False] * MOTOR_COUNT
         self._last_state_transition_count: Optional[int] = None
         self._last_multi_turn_unknown_bitmap: Optional[int] = None

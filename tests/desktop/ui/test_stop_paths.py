@@ -3,8 +3,15 @@ import time
 from types import MethodType, SimpleNamespace
 
 from desktop.ui.ui_app import HandGUI
-from desktop.core.protocol import ControlMode
+from desktop.core.protocol import (
+    ControlMode,
+    SYSTEM_STATE_CALIBRATION_RUNNING,
+    SYSTEM_STATE_ROPE_INIT_RUNNING,
+    SYSTEM_STATE_RUN_DIRECT,
+    SYSTEM_STATE_UNCONTROLLABLE,
+)
 from desktop.ui.ui_control_commands import ControlCommandController
+from desktop.ui.ui_control_state import ControlPanelStateMixin
 
 
 class _FakeSignal:
@@ -24,6 +31,35 @@ class _FakeCheckBox:
 
     def setChecked(self, checked):
         self.checked = bool(checked)
+
+
+def test_startup_fault_does_not_latch_estop_before_motion_starts():
+    app = SimpleNamespace(_fault_previous_runtime_active=False)
+    summary = {"active": True, "offline_only": False}
+
+    assert not HandGUI._fault_stop_allowed(
+        app, summary, SimpleNamespace(system_state=SYSTEM_STATE_UNCONTROLLABLE)
+    )
+    assert HandGUI._fault_stop_allowed(
+        app, summary, SimpleNamespace(system_state=SYSTEM_STATE_RUN_DIRECT)
+    )
+
+
+def test_internal_p4_motion_fault_does_not_send_competing_host_estop():
+    """标定和 Rope Init 由 P4 自己停机，上位机只展示诊断，不能抢断预检。"""
+    app = SimpleNamespace(_fault_previous_runtime_active=False)
+    summary = {"active": True, "offline_only": False}
+
+    assert not HandGUI._fault_stop_allowed(
+        app,
+        summary,
+        SimpleNamespace(system_state=SYSTEM_STATE_CALIBRATION_RUNNING),
+    )
+    assert not HandGUI._fault_stop_allowed(
+        app,
+        summary,
+        SimpleNamespace(system_state=SYSTEM_STATE_ROPE_INIT_RUNNING),
+    )
 
 
 def test_estop_is_enqueued_before_test_and_recorder_cleanup():
@@ -46,6 +82,92 @@ def test_estop_is_enqueued_before_test_and_recorder_cleanup():
     assert events.index("backend.stop") < events.index("stop_all_tests")
     assert panel._estop_latched is True
     assert panel._estop_in_progress is False
+
+
+def test_safe_close_arms_lease_hold_without_latching_estop():
+    events = []
+    panel = SimpleNamespace(
+        stop_all_tests=lambda *_args, **_kwargs: events.append("stop_all_tests"),
+        backend=SimpleNamespace(
+            hold_current_motor_positions=lambda delay_s: events.append(
+                ("hold", delay_s)
+            )
+        ),
+        context=SimpleNamespace(
+            disconnect_current_port=lambda status, stop_lower: events.append(
+                ("disconnect", status, stop_lower)
+            )
+        ),
+    )
+
+    ControlCommandController.safe_close_controller(panel)
+
+    assert ("hold", 0.25) in events
+    disconnect = next(event for event in events if isinstance(event, tuple) and event[0] == "disconnect")
+    assert disconnect[2] is False
+
+
+def test_direct_result_reports_execution_only_after_p4_generation_applies():
+    actions = []
+    statuses = []
+    panel = SimpleNamespace(
+        _last_reported_direct_generation=None,
+        context=SimpleNamespace(emit_action=actions.append),
+        _set_status=statuses.append,
+    )
+
+    # 首帧只是重连基线，不能把历史结果当成本次命令重复提示。
+    baseline = SimpleNamespace(
+        has_motion_result_status=True,
+        pending_direct_generation=7,
+        applied_direct_generation=7,
+        direct_reject_reason=0,
+    )
+    ControlPanelStateMixin._handle_direct_command_result(panel, baseline)
+    assert actions == []
+
+    # 已提交但尚未仲裁的短窗口不应提前显示“执行成功”。
+    pending = SimpleNamespace(
+        has_motion_result_status=True,
+        pending_direct_generation=8,
+        applied_direct_generation=7,
+        direct_reject_reason=0,
+    )
+    ControlPanelStateMixin._handle_direct_command_result(panel, pending)
+    assert actions == []
+
+    applied = SimpleNamespace(
+        has_motion_result_status=True,
+        pending_direct_generation=8,
+        applied_direct_generation=8,
+        direct_reject_reason=0,
+    )
+    ControlPanelStateMixin._handle_direct_command_result(panel, applied)
+    assert actions == ["Direct command executed by P4: generation=8"]
+    assert statuses == []
+
+
+def test_direct_result_surfaces_p4_rejection_reason():
+    actions = []
+    statuses = []
+    panel = SimpleNamespace(
+        _last_reported_direct_generation=8,
+        context=SimpleNamespace(emit_action=actions.append),
+        _set_status=statuses.append,
+    )
+    rejected = SimpleNamespace(
+        has_motion_result_status=True,
+        pending_direct_generation=9,
+        applied_direct_generation=8,
+        direct_reject_reason=1,
+    )
+
+    ControlPanelStateMixin._handle_direct_command_result(panel, rejected)
+
+    assert len(actions) == 1
+    assert "generation=9" in actions[0]
+    assert "state/E-STOP gate" in actions[0]
+    assert statuses == actions
 
 
 def test_test_stop_returns_without_waiting_for_recording_finalize():

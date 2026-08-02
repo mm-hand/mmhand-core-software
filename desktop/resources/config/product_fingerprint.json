@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "model_id": "mmhand_structure_21dof",
+  "mapping_id": "structure_urdf_v2",
+  "feedback_mapping_version": 2,
+  "manual_scaled_mapping_version": 3,
+  "control_model_crc": "73FD45FA",
+  "visual_model_crc": "955C1BCC",
+  "hardware_map_crc": "9B40D3A6",
+  "parameter_crc": "B53EA455",
+  "firmware_source_crc": "EE02CE8B",
+  "structure_commit_crc": "99070D41",
+  "source_commit": "372a647e2f2a48ac48707c717790482a7819500a"
+}

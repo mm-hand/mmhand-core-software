@@ -137,6 +137,13 @@ void System_Init() {
     // E-STOP 使用单调 token 绕过普通事件队列，队列满时也不会丢急停请求。
     sharedData.emergency_stop_request_token = 0;
     sharedData.servo_emergency_stop_token = 0;
+    sharedData.emergency_stop_latched = 0;
+    // 上位机控制租约与 Hold 确认从空闲代次开始；直控、负反馈、自动标定和
+    // Rope Init 共用这组事务字段，避免各运动任务维护彼此不一致的看门狗。
+    sharedData.host_control_hold_status = HOST_CONTROL_HOLD_IDLE;
+    sharedData.host_control_hold_request_token = 0;
+    sharedData.host_control_hold_result_token = 0;
+    sharedData.host_control_hold_started_ms = 0;
     sharedData.system_fault_bitmap = 0;
     sharedData.system_fault_latched_bitmap = 0;
     sharedData.state_transition_count = 0;

@@ -438,6 +438,136 @@ static uint32_t calibrationJointMotorMask(uint8_t jointIndex)
     return motorMask & validMotorChannelMask();
 }
 
+/** 把本轮标定关节列表转换成磁编位图，只检查真正参与标定的 Jxx。 */
+static uint32_t buildCalibrationJointMask(const uint8_t* joints,
+                                          uint8_t jointCount)
+{
+    uint32_t jointMask = 0;
+    if (!joints) {
+        return 0;
+    }
+    for (uint8_t i = 0; i < jointCount; ++i) {
+        if (joints[i] < ENCODER_TOTAL_NUM) {
+            jointMask |= 1UL << joints[i];
+        }
+    }
+    return jointMask;
+}
+
+/**
+ * 标定启动前等待所选磁编连续稳定。
+ * active scope 切换时健康位可能短暂抖动，因此按新时间戳累计稳定帧，
+ * 确认 S3/CAN 快照、在线位和故障位一致后才允许机械动作。
+ */
+static bool waitForCalibrationEncoderRecovery(TaskSharedData_t* sharedData,
+                                               uint32_t requiredJointMask)
+{
+    if (!sharedData || requiredJointMask == 0 || !sharedData->canRxQueue) {
+        return false;
+    }
+
+    const uint32_t beginMs = millis();
+    uint32_t lastLogMs = 0;
+    uint32_t lastFeedbackTimestamp = 0;
+    uint8_t stableSamples = 0;
+    while (autoCalibrationStillOwnsControl(sharedData)) {
+        const uint32_t nowMs = millis();
+        const uint32_t onlineMask =
+            sharedAtomicLoad(&sharedData->encoder_online_bitmap);
+        const uint32_t faultMask =
+            sharedAtomicLoad(&sharedData->encoder_fault_bitmap);
+        const uint8_t canOnline =
+            sharedAtomicLoad(&sharedData->can_link_online);
+
+        RemoteSensorData_t snapshot;
+        memset(&snapshot, 0, sizeof(snapshot));
+        const bool hasSnapshot =
+            xQueuePeek(sharedData->canRxQueue, &snapshot, 0) == pdTRUE;
+        const bool freshSnapshot =
+            hasSnapshot && snapshot.isValid && snapshot.timestamp != 0 &&
+            (uint32_t)(nowMs - snapshot.timestamp) <=
+                kEncoderTrustedSampleMaxAgeMs;
+        const bool ready =
+            freshSnapshot && canOnline != 0 &&
+            (onlineMask & requiredJointMask) == requiredJointMask &&
+            (faultMask & requiredJointMask) == 0;
+
+        if (ready && snapshot.timestamp != lastFeedbackTimestamp) {
+            lastFeedbackTimestamp = snapshot.timestamp;
+            if (stableSamples < kEncoderRecoveryStableSamples) {
+                ++stableSamples;
+            }
+            if (stableSamples >= kEncoderRecoveryStableSamples) {
+                FW_LOG_INFO_PRINTF(
+                    "[AUTO CALIB] ENCODER_RECOVERY_READY required=0x%08lX "
+                    "online=0x%08lX\r\n",
+                    (unsigned long)requiredJointMask,
+                    (unsigned long)onlineMask);
+                return true;
+            }
+        } else if (!ready) {
+            stableSamples = 0;
+        }
+
+        if ((uint32_t)(nowMs - beginMs) >= kEncoderRecoveryTimeoutMs) {
+            uint32_t unresolvedMask =
+                requiredJointMask & (~onlineMask | faultMask);
+            if (!freshSnapshot || canOnline == 0) {
+                unresolvedMask |= requiredJointMask;
+            }
+            setCalibrationDiag(sharedData,
+                               CALIB_DIAG_REASON_ENCODER_ERROR,
+                               CALIB_DIAG_PHASE_INIT,
+                               0xFF,
+                               0xFF,
+                               (int32_t)onlineMask,
+                               (int32_t)faultMask,
+                               (int32_t)canOnline,
+                               unresolvedMask);
+            FW_LOG_WARN_PRINTF(
+                "[AUTO CALIB] ENCODER_RECOVERY_FAIL required=0x%08lX "
+                "online=0x%08lX fault=0x%08lX can=%u fresh=%u "
+                "unresolved=0x%08lX\r\n",
+                (unsigned long)requiredJointMask,
+                (unsigned long)onlineMask,
+                (unsigned long)faultMask,
+                (unsigned)canOnline,
+                freshSnapshot ? 1U : 0U,
+                (unsigned long)unresolvedMask);
+            return false;
+        }
+
+        if ((uint32_t)(nowMs - lastLogMs) >=
+            kEncoderRecoveryLogIntervalMs) {
+            lastLogMs = nowMs;
+            FW_LOG_INFO_PRINTF(
+                "[AUTO CALIB] ENCODER_RECOVERY_WAIT required=0x%08lX "
+                "online=0x%08lX fault=0x%08lX can=%u fresh=%u stable=%u/%u\r\n",
+                (unsigned long)requiredJointMask,
+                (unsigned long)onlineMask,
+                (unsigned long)faultMask,
+                (unsigned)canOnline,
+                freshSnapshot ? 1U : 0U,
+                (unsigned)stableSamples,
+                (unsigned)kEncoderRecoveryStableSamples);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    if (!hasCalibrationDiag(sharedData)) {
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_CONTROL_LOST,
+                           CALIB_DIAG_PHASE_INIT,
+                           0xFF,
+                           0xFF,
+                           sharedData ? (int32_t)sharedData->system_state : -1,
+                           sharedData ? (int32_t)sharedData->servo_target_owner : -1,
+                           sharedData ? (int32_t)sharedData->control_enabled : -1,
+                           requiredJointMask);
+    }
+    return false;
+}
+
 // 标定开始前等待热插拔恢复闭环完成。该函数只观察共享状态，不发送任何运动目标。
 static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
                                             uint32_t requiredMask)
@@ -554,6 +684,17 @@ static bool waitForCalibrationServoRecovery(TaskSharedData_t* sharedData,
                 (unsigned)kServoRecoveryStableSamples);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!hasCalibrationDiag(sharedData)) {
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_CONTROL_LOST,
+                           CALIB_DIAG_PHASE_INIT,
+                           0xFF,
+                           0xFF,
+                           sharedData ? (int32_t)sharedData->system_state : -1,
+                           sharedData ? (int32_t)sharedData->servo_target_owner : -1,
+                           sharedData ? (int32_t)sharedData->control_enabled : -1,
+                           requiredMask);
     }
     return false;
 }
@@ -4655,10 +4796,16 @@ void autoCalibrationTask(void* parameter)
 
     const uint32_t selectedMotorMask =
         buildCalibrationMotorMask(activeJoints, activeJointCount);
+    const uint32_t selectedJointMask =
+        buildCalibrationJointMask(activeJoints, activeJointCount);
     const bool selectedRecoveryReady =
         activeJointCount > 0 &&
         selectedMotorMask != 0 &&
         waitForCalibrationServoRecovery(sharedData, selectedMotorMask);
+    const bool selectedEncoderReady =
+        selectedRecoveryReady &&
+        selectedJointMask != 0 &&
+        waitForCalibrationEncoderRecovery(sharedData, selectedJointMask);
 
     bool needsWorkspaceReadMask = false;
     for (uint8_t i = 0; i < activeJointCount; ++i) {
@@ -4669,7 +4816,7 @@ void autoCalibrationTask(void* parameter)
     }
     uint32_t workspaceReadMask = 0;
     const bool workspaceReady =
-        selectedRecoveryReady &&
+        selectedEncoderReady &&
         (!needsWorkspaceReadMask ||
          buildDynamicWorkspaceMotorMask(sharedData,
                                         activeJoints,

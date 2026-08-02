@@ -15,6 +15,9 @@ namespace mmhand::config::calibration {
 inline constexpr uint32_t kFeedbackReadyServoTimeoutMs = 500; ///< 标定允许使用的舵机快照最大年龄。
 inline constexpr uint32_t kEncoderTrustedSampleMaxAgeMs = 300; ///< 磁编 raw 样本最大年龄。
 inline constexpr uint32_t kInitialFeedbackWaitMs = 1200; ///< 标定启动后等待首帧反馈的时限。
+inline constexpr uint32_t kEncoderRecoveryTimeoutMs = 2000; ///< 标定预检等待所选磁编恢复的总时限。
+inline constexpr uint32_t kEncoderRecoveryLogIntervalMs = 500; ///< 磁编恢复等待日志的节流周期。
+inline constexpr uint8_t kEncoderRecoveryStableSamples = 3; ///< 开始机械运动前要求的连续有效磁编帧数。
 inline constexpr uint32_t kServoRecoveryTimeoutMs = 5000; ///< 热插拔多圈恢复总时限。
 inline constexpr uint32_t kServoRecoveryLogIntervalMs = 500; ///< 恢复等待日志节流周期。
 inline constexpr uint8_t kServoRecoveryStableSamples = 3; ///< 恢复成功前要求的连续稳定帧数。

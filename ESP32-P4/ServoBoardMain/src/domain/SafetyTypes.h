@@ -17,6 +17,7 @@ inline constexpr uint32_t SYSTEM_FAULT_MULTITURN_UNKNOWN = 1UL << 6; ///< active
 
 enum class ServoRejectReason : uint8_t {
     None = 0,        ///< 允许发送。
+    InvalidCommand, ///< 批次数量、总线、ID 或 Mxx 映射非法。
     EmergencyStop,  ///< E-STOP 已锁存。
     InvalidOwner,   ///< 生产者不持有当前输出权。
     InvalidState,   ///< 顶层状态不允许运动。
@@ -25,13 +26,17 @@ enum class ServoRejectReason : uint8_t {
     StaleTarget,    ///< 命令时间戳超过新鲜度窗口。
     LogicalRange,   ///< 超出标定/LUT 逻辑边界。
     HardwareRange,  ///< 超出 ST3215 hardware ABS 硬边界。
+    TurnOverflow,   ///< 舵机已越过 Reset Zero 阈值，必须先重置圈数。
 };
 
 struct ServoSafetyDecision {
     bool allowed;             ///< 最终是否允许进入驱动。
-    ServoRejectReason reason; ///< 拒绝或钳位原因。
-    int32_t requestedAbs;     ///< 业务层请求的 logical ABS。
-    int32_t appliedAbs;       ///< 安全策略实际允许的 logical ABS。
+    ServoRejectReason reason; ///< 拒绝原因；allowed=true 时必须为 None。
+    int32_t requestedAbs;     ///< 业务层请求的 logical ABS，单位 counts。
+    int32_t appliedAbs;       ///< 安全策略允许进入驱动的 logical ABS，单位 counts。
+    int32_t hardwareAbs;      ///< requestedAbs-logicalOffset，单位 counts；拒绝时仍供诊断。
+    uint8_t motorChannel;     ///< 对应 Mxx；结构错误且无法映射时为 0xFF。
+    uint8_t commandIndex;     ///< 批次内命令下标；无法对应单条命令时为 0xFF。
 };
 
 #endif // MMHAND_SAFETY_TYPES_H

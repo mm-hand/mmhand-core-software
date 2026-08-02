@@ -6,43 +6,45 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
+import os
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from desktop.core.angle_mapping import JOINT_SPECS
+DEFAULT_MANIFEST = PROJECT_ROOT / "desktop/resources/config/robot_model_manifest.json"
 
 
-# The structure repository uses CAD-oriented names. The desktop pipeline uses
-# these legacy semantic names in angle mapping, retargeting, and calibration.
-SOURCE_TO_DESKTOP_JOINT = {
-    "Little_MCP_AA": "little_aa_joint",
-    "Little_MCP_FE": "mmhand_finger_4_proximal_phalanx_1_mcp_fe_joint",
-    "finger_4_distal_phalanx_1_pip_joint": "mmhand_finger_4_distal_phalanx_1_pip_joint",
-    "finger_4_fingertip_1_dip_joint": "mmhand_finger_4_fingertip_1_dip_joint",
-    "Ring_MCP_AA": "ring_aa_joint",
-    "Ring_MCP_FE": "mmhand_finger_3_proximal_phalanx_1_mcp_fe_joint",
-    "finger_3_distal_phalanx_1_pip_joint": "mmhand_finger_3_distal_phalanx_1_pip_joint",
-    "finger_3_fingertip_1_dip_joint": "mmhand_finger_3_fingertip_1_dip_joint",
-    "Middle_MCP_AA": "middle_aa_joint",
-    "Middle_MCP_FE": "mmhand_finger_2_proximal_phalanx_1_mcp_fe_joint",
-    "finger_2_distal_phalanx_1_pip_joint": "mmhand_finger_2_distal_phalanx_1_pip_joint",
-    "finger_2_fingertip_1_dip_joint": "mmhand_finger_2_fingertip_1_dip_joint",
-    "Index_MCP_AA": "index_aa_joint",
-    "Index_MCP_FE": "mmhand_finger_1_proximal_phalanx_1_mcp_fe_joint",
-    "finger_1_distal_phalanx_1_pip_joint": "mmhand_finger_1_distal_phalanx_1_pip_joint",
-    "finger_1_fingertip_1_dip_joint": "mmhand_finger_1_fingertip_1_dip_joint",
-    "Thumb_MCP_AA": "thumb_aa_joint",
-    "Thumb_MCP_FE": "mmhand_thumb_1_mmhand_finger_5_proximal_phalanx_1_mcp_fe_joint",
-    "mmhand_thumb_1_finger_7_distal_phalanx_1_pip_joint": "mmhand_thumb_1_mmhand_finger_5_distal_phalanx_1_pip_joint",
-    "mmhand_thumb_1_finger_7_fingertip_1_dip_joint": "mmhand_thumb_1_mmhand_finger_5_fingertip_1_dip_joint",
-    "Thumb_CMC": "thumb_cmc1_joint",
-}
+def _load_joint_aliases(manifest_path: Path) -> dict[str, str]:
+    """从唯一语义清单建立 CAD 名称到运行时名称的转换表。"""
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    joints = data.get("joints")
+    if not isinstance(joints, list) or len(joints) != 21:
+        raise ValueError("robot model manifest must contain 21 joints")
+    aliases: dict[str, str] = {}
+    for expected, item in enumerate(joints):
+        if not isinstance(item, dict) or int(item.get("joint_index", -1)) != expected:
+            raise ValueError(f"invalid manifest joint order at J{expected:02d}")
+        source = str(item.get("source_urdf_joint_name", ""))
+        target = str(item.get("urdf_joint_name", ""))
+        if not source or not target or source in aliases:
+            raise ValueError(f"invalid manifest alias at J{expected:02d}")
+        aliases[source] = target
+    return aliases
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """文件级原子替换，避免更新中断时破坏当前可用 URDF。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+        Path(temp_name).replace(path)
+    except Exception:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
 
 
 def _repo_commit(source_root: Path) -> str | None:
@@ -80,7 +82,8 @@ def _ensure_mesh_junction(adapter_root: Path, source_meshes: Path) -> None:
         raise RuntimeError(f"cannot create mesh Junction: {result.stderr or result.stdout}")
 
 
-def build_adapter(source_root: Path, adapter_root: Path) -> Path:
+def build_adapter(source_root: Path, adapter_root: Path,
+                  manifest_path: Path = DEFAULT_MANIFEST) -> Path:
     source_root = source_root.resolve()
     source_urdf = source_root / "urdf" / "mmhand.urdf"
     source_meshes = source_root / "meshes"
@@ -89,6 +92,7 @@ def build_adapter(source_root: Path, adapter_root: Path) -> Path:
             "source root must contain urdf/mmhand.urdf and meshes/: " + str(source_root)
         )
 
+    joint_aliases = _load_joint_aliases(manifest_path)
     tree = ET.parse(source_urdf)
     root = tree.getroot()
     source_names = set()
@@ -96,18 +100,18 @@ def build_adapter(source_root: Path, adapter_root: Path) -> Path:
     for joint in root.findall("joint"):
         source_name = joint.get("name", "")
         source_names.add(source_name)
-        desktop_name = SOURCE_TO_DESKTOP_JOINT.get(source_name)
+        desktop_name = joint_aliases.get(source_name)
         if desktop_name:
             if desktop_name in output_names:
                 raise ValueError(f"duplicate desktop joint alias: {desktop_name}")
             joint.set("name", desktop_name)
             output_names.add(desktop_name)
 
-    missing_source = sorted(set(SOURCE_TO_DESKTOP_JOINT) - source_names)
+    missing_source = sorted(set(joint_aliases) - source_names)
     if missing_source:
         raise ValueError("source URDF is missing expected joints: " + ", ".join(missing_source))
 
-    expected_desktop = {spec.urdf_joint_name for spec in JOINT_SPECS.values()}
+    expected_desktop = set(joint_aliases.values())
     missing_desktop = sorted(expected_desktop - output_names)
     if missing_desktop:
         raise ValueError("adapter did not create required desktop joints: " + ", ".join(missing_desktop))
@@ -117,17 +121,19 @@ def build_adapter(source_root: Path, adapter_root: Path) -> Path:
     output_urdf = adapter_root / "urdf" / "hand.urdf"
     output_urdf.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(tree, space="  ")
-    tree.write(output_urdf, encoding="utf-8", xml_declaration=True)
+    xml_text = ET.tostring(root, encoding="unicode", xml_declaration=True)
+    _atomic_write_text(output_urdf, xml_text)
 
     manifest = {
         "source_root": str(source_root),
         "source_urdf": str(source_urdf),
         "source_commit": _repo_commit(source_root),
         "adapter_urdf": str(output_urdf),
-        "joint_aliases": SOURCE_TO_DESKTOP_JOINT,
+        "joint_aliases": joint_aliases,
     }
-    (adapter_root / "structure_urdf_adapter.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    _atomic_write_text(
+        adapter_root / "structure_urdf_adapter.json",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
     )
     return output_urdf
 
@@ -138,8 +144,9 @@ def main() -> int:
     )
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--adapter-root", required=True, type=Path)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()
-    output_urdf = build_adapter(args.source_root, args.adapter_root)
+    output_urdf = build_adapter(args.source_root, args.adapter_root, args.manifest)
     print(f"Adapter URDF created: {output_urdf}")
     return 0
 

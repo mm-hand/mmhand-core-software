@@ -25,7 +25,6 @@ namespace mmhand::config::servo {
 
 /** 多圈恢复与异步 NVS 协调参数；不改变现有快照布局和键名。 */
 inline constexpr uint32_t kNvsRestoreWaitWindowMs = 3000;
-inline constexpr uint32_t kHostHeartbeatOfflineMs = 1000;
 inline constexpr uint32_t kNvsSaveMinIntervalMs = 500;
 inline constexpr uint32_t kNvsOfflinePeriodicSaveMs = 2000;
 inline constexpr uint16_t kNvsRestoreRawToleranceCounts = 256;

@@ -2,57 +2,15 @@ import struct
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
 
+# 协议编号、21/27 维度、固定 payload 长度和时间戳规则均由唯一 schema 生成。
+# 本文件只保留字段编解码和业务数据模型，禁止重新定义同名协议常量。
+from .generated_upper_protocol import *  # noqa: F403
+
 
 class ControlMode(Enum):
     JOINT_ANGLE = 0
     DIRECT_MOTOR = 1
 
-
-PROTOCOL_HEADER = 0xFE
-PROTOCOL_TAIL = 0xFF
-
-# Upstream packet types (device -> desktop)
-PACKET_TYPE_SENSOR = 0x01
-PACKET_TYPE_CALIB_ACK = 0x02
-PACKET_TYPE_SERVO_ANGLE = 0x03
-PACKET_TYPE_JOINT_DEBUG = 0x04
-PACKET_TYPE_SERVO_TELEM = 0x05
-PACKET_TYPE_PROTO_ACK = 0x06
-PACKET_TYPE_FAULT_STATUS = 0x07
-PACKET_TYPE_SERVO_RAW = 0x09
-PACKET_TYPE_TACTILE = 0x0A
-PACKET_TYPE_ENCODER_RAW = 0x0B
-PACKET_TYPE_SYSTEM_STATUS = 0x0C
-PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D
-PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E
-PACKET_TYPE_TACTILE_FULL = 0x0F
-PACKET_TYPE_CALIB_DIAG = 0x10
-PACKET_TYPE_TASK_DIAG = 0x11
-PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12
-PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13
-
-# 当前 P4 上行协议在以下包的业务负载末尾追加 4 字节大端毫秒时间戳。
-# 标定诊断、任务诊断和 Joint Debug 已在业务结构内携带时间，不重复追加。
-P4_TIMESTAMP_BYTES = 4
-P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset(
-    {
-        PACKET_TYPE_SENSOR,
-        PACKET_TYPE_CALIB_ACK,
-        PACKET_TYPE_SERVO_ANGLE,
-        PACKET_TYPE_SERVO_TELEM,
-        PACKET_TYPE_PROTO_ACK,
-        PACKET_TYPE_FAULT_STATUS,
-        PACKET_TYPE_SERVO_RAW,
-        PACKET_TYPE_TACTILE,
-        PACKET_TYPE_ENCODER_RAW,
-        PACKET_TYPE_SYSTEM_STATUS,
-        PACKET_TYPE_MOTOR_ABS_LIMIT,
-        PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
-        PACKET_TYPE_TACTILE_FULL,
-        PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
-        PACKET_TYPE_SERVO_LOGICAL_RANGE,
-    }
-)
 
 CALIB_WARN_NONE = 0x00
 CALIB_WARN_AUTO_MIN_OFFSET = 0x01
@@ -77,47 +35,6 @@ TASK_RUNTIME_NAMES = {
     TASK_RUNTIME_AUTO_CALIB: "AutoCalibration",
     TASK_RUNTIME_MONITOR: "TaskMonitor",
 }
-
-# Downstream commands (desktop -> device)
-CMD_CALIBRATE = 0xCA
-CMD_ANGLE_CTRL = 0xCB
-CMD_START = 0xCC
-CMD_STOP = 0xCD
-CMD_RESET = 0xCE
-CMD_MOTOR_POS = 0xD0
-CMD_MOTOR_POS_SWEEP = 0xD2
-CMD_MOTOR_POS_ABS = 0xD3
-CMD_MOTOR_POS_ABS_ONE = 0xDE
-CMD_ACTIVE_SCOPE = 0xD7
-CMD_RUN_FEEDBACK = 0xD8
-CMD_PAUSE = 0xD9
-CMD_RESTORE_MULTITURN = 0xDA
-CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB
-# 上位机在线心跳；固件用它判断桌面端是否已经关闭。
-CMD_HOST_HEARTBEAT = 0xDC
-CMD_MULTITURN_NVS_CONTROL = 0xDD
-CMD_CALIB_LOAD_JOINT = 0xDF
-CMD_CALIB_LOAD_LIMITS = 0xE0
-CMD_CLEAR_CALIBRATION = 0xE5
-CMD_MANUAL_ENCODER_REFERENCE = 0xE6
-CMD_MANUAL_ENCODER_QUERY = 0xE7
-CMD_MANUAL_ENCODER_SINGLE = 0xE8
-CMD_ROPE_INIT = 0xE9
-CMD_ANGLE_CTRL_MASKED = 0xEA
-# 按电机掩码局部失效标定；P4 根据 HardwareMap 计算实际关节范围。
-CMD_CLEAR_CALIBRATION_SCOPE = 0xEB
-# 重置 hardware ABS 严格越过 ±30715 的舵机圈数。
-CMD_SERVO_RESET_ZERO = 0xEC
-
-
-PROTO_ACK_STATUS_OK = 0
-PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1
-PROTO_ACK_STATUS_QUEUED = 2
-PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED = 3
-PROTO_ACK_STATUS_INVALID_DATA = 4
-PROTO_ACK_STATUS_NVS_FAILURE = 5
-PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6
-PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7
 
 SYSTEM_STATE_UNCONTROLLABLE = 0
 SYSTEM_STATE_IDLE = 1
@@ -145,6 +62,16 @@ ROPE_INIT_REASON_TARGET_PUBLISH_FAILED = 7
 ROPE_INIT_REASON_SYSTEM_FAULT = 8
 ROPE_INIT_REASON_CANCELLED = 9
 ROPE_INIT_REASON_TASK_START_FAILED = 10
+
+# RUN_DIRECT 结果由 SYSTEM_STATUS 中的 generation/reject_reason 异步确认。
+# 数值与 P4 domain/SystemTypes.h 保持一致，不能重新编号。
+DIRECT_REJECT_NONE = 0
+DIRECT_REJECT_STATE = 1
+DIRECT_REJECT_HARDWARE = 2
+DIRECT_REJECT_MULTITURN = 3
+DIRECT_REJECT_EVENT_QUEUE = 4
+DIRECT_REJECT_STALE = 5
+DIRECT_REJECT_FAULT = 6
 
 # RUN_FEEDBACK admission is asynchronous: the command ACK only means that P4
 # queued the request.  These fields report the eventual StateMachine result.
@@ -203,10 +130,7 @@ SERVO_TARGET_OWNER_NONE = 0
 SERVO_TARGET_OWNER_CONTROL = 1
 SERVO_TARGET_OWNER_CALIBRATION = 2
 
-# Decoupled dimensions
-ENCODER_COUNT = 21
-MOTOR_COUNT = 27
-ENCODER_RAW_MODULO = 16384
+# 与协议无关的控制域配置。
 DUAL_TENDON_JOINT_INDICES = (0, 4, 8, 12, 16, 20)
 TENDON_LUT_ACTUATOR_COUNT = 2
 TENDON_LUT_MAX_SAMPLES = 24
@@ -243,7 +167,6 @@ def directed_encoder_delta(from_raw: int, to_raw: int, direction: int) -> Option
 
 CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
-DISCONNECT_SENTINEL = 0x7FFF
 
 # Serial settings
 BAUDRATE = 921600
@@ -255,7 +178,22 @@ TX_QUEUE_GET_TIMEOUT = 0.1
 
 
 def _build_command_frame(cmd: int, payload: bytes = b"") -> bytes:
+    """按 P4 下行帧格式编码命令，并用生成长度表阻止协议漂移。
+
+    帧格式为 FE | LEN | CMD | PAYLOAD | FF；LEN 统计 CMD、PAYLOAD 和尾字节，
+    不包含帧头与 LEN 自身。所有当前下行命令均为定长 payload。
+    """
     payload = bytes(payload)
+    # 下行命令全部是定长协议。这里使用同一份 schema 生成的长度表做最后校验，
+    # 可在串口发送前发现 C++/Python 字段增删不同步，而不是等 P4 静默拒绝。
+    expected_payload_bytes = COMMAND_PAYLOAD_LENGTHS.get(int(cmd))
+    if expected_payload_bytes is None:
+        raise ValueError(f"unknown upper command: 0x{int(cmd) & 0xFF:02X}")
+    if len(payload) != expected_payload_bytes:
+        raise ValueError(
+            f"command 0x{int(cmd) & 0xFF:02X} payload length mismatch: "
+            f"expected {expected_payload_bytes}, got {len(payload)}"
+        )
     # Symmetric downstream frame: [0xFE][LEN][CMD][PAYLOAD][0xFF]
     # LEN = CMD byte + payload + tail byte.
     frame_len = 1 + len(payload) + 1
@@ -798,6 +736,24 @@ def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
         "device_timestamp_ms": read_u32(),
     })
     return result
+
+
+def parse_product_fingerprint_packet(payload: bytes) -> Optional[dict]:
+    """解析 P4 当前固件、参数、硬件映射和 URDF 的可复现实验指纹。"""
+    if len(payload) != 28:
+        return None
+    values = struct.unpack(">BBBBIIIIII", payload)
+    return {
+        "schema_version": int(values[0]),
+        "feedback_mapping_version": int(values[1]),
+        "manual_scaled_mapping_version": int(values[2]),
+        "control_model_crc": int(values[4]),
+        "visual_model_crc": int(values[5]),
+        "hardware_map_crc": int(values[6]),
+        "parameter_crc": int(values[7]),
+        "firmware_source_crc": int(values[8]),
+        "structure_commit_crc": int(values[9]),
+    }
 
 
 def parse_calib_ack(payload: bytes) -> Optional[int]:

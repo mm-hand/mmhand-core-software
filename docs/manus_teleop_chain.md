@@ -1,5 +1,7 @@
 # MANUS 遥操链路简明说明
 
+> 当前专项文档，最后核对：2026-08-01。MANUS 可以走 Direct SDK/TCP/外部 IK 路径，是否经过 ROS2 取决于启动方式；不要把 MANUS 与 Wuji 原生 ROS2 publisher 混为一条固定链路。两者最终都必须经过 desktop 的显式输出授权门，详见[ROS2与遥操链路](ROS2与遥操链路.md)。
+
 本文是当前 MANUS 遥操的唯一主说明。其它 MANUS 目录 README 只做入口跳转，避免多份文档内容重复。
 
 ## 1. 数据链路

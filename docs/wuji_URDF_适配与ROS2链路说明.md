@@ -1,5 +1,7 @@
 # Wuji 手套适配当前 MMHand URDF 与 ROS2 链路说明
 
+> 当前专项文档，最后核对：2026-08-01。Wuji 发布端使用 `urdf_deg` 和带 model id 的 layout label；desktop raw-IK bridge 的兼容默认仍是 `legacy_calibrated_deg`，接 Wuji 时必须显式选择 `urdf_deg`。desktop 当前尚未严格校验 layout label，详见[ROS2与遥操链路](ROS2与遥操链路.md)。
+
 ## 1. 目的与对比范围
 
 本文对比以下两个 Wuji ROS2 工作区：

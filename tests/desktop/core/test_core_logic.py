@@ -51,7 +51,6 @@ class TestSetMotorPositionsAbsolute:
         call_args = mock_comm.send_command.call_args[0][0]
         assert call_args[0] == "motor_pos_abs"
         assert len(call_args[1]) == MOTOR_COUNT
-
     def test_normal_case_values_preserved(self, controller, mock_comm):
         """Verify valid values within range are sent unchanged."""
         controller.comm = mock_comm
@@ -447,3 +446,32 @@ class TestLoadCalibrationSnapshot:
                 received_after=102.0,
             ),
         ]
+
+
+class TestShutdownSemantics:
+    """普通退出依赖 P4 租约 Hold，显式急停才允许发送锁存式 STOP。"""
+
+    @staticmethod
+    def _controller_with_comm():
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller._update_thread = None
+        return controller
+
+    def test_default_shutdown_does_not_latch_lower_estop(self, monkeypatch):
+        controller = self._controller_with_comm()
+        monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
+
+        controller.shutdown()
+
+        controller.comm.send_command.assert_not_called()
+        controller.comm.disconnect.assert_called_once_with()
+
+    def test_explicit_stop_lower_still_sends_estop(self, monkeypatch):
+        controller = self._controller_with_comm()
+        monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
+
+        controller.shutdown(stop_lower=True)
+
+        controller.comm.send_command.assert_called_once_with("stop")
+        controller.comm.disconnect.assert_called_once_with()

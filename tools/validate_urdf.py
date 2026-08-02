@@ -4,16 +4,26 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+DEFAULT_MANIFEST = PROJECT_ROOT / "desktop/resources/config/robot_model_manifest.json"
 
-from desktop.core.angle_mapping import JOINT_SPECS
+
+def _required_joint_names(manifest_path: Path) -> set[str]:
+    """校验器只读取语义清单，不导入 Desktop 运行时代码。"""
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    joints = data.get("joints")
+    if not isinstance(joints, list) or len(joints) != 21:
+        raise ValueError("robot model manifest must contain 21 joints")
+    names = {str(item.get("urdf_joint_name", "")) for item in joints}
+    if "" in names or len(names) != 21:
+        raise ValueError("robot model manifest contains invalid joint names")
+    return names
 
 
 def _resolve_mesh_path(resource_root: Path, urdf_path: Path, filename: str) -> Path | None:
@@ -24,7 +34,7 @@ def _resolve_mesh_path(resource_root: Path, urdf_path: Path, filename: str) -> P
     return (urdf_path.parent / filename).resolve()
 
 
-def validate(resource_root: Path) -> list[str]:
+def validate(resource_root: Path, manifest_path: Path = DEFAULT_MANIFEST) -> list[str]:
     errors: list[str] = []
     resource_root = resource_root.resolve()
     urdf_path = resource_root / "urdf" / "hand.urdf"
@@ -53,8 +63,10 @@ def validate(resource_root: Path) -> list[str]:
             errors.append(f"missing mesh: {filename} -> {resolved}")
 
     joints = {joint.get("name", ""): joint for joint in root.findall("joint")}
-    required_specs = {spec.urdf_joint_name: spec for spec in JOINT_SPECS.values()}
-    required_joint_names = set(required_specs)
+    try:
+        required_joint_names = _required_joint_names(manifest_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [f"invalid robot model manifest: {exc}"]
     missing_joints = sorted(required_joint_names - set(joints))
     if missing_joints:
         errors.append("missing required 21-joint mapping names: " + ", ".join(missing_joints))
@@ -76,13 +88,6 @@ def validate(resource_root: Path) -> list[str]:
             if lower >= upper:
                 errors.append(f"joint limit lower >= upper: {name} ({lower} >= {upper})")
                 continue
-            expected = required_specs[name]
-            if abs(lower - expected.urdf_min_rad) > 1e-6 or abs(upper - expected.urdf_max_rad) > 1e-6:
-                errors.append(
-                    "joint limit differs from urdf_joint_mapping_v2.json: "
-                    f"{name} actual=({lower:.8f},{upper:.8f}) "
-                    f"mapped=({expected.urdf_min_rad:.8f},{expected.urdf_max_rad:.8f})"
-                )
 
     print(f"URDF: {urdf_path}")
     print(f"Robot: {root.get('name', '<unnamed>')}")
@@ -100,8 +105,9 @@ def main() -> int:
         type=Path,
         help="Resource root containing urdf/hand.urdf and its mesh tree.",
     )
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()
-    errors = validate(args.urdf_root)
+    errors = validate(args.urdf_root, args.manifest)
     if errors:
         print("URDF validation failed:")
         for error in errors:

@@ -1,5 +1,7 @@
 # 下位机多圈圈数 NVS 保存与烧录注意事项
 
+> 当前专项文档，最后核对：2026-08-01。当前实现为 `mt_abs` namespace、V2 A/B 双槽、sequence、CRC32、mappingSignature 和异步低优先级保存；所有业务目标须经 ActuatorCommandGateway，文中的直控/反馈流程图若直接写 `servoTargetQueue`，应理解为 Gateway 内部的 latest-value 邮箱，不是允许业务任务直接访问。
+
 本文档说明当前 ESP32-P4 下位机如何保存飞特舵机多圈圈数、为什么需要逻辑坐标/硬件坐标分离、换舵机时如何关闭 NVS，以及 Arduino 烧录时需要注意的位置。
 
 ## 背景
@@ -177,7 +179,8 @@ ServoBusDriver::setTarget()
 上位机 motor absolute/direct command
 -> UpperCommCommandRouter::upperApplyMotorTargets()
 -> ControlTask 组装 ServoTargetBatch
--> servoTargetQueue
+-> ActuatorCommandGateway::submit()
+-> ServoSafetyPolicy 校验并写入内部 servoTargetQueue
 -> ServoCommunicationTask::applyServoTargetBatch()
 -> ServoBusDriver::setTarget()
 -> logicalToHardwareTarget()
@@ -191,7 +194,8 @@ ServoBusDriver::setTarget()
 -> ControlTask
 -> ControlSolver PID 输出 outPulses
 -> appendServoTarget()
--> servoTargetQueue
+-> ActuatorCommandGateway::submit()
+-> ServoSafetyPolicy 校验并写入内部 servoTargetQueue
 -> ServoCommunicationTask::applyServoTargetBatch()
 -> ServoBusDriver::setTarget()
 -> logicalToHardwareTarget()

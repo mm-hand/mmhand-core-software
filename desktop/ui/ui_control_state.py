@@ -3,6 +3,13 @@
 from .ui_control_common import (
     ControlMode,
     ControlScopeModel,
+    DIRECT_REJECT_EVENT_QUEUE,
+    DIRECT_REJECT_FAULT,
+    DIRECT_REJECT_HARDWARE,
+    DIRECT_REJECT_MULTITURN,
+    DIRECT_REJECT_NONE,
+    DIRECT_REJECT_STALE,
+    DIRECT_REJECT_STATE,
     ENCODER_COUNT,
     HandModel,
     JointWorkspaceRange,
@@ -37,6 +44,15 @@ from .ui_control_common import (
 
 
 class ControlPanelStateMixin:
+    _DIRECT_REJECT_LABELS = {
+        DIRECT_REJECT_STATE: "state/E-STOP gate",
+        DIRECT_REJECT_HARDWARE: "servo hardware unavailable",
+        DIRECT_REJECT_MULTITURN: "multi-turn position unknown",
+        DIRECT_REJECT_EVENT_QUEUE: "state-event queue full",
+        DIRECT_REJECT_STALE: "stale command or host lease",
+        DIRECT_REJECT_FAULT: "system fault",
+    }
+
     def update_state(self, state) -> None:
         """Run the update state workflow."""
         self._state = state
@@ -52,6 +68,7 @@ class ControlPanelStateMixin:
             self._show_servo_turn_overflow_guide(overflow_bitmap)
         self._handle_firmware_epoch_change(state)
         self._handle_connectivity_transitions(state)
+        self._handle_direct_command_result(state)
         self._update_p4_rope_init_progress(state)
         calib_status = str(getattr(state, "calib_status", "IDLE"))
         active_calib_statuses = {"PENDING", "RUNNING"}
@@ -89,6 +106,50 @@ class ControlPanelStateMixin:
         self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
         self._update_manual_action_buttons()
 
+    def _handle_direct_command_result(self, state) -> None:
+        """把“已提交串口帧”和“P4 已接受执行”区分为两个阶段。"""
+        if state is None or not bool(
+            getattr(state, "has_motion_result_status", False)
+        ):
+            return
+        generation = int(
+            getattr(state, "pending_direct_generation", 0) or 0
+        ) & 0xFFFFFFFF
+        applied_generation = int(
+            getattr(state, "applied_direct_generation", 0) or 0
+        ) & 0xFFFFFFFF
+        reject_reason = int(
+            getattr(state, "direct_reject_reason", DIRECT_REJECT_NONE) or 0
+        )
+
+        # 首帧只建立设备当前代次基线，避免重连时把上一次会话的结果重新弹出。
+        if self._last_reported_direct_generation is None:
+            self._last_reported_direct_generation = generation
+            return
+        if generation == self._last_reported_direct_generation:
+            return
+
+        if generation != 0 and applied_generation == generation:
+            self._last_reported_direct_generation = generation
+            self.context.emit_action(
+                f"Direct command executed by P4: generation={generation}"
+            )
+            return
+        if reject_reason == DIRECT_REJECT_NONE:
+            # 状态包可能落在“已入队、状态机尚未仲裁”的短窗口，继续等待下一帧。
+            return
+
+        self._last_reported_direct_generation = generation
+        reason_text = ControlPanelStateMixin._DIRECT_REJECT_LABELS.get(
+            reject_reason, f"unknown reason {reject_reason}"
+        )
+        message = (
+            f"Direct command rejected by P4: generation={generation}, "
+            f"reason={reason_text}"
+        )
+        self.context.emit_action(message)
+        self._set_status(message)
+
     def _reset_motor_target_cache_for_device_epoch(self, reason: str) -> None:
         """Reset the motor target cache for device epoch state."""
         self._motor_target_initialized = False
@@ -96,6 +157,7 @@ class ControlPanelStateMixin:
         self._motor_session_origin_abs = [None] * MOTOR_COUNT
         self._motor_last_slider = [None] * MOTOR_COUNT
         self._motor_last_sent_abs = [None] * MOTOR_COUNT
+        self._last_reported_direct_generation = None
         self._motor_target_user_set = [False] * MOTOR_COUNT
         self._clear_run_states()
         self.context.emit_action(reason)
@@ -235,6 +297,7 @@ class ControlPanelStateMixin:
         self._motor_last_slider = [None] * MOTOR_COUNT
         self._motor_slider_dragging = [False] * MOTOR_COUNT
         self._motor_last_sent_abs = [None] * MOTOR_COUNT
+        self._last_reported_direct_generation = None
         self._last_state_transition_count = None
         self._last_multi_turn_unknown_bitmap = None
         self.reset_turn_unknown_popup_episode()
@@ -579,8 +642,10 @@ class ControlPanelStateMixin:
         self.backend.set_single_motor_position_absolute(idx, target_abs)
         if 0 <= idx < len(self._motor_last_sent_abs):
             self._motor_last_sent_abs[idx] = target_abs
+        # send_command 只说明帧已进入发送队列，不能提前声称下位机已经执行。
+        # 最终结果由 _handle_direct_command_result 根据 generation 异步确认。
         self.context.emit_action(
-            f"Single motor absolute position sent ({trigger}): M{idx:02d}={target_abs}"
+            f"Single motor absolute position submitted ({trigger}): M{idx:02d}={target_abs}"
         )
         return target_abs
 

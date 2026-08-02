@@ -1,5 +1,7 @@
 # 历史 BUG 审计报告（参考恢复版）
 
+最后复核：2026-08-01。本文已经采用“旧结论—当前状态”格式，继续保留，不作为删除对象；未关闭项必须回到当前源码和实机日志复证。
+
 日期：2026-07-06  
 状态：参考文档，不作为当前主链路 BUG 结论直接使用。
 
@@ -190,12 +192,12 @@ Pid->Integral = 0;
 
 ---
 
-### H02：ROS2 21 角输入缺少速率/范围/超时保护
+### H02：ROS2 已有授权/范围门禁，仍缺消息级新鲜度与速率诊断
 
 当前风险：
 
-- `/mmhand/joint_targets` 和 `/raw_ik_target` 主要检查 21 个 float 和 finite。
-- 高频发布或角度突变会直接进入 `backend.send_joint_targets(... live=True)`。
+- `/mmhand/joint_targets` 和 `/raw_ik_target` 先检查 21 个 finite 值并做坐标适配，随后经过 armed、串口在线、controller ready、active scope 绑定和 workspace guard。
+- 高频发布或角度突变会先进入 `HandBackend.send_ros2_joint_targets()`；当前已有 armed、串口在线、controller ready、active scope 绑定和 workspace guard，但还缺消息时间戳/sequence 与独立 staleness watchdog。
 - 没有 staleness watchdog 时，外部节点停止发布后，系统可能保持最后目标。
 
 建议：
@@ -208,24 +210,24 @@ Pid->Integral = 0;
 
 ---
 
-### H03：双电机防松绳 clamp 仍未完全来自标定 anchor
+### H03：双电机防松绳保护（历史问题，当前已迁移）
 
-当前事实：
+2026-07-06 审计时的事实：
 
 - `DualTendonControl.cpp` 已有 `450 counts` release clamp。
 - J20 已单独放宽到 `600 counts`。
 - 但 `motorZero = 2557 / 358` 仍是静态值，且所有双电机关节共用同一几何模型。
 
-风险：
+当时风险：
 
 - 当前参数可能在实测中有效，但并不是严格的“每关节自动标定闭环参数”。
 - 如果不同双关节机械绕绳差异明显，静态值可能留下边界风险。
 
-建议：
+当前实现（2026-08-01 复核）：
 
-- 自动标定输出 per-joint/per-motor preload anchor。
-- 双电机 clamp 使用每个关节自己的 anchor。
-- 标定快照协议升级到 int32 ABS，避免多圈值被 int16 截断。
+- 自动标定结果按 joint/motor 保存，V3 标定快照使用 `int32` ABS；双电机控制根据各电机标定 LUT 生成逻辑目标，不再把旧 `450/600 counts` 静态 release clamp 当作当前安全边界。
+- 所有批量目标统一经过 `ActuatorCommandGateway` 和 `ServoSafetyPolicy`，再执行 owner、在线状态、多圈可信度、逻辑行程与换圈后的硬件 ABS 范围检查。
+- 旧参数仍保留在本节是为了说明问题来源，不能据此给当前固件调参。
 
 ---
 

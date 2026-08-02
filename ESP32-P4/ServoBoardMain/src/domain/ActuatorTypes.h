@@ -10,9 +10,19 @@
 #include <stdint.h>
 
 inline constexpr uint8_t SERVO_TARGET_OWNER_NONE = 0;        ///< 当前没有任务拥有舵机输出权。
-inline constexpr uint8_t SERVO_TARGET_OWNER_CONTROL = 1;     ///< 控制/直控/Rope Init 共用的执行 owner。
-inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2; ///< 自动标定任务独占 owner。
+inline constexpr uint8_t SERVO_TARGET_OWNER_CONTROL = 1;     ///< 负反馈与直控任务的执行 owner。
+inline constexpr uint8_t SERVO_TARGET_OWNER_CALIBRATION = 2; ///< 自动标定与 Rope Init 的执行 owner。
 inline constexpr uint8_t SERVO_TARGET_BATCH_MAX = SERVO_TOTAL_NUM; ///< 单批最多覆盖全手 27 台舵机。
+
+/** 批次用途用于执行层确认安全事务；普通控制/标定批次保持为 NORMAL。 */
+inline constexpr uint8_t SERVO_TARGET_PURPOSE_NORMAL = 0;
+inline constexpr uint8_t SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD = 1;
+
+/** 上位机租约丢失后的“保持当前 ABS”事务状态，覆盖控制、标定和 Rope Init。 */
+inline constexpr uint8_t HOST_CONTROL_HOLD_IDLE = 0;
+inline constexpr uint8_t HOST_CONTROL_HOLD_PENDING = 1;
+inline constexpr uint8_t HOST_CONTROL_HOLD_APPLIED = 2;
+inline constexpr uint8_t HOST_CONTROL_HOLD_FAILED = 3;
 
 struct ServoTargetCommand_t {
     uint8_t busIndex;  ///< 目标 UART 总线索引，范围 0..NUM_BUSES-1。
@@ -25,8 +35,10 @@ struct ServoTargetCommand_t {
 struct ServoTargetBatch_t {
     uint8_t count;     ///< commands 中有效命令数量。
     uint8_t source;    ///< SERVO_TARGET_OWNER_*，执行时再次核对 owner。
+    uint8_t purpose;   ///< SERVO_TARGET_PURPOSE_*，NORMAL 之外需要执行层回写确认。
     ServoTargetCommand_t commands[SERVO_TARGET_BATCH_MAX]; ///< 同一控制周期的原子目标快照。
     uint32_t timestamp; ///< 生产者生成批次的单调毫秒时间。
+    uint32_t transactionToken; ///< 安全事务代次；普通批次固定为 0。
 };
 
 struct ControlCommandSnapshot_t {

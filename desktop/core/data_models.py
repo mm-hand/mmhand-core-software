@@ -691,6 +691,10 @@ class HandModel:
     calib_diag_timestamp_ms: int = 0
     task_runtime: dict = field(default_factory=dict)
     task_runtime_last_rx_ts: float = 0.0
+    # P4 周期上报的产品指纹，用于把运行日志绑定到确切的固件、参数和机器人模型。
+    product_fingerprint: dict = field(default_factory=dict)
+    product_fingerprint_last_rx_ts: float = 0.0
+    has_product_fingerprint: bool = False
 
     # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
@@ -962,6 +966,15 @@ class HandModel:
             if isinstance(item, dict)
         }
         self.task_runtime_last_rx_ts = float(getattr(other, "task_runtime_last_rx_ts", 0.0) or 0.0)
+        self.product_fingerprint = dict(
+            getattr(other, "product_fingerprint", {}) or {}
+        )
+        self.product_fingerprint_last_rx_ts = float(
+            getattr(other, "product_fingerprint_last_rx_ts", 0.0) or 0.0
+        )
+        self.has_product_fingerprint = bool(
+            getattr(other, "has_product_fingerprint", False)
+        )
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
         self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
         self.tactile_full_seq = getattr(other, "tactile_full_seq", None)

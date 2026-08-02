@@ -1,5 +1,7 @@
 # 自动标定卡顿根因说明：ControlTask 抢占标定舵机目标队列
 
+> 文档状态（2026-08-01）：保留为并发故障复盘。当前架构已通过状态机 owner、命令 generation、ActuatorCommandGateway 唯一入口和容量 1 latest-value 邮箱消除原始抢占路径；正文旧调用链用于解释为何要这样重构，不代表现在仍允许 ControlTask 直写队列。
+
 > 日期：2026-07-12
 > 对应修复提交：`5cd297f Fix calibration queue ownership and restore runtime`
 > 结论状态：实机验证通过，双电机标定未再出现原先的长时间卡顿

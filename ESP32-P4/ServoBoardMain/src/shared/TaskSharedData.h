@@ -85,6 +85,12 @@ typedef struct {
     volatile uint32_t feedback_recovery_request_sequence;///< 被恢复的关节命令序号。
     volatile uint32_t emergency_stop_request_token;      ///< 任意任务可递增的 E-STOP 请求。
     volatile uint32_t servo_emergency_stop_token;        ///< 舵机任务已观察的断扭矩请求代际。
+    volatile uint8_t emergency_stop_latched;             ///< E-STOP 最终发送门禁，仅 RESET 清除。
+    // 上位机失联后先停止普通目标，再将 active 电机锁到最新实际 ABS；Servo 任务确认后才释放 owner。
+    volatile uint8_t host_control_hold_status;           ///< HOST_CONTROL_HOLD_*。
+    volatile uint32_t host_control_hold_request_token;   ///< 状态机发起的 Hold 事务代次。
+    volatile uint32_t host_control_hold_result_token;    ///< Servo 任务最后确认的 Hold 事务代次。
+    volatile uint32_t host_control_hold_started_ms;      ///< 本次 Hold 开始时间，用于确认超时。
     volatile uint32_t system_fault_bitmap;               ///< 当前实时故障位。
     volatile uint32_t system_fault_latched_bitmap;       ///< 必须 Clear Fault 的锁存故障位。
     volatile uint32_t state_transition_count;            ///< 系统状态切换计数。

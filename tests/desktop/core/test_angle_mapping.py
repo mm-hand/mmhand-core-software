@@ -44,7 +44,7 @@ def test_all_21_mapping_limits_match_active_urdf():
 
 def test_feedback_mapping_declares_runtime_v2_and_staged_v3():
     data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
-    assert data["schema_version"] == 3
+    assert data["schema_version"] == 4
     assert data["feedback_mapping_version"] == 2
     assert data["manual_scaled_mapping_version"] == 3
     assert data["p4_sync_required"] is False
@@ -62,7 +62,7 @@ def test_feedback_mapping_declares_runtime_v2_and_staged_v3():
 def test_generated_p4_urdf_limits_are_current_and_crc_matches():
     root = Path(__file__).resolve().parents[3]
     subprocess.run(
-        [sys.executable, str(root / "tools" / "generate_p4_urdf_limits.py"), "--check"],
+        [sys.executable, str(root / "tools" / "generate_robot_model.py"), "--check"],
         cwd=root,
         check=True,
     )

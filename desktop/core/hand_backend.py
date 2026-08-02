@@ -202,7 +202,8 @@ class HandBackend:
     def initialize(self, port: str) -> bool:
         return self.connect(port)
 
-    def shutdown(self, stop_lower: bool = True) -> None:
+    def shutdown(self, stop_lower: bool = False) -> None:
+        """关闭上位机链路；默认交由 P4 租约 Hold，显式急停才下发 STOP。"""
         self.cancel_replay_motion("shutdown")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="shutdown")

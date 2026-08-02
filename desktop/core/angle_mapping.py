@@ -21,7 +21,7 @@ import json
 import math
 import struct
 import zlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
@@ -155,38 +155,8 @@ class AngleMappingDebug:
     mapping_status: str
 
 
-_BASE_JOINT_SPECS: Dict[int, JointAngleSpec] = {
-    0: JointAngleSpec(0, "Pinky root", "little_aa_joint", -0.802851, 0.331613, -45.0, 11.0, is_coupled=True, motor_indices=(0, 1), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    1: JointAngleSpec(1, "Pinky MCP", "mmhand_finger_4_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(2,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    2: JointAngleSpec(2, "Pinky PIP", "mmhand_finger_4_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(3,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    3: JointAngleSpec(3, "Pinky DIP", "mmhand_finger_4_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(4,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    4: JointAngleSpec(4, "Ring root", "ring_aa_joint", -0.802851, 0.506145, -51.0, 21.0, is_coupled=True, motor_indices=(5, 6), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    5: JointAngleSpec(5, "Ring MCP", "mmhand_finger_3_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(7,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    6: JointAngleSpec(6, "Ring PIP", "mmhand_finger_3_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(8,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    7: JointAngleSpec(7, "Ring DIP", "mmhand_finger_3_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(9,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    8: JointAngleSpec(8, "Middle root", "middle_aa_joint", -0.523599, 0.593412, -24.0, 23.0, is_coupled=True, motor_indices=(10, 11), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    9: JointAngleSpec(9, "Middle MCP", "mmhand_finger_2_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(12,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    10: JointAngleSpec(10, "Middle PIP", "mmhand_finger_2_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(13,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    11: JointAngleSpec(11, "Middle DIP", "mmhand_finger_2_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(14,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    12: JointAngleSpec(12, "Index root", "index_aa_joint", -0.506145, 0.610865, -11.0, 30.0, is_coupled=True, motor_indices=(15, 16), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    13: JointAngleSpec(13, "Index MCP", "mmhand_finger_1_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(17,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    14: JointAngleSpec(14, "Index PIP", "mmhand_finger_1_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(18,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    15: JointAngleSpec(15, "Index DIP", "mmhand_finger_1_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(19,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    16: JointAngleSpec(16, "Thumb AA", "thumb_aa_joint", -0.506145, 0.523599, -29.0, 30.0, is_coupled=True, motor_indices=(20, 21), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    17: JointAngleSpec(17, "Thumb MCP", "mmhand_thumb_1_mmhand_finger_5_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(22,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    18: JointAngleSpec(18, "Thumb PIP", "mmhand_thumb_1_mmhand_finger_5_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(23,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    19: JointAngleSpec(19, "Thumb DIP", "mmhand_thumb_1_mmhand_finger_5_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(24,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    20: JointAngleSpec(20, "Thumb CMC", "thumb_cmc1_joint", -1.396263, 0.017453, -80.0, 1.0, is_coupled=True, motor_indices=(25, 26), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-}
-
-
 def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
-    """Overlay the active structure URDF limits onto immutable joint metadata.
-
-    The JSON deliberately stores legacy q_target endpoints separately from
-    URDF limits. New control commands use active-URDF degrees; the legacy
-    endpoints remain available only at explicit compatibility boundaries.
-    """
+    """从统一生成的映射文件加载 21 关节全部运行时元数据。"""
     try:
         data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -194,7 +164,7 @@ def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"invalid URDF joint mapping JSON: {URDF_JOINT_MAPPING_PATH}") from exc
 
-    if not isinstance(data, dict) or int(data.get("schema_version", 0)) not in (1, 2, 3):
+    if not isinstance(data, dict) or int(data.get("schema_version", 0)) != 4:
         raise RuntimeError("unsupported URDF joint mapping schema")
     entries = data.get("joints")
     if not isinstance(entries, list):
@@ -212,24 +182,31 @@ def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
             raise RuntimeError(f"duplicate URDF joint mapping entry J{idx:02d}")
         by_index[idx] = entry
 
-    expected_indices = set(_BASE_JOINT_SPECS)
+    expected_indices = set(range(ENCODER_COUNT))
     if set(by_index) != expected_indices:
         missing = sorted(expected_indices - set(by_index))
         extra = sorted(set(by_index) - expected_indices)
         raise RuntimeError(f"URDF joint mapping indices mismatch: missing={missing}, extra={extra}")
 
     specs: Dict[int, JointAngleSpec] = {}
-    for idx, base in _BASE_JOINT_SPECS.items():
+    used_motors: set[int] = set()
+    for idx in range(ENCODER_COUNT):
         entry = by_index[idx]
-        if str(entry.get("urdf_joint_name", "")) != base.urdf_joint_name:
-            raise RuntimeError(f"URDF joint mapping J{idx:02d} name does not match {base.urdf_joint_name}")
         try:
+            joint_name = str(entry["display_name"])
+            urdf_joint_name = str(entry["urdf_joint_name"])
             urdf_lo_deg, urdf_hi_deg = [float(v) for v in entry["urdf_limit_deg"]]
             calib_lo_deg, calib_hi_deg = [float(v) for v in entry["calibrated_default_range_deg"]]
             urdf_at_calib_min_deg = float(entry["urdf_at_calibrated_min_deg"])
             urdf_at_calib_max_deg = float(entry["urdf_at_calibrated_max_deg"])
+            motor_indices = tuple(int(value) for value in entry["motor_indices"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid numeric fields") from exc
+        if not joint_name or not urdf_joint_name or len(motor_indices) not in (1, 2):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid semantic fields")
+        if any(motor < 0 or motor >= 27 or motor in used_motors for motor in motor_indices):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid motor bindings")
+        used_motors.update(motor_indices)
         values = (urdf_lo_deg, urdf_hi_deg, calib_lo_deg, calib_hi_deg, urdf_at_calib_min_deg, urdf_at_calib_max_deg)
         if not all(math.isfinite(value) for value in values):
             raise RuntimeError(f"URDF joint mapping J{idx:02d} contains a non-finite value")
@@ -239,17 +216,23 @@ def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
             raise RuntimeError(f"URDF joint mapping J{idx:02d} calibrated-min endpoint is outside URDF limits")
         if not min(urdf_lo_deg, urdf_hi_deg) <= urdf_at_calib_max_deg <= max(urdf_lo_deg, urdf_hi_deg):
             raise RuntimeError(f"URDF joint mapping J{idx:02d} calibrated-max endpoint is outside URDF limits")
-        specs[idx] = replace(
-            base,
+        specs[idx] = JointAngleSpec(
+            joint_index=idx,
+            joint_name=joint_name,
+            urdf_joint_name=urdf_joint_name,
             urdf_min_rad=math.radians(urdf_lo_deg),
             urdf_max_rad=math.radians(urdf_hi_deg),
             default_calib_min_deg=calib_lo_deg,
             default_calib_max_deg=calib_hi_deg,
             urdf_at_calib_min_rad=math.radians(urdf_at_calib_min_deg),
             urdf_at_calib_max_rad=math.radians(urdf_at_calib_max_deg),
-            mapping_source=f"{data.get('mapping_id', 'structure URDF')} endpoint mapping",
+            is_coupled=bool(entry.get("is_coupled", False)),
+            motor_indices=motor_indices,
+            mapping_source=str(entry.get("mapping_source", data.get("mapping_id", "structure URDF"))),
             mapping_status=str(entry.get("mapping_status", "unverified")),
         )
+    if used_motors != set(range(27)):
+        raise RuntimeError("URDF joint mapping does not bind every motor M00-M26")
     return specs
 
 

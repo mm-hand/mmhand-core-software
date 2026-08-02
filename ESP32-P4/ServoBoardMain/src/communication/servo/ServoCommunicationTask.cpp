@@ -11,6 +11,7 @@
 
 #include "../../hardware/HardwareMap.h"
 #include "../../config/DiagnosticsConfig.h"
+#include "../../config/SafetyConfig.h"
 #include "../../config/ServoConfig.h"
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
@@ -27,9 +28,11 @@
 #include "../../hardware/servo/ServoBusRegistry.h"
 #include "../../recovery/MultiTurnRecoveryPolicy.h"
 #include "../../actuator/ActuatorCommandGateway.h"
+#include "../../actuator/ServoSafetyPolicy.h"
 
 
 using namespace mmhand::config::diagnostics;
+using namespace mmhand::config::safety;
 using namespace mmhand::config::servo;
 
 using p4::recovery::completedMotionSaveReason;
@@ -165,41 +168,144 @@ static void recordServoRangeReject(TaskSharedData_t* sharedData,
         (long)kServoHardwareCommandMax);
 }
 
-/** 应用一个 owner 已仲裁的目标批次，并按总线合并为同步写。 */
-static void applyServoTargetBatch(TaskSharedData_t* sharedData,
-                                  const ServoTargetBatch_t& batch)
+/**
+ * 低频记录统一安全策略的拒绝结果。
+ *
+ * 控制任务每 10 ms 可能重发同一目标，因此按 Mxx 限频，避免拒绝日志反过来
+ * 阻塞舵机 UART。logical/hardware range 拒绝仍写入共享诊断供 UI 展示。
+ */
+static void recordServoSafetyReject(TaskSharedData_t* sharedData,
+                                    const ServoSafetyDecision& decision,
+                                    uint32_t nowMs)
 {
+    static uint32_t lastLogMs[SERVO_TOTAL_NUM] = {0};
+    if (!sharedData || decision.motorChannel >= SERVO_TOTAL_NUM) {
+        return;
+    }
+    if ((uint32_t)(nowMs - lastLogMs[decision.motorChannel]) < 500U) {
+        return;
+    }
+    lastLogMs[decision.motorChannel] = nowMs;
+    if (decision.reason == ServoRejectReason::LogicalRange ||
+        decision.reason == ServoRejectReason::HardwareRange) {
+        FeetechServoDriver* bus = servoBusRegistry().driver(
+            motorMap[decision.motorChannel].busIndex);
+        recordServoRangeReject(
+            sharedData,
+            decision.motorChannel,
+            decision.requestedAbs,
+            bus ? bus->getLogicalOffset(motorMap[decision.motorChannel].servoID)
+                : 0);
+    }
+    FW_LOG_WARN_PRINTF(
+        "[SERVO SAFETY REJECT] M%02u reason=%s requested=%ld hardware=%ld "
+        "owner=%u state=%u\r\n",
+        (unsigned)decision.motorChannel,
+        p4::actuator::rejectReasonName(decision.reason),
+        (long)decision.requestedAbs,
+        (long)decision.hardwareAbs,
+        (unsigned)sharedData->servo_target_owner,
+        (unsigned)sharedData->system_state);
+}
+
+/**
+ * 应用一个目标批次，并在真正进入飞特驱动前执行统一最终安全裁决。
+ * 返回实际进入任一总线同步写缓存的命令数量；0 表示整批被拒绝或为空。
+ */
+static uint8_t applyServoTargetBatch(TaskSharedData_t* sharedData,
+                                     const ServoTargetBatch_t& batch)
+{
+    if (!sharedData) {
+        return 0;
+    }
+    // 队列属于跨任务边界：即使发布入口已经校验，也必须在消费端再次验证批次结构，
+    // 避免损坏数据在检查 busIndex/servoId 前被用于访问驱动数组。
+    const ServoSafetyDecision batchDecision =
+        p4::actuator::evaluateBatchStructure(batch);
+    if (!batchDecision.allowed) {
+        FW_LOG_WARN_PRINTF(
+            "[SERVO SAFETY REJECT] batch reason=%s command_index=%u\r\n",
+            p4::actuator::rejectReasonName(batchDecision.reason),
+            (unsigned)batchDecision.commandIndex);
+        return 0;
+    }
     bool busWritePending[NUM_BUSES] = {false};
-    const uint32_t overflowMask = sharedData
-        ? sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap)
-        : 0;
+    int32_t logicalMin[SERVO_TOTAL_NUM] = {0};
+    int32_t logicalMax[SERVO_TOTAL_NUM] = {0};
+    p4::actuator::ServoSafetyContext safetyContext;
+    safetyContext.activeOwner =
+        sharedAtomicLoad(&sharedData->servo_target_owner);
+    safetyContext.systemState =
+        sharedAtomicLoad(&sharedData->system_state);
+    safetyContext.emergencyStopLatched =
+        sharedAtomicLoad(&sharedData->emergency_stop_latched) != 0;
+    safetyContext.nowMs = millis();
+    safetyContext.maxTargetAgeMs = kServoTargetMaxAgeMs;
+    safetyContext.onlineMotorMask =
+        sharedAtomicLoad(&sharedData->servo_online_bitmap);
+    safetyContext.multiTurnUnknownMask =
+        sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap);
+    safetyContext.turnOverflowMask =
+        sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap);
+    safetyContext.logicalRangeValidMask =
+        sharedAtomicLoad(&sharedData->servo_logical_range_valid_bitmap);
+    {
+        // logical range 是多字段快照，复制到栈上后再逐命令裁决，避免跨核撕裂。
+        SharedSafetyGuard guard;
+        memcpy(logicalMin,
+               sharedData->servo_logical_range_min,
+               sizeof(logicalMin));
+        memcpy(logicalMax,
+               sharedData->servo_logical_range_max,
+               sizeof(logicalMax));
+    }
+    safetyContext.logicalMin = logicalMin;
+    safetyContext.logicalMax = logicalMax;
+    safetyContext.requireOnline = true;
+    // 自动标定必须允许从 Turn Unknown 重建基准；直控也承担人工恢复用途。
+    // 负反馈和 Rope Init 则必须依赖可信 logical ABS。
+    safetyContext.requireMultiTurnKnown =
+        sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
+        sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+
+    uint8_t appliedCount = 0;
+    const uint32_t nowMs = millis();
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
         const ServoTargetCommand_t& cmd = batch.commands[i];
         FeetechServoDriver* bus = servoBusRegistry().driver(cmd.busIndex);
-        if (!bus) {
-            continue;
-        }
         const int motorChannel =
             findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
-        if (motorChannel >= 0 &&
-            (overflowMask & (1UL << (uint8_t)motorChannel)) != 0) {
-            // hardware ABS 已越过 ST3215 的实际多圈行程，禁止任何控制命令
-            // 再次打开力矩；用户必须先执行 Reset Zero。
-            bus->setTorqueEnabled(cmd.servoId, false);
+        const int32_t logicalOffset = bus
+                                          ? bus->getLogicalOffset(cmd.servoId)
+                                          : 0;
+        const ServoSafetyDecision decision =
+            p4::actuator::evaluateCommand(batch,
+                                          i,
+                                          motorChannel >= 0
+                                              ? (uint8_t)motorChannel
+                                              : 0xFF,
+                                          logicalOffset,
+                                          safetyContext);
+        if (!decision.allowed || !bus) {
+            if (bus && decision.reason == ServoRejectReason::TurnOverflow) {
+                // 越圈后必须保持扭矩关闭，直到用户显式执行 Reset Zero。
+                bus->setTorqueEnabled(cmd.servoId, false);
+            }
+            recordServoSafetyReject(sharedData, decision, nowMs);
             continue;
         }
         if (bus->setTarget(cmd.servoId,
-                           cmd.position,
+                           decision.appliedAbs,
                            cmd.speed,
                            cmd.acc)) {
             busWritePending[cmd.busIndex] = true;
+            appliedCount++;
         } else {
-            if (motorChannel >= 0) {
-                recordServoRangeReject(sharedData,
-                                       (uint8_t)motorChannel,
-                                       cmd.position,
-                                       bus->getLogicalOffset(cmd.servoId));
-            }
+            // 驱动硬防线再次拒绝意味着策略上下文与驱动状态发生竞态，必须留下诊断。
+            ServoSafetyDecision driverReject = decision;
+            driverReject.allowed = false;
+            driverReject.reason = ServoRejectReason::HardwareRange;
+            recordServoSafetyReject(sharedData, driverReject, nowMs);
         }
     }
 
@@ -211,6 +317,35 @@ static void applyServoTargetBatch(TaskSharedData_t* sharedData,
             }
         }
     }
+    return appliedCount;
+}
+
+/**
+ * Host Hold 是需要执行层确认的安全事务：只有整批命令都进入总线同步写缓存后才回报 APPLIED。
+ * 状态机只读取 token 相同的结果，旧事务完成不会释放新一轮 owner。
+ */
+static void reportHostControlHoldResult(TaskSharedData_t* sharedData,
+                                        const ServoTargetBatch_t& batch,
+                                        uint8_t appliedCount)
+{
+    if (!sharedData ||
+        batch.purpose != SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD) {
+        return;
+    }
+    const bool fullyApplied =
+        batch.count != 0 && appliedCount == batch.count;
+    sharedAtomicStore(&sharedData->host_control_hold_result_token,
+                      batch.transactionToken);
+    sharedAtomicStore(&sharedData->host_control_hold_status,
+                      (uint8_t)(fullyApplied
+                          ? HOST_CONTROL_HOLD_APPLIED
+                          : HOST_CONTROL_HOLD_FAILED));
+    FW_LOG_WARN_PRINTF(
+        "[HOST LEASE HOLD] token=%lu count=%u applied=%u status=%s\r\n",
+        (unsigned long)batch.transactionToken,
+        (unsigned)batch.count,
+        (unsigned)appliedCount,
+        fullyApplied ? "applied" : "failed");
 }
 
 /** 清空目标队列并关闭所有已映射在线舵机力矩。 */
@@ -1145,9 +1280,11 @@ static void processMultiTurnNvsSave(TaskSharedData_t* sharedData,
     processMultiTurnNvsSaveResults(sharedData, state);
 
     const uint32_t nowMs = millis();
-    const uint32_t hostHeartbeatMs = sharedData->host_rx_heartbeat_ms;
+    // 与状态机共用同一份原子心跳快照，NVS 在线判定和控制租约不会各读到不同半帧。
+    const uint32_t hostHeartbeatMs =
+        sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms);
     const bool hostOnline = hostHeartbeatMs != 0 &&
-        (uint32_t)(nowMs - hostHeartbeatMs) <= kHostHeartbeatOfflineMs;
+        (uint32_t)(nowMs - hostHeartbeatMs) <= kHostControlLeaseTimeoutMs;
     const bool hostJustWentOffline = state->hostWasOnline && !hostOnline;
     state->hostWasOnline = hostOnline;
 
@@ -1473,19 +1610,21 @@ void servoCommunicationTask(void* parameter)
         ServoTargetBatch_t batch;
         while (p4::actuator::receiveLatest(sharedData, &batch)) {
             const uint8_t owner = sharedData->servo_target_owner;
-            if (owner != SERVO_TARGET_OWNER_NONE && batch.source == owner) {
-                const uint32_t applyBeginMs = millis();
+            const uint32_t applyBeginMs = millis();
+            const uint8_t appliedCount =
                 applyServoTargetBatch(sharedData, batch);
-                const uint32_t applyElapsedMs = millis() - applyBeginMs;
-                if (applyElapsedMs > kServoApplyStallLogThresholdMs) {
-                    FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=apply_target elapsedMs=%lu source=%u owner=%u ageMs=%lu count=%u\r\n",
-                                       (unsigned long)applyElapsedMs,
-                                       (unsigned)batch.source,
-                                       (unsigned)owner,
-                                       (unsigned long)(millis() - batch.timestamp),
-                                       (unsigned)batch.count);
-                }
-            } else {
+            reportHostControlHoldResult(sharedData, batch, appliedCount);
+            const uint32_t applyElapsedMs = millis() - applyBeginMs;
+            if (applyElapsedMs > kServoApplyStallLogThresholdMs) {
+                FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=apply_target elapsedMs=%lu source=%u owner=%u ageMs=%lu count=%u applied=%u\r\n",
+                                   (unsigned long)applyElapsedMs,
+                                   (unsigned)batch.source,
+                                   (unsigned)owner,
+                                   (unsigned long)(millis() - batch.timestamp),
+                                   (unsigned)batch.count,
+                                   (unsigned)appliedCount);
+            }
+            if (batch.count != 0 && appliedCount == 0) {
                 queueDropTotal++;
                 const uint32_t nowMs = millis();
                 if ((uint32_t)(nowMs - lastQueueDropLogMs) >=

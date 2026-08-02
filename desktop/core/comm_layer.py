@@ -26,6 +26,7 @@ from .protocol import (
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
+    PACKET_TYPE_PRODUCT_FINGERPRINT,
     PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_SERVO_RAW,
     PACKET_TYPE_SYSTEM_STATUS,
@@ -101,6 +102,7 @@ from .protocol import (
     parse_joint_calib_snapshot_packet,
     parse_manual_encoder_reference_packet,
     parse_motor_abs_limit_packet,
+    parse_product_fingerprint_packet,
     parse_servo_logical_range_packet,
     parse_proto_ack,
     parse_sensor_packet,
@@ -1735,6 +1737,15 @@ class LowerComputerComm:
                         model.calib_status = "FAILED"
                     elif calib_status == 4:
                         model.calib_status = "WARN"
+                    emitted = True
+
+            elif pkt_type == PACKET_TYPE_PRODUCT_FINGERPRINT:
+                parsed = parse_product_fingerprint_packet(payload)
+                if parsed is not None:
+                    # CRC 在模型中保留整数，写 meta.json 时统一格式化为 8 位十六进制。
+                    model.product_fingerprint = dict(parsed)
+                    model.product_fingerprint_last_rx_ts = time.time()
+                    model.has_product_fingerprint = True
                     emitted = True
 
             elif pkt_type == PACKET_TYPE_MOTOR_ABS_LIMIT:

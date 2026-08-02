@@ -487,14 +487,17 @@ class HandController:
             time.sleep(0.02)
         return False
 
-    def shutdown(self, stop_lower: bool = True):
+    def shutdown(self, stop_lower: bool = False):
         """
-        安全关闭控制器：停止下位机、等待线程、清理资源。
+        关闭串口与后台线程。
+
+        普通退出默认不发送锁存式 STOP：断开后由 P4 的上位机租约超时执行
+        当前 ABS Hold。只有用户显式要求急停时才传入 stop_lower=True。
         """
         import time
         log_session("CTRL", f"shutdown requested stop_lower={int(bool(stop_lower))}")
 
-        # Step 1: 停止下位机上的运动（即使暂停也要发送 STOP）
+        # STOP 在 P4 中是必须 RESET 才能解除的 E-STOP，不能作为普通资源清理动作。
         if self.comm:
             try:
                 if stop_lower:

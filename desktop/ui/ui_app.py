@@ -11,8 +11,11 @@ from desktop.paths import (
     MANUS_CALIBRATION_PATH,
     MOTOR_MID_CALIB_PATH,
     POSE_FIST_PATH,
+    PRODUCT_FINGERPRINT_PATH,
     PROJECT_ROOT,
     RAW_IK_Q_TARGET_PATH,
+    ROBOT_MODEL_MANIFEST_PATH,
+    URDF_JOINT_MAPPING_PATH,
 )
 from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
 from desktop.core.data_recording import DataSessionRecorder
@@ -1262,13 +1265,26 @@ class HandGUI(QtWidgets.QMainWindow):
     def _fault_stop_allowed(self, summary: dict, state: HandModel) -> bool:
         if not summary.get("active"):
             return False
-        if not summary.get("offline_only"):
-            return True
-        return self._fault_popup_allowed(summary, state)
+        system_state = getattr(state, "system_state", None)
+        motion_state = system_state in (
+            SYSTEM_STATE_RUN_DIRECT,
+            SYSTEM_STATE_RUN_FEEDBACK,
+            SYSTEM_STATE_PAUSED,
+        )
+        # 连接初期尚未收到舵机/CAN首帧时，故障位会短暂出现。此时系统没有
+        # 运动所有权，无需发送会被P4永久锁存的E-STOP；真正运行中出现故障
+        # 或上一帧刚从运行态退出时，仍立即执行STOP。自动标定和 Rope Init
+        # 是 P4 内部任务，反馈预检和故障停机均由 P4 状态机负责；上位机不能因
+        # 一帧显示抖动抢发 E-STOP，否则会打断 P4 的稳定帧等待。
+        return bool(motion_state or self._fault_previous_runtime_active)
 
     def _handle_fault_side_effects(self, state: HandModel) -> None:
         system_state = getattr(state, "system_state", None)
-        runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PAUSED)
+        runtime_state = system_state in (
+            SYSTEM_STATE_RUN_DIRECT,
+            SYSTEM_STATE_RUN_FEEDBACK,
+            SYSTEM_STATE_PAUSED,
+        )
         if runtime_state:
             self._fault_previous_runtime_active = True
 
@@ -1615,6 +1631,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 },
             },
             "calibration_snapshot": self._read_json_config(CALIB_LOAD_SNAPSHOT_PATH),
+            "product_fingerprint": self._recording_product_fingerprint(),
             "config_files": self._recording_config_snapshot(),
         }
         recording_topics = list(DEFAULT_TOPICS)
@@ -2402,8 +2419,32 @@ class HandGUI(QtWidgets.QMainWindow):
             "motor_mid_calib": MOTOR_MID_CALIB_PATH,
             "manus_calibration": MANUS_CALIBRATION_PATH,
             "raw_ik_q_target": RAW_IK_Q_TARGET_PATH,
+            "robot_model_manifest": ROBOT_MODEL_MANIFEST_PATH,
+            "urdf_joint_mapping": URDF_JOINT_MAPPING_PATH,
+            "generated_product_fingerprint": PRODUCT_FINGERPRINT_PATH,
         }
         return {name: self._read_json_config(path) for name, path in paths.items()}
+
+    def _recording_product_fingerprint(self) -> dict:
+        """同时保存仓库期望指纹和 P4 实际上报值，便于发现烧错固件。"""
+        p4_value = dict(getattr(self._state, "product_fingerprint", {}) or {})
+        for key in (
+            "control_model_crc",
+            "visual_model_crc",
+            "hardware_map_crc",
+            "parameter_crc",
+            "firmware_source_crc",
+            "structure_commit_crc",
+        ):
+            if key in p4_value:
+                p4_value[key] = f"{int(p4_value[key]) & 0xFFFFFFFF:08X}"
+        return {
+            "desktop_expected": self._read_json_config(PRODUCT_FINGERPRINT_PATH),
+            "p4_reported": p4_value,
+            "p4_report_received": bool(
+                getattr(self._state, "has_product_fingerprint", False)
+            ),
+        }
 
     def show_servo_status_dialog(self) -> None:
         state = self._state or self.backend.get_current_state()
@@ -2588,10 +2629,13 @@ class HandGUI(QtWidgets.QMainWindow):
             self._stop_data_recording("closed")
             self._stop_tactile_port()
             try:
+                # 先提交一次当前反馈位置，降低窗口关闭到 P4 租约超时之间的位移；
+                # 随后的串口断开由 P4 在租约到期后执行带确认的 ABS Hold。
                 self.backend.hold_current_motor_positions(delay_s=0.15)
             except Exception:
                 pass
-            self.backend.shutdown(stop_lower=True)
+            # 普通关闭不是急停，禁止发送会锁存 emergency_stop_latched 的 CMD_STOP。
+            self.backend.shutdown(stop_lower=False)
             self.backend.unregister_update_callback(self._on_state_update)
             self.backend.unregister_joint_target_callback(self._on_joint_target_command)
             if self._on_close_extra:

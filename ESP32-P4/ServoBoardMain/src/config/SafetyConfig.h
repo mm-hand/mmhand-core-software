@@ -28,6 +28,18 @@ inline constexpr uint32_t kStateServoFeedbackTimeoutMs = 500;
 /** S3 编码器明确故障持续达到该时间后才置位，过滤瞬时坏帧。 */
 inline constexpr uint32_t kEncoderFaultTimeoutMs = 300;
 
+/**
+ * 单槽目标邮箱中超过该年龄的批次不得进入驱动。
+ * 500 ms 覆盖当前同步读偶发长周期，同时仍能拒绝模式切换前遗留的旧命令。
+ */
+inline constexpr uint32_t kServoTargetMaxAgeMs = 500;
+
+/** 上位机 1 s 没有任何有效协议帧时，所有舵机运动态的公共租约失效。 */
+inline constexpr uint32_t kHostControlLeaseTimeoutMs = 1000;
+
+/** Hold 批次必须在该时间内由 ServoCommunicationTask 确认，否则升级为 E-STOP。 */
+inline constexpr uint32_t kHostControlHoldApplyTimeoutMs = 500;
+
 static_assert(kServoResetZeroTriggerMin > kServoHardwareCommandMin &&
                   kServoResetZeroTriggerMax < kServoHardwareCommandMax,
               "Reset Zero trigger must stay inside hardware range");

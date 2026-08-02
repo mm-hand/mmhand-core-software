@@ -1,5 +1,7 @@
 # SPI 模式与磁编/触觉连线说明
 
+> 当前专项文档，最后核对：2026-08-01。磁编为 10 MHz Mode 1，触觉为 1 MHz Mode 3；逻辑手指顺序统一为 G/group0 小指至 G/group4 拇指。138/151 的 selector channel 不同，必须以 S3 `Config.h` 当前模式为准。
+
 本文按当前仓库代码整理 ESP32-S3 侧两条 SPI 链路：
 
 - AS5047P 磁编码器链路
@@ -58,10 +60,10 @@ Paxini 手册里的 SPI 配置写的是 `CPOL = High`、`CPHA = 2Edge`，对应 
 
 | 链路 | SCLK | MOSI | MISO | 代码模式 | 当前实际时钟 |
 | --- | ---: | ---: | ---: | --- | ---: |
-| AS5047P 磁编码器 | GPIO9 | GPIO38 | GPIO47 | Mode 1 | 1 MHz |
+| AS5047P 磁编码器 | GPIO9 | GPIO38 | GPIO47 | Mode 1 | 10 MHz |
 | Paxini 触觉 | GPIO8 | GPIO10 | GPIO21 | Mode 3 | 1 MHz |
 
-注意：`Config.h` 中有 `SPI_FREQ_ENC 10000000`，但当前 `HalEncoders.cpp` 的 `setupSPI()` 实际写死为 `1000 * 1000`，也就是 1 MHz。触觉使用 `SPI_FREQ_TAC 1000000`，也是 1 MHz。
+当前 `HalSensorSpi.cpp` 使用 `SPI_FREQ_ENC=10000000` 创建磁编设备，因此实际配置为 10 MHz；触觉使用 `SPI_FREQ_TAC=1000000`，为 1 MHz。若实机波形不是该频率，优先检查烧录固件版本和 product fingerprint，而不是按旧版 `HalEncoders.cpp` 的历史写死值判断。
 
 ## 3. 磁编码器连线与五组选择
 
@@ -255,7 +257,7 @@ tactile.prepareBootSelectPins();
 | GPIO17 | 触觉 pattern bit4 | `Config.h` 中也命名为 `PIN_MUX_F` |
 | GPIO2/4/5 | 磁编默认 MUX A/B/C | 触觉启动保护阶段也会拉高 |
 
-当前默认 `ENC_HW_MODE_138_CS_DEMUX` 下，磁编运行期只使用 GPIO2/4/5 做 MUX，触觉运行期使用 GPIO7/6/13/14/17 做 pattern。两者通过 `g_sensorMuxMutex` 互斥，避免同时改选择线。
+当前默认 `ENC_HW_MODE_138_CS_DEMUX` 下，磁编 selector 还会使用 GPIO2/4/5/13/14/17/18 中的板级组合，触觉使用 GPIO7/6/13/14/17 等 pattern。两者通过 `g_sensorSelectMutex` 互斥，避免同时改变共享选择资源。
 
 ### 5.3 为什么触觉第三点 disabled
 

@@ -12,6 +12,8 @@ param()
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $sourceRoot = Join-Path $repoRoot "ESP32-P4\ServoBoardMain\src"
+$servoTaskPath = Join-Path $sourceRoot "communication\servo\ServoCommunicationTask.cpp"
+$driverHeaderPath = Join-Path $sourceRoot "hardware\servo\FeetechServoDriver.h"
 $failures = New-Object "System.Collections.Generic.List[string]"
 
 function Add-Failure([string]$message) {
@@ -68,10 +70,25 @@ if ($LASTEXITCODE -notin @(0, 1)) {
     }
 }
 
-# The generated URDF table must match the desktop mapping.
-& python (Join-Path $repoRoot "tools\generate_p4_urdf_limits.py") --check
+# Desktop、P4 与 Wuji 的所有模型产物必须来自同一生成器且没有过期。
+& python (Join-Path $repoRoot "tools\generate_upper_protocol.py") --check
 if ($LASTEXITCODE -ne 0) {
-    Add-Failure "UrdfJointLimits.generated.h is stale."
+    Add-Failure "Upper-protocol C++/Python generated files are stale."
+}
+
+& python (Join-Path $repoRoot "tools\generate_robot_model.py") --check
+if ($LASTEXITCODE -ne 0) {
+    Add-Failure "Robot-model generated files or product fingerprint are stale."
+}
+
+# 最终舵机目标必须经过统一结构化安全决策；-U 允许格式化工具把调用拆成多行。
+& rg -U -q 'p4::actuator::\s*evaluateCommand\s*\(' $servoTaskPath
+if ($LASTEXITCODE -ne 0) {
+    Add-Failure "Servo execution path bypasses ServoSafetyPolicy::evaluateCommand."
+}
+& rg -F -q "logicalToHardwareTarget" $driverHeaderPath
+if ($LASTEXITCODE -ne 0) {
+    Add-Failure "Feetech driver lost the final logical-to-hardware range guard."
 }
 
 if ($failures.Count -gt 0) {

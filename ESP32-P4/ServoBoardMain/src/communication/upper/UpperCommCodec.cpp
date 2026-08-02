@@ -142,60 +142,10 @@ float readFloatBigEndian(const uint8_t* p)
     return value;
 }
 
-// 返回命令字节之后的固定 payload 长度；未知命令返回 SIZE_MAX。
+// 固定长度表由唯一 schema 生成；codec 不再维护第二份 switch。
 size_t getCommandPayloadLength(uint8_t cmd)
 {
-    switch (cmd)
-    {
-        case CMD_CALIBRATE:
-        case CMD_START:
-        case CMD_STOP:
-        case CMD_RESET:
-        case CMD_RUN_FEEDBACK:
-        case CMD_PAUSE:
-        case CMD_HOST_HEARTBEAT:
-
-        case CMD_CLEAR_CALIBRATION:
-        case CMD_MANUAL_ENCODER_QUERY:
-            return 0;
-        case CMD_MULTITURN_NVS_CONTROL:
-            return kMultiTurnNvsControlPayloadBytes;
-        case CMD_CLEAR_CALIBRATION_SCOPE:
-            return kClearCalibrationScopePayloadBytes;
-        case CMD_SERVO_RESET_ZERO:
-            return kServoResetZeroPayloadBytes;
-        case CMD_MANUAL_ENCODER_REFERENCE:
-            return kManualEncoderReferencePayloadBytes;
-        case CMD_MANUAL_ENCODER_SINGLE:
-            return kManualEncoderSinglePayloadBytes;
-        case CMD_ROPE_INIT:
-            return kRopeInitPayloadBytes;
-        case CMD_ANGLE_CTRL:
-            return kFloatPayloadBytes;
-        case CMD_ANGLE_CTRL_MASKED:
-            return kMaskedFloatPayloadBytes;
-        case CMD_MOTOR_POS:
-            return kMotorPosPayloadBytes;
-        case CMD_MOTOR_POS_SWEEP:
-            return kMotorPosPayloadBytes;
-        case CMD_MOTOR_POS_ABS:
-            return kMotorPosAbsPayloadBytes;
-        case CMD_MOTOR_POS_ABS_ONE:
-            return kMotorPosAbsOnePayloadBytes;
-
-        case CMD_ACTIVE_SCOPE:
-            return kActiveScopePayloadBytes;
-        case CMD_RESTORE_MULTITURN:
-            return kRestoreMultiTurnPayloadBytes;
-        case CMD_MOTOR_ABS_LIMIT_LOCK:
-            return kMotorAbsLimitLockPayloadBytes;
-        case CMD_CALIB_LOAD_JOINT:
-            return kCalibLoadJointPayloadBytes;
-        case CMD_CALIB_LOAD_LIMITS:
-            return kCalibLoadLimitsPayloadBytes;
-        default:
-            return (size_t)-1;
-    }
+    return generatedCommandPayloadLength(cmd);
 }
 
 // 解析 P4 逻辑多圈 ABS。逻辑坐标可能因单台舵机掉电后的 offset 平移
