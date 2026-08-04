@@ -535,7 +535,8 @@ static bool directMotorMaskReady(TaskSharedData_t* sharedData,
         return false;
     }
 
-    // 新直控命令已经按 pending scope 独立检查舵机在线、CAN 依赖和多圈可信；
+    // 直控虽以当前 ABS 为锚点，仍必须建立在可信多圈坐标上；Turn Unknown
+    // 时由上位机引导 New Device Reset，不能在最终状态机入口绕过该门禁。
     // 此处忽略旧 scope 遗留的 CAN/SERVO/MULTITURN 位，只保留与 scope
     // 无关的过载、标定等全局故障。
     const uint32_t scopeDependentFaults =

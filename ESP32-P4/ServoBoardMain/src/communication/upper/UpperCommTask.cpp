@@ -2293,11 +2293,24 @@ void upperCommunicationTask(void* parameter)
             lastServoLogicalRangeSentMs = nowMs;
         }
 
-        if (calibrationStatusHasUsableResult(g_calibrationStatus) &&
-            (uint32_t)(nowMs - lastJointCalibSnapshotSentMs) >= kJointCalibSnapshotHeartbeatMs) {
+        // 单个 Jxx 的标定结果一旦成功就独立有效，不能再由整轮 SUCCESS/FAILED
+        // 决定是否上报。这样后续关节失败时，前面成功关节仍能更新 Current，
+        // 并由上位机逐关节合并进快照。
+        if ((uint32_t)(nowMs - lastJointCalibSnapshotSentMs) >=
+            kJointCalibSnapshotHeartbeatMs) {
+            const uint32_t completedThisRun =
+                sharedAtomicLoad(
+                    &sharedData->calibration_completed_joint_bitmap) &
+                ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+            const bool calibrationRunning =
+                g_calibrationStatus == CALIB_STATUS_RUNNING;
             for (uint8_t n = 0; n < ENCODER_TOTAL_NUM; n++) {
                 const uint8_t jointIndex = (uint8_t)((nextJointCalibSnapshotIndex + n) % ENCODER_TOTAL_NUM);
-                if (g_jointCalibResult[jointIndex].success) {
+                // 标定运行中只读已经完整提交的本轮结果；静止后可周期回传
+                // RAM 中全部有效结果，支持断线重连和 Calib Load 恢复显示。
+                if (g_jointCalibResult[jointIndex].success &&
+                    (!calibrationRunning ||
+                     (completedThisRun & (1UL << jointIndex)) != 0)) {
                     sendJointCalibSnapshotPacket(jointIndex);
                 }
             }
@@ -2310,10 +2323,31 @@ void upperCommunicationTask(void* parameter)
             SharedSafetyGuard guard;
             calibDiag = sharedData->calibration_diag;
         }
-        if (calibDiag.sequence != lastCalibrationDiagSequenceSent ||
+        const bool calibrationDiagChanged =
+            calibDiag.sequence != lastCalibrationDiagSequenceSent;
+        if (calibrationDiagChanged ||
             (calibDiag.valid &&
              (uint32_t)(nowMs - lastCalibrationDiagSentMs) >= kSystemStatusHeartbeatMs)) {
             sendCalibrationDiagPacket(calibDiag);
+
+            // 整轮标定即使以 FAILED 收尾，也要把其中成功关节的 V3/LUT 快照
+            // 立即发给上位机。否则周期快照会被全局 FAILED 状态门禁挡住，
+            // 已成功关节只能留在 P4 RAM，UI Current 和本机快照都无法更新。
+            if (calibrationDiagChanged && calibDiag.valid &&
+                calibDiag.reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED &&
+                calibDiag.phase == CALIB_DIAG_PHASE_SEQUENCE &&
+                calibDiag.motor == 0xFF) {
+                const uint32_t completedJointMask =
+                    (uint32_t)calibDiag.valueA &
+                    ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+                for (uint8_t jointIndex = 0;
+                     jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+                    if ((completedJointMask & (1UL << jointIndex)) != 0 &&
+                        g_jointCalibResult[jointIndex].success) {
+                        sendJointCalibSnapshotPacket(jointIndex);
+                    }
+                }
+            }
             lastCalibrationDiagSequenceSent = calibDiag.sequence;
             lastCalibrationDiagSentMs = nowMs;
         }

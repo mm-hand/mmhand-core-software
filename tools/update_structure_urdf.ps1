@@ -45,13 +45,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "URDF validation failed. The desktop Junction remains pointed at the previous adapter path."
 }
 
-Write-Output "Generating Desktop/P4/Wuji model contracts and product fingerprint..."
+Write-Output "Generating Desktop/P4 model contracts and product fingerprint..."
 & python $ModelGenerator
 if ($LASTEXITCODE -ne 0) {
-    throw "Cross-platform robot-model generation failed."
+    throw "Desktop/P4 robot-model generation failed."
 }
 
-# 生成后立即反向检查，保证脚本没有留下只更新一半的模型产物。
+# 生成后立即反向检查，防止脚本中断后只留下部分新模型产物。
 & python $ModelGenerator --check
 if ($LASTEXITCODE -ne 0) {
     throw "Generated robot-model files are inconsistent."
@@ -74,4 +74,4 @@ if (-not $SkipP4Build) {
     }
 }
 
-Write-Output "Structure URDF and every generated contract are ready. Restart the desktop application to reload caches."
+Write-Output "Structure URDF and Desktop/P4 generated contracts are ready. Restart the desktop application to reload caches."

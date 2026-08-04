@@ -221,11 +221,14 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
         set_control_mode=lambda mode: events.append(("mode", mode)),
         set_pid_control=lambda enabled: events.append(("pid", enabled)),
         set_motor_positions_absolute=lambda _targets: events.append("motor_abs"),
+        reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
     )
     panel = SimpleNamespace(
         _app_mode="manual",
         _manual_submode=lambda: "joint",
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [],
         _active_scope_joint_calib_missing_indices=lambda: [],
         _apply_active_scope_for_current_mode=lambda: True,
         _state=SimpleNamespace(system_state=5),
@@ -249,6 +252,7 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
 
     assert ("mode", ControlMode.JOINT_ANGLE) in events
     assert ("pid", True) in events
+    assert events.index("reset") < events.index("start")
     assert "start" in events
     assert "motor_abs" not in events
     assert "sync_motor" not in events
@@ -259,6 +263,7 @@ def test_joint_enable_does_not_arm_raw_ik_output():
     backend = SimpleNamespace(
         set_control_mode=lambda mode: events.append(("mode", mode)),
         set_pid_control=lambda enabled: events.append(("pid", enabled)),
+        reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
         set_ros2_output_armed=lambda armed, reason="": (
             events.append(("ros2_arm", bool(armed), reason)) or (True, "ROS2 armed")
@@ -267,6 +272,8 @@ def test_joint_enable_does_not_arm_raw_ik_output():
     panel = SimpleNamespace(
         _app_mode="teleop",
         _manual_submode=lambda: "joint",
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [],
         _active_scope_joint_calib_missing_indices=lambda: [],
         _apply_active_scope_for_current_mode=lambda: True,
         _state=SimpleNamespace(system_state=5),
@@ -287,6 +294,7 @@ def test_joint_enable_does_not_arm_raw_ik_output():
     ControlCommandController.start_controller(panel)
 
     assert not any(event[0] == "ros2_arm" for event in events if isinstance(event, tuple))
+    assert events.index("reset") < events.index("start")
     assert "start" in events
 
 
@@ -338,11 +346,14 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
         set_control_mode=lambda mode: events.append(("mode", mode)),
         set_pid_control=lambda enabled: events.append(("pid", enabled)),
         set_motor_positions_absolute=lambda values: events.append(("motor_abs", list(values))),
+        reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
     )
     panel = SimpleNamespace(
         _app_mode="manual",
         _manual_submode=lambda: "motor",
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [],
         _apply_active_scope_for_current_mode=lambda: True,
         _state=SimpleNamespace(system_state=5),
         _active_scope_multiturn_unknown_mask=lambda: 0,
@@ -366,4 +377,125 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
     assert ("mode", ControlMode.DIRECT_MOTOR) in events
     assert ("pid", False) in events
     assert ("motor_abs", targets) in events
+    assert "start" in events
+    assert events.index("reset") < events.index("start") < events.index(("motor_abs", targets))
+
+
+def test_motor_enable_checks_servo_online_but_not_encoder_online():
+    events = []
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "motor",
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [3],
+        _apply_active_scope_for_current_mode=lambda: True,
+        _active_scope_multiturn_unknown_mask=lambda: 0,
+        _show_turn_recovery_guide=lambda *_args: None,
+        _sync_motor_targets_to_feedback=lambda: True,
+        _build_motor_abs_command_list=lambda: [0] * 27,
+        _motor_last_sent_abs=[],
+        _estop_latched=False,
+        backend=SimpleNamespace(
+            set_control_mode=lambda _mode: events.append("mode"),
+            set_pid_control=lambda _enabled: events.append("pid"),
+            start=lambda: events.append("start"),
+            set_motor_positions_absolute=lambda _targets: events.append("direct"),
+        ),
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda _text: None,
+        ),
+        _set_status=lambda text: events.append(text),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlCommandController.start_controller(panel)
+
+    assert "direct" in events
+
+
+def test_joint_enable_requires_corresponding_servo_online_before_start():
+    events = []
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "joint",
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_offline_motor_indices=lambda _state: [8],
+        _active_scope_offline_encoder_indices=lambda _state: [],
+        _format_motor_list=lambda indices: ",".join(f"M{idx:02d}" for idx in indices),
+        _format_joint_list=lambda indices: ",".join(f"J{idx:02d}" for idx in indices),
+        backend=SimpleNamespace(
+            set_control_mode=lambda _mode: None,
+            set_pid_control=lambda _enabled: None,
+            start=lambda: events.append("start"),
+        ),
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda _text: None,
+        ),
+        _set_status=lambda text: events.append(text),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlCommandController.start_controller(panel)
+
+    assert "start" not in events
+    assert any("servo offline" in str(event) for event in events)
+
+
+def test_joint_enable_rejects_offline_encoder_before_start():
+    events = []
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "joint",
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [3],
+        _format_joint_list=lambda indices: ",".join(f"J{idx:02d}" for idx in indices),
+        backend=SimpleNamespace(start=lambda: events.append("start")),
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+        ),
+        _set_status=lambda text: events.append(text),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlCommandController.start_controller(panel)
+
+    assert "start" not in events
+    assert any("encoder offline" in str(event) for event in events)
+
+
+def test_motor_enable_turn_unknown_guides_new_device_before_reset_or_start():
+    events = []
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "motor",
+        _state=SimpleNamespace(system_state=5),
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_multiturn_unknown_mask=lambda: 1 << 4,
+        _show_turn_recovery_guide=lambda mask, action: events.append(
+            ("turn_guide", mask, action)
+        ),
+        _estop_latched=True,
+        backend=SimpleNamespace(
+            reset=lambda: events.append("reset"),
+            start=lambda: events.append("start"),
+        ),
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+        ),
+        _set_status=lambda text: events.append(text),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlCommandController.start_controller(panel)
+
+    assert ("turn_guide", 1 << 4, "ENABLE") in events
+    assert "reset" not in events
     assert "start" not in events

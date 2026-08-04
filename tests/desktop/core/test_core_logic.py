@@ -10,6 +10,7 @@ from desktop.core.protocol import (
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
+    CMD_RESET,
     CMD_RESTORE_MULTITURN,
     ControlMode,
     ENCODER_COUNT,
@@ -327,6 +328,8 @@ class TestResetMultiturnBaselineForNewDevice:
 
         def wait_for_ack(cmd, _timeout, received_after=None):
             del received_after
+            if cmd == CMD_RESET:
+                return (cmd, 0, 2, 0.5)
             if cmd == CMD_RESTORE_MULTITURN:
                 state.multi_turn_unknown_bitmap = 0
                 state.has_servo_angle_data = True
@@ -346,6 +349,8 @@ class TestResetMultiturnBaselineForNewDevice:
         assert motor_mask == (1 << 3)
         assert joint_mask == (1 << 2)
         assert "affected joint" in message
+        assert call("reset") in controller.comm.send_command.call_args_list
+        assert call("stop") not in controller.comm.send_command.call_args_list
         assert call(
             ("restore_multiturn", 1 << 3, [0, 0, 0, 1234] + [0] * (MOTOR_COUNT - 4))
         ) in controller.comm.send_command.call_args_list

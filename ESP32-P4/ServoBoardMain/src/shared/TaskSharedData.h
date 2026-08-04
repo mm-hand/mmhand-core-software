@@ -124,6 +124,8 @@ typedef struct {
     int32_t servo_range_reject_logical_max;        ///< 当前会话最大 logical ABS。
     // 标定真正准备发送首帧运动目标后置 1，通信任务据此暂停后台扫描。
     volatile uint8_t calibration_motion_started; ///< 1 表示标定已真正进入运动阶段。
+    // 本轮已经完整提交结果的 Jxx；写 LUT/限位的任务最后置位，通信任务先读此门禁。
+    volatile uint32_t calibration_completed_joint_bitmap; ///< 本轮可安全上报的成功 Jxx。
     // 标定完成后，把当前 power-session ABS 登记为可信的请求/结果闭环。
     volatile uint32_t calibration_trust_request_mask;  ///< 请求登记可信的 Mxx。
     volatile uint32_t calibration_trust_request_token; ///< 登记请求代际。

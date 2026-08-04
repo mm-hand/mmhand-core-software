@@ -93,6 +93,9 @@ class ControlPanel(
         self._startup_missing_warning_shown = False
         self._pending_calib_joint_mask = 0
         self._pending_calib_motor_mask = 0
+        # 记录本轮开始前各 Jxx 的结果签名；运行中只把新产生或变化的
+        # 成功结果增量写入快照，避免把上轮旧结果误判成本轮成功。
+        self._pending_calib_result_baselines = {}
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
         self._selected_joint_mask = int(default_joint_mask)
         self._selected_motor_mask = int(default_motor_mask)

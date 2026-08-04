@@ -8,7 +8,7 @@
   "p4_generated_header_required": true,
   "description": "Generated from robot_model_manifest.json and active hand.urdf; do not edit manually.",
   "source_urdf": "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf",
-  "source_commit": "372a647e2f2a48ac48707c717790482a7819500a",
+  "source_commit": "0e9737072528d817e1343f578fbb48fcbee762b6",
   "joints": [
     {
       "joint_index": 0,
@@ -17,14 +17,14 @@
       "urdf_joint_name": "little_aa_joint",
       "urdf_limit_deg": [
         0.0,
-        55.0
+        54.0
       ],
       "calibrated_default_range_deg": [
         -45.0,
         11.0
       ],
       "urdf_at_calibrated_min_deg": 0.0,
-      "urdf_at_calibrated_max_deg": 55.0,
+      "urdf_at_calibrated_max_deg": 54.0,
       "is_coupled": true,
       "motor_indices": [
         0,
@@ -62,14 +62,14 @@
       "urdf_joint_name": "mmhand_finger_4_distal_phalanx_1_pip_joint",
       "urdf_limit_deg": [
         -9.0,
-        88.0
+        89.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         88.0
       ],
       "urdf_at_calibrated_min_deg": -9.0,
-      "urdf_at_calibrated_max_deg": 88.0,
+      "urdf_at_calibrated_max_deg": 89.0,
       "is_coupled": false,
       "motor_indices": [
         3
@@ -83,15 +83,15 @@
       "source_urdf_joint_name": "finger_4_fingertip_1_dip_joint",
       "urdf_joint_name": "mmhand_finger_4_fingertip_1_dip_joint",
       "urdf_limit_deg": [
-        -12.0,
-        90.0
+        -13.0,
+        101.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -12.0,
-      "urdf_at_calibrated_max_deg": 90.0,
+      "urdf_at_calibrated_min_deg": -13.0,
+      "urdf_at_calibrated_max_deg": 101.0,
       "is_coupled": false,
       "motor_indices": [
         4
@@ -106,14 +106,14 @@
       "urdf_joint_name": "ring_aa_joint",
       "urdf_limit_deg": [
         0.0,
-        63.0
+        61.0
       ],
       "calibrated_default_range_deg": [
         -51.0,
         21.0
       ],
       "urdf_at_calibrated_min_deg": 0.0,
-      "urdf_at_calibrated_max_deg": 63.0,
+      "urdf_at_calibrated_max_deg": 61.0,
       "is_coupled": true,
       "motor_indices": [
         5,
@@ -151,14 +151,14 @@
       "urdf_joint_name": "mmhand_finger_3_distal_phalanx_1_pip_joint",
       "urdf_limit_deg": [
         -9.0,
-        88.0
+        89.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         88.0
       ],
       "urdf_at_calibrated_min_deg": -9.0,
-      "urdf_at_calibrated_max_deg": 88.0,
+      "urdf_at_calibrated_max_deg": 89.0,
       "is_coupled": false,
       "motor_indices": [
         8
@@ -172,15 +172,15 @@
       "source_urdf_joint_name": "finger_3_fingertip_1_dip_joint",
       "urdf_joint_name": "mmhand_finger_3_fingertip_1_dip_joint",
       "urdf_limit_deg": [
-        -12.0,
-        90.0
+        -13.0,
+        101.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -12.0,
-      "urdf_at_calibrated_max_deg": 90.0,
+      "urdf_at_calibrated_min_deg": -13.0,
+      "urdf_at_calibrated_max_deg": 101.0,
       "is_coupled": false,
       "motor_indices": [
         9
@@ -195,14 +195,14 @@
       "urdf_joint_name": "middle_aa_joint",
       "urdf_limit_deg": [
         0.0,
-        60.0
+        59.0
       ],
       "calibrated_default_range_deg": [
         -24.0,
         23.0
       ],
       "urdf_at_calibrated_min_deg": 0.0,
-      "urdf_at_calibrated_max_deg": 60.0,
+      "urdf_at_calibrated_max_deg": 59.0,
       "is_coupled": true,
       "motor_indices": [
         10,
@@ -217,14 +217,14 @@
       "source_urdf_joint_name": "Middle_MCP_FE",
       "urdf_joint_name": "mmhand_finger_2_proximal_phalanx_1_mcp_fe_joint",
       "urdf_limit_deg": [
-        -15.0,
+        -14.0,
         90.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -15.0,
+      "urdf_at_calibrated_min_deg": -14.0,
       "urdf_at_calibrated_max_deg": 90.0,
       "is_coupled": false,
       "motor_indices": [
@@ -240,14 +240,14 @@
       "urdf_joint_name": "mmhand_finger_2_distal_phalanx_1_pip_joint",
       "urdf_limit_deg": [
         -9.0,
-        88.0
+        89.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         88.0
       ],
       "urdf_at_calibrated_min_deg": -9.0,
-      "urdf_at_calibrated_max_deg": 88.0,
+      "urdf_at_calibrated_max_deg": 89.0,
       "is_coupled": false,
       "motor_indices": [
         13
@@ -261,15 +261,15 @@
       "source_urdf_joint_name": "finger_2_fingertip_1_dip_joint",
       "urdf_joint_name": "mmhand_finger_2_fingertip_1_dip_joint",
       "urdf_limit_deg": [
-        -12.0,
-        90.0
+        -13.0,
+        101.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -12.0,
-      "urdf_at_calibrated_max_deg": 90.0,
+      "urdf_at_calibrated_min_deg": -13.0,
+      "urdf_at_calibrated_max_deg": 101.0,
       "is_coupled": false,
       "motor_indices": [
         14
@@ -284,14 +284,14 @@
       "urdf_joint_name": "index_aa_joint",
       "urdf_limit_deg": [
         0.0,
-        65.0
+        58.0
       ],
       "calibrated_default_range_deg": [
         -11.0,
         30.0
       ],
       "urdf_at_calibrated_min_deg": 0.0,
-      "urdf_at_calibrated_max_deg": 65.0,
+      "urdf_at_calibrated_max_deg": 58.0,
       "is_coupled": true,
       "motor_indices": [
         15,
@@ -306,14 +306,14 @@
       "source_urdf_joint_name": "Index_MCP_FE",
       "urdf_joint_name": "mmhand_finger_1_proximal_phalanx_1_mcp_fe_joint",
       "urdf_limit_deg": [
-        -15.0,
+        -14.0,
         90.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -15.0,
+      "urdf_at_calibrated_min_deg": -14.0,
       "urdf_at_calibrated_max_deg": 90.0,
       "is_coupled": false,
       "motor_indices": [
@@ -329,14 +329,14 @@
       "urdf_joint_name": "mmhand_finger_1_distal_phalanx_1_pip_joint",
       "urdf_limit_deg": [
         -9.0,
-        88.0
+        89.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         88.0
       ],
       "urdf_at_calibrated_min_deg": -9.0,
-      "urdf_at_calibrated_max_deg": 88.0,
+      "urdf_at_calibrated_max_deg": 89.0,
       "is_coupled": false,
       "motor_indices": [
         18
@@ -350,15 +350,15 @@
       "source_urdf_joint_name": "finger_1_fingertip_1_dip_joint",
       "urdf_joint_name": "mmhand_finger_1_fingertip_1_dip_joint",
       "urdf_limit_deg": [
-        -12.0,
-        90.0
+        -13.0,
+        101.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -12.0,
-      "urdf_at_calibrated_max_deg": 90.0,
+      "urdf_at_calibrated_min_deg": -13.0,
+      "urdf_at_calibrated_max_deg": 101.0,
       "is_coupled": false,
       "motor_indices": [
         19
@@ -373,14 +373,14 @@
       "urdf_joint_name": "thumb_aa_joint",
       "urdf_limit_deg": [
         0.0,
-        56.0
+        57.0
       ],
       "calibrated_default_range_deg": [
         -29.0,
         30.0
       ],
       "urdf_at_calibrated_min_deg": 0.0,
-      "urdf_at_calibrated_max_deg": 56.0,
+      "urdf_at_calibrated_max_deg": 57.0,
       "is_coupled": true,
       "motor_indices": [
         20,
@@ -395,14 +395,14 @@
       "source_urdf_joint_name": "Thumb_MCP_FE",
       "urdf_joint_name": "mmhand_thumb_1_mmhand_finger_5_proximal_phalanx_1_mcp_fe_joint",
       "urdf_limit_deg": [
-        -15.0,
+        -19.0,
         90.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -15.0,
+      "urdf_at_calibrated_min_deg": -19.0,
       "urdf_at_calibrated_max_deg": 90.0,
       "is_coupled": false,
       "motor_indices": [
@@ -418,14 +418,14 @@
       "urdf_joint_name": "mmhand_thumb_1_mmhand_finger_5_distal_phalanx_1_pip_joint",
       "urdf_limit_deg": [
         -9.0,
-        88.0
+        89.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         88.0
       ],
       "urdf_at_calibrated_min_deg": -9.0,
-      "urdf_at_calibrated_max_deg": 88.0,
+      "urdf_at_calibrated_max_deg": 89.0,
       "is_coupled": false,
       "motor_indices": [
         23
@@ -439,15 +439,15 @@
       "source_urdf_joint_name": "mmhand_thumb_1_finger_7_fingertip_1_dip_joint",
       "urdf_joint_name": "mmhand_thumb_1_mmhand_finger_5_fingertip_1_dip_joint",
       "urdf_limit_deg": [
-        -12.0,
-        90.0
+        -13.0,
+        101.0
       ],
       "calibrated_default_range_deg": [
         0.0,
         90.0
       ],
-      "urdf_at_calibrated_min_deg": -12.0,
-      "urdf_at_calibrated_max_deg": 90.0,
+      "urdf_at_calibrated_min_deg": -13.0,
+      "urdf_at_calibrated_max_deg": 101.0,
       "is_coupled": false,
       "motor_indices": [
         24

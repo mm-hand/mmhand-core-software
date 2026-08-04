@@ -21,31 +21,47 @@ class ControlCommandController:
                 self._update_connection_lights()
                 return
             self._update_connection_lights()
-        if self._manual_submode() != "motor":
-            missing_workspace = self._active_scope_joint_calib_missing_indices()
-            if missing_workspace:
+        mode = self._manual_submode()
+        state = self._state
+        missing_motors = self._active_scope_offline_motor_indices(state)
+        if missing_motors:
+            self._set_status(
+                "ENABLE blocked: selected servo offline ("
+                + self._format_motor_list(missing_motors)
+                + ")"
+            )
+            return
+        if mode != "motor":
+            missing_encoders = self._active_scope_offline_encoder_indices(state)
+            if missing_encoders:
                 self._set_status(
-                    "ENABLE blocked: active workspace is not ready ("
-                    + self._format_joint_indices(missing_workspace)
+                    "ENABLE blocked: selected encoder offline ("
+                    + self._format_joint_list(missing_encoders)
                     + ")"
                 )
                 return
+        # 两种控制模式都依赖可信的舵机多圈坐标。未知时保持禁用，
+        # 并引导用户先执行 New Device Reset，再重新取得控制权。
+        unknown_mask = self._active_scope_multiturn_unknown_mask()
+        if unknown_mask != 0:
+            self._show_turn_recovery_guide(unknown_mask, "ENABLE")
+            return
+        # ENABLE 是用户解除 E-STOP 的明确动作。必须先清除 P4 锁存状态，
+        # 再重发 active scope；否则 RESET 可能清掉刚刚下发的 scope。
+        if self._estop_latched:
+            self.backend.reset()
+            self._estop_latched = False
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Enable blocked: active scope was not accepted by lower controller")
             return
-        state = self._state
         if state is not None and getattr(state, "system_state", None) == SYSTEM_STATE_PAUSED:
             self._estop_latched = False
             self.backend.start()
             self.context.emit_action("Resume")
             self._set_status("Resume requested: continuing paused target")
             return
-        unknown_mask = self._active_scope_multiturn_unknown_mask()
-        if unknown_mask != 0:
-            self._show_turn_recovery_guide(unknown_mask, "ENABLE")
-            return
 
-        if self._manual_submode() != "motor":
+        if mode != "motor":
             # 关节负反馈/遥操启动时不能先发舵机 ABS 直控命令。
             # ABS 命令会让 P4 立即进入 RUN_DIRECT，紧接着的负反馈
             # START/RUN 会因模式门禁被拒绝，表现为 Send 成功但舵机不转。
@@ -63,6 +79,9 @@ class ControlCommandController:
         targets = self._build_motor_abs_command_list()
         self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
         self.backend.set_pid_control(False)
+        # 直控也先申请基础 IDLE。E-STOP 后该 START 排在 RESET 之后，
+        # 随后的 ABS 包再申请 RUN_DIRECT，三者保持单一串口 FIFO 顺序。
+        self.backend.start()
         self.backend.set_motor_positions_absolute(targets)
         self._motor_last_sent_abs = list(targets)
         self._estop_latched = False
@@ -204,7 +223,9 @@ class ControlCommandController:
 
     def reset_controller(self) -> None:
         """Reset the controller state."""
-        self._estop_latched = True
+        # RESET/Clear Fault 会清除 P4 的锁存 E-STOP；控制仍保持关闭，
+        # 用户下一次按 ENABLE 时再按当前模式重新取得控制权。
+        self._estop_latched = False
         self._reset_p4_rope_init_progress()
         self.backend.reset()
         self._clear_run_states()

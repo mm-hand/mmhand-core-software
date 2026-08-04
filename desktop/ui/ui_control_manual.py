@@ -124,6 +124,15 @@ class ControlPanelManualMixin:
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
         active_joints = self._active_scope_joint_indices()
         joint_workspace_ready = bool(active_joints) and not self._active_scope_joint_calib_missing_indices()
+        active_motor_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        motor_online_ready = (
+            active_motor_mask != 0 and
+            not self._active_scope_offline_motor_indices(self._state)
+        )
+        encoder_online_ready = (
+            bool(active_joints) and
+            not self._active_scope_offline_encoder_indices(self._state)
+        )
         if getattr(self, "manual_check", None) is not None:
             self.manual_check.setVisible(mode != "device_check")
             self.manual_check.setEnabled(mode != "device_check")
@@ -243,10 +252,31 @@ class ControlPanelManualMixin:
                     "Control Enable is not a calibration prerequisite"
                 )
         if getattr(self, "enable_btn", None) is not None:
-            self.enable_btn.setEnabled(
-                mode != "device_check" and
-                (mode == "motor" or joint_workspace_ready)
-            )
+            if mode == "motor":
+                enable_ready = motor_online_ready
+                missing = self._active_scope_offline_motor_indices(self._state)
+                tooltip = (
+                    "Direct Enable requires selected servos online"
+                    if not missing
+                    else "Direct Enable blocked: offline " + self._format_motor_list(missing)
+                )
+            else:
+                # 负反馈 ENABLE 检查所选磁编及对应舵机在线，但不依赖 Auto/快照。
+                # 动态工作空间仍在真正发送关节目标时执行最终保护。
+                enable_ready = motor_online_ready and encoder_online_ready
+                missing_motors = self._active_scope_offline_motor_indices(self._state)
+                missing_encoders = self._active_scope_offline_encoder_indices(self._state)
+                if missing_motors:
+                    tooltip = "Feedback Enable blocked: servo offline " + self._format_motor_list(missing_motors)
+                elif missing_encoders:
+                    tooltip = "Feedback Enable blocked: encoder offline " + self._format_joint_list(missing_encoders)
+                else:
+                    tooltip = (
+                        "Feedback Enable requires selected servos and encoders online; "
+                        "calibration safety is checked when a joint target is sent"
+                    )
+            self.enable_btn.setEnabled(mode != "device_check" and enable_ready)
+            self.enable_btn.setToolTip(tooltip)
         if getattr(self, "raw_ik_enable_btn", None) is not None:
             # UI 必须显示 backend 的真实授权状态。E-STOP、Pause、断线或
             # active scope 改变后 backend 会撤权，按钮会在下一次刷新时复位。

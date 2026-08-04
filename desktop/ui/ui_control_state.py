@@ -72,9 +72,17 @@ class ControlPanelStateMixin:
         self._update_p4_rope_init_progress(state)
         calib_status = str(getattr(state, "calib_status", "IDLE"))
         active_calib_statuses = {"PENDING", "RUNNING"}
+        partial_completed_mask = (
+            self._partial_calibration_completed_joint_mask(state)
+            if calib_status == "FAILED"
+            else 0
+        )
         calib_finished_success = (
-            calib_status in {"SUCCESS", "WARN"} and
-            self._last_calib_status in active_calib_statuses
+            (
+                calib_status in {"SUCCESS", "WARN"}
+                or partial_completed_mask != 0
+            )
+            and self._last_calib_status in active_calib_statuses
         )
         if calib_finished_success:
             self._joint_target_initialized = False
@@ -84,9 +92,16 @@ class ControlPanelStateMixin:
             if joint_calib_valid_mask == 0:
                 self._joint_target_user_set = [False] * ENCODER_COUNT
         self._last_joint_calib_valid_mask = joint_calib_valid_mask
-        if calib_status in {"FAILED", "IDLE"} and self._last_calib_status in active_calib_statuses:
+        # FAILED 状态包可能先于最终标定诊断和成功关节快照到达。
+        # 此处不能提前清掉 pending mask，否则部分成功结果无法合并。
+        if (
+            calib_status == "IDLE"
+            and self._last_calib_status
+            in (active_calib_statuses | {"SUCCESS", "WARN", "FAILED"})
+        ):
             self._pending_calib_joint_mask = 0
             self._pending_calib_motor_mask = 0
+            self._pending_calib_result_baselines = {}
         self._last_calib_status = calib_status
         self._update_connection_lights()
         self._refresh_nvs_control_button()
@@ -398,6 +413,30 @@ class ControlPanelStateMixin:
         if idx < len(getattr(state, "servo_telem_online", []) or []) and getattr(state, "servo_telem_online", [])[idx]:
             return True
         return False
+
+    def _active_scope_offline_motor_indices(self, state=None) -> List[int]:
+        """返回当前作用域中未在线的舵机；直控门禁不得依赖磁编码器。"""
+        state = self._state if state is None else state
+        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        return [
+            idx for idx in range(MOTOR_COUNT)
+            if (active_mask & (1 << idx)) != 0
+            and not self._motor_display_valid(idx, state)
+        ]
+
+    def _active_scope_offline_encoder_indices(self, state=None) -> List[int]:
+        """返回当前负反馈作用域中离线/无有效 raw 的磁编码器。"""
+        state = self._state if state is None else state
+        missing: List[int] = []
+        for idx in self._active_scope_joint_indices():
+            status = self._joint_encoder_status(idx, state)
+            if status == "fault":
+                missing.append(idx)
+                continue
+            # 旧固件没有 encoder health 位图时，以 raw 数据有效性兜底。
+            if status is None and not self._joint_raw_feedback_valid(idx, state):
+                missing.append(idx)
+        return missing
 
     def _read_motor_target_slider_int(self, idx: int) -> int:
         """Read the motor target slider int value from the UI."""

@@ -4558,6 +4558,11 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
             FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL done J%02u dual\r\n",
                           orderedJoints[i]);
             completedJointMask |= currentJointBit;
+            // 双腱函数返回 true 时 LUT、ABS Limit 和多圈可信登记均已完成，
+            // 此后 UpperComm 才能安全读取并上报该 Jxx 结果。
+            sharedAtomicFetchOr(
+                &sharedData->calibration_completed_joint_bitmap,
+                currentJointBit);
             continue;
         }
 
@@ -4655,6 +4660,10 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
 
         FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL done J%02u\r\n", orderedJoints[i]);
         completedJointMask |= currentJointBit;
+        // 单电机同样在完整收尾后置位，禁止通信任务读取写到一半的 LUT。
+        sharedAtomicFetchOr(
+            &sharedData->calibration_completed_joint_bitmap,
+            currentJointBit);
     }
 
     if (failedJointMask != 0) {
@@ -4662,17 +4671,18 @@ bool runAutoCalibrationSequence(TaskSharedData_t* sharedData,
                       (unsigned long)failedJointMask,
                       (unsigned long)completedJointMask,
                       (unsigned long)seenJoints);
-        if (!hasCalibrationDiag(sharedData)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                               CALIB_DIAG_PHASE_SEQUENCE,
-                               firstFailedJoint,
-                               0xFF,
-                               completedJointMask,
-                               failedJointMask,
-                               jointCount,
-                               failedJointMask);
-        }
+        // 单关节失败时已经写入过细节诊断，但上位机还需要一帧最终汇总，
+        // 才能只提交本轮成功关节。motor=0xFF 用于区分该汇总与过程诊断：
+        // valueA=完成关节掩码，valueB/bitmap=失败关节掩码。
+        setCalibrationDiag(sharedData,
+                           CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                           CALIB_DIAG_PHASE_SEQUENCE,
+                           firstFailedJoint,
+                           0xFF,
+                           completedJointMask,
+                           failedJointMask,
+                           jointCount,
+                           failedJointMask);
         return false;
     }
 
@@ -4737,6 +4747,9 @@ void autoCalibrationTask(void* parameter)
         // 预检期间禁止通信任务把热插拔恢复误判为“标定运动中”而跳过。
         sharedAtomicStore(&sharedData->calibration_motion_started,
                           (uint8_t)0);
+        // 每轮独立统计成功关节；旧结果仍保留在 RAM，但不能冒充本轮完成。
+        sharedAtomicStore(&sharedData->calibration_completed_joint_bitmap,
+                          (uint32_t)0);
     }
 
     uint8_t activeJoints[ENCODER_TOTAL_NUM] = {0};

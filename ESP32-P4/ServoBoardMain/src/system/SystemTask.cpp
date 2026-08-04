@@ -168,6 +168,7 @@ void System_Init() {
     sharedData.servo_multiturn_configured_bitmap = 0;
     sharedData.servo_recovery_failed_bitmap = 0;
     sharedData.calibration_motion_started = 0;
+    sharedData.calibration_completed_joint_bitmap = 0;
     sharedData.calibration_trust_request_mask = 0;
     sharedData.calibration_trust_request_token = 0;
     sharedData.calibration_trust_result_token = 0;

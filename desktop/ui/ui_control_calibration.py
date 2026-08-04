@@ -6,6 +6,8 @@ from .ui_control_common import (
     CALIB_WARN_AUTO_MAX_SHORTFALL,
     CALIB_WARN_AUTO_MIN_OFFSET,
     CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
+    CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+    CALIB_DIAG_PHASE_SEQUENCE,
     CalibrationSnapshotError,
     ControlMode,
     ControlScopeModel,
@@ -302,6 +304,19 @@ class CalibrationWorkflowController:
         active_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
         self._pending_calib_joint_mask = active_joint_mask
         self._pending_calib_motor_mask = active_motor_mask
+        current_results = list(
+            getattr(self._state, "joint_calib_results", []) or []
+        )
+        self._pending_calib_result_baselines = {
+            joint_idx: self._joint_calib_result_signature(
+                current_results[joint_idx]
+                if joint_idx < len(current_results)
+                else None
+            )
+            for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(
+                active_joint_mask
+            )
+        }
         for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(active_joint_mask):
             if 0 <= joint_idx < len(self._joint_target_user_set):
                 self._joint_target_user_set[joint_idx] = False
@@ -1034,14 +1049,79 @@ class CalibrationWorkflowController:
             results[joint_idx] = dict(item)
         return results
 
+    def _partial_calibration_completed_joint_mask(self, state) -> int:
+        """读取 P4 的部分标定最终汇总，只返回本轮真正完成的 Jxx。"""
+        if state is None or not bool(getattr(state, "calib_diag_valid", False)):
+            return 0
+        if (
+            int(getattr(state, "calib_diag_reason", 0) or 0)
+            != CALIB_DIAG_REASON_JOINT_STEP_FAILED
+            or int(getattr(state, "calib_diag_phase", 0) or 0)
+            != CALIB_DIAG_PHASE_SEQUENCE
+            or int(getattr(state, "calib_diag_motor", 0xFF)) != 0xFF
+        ):
+            return 0
+        completed_mask = int(getattr(state, "calib_diag_value_a", 0) or 0)
+        failed_mask = int(getattr(state, "calib_diag_value_b", 0) or 0)
+        reported_failed_mask = int(getattr(state, "calib_diag_bitmap", 0) or 0)
+        if failed_mask == 0 or failed_mask != reported_failed_mask:
+            return 0
+        valid_joint_mask = (1 << ENCODER_COUNT) - 1
+        return completed_mask & valid_joint_mask & ~failed_mask
+
+    @staticmethod
+    def _joint_calib_result_signature(item: Optional[dict]) -> Optional[str]:
+        """生成稳定签名，用于区分本轮新结果与 P4 中原有的旧结果。"""
+        if not isinstance(item, dict) or not bool(item.get("success", False)):
+            return None
+        return json.dumps(item, sort_keys=True, ensure_ascii=False)
+
+    def _incremental_calibration_completed_joint_mask(self, state) -> int:
+        """返回本轮已经产生新成功结果、但不依赖整轮状态的 Jxx 掩码。"""
+        pending_mask = int(self._pending_calib_joint_mask) & (
+            (1 << ENCODER_COUNT) - 1
+        )
+        if state is None or pending_mask == 0:
+            return 0
+        results = list(getattr(state, "joint_calib_results", []) or [])
+        baselines = getattr(self, "_pending_calib_result_baselines", {}) or {}
+        completed_mask = 0
+        for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(
+            pending_mask
+        ):
+            item = results[joint_idx] if joint_idx < len(results) else None
+            signature = CalibrationWorkflowController._joint_calib_result_signature(
+                item
+            )
+            if signature is not None and signature != baselines.get(joint_idx):
+                completed_mask |= 1 << joint_idx
+        return completed_mask
+
     def _maybe_save_calibration_snapshot(self, state) -> None:
-        if state is None or str(getattr(state, "calib_status", "IDLE")) not in {"SUCCESS", "WARN"}:
+        if state is None:
+            return
+        calib_status = str(getattr(state, "calib_status", "IDLE"))
+        if calib_status not in {"PENDING", "RUNNING", "SUCCESS", "WARN", "FAILED"}:
             return
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
         if valid_bitmap == 0:
             return
-        active_joint_mask = int(self._pending_calib_joint_mask)
-        active_joint_mask &= (1 << ENCODER_COUNT) - 1
+        pending_joint_mask = int(self._pending_calib_joint_mask)
+        pending_joint_mask &= (1 << ENCODER_COUNT) - 1
+        incremental_mask = self._incremental_calibration_completed_joint_mask(
+            state
+        )
+        if calib_status in {"PENDING", "RUNNING"}:
+            active_joint_mask = incremental_mask
+        elif calib_status == "FAILED":
+            # 整轮失败不等于每个关节都失败。只合并 P4 最终汇总中明确完成的关节，
+            # 同时接纳已经逐关节上报的新结果；失败关节及旧快照保持不变。
+            active_joint_mask = pending_joint_mask & (
+                self._partial_calibration_completed_joint_mask(state)
+                | incremental_mask
+            )
+        else:
+            active_joint_mask = pending_joint_mask
         if active_joint_mask == 0:
             return
         # 只更新目标关节直接使用的舵机。工作空间辅助电机不属于本轮标定，
@@ -1208,6 +1288,10 @@ class CalibrationWorkflowController:
             ensure_ascii=False,
         )
         if signature == self._last_calib_snapshot_signature:
+            if calib_status in {"SUCCESS", "WARN"}:
+                self._pending_calib_joint_mask = 0
+                self._pending_calib_motor_mask = 0
+                self._pending_calib_result_baselines = {}
             return
         try:
             payload = atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, payload)
@@ -1215,8 +1299,21 @@ class CalibrationWorkflowController:
             self._set_status(f"Calib snapshot save failed: {exc}")
             return
         self._last_calib_snapshot_signature = signature
-        self._pending_calib_joint_mask = 0
-        self._pending_calib_motor_mask = 0
+        # 更新已落盘 Jxx 的基线；RUNNING 时继续等待其余关节，不能清空整轮 mask。
+        baselines = getattr(self, "_pending_calib_result_baselines", None)
+        if not isinstance(baselines, dict):
+            baselines = {}
+            self._pending_calib_result_baselines = baselines
+        for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(
+            active_joint_mask
+        ):
+            baselines[joint_idx] = (
+                self._joint_calib_result_signature(joint_results[joint_idx])
+            )
+        if calib_status in {"SUCCESS", "WARN"}:
+            self._pending_calib_joint_mask = 0
+            self._pending_calib_motor_mask = 0
+            self._pending_calib_result_baselines = {}
         self.context.emit_action(f"Calib snapshot saved: {CALIB_LOAD_SNAPSHOT_PATH.name}")
         self._set_status(f"Calib snapshot saved to {CALIB_LOAD_SNAPSHOT_PATH.name}")
         self._update_manual_action_buttons()
@@ -1455,6 +1552,8 @@ class CalibrationWorkflowController:
                     "局部多圈基准已经重建。\n\n"
                     f"已自动切换到 Joint Channels 并只勾选：{joint_text}\n"
                     "请确认对应手指绳路和运动空间安全，然后点击 Calibrate。\n\n"
+                    "标定不要求已有全手快照：只要所选关节 Manual 完整、"
+                    "舵机在线且 Turn Known，也可以重新勾选全手后直接标定。\n\n"
                     "标定完成并显示 TURN KNOWN / CALIB SUCCESS 后，"
                     "再恢复正常控制。"
                 ),

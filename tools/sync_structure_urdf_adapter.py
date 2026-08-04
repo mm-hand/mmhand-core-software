@@ -60,6 +60,25 @@ def _repo_commit(source_root: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def _resolve_source_urdf(source_root: Path) -> Path:
+    """选择 structure 导出的 URDF；默认文件缺失时仅接受唯一候选。"""
+    urdf_root = source_root / "urdf"
+    preferred = urdf_root / "mmhand.urdf"
+    if preferred.is_file():
+        return preferred
+
+    candidates = sorted(path for path in urdf_root.glob("*.urdf") if path.is_file())
+    if len(candidates) != 1:
+        names = ", ".join(path.name for path in candidates) or "none"
+        raise FileNotFoundError(
+            "source URDF mmhand.urdf is missing and the fallback is ambiguous: " + names
+        )
+
+    fallback = candidates[0]
+    print(f"Warning: mmhand.urdf is missing; using the only URDF candidate: {fallback}")
+    return fallback
+
+
 def _ensure_mesh_junction(adapter_root: Path, source_meshes: Path) -> None:
     target = adapter_root / "meshes"
     if target.exists() or target.is_symlink():
@@ -85,29 +104,38 @@ def _ensure_mesh_junction(adapter_root: Path, source_meshes: Path) -> None:
 def build_adapter(source_root: Path, adapter_root: Path,
                   manifest_path: Path = DEFAULT_MANIFEST) -> Path:
     source_root = source_root.resolve()
-    source_urdf = source_root / "urdf" / "mmhand.urdf"
+    source_urdf = _resolve_source_urdf(source_root)
     source_meshes = source_root / "meshes"
-    if not source_urdf.is_file() or not source_meshes.is_dir():
+    if not source_meshes.is_dir():
         raise FileNotFoundError(
-            "source root must contain urdf/mmhand.urdf and meshes/: " + str(source_root)
+            "source root must contain meshes/: " + str(source_root)
         )
 
     joint_aliases = _load_joint_aliases(manifest_path)
+    # CAD 导出器可能只改变 PIP/DIP 名称大小写；语义匹配不应因此失效。
+    folded_aliases = {name.casefold(): target for name, target in joint_aliases.items()}
+    if len(folded_aliases) != len(joint_aliases):
+        raise ValueError("manifest contains case-insensitive duplicate source joint names")
     tree = ET.parse(source_urdf)
     root = tree.getroot()
+    # CAD 临时文件名不能成为运行时模型标识，适配器始终输出稳定名称。
+    root.set("name", "mmhand")
     source_names = set()
     output_names = set()
     for joint in root.findall("joint"):
         source_name = joint.get("name", "")
         source_names.add(source_name)
-        desktop_name = joint_aliases.get(source_name)
+        desktop_name = folded_aliases.get(source_name.casefold())
         if desktop_name:
             if desktop_name in output_names:
                 raise ValueError(f"duplicate desktop joint alias: {desktop_name}")
             joint.set("name", desktop_name)
             output_names.add(desktop_name)
 
-    missing_source = sorted(set(joint_aliases) - source_names)
+    source_names_folded = {name.casefold() for name in source_names}
+    missing_source = sorted(
+        name for name in joint_aliases if name.casefold() not in source_names_folded
+    )
     if missing_source:
         raise ValueError("source URDF is missing expected joints: " + ", ".join(missing_source))
 

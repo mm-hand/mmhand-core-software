@@ -31,12 +31,15 @@ from .protocol import (
     CMD_MANUAL_ENCODER_SINGLE,
     CMD_ROPE_INIT,
     CMD_PAUSE,
+    CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_SERVO_RESET_ZERO,
     DUAL_TENDON_JOINT_INDICES,
     TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
     MOTOR_COUNT,
+    PROTO_ACK_STATUS_OK,
+    PROTO_ACK_STATUS_QUEUED,
     ControlMode,
     MOTOR_ABS_CMD_MAX,
     MOTOR_ABS_CMD_MIN,
@@ -60,6 +63,7 @@ MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_MAX_ATTEMPTS = 3
 MULTITURN_NVS_CONTROL_RETRY_DELAY_S = 0.15
 NEW_DEVICE_RESET_SETTLE_S = 0.30
+NEW_DEVICE_RESET_RESET_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
@@ -1060,8 +1064,31 @@ class HandController:
         if affected_joint_mask == 0:
             return False, "cannot map Turn Unknown motors to joints", 0, 0
 
-        self.stop()
-        # 先等待 STOP 状态和热插拔配置事务稳定，再发送恢复命令；
+        # New Device Reset 是维护恢复，不是用户急停。这里发送 RESET 会撤销
+        # 旧 owner/目标、关闭扭矩并清除可恢复锁存；若发送 STOP，则
+        # emergency_stop_latched 会一直保留，导致紧接着执行的全手标定被拒绝。
+        reset_sent_at = time.time()
+        self.reset()
+        reset_ack = self.comm.wait_for_ack(
+            CMD_RESET,
+            NEW_DEVICE_RESET_RESET_ACK_TIMEOUT_S,
+            received_after=reset_sent_at,
+        )
+        if (
+            reset_ack is None
+            or int(reset_ack[2]) not in (
+                PROTO_ACK_STATUS_OK,
+                PROTO_ACK_STATUS_QUEUED,
+            )
+        ):
+            return (
+                False,
+                "maintenance reset ACK timeout/reject before turn0 restore",
+                restore_mask,
+                affected_joint_mask,
+            )
+
+        # 等待 RESET 状态切换和热插拔配置事务稳定，再发送恢复命令；
         # 否则二进制 ACK 可能与舵机重连诊断日志同时到达，造成误判超时。
         time.sleep(NEW_DEVICE_RESET_SETTLE_S)
 

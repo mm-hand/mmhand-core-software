@@ -7,6 +7,7 @@ from desktop.core.data_models import HandModel, JointWorkspaceRange
 from desktop.core.protocol import (
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_RUN_FEEDBACK,
+    SYSTEM_STATE_UNCONTROLLABLE,
 )
 from desktop.ui.ui_control_panels import ControlPanel
 from desktop.ui.ui_qt_compat import QtWidgets, ensure_app
@@ -128,7 +129,7 @@ def test_manual_workflow_signal_survives_mode_body_rebuild():
 
 
 def test_new_device_reset_available_while_feedback_is_running():
-    """Turn Unknown 恢复可从负反馈状态发起，后端会先执行安全 STOP。"""
+    """Turn Unknown 恢复可从负反馈状态发起，后端会先执行安全维护复位。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
     state = HandModel()
@@ -141,6 +142,23 @@ def test_new_device_reset_available_while_feedback_is_running():
 
     assert panel.new_device_reset_btn.isEnabled()
     assert "安全停止" in panel.new_device_reset_btn.toolTip()
+
+
+def test_calibration_stays_available_without_auto_snapshot():
+    """没有 Auto/LUT/ABS Limit 时禁止负反馈，但必须允许用户重新执行标定。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    panel.tabs.setCurrentIndex(1)
+    state = HandModel()
+    state.system_state = SYSTEM_STATE_UNCONTROLLABLE
+    state.motor_abs_limit_valid_bitmap = 0
+    state.joint_calib_results = [None] * 21
+    panel._state = state
+
+    panel._update_manual_action_buttons()
+
+    assert panel.calib_btn.isEnabled()
+    assert not panel.enable_btn.isEnabled()
 
 
 def test_new_device_reset_stays_disabled_when_turns_are_trusted_or_task_busy():

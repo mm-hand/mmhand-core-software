@@ -21,21 +21,19 @@ def _args(tmp_path: Path, *, urdf: Path | None = None) -> argparse.Namespace:
         fingerprint_output=tmp_path / "fingerprint.json",
         p4_limits_output=tmp_path / "limits.h",
         p4_fingerprint_output=tmp_path / "fingerprint.h",
-        wuji_contract_output=tmp_path / "wuji.json",
         check=False,
     )
 
 
-def test_generator_outputs_all_cross_platform_contracts(tmp_path: Path) -> None:
+def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
     outputs = generate_robot_model.build_outputs(_args(tmp_path))
-    assert len(outputs) == 5
+    assert len(outputs) == 4
     mapping = json.loads(outputs[tmp_path / "mapping.json"])
     fingerprint = json.loads(outputs[tmp_path / "fingerprint.json"])
-    wuji = json.loads(outputs[tmp_path / "wuji.json"])
 
     assert mapping["schema_version"] == 4
     assert [item["joint_index"] for item in mapping["joints"]] == list(range(21))
-    assert fingerprint["control_model_crc"] == wuji["control_model_crc"]
+    assert len(fingerprint["control_model_crc"]) == 8
     assert len(fingerprint["firmware_source_crc"]) == 8
 
 

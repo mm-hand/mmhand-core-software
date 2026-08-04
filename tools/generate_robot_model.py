@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""从语义清单和活动 URDF 统一生成 Desktop、P4 与 Wuji 模型产物。"""
+"""从语义清单和活动 URDF 统一生成 Desktop 与 P4 模型产物。"""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -30,11 +29,6 @@ DEFAULT_P4_LIMITS = (
 )
 DEFAULT_P4_FINGERPRINT = (
     ROOT / "ESP32-P4/ServoBoardMain/src/generated/ProductFingerprint.generated.h"
-)
-DEFAULT_WUJI_CONTRACT = (
-    ROOT
-    / "wuji_hand_ws/src/wuji_mmhand_teleop/wuji_mmhand_teleop/assets"
-    / "hku_hand_v2_urdf/urdf_contract.json"
 )
 EXPECTED_JOINT_COUNT = 21
 
@@ -328,32 +322,6 @@ static const uint32_t kProductStructureCommitCrc = 0x{value('structure_commit_cr
 """
 
 
-def render_wuji_contract(manifest: dict, limits: list[tuple[int, float, float]],
-                         fingerprint: dict, source_commit: str, urdf_path: Path) -> str:
-    data = {
-        "schema_version": 2,
-        "model_id": str(manifest["model_id"]),
-        "mapping_id": str(manifest["mapping_id"]),
-        "mapping_version": int(manifest["manual_scaled_mapping_version"]),
-        "urdf_config_crc": fingerprint["control_model_crc"],
-        "control_model_crc": fingerprint["control_model_crc"],
-        "visual_model_crc": fingerprint["visual_model_crc"],
-        "source_commit": source_commit,
-        "urdf_sha256": hashlib.sha256(urdf_path.read_bytes()).hexdigest().upper(),
-        "topic": "/raw_ik_target",
-        "input_space": "urdf_deg",
-        "joints": [
-            {
-                "joint_index": index,
-                "name": manifest["joints"][index]["urdf_joint_name"],
-                "limit_deg": [round(lower, 6), round(upper, 6)],
-            }
-            for index, lower, upper in limits
-        ],
-    }
-    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-
-
 def _atomic_write(path: Path, content: str) -> None:
     """同目录临时文件替换，避免中途退出留下半份 JSON/头文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -377,9 +345,6 @@ def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
         args.p4_limits_output: render_p4_limits(manifest, limits),
         args.fingerprint_output: render_fingerprint_json(fingerprint),
         args.p4_fingerprint_output: render_p4_fingerprint(fingerprint),
-        args.wuji_contract_output: render_wuji_contract(
-            manifest, limits, fingerprint, source_commit, args.urdf
-        ),
     }
 
 
@@ -392,7 +357,6 @@ def main() -> int:
     parser.add_argument("--fingerprint-output", type=Path, default=DEFAULT_FINGERPRINT)
     parser.add_argument("--p4-limits-output", type=Path, default=DEFAULT_P4_LIMITS)
     parser.add_argument("--p4-fingerprint-output", type=Path, default=DEFAULT_P4_FINGERPRINT)
-    parser.add_argument("--wuji-contract-output", type=Path, default=DEFAULT_WUJI_CONTRACT)
     parser.add_argument("--check", action="store_true", help="只检查生成物是否过期")
     args = parser.parse_args()
     try:
