@@ -7,6 +7,7 @@
 #define MMHAND_SERVO_CONFIG_H
 
 #include <stdint.h>
+#include "DimensionsConfig.h"
 
 // 该宏参与条件编译，暂时保留宏形式以兼容 Arduino 预处理器。
 #define MULTITURN_NVS_PERSISTENCE_ENABLE 1
@@ -32,7 +33,11 @@ inline constexpr int32_t kNvsMoveAbsThreshold = 64;
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
 inline constexpr uint8_t kOnlineConfirmReads = 2; ///< 连续成功读取达到此值才判上线。
-inline constexpr uint32_t kOfflineProbeIntervalMs = 50; ///< 每周期仅探测一台离线舵机。
+inline constexpr uint16_t kDiscoveryProbeTimeoutMs = 2; ///< 动态 BUS 探测单次最长阻塞时间。
+/** 单 BUS 控制容量只有一个事实来源，避免扫描策略与同步收发缓存的上限发生漂移。 */
+inline constexpr uint8_t kMaxControllableServosPerBus = MAX_SERVOS_PER_BUS;
+/** 曾经在线后掉线的 Mxx 定向重扫间隔；初次上电缺失的舵机不进入此循环。 */
+inline constexpr uint32_t kOfflineRouteRescanIntervalMs = 500;
 inline constexpr uint8_t kRecoveryMaxAttempts = 3; ///< 单次上线恢复最大尝试次数。
 inline constexpr uint32_t kRecoveryRetryIntervalMs = 100; ///< 上线恢复重试间隔。
 

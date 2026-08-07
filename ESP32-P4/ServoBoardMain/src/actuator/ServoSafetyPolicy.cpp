@@ -96,8 +96,7 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
     }
     for (uint8_t i = 0; i < batch.count; ++i) {
         const ServoTargetCommand_t& command = batch.commands[i];
-        // busIndex/servoId 会用于索引驱动注册表，非法值不能进入跨任务队列。
-        if (command.busIndex >= NUM_BUSES || command.servoId > MAX_SERVO_ID) {
+        if (command.motorChannel >= SERVO_TOTAL_NUM) {
             return reject(ServoRejectReason::InvalidCommand,
                           command.position,
                           0,
@@ -116,10 +115,12 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
 
 ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     uint8_t commandIndex,
-                                    uint8_t motorChannel,
                                     int32_t logicalOffset,
                                     const ServoSafetyContext& context)
 {
+    const uint8_t motorChannel = commandIndex < batch.count
+        ? batch.commands[commandIndex].motorChannel
+        : 0xFF;
     if (commandIndex >= batch.count || commandIndex >= SERVO_TARGET_BATCH_MAX ||
         motorChannel >= SERVO_TOTAL_NUM) {
         return reject(ServoRejectReason::InvalidCommand,
@@ -140,6 +141,20 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     : (hardware64 < INT32_MIN
                                            ? INT32_MIN
                                            : (int32_t)hardware64);
+
+    // 动态路由是所有物理访问的前置条件；冲突和超载必须在 online 判断前给出明确原因。
+    if ((context.routeConflictMask & motorBit) != 0) {
+        return reject(ServoRejectReason::RouteConflict,
+                      requestedAbs, hardwareAbs, motorChannel, commandIndex);
+    }
+    if ((context.routedMotorMask & motorBit) == 0) {
+        return reject(ServoRejectReason::RouteUnknown,
+                      requestedAbs, hardwareAbs, motorChannel, commandIndex);
+    }
+    if ((context.controllableRouteMask & motorBit) == 0) {
+        return reject(ServoRejectReason::BusOverCapacity,
+                      requestedAbs, hardwareAbs, motorChannel, commandIndex);
+    }
 
     // E-STOP 必须先于 owner/state 判断：急停请求一经锁存，任何竞态中的旧批次都不得落到驱动。
     if (context.emergencyStopLatched) {
@@ -238,6 +253,9 @@ const char* rejectReasonName(ServoRejectReason reason)
     switch (reason) {
         case ServoRejectReason::None: return "none";
         case ServoRejectReason::InvalidCommand: return "invalid-command";
+        case ServoRejectReason::RouteUnknown: return "route-unknown";
+        case ServoRejectReason::RouteConflict: return "route-conflict";
+        case ServoRejectReason::BusOverCapacity: return "bus-over-capacity";
         case ServoRejectReason::EmergencyStop: return "emergency-stop";
         case ServoRejectReason::InvalidOwner: return "invalid-owner";
         case ServoRejectReason::InvalidState: return "invalid-state";

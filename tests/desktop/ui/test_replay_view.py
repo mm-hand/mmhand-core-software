@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from desktop.algorithm.replay_controller import ReplayStatus
+from desktop.replay.replay_controller import ReplayStatus
 from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_RUN_FEEDBACK
 from desktop.ui.ui_qt_compat import ensure_app
 from desktop.ui.ui_replay_view import ReplayView

@@ -1,4 +1,12 @@
-"""ControlPanelStateMixin methods for the modular control panel."""
+"""ui_control_state.py - MMHand Desktop 模块契约。
+
+职责：根据 HandModel 快照刷新控制状态、门禁和提示。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 
 from .ui_control_common import (
     ControlMode,
@@ -30,6 +38,12 @@ from .ui_control_common import (
     Optional,
     QtGui,
     QtWidgets,
+    SERVO_ROUTE_UNKNOWN,
+    SERVO_ROUTE_PROBING,
+    SERVO_ROUTE_ONLINE,
+    SERVO_ROUTE_OFFLINE,
+    SERVO_ROUTE_CONFLICT,
+    SERVO_ROUTE_BUS_OVERLOADED,
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_READY,
@@ -41,9 +55,18 @@ from .ui_control_common import (
     motor_target_from_servo_feedback,
     motor_tendon_shorten_abs_sign,
 )
+from .ui_dialogs import show_scrollable_message
 
 
 class ControlPanelStateMixin:
+    _ENCODER_ALL_MASK = (1 << ENCODER_COUNT) - 1
+    _ENCODER_COMMON_ZERO_CONFIRM_S = 0.20
+    _ENCODER_COMMON_ZERO_RECOVERY_FRAMES = 3
+    _ENCODER_COMMON_BUS_MESSAGE = (
+        "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
+        "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
+    )
+
     _DIRECT_REJECT_LABELS = {
         DIRECT_REJECT_STATE: "state/E-STOP gate",
         DIRECT_REJECT_HARDWARE: "servo hardware unavailable",
@@ -56,6 +79,7 @@ class ControlPanelStateMixin:
     def update_state(self, state) -> None:
         """Run the update state workflow."""
         self._state = state
+        self._update_encoder_common_bus_guard(state)
         unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & VALID_MOTOR_MASK
         if unknown_bitmap == 0:
             self.reset_turn_unknown_popup_episode()
@@ -67,6 +91,7 @@ class ControlPanelStateMixin:
         else:
             self._show_servo_turn_overflow_guide(overflow_bitmap)
         self._handle_firmware_epoch_change(state)
+        self._handle_servo_route_status(state)
         self._handle_connectivity_transitions(state)
         self._handle_direct_command_result(state)
         self._update_p4_rope_init_progress(state)
@@ -120,6 +145,98 @@ class ControlPanelStateMixin:
         )
         self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
         self._update_manual_action_buttons()
+
+    @classmethod
+    def _encoder_common_zero_snapshot(cls, state) -> bool:
+        """判断当前新鲜Raw快照是否符合“公共MISO被拉低”的假在线特征。"""
+        if state is None or not bool(getattr(state, "has_encoder_raw_data", False)):
+            return False
+        if not bool(getattr(state, "has_encoder_health_status", False)):
+            return False
+        online_mask = int(getattr(state, "encoder_online_bitmap", 0) or 0)
+        fault_mask = int(getattr(state, "encoder_fault_bitmap", 0) or 0)
+        if (online_mask & cls._ENCODER_ALL_MASK) != cls._ENCODER_ALL_MASK or fault_mask != 0:
+            return False
+        encoders = list(getattr(state, "encoders", []) or [])
+        if len(encoders) < ENCODER_COUNT:
+            return False
+        for encoder in encoders[:ENCODER_COUNT]:
+            if bool(getattr(encoder, "raw_error", getattr(encoder, "error", True))):
+                return False
+            if int(getattr(encoder, "raw_sensor", 0) or 0) != 0:
+                return False
+        return True
+
+    def _apply_encoder_common_bus_fault_overlay(self, state) -> None:
+        """只覆盖上位机本地健康位图，不改变下位机状态或通信协议。"""
+        if state is None or not self._encoder_common_bus_fault:
+            return
+        state.encoder_online_bitmap = int(
+            getattr(state, "encoder_online_bitmap", 0) or 0
+        ) & ~self._ENCODER_ALL_MASK
+        state.encoder_warn_bitmap = int(
+            getattr(state, "encoder_warn_bitmap", 0) or 0
+        ) & ~self._ENCODER_ALL_MASK
+        state.encoder_fault_bitmap = int(
+            getattr(state, "encoder_fault_bitmap", 0) or 0
+        ) | self._ENCODER_ALL_MASK
+
+    def _update_encoder_common_bus_guard(self, state) -> None:
+        """对21路全零假在线做200ms确认，并在恢复后连续3帧解除。"""
+        if state is None:
+            return
+        sample_ts = float(getattr(state, "encoder_raw_last_rx_ts", 0.0) or 0.0)
+        is_new_raw_sample = (
+            sample_ts > 0.0 and
+            sample_ts != self._encoder_common_zero_last_sample_ts
+        )
+        if is_new_raw_sample:
+            self._encoder_common_zero_last_sample_ts = sample_ts
+            zero_snapshot = self._encoder_common_zero_snapshot(state)
+            encoders = list(getattr(state, "encoders", []) or [])
+            valid_nonzero_snapshot = (
+                len(encoders) >= ENCODER_COUNT and
+                all(
+                    not bool(getattr(encoder, "raw_error", getattr(encoder, "error", True)))
+                    for encoder in encoders[:ENCODER_COUNT]
+                ) and
+                any(
+                    int(getattr(encoder, "raw_sensor", 0) or 0) != 0
+                    for encoder in encoders[:ENCODER_COUNT]
+                )
+            )
+
+            if not self._encoder_common_bus_fault:
+                self._encoder_common_zero_recovery_frames = 0
+                if zero_snapshot:
+                    if self._encoder_common_zero_first_ts <= 0.0:
+                        self._encoder_common_zero_first_ts = sample_ts
+                    elif (
+                        sample_ts - self._encoder_common_zero_first_ts
+                        >= self._ENCODER_COMMON_ZERO_CONFIRM_S
+                    ):
+                        self._encoder_common_bus_fault = True
+                        self.context.emit_action(self._ENCODER_COMMON_BUS_MESSAGE)
+                        self._set_status(self._ENCODER_COMMON_BUS_MESSAGE)
+                else:
+                    self._encoder_common_zero_first_ts = 0.0
+            elif valid_nonzero_snapshot:
+                self._encoder_common_zero_recovery_frames += 1
+                if (
+                    self._encoder_common_zero_recovery_frames
+                    >= self._ENCODER_COMMON_ZERO_RECOVERY_FRAMES
+                ):
+                    self._encoder_common_bus_fault = False
+                    self._encoder_common_zero_first_ts = 0.0
+                    self._encoder_common_zero_recovery_frames = 0
+                    message = "磁编公共SPI全零异常已解除；请转动关节确认Raw值连续变化。"
+                    self.context.emit_action(message)
+                    self._set_status(message)
+            else:
+                self._encoder_common_zero_recovery_frames = 0
+
+        # 后续状态包会再次带回固件的全在线位图，因此故障锁存期间每次刷新都要覆盖。
+        self._apply_encoder_common_bus_fault_overlay(state)
 
     def _handle_direct_command_result(self, state) -> None:
         """把“已提交串口帧”和“P4 已接受执行”区分为两个阶段。"""
@@ -289,6 +406,43 @@ class ControlPanelStateMixin:
         self._last_encoder_warn_bitmap = encoder_warn_mask
         self._last_encoder_fault_bitmap = encoder_fault_mask
 
+    def _handle_servo_route_status(self, state) -> None:
+        """在扫描提交后一次性提示重复 ID 或单 BUS 超过十台的布线错误。"""
+        if not bool(getattr(state, "has_servo_route_status", False)):
+            return
+        conflict_mask = int(getattr(state, "servo_route_conflict_bitmap", 0) or 0)
+        overload_mask = int(getattr(state, "servo_bus_overload_mask", 0) or 0)
+        if conflict_mask == 0 and overload_mask == 0:
+            self._last_servo_route_warning_signature = None
+            return
+        counts = tuple(int(value) for value in getattr(state, "servo_bus_device_count", [])[:4])
+        signature = (conflict_mask, overload_mask, counts)
+        if signature == self._last_servo_route_warning_signature:
+            return
+        self._last_servo_route_warning_signature = signature
+
+        lines = ["P4 已停止存在布线冲突的舵机路由："]
+        if conflict_mask:
+            lines.append(
+                "- 重复 ID：" + self._format_motor_mask(conflict_mask)
+                + "；同一个 ID 只能出现在一条 BUS 上。"
+            )
+        for bus in range(min(4, len(counts))):
+            if (overload_mask & (1 << bus)) != 0:
+                lines.append(
+                    f"- BUS{bus} 检测到 {counts[bus]} 个响应 ID，最多允许 10 个；"
+                    "请把部分舵机移动到其他 BUS。"
+                )
+        message = "\n".join(lines)
+        self.context.emit_action(message.replace("\n", " "))
+        self._set_status("Servo route blocked: check duplicate IDs or BUS capacity")
+        show_scrollable_message(
+            self,
+            "舵机 BUS 路由异常",
+            message,
+            severity="warning",
+        )
+
     def clear_live_state(self) -> None:
         self.stop_all_tests("stopped on disconnect", update_status=False)
         self._reset_p4_rope_init_progress()
@@ -317,9 +471,14 @@ class ControlPanelStateMixin:
         self._last_multi_turn_unknown_bitmap = None
         self.reset_turn_unknown_popup_episode()
         self._last_servo_online_bitmap = None
+        self._last_servo_route_warning_signature = None
         self._last_encoder_online_bitmap = None
         self._last_encoder_warn_bitmap = None
         self._last_encoder_fault_bitmap = None
+        self._encoder_common_zero_first_ts = 0.0
+        self._encoder_common_zero_last_sample_ts = 0.0
+        self._encoder_common_zero_recovery_frames = 0
+        self._encoder_common_bus_fault = False
         self._joint_target_user_set = [False] * ENCODER_COUNT
         self._motor_target_user_set = [False] * MOTOR_COUNT
         self._clear_run_states()
@@ -335,6 +494,8 @@ class ControlPanelStateMixin:
                 + self.motor_abs_items
                 + self.motor_load_items
                 + self.motor_joint_items
+                + self.motor_bus_items
+                + self.motor_route_items
             ):
                 if item is not None:
                     item.setText("-")
@@ -413,6 +574,75 @@ class ControlPanelStateMixin:
         if idx < len(getattr(state, "servo_telem_online", []) or []) and getattr(state, "servo_telem_online", [])[idx]:
             return True
         return False
+
+    def _motor_route_controllable(self, idx: int, state: Optional[HandModel] = None) -> bool:
+        """仅认可 P4 动态扫描已提交且未冲突、未超容量的唯一 BUS 路由。"""
+        state = self._state if state is None else state
+        if idx < 0 or idx >= MOTOR_COUNT or state is None:
+            return False
+        if not bool(getattr(state, "has_servo_route_status", False)):
+            return False
+        mask = int(getattr(state, "servo_route_controllable_bitmap", 0) or 0)
+        return (mask & (1 << idx)) != 0
+
+    def _active_scope_unroutable_motor_indices(self, state=None) -> List[int]:
+        """返回当前作用域内没有唯一可控 BUS 路由的舵机。"""
+        state = self._state if state is None else state
+        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
+        return [
+            idx for idx in range(MOTOR_COUNT)
+            if (active_mask & (1 << idx)) != 0
+            and not self._motor_route_controllable(idx, state)
+        ]
+
+    def _refresh_motor_route_item(self, motor_idx: int, state) -> None:
+        """刷新单台舵机的动态 BUS 与路由状态，不推断或回退到固定映射。"""
+        if motor_idx >= len(self.motor_bus_items) or motor_idx >= len(self.motor_route_items):
+            return
+        bus_item = self.motor_bus_items[motor_idx]
+        route_item = self.motor_route_items[motor_idx]
+        if bus_item is None or route_item is None:
+            return
+        bus_item.setText("-")
+        route_item.setForeground(QtGui.QBrush(QtGui.QColor("#6b7280")))
+        if not bool(getattr(state, "has_servo_route_status", False)):
+            route_item.setText("Waiting")
+            route_item.setToolTip("Waiting for P4 dynamic servo route status")
+            return
+        route_buses = list(getattr(state, "servo_route_bus", []) or [])
+        route_states = list(getattr(state, "servo_route_state", []) or [])
+        route_bus = int(route_buses[motor_idx]) if motor_idx < len(route_buses) else 0xFF
+        route_state = int(route_states[motor_idx]) if motor_idx < len(route_states) else SERVO_ROUTE_UNKNOWN
+        if 0 <= route_bus < 4:
+            bus_item.setText(f"BUS{route_bus}")
+        labels = {
+            SERVO_ROUTE_UNKNOWN: "Unknown",
+            SERVO_ROUTE_PROBING: "Scanning",
+            SERVO_ROUTE_ONLINE: "Online",
+            SERVO_ROUTE_OFFLINE: "Offline",
+            SERVO_ROUTE_CONFLICT: "ID Conflict",
+            SERVO_ROUTE_BUS_OVERLOADED: "BUS Full",
+        }
+        route_item.setText(labels.get(route_state, f"State {route_state}"))
+        if route_state == SERVO_ROUTE_ONLINE:
+            color = "#2e7d32"
+            tip = "Unique dynamic route is online and controllable"
+        elif route_state == SERVO_ROUTE_PROBING:
+            color = "#b26a00"
+            progress = int(getattr(state, "servo_route_scan_progress", 0) or 0)
+            tip = f"P4 is scanning servo routes: {progress}%"
+        elif route_state == SERVO_ROUTE_CONFLICT:
+            color = "#c62828"
+            tip = "This servo ID was found on multiple BUSes; control is blocked"
+        elif route_state == SERVO_ROUTE_BUS_OVERLOADED:
+            color = "#c62828"
+            tip = "This BUS has more than 10 servos; move servos to another BUS"
+        else:
+            color = "#6b7280"
+            tip = "No controllable dynamic route"
+        route_item.setForeground(QtGui.QBrush(QtGui.QColor(color)))
+        route_item.setToolTip(tip)
+        bus_item.setToolTip(tip)
 
     def _active_scope_offline_motor_indices(self, state=None) -> List[int]:
         """返回当前作用域中未在线的舵机；直控门禁不得依赖磁编码器。"""
@@ -631,6 +861,13 @@ class ControlPanelStateMixin:
         ):
             self._set_status("Motor command blocked: waiting for motor feedback")
             return False
+        unroutable = self._active_scope_unroutable_motor_indices(state)
+        if unroutable:
+            self._set_status(
+                "Motor command blocked: no unique controllable BUS route ("
+                + self._format_motor_list(unroutable) + ")"
+            )
+            return False
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
             self._show_turn_recovery_guide(unknown_mask, f"Motor command ({trigger})")
@@ -667,6 +904,11 @@ class ControlPanelStateMixin:
             bool(getattr(state, "has_servo_angle_data", False)) or bool(getattr(state, "has_servo_raw_data", False))
         ):
             self._set_status("Motor command blocked: waiting for motor feedback")
+            return None
+        if not self._motor_route_controllable(idx, state):
+            self._set_status(
+                f"Motor command blocked: M{idx:02d} has no unique controllable BUS route"
+            )
             return None
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
@@ -770,6 +1012,13 @@ class ControlPanelStateMixin:
             bool(getattr(state, "has_servo_angle_data", False)) or bool(getattr(state, "has_servo_raw_data", False))
         ):
             self._set_status("Motor command blocked: waiting for motor feedback")
+            return
+        unroutable = self._active_scope_unroutable_motor_indices(state)
+        if unroutable:
+            self._set_status(
+                "Motor sweep blocked: no unique controllable BUS route ("
+                + self._format_motor_list(unroutable) + ")"
+            )
             return
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
@@ -1167,6 +1416,7 @@ class ControlPanelStateMixin:
             overload_flags = getattr(state, "servo_overload_fault", []) or []
             overload_loads = getattr(state, "servo_overload_trigger_load", []) or []
             for i in range(MOTOR_COUNT):
+                self._refresh_motor_route_item(i, state)
                 motor_online = self._motor_display_valid(i, state)
                 if not motor_online:
                     self._hide_offline_motor_feedback_items(i)
@@ -1347,7 +1597,10 @@ class ControlPanelStateMixin:
             item.setToolTip("Encoder WARN: transient CAN/encoder bad frame, using last trusted value")
         elif status is False or status == "fault":
             item.setForeground(QtGui.QBrush(QtGui.QColor("#d84343")))
-            item.setToolTip("Encoder FAULT/OFFLINE: stable feedback is unavailable")
+            if self._encoder_common_bus_fault:
+                item.setToolTip(self._ENCODER_COMMON_BUS_MESSAGE)
+            else:
+                item.setToolTip("Encoder FAULT/OFFLINE: stable feedback is unavailable")
         else:
             item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
             item.setToolTip("Encoder state unknown")

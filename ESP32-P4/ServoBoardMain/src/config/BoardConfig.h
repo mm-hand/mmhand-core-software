@@ -12,11 +12,11 @@
 inline constexpr int TWAI_TX_PIN = 47;
 inline constexpr int TWAI_RX_PIN = 48;
 
-/** 四条飞特总线的 UART 引脚顺序必须与 HardwareMap.busIndex 一致。 */
+/** 四条飞特总线的 UART 引脚；舵机所属 BUS 由启动扫描动态发现。 */
 inline constexpr int kServoBusRxPins[NUM_BUSES] = {21, 23, 27, 33};
 inline constexpr int kServoBusTxPins[NUM_BUSES] = {20, 22, 26, 32};
 inline constexpr uint32_t kServoBusBaud = 1000000;
 /** 当前 21 关节/27 舵机拓扑版本；写入多圈 NVS 映射签名，数值不得随意修改。 */
-inline constexpr uint8_t kHardwareMappingVersion = 2;
+inline constexpr uint8_t kHardwareMappingVersion = 3;
 
 #endif // MMHAND_BOARD_CONFIG_H

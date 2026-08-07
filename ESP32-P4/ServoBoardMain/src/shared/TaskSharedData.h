@@ -17,6 +17,7 @@
 #include "../domain/RecoveryTypes.h"
 #include "../domain/SafetyTypes.h"
 #include "../domain/ServoTypes.h"
+#include "../domain/ServoRouteTypes.h"
 #include "../domain/SystemTypes.h"
 #include "../domain/TelemetryTypes.h"
 
@@ -107,6 +108,17 @@ typedef struct {
     // hardware ABS 严格越过 Reset Zero 阈值时置位，不使用 logicalOffset。
     volatile uint32_t servo_turn_overflow_bitmap; ///< hardware ABS 超 Reset Zero 阈值的 Mxx。
     volatile uint32_t servo_online_bitmap; ///< 当前确认在线的 Mxx。
+    // 动态 BUS 路由只由 ServoCommunicationTask 写入，其余任务读取该快照做门禁和诊断。
+    volatile uint32_t servo_route_valid_bitmap;       ///< 已定位到唯一 BUS 的 Mxx。
+    volatile uint32_t servo_route_controllable_bitmap;///< 唯一路由且 BUS 未超载的 Mxx。
+    volatile uint32_t servo_route_conflict_bitmap;    ///< 同 ID 在多条 BUS 响应的 Mxx。
+    volatile uint8_t servo_bus_overload_mask;         ///< bit n=BUSn 检出超过 10 台。
+    volatile uint8_t servo_bus_device_count[NUM_BUSES]; ///< 每条 BUS 实际检出数量。
+    volatile uint8_t servo_route_bus[SERVO_TOTAL_NUM];  ///< 每个 Mxx 当前 BUS，未知为 0xFF。
+    volatile uint8_t servo_route_state[SERVO_TOTAL_NUM];///< ServoRouteState 数值。
+    volatile uint8_t servo_route_scan_state;          ///< 0空闲、1全扫、2单 Mxx 重扫。
+    volatile uint8_t servo_route_scan_progress;       ///< 0..100 扫描进度。
+    volatile uint32_t servo_route_generation;         ///< 每次路由重建后递增。
     // 热插拔恢复：pending=待配置，configured=已配置多圈，failed=恢复失败。
     volatile uint32_t servo_recovery_pending_bitmap;    ///< 等待热插拔恢复的 Mxx。
     volatile uint32_t servo_multiturn_configured_bitmap; ///< 本次上电已配置多圈模式的 Mxx。

@@ -1,4 +1,12 @@
-"""由 upper_protocol_schema.json 自动生成；禁止手工编辑。"""
+"""由 upper_protocol_schema.json 自动生成的 Desktop 协议常量。
+
+职责：提供上下位机共享的包类型、命令编号和固定长度。
+线程：纯常量模块，不创建线程，可由任意线程只读导入。
+输入：tools/generate_upper_protocol.py 读取的唯一协议 schema。
+输出：供 protocol.py 和协议测试读取的不可变常量。
+状态所有权：不拥有运行状态；文件内容由生成器独占维护。
+禁止依赖：禁止手工编辑，禁止导入 UI、通信对象或业务状态。
+"""
 
 PROTOCOL_HEADER = 0xFE
 PROTOCOL_TAIL = 0xFF
@@ -28,6 +36,7 @@ PACKET_TYPE_TASK_DIAG = 0x11  # RTOS 任务诊断
 PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12  # 21 路 Manual Min/Max
 PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13  # 27 路会话 logical range
 PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14  # 产品配置指纹
+PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15  # 动态舵机 BUS 路由、冲突、容量和扫描状态
 
 # Desktop -> P4 命令。
 CMD_CALIBRATE = 0xCA  # 按当前 active scope 启动自动标定
@@ -88,6 +97,7 @@ P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_PRODUCT_FINGERPRINT,
+    PACKET_TYPE_SERVO_ROUTE_STATUS,
 })
 
 # 固定下行 payload 长度，不包含命令字。

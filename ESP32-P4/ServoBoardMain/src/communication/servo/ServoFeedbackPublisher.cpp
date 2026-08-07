@@ -10,6 +10,7 @@
 #include "../../hardware/HardwareMap.h"
 #include "../../hardware/servo/FeetechServoDriver.h"
 #include "../../hardware/servo/ServoBusRegistry.h"
+#include "../../hardware/servo/ServoRouteTable.h"
 #include "../../shared/SharedSafetyState.h"
 #include "../../system/FirmwareLog.h"
 #include "../../system/StateMachineTask.h"
@@ -19,12 +20,25 @@ namespace p4::servo {
 namespace {
 
 /** 由 Mxx 映射到其总线驱动；无效通道返回 nullptr。 */
-FeetechServoDriver* driverForMotor(uint8_t motorChannel)
+FeetechServoDriver* driverForMotor(uint8_t motorChannel,
+                                  ServoRoute* outRoute = nullptr)
 {
-    if (motorChannel >= SERVO_TOTAL_NUM) {
+    ServoRoute route;
+    route.busIndex = SERVO_ROUTE_BUS_UNKNOWN;
+    route.servoId = motorChannel < SERVO_TOTAL_NUM
+        ? motorMap[motorChannel].servoID
+        : 0xFF;
+    route.state = ServoRouteState::Unknown;
+    if (outRoute) {
+        *outRoute = route;
+    }
+    if (!servoRouteTable().resolveDetected(motorChannel, &route)) {
         return nullptr;
     }
-    return servoBusRegistry().driver(motorMap[motorChannel].busIndex);
+    if (outRoute) {
+        *outRoute = route;
+    }
+    return servoBusRegistry().driver(route.busIndex);
 }
 
 /** 检查全部在线舵机 hardware ABS，并立即关闭越界通道力矩。 */
@@ -32,8 +46,9 @@ uint32_t collectTurnOverflowMask()
 {
     uint32_t overflowMask = 0;
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        FeetechServoDriver* driver = driverForMotor(ch);
-        const uint8_t id = motorMap[ch].servoID;
+        ServoRoute route;
+        FeetechServoDriver* driver = driverForMotor(ch, &route);
+        const uint8_t id = route.servoId;
         if (!driver || !driver->isOnline(id)) {
             continue;
         }
@@ -57,8 +72,9 @@ uint32_t collectOnlineMotorMask()
 {
     uint32_t mask = 0;
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        FeetechServoDriver* driver = driverForMotor(ch);
-        if (driver && driver->isOnline(motorMap[ch].servoID)) {
+        ServoRoute route;
+        FeetechServoDriver* driver = driverForMotor(ch, &route);
+        if (driver && driver->isOnline(route.servoId)) {
             mask |= (1UL << ch);
         }
     }
@@ -76,11 +92,12 @@ void publishRecoveryState(TaskSharedData_t* sharedData)
     uint32_t configuredMask = 0;
     uint32_t failedMask = 0;
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        FeetechServoDriver* driver = driverForMotor(ch);
+        ServoRoute route;
+        FeetechServoDriver* driver = driverForMotor(ch, &route);
         if (!driver) {
             continue;
         }
-        const uint8_t id = motorMap[ch].servoID;
+        const uint8_t id = route.servoId;
         const uint32_t bit = 1UL << ch;
         if (driver->hasOnlineTransitionPending(id)) {
             pendingMask |= bit;
@@ -158,9 +175,10 @@ void publishFeedback(TaskSharedData_t* sharedData)
         servoRawData.servoFlashRawPositions[ch] =
             sharedData->multiturn_nvs_snapshot_raw[ch];
 
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* driver = driverForMotor(ch);
+        ServoRoute route;
+        FeetechServoDriver* driver = driverForMotor(ch, &route);
+        const uint8_t busIndex = route.busIndex;
+        const uint8_t id = route.servoId;
         const uint32_t bit = 1UL << ch;
         if (driver && driver->isOnline(id)) {
             const ServoFeedbackInternal& feedback =

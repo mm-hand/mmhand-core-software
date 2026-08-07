@@ -9,13 +9,11 @@
 #include <stdint.h>
 
 struct JointMapItem {
-    uint8_t busIndex; ///< 兼容的关节主舵机总线索引。
-    uint8_t servoID;  ///< 兼容的关节主舵机物理 ID。
+    uint8_t motorChannel; ///< 关节主执行器 Mxx；物理 BUS 由运行时路由表决定。
 };
 
 struct MotorMapItem {
-    uint8_t busIndex; ///< 逻辑 Mxx 对应的 UART 总线索引。
-    uint8_t servoID;  ///< 逻辑 Mxx 对应的飞特物理 ID。
+    uint8_t servoID; ///< 逻辑 Mxx 对应的全手唯一飞特物理 ID；BUS 由运行时扫描决定。
 };
 
 struct JointActuatorItem {
@@ -30,8 +28,8 @@ struct JointActuatorGroup {
     JointActuatorItem actuators[MAX_JOINT_ACTUATORS]; ///< 按主/副顺序保存的执行器。
 };
 
-extern JointMapItem jointMap[ENCODER_TOTAL_NUM]; ///< 兼容旧调用的关节主映射表。
-extern MotorMapItem motorMap[SERVO_TOTAL_NUM]; ///< Mxx 到总线/ID 的唯一映射表。
+extern JointMapItem jointMap[ENCODER_TOTAL_NUM]; ///< Jxx 到主执行器 Mxx 的机械拓扑。
+extern MotorMapItem motorMap[SERVO_TOTAL_NUM]; ///< Mxx 到全手唯一舵机 ID 的身份表，不保存物理 BUS。
 extern JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM]; ///< 关节到执行器组映射。
 
 #endif // MMHAND_HARDWARE_TYPES_H

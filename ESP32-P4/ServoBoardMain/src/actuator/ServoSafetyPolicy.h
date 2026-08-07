@@ -22,6 +22,9 @@ struct ServoSafetyContext {
     uint32_t nowMs;                   ///< 执行层当前单调时间。
     uint32_t maxTargetAgeMs;          ///< 批次最大允许年龄；0 表示不启用年龄检查。
     uint32_t onlineMotorMask;         ///< 已由反馈去抖确认在线的 Mxx 位图。
+    uint32_t routedMotorMask;         ///< 已获得唯一 BUS 路由的 Mxx 位图。
+    uint32_t controllableRouteMask;   ///< 唯一路由且 BUS 未超载的 Mxx 位图。
+    uint32_t routeConflictMask;       ///< 同 ID 在多条 BUS 响应的 Mxx 位图。
     uint32_t multiTurnUnknownMask;    ///< logical ABS 仍不可信的 Mxx 位图。
     uint32_t turnOverflowMask;        ///< 已越过 Reset Zero 阈值的 Mxx 位图。
     uint32_t logicalRangeValidMask;   ///< logicalMin/logicalMax 已同步完成的 Mxx 位图。
@@ -47,7 +50,6 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch);
  */
 ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     uint8_t commandIndex,
-                                    uint8_t motorChannel,
                                     int32_t logicalOffset,
                                     const ServoSafetyContext& context);
 

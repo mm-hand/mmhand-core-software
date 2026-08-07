@@ -13,8 +13,8 @@ static const uint8_t kProductFingerprintSchemaVersion = 1;
 static const uint32_t kProductControlModelCrc = 0x7C0F9E73UL;
 static const uint32_t kProductVisualModelCrc = 0xC1E38298UL;
 static const uint32_t kProductHardwareMapCrc = 0x9B40D3A6UL;
-static const uint32_t kProductParameterCrc = 0xDD9885FAUL;
-static const uint32_t kProductFirmwareSourceCrc = 0x355FDCE9UL;
+static const uint32_t kProductParameterCrc = 0xA10AC3F9UL;
+static const uint32_t kProductFirmwareSourceCrc = 0x44AB76E3UL;
 static const uint32_t kProductStructureCommitCrc = 0x3DD60EFDUL;
 
 #endif // PRODUCT_FINGERPRINT_GENERATED_H

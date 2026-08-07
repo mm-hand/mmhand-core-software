@@ -1,4 +1,12 @@
-"""Channel table builders for the modular control panel."""
+"""ui_control_tables.py - MMHand Desktop 模块契约。
+
+职责：构建关节与舵机通道表格并定义稳定列布局。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 
 from .ui_control_common import (
     ENCODER_COUNT,
@@ -189,14 +197,16 @@ class MotorChannelTable(QtWidgets.QTableWidget):
             group = (start, end, motors, joint_idx)
             for row in range(start, end + 1):
                 antagonist_by_row[row] = group
-        table = MotorChannelTable(len(motor_rows), 14)
+        table = MotorChannelTable(len(motor_rows), 16)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Motor", "Turn", "RawNow", "FlashRaw", "AbsNow", "Load", "Target(rel)", "Action",
-            "-", "Raw Slider", "+", "Joint Angle",
+            "Group", "Use", "Motor", "BUS", "Route", "Turn", "RawNow", "FlashRaw", "AbsNow", "Load",
+            "Target(rel)", "Action", "-", "Raw Slider", "+", "Joint Angle",
         ])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         panel.motor_turn_items = [None] * MOTOR_COUNT
+        panel.motor_bus_items = [None] * MOTOR_COUNT
+        panel.motor_route_items = [None] * MOTOR_COUNT
         panel.motor_raw_items = [None] * MOTOR_COUNT
         panel.motor_flash_raw_items = [None] * MOTOR_COUNT
         panel.motor_abs_items = [None] * MOTOR_COUNT
@@ -319,24 +329,30 @@ class MotorChannelTable(QtWidgets.QTableWidget):
                 table.setCellWidget(row, 1, pair_cell)
                 table.setSpan(pair_start, 1, pair_end - pair_start + 1, 2)
             turn = panel._make_item("-")
+            bus = panel._make_item("-")
+            route = panel._make_item("Waiting")
             raw_now = panel._make_item("-")
             flash_raw = panel._make_item("-")
             abs_now = panel._make_item("-")
             load = panel._make_item("-")
             joint = panel._make_item("-")
-            for item in (turn, raw_now, flash_raw, abs_now, load, joint):
+            for item in (bus, route, turn, raw_now, flash_raw, abs_now, load, joint):
                 apply_group_background(item, row)
+            panel.motor_bus_items[i] = bus
+            panel.motor_route_items[i] = route
             panel.motor_turn_items[i] = turn
             panel.motor_raw_items[i] = raw_now
             panel.motor_flash_raw_items[i] = flash_raw
             panel.motor_abs_items[i] = abs_now
             panel.motor_load_items[i] = load
             panel.motor_joint_items[i] = joint
-            table.setItem(row, 3, turn)
-            table.setItem(row, 4, raw_now)
-            table.setItem(row, 5, flash_raw)
-            table.setItem(row, 6, abs_now)
-            table.setItem(row, 7, load)
+            table.setItem(row, 3, bus)
+            table.setItem(row, 4, route)
+            table.setItem(row, 5, turn)
+            table.setItem(row, 6, raw_now)
+            table.setItem(row, 7, flash_raw)
+            table.setItem(row, 8, abs_now)
+            table.setItem(row, 9, load)
             spin = QtWidgets.QSpinBox()
             spin.setRange(MOTOR_ABS_CMD_MIN, MOTOR_ABS_CMD_MAX)
             spin.setSingleStep(10)
@@ -344,17 +360,17 @@ class MotorChannelTable(QtWidgets.QTableWidget):
             spin.editingFinished.connect(lambda idx=i: panel._mark_motor_target_user_set(idx))
             apply_group_widget_background(spin, row)
             panel.motor_target_spins[i] = spin
-            table.setCellWidget(row, 8, spin)
+            table.setCellWidget(row, 10, spin)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: panel.send_motor_row(idx))
             apply_group_widget_background(send, row)
             panel.motor_send_buttons[i] = send
-            table.setCellWidget(row, 9, send)
+            table.setCellWidget(row, 11, send)
             minus = QtWidgets.QPushButton("-")
             minus.setMaximumWidth(34)
             minus.clicked.connect(lambda _=False, idx=i: panel._step_motor_target(idx, -1))
             apply_group_widget_background(minus, row)
-            table.setCellWidget(row, 10, minus)
+            table.setCellWidget(row, 12, minus)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setMinimumWidth(72)
             slider.setRange(MOTOR_TARGET_SCALE_LO, MOTOR_TARGET_SCALE_HI)
@@ -363,13 +379,13 @@ class MotorChannelTable(QtWidgets.QTableWidget):
             slider.valueChanged.connect(lambda value, idx=i: panel._motor_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             panel.motor_sliders[i] = slider
-            table.setCellWidget(row, 11, slider)
+            table.setCellWidget(row, 13, slider)
             plus = QtWidgets.QPushButton("+")
             plus.setMaximumWidth(34)
             plus.clicked.connect(lambda _=False, idx=i: panel._step_motor_target(idx, 1))
             apply_group_widget_background(plus, row)
-            table.setCellWidget(row, 12, plus)
-            table.setItem(row, 13, joint)
+            table.setCellWidget(row, 14, plus)
+            table.setItem(row, 15, joint)
             panel._control_widgets.extend([spin, send, minus, slider, plus])
             if not _motor_channel_valid(i):
                 table.setRowHidden(row, True)
@@ -380,13 +396,17 @@ class MotorChannelTable(QtWidgets.QTableWidget):
         table.setColumnWidth(1, 44)
         table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(2, 58)
-        for col in (4, 5, 6):
+        table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(3, 54)
+        table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(4, 94)
+        for col in (6, 7, 8):
             table.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
             table.setColumnWidth(col, 76)
-        table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(8, 126)
-        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Stretch)
-        table.setColumnWidth(11, 150)
-        table.horizontalHeader().setSectionResizeMode(13, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(13, 82)
+        table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(10, 126)
+        table.horizontalHeader().setSectionResizeMode(13, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(13, 150)
+        table.horizontalHeader().setSectionResizeMode(15, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(15, 82)
         return table

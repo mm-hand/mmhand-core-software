@@ -253,8 +253,7 @@ static void clearCalibratedMotorAbsLimitsForJoint(TaskSharedData_t* sharedData,
             }
         }
     } else {
-        const int primaryCh = findMotorChannelByBusId(jointMap[jointIndex].busIndex,
-                                                      jointMap[jointIndex].servoID);
+        const int primaryCh = findPrimaryMotorChannelForJoint(jointIndex);
         if (primaryCh >= 0 && primaryCh < SERVO_TOTAL_NUM) {
             clearedMask |= (1UL << (uint8_t)primaryCh);
         }
@@ -403,8 +402,7 @@ static bool isJointPrimaryServoMultiTurnKnown(TaskSharedData_t* sharedData, uint
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
-    const int ch = findMotorChannelByBusId(jointMap[jointIndex].busIndex,
-                                           jointMap[jointIndex].servoID);
+    const int ch = findPrimaryMotorChannelForJoint(jointIndex);
     if (ch < 0 || ch >= SERVO_TOTAL_NUM) {
         return false;
     }
@@ -428,9 +426,7 @@ static uint32_t calibrationJointMotorMask(uint8_t jointIndex)
             }
         }
     } else {
-        const int primaryCh =
-            findMotorChannelByBusId(jointMap[jointIndex].busIndex,
-                                    jointMap[jointIndex].servoID);
+        const int primaryCh = findPrimaryMotorChannelForJoint(jointIndex);
         if (primaryCh >= 0 && primaryCh < SERVO_TOTAL_NUM) {
             motorMask |= (1UL << primaryCh);
         }
@@ -773,7 +769,9 @@ static bool calibrationBatchOverloadSafe(TaskSharedData_t* sharedData,
     }
     for (uint8_t i = 0; i < batch->count; i++) {
         const ServoTargetCommand_t& cmd = batch->commands[i];
-        const int ch = findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
+        const int ch = cmd.motorChannel < SERVO_TOTAL_NUM
+            ? cmd.motorChannel
+            : -1;
         if (ch < 0 || ch >= SERVO_TOTAL_NUM || !isMotorChannelValid((uint8_t)ch)) {
             continue;
         }
@@ -920,8 +918,6 @@ enum AutoCalibState {
 struct JointCalibContext {
     AutoCalibState state;       // 当前状态。
     uint8_t jointIndex;         // J00~J20。
-    uint8_t bus;                // 主舵机总线。
-    uint8_t servoId;            // 主舵机总线 ID。
     uint8_t motorChannel;       // 扁平化 Mxx 通道。
     int32_t directionSign;      // 舵机收绳时 ABS 增减方向。
     int8_t encoderTravelSign;   // 本轮磁编实测行程方向。
@@ -959,20 +955,19 @@ struct JointCalibContext {
     TendonRawFitBuffer fitSamples;        // 本轮 Tendon LUT 原始样本。
 };
 
-// 向批次追加或覆盖同一 bus/id 的目标，保证每帧每台舵机只有一条命令。
+// 向批次追加或覆盖同一 Mxx 的目标，保证每帧每台舵机只有一条命令。
 static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
-                                   uint8_t busIndex,
-                                   uint8_t servoId,
+                                   uint8_t motorChannel,
                                    int32_t position,
                                    uint16_t speed,
                                    uint8_t acc)
 {
-    if (!batch) {
+    if (!batch || !isMotorChannelValid(motorChannel)) {
         return false;
     }
     for (uint8_t i = 0; i < batch->count; i++) {
         ServoTargetCommand_t& existing = batch->commands[i];
-        if (existing.busIndex == busIndex && existing.servoId == servoId) {
+        if (existing.motorChannel == motorChannel) {
             existing.position = position;
             existing.speed = speed;
             existing.acc = acc;
@@ -983,8 +978,7 @@ static bool appendServoTargetLocal(ServoTargetBatch_t* batch,
         return false;
     }
     ServoTargetCommand_t& cmd = batch->commands[batch->count++];
-    cmd.busIndex = busIndex;
-    cmd.servoId = servoId;
+    cmd.motorChannel = motorChannel;
     cmd.position = position;
     cmd.speed = speed;
     cmd.acc = acc;
@@ -1003,8 +997,7 @@ static bool appendJointCalibrationTargetToBatch(ServoTargetBatch_t* batch,
         return false;
     }
     return appendServoTargetLocal(batch,
-                                  jointMap[jointIndex].busIndex,
-                                  jointMap[jointIndex].servoID,
+                                  (uint8_t)findPrimaryMotorChannelForJoint(jointIndex),
                                   primaryTarget,
                                   speed,
                                   acc);
@@ -1059,10 +1052,8 @@ static bool appendCalibrationHoldTargetsExcept(TaskSharedData_t* sharedData,
                                   motorChannel);
                     return false;
                 }
-                const MotorMapItem& map = motorMap[motorChannel];
                 if (!appendServoTargetLocal(batch,
-                                            map.busIndex,
-                                            map.servoID,
+                                            motorChannel,
                                             clampToServoPosLocal(holdAbs),
                                             params.servoSpeed,
                                             params.servoAcc)) {
@@ -1072,28 +1063,6 @@ static bool appendCalibrationHoldTargetsExcept(TaskSharedData_t* sharedData,
                                   (long)holdAbs);
                     return false;
                 }
-            }
-        } else {
-            const uint8_t bus = jointMap[jointIndex].busIndex;
-            const uint8_t id = jointMap[jointIndex].servoID;
-            int32_t holdAbs = 0;
-            if (!readLatestServoAbs(sharedData, bus, id, &holdAbs)) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL hold feedback missing J%02u bus%u id%u\r\n",
-                              jointIndex,
-                              bus,
-                              id);
-                return false;
-            }
-            if (!appendServoTargetLocal(batch,
-                                        bus,
-                                        id,
-                                        clampToServoPosLocal(holdAbs),
-                                        params.servoSpeed,
-                                        params.servoAcc)) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL append hold target J%02u abs=%ld\r\n",
-                              jointIndex,
-                              (long)holdAbs);
-                return false;
             }
         }
     }
@@ -1138,10 +1107,8 @@ static bool appendMotorCalibrationTargetToBatch(ServoTargetBatch_t* batch,
     if (!batch || !isMotorChannelValid(motorChannel)) {
         return false;
     }
-    const MotorMapItem& map = motorMap[motorChannel];
     return appendServoTargetLocal(batch,
-                                  map.busIndex,
-                                  map.servoID,
+                                  motorChannel,
                                   clampToServoPosLocal(targetAbs),
                                   params.servoSpeed,
                                   params.servoAcc);
@@ -3462,13 +3429,13 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     int32_t encoder = 0;
     int32_t absNow = 0;
     if (!readLatestEncoderSample(sharedData, ctx->jointIndex, &raw, &encoder) ||
-        !readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &absNow)) {
+        !readLatestMotorServoAbs(sharedData, ctx->motorChannel, &absNow)) {
         return false;
     }
 
     int16_t baselineLoadRaw = 0;
     const bool hasBaselineLoad =
-        readLatestServoLoad(sharedData, ctx->bus, ctx->servoId, &baselineLoadRaw);
+        readLatestMotorServoLoad(sharedData, ctx->motorChannel, &baselineLoadRaw);
     ctx->baselineLoad = hasBaselineLoad ? mmhand::servo::loadMagnitude(baselineLoadRaw) : 0;
     ctx->startSearchRaw = raw;
     ctx->startSearchEncoder = encoder;
@@ -3494,10 +3461,9 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC_BEGIN J%02u startDeg=%.3f tightDeg=dynamic totalDeg=dynamic angleMax=dynamic\r\n",
                   ctx->jointIndex,
                   kLutStartDeg);
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] START J%02u bus%u id%u abs=%ld raw=%u oriented=%ld dir=%d baselineLoad=%d speedCps=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] START J%02u M%02u abs=%ld raw=%u oriented=%ld dir=%d baselineLoad=%d speedCps=%ld\r\n",
                   ctx->jointIndex,
-                  ctx->bus,
-                  ctx->servoId,
+                  ctx->motorChannel,
                   (long)ctx->startSearchAbs,
                   (unsigned)ctx->startSearchRaw,
                   (long)ctx->startSearchEncoder,
@@ -3563,10 +3529,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             // 不再经过已经淘汰的逐关节静态参数表。
             ctx->commandSpeed = params.servoSpeed;
             ctx->commandAcc = params.servoAcc;
-            ctx->bus = jointMap[ctx->jointIndex].busIndex;
-            ctx->servoId = jointMap[ctx->jointIndex].servoID;
             const int motorChannel =
-                findMotorChannelByBusId(ctx->bus, ctx->servoId);
+                findPrimaryMotorChannelForJoint(ctx->jointIndex);
             if (motorChannel < 0 || motorChannel >= SERVO_TOTAL_NUM) {
                 failAutoCalibContext(ctx, "primary motor channel not mapped");
                 return;
@@ -3596,16 +3560,15 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             const bool encoderOk =
                 readLatestEncoderSample(sharedData, ctx->jointIndex, &raw, &encoder);
             const bool absOk =
-                readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &absNow);
+                readLatestMotorServoAbs(sharedData, ctx->motorChannel, &absNow);
             const bool rawOk =
-                readLatestServoRaw(sharedData, ctx->bus, ctx->servoId, &rawServo);
+                readLatestMotorServoRaw(sharedData, ctx->motorChannel, &rawServo);
             if (!encoderOk || !absOk || !rawOk) {
                 if ((nowMs - ctx->lastTraceMs) >= params.traceMs) {
                     ctx->lastTraceMs = nowMs;
                     logInitialFeedbackDiagnostic(sharedData,
                                                ctx->jointIndex,
-                                               ctx->bus,
-                                               ctx->servoId,
+                                               ctx->motorChannel,
                                                encoderOk,
                                                absOk,
                                                rawOk);
@@ -3615,8 +3578,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 }
                 logInitialFeedbackDiagnostic(sharedData,
                                            ctx->jointIndex,
-                                           ctx->bus,
-                                           ctx->servoId,
+                                           ctx->motorChannel,
                                            encoderOk,
                                            absOk,
                                            rawOk);
@@ -3637,10 +3599,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
 
             const int32_t turn = servoTurnFromAbs(absNow);
             if (turn != 0) {
-                FW_LOG_INFO_PRINTF("[AUTO CALIB] SKIP_NORMALIZE_TURN J%02u bus%u id%u abs=%ld raw=%d turn=%ld; calibrate from current abs\r\n",
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] SKIP_NORMALIZE_TURN J%02u M%02u abs=%ld raw=%d turn=%ld; calibrate from current abs\r\n",
                               ctx->jointIndex,
-                              ctx->bus,
-                              ctx->servoId,
+                              ctx->motorChannel,
                               (long)absNow,
                               (int)rawServo,
                               (long)turn);
@@ -3667,7 +3628,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             int32_t currentEncoder = 0;
             int32_t currentAbs = 0;
             if (!readLatestEncoderSample(sharedData, ctx->jointIndex, &currentRaw, &currentEncoder) ||
-                !readLatestServoAbs(sharedData, ctx->bus, ctx->servoId, &currentAbs)) {
+                !readLatestMotorServoAbs(sharedData, ctx->motorChannel, &currentAbs)) {
                 failAutoCalibContextWithDiag(ctx,
                                              sharedData,
                                              "lost encoder/servo feedback",
@@ -3682,7 +3643,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             }
 
             int16_t loadRaw = 0;
-            const bool hasLoad = readLatestServoLoad(sharedData, ctx->bus, ctx->servoId, &loadRaw);
+            const bool hasLoad =
+                readLatestMotorServoLoad(sharedData, ctx->motorChannel, &loadRaw);
             const int16_t loadMag = hasLoad ? mmhand::servo::loadMagnitude(loadRaw) : 0;
             const int32_t totalAbsDelta = abs32(currentAbs - ctx->startSearchAbs);
             const int32_t totalEncoderDelta =

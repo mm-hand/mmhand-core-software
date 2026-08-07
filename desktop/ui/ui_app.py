@@ -1,3 +1,12 @@
+"""ui_app.py - MMHand Desktop 模块契约。
+
+职责：创建主窗口并编排状态刷新、故障展示和各功能页面。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 import os
 import json
 import threading
@@ -130,7 +139,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._on_close_extra = on_close_extra
         self._action_callback = action_callback
         if replay_service is None:
-            from desktop.algorithm.replay_service import ReplayService
+            from desktop.replay.replay_service import ReplayService
             replay_service = ReplayService(self.backend)
         self.replay_service = replay_service
         self._pose_generate = bool(pose_generate)

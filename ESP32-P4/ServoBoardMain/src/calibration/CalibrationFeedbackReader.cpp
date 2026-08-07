@@ -69,79 +69,6 @@ bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
         sharedData, jointIndex, &raw, outEncoder);
 }
 
-bool readLatestServoAbs(TaskSharedData_t* sharedData,
-                        uint8_t bus,
-                        uint8_t id,
-                        int32_t* outAbs)
-{
-    if (!sharedData || !outAbs) {
-        return false;
-    }
-    const int channel = findMotorChannelByBusId(bus, id);
-    if (channel < 0) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[channel] == 0) {
-        return false;
-    }
-    *outAbs = servoData.servoAngles[channel];
-    return true;
-}
-
-bool readLatestServoRaw(TaskSharedData_t* sharedData,
-                        uint8_t bus,
-                        uint8_t id,
-                        int16_t* outRaw)
-{
-    if (!sharedData || !outRaw) {
-        return false;
-    }
-    const int channel = findMotorChannelByBusId(bus, id);
-    if (channel < 0) {
-        return false;
-    }
-
-    ServoAngleData_t servoData;
-    if (!sharedData->servoFeedbackQueue ||
-        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
-        servoData.onlineStatus[channel] == 0) {
-        return false;
-    }
-    *outRaw = mmhand::servo::normalizeRawSingleTurn(
-        servoData.servoRawPositions[channel]);
-    return true;
-}
-
-bool readLatestServoLoad(TaskSharedData_t* sharedData,
-                         uint8_t bus,
-                         uint8_t id,
-                         int16_t* outLoad)
-{
-    if (!sharedData || !outLoad) {
-        return false;
-    }
-    const int channel = findMotorChannelByBusId(bus, id);
-    if (channel < 0) {
-        return false;
-    }
-
-    ServoTelemetryData_t telemetry;
-    QueueHandle_t queue = sharedData->servoTelemetrySnapshotQueue
-        ? sharedData->servoTelemetrySnapshotQueue
-        : sharedData->servoTelemetryQueue;
-    if (!queue ||
-        xQueuePeek(queue, &telemetry, 0) != pdTRUE ||
-        telemetry.onlineStatus[channel] == 0) {
-        return false;
-    }
-    *outLoad = telemetry.load[channel];
-    return true;
-}
-
 bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
                              uint8_t motorChannel,
                              int32_t* outAbs)
@@ -181,15 +108,34 @@ bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
     return true;
 }
 
+bool readLatestMotorServoRaw(TaskSharedData_t* sharedData,
+                             uint8_t motorChannel,
+                             int16_t* outRaw)
+{
+    if (!sharedData || !outRaw || !isMotorChannelValid(motorChannel)) {
+        return false;
+    }
+    ServoAngleData_t servoData;
+    if (!sharedData->servoFeedbackQueue ||
+        xQueuePeek(sharedData->servoFeedbackQueue, &servoData, 0) != pdTRUE ||
+        servoData.onlineStatus[motorChannel] == 0) {
+        return false;
+    }
+    *outRaw = mmhand::servo::normalizeRawSingleTurn(
+        servoData.servoRawPositions[motorChannel]);
+    return true;
+}
+
 void logInitialFeedbackDiagnostic(TaskSharedData_t* sharedData,
                                   uint8_t jointIndex,
-                                  uint8_t bus,
-                                  uint8_t id,
+                                  uint8_t motorChannel,
                                   bool encoderOk,
                                   bool absOk,
                                   bool rawOk)
 {
-    const int channel = findMotorChannelByBusId(bus, id);
+    const int channel = isMotorChannelValid(motorChannel)
+        ? motorChannel
+        : -1;
     const uint32_t nowMs = millis();
     bool sensorQueueOk = false;
     bool sensorValid = false;
@@ -224,10 +170,10 @@ void logInitialFeedbackDiagnostic(TaskSharedData_t* sharedData,
     }
 
     FW_LOG_INFO_PRINTF(
-        "[AUTO CALIB] INIT_FEEDBACK J%02u bus%u id%u ch=%d "
+        "[AUTO CALIB] INIT_FEEDBACK J%02u M%02u "
         "encoderOk=%u absOk=%u rawOk=%u sensorQ=%u valid=%u "
         "err=0x%02X age=%lu servoQ=%u online=%u age=%lu abs=%ld raw=%d\r\n",
-        jointIndex, bus, id, channel,
+        jointIndex, motorChannel,
         encoderOk ? 1 : 0, absOk ? 1 : 0, rawOk ? 1 : 0,
         sensorQueueOk ? 1 : 0, sensorValid ? 1 : 0, sensorError,
         (unsigned long)sensorAgeMs, servoQueueOk ? 1 : 0, servoOnline,

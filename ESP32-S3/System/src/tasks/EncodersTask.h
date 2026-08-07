@@ -5,10 +5,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-// 声明外部可访问的任务句柄
+// 磁编采集任务句柄，由SystemTasks创建。
 extern TaskHandle_t xEncTask;
 
-// 编码器任务函数声明
+/** @brief 以2ms周期采集21路磁编，并覆盖写入最新值队列。 */
 void Task_Encoders(void* pvParameters);
 
 #endif // ENCODERS_TASK_H

@@ -3,42 +3,46 @@
 #include "../hal/HalEncoders.h"
 
 namespace {
+// [待确认是否关闭] 当前每约200ms打印一次21路角度，会占用921600波特率串口和CPU。
 constexpr bool kEnableEncoderDebugDump = true;
 constexpr int kEncoderDebugDumpDecimation = 100;
+// 2ms周期对应理论500Hz；实际周期还受5组SPI传输和互斥等待影响。
 constexpr uint32_t kEncoderTaskPeriodMs = 2;
 }
 
-// 浠诲姟鍙ユ焺
+// 任务句柄由SystemTasks::startSystemTasks写入。
 TaskHandle_t xEncTask = NULL;
 
-// 闃熷垪锛堝閮ㄥ０鏄庯紝鍦⊿ystemTasks涓畾涔夛級
+// 长度为1的覆盖队列，由SystemTasks创建，CanTask读取。
 extern QueueHandle_t xQueueEncoderData;
 
+// [待确认是否简化] 该计数器仅服务串口抽样打印，可改为函数内static或毫秒节拍。
 static int g_testCounter = 0;
 
 /**
- * 缂栫爜鍣ㄤ换鍔?(200Hz)
- * 璐熻矗璇诲彇缂栫爜鍣ㄥ師濮嬫暟鎹苟鍙戦€佸埌闃熷垪
+ * @brief 周期采集21路AS5047P，并把最新有效性快照交给CAN任务。
+ * @param pvParameters FreeRTOS预留任务参数，当前未使用。
+ * @note 错误通道统一写成0xFFFF，使P4不会把旧值或0误认为有效角度。
  */
 void Task_Encoders(void* pvParameters) {
+    (void)pvParameters;
     const TickType_t xFrequency = pdMS_TO_TICKS(kEncoderTaskPeriodMs);
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    
-    // 鏈湴鏁版嵁缂撳啿
+
+    // localData是提交给队列的一致快照，避免采集对象在发送过程中变化。
     EncoderData localData{};
 
     Serial.println("[Task_Encoders] Started!");
 
     for (;;) {
+        // [待确认是否简化] rawData到localData发生一次完整结构体复制，可直接调用getData(localData)。
         EncoderData rawData = encoders.getData();
-        
         localData = rawData;
 
-        // 鎵撳嵃娴嬭瘯缁撴灉 (姣?00娆″惊鐜墦鍗颁竴娆?
+        // 抽样输出Raw值；用于排查链序和FPC，不参与控制。
         if (kEnableEncoderDebugDump && (g_testCounter % kEncoderDebugDumpDecimation) == 1) {
             Serial.println(">>> Encoders (raw Angle: 0~16383)");
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-                // [ID:鏁版嵁] 鏍煎紡浼樺寲
                 Serial.printf("[%02d:%05d] ", i, localData.rawAngles[i]);
                 if ((i + 1) % 5 == 0) {
                     Serial.println();
@@ -49,32 +53,25 @@ void Task_Encoders(void* pvParameters) {
             }
         }
 
-        // 2. 澶勭悊閿欒鏍囪
+        // CAN原始角度协议用0xFFFF表示该通道不可用。
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
             if (localData.errorFlags[i]) {
-                localData.rawAngles[i] = 0xFFFF;  // 閿欒鏍囪
+                localData.rawAngles[i] = 0xFFFF;
             }
         }
 
-        // 3. 鍙戦€佸埌闃熷垪
         if (xQueueEncoderData != NULL) {
+            // 队列长度为1，覆盖写保证CanTask永远拿到最新数据，不积压旧采样。
             xQueueOverwrite(xQueueEncoderData, &localData);
-            
-            // 璋冭瘯鎵撳嵃 (姣忕涓€娆★紝閬垮厤鍒峰睆)
-            static uint32_t lastPrint = 0;
-            if (millis() - lastPrint > 1000) {
-                // Serial.println("[Task_Encoders] Queue filled OK.");
-                lastPrint = millis();
-            }
         } else {
-            // 閿欒锛氶槦鍒楁湭鍒涘缓
+            // 队列异常时限频打印，避免故障日志淹没串口。
             static uint32_t lastErr = 0;
             if (millis() - lastErr > 2000) {
                 Serial.println("[FATAL] xQueueEncoderData is NULL!");
                 lastErr = millis();
             }
         }
-        
+
         g_testCounter++;
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }

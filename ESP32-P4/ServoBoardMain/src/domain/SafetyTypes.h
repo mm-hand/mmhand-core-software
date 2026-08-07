@@ -17,7 +17,10 @@ inline constexpr uint32_t SYSTEM_FAULT_MULTITURN_UNKNOWN = 1UL << 6; ///< active
 
 enum class ServoRejectReason : uint8_t {
     None = 0,        ///< 允许发送。
-    InvalidCommand, ///< 批次数量、总线、ID 或 Mxx 映射非法。
+    InvalidCommand, ///< 批次数量或 Mxx 映射非法。
+    RouteUnknown,   ///< Mxx 尚未在四条 BUS 中获得唯一运行时路由。
+    RouteConflict,  ///< 同一个舵机 ID 在多条 BUS 上同时响应。
+    BusOverCapacity, ///< 所在 BUS 检出超过 10 台舵机，整 BUS 禁止运动。
     EmergencyStop,  ///< E-STOP 已锁存。
     InvalidOwner,   ///< 生产者不持有当前输出权。
     InvalidState,   ///< 顶层状态不允许运动。

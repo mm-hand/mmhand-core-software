@@ -1,4 +1,12 @@
-"""ControlCommandController methods for the modular control panel."""
+"""ui_control_commands.py - MMHand Desktop 模块契约。
+
+职责：实现控制面板的 Enable、Stop、E-STOP 和目标发送命令。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 
 from .ui_control_common import (
     ControlMode,
@@ -23,12 +31,26 @@ class ControlCommandController:
             self._update_connection_lights()
         mode = self._manual_submode()
         state = self._state
+        scan_state = int(getattr(state, "servo_route_scan_state", 0) or 0) if state is not None else 0
+        if scan_state:
+            self._set_status("ENABLE blocked: wait for P4 servo route scan to finish")
+            return
         missing_motors = self._active_scope_offline_motor_indices(state)
         if missing_motors:
             self._set_status(
                 "ENABLE blocked: selected servo offline ("
                 + self._format_motor_list(missing_motors)
                 + ")"
+            )
+            return
+        unroutable_motors = self._active_scope_unroutable_motor_indices(state)
+        if unroutable_motors:
+            scan_state = int(getattr(state, "servo_route_scan_state", 0) or 0) if state is not None else 0
+            reason = "P4 route scan is running" if scan_state else "duplicate ID, BUS capacity, or missing route"
+            self._set_status(
+                "ENABLE blocked: selected servo has no unique controllable BUS route ("
+                + self._format_motor_list(unroutable_motors)
+                + f"); {reason}"
             )
             return
         if mode != "motor":
@@ -235,10 +257,25 @@ class ControlCommandController:
         """Return whether feedback command allowed passes."""
         if self._app_mode not in ("manual", "teleop"):
             return True
+        if bool(getattr(self, "_encoder_common_bus_fault", False)):
+            if show_status:
+                self._set_status(
+                    "Feedback blocked: 21路磁编Raw全零，疑似图三末端至S3的公共SPI FPC短路"
+                )
+            return False
         active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
         if active_mask == 0:
             if show_status:
                 self._set_status("Feedback blocked: no active motor selected")
+            return False
+        unroutable = self._active_scope_unroutable_motor_indices(self._state)
+        if unroutable:
+            if show_status:
+                self._set_status(
+                    "Feedback blocked: no unique controllable BUS route ("
+                    + self._format_motor_list(unroutable)
+                    + ")"
+                )
             return False
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:

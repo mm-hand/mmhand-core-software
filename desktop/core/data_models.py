@@ -1,3 +1,12 @@
+"""data_models.py - MMHand Desktop 模块契约。
+
+职责：定义上位机共享的设备状态、标定状态和遥测数据模型。
+线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
+"""
 # data_models.py - 灵巧手数据模型（状态与控制合一）
 
 from dataclasses import dataclass, field
@@ -641,6 +650,19 @@ class HandModel:
     require_can_feedback: bool = False
     has_connectivity_status: bool = False
     servo_online_bitmap: int = 0
+    # P4 动态扫描得到的唯一可信路由。未收到该包时，上位机不得按旧固定 BUS 继续控制。
+    has_servo_route_status: bool = False
+    servo_route_generation: int = 0
+    servo_route_valid_bitmap: int = 0
+    servo_route_controllable_bitmap: int = 0
+    servo_route_conflict_bitmap: int = 0
+    servo_bus_overload_mask: int = 0
+    servo_route_scan_state: int = 0
+    servo_route_scan_progress: int = 0
+    servo_bus_device_count: List[int] = field(default_factory=lambda: [0] * 4)
+    servo_route_bus: List[int] = field(default_factory=lambda: [0xFF] * MOTOR_COUNT)
+    servo_route_state: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
+    servo_route_last_rx_ts: float = 0.0
     encoder_online_bitmap: int = 0
     encoder_warn_bitmap: int = 0
     encoder_fault_bitmap: int = 0
@@ -902,6 +924,42 @@ class HandModel:
         self.require_can_feedback = bool(getattr(other, "require_can_feedback", False))
         self.has_connectivity_status = bool(getattr(other, "has_connectivity_status", False))
         self.servo_online_bitmap = int(getattr(other, "servo_online_bitmap", 0) or 0)
+        self.has_servo_route_status = bool(
+            getattr(other, "has_servo_route_status", False)
+        )
+        self.servo_route_generation = int(
+            getattr(other, "servo_route_generation", 0) or 0
+        )
+        self.servo_route_valid_bitmap = int(
+            getattr(other, "servo_route_valid_bitmap", 0) or 0
+        )
+        self.servo_route_controllable_bitmap = int(
+            getattr(other, "servo_route_controllable_bitmap", 0) or 0
+        )
+        self.servo_route_conflict_bitmap = int(
+            getattr(other, "servo_route_conflict_bitmap", 0) or 0
+        )
+        self.servo_bus_overload_mask = int(
+            getattr(other, "servo_bus_overload_mask", 0) or 0
+        )
+        self.servo_route_scan_state = int(
+            getattr(other, "servo_route_scan_state", 0) or 0
+        )
+        self.servo_route_scan_progress = int(
+            getattr(other, "servo_route_scan_progress", 0) or 0
+        )
+        self.servo_bus_device_count = list(
+            getattr(other, "servo_bus_device_count", [0] * 4)
+        )
+        self.servo_route_bus = list(
+            getattr(other, "servo_route_bus", [0xFF] * MOTOR_COUNT)
+        )
+        self.servo_route_state = list(
+            getattr(other, "servo_route_state", [0] * MOTOR_COUNT)
+        )
+        self.servo_route_last_rx_ts = float(
+            getattr(other, "servo_route_last_rx_ts", 0.0) or 0.0
+        )
         self.encoder_online_bitmap = int(getattr(other, "encoder_online_bitmap", 0) or 0)
         self.encoder_warn_bitmap = int(getattr(other, "encoder_warn_bitmap", 0) or 0)
         self.encoder_fault_bitmap = int(getattr(other, "encoder_fault_bitmap", 0) or 0)

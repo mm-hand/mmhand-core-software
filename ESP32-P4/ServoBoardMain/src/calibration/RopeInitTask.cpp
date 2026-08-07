@@ -50,10 +50,8 @@ static bool appendMotorTarget(ServoTargetBatch_t* batch,
         !isMotorChannelValid(motorChannel)) {
         return false;
     }
-    const MotorMapItem& map = motorMap[motorChannel];
     ServoTargetCommand_t& command = batch->commands[batch->count++];
-    command.busIndex = map.busIndex;
-    command.servoId = map.servoID;
+    command.motorChannel = motorChannel;
     // targetAbs 是 P4 逻辑多圈坐标。最终下发前由通信任务按这一台舵机
     // 自己的 logicalOffset 转为硬件坐标并检查实际行程。
     command.position = targetAbs;

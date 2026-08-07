@@ -22,9 +22,13 @@ conda activate torch
 python -m desktop --help
 python -m desktop ui --help
 python -m desktop cli --help
+python tools/check_desktop_architecture.py
 python -m compileall -q desktop tests
 pytest -q tests
 ```
+
+正式运行模块统一使用“职责、线程、输入、输出、状态所有权、禁止依赖”六项中文文件头。
+分层边界、允许依赖和新增文件维护方式见 [ARCHITECTURE_P0.md](ARCHITECTURE_P0.md)。
 
 ROS2 功能需要当前 Python 环境能导入 `rclpy` 和 `std_msgs`。如果使用 ROS2 Jazzy，请注意它通常绑定 Python 3.12；不要把 ROS2 的 Python 3.12 site-packages 混到 Python 3.10 环境中运行。
 

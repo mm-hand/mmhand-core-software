@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from desktop.algorithm.replay_csv_loader import load_replay_csv
+from desktop.replay.replay_csv_loader import load_replay_csv
 from desktop.core.protocol import ENCODER_COUNT
 
 

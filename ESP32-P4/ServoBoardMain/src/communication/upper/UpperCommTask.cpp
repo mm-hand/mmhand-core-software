@@ -1012,6 +1012,78 @@ static void invalidateAutomaticCalibration(TaskSharedData_t* sharedData,
 }
 
 /**
+ * 上报 Mxx 到物理 BUS 的运行时路由快照。
+ *
+ * BUS 位置不再属于 HardwareMap，因此上位机必须依据本包区分扫描中、离线、
+ * 重复 ID 和 BUS 超容量。数组顺序固定为 M00..M26。
+ */
+static bool sendServoRouteStatusPacket(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return false;
+    }
+
+    uint32_t generation = 0;
+    uint32_t validMask = 0;
+    uint32_t controllableMask = 0;
+    uint32_t conflictMask = 0;
+    uint8_t overloadMask = 0;
+    uint8_t scanState = 0;
+    uint8_t scanProgress = 0;
+    uint8_t busCounts[NUM_BUSES] = {0};
+    uint8_t routeBus[SERVO_TOTAL_NUM] = {0};
+    uint8_t routeState[SERVO_TOTAL_NUM] = {0};
+    {
+        SharedSafetyGuard guard;
+        generation = sharedAtomicLoad(&sharedData->servo_route_generation);
+        validMask = sharedAtomicLoad(&sharedData->servo_route_valid_bitmap);
+        controllableMask =
+            sharedAtomicLoad(&sharedData->servo_route_controllable_bitmap);
+        conflictMask =
+            sharedAtomicLoad(&sharedData->servo_route_conflict_bitmap);
+        overloadMask = sharedAtomicLoad(&sharedData->servo_bus_overload_mask);
+        scanState = sharedAtomicLoad(&sharedData->servo_route_scan_state);
+        scanProgress = sharedAtomicLoad(&sharedData->servo_route_scan_progress);
+        // 这些共享数组带 volatile，不能直接传给 memcpy。持锁后逐项生成普通局部快照，
+        // 既保留 volatile 的并发语义，也保证后续组包期间看到的是同一代路由数据。
+        for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
+            busCounts[bus] = sharedData->servo_bus_device_count[bus];
+        }
+        for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+            routeBus[motor] = sharedData->servo_route_bus[motor];
+            routeState[motor] = sharedData->servo_route_state[motor];
+        }
+    }
+
+    uint8_t buffer[96];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_SERVO_ROUTE_STATUS;
+    appendU32BigEndian(buffer, &idx, generation);
+    appendU32BigEndian(buffer, &idx, validMask);
+    appendU32BigEndian(buffer, &idx, controllableMask);
+    appendU32BigEndian(buffer, &idx, conflictMask);
+    buffer[idx++] = overloadMask;
+    buffer[idx++] = scanState;
+    buffer[idx++] = scanProgress;
+    for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
+        buffer[idx++] = busCounts[bus];
+    }
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+        buffer[idx++] = routeBus[motor];
+    }
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+        buffer[idx++] = routeState[motor];
+    }
+    appendU32BigEndian(buffer, &idx, millis());
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = static_cast<uint8_t>(idx - 2U);
+    FW_SERIAL_WRITE(buffer, idx);
+    return true;
+}
+
+/**
  * 周期上报当前固件的产品指纹。
  *
  * 上位机将这些 CRC 写入每次 run_data 的 meta.json，后续分析可以精确确认
@@ -2025,6 +2097,8 @@ void upperCommunicationTask(void* parameter)
     uint32_t lastFeedbackCollisionTransitionSent = 0;
     uint32_t lastSystemStatusSentMs = 0;
     bool systemStatusSentInitialized = false;
+    uint32_t lastServoRouteGenerationSent = 0xFFFFFFFFUL;
+    uint32_t lastServoRouteStatusSentMs = 0;
     uint32_t lastManualReferenceSentMs = 0;
     uint32_t lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
     uint32_t lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
@@ -2350,6 +2424,17 @@ void upperCommunicationTask(void* parameter)
             }
             lastCalibrationDiagSequenceSent = calibDiag.sequence;
             lastCalibrationDiagSentMs = nowMs;
+        }
+
+        const uint32_t servoRouteGeneration =
+            sharedAtomicLoad(&sharedData->servo_route_generation);
+        if (servoRouteGeneration != lastServoRouteGenerationSent ||
+            (uint32_t)(nowMs - lastServoRouteStatusSentMs) >=
+                kServoRouteStatusHeartbeatMs) {
+            if (sendServoRouteStatusPacket(sharedData)) {
+                lastServoRouteGenerationSent = servoRouteGeneration;
+                lastServoRouteStatusSentMs = nowMs;
+            }
         }
 
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_UPPER_COMM);

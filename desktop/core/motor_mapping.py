@@ -1,4 +1,12 @@
-"""Shared motor/joint mapping helpers used by desktop controls and plots."""
+"""motor_mapping.py - MMHand Desktop 模块契约。
+
+职责：维护 J00-J20 与 M00-M26 的稳定映射和位图换算。
+线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
+"""
 
 from .protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 

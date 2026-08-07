@@ -1,17 +1,20 @@
 #include "HalTWAI.h"
 #include <cstring>
 
-// Global instance
+// 全局唯一TWAI对象，任务层直接调用。
 HalTWAI twaiBus;
 
 namespace {
+// 错误详情每帧最多7路，21路恰好拆成3帧。
 constexpr uint8_t kErrorCodesPerFrame = 7;
 constexpr uint8_t kErrorFrameCount =
     (ENCODER_TOTAL_NUM + kErrorCodesPerFrame - 1) / kErrorCodesPerFrame;
 
+// DIAAGC bit11=MAGL、bit10=MAGH；命名与AS5047P手册一致。
 constexpr uint16_t kDiagMagLowBit = 0x0800;
 constexpr uint16_t kDiagMagHighBit = 0x0400;
 
+/** @brief 取触觉三轴最大幅值，用于摘要噪声门限。 */
 uint8_t tactileAxisMagnitude(const uint8_t* axes) {
     const int x = abs((int8_t)axes[0]);
     const int y = abs((int8_t)axes[1]);
@@ -22,7 +25,9 @@ uint8_t tactileAxisMagnitude(const uint8_t* axes) {
     return (uint8_t)value;
 }
 
+/** @brief 按配置门限过滤一组三轴触觉摘要。 */
 void writeFilteredTactileSummary(uint8_t* dst, const uint8_t* src) {
+    // [待确认是否简化] 当前门限为0，除全零外不会过滤任何值。
     if (tactileAxisMagnitude(src) <= TACTILE_SUMMARY_NOISE_FLOOR) {
         dst[0] = 0;
         dst[1] = 0;
@@ -34,6 +39,7 @@ void writeFilteredTactileSummary(uint8_t* dst, const uint8_t* src) {
     dst[2] = src[2];
 }
 
+/** @brief CRC16-CCITT逐位算法，初值0xFFFF、多项式0x1021。 */
 uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; i++) {
@@ -50,6 +56,7 @@ uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
 }
 } // namespace
 
+// 编译期检查CAN ID范围、分帧数量和标准帧DLC，防止改规模后静默越界。
 static_assert(
     kErrorFrameCount ==
         (CAN_ID_ERROR_DETAIL_LAST - CAN_ID_ERROR_DETAIL_BASE + 1),
@@ -70,14 +77,17 @@ static_assert(
     "Tactile full payload budget too small.");
 static_assert(CAN_ID_TAC_FULL_DUMP_LAST <= 0x7FF, "Tactile full CAN IDs must fit standard CAN.");
 
+/** @brief 初始状态为未安装TWAI驱动。 */
 HalTWAI::HalTWAI() : _is_initialized(false) {}
 
+/** @brief 安装并启动普通模式TWAI；收发均使用标准11位ID。 */
 bool HalTWAI::begin() {
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
         (gpio_num_t)PIN_TWAI_TX,
         (gpio_num_t)PIN_TWAI_RX,
         TWAI_MODE_NORMAL
     );
+    // 触觉全量调试一次可产生219帧，因此发送队列预留512深度。
     g_config.tx_queue_len = 512;
     g_config.rx_queue_len = 10;
 
@@ -88,6 +98,7 @@ bool HalTWAI::begin() {
         return false;
     }
     if (twai_start() != ESP_OK) {
+        // [待确认是否修正] 此处没有卸载已安装驱动，后续再次begin可能返回已安装错误。
         return false;
     }
 
@@ -95,6 +106,7 @@ bool HalTWAI::begin() {
     return true;
 }
 
+/** @brief 复制负载并阻塞等待最多5ms加入TWAI发送队列。 */
 bool HalTWAI::sendFrame(uint32_t id, const uint8_t *data, uint8_t len) {
     if (!_is_initialized) return false;
     if (!data || len > 8) return false;
@@ -109,6 +121,10 @@ bool HalTWAI::sendFrame(uint32_t id, const uint8_t *data, uint8_t len) {
     return (twai_transmit(&message, pdMS_TO_TICKS(5)) == ESP_OK);
 }
 
+/**
+ * @brief 将21个uint16按大端序拆成6个数据帧，再发送CRC元数据帧。
+ * @note 数据帧本身不带序号；P4依赖完整帧集合和末尾CRC拒绝跨批混帧。
+ */
 uint8_t HalTWAI::sendEncoderData(const EncoderData &encData) {
     uint8_t packet[CAN_ENC_PAYLOAD_BYTES] = {0};
     for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
@@ -136,6 +152,7 @@ uint8_t HalTWAI::sendEncoderData(const EncoderData &encData) {
         }
     }
 
+    // 序号放在CRC帧中，uint8自然回绕。
     static uint8_t seq = 0;
     const uint16_t crc = crc16Ccitt(packet, sizeof(packet));
     memset(buffer, 0, 8);
@@ -150,6 +167,7 @@ uint8_t HalTWAI::sendEncoderData(const EncoderData &encData) {
     return sent;
 }
 
+/** @brief 展平15组三轴摘要，附加CRC16后拆成7个带同序号的CAN帧。 */
 uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData) {
     uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES] = {0};
     uint8_t cursor = 0;
@@ -181,11 +199,16 @@ uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData) {
             const uint8_t idx = frame * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME + slot;
             buffer[slot + 1] = (idx < CAN_TAC_SUMMARY_PACKET_BYTES) ? packet[idx] : 0;
         }
+        // [待确认是否增强] 当前忽略单帧发送失败，调用者仍会收到并使用该批次序号。
         sendFrame(CAN_ID_TAC_SUMMARY_BASE + frame, buffer, CAN_TAC_SUMMARY_DLC);
     }
     return thisSeq;
 }
 
+/**
+ * @brief 将1530字节全量触觉流拆成7字节负载CAN帧。
+ * @warning 一批约219帧，默认关闭；开启后会显著占用1Mbit/s总线。
+ */
 void HalTWAI::sendTactileFullDump(const TactileData &tacData, uint8_t seq) {
     uint8_t buffer[CAN_TAC_FULL_DLC] = {0};
     uint16_t frameIdx = 0;
@@ -200,6 +223,7 @@ void HalTWAI::sendTactileFullDump(const TactileData &tacData, uint8_t seq) {
         sendFrame(CAN_ID_TAC_FULL_DUMP_BASE + frameIdx, buffer, CAN_TAC_FULL_DLC);
         frameIdx++;
         slot = 0;
+        // 每64帧主动让出1ms，降低长批次对其他任务的连续阻塞。
         if ((frameIdx & 0x3F) == 0) {
             delay(1);
         }
@@ -234,6 +258,7 @@ void HalTWAI::sendTactileFullDump(const TactileData &tacData, uint8_t seq) {
     }
 }
 
+/** @brief 仅对Z轴活动明显的模块发送最小值、最大值、绝对和和非零数。 */
 void HalTWAI::sendTactileRawDiag(const TactileData &tacData) {
     static uint8_t seq = 0;
     const uint8_t thisSeq = seq++;
@@ -279,33 +304,7 @@ void HalTWAI::sendTactileRawDiag(const TactileData &tacData) {
     }
 }
 
-bool HalTWAI::sendCalibrationAck(bool success) {
-    if (!_is_initialized) return false;
-
-    twai_message_t message;
-    message.identifier = 0x300;
-    message.extd = 0;
-    message.rtr = 0;
-    message.data_length_code = 1;
-    message.data[0] = success ? 0x01 : 0x00;
-
-    return (twai_transmit(&message, 0) == ESP_OK);
-}
-
-bool HalTWAI::receiveMonitor(RemoteCommand *outCmd) {
-    if (!_is_initialized) return false;
-
-    twai_message_t message;
-    if (twai_receive(&message, 0) == ESP_OK) {
-        if (outCmd) {
-            outCmd->cmd_type = message.data[0];
-            outCmd->is_new = true;
-        }
-        return true;
-    }
-    return false;
-}
-
+/** @brief 把内部错误位组合压缩为P4协议定义的单字节错误码。 */
 uint8_t HalTWAI::encodeFaultCode(uint16_t rawLatchedError, uint16_t errorFlag) {
     if (errorFlag == 0) {
         return 0x00; // OK
@@ -365,8 +364,7 @@ uint8_t HalTWAI::encodeFaultCode(uint16_t rawLatchedError, uint16_t errorFlag) {
     return 0xF0; // UNKNOWN_RAW
 }
 
-// [seq + 7 routes] x 3 frames:
-// 0x1F0 => idx 0..6, 0x1F1 => idx 7..13, 0x1F2 => idx 14..20
+// 三帧格式均为[seq + 7路错误码]：0x1F0覆盖J00~J06，依次到J20。
 void HalTWAI::sendErrorStatus(const EncoderData &data) {
     bool hasError = false;
     for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
@@ -399,6 +397,7 @@ void HalTWAI::sendErrorStatus(const EncoderData &data) {
     seq++;
 }
 
+/** @brief 维护TWAI状态机：bus-off发起恢复、STOPPED尝试重新启动。 */
 bool HalTWAI::maintain() {
     twai_status_info_t status_info;
 
@@ -420,6 +419,7 @@ bool HalTWAI::maintain() {
         return false;
     }
 
+    // [待确认是否限频] 计数持续超限时该日志会在4ms CanTask循环中反复打印。
     if (status_info.tx_error_counter > 100 || status_info.rx_error_counter > 100) {
         Serial.printf(
             "[CAN WARN] High Error Count! Tx:%d Rx:%d\n",

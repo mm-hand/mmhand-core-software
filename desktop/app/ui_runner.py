@@ -1,4 +1,12 @@
-"""UI mode runner with optional ROS2 joint-target input."""
+"""ui_runner.py - MMHand Desktop 模块契约。
+
+职责：装配 HandBackend、Qt 主界面和可选 ROS2 输入桥。
+线程：在进程主线程执行；仅负责创建和关闭 CLI、Qt 及可选 ROS2 生命周期。
+输入：命令行参数、环境变量和启动配置。
+输出：已装配的应用服务、进程退出码和启动诊断。
+状态所有权：只拥有启动期配置与生命周期句柄，不拥有设备运行状态。
+禁止依赖：禁止实现协议解析、控制算法和设备安全判断，统一委托 core/服务层。
+"""
 
 from __future__ import annotations
 
@@ -82,7 +90,7 @@ def _run_replay_gui(
     ros2_enabled: bool = False,
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
-    from desktop.algorithm.replay_service import ReplayService
+    from desktop.replay.replay_service import ReplayService
     replay_service = ReplayService(backend)
 
     from desktop.ui.ui_app import HandGUI

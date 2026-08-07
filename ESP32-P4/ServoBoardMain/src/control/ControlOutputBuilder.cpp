@@ -158,12 +158,8 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
             continue;
         }
 
-        const MotorMapItem& motor = motorMap[actuator.motorChannel];
-
         JointActuatorRuntimeTarget& target = outTargets[outCount++];
         target.motorChannel = actuator.motorChannel;
-        target.busIndex = motor.busIndex;
-        target.servoId = motor.servoID;
         target.sign = actuator.sign;
         target.targetAbs = clampServoPos(primaryTargetAbs + actuator.offset);
     }
@@ -172,20 +168,19 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
 
 // 向 batch 追加一个舵机目标。
 bool appendServoTarget(ServoTargetBatch_t* batch,
-                       uint8_t busIndex,
-                       uint8_t servoId,
+                       uint8_t motorChannel,
                        int32_t position,
                        uint16_t speed,
                        uint8_t acc)
 {
     // 舵机目标队列使用固定大小 batch，即使调用方传入过多执行器，
     // 也不能写出 SERVO_TARGET_BATCH_MAX。
-    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX) {
+    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX ||
+        !isMotorChannelValid(motorChannel)) {
         return false;
     }
     ServoTargetCommand_t& cmd = batch->commands[batch->count++];
-    cmd.busIndex = busIndex;
-    cmd.servoId = servoId;
+    cmd.motorChannel = motorChannel;
     cmd.position = position;
     cmd.speed = speed;
     cmd.acc = acc;
@@ -210,8 +205,7 @@ uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
     for (uint8_t i = 0; i < targetCount; i++) {
         // 统计成功追加的数量，调用方可据此回退到保持当前位置。
         if (appendServoTarget(batch,
-                              targets[i].busIndex,
-                              targets[i].servoId,
+                              targets[i].motorChannel,
                               targets[i].targetAbs,
                               speed,
                               acc)) {
@@ -235,8 +229,7 @@ uint8_t appendJointActuatorRuntimeTargets(ServoTargetBatch_t* batch,
     for (uint8_t i = 0; i < targetCount; i++) {
         // 运行时目标已包含 offset 和方向相关决策。
         if (appendServoTarget(batch,
-                              targets[i].busIndex,
-                              targets[i].servoId,
+                              targets[i].motorChannel,
                               targets[i].targetAbs,
                               speed,
                               acc)) {

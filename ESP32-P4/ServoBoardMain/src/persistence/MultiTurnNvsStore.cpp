@@ -26,7 +26,7 @@ static const char* kSlot0Key = "slot0";
 static const char* kSlot1Key = "slot1";
 static const char* kEnabledKey = "enabled";
 static const uint32_t kMagic = 0x4D544E31UL; // MTN1
-static const uint16_t kVersion = 2;
+static const uint16_t kVersion = 3;
 static bool g_nvsReady = false;
 
 static bool ensureNvsReady()
@@ -67,7 +67,8 @@ static uint32_t snapshotCrc(const MultiTurnNvsSnapshot& snapshot)
 static uint32_t mappingSignature()
 {
     uint32_t crc = 0;
-    // 保留原 V2 签名值 2，使重构前写入的快照仍能通过映射校验。
+    // BUS 是运行时接线结果，不属于持久化拓扑。签名只绑定 Mxx/Jxx 的
+    // 逻辑身份；舵机换到另一条 BUS 后仍可恢复同一份多圈快照。
     uint8_t byte = kHardwareMappingVersion;
     crc = crc32Update(crc, &byte, 1);
     byte = (uint8_t)SERVO_TOTAL_NUM;
@@ -76,8 +77,7 @@ static uint32_t mappingSignature()
     crc = crc32Update(crc, &byte, 1);
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t values[3] = {
-            motorMap[ch].busIndex,
+        const uint8_t values[2] = {
             motorMap[ch].servoID,
             (uint8_t)(getMotorTendonShortenAbsSign(ch) < 0 ? 0xFF : 0x01),
         };
@@ -85,11 +85,8 @@ static uint32_t mappingSignature()
     }
 
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
-        uint8_t values[2] = {
-            jointMap[joint].busIndex,
-            jointMap[joint].servoID,
-        };
-        crc = crc32Update(crc, values, sizeof(values));
+        byte = jointMap[joint].motorChannel;
+        crc = crc32Update(crc, &byte, 1);
 
         const JointActuatorGroup& group = jointActuatorGroups[joint];
         byte = group.count;

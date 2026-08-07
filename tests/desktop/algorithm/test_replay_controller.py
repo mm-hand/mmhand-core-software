@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import manual_encoder_reference_entry_crc
-from desktop.algorithm.replay_controller import (
+from desktop.replay.replay_controller import (
     REPLAY_TIMELINE_REBASE_THRESHOLD_SECONDS,
     ReplayController,
     replay_start_state_allowed,
 )
-from desktop.algorithm.replay_models import ReplayFrame, ReplayTrace
+from desktop.replay.replay_models import ReplayFrame, ReplayTrace
 from desktop.teleop.joint_target_adapter import active_mapping_identity
 from desktop.core.protocol import (
     ENCODER_COUNT,
@@ -262,7 +262,7 @@ def test_replay_rebases_timeline_instead_of_aborting(monkeypatch):
     backend = _Backend()
     controller = ReplayController(backend)
     monkeypatch.setattr(
-        "desktop.algorithm.replay_controller.REPLAY_TIMELINE_REBASE_THRESHOLD_SECONDS",
+        "desktop.replay.replay_controller.REPLAY_TIMELINE_REBASE_THRESHOLD_SECONDS",
         -1.0,
     )
 

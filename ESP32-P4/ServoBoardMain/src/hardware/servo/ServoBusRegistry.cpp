@@ -5,10 +5,7 @@
 #include "ServoBusRegistry.h"
 
 #include "../../config/BoardConfig.h"
-#include "../../config/ServoConfig.h"
-#include "../HardwareMap.h"
-
-using mmhand::config::servo::kOfflineProbeIntervalMs;
+#include "ServoRouteTable.h"
 
 ServoBusRegistry& servoBusRegistry()
 {
@@ -35,64 +32,18 @@ void ServoBusRegistry::begin()
     initialized_ = true;
 }
 
-void ServoBusRegistry::configureMappedServosForMultiTurn()
+void ServoBusRegistry::configureRoutedServosForMultiTurn()
 {
 #if SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
-    if (configuredOnce_) {
-        return;
-    }
-
-    uint8_t configuredIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
-    uint8_t configuredCounts[NUM_BUSES] = {0};
     for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
-        const uint8_t busIndex = motorMap[channel].busIndex;
-        const uint8_t id = motorMap[channel].servoID;
-        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
+        ServoRoute route;
+        if (!servoRouteTable().resolveControllable(channel, &route)) {
             continue;
         }
-
-        bool alreadyConfigured = false;
-        for (uint8_t i = 0; i < configuredCounts[busIndex]; ++i) {
-            if (configuredIds[busIndex][i] == id) {
-                alreadyConfigured = true;
-                break;
-            }
-        }
-        if (alreadyConfigured ||
-            configuredCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
-            continue;
-        }
-
-        FeetechServoDriver* bus = driver(busIndex);
-        if (bus && bus->configureMultiTurnMode(id)) {
-            configuredIds[busIndex][configuredCounts[busIndex]++] = id;
+        FeetechServoDriver* bus = driver(route.busIndex);
+        if (bus && !bus->isMultiTurnConfigured(route.servoId)) {
+            bus->configureMultiTurnMode(route.servoId);
         }
     }
-    configuredOnce_ = true;
 #endif
-}
-
-void ServoBusRegistry::probeOneOfflineMappedServo(uint32_t nowMs)
-{
-    if (static_cast<uint32_t>(nowMs - lastOfflineProbeMs_) <
-        kOfflineProbeIntervalMs) {
-        return;
-    }
-    lastOfflineProbeMs_ = nowMs;
-
-    for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; ++offset) {
-        const uint8_t channel =
-            static_cast<uint8_t>((nextOfflineProbeChannel_ + offset) %
-                                 SERVO_TOTAL_NUM);
-        const uint8_t busIndex = motorMap[channel].busIndex;
-        const uint8_t id = motorMap[channel].servoID;
-        FeetechServoDriver* bus = driver(busIndex);
-        if (!bus || id > MAX_SERVO_ID || bus->isOnline(id)) {
-            continue;
-        }
-        nextOfflineProbeChannel_ =
-            static_cast<uint8_t>((channel + 1) % SERVO_TOTAL_NUM);
-        bus->probeFeedback(id);
-        return;
-    }
 }

@@ -1,18 +1,11 @@
-"""Central angle mapping helpers.
+"""angle_mapping.py - MMHand Desktop 模块契约。
 
-Canonical rule:
-    MANUS / retarget / IK / FK / viewer internals use URDF joint angles.
-    HandBackend.send_joint_targets() accepts J00-J20 in active-URDF degrees.
-
-Units:
-    URDF angle: radians in IK/FK code, degrees only in UI text/JSON streams.
-    Viewer angle: URDF degrees. The viewer converts degrees back to radians.
-    Legacy calibrated angle: the pre-URDF q_target degree convention retained
-    only for compatibility with older MANUS/IK producers.
-
-The calibrated mapping below is a temporary linear framework that mirrors the
-current host behavior. It must be verified on hardware. Tendon/coupled joints
-may need a non-linear or multi-motor model; they are explicitly marked.
+职责：统一 URDF、标定坐标和下位机角度空间之间的换算。
+线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
 """
 
 from __future__ import annotations

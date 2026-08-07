@@ -1,3 +1,12 @@
+"""protocol.py - MMHand Desktop 模块契约。
+
+职责：编码下行命令帧并集中暴露生成的协议常量。
+线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
+"""
 import struct
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
@@ -129,6 +138,14 @@ CALIB_DIAG_PHASE_SEQUENCE = 7
 SERVO_TARGET_OWNER_NONE = 0
 SERVO_TARGET_OWNER_CONTROL = 1
 SERVO_TARGET_OWNER_CALIBRATION = 2
+
+# 动态舵机路由状态；数值必须与 P4 ServoRouteState 保持一致。
+SERVO_ROUTE_UNKNOWN = 0
+SERVO_ROUTE_PROBING = 1
+SERVO_ROUTE_ONLINE = 2
+SERVO_ROUTE_OFFLINE = 3
+SERVO_ROUTE_CONFLICT = 4
+SERVO_ROUTE_BUS_OVERLOADED = 5
 
 # 与协议无关的控制域配置。
 DUAL_TENDON_JOINT_INDICES = (0, 4, 8, 12, 16, 20)
@@ -753,6 +770,31 @@ def parse_product_fingerprint_packet(payload: bytes) -> Optional[dict]:
         "parameter_crc": int(values[7]),
         "firmware_source_crc": int(values[8]),
         "structure_commit_crc": int(values[9]),
+    }
+
+
+def parse_servo_route_status_packet(payload: bytes) -> Optional[dict]:
+    """解析 27 台舵机在四路 BUS 上的动态发现结果。
+
+    P4 只上报已经完成提交的路由快照。扫描过程中 ``controllable_bitmap``
+    会被清零，因此 UI 不得退回使用旧的固定 BUS 映射。
+    """
+    if len(payload) != 77:
+        return None
+    generation, valid_bitmap, controllable_bitmap, conflict_bitmap = struct.unpack(
+        ">IIII", payload[:16]
+    )
+    return {
+        "generation": int(generation),
+        "valid_bitmap": int(valid_bitmap),
+        "controllable_bitmap": int(controllable_bitmap),
+        "conflict_bitmap": int(conflict_bitmap),
+        "bus_overload_mask": int(payload[16]),
+        "scan_state": int(payload[17]),
+        "scan_progress": int(payload[18]),
+        "bus_device_count": [int(value) for value in payload[19:23]],
+        "route_bus": [int(value) for value in payload[23:50]],
+        "route_state": [int(value) for value in payload[50:77]],
     }
 
 

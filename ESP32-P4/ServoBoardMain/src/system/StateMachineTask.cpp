@@ -466,6 +466,44 @@ static bool readyRequiresCan(TaskSharedData_t* sharedData)
     return sharedAtomicLoad(&sharedData->require_can_feedback) != 0;
 }
 
+/**
+ * 验证 active scope 的运行时 BUS 路由。
+ *
+ * 扫描会占用飞特 UART，因此即使扫描目标不在 active scope，也不允许在扫描
+ * 中启动新运动；扫描结束后再依据 controllable 位图区分离线、重复 ID 和超载。
+ */
+static bool requiredServoRoutesControllable(TaskSharedData_t* sharedData,
+                                            uint32_t requiredMask)
+{
+    if (!sharedData || requiredMask == 0) {
+        return false;
+    }
+    const uint8_t scanState =
+        sharedAtomicLoad(&sharedData->servo_route_scan_state);
+    const uint32_t controllableRouteMask =
+        sharedAtomicLoad(&sharedData->servo_route_controllable_bitmap);
+    const uint32_t unroutableMask = requiredMask & ~controllableRouteMask;
+    if (scanState == 0 && unroutableMask == 0) {
+        return true;
+    }
+
+    static uint32_t s_lastRouteRejectLogMs = 0;
+    const uint32_t nowMs = millis();
+    if ((uint32_t)(nowMs - s_lastRouteRejectLogMs) >= 1000U) {
+        FW_LOG_WARN_PRINTF(
+            "[STATE] servo route rejected required=0x%08lX controllable=0x%08lX blocked=0x%08lX scan=%u overload=0x%02X conflict=0x%08lX\r\n",
+            (unsigned long)requiredMask,
+            (unsigned long)controllableRouteMask,
+            (unsigned long)unroutableMask,
+            (unsigned)scanState,
+            (unsigned)sharedAtomicLoad(&sharedData->servo_bus_overload_mask),
+            (unsigned long)sharedAtomicLoad(
+                &sharedData->servo_route_conflict_bitmap));
+        s_lastRouteRejectLogMs = nowMs;
+    }
+    return false;
+}
+
 static bool requiredServosOnline(TaskSharedData_t* sharedData, const ServoAngleData_t& servoSnapshot)
 {
     const uint32_t requiredMask = readyServoRequiredMask(sharedData);
@@ -486,7 +524,7 @@ static bool requiredServosOnline(TaskSharedData_t* sharedData, const ServoAngleD
         }
     }
     if (missingMask == 0) {
-        return true;
+        return requiredServoRoutesControllable(sharedData, requiredMask);
     }
 
     static uint32_t s_lastMissingServoLogMs = 0;
@@ -528,6 +566,10 @@ static bool directMotorMaskReady(TaskSharedData_t* sharedData,
         }
     }
     if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) & requiredMask) != 0) {
+        return false;
+    }
+
+    if (!requiredServoRoutesControllable(sharedData, requiredMask)) {
         return false;
     }
     if ((sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
@@ -1022,16 +1064,20 @@ static bool beginHostControlHold(TaskSharedData_t* sharedData,
     const uint32_t activeMotorMask = readyServoRequiredMask(sharedData);
     const uint32_t onlineMask =
         sharedAtomicLoad(&sharedData->servo_online_bitmap);
+    const uint32_t controllableRouteMask =
+        sharedAtomicLoad(&sharedData->servo_route_controllable_bitmap);
     if (activeMotorMask == 0 ||
-        (onlineMask & activeMotorMask) != activeMotorMask) {
+        (onlineMask & activeMotorMask) != activeMotorMask ||
+        (controllableRouteMask & activeMotorMask) != activeMotorMask) {
         sharedAtomicStore(&sharedData->host_control_hold_status,
                           (uint8_t)HOST_CONTROL_HOLD_FAILED);
         sharedAtomicStore(&sharedData->host_control_hold_result_token, token);
         FW_LOG_WARN_PRINTF(
-            "[HOST LEASE HOLD] hardware unavailable token=%lu active=0x%08lX online=0x%08lX\r\n",
+            "[HOST LEASE HOLD] hardware unavailable token=%lu active=0x%08lX online=0x%08lX route=0x%08lX\r\n",
             (unsigned long)token,
             (unsigned long)activeMotorMask,
-            (unsigned long)onlineMask);
+            (unsigned long)onlineMask,
+            (unsigned long)controllableRouteMask);
         return false;
     }
 
@@ -1047,8 +1093,7 @@ static bool beginHostControlHold(TaskSharedData_t* sharedData,
             continue;
         }
         ServoTargetCommand_t& command = batch.commands[batch.count++];
-        command.busIndex = motorMap[motor].busIndex;
-        command.servoId = motorMap[motor].servoID;
+        command.motorChannel = motor;
         command.position = servoData.servoAngles[motor];
         // 复用当前项目的全局默认速度/加速度；Hold 目标等于当前 ABS，参数只作为驱动帧必填项。
         command.speed = SERVO_TARGET_SPEED_DEFAULT;

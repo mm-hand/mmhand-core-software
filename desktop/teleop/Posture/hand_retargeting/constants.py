@@ -1,4 +1,12 @@
-"""Shared constants for hand tracking and robot retargeting."""
+"""constants.py - MMHand Desktop 模块契约。
+
+职责：集中保存视觉手部重定向的稳定常量和默认资源路径。
+线程：接收器可在 SDK/摄像头工作线程执行；纯映射和数学函数不创建线程。
+输入：手套、骨架或视觉关键点，以及活动 URDF/标定配置。
+输出：统一 J00-J20 目标、接收状态和可诊断质量信息。
+状态所有权：接收器拥有最近输入帧；角度映射和模型配置按只读快照使用。
+禁止依赖：禁止依赖 Qt/UI 或直接写串口，目标必须经过统一角度适配和后端门禁。
+"""
 
 from pathlib import Path
 

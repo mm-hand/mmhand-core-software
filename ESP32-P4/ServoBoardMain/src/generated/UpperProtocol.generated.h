@@ -38,6 +38,7 @@ inline constexpr uint8_t PACKET_TYPE_TASK_DIAG = 0x11; ///< RTOS 任务诊断
 inline constexpr uint8_t PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12; ///< 21 路 Manual Min/Max
 inline constexpr uint8_t PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13; ///< 27 路会话 logical range
 inline constexpr uint8_t PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14; ///< 产品配置指纹
+inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵机 BUS 路由、冲突、容量和扫描状态
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
@@ -153,5 +154,6 @@ inline constexpr uint32_t kServoLogicalRangeHeartbeatMs = 500; ///< 对应上行
 inline constexpr uint32_t kJointCalibSnapshotHeartbeatMs = 1000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 inline constexpr uint32_t kManualEncoderReferenceHeartbeatMs = 1000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 inline constexpr uint32_t kProductFingerprintHeartbeatMs = 2000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
+inline constexpr uint32_t kServoRouteStatusHeartbeatMs = 500; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 
 #endif // MMHAND_UPPER_PROTOCOL_GENERATED_H

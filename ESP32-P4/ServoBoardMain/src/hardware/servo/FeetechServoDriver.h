@@ -232,12 +232,18 @@ public:
     }
 
     /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
-    bool probeFeedback(uint8_t id)
+    bool probeFeedback(uint8_t id,
+                       uint16_t timeoutMs = SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT)
     {
         if (!_serial || id > MAX_SERVO_ID) {
             return false;
         }
-        if (_sms.FeedBack(id) < 0) {
+        // 扫描阶段临时缩短单播超时，避免一个不存在的 ID 长时间阻塞四条 BUS。
+        const unsigned long previousTimeout = _sms.IOTimeOut;
+        _sms.IOTimeOut = timeoutMs == 0 ? 1 : timeoutMs;
+        const int feedbackResult = _sms.FeedBack(id);
+        _sms.IOTimeOut = previousTimeout;
+        if (feedbackResult < 0) {
             markReadFailure(id);
             return false;
         }

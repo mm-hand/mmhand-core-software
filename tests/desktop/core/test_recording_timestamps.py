@@ -12,7 +12,7 @@ from desktop.core.data_recording.topic_schema import (
     DEFAULT_TOPICS,
     TOPIC_FIELDNAMES,
 )
-from desktop.algorithm.replay_csv_loader import load_replay_csv
+from desktop.replay.replay_csv_loader import load_replay_csv
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.protocol import (
     PACKET_TYPE_PROTO_ACK,

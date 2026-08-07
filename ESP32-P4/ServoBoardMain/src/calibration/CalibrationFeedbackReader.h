@@ -25,24 +25,6 @@ bool readLatestEncoderOriented(TaskSharedData_t* sharedData,
                                uint8_t jointIndex,
                                int32_t* outEncoder);
 
-/** 按 bus/id 读取 P4 logical ABS；该值包含多圈恢复 offset，不是舵机单圈 raw。 */
-bool readLatestServoAbs(TaskSharedData_t* sharedData,
-                        uint8_t bus,
-                        uint8_t id,
-                        int32_t* outAbs);
-
-/** 按 bus/id 读取归一化到 0..4095 的舵机单圈 raw。 */
-bool readLatestServoRaw(TaskSharedData_t* sharedData,
-                        uint8_t bus,
-                        uint8_t id,
-                        int16_t* outRaw);
-
-/** 按 bus/id 读取飞特有符号 load 原值；调用方自行决定取方向或幅值。 */
-bool readLatestServoLoad(TaskSharedData_t* sharedData,
-                         uint8_t bus,
-                         uint8_t id,
-                         int16_t* outLoad);
-
 /** 按扁平 Mxx 通道读取 P4 logical ABS，避免调用方重复做 bus/id 映射。 */
 bool readLatestMotorServoAbs(TaskSharedData_t* sharedData,
                              uint8_t motorChannel,
@@ -53,11 +35,15 @@ bool readLatestMotorServoLoad(TaskSharedData_t* sharedData,
                               uint8_t motorChannel,
                               int16_t* outLoad);
 
+/** 按 Mxx 读取归一化到 0..4095 的舵机单圈 raw。 */
+bool readLatestMotorServoRaw(TaskSharedData_t* sharedData,
+                             uint8_t motorChannel,
+                             int16_t* outRaw);
+
 /** 初始反馈等待失败时输出队列、在线位和样本年龄诊断。 */
 void logInitialFeedbackDiagnostic(TaskSharedData_t* sharedData,
                                   uint8_t jointIndex,
-                                  uint8_t bus,
-                                  uint8_t id,
+                                  uint8_t motorChannel,
                                   bool encoderOk,
                                   bool absOk,
                                   bool rawOk);

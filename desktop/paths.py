@@ -1,4 +1,12 @@
-"""Shared filesystem paths for the desktop package."""
+"""paths.py - MMHand Desktop 模块契约。
+
+职责：集中解析仓库、资源、配置和运行数据目录。
+线程：纯模块初始化或工具调用线程执行，不创建后台线程。
+输入：包配置、路径参数或文本流。
+输出：稳定导入边界、路径或过滤后的数据。
+状态所有权：只拥有模块级不可变配置，不拥有设备运行状态。
+禁止依赖：禁止导入 Qt 控件或直接操作下位机通信。
+"""
 
 from pathlib import Path
 

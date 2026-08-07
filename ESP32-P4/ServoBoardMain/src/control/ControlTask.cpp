@@ -142,11 +142,8 @@ static uint8_t appendJointActuatorHoldTargets(ServoTargetBatch_t* batch,
             servoData.onlineStatus[actuator.motorChannel] == 0) {
             continue;
         }
-        const MotorMapItem& motor = motorMap[actuator.motorChannel];
         JointActuatorRuntimeTarget& target = targets[targetCount++];
         target.motorChannel = actuator.motorChannel;
-        target.busIndex = motor.busIndex;
-        target.servoId = motor.servoID;
         target.sign = actuator.sign;
         target.targetAbs = clampServoPos(servoData.servoAngles[actuator.motorChannel]);
     }
@@ -177,11 +174,8 @@ static uint8_t appendJointActuatorSnapshotTargets(
             servoData.onlineStatus[actuator.motorChannel] == 0) {
             continue;
         }
-        const MotorMapItem& motor = motorMap[actuator.motorChannel];
         JointActuatorRuntimeTarget& target = targets[targetCount++];
         target.motorChannel = actuator.motorChannel;
-        target.busIndex = motor.busIndex;
-        target.servoId = motor.servoID;
         target.sign = actuator.sign;
         target.targetAbs = clampServoPos(holdAbs[i]);
     }
@@ -300,7 +294,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             resetDualTendonController(jointIndex);
             return 0;
         }
-        const MotorMapItem& motor = motorMap[motorChannel];
         const uint32_t bit = (1UL << motorChannel);
         uint32_t validBitmap = 0;
         {
@@ -317,8 +310,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         }
         JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
         target.motorChannel = motorChannel;
-        target.busIndex = motor.busIndex;
-        target.servoId = motor.servoID;
         target.sign = 1;
         // 与单电机反馈使用相同的 LOCK 语义：锁定通道限制在标定 ABS 范围内，
         // 未锁定通道继续保持反馈控制，并允许运动到该范围之外。
@@ -587,9 +578,7 @@ void controlTask(void* parameter)
         memset(absolutePositionTendon, 0, sizeof(absolutePositionTendon));
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
         {
-            const uint8_t bus = jointMap[jointIndex].busIndex;
-            const uint8_t id = jointMap[jointIndex].servoID;
-            const int ch = findMotorChannelByBusId(bus, id);
+            const int ch = findPrimaryMotorChannelForJoint(jointIndex);
             if (ch >= 0 && servoData.onlineStatus[ch]) {
                 const int32_t rawAbs = servoData.servoAngles[ch];
                 absolutePositionRaw[jointIndex] = rawAbs;
@@ -1034,12 +1023,6 @@ void controlTask(void* parameter)
                     if (((activeMotorMask >> ch) & 0x1UL) == 0) {
                         continue;
                     }
-                    const uint8_t bus = motorMap[ch].busIndex;
-                    const uint8_t id = motorMap[ch].servoID;
-                    if (bus >= NUM_BUSES) {
-                        continue;
-                    }
-
                     int32_t targetPos = clampServoPos(servoData.servoAngles[ch]);
                     if (!hotplugHoldMotor[ch]) {
                         if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
@@ -1074,7 +1057,7 @@ void controlTask(void* parameter)
                     } else {
                         sweepAnchorValid[ch] = false;
                     }
-                    appendServoTarget(&targetBatch, bus, id, targetPos,
+                    appendServoTarget(&targetBatch, ch, targetPos,
                                       SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
                 }
             }
@@ -1083,9 +1066,8 @@ void controlTask(void* parameter)
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
                 // 关节模式会对每个关节独立决定：保持、使用双腱控制或输出普通 PID 目标。
-                const uint8_t bus = jointMap[jointIndex].busIndex;
-                const uint8_t id = jointMap[jointIndex].servoID;
-                const int jointMotorCh = findMotorChannelByBusId(bus, id);
+                const int jointMotorCh =
+                    findPrimaryMotorChannelForJoint(jointIndex);
                 const bool servoOnline = (jointMotorCh >= 0) && (servoData.onlineStatus[jointMotorCh] != 0);
                 bool overloadFaultActive =
                     p4::control::jointHasOverloadFault(
@@ -1110,10 +1092,6 @@ void controlTask(void* parameter)
                     (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
                 feedbackCollisionPidPushActive[jointIndex] = false;
                 feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
-
-                if (bus >= NUM_BUSES) {
-                    continue;
-                }
 
                 if (!jointInScope)
                 {

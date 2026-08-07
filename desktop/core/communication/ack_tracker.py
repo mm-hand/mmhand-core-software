@@ -1,0 +1,109 @@
+"""ack_tracker.py - P4 命令确认包的线程同步器。
+
+职责：登记最新协议 ACK，并让业务线程按命令号和发送时间等待对应确认。
+线程：RX 线程调用 ``publish``；UI/后端调用线程可并发调用 ``wait_for``。
+输入：ACK 命令号、模式、状态、P4 时间和主机接收时间。
+输出：匹配 ACK 元组或超时 ``None``，并提供单调递增 ACK 序号。
+状态所有权：本类唯一持有 Condition、最新 ACK 与 ACK sequence。
+禁止依赖：禁止发送串口、修改 HandModel、触发 UI 弹窗或解释业务状态机。
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from typing import Optional
+
+
+class AckTracker:
+    """ACK 的发布/等待协调器。"""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._last_ack: Optional[tuple] = None
+        self._last_p4_time_ms: Optional[int] = None
+        self._sequence = 0
+
+    @property
+    def condition(self) -> threading.Condition:
+        """仅供 ``LowerComputerComm._ack_lock`` 旧属性兼容。"""
+        return self._condition
+
+    @property
+    def last_ack(self) -> Optional[tuple]:
+        with self._condition:
+            return self._last_ack
+
+    @property
+    def sequence(self) -> int:
+        with self._condition:
+            return int(self._sequence)
+
+    @property
+    def last_p4_time_ms(self) -> Optional[int]:
+        """返回最近 ACK 的 P4 处理时刻，不改变历史四元素 ACK 元组契约。"""
+        with self._condition:
+            return self._last_p4_time_ms
+
+    def reset(
+        self,
+        *,
+        notify_waiters: bool = False,
+        reset_sequence: bool = False,
+    ) -> None:
+        """清除旧 ACK；默认保留跨重连单调递增的 sequence。
+
+        UI 使用 sequence 去重操作事件。连接短暂中断时若 sequence 回到零，可能把重连后
+        第一条 ACK 误判成旧事件，因此只有创建全新会话时才允许显式清零。
+        """
+        with self._condition:
+            self._last_ack = None
+            self._last_p4_time_ms = None
+            if reset_sequence:
+                self._sequence = 0
+            if notify_waiters:
+                self._condition.notify_all()
+
+    def publish(
+        self,
+        command: int,
+        mode: int,
+        status: int,
+        received_at: float,
+        p4_time_ms: Optional[int] = None,
+    ) -> int:
+        """由 RX 线程发布一个 ACK，并返回发布后的 sequence。"""
+        with self._condition:
+            # 兼容旧调用方：(cmd, mode, status, host_received_at) 必须保持四元素。
+            self._last_ack = (int(command), int(mode), int(status), float(received_at))
+            self._last_p4_time_ms = None if p4_time_ms is None else int(p4_time_ms)
+            self._sequence += 1
+            sequence = int(self._sequence)
+            self._condition.notify_all()
+            return sequence
+
+    def wait_for(
+        self,
+        command: int,
+        timeout_s: float = 1.0,
+        received_after: Optional[float] = None,
+    ) -> Optional[tuple]:
+        """等待指定命令的新 ACK，避免把上一次操作的 ACK 误当成本次成功。"""
+        deadline = time.time() + max(0.0, float(timeout_s))
+        with self._condition:
+            while True:
+                ack = self._last_ack
+                ack_is_new = (
+                    received_after is None
+                    or (
+                        ack is not None
+                        and len(ack) >= 4
+                        and float(ack[3]) >= float(received_after)
+                    )
+                )
+                if ack is not None and int(ack[0]) == int(command) and ack_is_new:
+                    return ack
+                remaining = deadline - time.time()
+                if remaining <= 0.0:
+                    return None
+                self._condition.wait(timeout=remaining)

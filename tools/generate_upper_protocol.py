@@ -169,7 +169,15 @@ def _render_python(schema: dict) -> str:
     frame = schema["frame"]
     dimensions = schema["dimensions"]
     lines = [
-        '"""由 upper_protocol_schema.json 自动生成；禁止手工编辑。"""',
+        '"""由 upper_protocol_schema.json 自动生成的 Desktop 协议常量。',
+        '',
+        '职责：提供上下位机共享的包类型、命令编号和固定长度。',
+        '线程：纯常量模块，不创建线程，可由任意线程只读导入。',
+        '输入：tools/generate_upper_protocol.py 读取的唯一协议 schema。',
+        '输出：供 protocol.py 和协议测试读取的不可变常量。',
+        '状态所有权：不拥有运行状态；文件内容由生成器独占维护。',
+        '禁止依赖：禁止手工编辑，禁止导入 UI、通信对象或业务状态。',
+        '"""',
         "",
         f"PROTOCOL_HEADER = 0x{int(frame['header']):02X}",
         f"PROTOCOL_TAIL = 0x{int(frame['tail']):02X}",

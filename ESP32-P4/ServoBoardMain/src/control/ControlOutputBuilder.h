@@ -13,8 +13,6 @@
 // 不能简单镜像生成第二个电机目标。
 struct JointActuatorRuntimeTarget {
     uint8_t motorChannel; ///< 逻辑 Mxx。
-    uint8_t busIndex;     ///< 物理 UART 总线。
-    uint8_t servoId;      ///< 飞特物理 ID。
     int8_t sign;          ///< 腱绳方向符号。
     int32_t targetAbs;    ///< P4 logical ABS。
 };
@@ -43,10 +41,9 @@ uint8_t buildJointActuatorRuntimeTargets(uint8_t jointIndex,
                                          JointActuatorRuntimeTarget* outTargets,
                                          uint8_t outCapacity);
 
-// 如果固定大小 batch 仍有空间，则追加一条 bus/id 命令。
+// 如果固定大小 batch 仍有空间，则追加一条 Mxx 命令；BUS 在执行时解析。
 bool appendServoTarget(ServoTargetBatch_t* batch,
-                       uint8_t busIndex,
-                       uint8_t servoId,
+                       uint8_t motorChannel,
                        int32_t position,
                        uint16_t speed,
                        uint8_t acc);

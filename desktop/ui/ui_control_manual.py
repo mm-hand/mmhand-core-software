@@ -1,4 +1,12 @@
-"""ControlPanelManualMixin methods for the modular control panel."""
+"""ui_control_manual.py - MMHand Desktop 模块契约。
+
+职责：实现直控模式下的舵机目标编辑和发送交互。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 
 from desktop.core.angle_mapping import get_spec
 
@@ -127,7 +135,8 @@ class ControlPanelManualMixin:
         active_motor_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
         motor_online_ready = (
             active_motor_mask != 0 and
-            not self._active_scope_offline_motor_indices(self._state)
+            not self._active_scope_offline_motor_indices(self._state) and
+            not self._active_scope_unroutable_motor_indices(self._state)
         )
         encoder_online_ready = (
             bool(active_joints) and
@@ -255,19 +264,30 @@ class ControlPanelManualMixin:
             if mode == "motor":
                 enable_ready = motor_online_ready
                 missing = self._active_scope_offline_motor_indices(self._state)
-                tooltip = (
-                    "Direct Enable requires selected servos online"
-                    if not missing
-                    else "Direct Enable blocked: offline " + self._format_motor_list(missing)
-                )
+                unroutable = self._active_scope_unroutable_motor_indices(self._state)
+                if missing:
+                    tooltip = "Direct Enable blocked: offline " + self._format_motor_list(missing)
+                elif unroutable:
+                    tooltip = (
+                        "Direct Enable blocked: no unique controllable BUS route "
+                        + self._format_motor_list(unroutable)
+                    )
+                else:
+                    tooltip = "Direct Enable requires selected servos online with unique BUS routes"
             else:
                 # 负反馈 ENABLE 检查所选磁编及对应舵机在线，但不依赖 Auto/快照。
                 # 动态工作空间仍在真正发送关节目标时执行最终保护。
                 enable_ready = motor_online_ready and encoder_online_ready
                 missing_motors = self._active_scope_offline_motor_indices(self._state)
+                unroutable = self._active_scope_unroutable_motor_indices(self._state)
                 missing_encoders = self._active_scope_offline_encoder_indices(self._state)
                 if missing_motors:
                     tooltip = "Feedback Enable blocked: servo offline " + self._format_motor_list(missing_motors)
+                elif unroutable:
+                    tooltip = (
+                        "Feedback Enable blocked: no unique controllable BUS route "
+                        + self._format_motor_list(unroutable)
+                    )
                 elif missing_encoders:
                     tooltip = "Feedback Enable blocked: encoder offline " + self._format_joint_list(missing_encoders)
                 else:
@@ -493,6 +513,13 @@ class ControlPanelManualMixin:
             if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
                 self._set_status("Release blocked: waiting for motor ABS feedback")
                 return
+            unroutable = self._active_scope_unroutable_motor_indices(state)
+            if unroutable:
+                self._set_status(
+                    "Release blocked: no unique controllable BUS route "
+                    + self._format_motor_list(unroutable)
+                )
+                return
 
             active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)
             if active_mask == 0:
@@ -572,6 +599,13 @@ class ControlPanelManualMixin:
             state = self._state
             if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
                 self._set_status("Tighten blocked: waiting for motor ABS feedback")
+                return
+            unroutable = self._active_scope_unroutable_motor_indices(state)
+            if unroutable:
+                self._set_status(
+                    "Tighten blocked: no unique controllable BUS route "
+                    + self._format_motor_list(unroutable)
+                )
                 return
 
             active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)

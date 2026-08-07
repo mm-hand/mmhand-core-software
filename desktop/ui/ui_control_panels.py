@@ -1,4 +1,12 @@
-"""Facade for the modular MMHand control panel."""
+"""ui_control_panels.py - MMHand Desktop 模块契约。
+
+职责：作为模块化 ControlPanel 的稳定门面组合各控制能力。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 
 from .ui_control_common import (
     ENCODER_COUNT,
@@ -81,6 +89,12 @@ class ControlPanel(
         self._joint_target_initialized = False
         self._joint_run_states = [False] * ENCODER_COUNT
         self._motors_by_joint = ControlScopeModel.motors_by_joint_index()
+        # 21 路磁编共用 S3 的 SPI MISO/MOSI。公共返回线被拉低时，固件可能把
+        # 0x0000 当作合法零角度并继续上报全在线；在上位机侧对这一特征做短时去抖。
+        self._encoder_common_zero_first_ts = 0.0
+        self._encoder_common_zero_last_sample_ts = 0.0
+        self._encoder_common_zero_recovery_frames = 0
+        self._encoder_common_bus_fault = False
 
     def _init_scope_and_calibration_state(self) -> None:
         """Initialize calibration state and active scope selections."""
@@ -115,6 +129,8 @@ class ControlPanel(
     def _init_motor_panel_state(self) -> None:
         """Initialize motor table state and direct-control caches."""
         self.motor_turn_items: List[QtWidgets.QTableWidgetItem] = []
+        self.motor_bus_items: List[QtWidgets.QTableWidgetItem] = []
+        self.motor_route_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
         # FlashRaw 用于比较当前单圈位置和最近一次可信 NVS 锚点。
         self.motor_flash_raw_items: List[QtWidgets.QTableWidgetItem] = []
@@ -150,6 +166,8 @@ class ControlPanel(
         self._servo_turn_overflow_popup_episode_active = False
         self._servo_turn_overflow_popup_episode_mask = 0
         self._last_servo_online_bitmap: Optional[int] = None
+        # 同一轮扫描错误只弹一次；路由恢复正常后清空签名，允许下一轮新故障再次提示。
+        self._last_servo_route_warning_signature = None
         self._last_encoder_online_bitmap: Optional[int] = None
         self._last_encoder_warn_bitmap: Optional[int] = None
         self._last_encoder_fault_bitmap: Optional[int] = None

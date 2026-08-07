@@ -161,6 +161,19 @@ void System_Init() {
     // 所有有效舵机上电先视为多圈未知，只有 NVS 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     sharedData.servo_turn_overflow_bitmap = 0;
+    sharedData.servo_route_valid_bitmap = 0;
+    sharedData.servo_route_controllable_bitmap = 0;
+    sharedData.servo_route_conflict_bitmap = 0;
+    sharedData.servo_bus_overload_mask = 0;
+    sharedData.servo_route_scan_state = 0;
+    sharedData.servo_route_scan_progress = 0;
+    sharedData.servo_route_generation = 0;
+    memset((void*)sharedData.servo_bus_device_count, 0,
+           sizeof(sharedData.servo_bus_device_count));
+    memset((void*)sharedData.servo_route_state, 0,
+           sizeof(sharedData.servo_route_state));
+    memset((void*)sharedData.servo_route_bus, SERVO_ROUTE_BUS_UNKNOWN,
+           sizeof(sharedData.servo_route_bus));
     sharedData.servo_online_bitmap = 0;
     // 上电时尚未收到任何舵机反馈，因此没有 pending 事务，也没有已配置电机。
     // 舵机连续上线两帧后，ServoCommunicationTask 会建立 pending 并完成恢复。

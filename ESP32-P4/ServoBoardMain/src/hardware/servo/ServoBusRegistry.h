@@ -1,6 +1,6 @@
 /**
  * @file ServoBusRegistry.h
- * @brief 集中持有四条飞特总线驱动，并负责一次性初始化和离线探测。
+ * @brief 集中持有四条飞特总线驱动，只负责 UART 生命周期和路由后配置。
  */
 #ifndef P4_SERVO_BUS_REGISTRY_H
 #define P4_SERVO_BUS_REGISTRY_H
@@ -9,24 +9,18 @@
 
 class ServoBusRegistry {
 public:
-    /** 按 HardwareMap.busIndex 获取驱动；越界返回 nullptr。 */
+    /** 按物理 BUS 索引获取驱动；Mxx 到 BUS 的关系由 ServoRouteTable 提供。 */
     FeetechServoDriver* driver(uint8_t busIndex);
 
     /** 使用 BoardConfig 的引脚和波特率初始化全部 UART，仅执行一次。 */
     void begin();
 
-    /** 将 HardwareMap 中出现的舵机配置为多圈模式，仅执行一次。 */
-    void configureMappedServosForMultiTurn();
-
-    /** 每个探测周期只查询一台离线舵机，避免故障设备拖慢实时总线。 */
-    void probeOneOfflineMappedServo(uint32_t nowMs);
+    /** 按当前运行时路由配置舵机多圈模式；冲突和超载 BUS 不执行写操作。 */
+    void configureRoutedServosForMultiTurn();
 
 private:
     FeetechServoDriver buses_[NUM_BUSES];
     bool initialized_ = false;
-    bool configuredOnce_ = false;
-    uint32_t lastOfflineProbeMs_ = 0;
-    uint8_t nextOfflineProbeChannel_ = 0;
 };
 
 /** 返回进程内唯一总线注册表。 */

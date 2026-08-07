@@ -6,10 +6,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-// 队列声明
+// 长度为1的覆盖队列：EncTask写入、CanTask读取，始终只保留最新磁编快照。
 extern QueueHandle_t xQueueEncoderData;
 
-// 启动系统任务
+/** @brief 创建磁编覆盖队列，并启动全部FreeRTOS任务。 */
 void startSystemTasks();
 
 #endif

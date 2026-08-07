@@ -1,26 +1,23 @@
 /**
  * @file HardwareMap.cpp
- * @brief 实现 21 关节、27 舵机、总线及双腱执行器映射。
+ * @brief 实现 21 关节、27 舵机身份及双腱执行器映射。
  */
 #include "HardwareMap.h"
 
-// 关节到主舵机映射供单腱和兼容查询使用；双腱完整所有权见 jointActuatorGroups。
+// 关节到主舵机映射供单腱查询使用；双腱完整所有权见 jointActuatorGroups。
 JointMapItem jointMap[ENCODER_TOTAL_NUM] = {
-    {0, 0},  {0, 2},  {0, 3},  {0, 4},
-    {0, 5},  {0, 7},  {1, 8},  {2, 9},
-    {1, 10}, {1, 12}, {1, 13}, {1, 14},
-    {2, 15}, {2, 17}, {2, 18}, {2, 19},
-    {3, 20}, {3, 22}, {3, 23}, {3, 24}, {3, 25}
+    {0},  {2},  {3},  {4},
+    {5},  {7},  {8},  {9},
+    {10}, {12}, {13}, {14},
+    {15}, {17}, {18}, {19},
+    {20}, {22}, {23}, {24}, {25}
 };
 
-// Mxx 到物理总线/ID 的唯一映射；当前硬件 ID 与 Mxx 编号相同。
+// Mxx 到全手唯一舵机 ID 的身份映射；物理 BUS 不属于静态拓扑。
 MotorMapItem motorMap[SERVO_TOTAL_NUM] = {
-    {0, 0},  {0, 1},  {0, 2},  {0, 3},  {0, 4},
-    {0, 5},  {0, 6},  {0, 7},  {1, 8},  {2, 9},
-    {1, 10}, {1, 11}, {1, 12}, {1, 13}, {1, 14},
-    {2, 15}, {2, 16}, {2, 17}, {2, 18}, {2, 19},
-    {3, 20}, {3, 21}, {3, 22}, {3, 23}, {3, 24},
-    {3, 25}, {3, 26}
+    {0},  {1},  {2},  {3},  {4},  {5},  {6},  {7},  {8},
+    {9},  {10}, {11}, {12}, {13}, {14}, {15}, {16}, {17},
+    {18}, {19}, {20}, {21}, {22}, {23}, {24}, {25}, {26}
 };
 
 // 舵机 ABS 到腱绳收紧坐标的方向：+1 表示 ABS 增大收绳，-1 表示减小收绳。
@@ -78,7 +75,7 @@ JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {
 
 bool isMotorMapItemValid(const MotorMapItem& item)
 {
-    return item.busIndex < NUM_BUSES && item.servoID <= MAX_SERVO_ID;
+    return item.servoID <= MAX_SERVO_ID;
 }
 
 bool isMotorChannelValid(uint8_t motorChannel)
@@ -183,12 +180,10 @@ int findPrimaryMotorChannelForJoint(uint8_t jointIndex)
     return (int)item.motorChannel;
 }
 
-int findMotorChannelByBusId(uint8_t busIndex, uint8_t servoID)
+int findMotorChannelByServoId(uint8_t servoID)
 {
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        if (isMotorChannelValid(ch) &&
-            motorMap[ch].busIndex == busIndex &&
-            motorMap[ch].servoID == servoID) {
+        if (isMotorChannelValid(ch) && motorMap[ch].servoID == servoID) {
             return (int)ch;
         }
     }

@@ -25,8 +25,7 @@ inline constexpr uint8_t HOST_CONTROL_HOLD_APPLIED = 2;
 inline constexpr uint8_t HOST_CONTROL_HOLD_FAILED = 3;
 
 struct ServoTargetCommand_t {
-    uint8_t busIndex;  ///< 目标 UART 总线索引，范围 0..NUM_BUSES-1。
-    uint8_t servoId;   ///< 飞特总线内的物理 ID。
+    uint8_t motorChannel; ///< 逻辑 Mxx；执行层在发送前解析当前 BUS 路由。
     int32_t position;  ///< P4 logical ABS counts，不是舵机 hardware ABS。
     uint16_t speed;    ///< 飞特位置命令速度参数，0 表示固件默认策略。
     uint8_t acc;       ///< 飞特位置命令加速度参数。

@@ -26,6 +26,8 @@
 
 #include "../../hardware/servo/FeetechServoDriver.h"
 #include "../../hardware/servo/ServoBusRegistry.h"
+#include "../../hardware/servo/ServoDiscoveryManager.h"
+#include "../../hardware/servo/ServoRouteTable.h"
 #include "../../recovery/MultiTurnRecoveryPolicy.h"
 #include "../../actuator/ActuatorCommandGateway.h"
 #include "../../actuator/ServoSafetyPolicy.h"
@@ -38,6 +40,60 @@ using namespace mmhand::config::servo;
 using p4::recovery::completedMotionSaveReason;
 using p4::recovery::isMultiTurnMotionState;
 using p4::recovery::isRawNearTurnEdge;
+
+/** 解析 Mxx 当前唯一物理路由；controllable=true 时同时执行 BUS 容量门禁。 */
+static FeetechServoDriver* resolveMotorDriver(uint8_t motorChannel,
+                                             ServoRoute* outRoute,
+                                             bool controllable)
+{
+    ServoRoute route;
+    const bool resolved = controllable
+        ? servoRouteTable().resolveControllable(motorChannel, &route)
+        : servoRouteTable().resolveDetected(motorChannel, &route);
+    if (!resolved) {
+        return NULL;
+    }
+    FeetechServoDriver* driver = servoBusRegistry().driver(route.busIndex);
+    if (!driver) {
+        return NULL;
+    }
+    if (outRoute) {
+        *outRoute = route;
+    }
+    return driver;
+}
+
+/** 将路由表复制到跨任务只读快照，UI 和状态机不直接访问 UART 所有者对象。 */
+static void publishServoRouteSnapshot(TaskSharedData_t* sharedData)
+{
+    if (!sharedData) {
+        return;
+    }
+    const ServoRouteSnapshot snapshot = servoRouteTable().snapshot();
+    SharedSafetyGuard guard;
+    sharedAtomicStore(&sharedData->servo_route_valid_bitmap,
+                      snapshot.validMotorMask);
+    sharedAtomicStore(&sharedData->servo_route_controllable_bitmap,
+                      snapshot.controllableMotorMask);
+    sharedAtomicStore(&sharedData->servo_route_conflict_bitmap,
+                      snapshot.conflictMotorMask);
+    sharedAtomicStore(&sharedData->servo_bus_overload_mask,
+                      snapshot.busOverloadMask);
+    sharedAtomicStore(&sharedData->servo_route_scan_state,
+                      snapshot.scanState);
+    sharedAtomicStore(&sharedData->servo_route_scan_progress,
+                      snapshot.scanProgress);
+    sharedAtomicStore(&sharedData->servo_route_generation,
+                      snapshot.generation);
+    for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
+        sharedData->servo_bus_device_count[bus] = snapshot.busDeviceCount[bus];
+    }
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+        sharedData->servo_route_bus[motor] = snapshot.routes[motor].busIndex;
+        sharedData->servo_route_state[motor] =
+            static_cast<uint8_t>(snapshot.routes[motor].state);
+    }
+}
 
 /** 向一条总线的轮询列表追加舵机 ID；已存在视为成功，容量满返回 false。 */
 static bool addReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
@@ -84,12 +140,12 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
             continue;
         }
 
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
-        if (!bus || id > MAX_SERVO_ID ||
-            !bus->isMultiTurnConfigured(id) ||
-            !bus->restoreAbsolutePosition(id, motorAbs[ch], rawToleranceCounts)) {
+        ServoRoute route;
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
+        if (!bus || !bus->isMultiTurnConfigured(route.servoId) ||
+            !bus->restoreAbsolutePosition(route.servoId,
+                                          motorAbs[ch],
+                                          rawToleranceCounts)) {
             rejected |= bit;
             continue;
         }
@@ -97,7 +153,7 @@ static bool restoreServoMultiTurnFromHost(TaskSharedData_t* sharedData,
             // New Device Reset 是用户确认“当前 raw 即新 turn0”的显式恢复。
             // 恢复成功后必须同时结束热插拔事务并清除 recoveryFailed；
             // 否则共享 Unknown 虽已清除，状态机仍会被旧失败位图阻塞。
-            bus->finishRecoveryAttempt(id, true, millis());
+            bus->finishRecoveryAttempt(route.servoId, true, millis());
         }
         restored |= bit;
     }
@@ -124,9 +180,9 @@ static void beginServoBuses()
 }
 
 /** 启动时把 HardwareMap 中全部舵机配置为多圈位置模式。 */
-static void configureMappedServosForMultiTurn()
+static void configureRoutedServosForMultiTurn()
 {
-    servoBusRegistry().configureMappedServosForMultiTurn();
+    servoBusRegistry().configureRoutedServosForMultiTurn();
 }
 
 /** 记录 logical->hardware 越界详情，供 SYSTEM_STATUS/UI 精确提示。 */
@@ -188,13 +244,14 @@ static void recordServoSafetyReject(TaskSharedData_t* sharedData,
     lastLogMs[decision.motorChannel] = nowMs;
     if (decision.reason == ServoRejectReason::LogicalRange ||
         decision.reason == ServoRejectReason::HardwareRange) {
-        FeetechServoDriver* bus = servoBusRegistry().driver(
-            motorMap[decision.motorChannel].busIndex);
+        ServoRoute route;
+        FeetechServoDriver* bus =
+            resolveMotorDriver(decision.motorChannel, &route, false);
         recordServoRangeReject(
             sharedData,
             decision.motorChannel,
             decision.requestedAbs,
-            bus ? bus->getLogicalOffset(motorMap[decision.motorChannel].servoID)
+            bus ? bus->getLogicalOffset(route.servoId)
                 : 0);
     }
     FW_LOG_WARN_PRINTF(
@@ -243,6 +300,12 @@ static uint8_t applyServoTargetBatch(TaskSharedData_t* sharedData,
     safetyContext.maxTargetAgeMs = kServoTargetMaxAgeMs;
     safetyContext.onlineMotorMask =
         sharedAtomicLoad(&sharedData->servo_online_bitmap);
+    safetyContext.routedMotorMask =
+        sharedAtomicLoad(&sharedData->servo_route_valid_bitmap);
+    safetyContext.controllableRouteMask =
+        sharedAtomicLoad(&sharedData->servo_route_controllable_bitmap);
+    safetyContext.routeConflictMask =
+        sharedAtomicLoad(&sharedData->servo_route_conflict_bitmap);
     safetyContext.multiTurnUnknownMask =
         sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap);
     safetyContext.turnOverflowMask =
@@ -272,33 +335,30 @@ static uint8_t applyServoTargetBatch(TaskSharedData_t* sharedData,
     const uint32_t nowMs = millis();
     for (uint8_t i = 0; i < batch.count && i < SERVO_TARGET_BATCH_MAX; i++) {
         const ServoTargetCommand_t& cmd = batch.commands[i];
-        FeetechServoDriver* bus = servoBusRegistry().driver(cmd.busIndex);
-        const int motorChannel =
-            findMotorChannelByBusId(cmd.busIndex, cmd.servoId);
+        ServoRoute route;
+        FeetechServoDriver* bus =
+            resolveMotorDriver(cmd.motorChannel, &route, true);
         const int32_t logicalOffset = bus
-                                          ? bus->getLogicalOffset(cmd.servoId)
+                                          ? bus->getLogicalOffset(route.servoId)
                                           : 0;
         const ServoSafetyDecision decision =
             p4::actuator::evaluateCommand(batch,
                                           i,
-                                          motorChannel >= 0
-                                              ? (uint8_t)motorChannel
-                                              : 0xFF,
                                           logicalOffset,
                                           safetyContext);
         if (!decision.allowed || !bus) {
             if (bus && decision.reason == ServoRejectReason::TurnOverflow) {
                 // 越圈后必须保持扭矩关闭，直到用户显式执行 Reset Zero。
-                bus->setTorqueEnabled(cmd.servoId, false);
+                bus->setTorqueEnabled(route.servoId, false);
             }
             recordServoSafetyReject(sharedData, decision, nowMs);
             continue;
         }
-        if (bus->setTarget(cmd.servoId,
+        if (bus->setTarget(route.servoId,
                            decision.appliedAbs,
                            cmd.speed,
                            cmd.acc)) {
-            busWritePending[cmd.busIndex] = true;
+            busWritePending[route.busIndex] = true;
             appliedCount++;
         } else {
             // 驱动硬防线再次拒绝意味着策略上下文与驱动状态发生竞态，必须留下诊断。
@@ -353,50 +413,34 @@ static void emergencyTorqueOffMappedServos(TaskSharedData_t* sharedData)
 {
     p4::actuator::clearPending(sharedData);
 
-    uint8_t disabledIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
-    uint8_t disabledCounts[NUM_BUSES] = {0};
     uint32_t requestedMask = 0;
     uint32_t torqueDisabledMask = 0;
     uint32_t torqueDisableFailedMask = 0;
 
-    for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint32_t bit = (1UL << ch);
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        if (busIndex >= NUM_BUSES || id > MAX_SERVO_ID) {
-            continue;
-        }
-
-        requestedMask |= bit;
-        bool alreadyDisabled = false;
-        for (uint8_t i = 0; i < disabledCounts[busIndex]; i++) {
-            if (disabledIds[busIndex][i] == id) {
-                alreadyDisabled = true;
-                break;
+    // E-STOP 不经过“唯一映射/每 BUS 十台”的运动门禁。即使同一 ID 被误接到
+    // 两条 BUS，也要对扫描到的每个物理地址尝试关闭力矩。
+    const ServoRouteSnapshot routes = servoRouteTable().snapshot();
+    for (uint8_t busIndex = 0; busIndex < NUM_BUSES; ++busIndex) {
+        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
+        uint32_t detectedIds = routes.detectedIdMask[busIndex];
+        for (uint8_t id = 0; id <= MAX_SERVO_ID; ++id) {
+            if ((detectedIds & (1UL << id)) == 0) {
+                continue;
+            }
+            const int motor = findMotorChannelByServoId(id);
+            if (motor < 0) {
+                continue;
+            }
+            const uint32_t bit = 1UL << static_cast<uint8_t>(motor);
+            requestedMask |= bit;
+            if (bus && bus->setTorqueEnabled(id, false)) {
+                torqueDisabledMask |= bit;
+            } else {
+                torqueDisableFailedMask |= bit;
             }
         }
-        if (alreadyDisabled) {
-            torqueDisabledMask |= bit;
-            continue;
-        }
-        if (disabledCounts[busIndex] >= MAX_SERVOS_PER_BUS) {
-            torqueDisableFailedMask |= bit;
-            continue;
-        }
-
-        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
-        if (!bus) {
-            torqueDisableFailedMask |= bit;
-            continue;
-        }
-
-        if (bus->setTorqueEnabled(id, false)) {
-            torqueDisabledMask |= bit;
-            disabledIds[busIndex][disabledCounts[busIndex]++] = id;
-        } else {
-            torqueDisableFailedMask |= bit;
-        }
     }
+    torqueDisabledMask &= ~torqueDisableFailedMask;
 
     FW_LOG_INFO_PRINTF("[SERVO E-STOP] torque-off request=0x%08lX disabled=0x%08lX failed=0x%08lX\r\n",
                   (unsigned long)requestedMask,
@@ -473,9 +517,9 @@ static void processCalibrationTrustCommit(TaskSharedData_t* sharedData,
         if ((requestMask & bit) == 0) {
             continue;
         }
-        FeetechServoDriver* bus =
-            servoBusRegistry().driver(motorMap[ch].busIndex);
-        if (bus && bus->acceptCurrentSessionAsTrusted(motorMap[ch].servoID)) {
+        ServoRoute route;
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
+        if (bus && bus->acceptCurrentSessionAsTrusted(route.servoId)) {
             acceptedMask |= bit;
         }
     }
@@ -565,14 +609,14 @@ static bool collectTrustedMultiTurnSnapshot(TaskSharedData_t* sharedData,
         if ((allowedMask & bit) == 0) {
             continue;
         }
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
-        if (!bus || !bus->isOnline(id)) {
+        ServoRoute route;
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, false);
+        if (!bus || !bus->isOnline(route.servoId)) {
             continue;
         }
-        const int16_t raw = normalizeServoRawSingleTurn(bus->getRawPosition(id));
-        const int32_t absPos = bus->getAbsolutePosition(id);
+        const int16_t raw =
+            normalizeServoRawSingleTurn(bus->getRawPosition(route.servoId));
+        const int32_t absPos = bus->getAbsolutePosition(route.servoId);
         motorAbs[ch] = absPos;
         motorRaw[ch] = raw;
         motorTurn[ch] = (int16_t)((absPos - raw) / 4096);
@@ -663,14 +707,16 @@ static void processServoOnlineTransitions(
         const uint8_t ch =
             (uint8_t)((nextChannel + offset) % SERVO_TOTAL_NUM);
         const uint32_t bit = (1UL << ch);
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
-        if (!bus || !bus->isRecoveryAttemptDue(id, nowMs)) {
+        ServoRoute route;
+        // 恢复过程会关闭力矩、改多圈模式并恢复 offset，属于物理写操作。
+        // BUS 超过十台时整条 BUS 必须保持只读，不能借恢复分支绕过容量门禁。
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
+        if (!bus || !bus->isRecoveryAttemptDue(route.servoId, nowMs)) {
             continue;
         }
         nextChannel = (uint8_t)((ch + 1) % SERVO_TOTAL_NUM);
 
+        const uint8_t id = route.servoId;
         const bool torqueOffOk = bus->setTorqueEnabled(id, false);
         bool configured = bus->isMultiTurnConfigured(id);
         if (!configured) {
@@ -719,7 +765,7 @@ static void processServoOnlineTransitions(
                       "torque_off=%u configured=%u anchor=%u anchor_src=%u trusted=%u "
                       "ready=%u failed=%u raw=%d unknown=0x%08lX\r\n",
                       (unsigned)ch,
-                      (unsigned)busIndex,
+                      (unsigned)route.busIndex,
                       (unsigned)id,
                       (unsigned)attemptNumber,
                       (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
@@ -870,9 +916,8 @@ static void cacheServoPowerLossSnapshots(
     }
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-        const uint8_t busIndex = motorMap[ch].busIndex;
-        const uint8_t id = motorMap[ch].servoID;
-        FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
+        ServoRoute route;
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, false);
         if (!bus) {
             continue;
         }
@@ -882,7 +927,7 @@ static void cacheServoPowerLossSnapshots(
         int16_t turn = 0;
         uint32_t sampleTimestampMs = 0;
         if (!bus->consumeOfflineTrustedSnapshot(
-                id, &logicalAbs, &raw, &turn, &sampleTimestampMs)) {
+                route.servoId, &logicalAbs, &raw, &turn, &sampleTimestampMs)) {
             continue;
         }
 
@@ -1061,11 +1106,11 @@ static void processServoResetZeroRequest(TaskSharedData_t* sharedData,
         if ((executableMask & bit) == 0) {
             continue;
         }
-        FeetechServoDriver* bus =
-            servoBusRegistry().driver(motorMap[ch].busIndex);
+        ServoRoute route;
+        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
         int16_t raw = 0;
         if (!bus ||
-            !bus->resetTurnCounter(motorMap[ch].servoID, &raw)) {
+            !bus->resetTurnCounter(route.servoId, &raw)) {
             sharedAtomicFetchOr(
                 &sharedData->servo_reset_zero_failed_mask, bit);
             continue;
@@ -1509,7 +1554,9 @@ void servoCommunicationTask(void* parameter)
     }
 
     beginServoBuses();
-    configureMappedServosForMultiTurn();
+    servoDiscoveryManager().begin();
+    publishServoRouteSnapshot(sharedData);
+    uint32_t configuredRouteGeneration = 0;
 
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t taskPeriodTicks = pdMS_TO_TICKS(10);
@@ -1593,6 +1640,30 @@ void servoCommunicationTask(void* parameter)
         }
         lastLoopStartMs = loopStartMs;
         taskRuntimeMarkLoopStart(TASK_RUNTIME_SERVO_COMM);
+        const uint8_t currentSystemState =
+            sharedAtomicLoad(&sharedData->system_state);
+        const bool motionActive =
+            currentSystemState == SYSTEM_STATE_RUN_DIRECT ||
+            currentSystemState == SYSTEM_STATE_RUN_FEEDBACK ||
+            currentSystemState == SYSTEM_STATE_CALIBRATION_RUNNING ||
+            currentSystemState == SYSTEM_STATE_ROPE_INIT_RUNNING;
+        const bool discoveryUsedBus =
+            servoDiscoveryManager().step(loopStartMs, motionActive);
+        publishServoRouteSnapshot(sharedData);
+        const uint32_t routeGeneration =
+            sharedAtomicLoad(&sharedData->servo_route_generation);
+        if (!servoDiscoveryManager().active() &&
+            routeGeneration != configuredRouteGeneration) {
+            configureRoutedServosForMultiTurn();
+            configuredRouteGeneration = routeGeneration;
+        }
+        if (discoveryUsedBus) {
+            // 扫描周期不混入同步读写，确保一轮最多产生一次短超时 UART 访问。
+            taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_COMM);
+            taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_COMM, false);
+            vTaskDelayUntil(&lastWakeTime, taskPeriodTicks);
+            continue;
+        }
         const uint32_t emergencyStopToken =
             sharedAtomicLoad(&sharedData->servo_emergency_stop_token);
         if (emergencyStopToken != lastEmergencyStopToken) {
@@ -1654,7 +1725,13 @@ void servoCommunicationTask(void* parameter)
                 (calibrationReadMask & (1UL << ch)) == 0) {
                 continue;
             }
-            addReadTarget(readIds, readCounts, motorMap[ch].busIndex, motorMap[ch].servoID);
+            ServoRoute route;
+            if (servoRouteTable().resolveControllable(ch, &route)) {
+                addReadTarget(readIds,
+                              readCounts,
+                              route.busIndex,
+                              route.servoId);
+            }
         }
 
         const uint8_t readStartBus = (readBusPhase == 0) ? 0 : 2;
@@ -1679,17 +1756,32 @@ void servoCommunicationTask(void* parameter)
             }
         }
         readBusPhase ^= 1;
-        // 标定持有目标时仍保持常规同步反馈，但推迟额外单舵机探测和热插拔恢复，
-        // 避免恢复事务打断双腱连续运动。
-        if (!calibrationMotionActive) {
-            servoBusRegistry().probeOneOfflineMappedServo(millis());
+#if MULTITURN_NVS_PERSISTENCE_ENABLE
+        // 必须在撤销动态路由之前消费驱动冻结的最后可信反馈；否则路由失效后
+        // 无法再定位原 BUS，RAM 热插拔锚点与掉电 NVS 快照都会丢失。
+        cacheServoPowerLossSnapshots(
+            sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
+#endif
+        // 掉线只清除该 Mxx 的运行时路由；定向重扫将在退出运动状态后逐 BUS 执行。
+        const ServoRouteSnapshot routeSnapshot = servoRouteTable().snapshot();
+        for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+            const ServoRoute& route = routeSnapshot.routes[motor];
+            if (route.busIndex >= NUM_BUSES ||
+                route.state != ServoRouteState::Online) {
+                continue;
+            }
+            FeetechServoDriver* driver =
+                servoBusRegistry().driver(route.busIndex);
+            if (driver && driver->isOfflineInvalidated(route.servoId)) {
+                servoRouteTable().markMotorOffline(motor);
+                servoDiscoveryManager().requestMotorScan(motor);
+            }
         }
+        publishServoRouteSnapshot(sharedData);
 
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
         // 掉线检测会在 sync read 中冻结最后可信反馈。必须先把它搬入独立
         // RAM 锚点，再处理重新上线事务，避免快速断电重启时恢复抢在保存前面。
-        cacheServoPowerLossSnapshots(
-            sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
         // 先吸收异步 Flash 写入结果，使恢复逻辑能看到最新已提交快照。
         processMultiTurnNvsSaveResults(sharedData, &nvsSaveState);
         processBootNvsRestore(sharedData,

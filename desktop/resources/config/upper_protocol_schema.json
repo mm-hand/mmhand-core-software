@@ -32,7 +32,8 @@
     {"name": "PACKET_TYPE_TASK_DIAG", "value": 17, "timestamp": false, "description": "RTOS 任务诊断"},
     {"name": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE", "value": 18, "timestamp": true, "description": "21 路 Manual Min/Max"},
     {"name": "PACKET_TYPE_SERVO_LOGICAL_RANGE", "value": 19, "timestamp": true, "description": "27 路会话 logical range"},
-    {"name": "PACKET_TYPE_PRODUCT_FINGERPRINT", "value": 20, "timestamp": true, "description": "产品配置指纹"}
+    {"name": "PACKET_TYPE_PRODUCT_FINGERPRINT", "value": 20, "timestamp": true, "description": "产品配置指纹"},
+    {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"}
   ],
   "commands": [
     {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},
@@ -102,7 +103,8 @@
       "kServoLogicalRangeHeartbeatMs": 500,
       "kJointCalibSnapshotHeartbeatMs": 1000,
       "kManualEncoderReferenceHeartbeatMs": 1000,
-      "kProductFingerprintHeartbeatMs": 2000
+      "kProductFingerprintHeartbeatMs": 2000,
+      "kServoRouteStatusHeartbeatMs": 500
     }
   }
 }
