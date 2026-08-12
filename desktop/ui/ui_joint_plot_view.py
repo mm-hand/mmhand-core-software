@@ -104,26 +104,11 @@ class JointRealtimePlotView(QtWidgets.QDialog):
         now = time.time()
         for idx in selected:
             self._ensure_series(idx)
-            debug_ts = 0
-            if idx < len(getattr(state, "joint_debug_timestamp_ms", [])):
-                try:
-                    debug_ts = int(state.joint_debug_timestamp_ms[idx])
-                except Exception:
-                    debug_ts = 0
-            if debug_ts > 0:
-                if idx not in self.t0_map:
-                    self.t0_map[idx] = float(debug_ts)
-                t_rel = (float(debug_ts) - self.t0_map[idx]) / 1000.0
-                actual = self._safe_get(getattr(state, "joint_debug_actual_deg", []), idx)
-                target = self._safe_get(getattr(state, "joint_debug_target_deg", []), idx)
-                if self.series_t[idx] and t_rel <= float(self.series_t[idx][-1]):
-                    continue
-            else:
-                if idx not in self.t0_map:
-                    self.t0_map[idx] = now
-                t_rel = now - self.t0_map[idx]
-                actual = self._safe_get(getattr(state, "angles", []), idx)
-                target = self._safe_get(targets or [], idx)
+            if idx not in self.t0_map:
+                self.t0_map[idx] = now
+            t_rel = now - self.t0_map[idx]
+            actual = self._safe_get(getattr(state, "angles", []), idx)
+            target = self._safe_get(targets or [], idx)
             self.series_t[idx].append(float(t_rel))
             self.series_actual[idx].append(float(actual))
             self.series_target[idx].append(float(target))

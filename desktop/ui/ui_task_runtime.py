@@ -27,6 +27,8 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("Task Runtime")
+        # 关闭即销毁，确保 UI 能在 destroyed 回调中及时退订 P4 诊断流。
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
         self.resize(1180, 430)
         self._last_logged_keys: Dict[int, Tuple[int, int]] = {}
         self._csv_file = None

@@ -7,7 +7,7 @@ $script:P4SketchPath = Join-Path $script:P4DebugWorkspace "ESP32-P4\ServoBoardMa
 $script:P4BuildPath = Join-Path $script:P4DebugWorkspace ".debug\p4"
 
 # Arduino CLI bundled with the local Arduino IDE 2.3.8 installation.
-$script:ArduinoCli = "D:\g8765\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe"
+$script:ArduinoCli = "C:\Users\g8765\arduino-ide\resources\app\lib\backend\resources\arduino-cli.exe"
 
 # ESP-IDF 5.5.2 supplies OpenOCD and RISC-V GDB only.
 $script:OpenOcdExe = "D:\esp32\Espressif\tools\openocd-esp32\v0.12.0-esp32-20250707\openocd-esp32\bin\openocd.exe"

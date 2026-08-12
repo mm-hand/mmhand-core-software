@@ -62,15 +62,9 @@ def _load_j02_series(csv_path: str) -> Tuple[List[float], List[float], List[floa
     host_ts: List[float] = []
     host_current: List[float] = []
     host_target: List[float] = []
-    debug_ts: List[float] = []
-    debug_current: List[float] = []
-    debug_target: List[float] = []
 
     curr_key = f"joint_curr_deg_j{JIDX:02d}"
     tgt_key = f"joint_target_deg_j{JIDX:02d}"
-    dbg_ts_key = f"joint_debug_ts_ms_j{JIDX:02d}"
-    dbg_tgt_key = f"joint_debug_target_deg_j{JIDX:02d}"
-    dbg_act_key = f"joint_debug_actual_deg_j{JIDX:02d}"
 
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -96,20 +90,6 @@ def _load_j02_series(csv_path: str) -> Tuple[List[float], List[float], List[floa
             host_ts.append(t)
             host_current.append(c)
             host_target.append(g)
-
-            dbg_t = _safe_float(str(row.get(dbg_ts_key, "")))
-            dbg_c = _safe_float(str(row.get(dbg_act_key, "")))
-            dbg_g = _safe_float(str(row.get(dbg_tgt_key, "")))
-            if math.isfinite(dbg_t) and math.isfinite(dbg_c) and math.isfinite(dbg_g):
-                if dbg_t > 0 and (not debug_ts or dbg_t > debug_ts[-1]):
-                    debug_ts.append(dbg_t)
-                    debug_current.append(dbg_c)
-                    debug_target.append(dbg_g)
-
-    if debug_ts:
-        t0 = debug_ts[0]
-        rel_t = [(t - t0) / 1000.0 for t in debug_ts]
-        return rel_t, debug_current, debug_target, "Device Time (s)"
 
     if not host_ts:
         raise ValueError(f"CSV 中没有可用数据行: {csv_path}")

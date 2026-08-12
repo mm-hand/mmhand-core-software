@@ -10,11 +10,11 @@
 #include <stdint.h>
 
 static const uint8_t kProductFingerprintSchemaVersion = 1;
-static const uint32_t kProductControlModelCrc = 0x7C0F9E73UL;
-static const uint32_t kProductVisualModelCrc = 0xC1E38298UL;
+static const uint32_t kProductControlModelCrc = 0xBE9EB4B1UL;
+static const uint32_t kProductVisualModelCrc = 0xA28E43D3UL;
 static const uint32_t kProductHardwareMapCrc = 0x9B40D3A6UL;
-static const uint32_t kProductParameterCrc = 0xA10AC3F9UL;
-static const uint32_t kProductFirmwareSourceCrc = 0x44AB76E3UL;
-static const uint32_t kProductStructureCommitCrc = 0x3DD60EFDUL;
+static const uint32_t kProductParameterCrc = 0xD775DA11UL;
+static const uint32_t kProductFirmwareSourceCrc = 0x0D35679AUL;
+static const uint32_t kProductStructureCommitCrc = 0x34467BF8UL;
 
 #endif // PRODUCT_FINGERPRINT_GENERATED_H

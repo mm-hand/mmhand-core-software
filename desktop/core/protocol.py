@@ -125,6 +125,11 @@ CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED = 24
 CALIB_DIAG_REASON_JOINT_STEP_FAILED = 25
 CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT = 26
 CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS = 27
+CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID = 28
+CALIB_DIAG_REASON_RESULT_SPAN_INVALID = 29
+CALIB_DIAG_REASON_RESULT_BUILD_FAILED = 30
+CALIB_DIAG_REASON_RESULT_COMMIT_FAILED = 31
+CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED = 32
 
 CALIB_DIAG_PHASE_NONE = 0
 CALIB_DIAG_PHASE_INIT = 1
@@ -186,6 +191,7 @@ CALIB_LOAD_THRESHOLD = 0.3
 ERROR_VAL_FLAG = 0xFFFF
 
 # Serial settings
+# P4 运行期 USB-UART 波特率；必须与固件 BoardConfig.h 保持一致。
 BAUDRATE = 921600
 SERIAL_TIMEOUT = 0.1
 RX_QUEUE_MAXSIZE = 200
@@ -552,8 +558,8 @@ def _unpack_float_be(data: bytes) -> float:
 
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
-    """解析当前唯一快照格式；209 为下发体，222 为带装配告警的上行体。"""
-    if len(payload) not in (209, 222):
+    """解析当前唯一 V3 快照；189 为下发体，202 为带装配告警的上行体。"""
+    if len(payload) not in (189, 202):
         return None
     idx = 0
     joint = payload[idx]
@@ -566,9 +572,6 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
         "success": bool(payload[idx]),
     }
     idx += 1
-    for key in ("encoderMin", "encoderMax", "offset"):
-        result[key] = struct.unpack(">i", payload[idx:idx + 4])[0]
-        idx += 4
     result["angleMax"] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
     for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
@@ -608,10 +611,6 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
 
     result["mappingVersion"] = int(payload[idx])
     idx += 1
-    result["encoderAtUrdfMin"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-    idx += 4
-    result["encoderAtUrdfMax"] = struct.unpack(">i", payload[idx:idx + 4])[0]
-    idx += 4
     result["angleMin"] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
     result["urdfConfigCrc"] = struct.unpack(">I", payload[idx:idx + 4])[0]
@@ -637,7 +636,7 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["assemblySpanDifferenceCounts"] = 0
     result["hasAssemblyWarningFields"] = False
     result["hasAssemblySpanComparisonFields"] = False
-    if len(payload) == 222:
+    if len(payload) == 202:
         result["assemblyWarningReason"] = int(payload[idx])
         idx += 1
         result["autoMinOffsetCounts"] = struct.unpack(
@@ -670,7 +669,9 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
 
 
 def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
-    if len(payload) < 25:
+    # 当前协议固定携带根因、诊断序号以及本轮成功/失败位图。
+    # 拒绝旧短包，避免把缺失字段误解释为“没有成功关节”。
+    if len(payload) != 37:
         return None
     idx = 0
     result = {
@@ -690,6 +691,12 @@ def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
     result["bitmap"] = struct.unpack(">I", payload[idx:idx + 4])[0]
     idx += 4
     result["timestamp_ms"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["sequence"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["completed_joint_mask"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+    idx += 4
+    result["failed_joint_mask"] = struct.unpack(">I", payload[idx:idx + 4])[0]
     return result
 
 
@@ -798,91 +805,112 @@ def parse_servo_route_status_packet(payload: bytes) -> Optional[dict]:
     }
 
 
-def parse_calib_ack(payload: bytes) -> Optional[int]:
-    if len(payload) < 1:
+def parse_safety_event_packet(payload: bytes) -> Optional[dict]:
+    """解析 P4 去重后的结构化安全事件。
+
+    ``device_timestamp_ms`` 由公共包路由器剥离，因此这里固定解析 22 字节业务字段。
+    """
+    if len(payload) != 22:
         return None
-    return payload[0]
+    (
+        sequence,
+        rule_id,
+        motor_channel,
+        joint_index,
+        system_state,
+        owner,
+        requested_value,
+        observed_value,
+        overflow_count,
+    ) = struct.unpack(">IHBBBBiiI", payload)
+    return {
+        "sequence": int(sequence),
+        "rule_id": int(rule_id),
+        "motor_channel": int(motor_channel),
+        "joint_index": int(joint_index),
+        "system_state": int(system_state),
+        "owner": int(owner),
+        "requested_value": int(requested_value),
+        "observed_value": int(observed_value),
+        "overflow_count": int(overflow_count),
+    }
 
 
-def parse_servo_angle_packet(payload: bytes) -> Optional[Tuple[List[int], List[bool]]]:
-    # Some firmware revisions upload fewer channels while newer desktop code reserves 27.
-    # Accept any payload that matches N * (4-byte angle + 1-byte online flag).
-    if not payload or (len(payload) % 5) != 0:
+def parse_servo_angle_packet(payload: bytes) -> Optional[List[int]]:
+    """解析 27 路 logical ABS；在线状态统一来自 SYSTEM_STATUS。"""
+    if len(payload) != MOTOR_COUNT * 4:
         return None
 
-    channel_count = len(payload) // 5
-    if channel_count <= 0:
-        return None
+    channel_count = MOTOR_COUNT
 
     angles: List[int] = []
     for i in range(channel_count):
         start = i * 4
         angles.append(struct.unpack(">i", payload[start:start + 4])[0])
 
-    online_flags: List[bool] = []
-    base = channel_count * 4
-    for i in range(channel_count):
-        online_flags.append(payload[base + i] == 1)
-    return angles, online_flags
+    return angles
 
 
 def parse_servo_telem_packet(
     payload: bytes,
 ) -> Optional[
-    Tuple[List[int], List[int], List[int], List[int], List[int], List[bool]]
+    Tuple[List[int], List[int], List[int], List[int], List[int]]
 ]:
-    # 当前协议每路固定9字节：
-    # speed(i16)、load(i16)、current(i16)、voltage(u8)、temperature(u8)、online(u8)。
-    if not payload or (len(payload) % 9) != 0:
+    # 每路固定 8 字节；在线状态不在 100 Hz 遥测中重复发送。
+    if len(payload) != MOTOR_COUNT * 8:
         return None
 
-    channel_count = len(payload) // 9
-    if channel_count <= 0:
-        return None
+    channel_count = MOTOR_COUNT
 
     speeds: List[int] = []
     loads: List[int] = []
     currents: List[int] = []
     volts: List[int] = []
     temps: List[int] = []
-    online: List[bool] = []
 
     for i in range(channel_count):
-        base = i * 9
+        base = i * 8
         speeds.append(struct.unpack(">h", payload[base:base + 2])[0])
         loads.append(struct.unpack(">h", payload[base + 2:base + 4])[0])
         currents.append(struct.unpack(">h", payload[base + 4:base + 6])[0])
         volts.append(payload[base + 6])
         temps.append(payload[base + 7])
-        online.append(payload[base + 8] == 1)
-    return speeds, loads, currents, volts, temps, online
+    return speeds, loads, currents, volts, temps
 
 
-def parse_servo_raw_packet(payload: bytes) -> Optional[Tuple[List[int], List[int], List[bool]]]:
-    """解析 RawNow、FlashRaw 和在线位；旧硬件位置/精简包不再兼容。"""
-    if not payload or (len(payload) % 5) != 0:
+def parse_servo_raw_packet(payload: bytes) -> Optional[List[int]]:
+    """解析当前单圈 RawNow；FlashRaw 改由保存结果事件上报。"""
+    if len(payload) != MOTOR_COUNT * 2:
         return None
 
-    channel_count = len(payload) // 5
-    if channel_count <= 0:
-        return None
+    channel_count = MOTOR_COUNT
 
     raw_positions: List[int] = []
     for i in range(channel_count):
         start = i * 2
         raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
 
-    flash_raw_positions: List[int] = []
-    flash_raw_base = channel_count * 2
-    for i in range(channel_count):
-        start = flash_raw_base + i * 2
-        flash_raw_positions.append(struct.unpack(">h", payload[start:start + 2])[0])
+    return raw_positions
 
-    online_flags: List[bool] = []
-    online_base = channel_count * 4
-    for i in range(channel_count):
-        online_flags.append(payload[online_base + i] == 1)
-    return raw_positions, flash_raw_positions, online_flags
+
+def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int, int, int]]:
+    """解析多圈恢复的异步最终 token、成功位图和拒绝位图。"""
+    if len(payload) != 12:
+        return None
+    return struct.unpack(">III", payload)
+
+
+def parse_multiturn_snapshot_raw_packet(payload: bytes) -> Optional[Tuple[int, int, List[int]]]:
+    """解析保存结果触发的 Flash Raw 快照。"""
+    expected = 8 + MOTOR_COUNT * 2
+    if len(payload) != expected:
+        return None
+    result_token, valid_mask = struct.unpack(">II", payload[:8])
+    raw_values = [
+        struct.unpack(">h", payload[8 + i * 2:10 + i * 2])[0]
+        for i in range(MOTOR_COUNT)
+    ]
+    return result_token, valid_mask, raw_values
 
 
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
@@ -968,38 +996,6 @@ def parse_tactile_full_fragment(
     if len(payload) != 4 + chunk_len:
         return None
     return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
-
-
-def parse_joint_debug_packet(
-    payload: bytes,
-) -> Optional[Tuple[int, bool, float, float, float, bool, int, int]]:
-    base_len = 2 + 3 * 4
-    cmd_len = base_len + 1 + 2
-    cmd_ts_len = cmd_len + 4
-    if len(payload) not in (cmd_len, cmd_ts_len):
-        return None
-
-    joint_index, valid, target_deg, actual_deg, loop1_out = struct.unpack(
-        ">BBfff", payload[:base_len]
-    )
-    cmd_valid = payload[base_len] == 1
-    cmd_target_pos = struct.unpack(">h", payload[base_len + 1 : base_len + 3])[0]
-
-    if len(payload) == cmd_ts_len:
-        device_timestamp_ms = struct.unpack(">I", payload[cmd_len : cmd_len + 4])[0]
-    else:
-        device_timestamp_ms = 0
-
-    return (
-        joint_index,
-        valid == 1,
-        target_deg,
-        actual_deg,
-        loop1_out,
-        cmd_valid,
-        cmd_target_pos,
-        device_timestamp_ms,
-    )
 
 
 def parse_frame(data: bytes) -> Tuple[List[Tuple[int, bytes]], bytearray]:
@@ -1158,8 +1154,6 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     payload = bytearray()
     payload.append(joint & 0xFF)
     payload.append(1 if bool(result.get("success", False)) else 0)
-    for key in ("encoderMin", "encoderMax", "offset"):
-        payload.extend(struct.pack(">i", int(result.get(key, 0))))
     payload.extend(_pack_float_be(float(result.get("angleMax", 0.0))))
     for key in ("startEncoder", "tightEncoder", "zeroEncoder", "encoderSpan"):
         payload.extend(struct.pack(">i", int(result.get(key, 0))))
@@ -1204,8 +1198,6 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
                 )
             payload.extend(struct.pack(">h", delta))
     payload.append(int(result.get("mappingVersion", 0)) & 0xFF)
-    payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMin", 0))))
-    payload.extend(struct.pack(">i", int(result.get("encoderAtUrdfMax", 0))))
     payload.extend(_pack_float_be(float(result.get("angleMin", 0.0))))
     payload.extend(struct.pack(">I", int(result.get("urdfConfigCrc", 0)) & 0xFFFFFFFF))
     auto_min_raw = int(result.get("autoMinRaw", -1))
@@ -1298,6 +1290,19 @@ def build_clear_manual_encoder_reference_cmd() -> bytes:
 
 def build_manual_encoder_query_cmd() -> bytes:
     return _build_command_frame(CMD_MANUAL_ENCODER_QUERY, b"")
+
+
+def build_state_sync_request_cmd(sync_mask: int = STATE_SYNC_ALL) -> bytes:
+    """请求 P4 发送指定静态状态；用于连接握手和用户显式刷新。"""
+    mask = int(sync_mask)
+    if mask < 0 or (mask & ~int(STATE_SYNC_ALL)) != 0:
+        raise ValueError(f"invalid state sync mask: 0x{mask:X}")
+    return _build_command_frame(CMD_STATE_SYNC_REQUEST, struct.pack(">I", mask))
+
+
+def build_task_diag_subscribe_cmd(enabled: bool) -> bytes:
+    """按窗口生命周期开启或关闭 P4 Task Runtime 诊断流。"""
+    return _build_command_frame(CMD_TASK_DIAG_SUBSCRIBE, bytes([1 if enabled else 0]))
 
 
 def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> bytes:

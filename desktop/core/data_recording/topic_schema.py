@@ -52,10 +52,6 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "joint_deg",
         "joint_target_deg",
         "joint_encoder_raw",
-        "joint_debug_valid",
-        "joint_debug_actual_deg",
-        "joint_debug_target_deg",
-        "joint_debug_cmd_target_pos",
     ],
     "servo_state": [
         *TIME_FIELDS,
@@ -107,16 +103,6 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "fy",
         "fz",
         "force_mag",
-    ],
-    "joint_debug_packets": [
-        *TIME_FIELDS,
-        "joint_index",
-        "valid",
-        "target_deg",
-        "actual_deg",
-        "loop1_output",
-        "cmd_valid",
-        "cmd_target_pos",
     ],
     "event_log": [
         *TIME_FIELDS,
@@ -170,12 +156,6 @@ def _wide_joint_fields() -> List[str]:
             f"{label}_target_deg",
             f"{label}_encoder_raw",
             f"{label}_active",
-            f"{label}_debug_valid",
-            f"{label}_debug_actual_deg",
-            f"{label}_debug_target_deg",
-            f"{label}_debug_pid_output",
-            f"{label}_debug_cmd_valid",
-            f"{label}_debug_cmd_target_pos",
         ])
     return fields
 
@@ -281,11 +261,10 @@ DEFAULT_TOPICS = [
     "tactile_summary",
     "tactile_summary_wide",
     "teleop_input",
-    "joint_debug_packets",
     "event_log",
 ]
 
-# CSV面向人工查看，只输出合并后的总表；长表和原始debug仍保留给HDF5/ROS bag。
+# CSV 面向人工查看，只输出合并后的总表；算法数据仍由 HDF5/ROS bag 保存。
 DEFAULT_CSV_TOPICS = [
     "core_state",
     "joint_wide",
@@ -312,6 +291,5 @@ ROSBAG_TOPIC_NAMES = {
     "servo_state": "/mmhand/motor_state",
     "tactile_summary": "/mmhand/tactile_summary",
     "teleop_input": "/mmhand/teleop",
-    "joint_debug_packets": "/mmhand/joint_debug_packets",
     "event_log": "/mmhand/events",
 }

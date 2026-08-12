@@ -22,7 +22,7 @@ DEFAULT_URDF = ROOT / "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf"
 DEFAULT_ADAPTER_MANIFEST = (
     ROOT / "desktop/resources/hku_hand_v2_urdf/structure_urdf_adapter.json"
 )
-DEFAULT_MAPPING = ROOT / "desktop/resources/config/urdf_joint_mapping_v2.json"
+DEFAULT_MAPPING = ROOT / "desktop/resources/config/urdf_joint_mapping.json"
 DEFAULT_FINGERPRINT = ROOT / "desktop/resources/config/product_fingerprint.json"
 DEFAULT_P4_LIMITS = (
     ROOT / "ESP32-P4/ServoBoardMain/src/generated/UrdfJointLimits.generated.h"
@@ -199,7 +199,6 @@ def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
 def render_p4_limits(manifest: dict, limits: list[tuple[int, float, float]]) -> str:
     feedback_version = int(manifest["feedback_mapping_version"])
     manual_version = int(manifest["manual_scaled_mapping_version"])
-    feedback_crc = mapping_crc32(feedback_version, limits)
     manual_crc = mapping_crc32(manual_version, limits)
     rows = "\n".join(
         f"    {{{lower:.6f}f, {upper:.6f}f}},  // J{index:02d}"
@@ -207,7 +206,7 @@ def render_p4_limits(manifest: dict, limits: list[tuple[int, float, float]]) -> 
     )
     return f"""/**
  * @file UrdfJointLimits.generated.h
- * @brief 活动 URDF 的 21 关节静态角度上下限和映射 CRC（自动生成）。
+ * @brief 活动 URDF 的 21 关节静态角度上下限和 Manual 映射 CRC（自动生成）。
  *
  * 由 tools/generate_robot_model.py 生成，禁止手工编辑。
  */
@@ -216,7 +215,7 @@ def render_p4_limits(manifest: dict, limits: list[tuple[int, float, float]]) -> 
 
 #include <Arduino.h>
 
-#include "../shared/TaskSharedData.h"
+#include "../runtime/SystemRuntimeContext.h"
 
 struct UrdfJointLimitDeg {{
     float minDeg;
@@ -224,7 +223,6 @@ struct UrdfJointLimitDeg {{
 }};
 
 static const uint8_t kUrdfFeedbackMappingVersion = {feedback_version};
-static const uint32_t kUrdfJointLimitConfigCrc = 0x{feedback_crc:08X}UL;
 static const uint8_t kManualScaledUrdfFeedbackMappingVersion = {manual_version};
 static const uint32_t kManualScaledUrdfConfigCrc = 0x{manual_crc:08X}UL;
 static const UrdfJointLimitDeg kUrdfJointLimits[ENCODER_TOTAL_NUM] = {{

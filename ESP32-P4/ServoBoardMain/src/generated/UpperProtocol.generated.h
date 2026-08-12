@@ -20,9 +20,7 @@ static_assert(SERVO_TOTAL_NUM == 27, "Protocol motor count drift");
 
 // P4 -> Desktop 包类型。
 inline constexpr uint8_t PACKET_TYPE_SENSOR = 0x01; ///< 21 关节映射角
-inline constexpr uint8_t PACKET_TYPE_CALIB_ACK = 0x02; ///< 标定状态变化 ACK
 inline constexpr uint8_t PACKET_TYPE_SERVO_ANGLE = 0x03; ///< 27 路 logical ABS
-inline constexpr uint8_t PACKET_TYPE_JOINT1_DEBUG = 0x04; ///< 关节 PID/LUT 诊断
 inline constexpr uint8_t PACKET_TYPE_SERVO_TELEM = 0x05; ///< 舵机遥测
 inline constexpr uint8_t PACKET_TYPE_PROTO_ACK = 0x06; ///< 命令 ACK
 inline constexpr uint8_t PACKET_TYPE_FAULT_STATUS = 0x07; ///< 故障与在线位图
@@ -39,6 +37,9 @@ inline constexpr uint8_t PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12; ///< 21 �
 inline constexpr uint8_t PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13; ///< 27 路会话 logical range
 inline constexpr uint8_t PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14; ///< 产品配置指纹
 inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵机 BUS 路由、冲突、容量和扫描状态
+inline constexpr uint8_t PACKET_TYPE_SAFETY_EVENT = 0x16; ///< 去重后的结构化安全规则事件
+inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 多圈恢复异步最终结果
+inline constexpr uint8_t PACKET_TYPE_MULTITURN_SNAPSHOT_RAW = 0x18; ///< 保存结果触发的 27 路 Flash Raw 快照
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
@@ -57,7 +58,7 @@ inline constexpr uint8_t CMD_MOTOR_ABS_LIMIT_LOCK = 0xDB; ///< 设置指定电�
 inline constexpr uint8_t CMD_HOST_HEARTBEAT = 0xDC; ///< 刷新上位机在线计时器，不携带业务数据
 inline constexpr uint8_t CMD_MULTITURN_NVS_CONTROL = 0xDD; ///< 启停多圈 NVS 保存；关闭时清除旧快照
 inline constexpr uint8_t CMD_MOTOR_POS_ABS_ONE = 0xDE; ///< 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
-inline constexpr uint8_t CMD_CALIB_LOAD_JOINT = 0xDF; ///< 恢复单关节 Auto/LUT v3 标定快照
+inline constexpr uint8_t CMD_CALIB_LOAD_JOINT = 0xDF; ///< 恢复单关节唯一 Auto/LUT v3 标定快照
 inline constexpr uint8_t CMD_CALIB_LOAD_LIMITS = 0xE0; ///< 批量恢复 27 路 ABS Limit 与有效位图
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION = 0xE5; ///< 清除全部 Auto/LUT 标定结果，保留 Manual
 inline constexpr uint8_t CMD_MANUAL_ENCODER_REFERENCE = 0xE6; ///< 写入或清除 21 组 Manual Min/Max 原始磁编值
@@ -67,6 +68,8 @@ inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动
 inline constexpr uint8_t CMD_ANGLE_CTRL_MASKED = 0xEA; ///< 按关节掩码下发稀疏关节目标角
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
 inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 复位越过硬圈数阈值舵机并清除对应多圈快照
+inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
+inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -78,6 +81,14 @@ inline constexpr uint8_t PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7; ///< 缺少�
 inline constexpr uint8_t MANUAL_SAVE_STATUS_NONE = 0; ///< 本次上电尚未发生 Manual 保存事务
 inline constexpr uint8_t MANUAL_SAVE_STATUS_OK = 1; ///< 最近一次 Manual NVS 保存并读回校验成功
 inline constexpr uint8_t MANUAL_SAVE_STATUS_FAILED = 2; ///< 最近一次 Manual NVS 保存或校验失败
+inline constexpr uint8_t STATE_SYNC_MANUAL_REFERENCE = 1; ///< 同步 21 路 Manual Min/Max
+inline constexpr uint8_t STATE_SYNC_MOTOR_ABS_LIMIT = 2; ///< 同步 27 路 ABS Limit
+inline constexpr uint8_t STATE_SYNC_SERVO_LOGICAL_RANGE = 4; ///< 同步 27 路逻辑行程
+inline constexpr uint8_t STATE_SYNC_JOINT_CALIBRATION = 8; ///< 同步全部有效 Auto/LUT 标定快照
+inline constexpr uint8_t STATE_SYNC_SERVO_ROUTE = 16; ///< 同步动态舵机 BUS 路由
+inline constexpr uint8_t STATE_SYNC_PRODUCT_FINGERPRINT = 32; ///< 同步产品配置指纹
+inline constexpr uint8_t STATE_SYNC_MULTITURN_STATE = 64; ///< 同步最新多圈恢复结果与 Flash Raw 快照
+inline constexpr uint8_t STATE_SYNC_ALL = 127; ///< 同步全部静态运行契约
 
 // 固定 payload 长度；单位 byte，不包含命令字本身。
 inline constexpr size_t kFloatPayloadBytes = 84;
@@ -89,13 +100,15 @@ inline constexpr size_t kActiveScopePayloadBytes = 9;
 inline constexpr size_t kRestoreMultiTurnPayloadBytes = 112;
 inline constexpr size_t kMotorAbsLimitLockPayloadBytes = 5;
 inline constexpr size_t kMultiTurnNvsControlPayloadBytes = 1;
-inline constexpr size_t kCalibLoadJointPayloadBytes = 209;
+inline constexpr size_t kCalibLoadJointPayloadBytes = 189;
 inline constexpr size_t kCalibLoadLimitsPayloadBytes = 228;
 inline constexpr size_t kManualEncoderReferencePayloadBytes = 85;
 inline constexpr size_t kManualEncoderSinglePayloadBytes = 5;
 inline constexpr size_t kRopeInitPayloadBytes = 4;
 inline constexpr size_t kClearCalibrationScopePayloadBytes = 4;
 inline constexpr size_t kServoResetZeroPayloadBytes = 4;
+inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
+inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
 inline constexpr size_t kSerialRxBufferSize = 512;
 inline constexpr int32_t kEncoderModulo = 16384;
 
@@ -103,45 +116,34 @@ inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 {
     switch (command) {
-        case CMD_CALIBRATE:
-        case CMD_START:
-        case CMD_STOP:
-        case CMD_RESET:
-        case CMD_RUN_FEEDBACK:
-        case CMD_PAUSE:
-        case CMD_HOST_HEARTBEAT:
-        case CMD_CLEAR_CALIBRATION:
-        case CMD_MANUAL_ENCODER_QUERY:
-            return 0;
-        case CMD_MULTITURN_NVS_CONTROL:
-            return 1;
-        case CMD_ROPE_INIT:
-        case CMD_CLEAR_CALIBRATION_SCOPE:
-        case CMD_SERVO_RESET_ZERO:
-            return 4;
-        case CMD_MOTOR_ABS_LIMIT_LOCK:
-        case CMD_MOTOR_POS_ABS_ONE:
-        case CMD_MANUAL_ENCODER_SINGLE:
-            return 5;
-        case CMD_ACTIVE_SCOPE:
-            return 9;
-        case CMD_MOTOR_POS:
-        case CMD_MOTOR_POS_SWEEP:
-            return 54;
-        case CMD_ANGLE_CTRL:
-            return 84;
-        case CMD_MANUAL_ENCODER_REFERENCE:
-            return 85;
-        case CMD_ANGLE_CTRL_MASKED:
-            return 88;
-        case CMD_MOTOR_POS_ABS:
-            return 108;
-        case CMD_RESTORE_MULTITURN:
-            return 112;
-        case CMD_CALIB_LOAD_JOINT:
-            return 209;
-        case CMD_CALIB_LOAD_LIMITS:
-            return 228;
+        case CMD_CALIBRATE: return 0;
+        case CMD_ANGLE_CTRL: return kFloatPayloadBytes;
+        case CMD_START: return 0;
+        case CMD_STOP: return 0;
+        case CMD_RESET: return 0;
+        case CMD_MOTOR_POS: return kMotorPosPayloadBytes;
+        case CMD_MOTOR_POS_SWEEP: return kMotorPosPayloadBytes;
+        case CMD_MOTOR_POS_ABS: return kMotorPosAbsPayloadBytes;
+        case CMD_ACTIVE_SCOPE: return kActiveScopePayloadBytes;
+        case CMD_RUN_FEEDBACK: return 0;
+        case CMD_PAUSE: return 0;
+        case CMD_RESTORE_MULTITURN: return kRestoreMultiTurnPayloadBytes;
+        case CMD_MOTOR_ABS_LIMIT_LOCK: return kMotorAbsLimitLockPayloadBytes;
+        case CMD_HOST_HEARTBEAT: return 0;
+        case CMD_MULTITURN_NVS_CONTROL: return kMultiTurnNvsControlPayloadBytes;
+        case CMD_MOTOR_POS_ABS_ONE: return kMotorPosAbsOnePayloadBytes;
+        case CMD_CALIB_LOAD_JOINT: return kCalibLoadJointPayloadBytes;
+        case CMD_CALIB_LOAD_LIMITS: return kCalibLoadLimitsPayloadBytes;
+        case CMD_CLEAR_CALIBRATION: return 0;
+        case CMD_MANUAL_ENCODER_REFERENCE: return kManualEncoderReferencePayloadBytes;
+        case CMD_MANUAL_ENCODER_QUERY: return 0;
+        case CMD_MANUAL_ENCODER_SINGLE: return kManualEncoderSinglePayloadBytes;
+        case CMD_ROPE_INIT: return kRopeInitPayloadBytes;
+        case CMD_ANGLE_CTRL_MASKED: return kMaskedFloatPayloadBytes;
+        case CMD_CLEAR_CALIBRATION_SCOPE: return kClearCalibrationScopePayloadBytes;
+        case CMD_SERVO_RESET_ZERO: return kServoResetZeroPayloadBytes;
+        case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
+        case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
         default: return SIZE_MAX;
     }
 }
@@ -149,11 +151,5 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 inline constexpr uint32_t kFaultStatusHeartbeatMs = 200; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 inline constexpr uint32_t kSystemStatusHeartbeatMs = 100; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 inline constexpr uint32_t kTaskDiagHeartbeatMs = 250; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kMotorAbsLimitHeartbeatMs = 500; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kServoLogicalRangeHeartbeatMs = 500; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kJointCalibSnapshotHeartbeatMs = 1000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kManualEncoderReferenceHeartbeatMs = 1000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kProductFingerprintHeartbeatMs = 2000; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kServoRouteStatusHeartbeatMs = 500; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 
 #endif // MMHAND_UPPER_PROTOCOL_GENERATED_H

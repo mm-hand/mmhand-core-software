@@ -27,9 +27,9 @@ namespace mmhand::config::servo {
 /** 多圈恢复与异步 NVS 协调参数；不改变现有快照布局和键名。 */
 inline constexpr uint32_t kNvsRestoreWaitWindowMs = 3000;
 inline constexpr uint32_t kNvsSaveMinIntervalMs = 500;
-inline constexpr uint32_t kNvsOfflinePeriodicSaveMs = 2000;
-inline constexpr uint16_t kNvsRestoreRawToleranceCounts = 256;
-inline constexpr int32_t kNvsMoveAbsThreshold = 64;
+inline constexpr uint32_t kNvsOfflinePeriodicSaveMs = 2000;   //离线期间每隔该时间保存一次快照。
+inline constexpr uint16_t kNvsRestoreRawToleranceCounts = 256;   //上电后读取的 raw 与快照 raw 的容差，超过则拒绝恢复。
+inline constexpr int32_t kNvsMoveAbsThreshold = 64;             ///< 运动期间逻辑 ABS 变化超过该值才触发离线保存。
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
 inline constexpr uint8_t kOnlineConfirmReads = 2; ///< 连续成功读取达到此值才判上线。

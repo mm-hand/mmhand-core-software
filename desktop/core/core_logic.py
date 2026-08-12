@@ -58,6 +58,7 @@ from .protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_PAUSED,
+    STATE_SYNC_ALL,
     manual_encoder_reference_crc,
     manual_encoder_reference_entry_crc,
     tendon_lut_field,
@@ -69,6 +70,7 @@ LOWER_STATUS_STALE_AFTER_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
 MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
+MULTITURN_NVS_CONTROL_RESULT_TIMEOUT_S = 2.0
 MULTITURN_NVS_CONTROL_MAX_ATTEMPTS = 3
 MULTITURN_NVS_CONTROL_RETRY_DELAY_S = 0.15
 NEW_DEVICE_RESET_SETTLE_S = 0.30
@@ -466,6 +468,8 @@ class HandController:
         self._update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self._update_thread.start()
 
+        # 静态配置不再周期广播；每次建立串口链路后显式完成一次全量握手同步。
+        self.request_state_sync(STATE_SYNC_ALL)
         sync_ok = self._wait_for_lower_sync(LOWER_SYNC_TIMEOUT_S)
         with self.state_lock:
             if self.current_state.calib_status == "SYNCING":
@@ -476,6 +480,18 @@ class HandController:
             self.last_sync_status = "Connected, but lower status/servo feedback sync timed out"
         log_session("CTRL", self.last_sync_status)
         return True
+
+    def request_state_sync(self, sync_mask: int = STATE_SYNC_ALL) -> bool:
+        """请求 P4 回传静态状态、标定快照、路由和产品指纹。"""
+        if not self.comm:
+            return False
+        return bool(self.comm.send_command(("state_sync", int(sync_mask))))
+
+    def set_task_diag_subscription(self, enabled: bool) -> bool:
+        """仅在 Task Runtime 窗口打开期间订阅高频任务诊断。"""
+        if not self.comm:
+            return False
+        return bool(self.comm.send_command(("task_diag_subscribe", bool(enabled))))
 
     def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
         with self.state_lock:
@@ -737,7 +753,15 @@ class HandController:
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
             received_after=sent_at,
         )
-        if ack is None or int(ack[2]) != 0:
+        if ack is None or int(ack[2]) not in (
+            PROTO_ACK_STATUS_OK,
+            PROTO_ACK_STATUS_QUEUED,
+        ):
+            return False
+        if (
+            int(ack[2]) == PROTO_ACK_STATUS_QUEUED
+            and not self._wait_for_manual_reference_save_result(sent_at)
+        ):
             return False
         expected_mask = (1 << ENCODER_COUNT) - 1
         expected_crc = manual_encoder_reference_crc(
@@ -775,6 +799,27 @@ class HandController:
                 )
             if received_at >= sent_at:
                 return True
+            time.sleep(0.01)
+        return False
+
+    def _wait_for_manual_reference_save_result(
+        self,
+        received_after: float,
+        timeout_s: float = MANUAL_REFERENCE_ACK_TIMEOUT_S,
+    ) -> bool:
+        """等待异步 Manual NVS 事务的结果包，避免把 QUEUED 当成写入完成。"""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                received_at = float(
+                    getattr(state, "manual_reference_last_rx_time", 0.0) or 0.0
+                )
+                save_status = int(
+                    getattr(state, "manual_reference_save_status", 0) or 0
+                )
+            if received_at >= received_after and save_status != 0:
+                return save_status == 1
             time.sleep(0.01)
         return False
 
@@ -864,7 +909,15 @@ class HandController:
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
             received_after=sent_at,
         )
-        if ack is None or int(ack[2]) != 0:
+        if ack is None or int(ack[2]) not in (
+            PROTO_ACK_STATUS_OK,
+            PROTO_ACK_STATUS_QUEUED,
+        ):
+            return False
+        if (
+            int(ack[2]) == PROTO_ACK_STATUS_QUEUED
+            and not self._wait_for_manual_reference_save_result(sent_at)
+        ):
             return False
         expected_crc = manual_encoder_reference_crc(expected_min, expected_max)
         return self._verify_manual_encoder_readback(
@@ -897,7 +950,15 @@ class HandController:
             MANUAL_REFERENCE_ACK_TIMEOUT_S,
             received_after=sent_at,
         )
-        if ack is None or int(ack[2]) != 0:
+        if ack is None or int(ack[2]) not in (
+            PROTO_ACK_STATUS_OK,
+            PROTO_ACK_STATUS_QUEUED,
+        ):
+            return False
+        if (
+            int(ack[2]) == PROTO_ACK_STATUS_QUEUED
+            and not self._wait_for_manual_reference_save_result(sent_at)
+        ):
             return False
         if not self.query_manual_encoder_references(
             MANUAL_REFERENCE_ACK_TIMEOUT_S
@@ -952,12 +1013,27 @@ class HandController:
             )
             if ack is not None:
                 status = int(ack[2])
-                if status == 0:
+                if status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+                    if (
+                        status == PROTO_ACK_STATUS_QUEUED
+                        and not self._wait_for_multiturn_nvs_control_result(
+                            target,
+                            sent_at,
+                        )
+                    ):
+                        self.last_multiturn_nvs_error = (
+                            "firmware queued command but final Flash state was not confirmed"
+                        )
+                        log_session(
+                            "MULTITURN",
+                            f"NVS control enabled={int(target)} result timeout attempt={attempt}",
+                        )
+                        return False
                     if not target:
                         self._clear_trusted_multiturn_cache()
                     log_session(
                         "MULTITURN",
-                        f"NVS control enabled={int(target)} ACK OK attempt={attempt}",
+                        f"NVS control enabled={int(target)} confirmed attempt={attempt}",
                     )
                     return True
                 self.last_multiturn_nvs_error = f"firmware rejected command (status={status})"
@@ -977,6 +1053,31 @@ class HandController:
             f"no ACK after {MULTITURN_NVS_CONTROL_MAX_ATTEMPTS} attempts; "
             "wait for servo hotplug recovery or update P4 firmware"
         )
+        return False
+
+    def _wait_for_multiturn_nvs_control_result(
+        self,
+        target: bool,
+        received_after: float,
+        timeout_s: float = MULTITURN_NVS_CONTROL_RESULT_TIMEOUT_S,
+    ) -> bool:
+        """等待 P4 在 Flash 事务完成后回传与请求一致的系统状态。"""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            with self.state_lock:
+                state = self.current_state
+                has_status = bool(
+                    getattr(state, "has_system_status_data", False)
+                )
+                received_at = float(
+                    getattr(state, "system_status_last_rx_ts", 0.0) or 0.0
+                )
+                actual = bool(
+                    getattr(state, "multiturn_nvs_enabled", True)
+                )
+            if has_status and received_at >= received_after and actual == bool(target):
+                return True
+            time.sleep(0.01)
         return False
 
     def _wait_for_multiturn_nvs_save(

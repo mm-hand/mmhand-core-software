@@ -623,6 +623,15 @@ class HandModel:
     multiturn_nvs_save_valid_mask: int = 0
     multiturn_nvs_save_fail_count: int = 0
     has_multiturn_nvs_status: bool = False
+    # CMD_RESTORE_MULTITURN 的异步最终结果，不与“已入队”协议 ACK 混淆。
+    multiturn_restore_result_token: int = 0
+    multiturn_restore_restored_mask: int = 0
+    multiturn_restore_rejected_mask: int = 0
+    multiturn_restore_result_last_rx_ts: float = 0.0
+    # Flash Raw 从 100 Hz 数据流移出后，由保存结果事件更新。
+    multiturn_snapshot_result_token: int = 0
+    multiturn_snapshot_valid_mask: int = 0
+    multiturn_snapshot_last_rx_ts: float = 0.0
     manual_reference_valid_bitmap: int = 0
     manual_reference_crc: int = 0
     manual_reference_nvs_sequence: int = 0
@@ -711,17 +720,26 @@ class HandModel:
     calib_diag_value_c: int = 0
     calib_diag_bitmap: int = 0
     calib_diag_timestamp_ms: int = 0
+    calib_diag_sequence: int = 0
+    calib_diag_completed_joint_mask: int = 0
+    calib_diag_failed_joint_mask: int = 0
     task_runtime: dict = field(default_factory=dict)
     task_runtime_last_rx_ts: float = 0.0
     # P4 周期上报的产品指纹，用于把运行日志绑定到确切的固件、参数和机器人模型。
     product_fingerprint: dict = field(default_factory=dict)
     product_fingerprint_last_rx_ts: float = 0.0
     has_product_fingerprint: bool = False
+    # P4 安全规则事件只保留最近 64 条；sequence 用于去重和日志关联。
+    latest_safety_event: dict = field(default_factory=dict)
+    safety_event_history: List[dict] = field(default_factory=list)
+    safety_event_overflow_count: int = 0
+    safety_event_last_rx_ts: float = 0.0
+    has_safety_event: bool = False
 
-    # 伺服绝对角度与在线状态（来自 PACKET_TYPE_SERVO_ANGLE，单位：编码器计数或固件定义的原始值）
+    # 伺服绝对角度来自 SERVO_ANGLE；在线状态统一来自 SYSTEM_STATUS 位图。
     servo_angles: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
-    # 伺服当前单圈 raw、最近一次 Flash 快照 raw 与在线状态。
+    # 当前单圈 raw 来自 100 Hz 流；Flash raw 来自保存结果触发的独立快照。
     servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_flash_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
@@ -739,15 +757,6 @@ class HandModel:
     # 伺服过载保护锁存状态（来自 PACKET_TYPE_FAULT_STATUS，按 motor channel 位图映射）
     servo_overload_fault: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     servo_overload_trigger_load: List[Optional[int]] = field(default_factory=lambda: [None] * MOTOR_COUNT)
-
-    # 关节调试信息（来自 PACKET_TYPE_JOINT_DEBUG）
-    joint_debug_valid: List[bool] = field(default_factory=lambda: [False] * ENCODER_COUNT)
-    joint_debug_target_deg: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
-    joint_debug_actual_deg: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
-    joint_debug_loop1_output: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
-    joint_debug_cmd_valid: List[bool] = field(default_factory=lambda: [False] * ENCODER_COUNT)
-    joint_debug_cmd_target_pos: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
-    joint_debug_timestamp_ms: List[int] = field(default_factory=lambda: [0] * ENCODER_COUNT)
 
     @property
     def angles(self) -> List[float]:
@@ -808,14 +817,6 @@ class HandModel:
         self.servo_telem_online = list(other.servo_telem_online)
         self.servo_overload_fault = list(other.servo_overload_fault)
         self.servo_overload_trigger_load = list(getattr(other, "servo_overload_trigger_load", [None] * MOTOR_COUNT))
-        # 复制关节调试信息
-        self.joint_debug_valid = list(other.joint_debug_valid)
-        self.joint_debug_target_deg = list(other.joint_debug_target_deg)
-        self.joint_debug_actual_deg = list(other.joint_debug_actual_deg)
-        self.joint_debug_loop1_output = list(other.joint_debug_loop1_output)
-        self.joint_debug_cmd_valid = list(other.joint_debug_cmd_valid)
-        self.joint_debug_cmd_target_pos = list(other.joint_debug_cmd_target_pos)
-        self.joint_debug_timestamp_ms = list(other.joint_debug_timestamp_ms)
         # 复制数据有效性标志
         self.has_sensor_data = bool(other.has_sensor_data)
         self.has_encoder_raw_data = bool(getattr(other, "has_encoder_raw_data", False))
@@ -839,6 +840,27 @@ class HandModel:
         self.multiturn_nvs_save_valid_mask = int(getattr(other, "multiturn_nvs_save_valid_mask", 0) or 0)
         self.multiturn_nvs_save_fail_count = int(getattr(other, "multiturn_nvs_save_fail_count", 0) or 0)
         self.has_multiturn_nvs_status = bool(getattr(other, "has_multiturn_nvs_status", False))
+        self.multiturn_restore_result_token = int(
+            getattr(other, "multiturn_restore_result_token", 0) or 0
+        )
+        self.multiturn_restore_restored_mask = int(
+            getattr(other, "multiturn_restore_restored_mask", 0) or 0
+        )
+        self.multiturn_restore_rejected_mask = int(
+            getattr(other, "multiturn_restore_rejected_mask", 0) or 0
+        )
+        self.multiturn_restore_result_last_rx_ts = float(
+            getattr(other, "multiturn_restore_result_last_rx_ts", 0.0) or 0.0
+        )
+        self.multiturn_snapshot_result_token = int(
+            getattr(other, "multiturn_snapshot_result_token", 0) or 0
+        )
+        self.multiturn_snapshot_valid_mask = int(
+            getattr(other, "multiturn_snapshot_valid_mask", 0) or 0
+        )
+        self.multiturn_snapshot_last_rx_ts = float(
+            getattr(other, "multiturn_snapshot_last_rx_ts", 0.0) or 0.0
+        )
         self.manual_reference_valid_bitmap = int(getattr(other, "manual_reference_valid_bitmap", 0) or 0)
         self.manual_reference_crc = int(getattr(other, "manual_reference_crc", 0) or 0)
         self.manual_reference_nvs_sequence = int(getattr(other, "manual_reference_nvs_sequence", 0) or 0)
@@ -1018,6 +1040,13 @@ class HandModel:
         self.calib_diag_value_c = int(getattr(other, "calib_diag_value_c", 0) or 0)
         self.calib_diag_bitmap = int(getattr(other, "calib_diag_bitmap", 0) or 0)
         self.calib_diag_timestamp_ms = int(getattr(other, "calib_diag_timestamp_ms", 0) or 0)
+        self.calib_diag_sequence = int(getattr(other, "calib_diag_sequence", 0) or 0)
+        self.calib_diag_completed_joint_mask = int(
+            getattr(other, "calib_diag_completed_joint_mask", 0) or 0
+        )
+        self.calib_diag_failed_joint_mask = int(
+            getattr(other, "calib_diag_failed_joint_mask", 0) or 0
+        )
         self.task_runtime = {
             int(task_id): dict(item)
             for task_id, item in getattr(other, "task_runtime", {}).items()
@@ -1032,6 +1061,23 @@ class HandModel:
         )
         self.has_product_fingerprint = bool(
             getattr(other, "has_product_fingerprint", False)
+        )
+        self.latest_safety_event = dict(
+            getattr(other, "latest_safety_event", {}) or {}
+        )
+        self.safety_event_history = [
+            dict(item)
+            for item in getattr(other, "safety_event_history", [])
+            if isinstance(item, dict)
+        ][-64:]
+        self.safety_event_overflow_count = int(
+            getattr(other, "safety_event_overflow_count", 0) or 0
+        )
+        self.safety_event_last_rx_ts = float(
+            getattr(other, "safety_event_last_rx_ts", 0.0) or 0.0
+        )
+        self.has_safety_event = bool(
+            getattr(other, "has_safety_event", False)
         )
         self.tactile_data = list(getattr(other, "tactile_data", []) or [])
         self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)

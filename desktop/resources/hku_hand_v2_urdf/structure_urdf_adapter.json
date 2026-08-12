@@ -1,7 +1,7 @@
 {
-  "source_root": "D:\\mmhand structure\\mmhand_description",
-  "source_urdf": "D:\\mmhand structure\\mmhand_description\\urdf\\(Unsaved).urdf",
-  "source_commit": "0e9737072528d817e1343f578fbb48fcbee762b6",
+  "source_root": "C:\\浏览器下周\\structure-main\\structure-main\\mmhand_description",
+  "source_urdf": "C:\\浏览器下周\\structure-main\\structure-main\\mmhand_description\\urdf\\mmhand.urdf",
+  "source_commit": "a3a4400dfc3fa0702b2dfc60afaf3ba12317cc58",
   "adapter_urdf": "D:\\mmhand structure\\desktop_urdf_adapter\\urdf\\hand.urdf",
   "joint_aliases": {
     "Little_MCP_AA": "little_aa_joint",

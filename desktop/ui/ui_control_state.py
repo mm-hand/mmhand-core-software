@@ -56,6 +56,7 @@ from .ui_control_common import (
     motor_tendon_shorten_abs_sign,
 )
 from .ui_dialogs import show_scrollable_message
+from desktop.core.safety_rules import explain_direct_reject
 
 
 class ControlPanelStateMixin:
@@ -66,15 +67,6 @@ class ControlPanelStateMixin:
         "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
         "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
     )
-
-    _DIRECT_REJECT_LABELS = {
-        DIRECT_REJECT_STATE: "state/E-STOP gate",
-        DIRECT_REJECT_HARDWARE: "servo hardware unavailable",
-        DIRECT_REJECT_MULTITURN: "multi-turn position unknown",
-        DIRECT_REJECT_EVENT_QUEUE: "state-event queue full",
-        DIRECT_REJECT_STALE: "stale command or host lease",
-        DIRECT_REJECT_FAULT: "system fault",
-    }
 
     def update_state(self, state) -> None:
         """Run the update state workflow."""
@@ -272,9 +264,7 @@ class ControlPanelStateMixin:
             return
 
         self._last_reported_direct_generation = generation
-        reason_text = ControlPanelStateMixin._DIRECT_REJECT_LABELS.get(
-            reject_reason, f"unknown reason {reject_reason}"
-        )
+        reason_text = explain_direct_reject(reject_reason)
         message = (
             f"Direct command rejected by P4: generation={generation}, "
             f"reason={reason_text}"

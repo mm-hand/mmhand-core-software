@@ -37,7 +37,7 @@ inline constexpr uint32_t kServoTargetMaxAgeMs = 500;
 /** 上位机 1 s 没有任何有效协议帧时，所有舵机运动态的公共租约失效。 */
 inline constexpr uint32_t kHostControlLeaseTimeoutMs = 1000;
 
-/** Hold 批次必须在该时间内由 ServoCommunicationTask 确认，否则升级为 E-STOP。 */
+/** Hold 批次必须在该时间内由 ServoBusTask 确认，否则升级为 E-STOP。 */
 inline constexpr uint32_t kHostControlHoldApplyTimeoutMs = 500;
 
 static_assert(kServoResetZeroTriggerMin > kServoHardwareCommandMin &&

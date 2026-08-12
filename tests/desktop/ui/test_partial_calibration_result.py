@@ -10,12 +10,8 @@ from desktop.ui.ui_control_calibration import CalibrationWorkflowController
 def test_partial_calibration_summary_returns_only_completed_joints():
     state = SimpleNamespace(
         calib_diag_valid=True,
-        calib_diag_reason=CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-        calib_diag_phase=CALIB_DIAG_PHASE_SEQUENCE,
-        calib_diag_motor=0xFF,
-        calib_diag_value_a=(1 << 3) | (1 << 4),
-        calib_diag_value_b=(1 << 5),
-        calib_diag_bitmap=(1 << 5),
+        calib_diag_completed_joint_mask=(1 << 3) | (1 << 4),
+        calib_diag_failed_joint_mask=(1 << 5),
     )
 
     mask = CalibrationWorkflowController._partial_calibration_completed_joint_mask(
@@ -34,6 +30,8 @@ def test_process_failure_diag_is_not_treated_as_partial_summary():
         calib_diag_value_a=9,
         calib_diag_value_b=0,
         calib_diag_bitmap=(1 << 3),
+        calib_diag_completed_joint_mask=0,
+        calib_diag_failed_joint_mask=0,
     )
 
     mask = CalibrationWorkflowController._partial_calibration_completed_joint_mask(

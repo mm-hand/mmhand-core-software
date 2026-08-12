@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Analyze one single-motor joint PID test recorded by the desktop UI.
 
-The script reads the multi-CSV session produced automatically by the Test tab.
-It prefers the high-rate joint-debug packet stream and aligns the lower-rate
-servo telemetry on the same time axis.  No command is sent to the hand.
+The script reads joint and servo state from the multi-CSV session produced by
+the Test tab. No command is sent to the hand.
 """
 
 from __future__ import annotations
@@ -106,14 +105,10 @@ def find_topic_csv(session_dir: Path, suffix: str) -> Optional[Path]:
 def session_has_pid_data(path: Path) -> bool:
     if not path.is_dir():
         return False
-    return any(path.glob("*joint_debug*.csv")) or any(path.glob("*_joint_state.csv"))
+    return any(path.glob("*_joint_state.csv"))
 
 
 def session_has_joint_data(path: Path, joint: int) -> bool:
-    for debug_path in path.glob("*joint_debug*.csv"):
-        for row in read_csv_rows(debug_path):
-            if safe_int(row.get("joint_index")) == joint and safe_int(row.get("valid"), 0) == 1:
-                return True
     joint_path = find_topic_csv(path, "_joint_state.csv")
     if joint_path is not None:
         for row in read_csv_rows(joint_path):
@@ -182,39 +177,6 @@ def deduplicate_time(columns: Sequence[np.ndarray]) -> Tuple[np.ndarray, ...]:
     return tuple(column[unique_indices] for column in sorted_columns)
 
 
-def load_debug_trace(session_dir: Path, joint: int) -> Optional[JointTrace]:
-    candidates = sorted(
-        session_dir.glob("*joint_debug*.csv"),
-        key=lambda path: path.stat().st_size,
-        reverse=True,
-    )
-    best: Optional[JointTrace] = None
-    for path in candidates:
-        rows = read_csv_rows(path)
-        selected = [
-            row
-            for row in rows
-            if safe_int(row.get("joint_index")) == joint
-            and safe_int(row.get("valid"), 0) == 1
-        ]
-        if len(selected) < 3:
-            continue
-        time_values = np.asarray([row_time(row) for row in selected], dtype=float)
-        target = np.asarray([safe_float(row.get("target_deg")) for row in selected], dtype=float)
-        actual = np.asarray([safe_float(row.get("actual_deg")) for row in selected], dtype=float)
-        loop1 = np.asarray([safe_float(row.get("loop1_output")) for row in selected], dtype=float)
-        valid = np.isfinite(time_values) & np.isfinite(target) & np.isfinite(actual)
-        if np.count_nonzero(valid) < 3:
-            continue
-        columns = deduplicate_time(
-            (time_values[valid], target[valid], actual[valid], loop1[valid])
-        )
-        trace = JointTrace(*columns, source=path.name)
-        if best is None or len(trace.time_s) > len(best.time_s):
-            best = trace
-    return best
-
-
 def load_joint_state_trace(session_dir: Path, joint: int) -> Optional[JointTrace]:
     path = find_topic_csv(session_dir, "_joint_state.csv")
     if path is None:
@@ -236,9 +198,7 @@ def load_joint_state_trace(session_dir: Path, joint: int) -> Optional[JointTrace
 
 
 def load_joint_trace(session_dir: Path, joint: int) -> JointTrace:
-    trace = load_debug_trace(session_dir, joint)
-    if trace is None:
-        trace = load_joint_state_trace(session_dir, joint)
+    trace = load_joint_state_trace(session_dir, joint)
     if trace is None:
         raise ValueError(f"session has no valid target/actual samples for J{joint:02d}")
     return trace
@@ -553,7 +513,7 @@ def tuning_notes(metrics: Dict[str, object], steps: Sequence[Dict[str, object]])
     notes: List[str] = []
     sample_rate = safe_float(metrics.get("sample_rate_hz"))
     if math.isfinite(sample_rate) and sample_rate < 20.0:
-        notes.append("采样率低于 20 Hz，超调和上升时间只能作趋势判断；应优先检查 joint debug 数据是否有效。")
+        notes.append("采样率低于 20 Hz，超调和上升时间只能作趋势判断；应提高关节状态记录频率。")
     saturation = safe_float(metrics.get("pid_output_saturation_ratio"))
     if math.isfinite(saturation) and saturation > 0.05:
         notes.append("PID 输出有较明显限幅，先减小测试阶跃或检查 Kp，限幅期间不能据此精确判断线性参数。")

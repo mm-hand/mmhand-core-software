@@ -1061,21 +1061,14 @@ class CalibrationWorkflowController:
         """读取 P4 的部分标定最终汇总，只返回本轮真正完成的 Jxx。"""
         if state is None or not bool(getattr(state, "calib_diag_valid", False)):
             return 0
-        if (
-            int(getattr(state, "calib_diag_reason", 0) or 0)
-            != CALIB_DIAG_REASON_JOINT_STEP_FAILED
-            or int(getattr(state, "calib_diag_phase", 0) or 0)
-            != CALIB_DIAG_PHASE_SEQUENCE
-            or int(getattr(state, "calib_diag_motor", 0xFF)) != 0xFF
-        ):
-            return 0
-        completed_mask = int(getattr(state, "calib_diag_value_a", 0) or 0)
-        failed_mask = int(getattr(state, "calib_diag_value_b", 0) or 0)
-        reported_failed_mask = int(getattr(state, "calib_diag_bitmap", 0) or 0)
-        if failed_mask == 0 or failed_mask != reported_failed_mask:
-            return 0
-        valid_joint_mask = (1 << ENCODER_COUNT) - 1
-        return completed_mask & valid_joint_mask & ~failed_mask
+        completed_mask = int(
+            getattr(state, "calib_diag_completed_joint_mask", 0) or 0
+        )
+        failed_mask = int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
+        if completed_mask or failed_mask:
+            valid_joint_mask = (1 << ENCODER_COUNT) - 1
+            return completed_mask & valid_joint_mask & ~failed_mask
+        return 0
 
     @staticmethod
     def _joint_calib_result_signature(item: Optional[dict]) -> Optional[str]:

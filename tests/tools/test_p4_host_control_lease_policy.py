@@ -21,10 +21,10 @@ def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Pat
     source = tmp_path / "host_control_lease_policy_test.cpp"
     source.write_text(
         r'''
-#include "system/HostControlLeasePolicy.h"
+#include "safety/HostControlLeasePolicy.h"
 #include "config/SafetyConfig.h"
-#include "domain/ActuatorTypes.h"
-#include "domain/SystemTypes.h"
+#include "data/ActuatorTypes.h"
+#include "data/SystemTypes.h"
 
 #include <cassert>
 #include <cstdint>
@@ -72,7 +72,7 @@ int main()
             "-std=c++17",
             f"-I{P4_SRC}",
             str(source),
-            str(P4_SRC / "system" / "HostControlLeasePolicy.cpp"),
+            str(P4_SRC / "safety" / "HostControlLeasePolicy.cpp"),
             "-o",
             str(executable),
         ],

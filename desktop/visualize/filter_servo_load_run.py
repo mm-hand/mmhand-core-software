@@ -53,7 +53,6 @@ def _latest_csv_file(run_data_dir: str) -> str:
         os.path.join(run_data_dir, name)
         for name in os.listdir(run_data_dir)
         if name.lower().endswith(".csv")
-        and not name.lower().endswith("_joint_debug_packets.csv")
         and not name.lower().endswith("_load_slim.csv")
         and os.path.isfile(os.path.join(run_data_dir, name))
     ]

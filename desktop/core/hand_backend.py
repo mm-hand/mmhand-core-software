@@ -757,21 +757,6 @@ class HandBackend:
                 self._replay_motion_active = False
                 log_session("REPLAY_OWNER", f"RELEASE token={token}")
 
-    def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> bool:
-        starter = getattr(self.comm, "start_joint_debug_packet_log", None)
-        if starter is None:
-            return False
-        try:
-            starter(path, row_callback=row_callback)
-        except TypeError:
-            starter(path)
-        return True
-
-    def stop_joint_debug_packet_log(self) -> None:
-        stopper = getattr(self.comm, "stop_joint_debug_packet_log", None)
-        if stopper is not None:
-            stopper()
-
     def protocol_diag_items(self) -> List[Tuple[str, object]]:
         comm = self.comm
         if comm is None:
@@ -779,13 +764,20 @@ class HandBackend:
         fields = [
             "_rx_diag_total_packets",
             "_rx_diag_sensor_packets",
-            "_rx_diag_joint_debug_packets",
             "_rx_diag_bytes",
             "_tx_diag_total_cmds",
             "_tx_diag_angle_live_cmds",
             "_tx_diag_bytes",
         ]
         return [(name, getattr(comm, name, "-")) for name in fields]
+
+    def request_state_sync(self, sync_mask: int) -> bool:
+        """透传静态状态显式同步请求，避免 UI 依赖固件周期广播。"""
+        return self._controller.request_state_sync(sync_mask)
+
+    def set_task_diag_subscription(self, enabled: bool) -> bool:
+        """根据 Task Runtime 窗口生命周期控制诊断带宽。"""
+        return self._controller.set_task_diag_subscription(enabled)
 
     # Controller command proxies.  These keep UI/ROS on the backend surface while
     # HandController remains the hardware-control primitive layer.

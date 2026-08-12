@@ -13,25 +13,27 @@
 
 `ServoBoardMain.ino` 只保留 Arduino `setup()/loop()`：
 
-- `setup()` 调用 `System_Init()`。
-- `loop()` 调用 `System_Loop()`。
+- `setup()` 调用 `appBootstrapSetup()`。
+- `loop()` 调用 `appBootstrapLoop()`。
 
 所有业务源码位于 `src/`。
 
 ## 关键边界
 
 - 飞特 SDK 只允许出现在
-  `src/hardware/servo/FeetechServoDriver.*`。
+  `src/hal/servo/FeetechServoDriver.*`。
 - 所有舵机目标只允许通过
-  `src/actuator/ActuatorCommandGateway.*`。
+  `src/modules/actuator/ActuatorCommandGateway.*`。
 - 状态和控制 owner 由
-  `src/system/StateMachineTask.*` 统一仲裁。
+  `src/tasks/system_state/SystemStateCoordinator.*` 统一仲裁；`SystemStateTask` 仅为薄入口。
+- 运行期 Flash 写入只允许由
+  `src/tasks/nvs_persistence/NvsPersistenceService.*` 执行。
 - 固定参数集中在 `src/config/`。
 - 协议编号和 NVS 格式保持向当前桌面端兼容。
 
-完整目录职责、命令/反馈链路、状态机、标定、多圈恢复和 Mermaid 框图见：
+当前分层目录、命令/反馈链路、状态机、安全规则和双格式框图统一见：
 
-[P4_固件架构重构说明_20260731.md](docs/P4_固件架构重构说明_20260731.md)
+[P4_嵌入式软件架构与安全规则_20260807.md](docs/P4_嵌入式软件架构与安全规则_20260807.md)
 
 ## 编译
 
@@ -52,7 +54,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 URDF 上限表检查：
 
 ```powershell
-python tools\generate_p4_urdf_limits.py --check
+python tools\generate_robot_model.py --check
 ```
 
 ## 调试

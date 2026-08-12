@@ -8,8 +8,14 @@ from desktop.core.data_models import HandModel, RAW_TO_DEG
 from desktop.core.protocol import (
     DISCONNECT_SENTINEL,
     ENCODER_COUNT,
+    MOTOR_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
     PACKET_TYPE_SENSOR,
+    parse_multiturn_restore_result_packet,
+    parse_multiturn_snapshot_raw_packet,
+    parse_servo_angle_packet,
     parse_servo_raw_packet,
     parse_servo_telem_packet,
 )
@@ -31,41 +37,86 @@ def _calibrated_model(joint_idx: int = 6, angle_max: float = 64.104) -> HandMode
     return model
 
 
-def test_servo_telemetry_packet_includes_signed_current() -> None:
-    payload = b"".join(
-        (
-            struct.pack(">hhhBBB", 120, -230, 45, 120, 36, 1),
-            struct.pack(">hhhBBB", -80, 700, -61, 118, 40, 0),
-        )
-    )
+def test_servo_telemetry_packet_includes_signed_current_without_online_array() -> None:
+    rows = [(120, -230, 45, 120, 36), (-80, 700, -61, 118, 40)]
+    rows.extend([(0, 0, 0, 0, 0)] * 25)
+    payload = b"".join(struct.pack(">hhhBB", *row) for row in rows)
 
     parsed = parse_servo_telem_packet(payload)
 
     assert parsed == (
-        [120, -80],
-        [-230, 700],
-        [45, -61],
-        [120, 118],
-        [36, 40],
-        [True, False],
+        [120, -80] + [0] * 25,
+        [-230, 700] + [0] * 25,
+        [45, -61] + [0] * 25,
+        [120, 118] + [0] * 25,
+        [36, 40] + [0] * 25,
     )
 
 
-def test_servo_raw_packet_contains_current_and_flash_raw() -> None:
-    payload = (
-        struct.pack(">hh", 12, 4090)
-        + struct.pack(">hh", 4000, 8)
-        + bytes((1, 0))
-    )
+def test_servo_raw_packet_contains_only_current_raw() -> None:
+    values = [12, 4090] + [0] * 25
+    payload = b"".join(struct.pack(">h", value) for value in values)
 
     parsed = parse_servo_raw_packet(payload)
 
-    assert parsed == ([12, 4090], [4000, 8], [True, False])
+    assert parsed == values
 
 
 def test_servo_raw_packet_rejects_removed_legacy_layouts() -> None:
     assert parse_servo_raw_packet(bytes(2 * 3)) is None
     assert parse_servo_raw_packet(bytes(2 * 7)) is None
+
+
+def test_servo_angle_packet_no_longer_contains_online_array() -> None:
+    values = list(range(MOTOR_COUNT))
+    payload = b"".join(struct.pack(">i", value) for value in values)
+    assert parse_servo_angle_packet(payload) == values
+    assert parse_servo_angle_packet(payload + bytes(MOTOR_COUNT)) is None
+
+
+def test_multiturn_result_and_flash_snapshot_packets() -> None:
+    assert parse_multiturn_restore_result_packet(
+        struct.pack(">III", 7, 0x15, 0x20)
+    ) == (7, 0x15, 0x20)
+
+    raw_values = [index - 13 for index in range(MOTOR_COUNT)]
+    snapshot = struct.pack(">II", 9, 0x07) + b"".join(
+        struct.pack(">h", value) for value in raw_values
+    )
+    assert parse_multiturn_snapshot_raw_packet(snapshot) == (
+        9,
+        0x07,
+        raw_values,
+    )
+
+
+def test_multiturn_packets_update_hand_model_end_to_end() -> None:
+    comm = LowerComputerComm("")
+    comm._last_model = HandModel()
+    flash_values = [100 + index for index in range(MOTOR_COUNT)]
+    packets = [
+        (
+            PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+            struct.pack(">IIII", 11, 0x03, 0x04, 1200),
+        ),
+        (
+            PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
+            struct.pack(">II", 12, 0x07)
+            + b"".join(struct.pack(">h", value) for value in flash_values)
+            + struct.pack(">I", 1210),
+        ),
+    ]
+
+    updated = comm._process_packets(packets)
+
+    assert updated is not None
+    assert updated.multiturn_restore_result_token == 11
+    assert updated.multiturn_restore_restored_mask == 0x03
+    assert updated.multiturn_restore_rejected_mask == 0x04
+    assert updated.multiturn_snapshot_result_token == 12
+    assert updated.multiturn_snapshot_valid_mask == 0x07
+    assert updated.servo_flash_raw_positions == flash_values
+    assert updated.has_servo_flash_raw_data is True
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():

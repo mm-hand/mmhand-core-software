@@ -56,10 +56,15 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
     CALIB_DIAG_REASON_JOINT_LIST_INVALID,
     CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+    CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID,
+    CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED,
     CALIB_DIAG_REASON_OVERLOAD,
     CALIB_DIAG_REASON_SERVO_OFFLINE,
     CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
     CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
+    CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+    CALIB_DIAG_REASON_RESULT_COMMIT_FAILED,
+    CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
     CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     CALIB_DIAG_REASON_TASK_START_FAILED,
@@ -92,6 +97,7 @@ from desktop.core.protocol import (
 from desktop.core.session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
+from desktop.core.safety_rules import explain_feedback_reject
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
 from .ui_dialogs import show_scrollable_message
@@ -174,6 +180,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_feedback_collision_armed_mask: Optional[int] = None
         self._last_feedback_collision_hold_mask: Optional[int] = None
         self._fault_popup_episode_active = False
+        # 同一故障周期内按诊断内容去重；CALIB_DIAG 晚于 SYSTEM_STATUS 到达时，
+        # 允许精确的标定原因替换先到的通用故障提示。
+        self._last_fault_popup_key = ""
+        self._calib_diag_wait_started_at = 0.0
         self._fault_dialog_active = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
@@ -370,12 +380,18 @@ class HandGUI(QtWidgets.QMainWindow):
     def show_task_runtime_window(self) -> None:
         if self._task_runtime_window is None:
             self._task_runtime_window = TaskRuntimeWindow(self)
-            self._task_runtime_window.destroyed.connect(lambda _obj=None: setattr(self, "_task_runtime_window", None))
+            self._task_runtime_window.destroyed.connect(self._on_task_runtime_window_destroyed)
+            self.backend.set_task_diag_subscription(True)
         if self._state is not None:
             self._task_runtime_window.update_state(self._state)
         self._task_runtime_window.show()
         self._task_runtime_window.raise_()
         self._task_runtime_window.activateWindow()
+
+    def _on_task_runtime_window_destroyed(self, _obj=None) -> None:
+        """窗口关闭后立即退订，避免纯诊断数据继续占用串口带宽。"""
+        self._task_runtime_window = None
+        self.backend.set_task_diag_subscription(False)
 
     def show_auto_calib_log_dialog(self) -> None:
         latest = self._latest_auto_calib_log_path()
@@ -995,6 +1011,11 @@ class HandGUI(QtWidgets.QMainWindow):
         value_c = int(getattr(state, "calib_diag_value_c", 0) or 0)
         bitmap = int(getattr(state, "calib_diag_bitmap", 0) or 0)
         timestamp_ms = int(getattr(state, "calib_diag_timestamp_ms", 0) or 0)
+        sequence = int(getattr(state, "calib_diag_sequence", 0) or 0)
+        completed_mask = int(
+            getattr(state, "calib_diag_completed_joint_mask", 0) or 0
+        )
+        failed_mask = int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
 
         reason_names = {
             CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY: "没有可标定的 active 关节",
@@ -1015,6 +1036,11 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
             CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT: "舵机热插拔恢复超时",
             CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: "单电机关节松绳超过两圈",
+            CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID: "关节与舵机映射无效",
+            CALIB_DIAG_REASON_RESULT_SPAN_INVALID: "磁编有效行程无效",
+            CALIB_DIAG_REASON_RESULT_BUILD_FAILED: "标定结果或 LUT 构建失败",
+            CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: "标定结果提交失败",
+            CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: "舵机多圈可信状态提交失败",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -1038,6 +1064,11 @@ class HandGUI(QtWidgets.QMainWindow):
             lines.append(f"标定失败原因：{title}")
             lines.append(f"阶段：{phase_text}")
             lines.append(f"对象：{joint_text}, {motor_text}")
+            if completed_mask or failed_mask:
+                lines.append(
+                    f"本轮结果：completed=0x{completed_mask:08X}, "
+                    f"failed=0x{failed_mask:08X}"
+                )
 
             if reason == CALIB_DIAG_REASON_OVERLOAD:
                 lines.append(f"数据：load={value_a}, limit={value_b}, raw_load={value_c}, bitmap=0x{bitmap:08X}")
@@ -1106,6 +1137,36 @@ class HandGUI(QtWidgets.QMainWindow):
                     "请检查绳索是否脱落、断裂、绕线方向错误或磁编码器未随机械运动；"
                     "确认机械安全后 Clear Fault，再重新标定。"
                 )
+            elif reason == CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID:
+                lines.append(
+                    f"数据：joint={value_a}, primary={value_b}, secondary={value_c}, "
+                    f"motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("检查 HardwareMap 中该关节的 J/M 映射、主副电机编号和舵机总数配置。")
+            elif reason == CALIB_DIAG_REASON_RESULT_SPAN_INVALID:
+                lines.append(
+                    f"数据：encoder_span={value_a}, endpoint_a={value_b}, "
+                    f"endpoint_b={value_c}, motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("磁编两端没有形成有效行程。检查磁编方向、机械是否确实运动到两端，以及 SPI/CAN 数据是否实时更新。")
+            elif reason == CALIB_DIAG_REASON_RESULT_BUILD_FAILED:
+                lines.append(
+                    f"数据：sample_count={value_a}, encoder_span={value_b}, "
+                    f"lut_count={value_c}, motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("端点或 LUT 样本无法组成有效标定结果。检查 Manual Min/Max、采样点数量和磁编行程后重新标定。")
+            elif reason == CALIB_DIAG_REASON_RESULT_COMMIT_FAILED:
+                lines.append(
+                    f"数据：joint={value_a}, encoder_span={value_b}, "
+                    f"lut_count={value_c}, motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("标定计算已结束，但结果未能写入运行时标定表。检查关节索引、共享状态和标定结果结构。")
+            elif reason == CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED:
+                lines.append(
+                    f"数据：joint={value_a}, primary={value_b}, secondary={value_c}, "
+                    f"motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("标定结果已计算，但对应舵机仍不能登记为 Turn Known。检查舵机在线、多圈模式配置和热插拔恢复状态。")
             elif reason == CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED:
                 workspace_stage_names = {
                     101: "动作前反馈预检查",
@@ -1139,7 +1200,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "title": title,
             "lines": lines,
             "suggestions": suggestions,
-            "key": f"{reason}:{phase}:{joint}:{motor}:{value_a}:{value_b}:{value_c}:{bitmap:08X}:{timestamp_ms}",
+            "key": f"{sequence}:{reason}:{phase}:{joint}:{motor}:{value_a}:{value_b}:{value_c}:{bitmap:08X}:{timestamp_ms}",
         }
 
     def _calib_tooltip(self, state: HandModel, calib: str) -> str:
@@ -1301,8 +1362,10 @@ class HandGUI(QtWidgets.QMainWindow):
         if not summary.get("active"):
             self._last_overload_popup_mask = 0
             self._fault_popup_episode_active = False
+            self._last_fault_popup_key = ""
             self._fault_stop_sent = False
             self._fault_previous_runtime_active = bool(runtime_state)
+            self._calib_diag_wait_started_at = 0.0
             return
 
         if self._fault_stop_allowed(summary, state) and not self._fault_stop_sent:
@@ -1320,7 +1383,22 @@ class HandGUI(QtWidgets.QMainWindow):
 
         if not self._fault_popup_allowed(summary, state):
             return
-        if self._fault_popup_episode_active:
+        # SYSTEM_STATUS 与 CALIB_DIAG 分包发送。故障位可能先到，短暂等待
+        # 结构化诊断，避免通用提示抢先弹出并吞掉真实的 J/M/阶段原因。
+        calibration_fault_without_diag = bool(
+            int(summary.get("bitmap", 0) or 0) & SYSTEM_FAULT_CALIBRATION
+        ) and not self._calib_diag_summary(state).get("active")
+        if calibration_fault_without_diag:
+            now = time.monotonic()
+            if self._calib_diag_wait_started_at <= 0.0:
+                self._calib_diag_wait_started_at = now
+                return
+            if now - self._calib_diag_wait_started_at < 0.50:
+                return
+        else:
+            self._calib_diag_wait_started_at = 0.0
+        popup_key = str(summary.get("key") or "")
+        if self._fault_popup_episode_active and popup_key == self._last_fault_popup_key:
             return
         if self._fault_dialog_active:
             return
@@ -1330,6 +1408,7 @@ class HandGUI(QtWidgets.QMainWindow):
             unknown_mask and self.control_panel.turn_unknown_popup_seen()
         )
         self._fault_popup_episode_active = True
+        self._last_fault_popup_key = popup_key
         if summary.get("only_turn_unknown") and turn_popup_seen:
             return
         if unknown_mask:
@@ -1395,16 +1474,7 @@ class HandGUI(QtWidgets.QMainWindow):
         if int(getattr(state, "feedback_admission_status", 0) or 0) != FEEDBACK_ADMISSION_REJECTED:
             return ""
         reason = int(getattr(state, "feedback_reject_reason", 0) or 0)
-        names = {
-            FEEDBACK_REJECT_MANUAL_REFERENCE: "Manual reference missing",
-            FEEDBACK_REJECT_STATE: "state does not allow feedback",
-            FEEDBACK_REJECT_WORKSPACE: "active joint is outside READY workspace",
-            FEEDBACK_REJECT_MULTITURN: "multi-turn position unknown",
-            FEEDBACK_REJECT_ABS_LIMIT: "active joint calibration is invalid",
-            FEEDBACK_REJECT_MODE_SWITCH: "command mode switch is busy",
-            FEEDBACK_REJECT_EVENT_QUEUE: "state event queue is full",
-        }
-        return names.get(reason, f"unknown reason {reason}")
+        return explain_feedback_reject(reason)
 
     def _turn_known_status(self, state: HandModel, system_status_fresh: Optional[bool] = None) -> tuple[str, bool, str]:
         if system_status_fresh is None:
@@ -1665,7 +1735,6 @@ class HandGUI(QtWidgets.QMainWindow):
         )
         self._recording_status_note = path
         self._recording_csv_path = path
-        self._start_joint_debug_packet_log()
         notes = []
         if bool(options.get("csv", True)):
             notes.append("CSV: on")
@@ -1694,10 +1763,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 self._maybe_write_run_data_row(self._state, force=True)
             self._record_event("save_data_stop", detail=reason, source="recorder")
             self._data_logger.stop()
-            self._stop_joint_debug_packet_log()
             self._set_status(f"Recording {reason}: {path}")
-        else:
-            self._stop_joint_debug_packet_log()
 
     def start_recording_for_test(self, reason: str = "test") -> None:
         if self._test_recording_stop_active():
@@ -1719,7 +1785,6 @@ class HandGUI(QtWidgets.QMainWindow):
             if thread is not None and thread.is_alive():
                 return
             if not self._data_logger.is_running():
-                self._stop_joint_debug_packet_log()
                 return
             path = self._data_logger.path
             flush_motion = getattr(self, "_flush_motion_recording_due", None)
@@ -1753,12 +1818,6 @@ class HandGUI(QtWidgets.QMainWindow):
             self._data_logger.stop()
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-        finally:
-            try:
-                self._stop_joint_debug_packet_log()
-            except Exception as exc:
-                if not error:
-                    error = f"{type(exc).__name__}: {exc}"
         self.test_recording_stop_finished.emit(path, reason, error)
 
     def _on_test_recording_stop_finished(self, path: str, reason: str, error: str) -> None:
@@ -1951,12 +2010,6 @@ class HandGUI(QtWidgets.QMainWindow):
                     "joint_encoder_raw": (
                         getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
                     ),
-                    "joint_debug_valid": (
-                        1 if i < len(getattr(state, "joint_debug_valid", [])) and state.joint_debug_valid[i] else 0
-                    ),
-                    "joint_debug_actual_deg": self._seq_value(getattr(state, "joint_debug_actual_deg", []), i),
-                    "joint_debug_target_deg": self._seq_value(getattr(state, "joint_debug_target_deg", []), i),
-                    "joint_debug_cmd_target_pos": self._seq_value(getattr(state, "joint_debug_cmd_target_pos", []), i),
                 },
             )
         self._write_joint_wide_row(state, host_time, p4_time_ms, active_joint_mask, targets)
@@ -2044,26 +2097,6 @@ class HandGUI(QtWidgets.QMainWindow):
                 getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
             )
             row[f"{label}_active"] = 1 if self._mask_has_bit(active_joint_mask, i) else 0
-            row[f"{label}_debug_valid"] = (
-                1
-                if i < len(getattr(state, "joint_debug_valid", []))
-                and state.joint_debug_valid[i]
-                else 0
-            )
-            row[f"{label}_debug_actual_deg"] = self._seq_value(getattr(state, "joint_debug_actual_deg", []), i)
-            row[f"{label}_debug_target_deg"] = self._seq_value(getattr(state, "joint_debug_target_deg", []), i)
-            row[f"{label}_debug_pid_output"] = self._seq_value(
-                getattr(state, "joint_debug_loop1_output", []), i
-            )
-            row[f"{label}_debug_cmd_valid"] = (
-                1
-                if i < len(getattr(state, "joint_debug_cmd_valid", []))
-                and state.joint_debug_cmd_valid[i]
-                else 0
-            )
-            row[f"{label}_debug_cmd_target_pos"] = self._seq_value(
-                getattr(state, "joint_debug_cmd_target_pos", []), i
-            )
         self._data_logger.write("joint_wide", row)
 
     def _write_servo_wide_row(
@@ -2176,41 +2209,6 @@ class HandGUI(QtWidgets.QMainWindow):
         raw_now = int(raw_values[motor_index]) % 4096
         direct_diff = abs(raw_now - int(flash_raw))
         return min(direct_diff, 4096 - direct_diff)
-
-    def _start_joint_debug_packet_log(self) -> None:
-        """Joint Debug 只进入统一多 topic 记录器，避免再生成一份旧格式重复 CSV。"""
-        try:
-            if not self.backend.start_joint_debug_packet_log(
-                "",
-                row_callback=self._write_joint_debug_packet_row,
-            ):
-                return
-        except Exception:
-            pass
-
-    def _stop_joint_debug_packet_log(self) -> None:
-        try:
-            self.backend.stop_joint_debug_packet_log()
-        finally:
-            pass
-
-    def _write_joint_debug_packet_row(self, row: Dict[str, object]) -> None:
-        if not self._data_logger.is_running():
-            return
-        self._data_logger.write(
-            "joint_debug_packets",
-            {
-                "host_time": row.get("host_time", time.time()),
-                "p4_time_ms": row.get("p4_time_ms", ""),
-                "joint_index": row.get("joint_index", ""),
-                "valid": row.get("valid", ""),
-                "target_deg": row.get("target_deg", ""),
-                "actual_deg": row.get("actual_deg", ""),
-                "loop1_output": row.get("loop1_output", ""),
-                "cmd_valid": row.get("cmd_valid", ""),
-                "cmd_target_pos": row.get("cmd_target_pos", ""),
-            },
-        )
 
     def _run_data_root_dir(self) -> str:
         return os.path.join(PROJECT_ROOT_DIR, "run_data")

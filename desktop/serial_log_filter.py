@@ -32,7 +32,6 @@ PACKET_NAMES = {
     0x01: "sensorMapped",
     0x02: "calibAck",
     0x03: "servoAbs",
-    0x04: "jointDebug",
     0x05: "servoTelem",
     0x06: "protoAck",
     0x07: "overloadFault",

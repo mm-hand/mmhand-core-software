@@ -176,95 +176,61 @@ class StateReducer:
                     model.encoder_raw_last_rx_ts = time.time()
                     emitted = True
 
-            # 自动标定阶段 ACK 只更新标定进度，不代替协议命令 ACK。
-            elif packet_kind == "calibration_ack":
-                code = owner._parse_protocol_payload("parse_calib_ack", payload)
-                if code == 1:
-                    model.calib_status = "RUNNING"
-                elif code == 2:
-                    model.calib_status = "SUCCESS"
-                elif code == 3:
-                    model.calib_status = "FAILED"
-                elif code == 4:
-                    model.calib_status = "WARN"
-                emitted = True
-
             # 舵机 logical ABS：控制、标定和多圈恢复共同使用的连续位置反馈。
             elif packet_kind == "servo_abs":
                 parsed = owner._parse_protocol_payload("parse_servo_angle_packet", payload)
                 if parsed is not None:
-                    angles, online_flags = parsed
-                    for i in range(min(MOTOR_COUNT, len(angles))):
-                        model.servo_angles[i] = int(angles[i])
-                        model.servo_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
+                    for i in range(min(MOTOR_COUNT, len(parsed))):
+                        model.servo_angles[i] = int(parsed[i])
                     model.has_servo_angle_data = True
                     emitted = True
 
-            # 舵机单圈 raw 与 Flash raw：用于热插拔恢复和断电前后差值诊断。
+            # 100 Hz 舵机单圈 raw；Flash raw 已改为保存结果触发的独立包。
             elif packet_kind == "servo_raw":
                 parsed = owner._parse_protocol_payload("parse_servo_raw_packet", payload)
                 if parsed is not None:
-                    raw_positions, flash_raw_positions, online_flags = parsed
-                    for i in range(min(MOTOR_COUNT, len(raw_positions))):
-                        model.servo_raw_positions[i] = int(raw_positions[i])
-                        if i < len(flash_raw_positions):
-                            model.servo_flash_raw_positions[i] = int(
-                                flash_raw_positions[i]
-                            )
-                        model.servo_raw_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
+                    for i in range(min(MOTOR_COUNT, len(parsed))):
+                        model.servo_raw_positions[i] = int(parsed[i])
                     model.has_servo_raw_data = True
-                    model.has_servo_flash_raw_data = True
+                    emitted = True
+
+            elif packet_kind == "multiturn_restore_result":
+                parsed = owner._parse_protocol_payload(
+                    "parse_multiturn_restore_result_packet", payload
+                )
+                if parsed is not None:
+                    token, restored_mask, rejected_mask = parsed
+                    model.multiturn_restore_result_token = int(token)
+                    model.multiturn_restore_restored_mask = int(restored_mask)
+                    model.multiturn_restore_rejected_mask = int(rejected_mask)
+                    model.multiturn_restore_result_last_rx_ts = time.time()
+                    emitted = True
+
+            elif packet_kind == "multiturn_snapshot_raw":
+                parsed = owner._parse_protocol_payload(
+                    "parse_multiturn_snapshot_raw_packet", payload
+                )
+                if parsed is not None:
+                    token, valid_mask, raw_values = parsed
+                    model.multiturn_snapshot_result_token = int(token)
+                    model.multiturn_snapshot_valid_mask = int(valid_mask)
+                    for i in range(min(MOTOR_COUNT, len(raw_values))):
+                        model.servo_flash_raw_positions[i] = int(raw_values[i])
+                    model.has_servo_flash_raw_data = int(valid_mask) != 0
+                    model.multiturn_snapshot_last_rx_ts = time.time()
                     emitted = True
 
             # 舵机遥测：速度、负载、电流、电压和温度保持同一帧原子更新。
             elif packet_kind == "servo_telemetry":
                 parsed = owner._parse_protocol_payload("parse_servo_telem_packet", payload)
                 if parsed is not None:
-                    speeds, loads, currents, volts, temps, online = parsed
+                    speeds, loads, currents, volts, temps = parsed
                     for i in range(min(MOTOR_COUNT, len(speeds))):
                         model.servo_speed[i] = int(speeds[i])
                         model.servo_load[i] = int(loads[i])
                         model.servo_current[i] = int(currents[i])
                         model.servo_voltage[i] = int(volts[i])
                         model.servo_temperature[i] = int(temps[i])
-                        model.servo_telem_online[i] = bool(online[i]) if i < len(online) else False
-                    emitted = True
-
-            # 关节调试包同时进入模型和独立记录器，二者共享同一个 P4 时间戳。
-            elif packet_kind == "joint_debug":
-                parsed = owner._parse_protocol_payload("parse_joint_debug_packet", payload)
-                if parsed is not None:
-                    (
-                        joint_index,
-                        valid,
-                        target_deg,
-                        actual_deg,
-                        loop1_out,
-                        cmd_valid,
-                        cmd_target_pos,
-                        device_timestamp_ms,
-                    ) = parsed
-                    owner._log_joint_debug_packet(
-                        host_ts_wall=time.time(),
-                        joint_index=joint_index,
-                        valid=valid,
-                        target_deg=target_deg,
-                        actual_deg=actual_deg,
-                        loop1_out=loop1_out,
-                        cmd_valid=cmd_valid,
-                        cmd_target_pos=cmd_target_pos,
-                        p4_time_ms=device_timestamp_ms,
-                    )
-                    model.p4_time_ms = int(device_timestamp_ms)
-                    model.has_p4_time = True
-                    if 0 <= joint_index < ENCODER_COUNT:
-                        model.joint_debug_valid[joint_index] = valid
-                        model.joint_debug_target_deg[joint_index] = float(target_deg)
-                        model.joint_debug_actual_deg[joint_index] = float(actual_deg)
-                        model.joint_debug_loop1_output[joint_index] = float(loop1_out)
-                        model.joint_debug_cmd_valid[joint_index] = bool(cmd_valid)
-                        model.joint_debug_cmd_target_pos[joint_index] = int(cmd_target_pos)
-                        model.joint_debug_timestamp_ms[joint_index] = int(device_timestamp_ms)
                     emitted = True
 
             # 故障包只描述每台舵机的过载锁存，不在通信层自行清除故障。
@@ -390,6 +356,13 @@ class StateReducer:
                     model.require_can_feedback = bool(require_can_feedback)
                     model.has_active_scope_status = bool(has_active_scope_status)
                     model.servo_online_bitmap = int(servo_online_bitmap)
+                    # 在线状态只有 SYSTEM_STATUS 一个权威来源；三个展示数组保持
+                    # 同步，避免 100 Hz 数据包重复携带 27 字节在线标志。
+                    for i in range(MOTOR_COUNT):
+                        online = ((int(servo_online_bitmap) >> i) & 0x01) != 0
+                        model.servo_online[i] = online
+                        model.servo_raw_online[i] = online
+                        model.servo_telem_online[i] = online
                     model.encoder_online_bitmap = int(encoder_online_bitmap)
                     model.encoder_warn_bitmap = int(encoder_warn_bitmap)
                     model.encoder_fault_bitmap = int(encoder_fault_bitmap)
@@ -508,6 +481,30 @@ class StateReducer:
                     model.has_product_fingerprint = True
                     emitted = True
 
+            elif packet_kind == "safety_event":
+                parsed = owner._parse_protocol_payload(
+                    "parse_safety_event_packet", payload
+                )
+                if parsed is not None:
+                    event = dict(parsed)
+                    event["device_timestamp_ms"] = int(packet_p4_time_ms or 0)
+                    # sequence 是 P4 单调事件号；重连或重复帧不得制造第二条证据。
+                    last_sequence = int(
+                        model.latest_safety_event.get("sequence", 0)
+                        if model.latest_safety_event
+                        else 0
+                    )
+                    if int(event["sequence"]) != last_sequence:
+                        model.safety_event_history.append(event)
+                        model.safety_event_history = model.safety_event_history[-64:]
+                    model.latest_safety_event = event
+                    model.safety_event_overflow_count = int(
+                        event.get("overflow_count", 0)
+                    )
+                    model.safety_event_last_rx_ts = time.time()
+                    model.has_safety_event = True
+                    emitted = True
+
             # 标定得到的电机 ABS 边界与锁定位图必须整包替换，不能逐项混用旧值。
             elif packet_kind == "motor_abs_limit":
                 parsed = owner._parse_protocol_payload("parse_motor_abs_limit_packet", payload)
@@ -590,6 +587,13 @@ class StateReducer:
                     model.calib_diag_value_c = int(parsed.get("valueC", 0) or 0)
                     model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
                     model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
+                    model.calib_diag_sequence = int(parsed.get("sequence", 0) or 0)
+                    model.calib_diag_completed_joint_mask = int(
+                        parsed.get("completed_joint_mask", 0) or 0
+                    )
+                    model.calib_diag_failed_joint_mask = int(
+                        parsed.get("failed_joint_mask", 0) or 0
+                    )
                     model.p4_time_ms = model.calib_diag_timestamp_ms
                     model.has_p4_time = True
                     emitted = True

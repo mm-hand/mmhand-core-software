@@ -43,7 +43,7 @@ def _load_schema(path: Path) -> dict:
                 raise ValueError(f"{label} {item['name']} description must contain Chinese")
             if "\n" in description or "\r" in description or "*/" in description:
                 raise ValueError(f"{label} {item['name']} description must be one safe comment line")
-    for group in ("proto_ack_status", "manual_save_status"):
+    for group in ("proto_ack_status", "manual_save_status", "state_sync_masks"):
         descriptions = data.get(f"{group}_descriptions", {})
         missing = [name for name in data.get(group, {}) if not str(descriptions.get(name, "")).strip()]
         if missing:
@@ -104,7 +104,7 @@ def _render_cpp(schema: dict) -> str:
             f"inline constexpr uint8_t {item['name']} = 0x{int(item['value']):02X}; "
             f"///< {description}"
         )
-    for group in ("proto_ack_status", "manual_save_status"):
+    for group in ("proto_ack_status", "manual_save_status", "state_sync_masks"):
         descriptions = schema.get(f"{group}_descriptions", {})
         for name, value in schema[group].items():
             description = str(descriptions.get(name, "未填写用途"))
@@ -113,7 +113,7 @@ def _render_cpp(schema: dict) -> str:
                 f"///< {description}"
             )
 
-    # 保留已有符号名，让业务代码迁移到生成契约时不发生机械行为变化。
+    # 命名长度常量供业务解析器和生成长度查询函数共享，避免头文件内出现第二份魔数。
     lengths = {item["name"]: int(item["payload_bytes"]) for item in schema["commands"]}
     aliases = {
         "kFloatPayloadBytes": "CMD_ANGLE_CTRL",
@@ -132,6 +132,8 @@ def _render_cpp(schema: dict) -> str:
         "kRopeInitPayloadBytes": "CMD_ROPE_INIT",
         "kClearCalibrationScopePayloadBytes": "CMD_CLEAR_CALIBRATION_SCOPE",
         "kServoResetZeroPayloadBytes": "CMD_SERVO_RESET_ZERO",
+        "kStateSyncRequestPayloadBytes": "CMD_STATE_SYNC_REQUEST",
+        "kTaskDiagSubscribePayloadBytes": "CMD_TASK_DIAG_SUBSCRIBE",
     }
     lines.extend(["", "// 固定 payload 长度；单位 byte，不包含命令字本身。"])
     for alias, command in aliases.items():
@@ -147,13 +149,13 @@ def _render_cpp(schema: dict) -> str:
             "    switch (command) {",
         ]
     )
-    grouped: dict[int, list[str]] = {}
+    alias_for_command = {command: alias for alias, command in aliases.items()}
+    # 连续直控与普通单圈直控使用完全相同的 27 路 uint16 payload。
+    alias_for_command["CMD_MOTOR_POS_SWEEP"] = "kMotorPosPayloadBytes"
     for item in schema["commands"]:
-        grouped.setdefault(int(item["payload_bytes"]), []).append(item["name"])
-    for payload_bytes, names in sorted(grouped.items()):
-        for name in names:
-            lines.append(f"        case {name}:")
-        lines.append(f"            return {payload_bytes};")
+        name = item["name"]
+        return_value = alias_for_command.get(name, str(int(item["payload_bytes"])))
+        lines.append(f"        case {name}: return {return_value};")
     lines.extend(["        default: return SIZE_MAX;", "    }", "}", ""])
     for name, value in schema["p4_runtime"]["heartbeats_ms"].items():
         lines.append(
@@ -200,7 +202,7 @@ def _render_python(schema: dict) -> str:
             f"{item['name']} = 0x{int(item['value']):02X}  "
             f"# {item.get('description', '未填写用途')}"
         )
-    for group in ("proto_ack_status", "manual_save_status"):
+    for group in ("proto_ack_status", "manual_save_status", "state_sync_masks"):
         lines.append("")
         descriptions = schema.get(f"{group}_descriptions", {})
         for name, value in schema[group].items():

@@ -12,19 +12,15 @@
 
 namespace mmhand::config::control {
 
-/** P4 关节反馈控制任务的固定周期。 */
-inline constexpr uint32_t kPeriodMs = 10;
+/** P4 关节反馈控制任务的固定周期，单位秒。 */
 inline constexpr float kPeriodSec = 0.010f;
 
 /** 14 bit 磁编码器一圈的原始计数。 */
 inline constexpr int32_t kEncoderModulo = 16384;
-/** 标定行程越过环形零点时允许的约 10 度判断余量。 */
-inline constexpr int32_t kEncoderMarginCounts =
-    (kEncoderModulo * 10 + 180) / 360;
 inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-/** PID 诊断日志采用全 active scope 轮询，避免 J00 长期独占日志。 */
-inline constexpr bool kPidDiagLogEnabled = true;
+/** PID 诊断默认关闭；实机调参时临时开启，并在 active scope 内轮询输出。 */
+inline constexpr bool kPidDiagLogEnabled = false;
 inline constexpr uint32_t kPidDiagLogPeriodMs = 50;
 
 inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;

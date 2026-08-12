@@ -8,11 +8,8 @@
 禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
 """
 
-import re
-from pathlib import Path
 from typing import List, Optional, Tuple
 
-from desktop.paths import PROJECT_ROOT
 from desktop.core.protocol import ENCODER_COUNT, HAND_PROFILE, MOTOR_COUNT, VALID_MOTOR_MASK
 
 from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX
@@ -32,40 +29,14 @@ FINGER_WORKFLOW_JOINT_ORDER = {
 }
 
 
-def _load_default_auto_calibration_joint_indices() -> List[int]:
-    """Load the default auto-calibration joint order from firmware source when available."""
-    fallback = [
-        0, 1, 2, 3,
-        4, 5, 6, 7,
-        8, 9, 10, 11,
-        12, 13, 14, 15,
-        20, 16, 17, 18, 19,
-    ]
-    try:
-        source_path = (
-            PROJECT_ROOT
-            / "ESP32-P4"
-            / "ServoBoardMain"
-            / "src"
-            / "calibration"
-            / "AutoCalibrationTask.cpp"
-        )
-        text = source_path.read_text(encoding="utf-8", errors="ignore")
-        match = re.search(
-            r"const\s+uint8_t\s+kDefaultAutoCalibrationJoints\s*\[\]\s*=\s*\{([^}]*)\}",
-            text,
-            re.MULTILINE,
-        )
-        if not match:
-            return fallback
-        joints = [int(token) for token in re.findall(r"\b\d+\b", match.group(1))]
-        joints = [idx for idx in joints if 0 <= idx < ENCODER_COUNT]
-        return joints or fallback
-    except Exception:
-        return fallback
-
-
-AUTO_CALIBRATION_JOINT_INDICES = _load_default_auto_calibration_joint_indices()
+# 设备 active scope 是实际标定范围；该列表仅供尚未取得设备状态时的 UI 展示。
+AUTO_CALIBRATION_JOINT_INDICES = [
+    joint_idx
+    for group_label, joint_start, joint_end in FINGER_JOINT_RANGES
+    for joint_idx in FINGER_WORKFLOW_JOINT_ORDER.get(
+        group_label, list(range(joint_start, joint_end + 1))
+    )
+]
 
 
 def _motor_channel_valid(idx: int) -> bool:

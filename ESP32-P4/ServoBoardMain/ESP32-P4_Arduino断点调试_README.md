@@ -165,8 +165,8 @@ Listening on port 3333 for gdb connections
 建议第一次在以下低风险位置设置断点：
 
 ```text
-System_Init()
-StateMachineTask 的状态切换分支
+appBootstrapSetup()
+SystemStateTask 的状态切换分支
 上位机命令解析入口
 ```
 

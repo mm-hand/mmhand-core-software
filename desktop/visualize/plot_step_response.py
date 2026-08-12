@@ -34,8 +34,6 @@ def latest_run_csv(run_data_dir: str) -> str:
         lower = name.lower()
         if not lower.endswith(".csv"):
             continue
-        if lower.endswith("_joint_debug_packets.csv"):
-            continue
         if lower.endswith("_load_slim.csv"):
             continue
         if not lower.startswith("hand_run_"):
@@ -116,22 +114,7 @@ def choose_actual_series(
     source: str,
 ) -> Tuple[List[float], str]:
     encoder_key = f"joint_deg_j{joint:02d}"
-    debug_valid_key = f"joint_debug_valid_j{joint:02d}"
-    debug_actual_key = f"joint_debug_actual_deg_j{joint:02d}"
-
     encoder = [safe_float(row.get(encoder_key, "")) for row in rows]
-    debug: List[float] = []
-    for row in rows:
-        valid = str(row.get(debug_valid_key, "")).strip() == "1"
-        value = safe_float(row.get(debug_actual_key, ""))
-        debug.append(value if valid else float("nan"))
-
-    if source == "encoder":
-        return encoder, "encoder actual"
-    if source == "debug":
-        return debug, "debug actual"
-    if finite_count(debug) >= 3:
-        return debug, "debug actual"
     return encoder, "encoder actual"
 
 
@@ -215,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", default="", help="CSV path. Defaults to latest run_data/hand_run_*.csv.")
     parser.add_argument("--run-data-dir", default=default_run_data_dir(), help="Directory used when --csv is omitted.")
     parser.add_argument("--joint", default="J11", help="Joint to plot, for example J11. Use all for all 21 joints.")
-    parser.add_argument("--source", choices=["auto", "encoder", "debug"], default="auto", help="Actual-angle source.")
+    parser.add_argument("--source", choices=["encoder"], default="encoder", help="Actual-angle source.")
     parser.add_argument("--out", default="", help="Output PNG path. Defaults next to the CSV.")
     parser.add_argument("--show", action="store_true", help="Also open a matplotlib window.")
     return parser

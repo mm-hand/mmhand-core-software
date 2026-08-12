@@ -117,12 +117,6 @@ def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
         "servo_telem_online": list(s.servo_telem_online),
         "servo_overload_fault": list(s.servo_overload_fault),
         "servo_overload_trigger_load": list(getattr(s, "servo_overload_trigger_load", [])),
-        "jd_valid": list(s.joint_debug_valid),
-        "jd_target": list(s.joint_debug_target_deg),
-        "jd_actual": list(s.joint_debug_actual_deg),
-        "jd_l1": list(s.joint_debug_loop1_output),
-        "jd_cmd_valid": list(s.joint_debug_cmd_valid),
-        "jd_cmd_pos": list(s.joint_debug_cmd_target_pos),
     }
 
 

@@ -10,6 +10,8 @@ from desktop.core.protocol import (
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
+    CMD_MANUAL_ENCODER_REFERENCE,
+    CMD_MULTITURN_NVS_CONTROL,
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     ControlMode,
@@ -18,6 +20,7 @@ from desktop.core.protocol import (
     TENDON_LUT_MAX_SAMPLES,
     MOTOR_ABS_CMD_MIN,
     MOTOR_ABS_CMD_MAX,
+    PROTO_ACK_STATUS_QUEUED,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
@@ -290,6 +293,61 @@ class TestRequestRunFeedback:
         assert controller.request_run_feedback() is True
         controller.comm.send_command.assert_called_once_with("run_feedback")
 
+
+class TestAsyncPersistenceAck:
+    """异步 Flash 命令必须在 QUEUED 后等待最终状态，不能误报完成。"""
+
+    def test_manual_reference_accepts_queued_then_verifies_readback(self):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.comm.wait_for_ack.return_value = (
+            CMD_MANUAL_ENCODER_REFERENCE,
+            0,
+            PROTO_ACK_STATUS_QUEUED,
+            1.0,
+        )
+        controller._wait_for_manual_reference_save_result = MagicMock(
+            return_value=True
+        )
+        controller._verify_manual_encoder_readback = MagicMock(return_value=True)
+
+        mins = [100] * ENCODER_COUNT
+        maxs = [200] * ENCODER_COUNT
+        assert controller.set_manual_encoder_references(mins, maxs) is True
+        controller._wait_for_manual_reference_save_result.assert_called_once()
+        controller._verify_manual_encoder_readback.assert_called_once()
+
+    def test_multiturn_control_accepts_queued_only_after_state_confirmation(self):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.comm.wait_for_ack.return_value = (
+            CMD_MULTITURN_NVS_CONTROL,
+            0,
+            PROTO_ACK_STATUS_QUEUED,
+            1.0,
+        )
+        controller._wait_for_multiturn_nvs_control_result = MagicMock(
+            return_value=True
+        )
+
+        assert controller.set_multiturn_nvs_enabled(True) is True
+        controller._wait_for_multiturn_nvs_control_result.assert_called_once()
+
+    def test_multiturn_control_reports_failure_when_final_state_is_missing(self):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.comm.wait_for_ack.return_value = (
+            CMD_MULTITURN_NVS_CONTROL,
+            0,
+            PROTO_ACK_STATUS_QUEUED,
+            1.0,
+        )
+        controller._wait_for_multiturn_nvs_control_result = MagicMock(
+            return_value=False
+        )
+
+        assert controller.set_multiturn_nvs_enabled(False) is False
+        assert "not confirmed" in controller.last_multiturn_nvs_error
 
 class TestResetMultiturnBaselineForNewDevice:
     def test_rejects_when_all_motor_turns_are_trusted_before_any_command(self):

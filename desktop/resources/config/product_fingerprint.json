@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "model_id": "mmhand_structure_21dof",
-  "mapping_id": "structure_urdf_v2",
-  "feedback_mapping_version": 2,
+  "mapping_id": "structure_urdf_v3",
+  "feedback_mapping_version": 3,
   "manual_scaled_mapping_version": 3,
-  "control_model_crc": "7C0F9E73",
-  "visual_model_crc": "C1E38298",
+  "control_model_crc": "BE9EB4B1",
+  "visual_model_crc": "A28E43D3",
   "hardware_map_crc": "9B40D3A6",
-  "parameter_crc": "A10AC3F9",
-  "firmware_source_crc": "44AB76E3",
-  "structure_commit_crc": "3DD60EFD",
-  "source_commit": "0e9737072528d817e1343f578fbb48fcbee762b6"
+  "parameter_crc": "D775DA11",
+  "firmware_source_crc": "0D35679A",
+  "structure_commit_crc": "34467BF8",
+  "source_commit": "a3a4400dfc3fa0702b2dfc60afaf3ba12317cc58"
 }

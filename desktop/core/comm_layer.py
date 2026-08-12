@@ -13,7 +13,7 @@ import os
 import queue
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 try:
@@ -37,15 +37,20 @@ from .protocol import (
     MOTOR_COUNT,
     PACKET_TYPE_CALIB_DIAG,
     PACKET_TYPE_FAULT_STATUS,
-    PACKET_TYPE_JOINT_DEBUG,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
     PACKET_TYPE_PRODUCT_FINGERPRINT,
     PACKET_TYPE_SERVO_ROUTE_STATUS,
+    PACKET_TYPE_SAFETY_EVENT,
+    PACKET_TYPE_SENSOR,
+    PACKET_TYPE_SERVO_ANGLE,
     PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_SERVO_TELEM,
     PACKET_TYPE_SYSTEM_STATUS,
     PACKET_TYPE_TASK_DIAG,
     PACKET_TYPE_TACTILE,
@@ -77,6 +82,8 @@ from .protocol import (
     build_clear_manual_encoder_reference_cmd,
     build_manual_encoder_query_cmd,
     build_manual_encoder_single_cmd,
+    build_state_sync_request_cmd,
+    build_task_diag_subscribe_cmd,
     build_rope_init_cmd,
     build_pause_cmd,
     build_restore_multiturn_cmd,
@@ -113,14 +120,15 @@ from .protocol import (
     SYSTEM_STATE_PAUSED,
     SYSTEM_FAULT_CALIBRATION,
     parse_calib_diag_packet,
-    parse_calib_ack,
     parse_fault_status_packet,
-    parse_joint_debug_packet,
     parse_joint_calib_snapshot_packet,
     parse_manual_encoder_reference_packet,
     parse_motor_abs_limit_packet,
+    parse_multiturn_restore_result_packet,
+    parse_multiturn_snapshot_raw_packet,
     parse_product_fingerprint_packet,
     parse_servo_route_status_packet,
+    parse_safety_event_packet,
     parse_servo_logical_range_packet,
     parse_proto_ack,
     parse_sensor_packet,
@@ -140,7 +148,6 @@ from .protocol import (
     PROTO_ACK_STATUS_OK,
     PROTO_ACK_STATUS_QUEUED,
 )
-from .run_data_logger import RunDataLogger
 from .session_log import log_session
 
 # String command / HandModel / tuple command.
@@ -206,17 +213,18 @@ MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
 # P4PacketRouter 只负责“包号 -> 稳定语义名”。当前状态归并仍按 packet_type
 # 保持完全兼容，语义名用于诊断和后续把各分支进一步下沉到独立 reducer。
 P4_PACKET_KINDS = {
-    0x01: "sensor",
+    PACKET_TYPE_SENSOR: "sensor",
     PACKET_TYPE_ENCODER_RAW: "encoder_raw",
-    0x02: "calibration_ack",
-    0x03: "servo_abs",
+    PACKET_TYPE_SERVO_ANGLE: "servo_abs",
     PACKET_TYPE_SERVO_RAW: "servo_raw",
-    0x05: "servo_telemetry",
-    PACKET_TYPE_JOINT_DEBUG: "joint_debug",
+    PACKET_TYPE_SERVO_TELEM: "servo_telemetry",
     PACKET_TYPE_FAULT_STATUS: "fault_status",
     PACKET_TYPE_SYSTEM_STATUS: "system_status",
     PACKET_TYPE_PRODUCT_FINGERPRINT: "product_fingerprint",
     PACKET_TYPE_SERVO_ROUTE_STATUS: "servo_route_status",
+    PACKET_TYPE_SAFETY_EVENT: "safety_event",
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT: "multiturn_restore_result",
+    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW: "multiturn_snapshot_raw",
     PACKET_TYPE_MOTOR_ABS_LIMIT: "motor_abs_limit",
     PACKET_TYPE_SERVO_LOGICAL_RANGE: "servo_logical_range",
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE: "manual_reference",
@@ -984,7 +992,6 @@ class LowerComputerComm:
         self._firmware_text_buffer = bytearray()
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
-        self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
         self._rx_diag_bytes = 0
         self._tx_diag_last_print = time.time()
@@ -994,8 +1001,6 @@ class LowerComputerComm:
         self._last_heartbeat_tx = 0.0
         self._heartbeat_enabled = False
         self._offline_reported = False
-        self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
-        self._joint_debug_packet_callback: Optional[Callable[[dict], None]] = None
         self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
         self._tactile_zero_counts: List[List[int]] = [
@@ -1075,7 +1080,6 @@ class LowerComputerComm:
     def disconnect(self):
         self.running = False
         self._heartbeat_enabled = False
-        self.stop_joint_debug_packet_log()
         auto_calib_path = self._auto_calib_logger.close()
         if auto_calib_path:
             log_session("AUTO_CALIB", f"log saved {auto_calib_path}")
@@ -1167,62 +1171,9 @@ class LowerComputerComm:
                 log_session("COMM", f"serial close after offline failed: {close_exc}")
             self._push_rx_model(self._build_offline_model())
 
-    def start_joint_debug_packet_log(self, path: str, row_callback: Optional[Callable[[dict], None]] = None) -> None:
-        fieldnames = [
-            "host_time",
-            "p4_time_ms",
-            "joint_index",
-            "valid",
-            "target_deg",
-            "actual_deg",
-            "loop1_output",
-            "cmd_valid",
-            "cmd_target_pos",
-        ]
-        self._joint_debug_packet_callback = row_callback
-        if path:
-            self._joint_debug_packet_logger.start(path, fieldnames=fieldnames)
-
-    def stop_joint_debug_packet_log(self) -> None:
-        self._joint_debug_packet_logger.stop()
-        self._joint_debug_packet_callback = None
-
-    def _log_joint_debug_packet(
-        self,
-        host_ts_wall: float,
-        joint_index: int,
-        valid: bool,
-        target_deg: float,
-        actual_deg: float,
-        loop1_out: float,
-        cmd_valid: bool,
-        cmd_target_pos: int,
-        p4_time_ms: int,
-    ) -> None:
-        row = {
-            "host_time": float(host_ts_wall),
-            "p4_time_ms": int(p4_time_ms),
-            "joint_index": int(joint_index),
-            "valid": 1 if valid else 0,
-            "target_deg": float(target_deg),
-            "actual_deg": float(actual_deg),
-            "loop1_output": float(loop1_out),
-            "cmd_valid": 1 if cmd_valid else 0,
-            "cmd_target_pos": int(cmd_target_pos),
-        }
-        if self._joint_debug_packet_logger.is_running():
-            self._joint_debug_packet_logger.write_row(row)
-        callback = self._joint_debug_packet_callback
-        if callback is not None:
-            try:
-                callback(dict(row))
-            except Exception:
-                pass
-
     def _reset_rx_diag(self) -> None:
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
-        self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
         self._rx_diag_bytes = 0
 
@@ -1301,9 +1252,7 @@ class LowerComputerComm:
         self._rx_diag_bytes += int(chunk_len)
         self._rx_diag_total_packets += len(packets)
         for pkt_type, _payload in packets:
-            if pkt_type == PACKET_TYPE_JOINT_DEBUG:
-                self._rx_diag_joint_debug_packets += 1
-            elif pkt_type == 0x01:
+            if pkt_type == 0x01:
                 self._rx_diag_sensor_packets += 1
 
     def _maybe_print_rx_diag(self) -> None:
@@ -1312,12 +1261,10 @@ class LowerComputerComm:
         if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._rx_diag_total_packets / elapsed
-        joint_debug_rate = self._rx_diag_joint_debug_packets / elapsed
         sensor_rate = self._rx_diag_sensor_packets / elapsed
         byte_rate = self._rx_diag_bytes / elapsed
         diag_msg = (
             f"total={total_rate:.1f} pkt/s "
-            f"jointDebug={joint_debug_rate:.1f} pkt/s "
             f"sensor={sensor_rate:.1f} pkt/s "
             f"bytes={byte_rate:.0f} B/s"
         )
@@ -1728,6 +1675,10 @@ class LowerComputerComm:
             return build_clear_manual_encoder_reference_cmd()
         if cmd == "query_manual_encoder_reference":
             return build_manual_encoder_query_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "state_sync":
+            return build_state_sync_request_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "task_diag_subscribe":
+            return build_task_diag_subscribe_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
             return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":

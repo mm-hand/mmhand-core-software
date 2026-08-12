@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "model_id": "mmhand_structure_21dof",
-  "mapping_id": "structure_urdf_v2",
-  "feedback_mapping_version": 2,
+  "mapping_id": "structure_urdf_v3",
+  "feedback_mapping_version": 3,
   "manual_scaled_mapping_version": 3,
   "description": "Canonical semantic manifest. URDF geometry and joint limits remain authoritative in hand.urdf.",
   "joints": [

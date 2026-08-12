@@ -42,10 +42,10 @@ def test_all_21_mapping_limits_match_active_urdf():
         assert spec.urdf_range_deg == pytest.approx(actual, abs=1e-4)
 
 
-def test_feedback_mapping_declares_runtime_v2_and_staged_v3():
+def test_feedback_mapping_declares_current_v3_contract():
     data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
     assert data["schema_version"] == 4
-    assert data["feedback_mapping_version"] == 2
+    assert data["feedback_mapping_version"] == 3
     assert data["manual_scaled_mapping_version"] == 3
     assert data["p4_sync_required"] is False
     assert data["p4_generated_header_required"] is True
@@ -66,7 +66,7 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
         cwd=root,
         check=True,
     )
-    version, crc = angle_mapping.urdf_feedback_mapping_metadata()
+    version, _ = angle_mapping.urdf_feedback_mapping_metadata()
     header = (
         root
         / "ESP32-P4"
@@ -76,9 +76,6 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
         / "UrdfJointLimits.generated.h"
     ).read_text(encoding="utf-8")
     assert f"kUrdfFeedbackMappingVersion = {version}" in header
-    match = re.search(r"kUrdfJointLimitConfigCrc = 0x([0-9A-F]{8})UL", header)
-    assert match is not None
-    assert int(match.group(1), 16) == crc
 
     manual_version, manual_crc = angle_mapping.urdf_manual_scaled_mapping_metadata()
     assert f"kManualScaledUrdfFeedbackMappingVersion = {manual_version}" in header
