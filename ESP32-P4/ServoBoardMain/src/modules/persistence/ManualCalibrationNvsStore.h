@@ -36,7 +36,7 @@ uint32_t manualEncoderReferencesValidMask();
 bool manualEncoderReferencesCoverActiveMask(uint32_t requiredMask);
 
 // 独立 A/B NVS schema 2 快照，保存有效位图并允许局部 scope。
-// 该数字仅表示 Flash 二进制布局；与 Auto 角度映射 V3 无关，也不读取旧 schema。
+// 该数字仅表示 Flash 二进制布局；与 Auto 角度映射 V4 无关，也不读取旧 schema。
 bool manualCalibrationNvsLoadLatest(
     ManualEncoderReference* outReferences,
     uint32_t* outSequence = NULL,

@@ -462,7 +462,7 @@ bool sendServoLogicalRangePacket(SystemRuntimeContext* sharedData)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 上报一个关节的 V3 Auto、Tendon LUT 和动态范围快照。 */
+/** 上报一个关节的 V4 Auto、Tendon LUT 和静态 URDF 范围快照。 */
 bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) {
@@ -470,7 +470,7 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     }
 
     const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
-    // 当前唯一 V3 基础快照 189 bytes，附加 13 bytes 装配告警、4 bytes
+    // 当前唯一 V4 基础快照 189 bytes，附加 13 bytes 装配告警、4 bytes
     // 时间戳和帧头尾后共 210 bytes；预留到 224，避免局部数组越界。
     uint8_t buffer[224];
     size_t idx = 0;

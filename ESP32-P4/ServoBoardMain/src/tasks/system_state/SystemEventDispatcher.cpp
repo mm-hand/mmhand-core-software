@@ -314,7 +314,7 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         return false;
     }
 
-    // 自动恢复只允许“向工作空间内部”运动，禁止目标仍低于动态 currentMin。
+    // 自动恢复只允许“向工作空间内部”运动；V4 中 currentMin 固定等于 URDF Min。
     bool safe = true;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         if ((activeMask & (1UL << joint)) == 0) {

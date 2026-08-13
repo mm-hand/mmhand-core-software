@@ -3,7 +3,7 @@
   "model_id": "mmhand_structure_21dof",
   "mapping_id": "structure_urdf_v3",
   "feedback_mapping_version": 3,
-  "manual_scaled_mapping_version": 3,
+  "manual_scaled_mapping_version": 4,
   "description": "Canonical semantic manifest. URDF geometry and joint limits remain authoritative in hand.urdf.",
   "joints": [
     {"joint_index": 0, "display_name": "Pinky root", "source_urdf_joint_name": "Little_MCP_AA", "urdf_joint_name": "little_aa_joint", "calibrated_default_range_deg": [-45.0, 11.0], "calibrated_min_endpoint": "lower", "calibrated_max_endpoint": "upper", "is_coupled": true, "motor_indices": [0, 1], "mapping_source": "coupled tendon joint, temporary linear joint-angle mapping", "mapping_status": "unverified"},

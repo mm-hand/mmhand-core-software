@@ -16,7 +16,7 @@ def _result(joint: int, motor_a: int, motor_b: int = 0xFF) -> dict:
     return {
         "joint": joint,
         "success": True,
-        "mappingVersion": 3,
+        "mappingVersion": 4,
         "urdfConfigCrc": 0x12345678,
         "manualReferenceCrc": joint + 100,
         "tendonLutValid": True,
@@ -36,7 +36,7 @@ def _current_payload(joint: int, result: dict) -> dict:
     return {
         "hand_profile": "v2",
         "feedback_mapping_version": 3,
-        "manual_scaled_mapping_version": 3,
+        "manual_scaled_mapping_version": 4,
         "urdf_config_crc": "0x12345678",
         "manual_reference_crc": "0x11111111",
         "active_joint_mask": 1 << joint,

@@ -23,7 +23,7 @@ from .protocol import ENCODER_COUNT, MOTOR_COUNT, VALID_MOTOR_MASK
 
 
 CALIBRATION_SNAPSHOT_FORMAT = "mmhand_calibration_bundle"
-CALIBRATION_SNAPSHOT_SCHEMA_VERSION = 5
+CALIBRATION_SNAPSHOT_SCHEMA_VERSION = 6
 _JOINT_MASK = (1 << ENCODER_COUNT) - 1
 
 
@@ -84,7 +84,7 @@ def seal_snapshot(payload: dict) -> dict:
 
 
 def validate_snapshot(payload: dict, *, verify_integrity: bool = True) -> dict:
-    """严格验证唯一受支持的 V5 快照，不再兼容旧版。"""
+    """严格验证唯一受支持的 V6/V4 快照，不再兼容旧映射语义。"""
     if not isinstance(payload, dict):
         raise CalibrationSnapshotError("snapshot root must be an object")
     if payload.get("format") != CALIBRATION_SNAPSHOT_FORMAT:
@@ -124,7 +124,7 @@ def validate_snapshot(payload: dict, *, verify_integrity: bool = True) -> dict:
 
 
 def read_snapshot(path: Path | str) -> dict:
-    """读取并严格校验 V5 快照。"""
+    """读取并严格校验 V6 快照。"""
     source = Path(path)
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))

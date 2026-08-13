@@ -1241,7 +1241,7 @@ class ControlPanelStateMixin:
                 self._set_item_text_if_changed(item, f"{lo:.2f}" if workspace.ready else "-")
                 self._set_item_tooltip_if_changed(
                     item,
-                    "Dynamic Current Min from P4 v3 calibration" if workspace.ready else workspace.reason,
+                    "Static URDF Min verified by P4 V4 Manual mapping" if workspace.ready else workspace.reason,
                 )
         if idx < len(self.joint_max_items):
             item = self.joint_max_items[idx]

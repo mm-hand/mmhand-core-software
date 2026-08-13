@@ -155,7 +155,7 @@ static bool initTightenStateFromFeedback(JointCalibContext* ctx,
     ctx->stateBeginMs = calibrationNowMs();
     ctx->state = AUTO_CALIB_STATE_TIGHTEN;
 
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC_BEGIN J%02u startDeg=%.3f tightDeg=dynamic totalDeg=dynamic angleMax=dynamic\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_SAMPLE_RANGE_BEGIN J%02u startDeg=%.3f tightDeg=pending totalDeg=pending\r\n",
                   ctx->jointIndex,
                   kLutStartDeg);
     FW_LOG_INFO_PRINTF("[AUTO CALIB] START J%02u M%02u abs=%ld raw=%u oriented=%ld dir=%d baselineLoad=%d speedCps=%ld\r\n",
@@ -189,7 +189,7 @@ static void initAutoCalibContext(JointCalibContext* ctx, uint8_t jointIndex)
 // 核心逻辑（非阻塞）：
 // 单电机非阻塞状态机单步函数。
 // INIT 等待首帧；TIGHTEN 搜索负载/角度停稳的紧端；PRE_RELEASE_SYNC 把目标
-// 锁回实际 ABS 并停稳；随后反向松到机械端点，生成 V3 映射和单路 Tendon LUT。
+// 锁回实际 ABS 并停稳；随后反向松到机械端点，生成 V4 映射和单路 Tendon LUT。
 static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                      SystemRuntimeContext* sharedData,
                                      const AutoCalibrationParams& params,
@@ -812,7 +812,8 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                         return;
                     }
                     const bool lutBuilt =
-                        buildTendonLutFromRawSamples(&result,
+                        buildTendonLutFromRawSamples(ctx->jointIndex,
+                                                     &result,
                                                      ctx->motorChannel,
                                                      0xFF,
                                                      1,
@@ -941,7 +942,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                   loadMag,
                                   releaseFromMaxDeg,
                                   windowAngleDeltaDeg);
-                    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=%.3f totalDeg=%.3f angleMax=%.3f span=%ld\r\n",
+                    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_SAMPLE_RANGE J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=%.3f totalDeg=%.3f urdfMax=%.3f span=%ld\r\n",
                                   ctx->jointIndex,
                                   result.startDeg,
                                   result.tightDeg,

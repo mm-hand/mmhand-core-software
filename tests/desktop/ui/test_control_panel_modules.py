@@ -36,7 +36,7 @@ def test_control_scope_model_orders_thumb_workflow_and_masks_motors() -> None:
 
 
 def test_joint_target_model_uses_calibrated_min_and_clamps_invalid_values() -> None:
-    model = JointTargetModel(mapping_version=3, urdf_crc=0x12345678)
+    model = JointTargetModel(mapping_version=4, urdf_crc=0x12345678)
     state = HandModel()
     min_raw = 100
     max_raw = 2000
@@ -47,19 +47,19 @@ def test_joint_target_model_uses_calibrated_min_and_clamps_invalid_values() -> N
     state.manual_reference_max_raw[0] = max_raw
     state.joint_calib_results[0] = {
         "success": True,
-        "hasManualScaledV3Fields": True,
-        "mappingVersion": 3,
+        "hasManualScaledV4Fields": True,
+        "mappingVersion": 4,
         "urdfConfigCrc": 0x12345678,
         "manualReferenceCrc": manual_encoder_reference_entry_crc(0, min_raw, max_raw),
-        "currentMinDeg": 5.0,
+        "currentMinDeg": model.default_min(0),
         "currentMaxDeg": model.default_max(0),
-        "angleMin": 5.0,
+        "angleMin": model.default_min(0),
         "angleMax": model.default_max(0),
     }
 
-    assert model.calibrated_min(0, state) == 5.0
-    assert model.target_min(0, state) == 5.0
-    assert model.clamp(0, float("nan"), state) == 5.0
+    assert model.calibrated_min(0, state) == model.default_min(0)
+    assert model.target_min(0, state) == model.default_min(0)
+    assert model.clamp(0, float("nan"), state) == model.default_min(0)
     assert model.clamp(0, model.default_max(0) + 100.0, state) == model.default_max(0)
 
 

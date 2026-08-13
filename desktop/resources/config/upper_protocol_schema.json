@@ -53,7 +53,7 @@
     {"name": "CMD_HOST_HEARTBEAT", "value": 220, "payload_bytes": 0, "description": "刷新上位机在线计时器，不携带业务数据"},
     {"name": "CMD_MULTITURN_NVS_CONTROL", "value": 221, "payload_bytes": 1, "description": "启停多圈 NVS 保存；关闭时清除旧快照"},
     {"name": "CMD_MOTOR_POS_ABS_ONE", "value": 222, "payload_bytes": 5, "description": "单台 Mxx logical ABS 直控，Mxx 加 int32 counts"},
-    {"name": "CMD_CALIB_LOAD_JOINT", "value": 223, "payload_bytes": 189, "description": "恢复单关节唯一 Auto/LUT v3 标定快照"},
+    {"name": "CMD_CALIB_LOAD_JOINT", "value": 223, "payload_bytes": 189, "description": "恢复单关节唯一 Auto/LUT v4 标定快照"},
     {"name": "CMD_CALIB_LOAD_LIMITS", "value": 224, "payload_bytes": 228, "description": "批量恢复 27 路 ABS Limit 与有效位图"},
     {"name": "CMD_CLEAR_CALIBRATION", "value": 229, "payload_bytes": 0, "description": "清除全部 Auto/LUT 标定结果，保留 Manual"},
     {"name": "CMD_MANUAL_ENCODER_REFERENCE", "value": 230, "payload_bytes": 85, "description": "写入或清除 21 组 Manual Min/Max 原始磁编值"},

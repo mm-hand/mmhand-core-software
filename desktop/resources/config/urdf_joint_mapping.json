@@ -3,7 +3,7 @@
   "model_id": "mmhand_structure_21dof",
   "mapping_id": "structure_urdf_v3",
   "feedback_mapping_version": 3,
-  "manual_scaled_mapping_version": 3,
+  "manual_scaled_mapping_version": 4,
   "p4_sync_required": false,
   "p4_generated_header_required": true,
   "description": "Generated from robot_model_manifest.json and active hand.urdf; do not edit manually.",

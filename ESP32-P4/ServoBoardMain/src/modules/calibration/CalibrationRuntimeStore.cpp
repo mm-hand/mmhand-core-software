@@ -1,6 +1,6 @@
 /**
  * @file CalibrationRuntimeStore.cpp
- * @brief 维护 Manual/Auto 标定运行数据及动态角度映射。
+ * @brief 维护 Manual/Auto 标定运行数据及 V4 静态 URDF 角度契约。
  */
 #include "CalibrationRuntimeStore.h"
 

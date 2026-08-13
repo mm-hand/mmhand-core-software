@@ -57,11 +57,11 @@ def _ready_state(active_mask=1, calibrated_mask=None):
                 state.manual_reference_min_raw[joint],
                 state.manual_reference_max_raw[joint],
             ),
-            "currentMinDeg": 5.0,
+            "currentMinDeg": spec.urdf_range_deg[0],
             "currentMaxDeg": spec.urdf_range_deg[1],
-            "angleMin": 5.0,
+            "angleMin": spec.urdf_range_deg[0],
             "angleMax": spec.urdf_range_deg[1],
-            "hasManualScaledV3Fields": True,
+            "hasManualScaledV4Fields": True,
         }
     return state
 
@@ -254,7 +254,7 @@ def test_replay_skips_uncalibrated_joint_and_clamps_current_workspace():
     assert controller.status().skipped_joint_mask == 0b10
     assert controller.status().clamped_joint_mask == 1
     assert controller.status().clamped_sample_count == 2
-    assert backend.sent[0][0][0] == 5.0
+    assert backend.sent[0][0][0] == get_spec(0).urdf_range_deg[0]
     assert backend.sent[-1][0][0] == get_spec(0).urdf_range_deg[1]
 
 

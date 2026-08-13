@@ -30,19 +30,10 @@ float clampJointTargetDeg(float targetDeg, uint8_t jointIndex)
         return 0.0f;
     }
 
-    float minDeg = 0.0f;
-    float maxDeg = 0.0f;
-    // 有效 Auto 使用动态 Current Min/URDF Max；未标定仅给 UI/诊断提供静态 URDF 范围。
-    const JointCalibrationResult& calibration =
-        g_jointCalibResult[jointIndex];
-    if (calibration.success &&
-        calibration.mappingVersion == kManualScaledUrdfFeedbackMappingVersion) {
-        minDeg = calibration.angleMin;
-        maxDeg = calibration.angleMax;
-    } else {
-        minDeg = kUrdfJointLimits[jointIndex].minDeg;
-        maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
-    }
+    // V4 的控制目标始终受静态 URDF Min/Max 约束。Auto 标定只负责
+    // 证明该关节可控并生成 Tendon LUT，不能再缩短或平移目标角区间。
+    const float minDeg = kUrdfJointLimits[jointIndex].minDeg;
+    const float maxDeg = kUrdfJointLimits[jointIndex].maxDeg;
 
     const p4::safety::BoundaryClampDecision decision =
         p4::safety::clampFloatToBoundary(targetDeg, minDeg, maxDeg);

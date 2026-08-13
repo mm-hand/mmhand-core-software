@@ -126,7 +126,7 @@ class CalibrationWorkflowController:
         sequence_base = int(getattr(state, "rope_init_sequence", 0) or 0)
         if not self.backend.rope_init(active_joint_mask):
             self._set_status(
-                "Rope Init rejected: check Manual/v3 calibration, state, and Turn"
+                "Rope Init rejected: check Manual/v4 calibration, state, and Turn"
             )
             return
         self._p4_rope_init_phase = "queued"
@@ -1194,9 +1194,9 @@ class CalibrationWorkflowController:
                 "Calib snapshot save blocked: Manual endpoint readback incomplete"
             )
             return
-        incompatible_v3 = [
+        incompatible_v4 = [
             idx for idx in required_joints
-            if int(joint_results[idx].get("mappingVersion", 0) or 0) != 3 or
+            if int(joint_results[idx].get("mappingVersion", 0) or 0) != 4 or
             int(joint_results[idx].get("manualReferenceCrc", 0) or 0)
             != manual_encoder_reference_entry_crc(
                 idx,
@@ -1204,10 +1204,10 @@ class CalibrationWorkflowController:
                 manual_max_values[idx],
             )
         ]
-        if incompatible_v3:
+        if incompatible_v4:
             self._set_status(
-                "Calib snapshot save blocked: v3/Manual CRC mismatch " +
-                self._format_joint_list(incompatible_v3)
+                "Calib snapshot save blocked: v4/Manual CRC mismatch " +
+                self._format_joint_list(incompatible_v4)
             )
             return
 
@@ -1261,7 +1261,7 @@ class CalibrationWorkflowController:
                 previous_payload = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
             except CalibrationSnapshotError as exc:
                 self._set_status(
-                    f"Calib snapshot save blocked: existing V5 snapshot invalid: {exc}"
+                    f"Calib snapshot save blocked: existing V6 snapshot invalid: {exc}"
                 )
                 return
 
@@ -2190,9 +2190,9 @@ class CalibrationWorkflowController:
         self._apply_active_scope_for_current_mode()
 
     def export_calibration_snapshot(self) -> None:
-        """导出完整 V5 标定包，供同一只手迁移到另一台电脑。"""
+        """导出完整 V6 标定包，供同一只手迁移到另一台电脑。"""
         if not CALIB_LOAD_SNAPSHOT_PATH.exists():
-            self._warn("Export Calib", "没有可导出的 V5 标定快照。")
+            self._warn("Export Calib", "没有可导出的 V6 标定快照。")
             return
         try:
             snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)

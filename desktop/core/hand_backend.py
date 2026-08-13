@@ -370,7 +370,7 @@ class HandBackend:
         if clamped:
             joints = ", ".join(f"J{idx:02d}" for idx in clamped)
             suffix = f" ({source})" if source else ""
-            message = f"Joint targets clamped to [Current Min, URDF Max]: {joints}{suffix}"
+            message = f"Joint targets clamped to [URDF Min, URDF Max]: {joints}{suffix}"
         return guarded, blocked, clamped, message
 
     def send_joint_targets(

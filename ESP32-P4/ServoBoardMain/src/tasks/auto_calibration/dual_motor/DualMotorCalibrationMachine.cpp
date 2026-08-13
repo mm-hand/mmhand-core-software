@@ -2038,7 +2038,7 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
 
 // 双腱关节完整标定流程：
 // 主紧端 -> 副松 3200 -> 副预紧 190 -> 主放副收至副 250 ->
-// 主补紧 -> 构建 V3 映射与两路 Tendon LUT -> 登记 READY 姿态。
+// 主补紧 -> 构建 V4 映射与两路 Tendon LUT -> 登记 READY 姿态。
 static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedData,
                                                   uint8_t jointIndex,
                                                   const AutoCalibrationParams& params,
@@ -2381,7 +2381,8 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
         return false;
     }
     const bool lutBuilt =
-        buildTendonLutFromRawSamples(&result,
+        buildTendonLutFromRawSamples(jointIndex,
+                                     &result,
                                      primaryMotor,
                                      secondaryMotor,
                                      2,
@@ -2519,7 +2520,7 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                    primaryReadyLoad,
                    (long)secondaryReadyAbs,
                    secondaryReadyLoad);
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_RANGE_DYNAMIC J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=%.3f totalDeg=%.3f angleMax=%.3f span=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] AUTO_SAMPLE_RANGE J%02u startDeg=%.3f zeroDeg=0.000 tightDeg=%.3f totalDeg=%.3f urdfMax=%.3f span=%ld\r\n",
                   jointIndex,
                   result.startDeg,
                   result.tightDeg,

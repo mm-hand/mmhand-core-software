@@ -558,7 +558,7 @@ def _unpack_float_be(data: bytes) -> float:
 
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
-    """解析当前唯一 V3 快照；189 为下发体，202 为带装配告警的上行体。"""
+    """解析当前唯一 V4 快照；189 为下发体，202 为带装配告警的上行体。"""
     if len(payload) not in (189, 202):
         return None
     idx = 0
@@ -625,7 +625,7 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     idx += 4
     result["currentMaxDeg"] = _unpack_float_be(payload[idx:idx + 4])
     idx += 4
-    result["hasManualScaledV3Fields"] = True
+    result["hasManualScaledV4Fields"] = True
 
     result["assemblyWarningReason"] = CALIB_WARN_NONE
     result["autoMinOffsetCounts"] = 0
@@ -1147,9 +1147,9 @@ def build_calib_load_joint_cmd(result: dict) -> bytes:
     joint = int(result.get("joint", -1))
     if joint < 0 or joint >= ENCODER_COUNT:
         raise ValueError(f"invalid joint index {joint}")
-    if int(result.get("mappingVersion", 0)) != 3:
+    if int(result.get("mappingVersion", 0)) != 4:
         raise ValueError(
-            f"J{joint:02d} mapping version mismatch; current mapping v3 is required"
+            f"J{joint:02d} mapping version mismatch; current mapping v4 is required"
         )
     payload = bytearray()
     payload.append(joint & 0xFF)

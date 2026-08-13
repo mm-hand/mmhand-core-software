@@ -11,6 +11,7 @@
 #include "../../config/CalibrationConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../generated/UrdfJointLimits.generated.h"
 
 namespace mmhand::calibration {
 
@@ -89,32 +90,48 @@ void maybeAppendTendonTravelFitSample(TendonRawFitBuffer* buffer,
     appendTendonRawFitSample(buffer, encoder, primaryAbs, secondaryAbs);
 }
 
-// 将原始样本的磁编位置转换为 LUT 内部轨迹角。
-static float tendonFitSampleAngleDeg(const JointCalibrationResult& result,
-                                   int32_t encoder)
+// 将方向归一化后的原始样本还原为物理 raw，再按 V4 Manual 映射得到 URDF 角。
+static float tendonFitSampleAngleDeg(uint8_t jointIndex,
+                                    const JointCalibrationResult& result,
+                                    int32_t encoder)
 {
-    if (result.encoderSpan <= 0 || result.totalDeg <= 0.0f) {
+    if (jointIndex >= ENCODER_TOTAL_NUM ||
+        result.encoderSpan <= 0 || result.totalDeg <= 0.0f) {
         return NAN;
     }
-    const int32_t delta =
-        calibrationForwardEncoderDelta(result.startEncoder,
-                                       calibrationWrapEncoderCount(encoder));
-    return result.startDeg +
-        ((float)delta / (float)result.encoderSpan) * result.totalDeg;
+    const int8_t direction = g_encoderDirection[jointIndex];
+    const uint16_t physicalRaw = (uint16_t)calibrationOrientEncoderRaw(
+        (uint16_t)calibrationWrapEncoderCount(encoder), direction);
+    EncoderUrdfMapResult mapped = {};
+    if (!mapManualScaledEncoderToUrdf(jointIndex,
+                                      result,
+                                      g_manualEncoderReference[jointIndex],
+                                      physicalRaw,
+                                      direction,
+                                      &mapped) ||
+        !mapped.valid) {
+        return NAN;
+    }
+    return mapped.urdfDeg;
 }
 
-// 在原始样本中按角度线性插值，得到指定执行器的理论 ABS。
+// 在原始样本中按角度线性插值。目标落在 Auto 实测区外但仍位于 URDF
+// 工作区时，沿首末两点斜率外推；最终命令仍受 LUT ABS 边界和硬件边界保护。
 static bool interpolateTendonFitAbs(float targetDeg,
                                   const float* sampleDeg,
                                   const int32_t* sampleAbs,
                                   uint8_t sampleCount,
                                   int32_t* outAbs)
 {
-    if (!sampleDeg || !sampleAbs || !outAbs || sampleCount == 0) {
+    if (!sampleDeg || !sampleAbs || !outAbs || sampleCount < 2) {
         return false;
     }
     if (targetDeg <= sampleDeg[0]) {
-        *outAbs = sampleAbs[0];
+        const float span = sampleDeg[1] - sampleDeg[0];
+        if (span <= 0.0f) return false;
+        const float slope = ((float)sampleAbs[1] - sampleAbs[0]) / span;
+        *outAbs = roundToInt32((float)sampleAbs[0] +
+                               (targetDeg - sampleDeg[0]) * slope);
         return true;
     }
     for (uint8_t i = 1; i < sampleCount; i++) {
@@ -131,20 +148,27 @@ static bool interpolateTendonFitAbs(float targetDeg,
             return true;
         }
     }
-    *outAbs = sampleAbs[sampleCount - 1];
+    const uint8_t last = sampleCount - 1;
+    const float span = sampleDeg[last] - sampleDeg[last - 1];
+    if (span <= 0.0f) return false;
+    const float slope =
+        ((float)sampleAbs[last] - sampleAbs[last - 1]) / span;
+    *outAbs = roundToInt32((float)sampleAbs[last] +
+                           (targetDeg - sampleDeg[last]) * slope);
     return true;
 }
 
 // 单、双腱共用同一套固定两行存储：单电机只写第 0 行，第 1 行保持
 // motor=0xFF；双电机同时写两行。LUT 保存的是舵机 raw ABS counts。
 // 将不等间隔原始样本重采样为固定 5° 步长 Tendon LUT。
-bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
+bool buildTendonLutFromRawSamples(uint8_t jointIndex,
+                                         JointCalibrationResult* result,
                                          uint8_t primaryMotor,
                                          uint8_t secondaryMotor,
                                          uint8_t actuatorCount,
                                          const TendonRawFitBuffer& raw)
 {
-    if (!result || actuatorCount == 0 ||
+    if (!result || jointIndex >= ENCODER_TOTAL_NUM || actuatorCount == 0 ||
         actuatorCount > TENDON_LUT_ACTUATOR_COUNT) {
         return false;
     }
@@ -152,7 +176,7 @@ bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
     result->tendonLutCount = 0;
     memset(result->tendonLutMotor, 0xFF, sizeof(result->tendonLutMotor));
     memset(result->tendonLutMotorAbs, 0, sizeof(result->tendonLutMotorAbs));
-    result->tendonLutAngleStartDeg = result->startDeg;
+    result->tendonLutAngleStartDeg = kUrdfJointLimits[jointIndex].minDeg;
     result->tendonLutAngleStepDeg = kTendonFitSampleStepDeg;
 
     if (!result->success || !result->scaled ||
@@ -169,10 +193,10 @@ bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
 
     for (uint8_t i = 0; i < raw.count; i++) {
         const float angleDeg =
-            tendonFitSampleAngleDeg(*result, raw.samples[i].encoder);
+            tendonFitSampleAngleDeg(jointIndex, *result, raw.samples[i].encoder);
         if (!isfinite(angleDeg) ||
-            angleDeg < result->startDeg - kTendonFitSampleStepDeg ||
-            angleDeg > result->tightDeg + kTendonFitSampleStepDeg) {
+            angleDeg < kUrdfJointLimits[jointIndex].minDeg - 180.0f ||
+            angleDeg > kUrdfJointLimits[jointIndex].maxDeg + 180.0f) {
             continue;
         }
         if (sampleCount >= kTendonRawSampleCapacity) {
@@ -199,14 +223,16 @@ bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
     }
 
     if (sampleCount < 3 ||
-        sampleDeg[sampleCount - 1] - sampleDeg[0] < kTendonFitSampleStepDeg * 2.0f ||
-        sampleDeg[0] > result->startDeg + kTendonFitSampleStepDeg ||
-        sampleDeg[sampleCount - 1] < result->tightDeg - kTendonFitSampleStepDeg) {
+        sampleDeg[sampleCount - 1] - sampleDeg[0] <
+            kTendonFitSampleStepDeg * 2.0f) {
         return false;
     }
 
+    const float urdfMinDeg = kUrdfJointLimits[jointIndex].minDeg;
+    const float urdfMaxDeg = kUrdfJointLimits[jointIndex].maxDeg;
+    const float urdfSpanDeg = urdfMaxDeg - urdfMinDeg;
     uint8_t lutCount =
-        (uint8_t)ceilf(result->totalDeg / kTendonFitSampleStepDeg) + 1;
+        (uint8_t)ceilf(urdfSpanDeg / kTendonFitSampleStepDeg) + 1;
     if (lutCount > TENDON_LUT_MAX_SAMPLES) {
         lutCount = TENDON_LUT_MAX_SAMPLES;
     }
@@ -218,11 +244,10 @@ bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
     if (actuatorCount > 1) {
         result->tendonLutMotor[1] = secondaryMotor;
     }
-    result->tendonLutAngleStartDeg = result->startDeg;
-    // 固定容量下仍强制包含两个机械端点。行程过长时步长会略大于
-    // 5 度，但不会因简单截断而丢失紧端样本。
+    result->tendonLutAngleStartDeg = urdfMinDeg;
+    // V4 LUT 固定覆盖完整 URDF 区间；Auto 实测区外使用端部斜率外推。
     result->tendonLutAngleStepDeg =
-        result->totalDeg / (float)(lutCount - 1);
+        urdfSpanDeg / (float)(lutCount - 1);
     for (uint8_t i = 0; i < lutCount; i++) {
         const float targetDeg =
             result->tendonLutAngleStartDeg +
@@ -248,7 +273,7 @@ bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
     return true;
 }
 
-// 由松端/紧端、舵机 ABS 和 Manual 参考构造完整 V3 标定结果。
+// 由松端/紧端、舵机 ABS 和 Manual 参考构造完整 V4 标定结果。
 static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
                                                          int32_t tautEncoder,
                                                          int32_t zeroEncoder,
@@ -302,7 +327,7 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     out->totalDeg = totalDeg;
     out->scaled = true;
 
-    // 上面的历史标定字段使用按关节方向统一后的磁编坐标；V3 的
+    // 上面的历史标定字段使用按关节方向统一后的磁编坐标；V4 的
     // autoMinRaw/autoMaxRaw 属于通信与 NVS 契约，必须保存物理 14-bit raw。
     // calibrationOrientEncoderRaw() 在 direction=-1 时是自逆变换，因此这里
     // 再调用一次即可还原物理 raw，同时不会改变 direction=+1 的关节。
@@ -326,7 +351,8 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     return true;
 }
 
-// 单电机关节结果构造包装：使用当前 URDF 上限和 Manual 条目。
+// 单电机关节结果构造包装：Auto 端点只保留为诊断和 LUT 样本边界，
+// 最终反馈角范围固定由 Manual Min/Max 映射到当前 URDF Min/Max。
 bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                                 int32_t tautEncoder,
                                                 int32_t zeroEncoder,
@@ -347,7 +373,8 @@ bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                                         out);
 }
 
-// 双腱关节结果构造包装：两路舵机共享同一磁编 Auto Min/Max。
+// 双腱关节结果构造包装：两路舵机共享同一磁编 Auto Min/Max；
+// Auto Span 不参与实时关节角比例计算。
 bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                                 int32_t startEncoder,
                                                 int32_t zeroEncoder,

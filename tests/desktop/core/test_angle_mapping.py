@@ -42,11 +42,11 @@ def test_all_21_mapping_limits_match_active_urdf():
         assert spec.urdf_range_deg == pytest.approx(actual, abs=1e-4)
 
 
-def test_feedback_mapping_declares_current_v3_contract():
+def test_feedback_mapping_declares_current_v4_manual_contract():
     data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
     assert data["schema_version"] == 4
     assert data["feedback_mapping_version"] == 3
-    assert data["manual_scaled_mapping_version"] == 3
+    assert data["manual_scaled_mapping_version"] == 4
     assert data["p4_sync_required"] is False
     assert data["p4_generated_header_required"] is True
 
@@ -98,7 +98,7 @@ def test_endpoint_mapping_round_trip_without_calib_snapshot(monkeypatch, tmp_pat
         assert math.degrees(angle_mapping.calibrated_to_urdf(idx, calib_max)) == pytest.approx(urdf_max)
 
 
-def test_bad_direction_negative_v3_endpoints_are_not_loaded(tmp_path):
+def test_bad_direction_negative_v4_endpoints_are_not_loaded(tmp_path):
     version, crc = angle_mapping.urdf_manual_scaled_mapping_metadata()
     results = [{} for _ in range(21)]
     results[14] = {
@@ -110,14 +110,16 @@ def test_bad_direction_negative_v3_endpoints_are_not_loaded(tmp_path):
         "tightEncoder": 10598,
         "autoMinRaw": 6398,
         "autoMaxRaw": 10598,
-        "angleMin": -192.258,
-        "angleMax": 88.0,
+        "angleMin": angle_mapping.get_spec(14).urdf_range_deg[0],
+        "angleMax": angle_mapping.get_spec(14).urdf_range_deg[1],
+        "currentMinDeg": angle_mapping.get_spec(14).urdf_range_deg[0],
+        "currentMaxDeg": angle_mapping.get_spec(14).urdf_range_deg[1],
     }
     snapshot = tmp_path / "bad_snapshot.json"
     def write_current_snapshot():
         payload = seal_snapshot({
             "format": "mmhand_calibration_bundle",
-            "schema_version": 5,
+            "schema_version": 6,
             "active_joint_mask": 1 << 14,
             "active_motor_mask": 1 << 18,
             "motor_abs_limit_valid_bitmap": 1 << 18,
@@ -137,10 +139,9 @@ def test_bad_direction_negative_v3_endpoints_are_not_loaded(tmp_path):
 
     results[14]["autoMinRaw"] = 9986
     results[14]["autoMaxRaw"] = 5786
-    results[14]["angleMin"] = -8.609
     write_current_snapshot()
     assert angle_mapping.load_calibrated_ranges(snapshot)[14] == pytest.approx(
-        (-8.609, 88.0)
+        angle_mapping.get_spec(14).urdf_range_deg
     )
 
 

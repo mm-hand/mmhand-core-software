@@ -128,7 +128,7 @@ ROPE_INIT_REASON_LABELS = {
     ROPE_INIT_REASON_SERVO_OFFLINE: "servo offline",
     ROPE_INIT_REASON_MULTITURN_UNKNOWN: "multi-turn unknown",
     ROPE_INIT_REASON_MANUAL_REQUIRED: "Manual endpoints required",
-    ROPE_INIT_REASON_AUTO_REQUIRED: "Auto v3 calibration required",
+    ROPE_INIT_REASON_AUTO_REQUIRED: "Auto v4 calibration required",
     ROPE_INIT_REASON_TARGET_PUBLISH_FAILED: "target publish failed",
     ROPE_INIT_REASON_SYSTEM_FAULT: "system fault",
     ROPE_INIT_REASON_CANCELLED: "cancelled",

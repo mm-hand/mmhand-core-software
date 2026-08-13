@@ -1,6 +1,6 @@
 /**
  * @file CalibrationMath.cpp
- * @brief 实现磁编跨圈、Manual 比例和 URDF 动态角度映射数学。
+ * @brief 实现磁编跨圈、Manual 全行程比例和 URDF 静态区间映射数学。
  */
 #include "CalibrationMath.h"
 
@@ -10,8 +10,8 @@
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../platform/log/FirmwareLog.h"
 
-static_assert(kManualScaledUrdfFeedbackMappingVersion == 3,
-              "Manual-scaled calibration contract must remain v3");
+static_assert(kManualScaledUrdfFeedbackMappingVersion == 4,
+              "Manual-scaled calibration contract must remain v4");
 
 // 按固定安装方向归一化原始磁编值，使“关节正方向”始终对应坐标增加。
 int32_t calibrationOrientEncoderRaw(uint16_t rawValue, int8_t direction)
@@ -95,7 +95,8 @@ int32_t calibrationDegToEncoderCount(float deg)
     return (int32_t)(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
 }
 
-// 依据人工机械行程与自动标定行程的比例生成 V3 动态 Current Min。
+// V4 将完整 Manual 机械行程固定映射到完整 URDF 行程。
+// Auto 端点只描述本次自动标定覆盖范围，不再改变 Current Min/Max 或实时角度比例。
 bool applyManualScaledUrdfMappingToCalibration(
     uint8_t jointIndex,
     const ManualEncoderReference& manual,
@@ -125,8 +126,8 @@ bool applyManualScaledUrdfMappingToCalibration(
     const UrdfJointLimitDeg& limit = kUrdfJointLimits[jointIndex];
     const float urdfSpanDeg = limit.maxDeg - limit.minDeg;
     const float degPerCount = urdfSpanDeg / (float)manualSpan;
+    const float currentMinDeg = limit.minDeg;
     const float currentMaxDeg = limit.maxDeg;
-    const float currentMinDeg = currentMaxDeg - (float)autoSpan * degPerCount;
     if (!isfinite(urdfSpanDeg) || urdfSpanDeg <= 0.0f ||
         !isfinite(degPerCount) || degPerCount <= 0.0f ||
         !isfinite(currentMinDeg) || !isfinite(currentMaxDeg)) {
@@ -146,7 +147,7 @@ bool applyManualScaledUrdfMappingToCalibration(
     result->urdfConfigCrc = kManualScaledUrdfConfigCrc;
     const float autoManualRatio = (float)autoSpan / (float)manualSpan;
     FW_LOG_INFO_PRINTF(
-        "[CALIB MAP V3] J%02u dir=%d manual=%ld(%u->%u) "
+        "[CALIB MAP V4] J%02u dir=%d manual=%ld(%u->%u) "
         "auto=%ld(%u->%u) ratio=%.6f "
         "urdf=[%.3f,%.3f] current=[%.3f,%.3f] crc=0x%08lX\r\n",
         (unsigned)jointIndex,
@@ -165,7 +166,7 @@ bool applyManualScaledUrdfMappingToCalibration(
         (unsigned long)manualEntryCrc);
     if (autoManualRatio > 1.0f) {
         FW_LOG_WARN_PRINTF(
-            "[CALIB MAP V3] WARN J%02u auto/manual ratio %.6f > 1; "
+            "[CALIB MAP V4] WARN J%02u auto/manual ratio %.6f > 1; "
             "result kept for diagnostics and control\r\n",
             (unsigned)jointIndex,
             autoManualRatio);
@@ -191,7 +192,8 @@ static int32_t signedDirectedCoordinateFromWindowStart(
     return belowWindow < aboveWindow ? -belowWindow : forward;
 }
 
-// V3 实时映射：Auto 区间内采用 Manual 比例，区间外按 16384 counts/360° 外推。
+// V4 实时映射：Manual 区间严格对应 URDF Min/Max；Manual 区间外才按
+// 16384 counts/360° 物理比例外推。Auto 区间不参与角度换算。
 bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
                                   const JointCalibrationResult& calibration,
                                   const ManualEncoderReference& manual,
@@ -203,85 +205,62 @@ bool mapManualScaledEncoderToUrdf(uint8_t jointIndex,
         return false;
     }
     memset(out, 0, sizeof(*out));
+    const UrdfJointLimitDeg* limit = jointIndex < ENCODER_TOTAL_NUM
+        ? &kUrdfJointLimits[jointIndex] : nullptr;
     if (jointIndex >= ENCODER_TOTAL_NUM ||
+        !limit ||
         calibration.mappingVersion != kManualScaledUrdfFeedbackMappingVersion ||
         calibration.urdfConfigCrc != kManualScaledUrdfConfigCrc ||
         !manual.valid ||
         manual.minRaw >= kCalibrationEncoderModulo ||
         manual.maxRaw >= kCalibrationEncoderModulo ||
         currentRaw >= kCalibrationEncoderModulo ||
-        calibration.autoMinRaw >= kCalibrationEncoderModulo ||
-        calibration.autoMaxRaw >= kCalibrationEncoderModulo ||
         calibration.manualSpanCounts <= 0 ||
         calibration.manualSpanCounts >= kCalibrationEncoderModulo ||
-        calibration.autoSpanCounts <= 0 ||
-        calibration.autoSpanCounts >= kCalibrationEncoderModulo ||
         !isfinite(calibration.currentMinDeg) ||
         !isfinite(calibration.currentMaxDeg) ||
-        calibration.currentMaxDeg <= calibration.currentMinDeg) {
+        calibration.currentMaxDeg <= calibration.currentMinDeg ||
+        fabsf(calibration.currentMinDeg - limit->minDeg) > 0.01f ||
+        fabsf(calibration.currentMaxDeg - limit->maxDeg) > 0.01f ||
+        fabsf(calibration.angleMin - limit->minDeg) > 0.01f ||
+        fabsf(calibration.angleMax - limit->maxDeg) > 0.01f) {
         return false;
     }
 
-    const int32_t directedTravel = calibrationDirectedEncoderDelta(
-        calibration.autoMinRaw, currentRaw, direction);
-    if (directedTravel < 0) {
+    const float urdfSpanDeg = limit->maxDeg - limit->minDeg;
+    // 运行时重新根据 P4 当前 Manual 端点计算跨度，禁止旧快照中的
+    // manualSpanCounts 与当前 Manual 数据不一致时继续参与角度换算。
+    const int32_t currentManualSpan = calibrationDirectedEncoderDelta(
+        manual.minRaw, manual.maxRaw, direction);
+    if (currentManualSpan <= 0 ||
+        currentManualSpan >= kCalibrationEncoderModulo ||
+        currentManualSpan != calibration.manualSpanCounts) {
         return false;
     }
-
-    int32_t signedTravel = directedTravel;
-    int32_t belowMinCounts = 0;
-    int32_t aboveMaxCounts = 0;
-    if (directedTravel > calibration.autoSpanCounts) {
-        const int32_t distanceAboveMax =
-            directedTravel - calibration.autoSpanCounts;
-        const int32_t distanceBelowMin =
-            kCalibrationEncoderModulo - directedTravel;
-        if (distanceBelowMin < distanceAboveMax) {
-            belowMinCounts = distanceBelowMin;
-            signedTravel = -distanceBelowMin;
-        } else {
-            aboveMaxCounts = distanceAboveMax;
-        }
-    }
-
-    const float urdfSpanDeg =
-        kUrdfJointLimits[jointIndex].maxDeg -
-        kUrdfJointLimits[jointIndex].minDeg;
     const float manualDegPerCount =
-        urdfSpanDeg / (float)calibration.manualSpanCounts;
-    // Manual 当前值和 Auto Min 必须落在同一有符号坐标系。否则 Manual Min
-    // 下方 -100 counts 会被误写成 +16284 counts，实时角会偏移接近一整圈。
+        urdfSpanDeg / (float)currentManualSpan;
+    // 以 Manual Min 为零点建立有符号坐标，跨 0/16383 时仍能区分上下边界。
     const int32_t manualCoordinate =
         signedDirectedCoordinateFromWindowStart(
             manual.minRaw, currentRaw, direction,
-            calibration.manualSpanCounts);
-    const int32_t autoMinCoordinate =
-        signedDirectedCoordinateFromWindowStart(
-            manual.minRaw, calibration.autoMinRaw, direction,
-            calibration.manualSpanCounts);
+            currentManualSpan);
+    const int32_t belowMinCounts = manualCoordinate < 0
+        ? -manualCoordinate : 0;
+    const int32_t aboveMaxCounts =
+        manualCoordinate > currentManualSpan
+        ? manualCoordinate - currentManualSpan : 0;
 
     float mappedDeg = 0.0f;
-    if (belowMinCounts == 0 && aboveMaxCounts == 0) {
-        // Auto 窗口是控制权威边界，即使略超 Manual 端点，也必须精确映射到
-        // currentMin/currentMax。
-        mappedDeg = calibration.currentMinDeg +
-            (float)signedTravel * manualDegPerCount;
-    } else if (manualCoordinate >= 0 &&
-               manualCoordinate <= calibration.manualSpanCounts) {
-        mappedDeg = calibration.currentMinDeg +
-            (float)(manualCoordinate - autoMinCoordinate) *
-                manualDegPerCount;
-    } else if (manualCoordinate < 0) {
-        const float manualMinMapped = calibration.currentMinDeg -
-            (float)autoMinCoordinate * manualDegPerCount;
-        mappedDeg = manualMinMapped +
+    if (manualCoordinate < 0) {
+        mappedDeg = limit->minDeg +
             calibrationEncoderCountToDeg(manualCoordinate);
+    } else if (manualCoordinate <= currentManualSpan) {
+        mappedDeg = limit->minDeg +
+            (float)manualCoordinate * manualDegPerCount;
     } else {
-        const float manualMaxMapped = calibration.currentMinDeg +
-            (float)(calibration.manualSpanCounts - autoMinCoordinate) *
-                manualDegPerCount;
-        mappedDeg = manualMaxMapped + calibrationEncoderCountToDeg(
-            manualCoordinate - calibration.manualSpanCounts);
+        mappedDeg = limit->maxDeg +
+            calibrationEncoderCountToDeg(
+            manualCoordinate - currentManualSpan);
     }
     if (!isfinite(mappedDeg)) {
         return false;

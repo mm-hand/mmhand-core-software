@@ -559,7 +559,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                         jointIndex, g_manualEncoderReference[jointIndex]);
                 const uint32_t localValidMask =
                     sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
-                // V3 Auto 端点必须是物理 14-bit raw；方向化标定坐标不能写入这些字段，
+                // V4 Auto 端点必须是物理 14-bit raw；方向化标定坐标不能写入这些字段，
                 // 否则 direction=-1 关节会产生错误的补码跨度。
                 const uint16_t expectedAutoMinRaw =
                     (uint16_t)calibrationOrientEncoderRaw(

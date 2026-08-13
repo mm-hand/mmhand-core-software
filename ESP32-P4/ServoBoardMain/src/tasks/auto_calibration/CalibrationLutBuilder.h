@@ -3,7 +3,7 @@
  * @brief 定义标定原始样本缓存和 Tendon LUT 构建接口。
  *
  * 自动标定状态机只负责采集磁编与舵机 ABS。本模块负责方向归一化、
- * 固定角步长重采样、Manual 比例映射及 V3 标定结果构造。
+ * 固定角步长重采样、Manual 全行程映射及 V4 标定结果构造。
  */
 #ifndef MMHAND_CALIBRATION_LUT_BUILDER_H
 #define MMHAND_CALIBRATION_LUT_BUILDER_H
@@ -53,13 +53,14 @@ void maybeAppendTendonTravelFitSample(TendonRawFitBuffer* buffer,
                                      int32_t secondaryAbs);
 
 /** 将原始轨迹重采样为固定角步长 Tendon LUT，并写入 result。 */
-bool buildTendonLutFromRawSamples(JointCalibrationResult* result,
+bool buildTendonLutFromRawSamples(uint8_t jointIndex,
+                                  JointCalibrationResult* result,
                                   uint8_t primaryMotor,
                                   uint8_t secondaryMotor,
                                   uint8_t actuatorCount,
                                   const TendonRawFitBuffer& raw);
 
-/** 构建单腱关节 V3 Auto 端点、动态角范围和单路 Tendon LUT。 */
+/** 构建单腱关节 V4 Manual 映射、Auto 诊断端点和单路 Tendon LUT。 */
 bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                          int32_t tautEncoder,
                                          int32_t zeroEncoder,
@@ -69,7 +70,7 @@ bool buildAutoZeroTightCalibrationResult(uint8_t jointIndex,
                                          int32_t tightServoAbs,
                                          JointCalibrationResult* out);
 
-/** 构建双腱关节 V3 Auto 端点；双路 LUT 由标定状态机随后写入。 */
+/** 构建双腱关节 V4 Manual 映射与 Auto 诊断端点；双路 LUT 随后写入。 */
 bool buildDualZeroTightCalibrationResult(uint8_t jointIndex,
                                          int32_t startEncoder,
                                          int32_t zeroEncoder,

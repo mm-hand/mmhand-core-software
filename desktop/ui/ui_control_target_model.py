@@ -1,6 +1,6 @@
 """ui_control_target_model.py - MMHand Desktop 模块契约。
 
-职责：计算 UI 目标角、动态工作空间和边界钳位结果。
+职责：计算 UI 目标角、V4 URDF 工作空间和边界钳位结果。
 线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
 输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
 输出：Qt 控件状态、用户提示和经门面提交的应用命令。
@@ -43,7 +43,7 @@ class JointTargetModel:
         idx: int,
         state: Optional[HandModel],
     ) -> JointWorkspaceRange:
-        """Resolve the calibrated target workspace for a joint."""
+        """校验关节标定契约，并返回固定 URDF 目标区间。"""
         return resolve_joint_workspace_range(
             state,
             idx,

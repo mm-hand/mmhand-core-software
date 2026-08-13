@@ -1,4 +1,4 @@
-"""锁定当前唯一 Auto/LUT V3 快照长度，防止旧映射字段重新进入运行协议。"""
+"""锁定当前唯一 Auto/LUT V4 快照长度，防止旧映射字段重新进入运行协议。"""
 
 from desktop.core.generated_upper_protocol import (
     CMD_CALIB_LOAD_JOINT,
@@ -10,13 +10,13 @@ from desktop.core.protocol import (
 )
 
 
-def _minimal_v3_result() -> dict:
+def _minimal_v4_result() -> dict:
     return {
         "joint": 0,
         "success": True,
-        "mappingVersion": 3,
-        "angleMax": 90.0,
-        "angleMin": 5.0,
+        "mappingVersion": 4,
+        "angleMax": 11.0,
+        "angleMin": -45.0,
         "startEncoder": 100,
         "tightEncoder": 200,
         "zeroEncoder": 100,
@@ -39,13 +39,13 @@ def _minimal_v3_result() -> dict:
         "autoMinRaw": 100,
         "autoMaxRaw": 200,
         "manualReferenceCrc": 2,
-        "currentMinDeg": 5.0,
-        "currentMaxDeg": 90.0,
+        "currentMinDeg": -45.0,
+        "currentMaxDeg": 11.0,
     }
 
 
-def test_calib_load_joint_uses_only_v3_payload() -> None:
-    frame = build_calib_load_joint_cmd(_minimal_v3_result())
+def test_calib_load_joint_uses_only_v4_payload() -> None:
+    frame = build_calib_load_joint_cmd(_minimal_v4_result())
 
     assert COMMAND_PAYLOAD_LENGTHS[CMD_CALIB_LOAD_JOINT] == 189
     assert len(frame) == 193

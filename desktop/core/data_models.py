@@ -427,7 +427,7 @@ def _default_motors() -> List[MotorSlot]:
 
 @dataclass(frozen=True)
 class JointWorkspaceRange:
-    """Validated host-side view of one joint's v3 control workspace."""
+    """Validated host-side view of one joint's V4 Manual/URDF workspace."""
 
     joint_index: int
     urdf_min_deg: float
@@ -450,7 +450,7 @@ class JointWorkspaceRange:
         return max(self.current_min_deg, min(self.current_max_deg, target))
 
     def open_pose_target(self, offset_deg: float = 5.0) -> float:
-        """Return the calibrated open pose inside the dynamic workspace."""
+        """返回位于当前 URDF 工作区内的 Open Pose 目标。"""
         if not self.ready or self.current_min_deg is None:
             raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
         try:
@@ -470,7 +470,7 @@ def resolve_joint_workspace_range(
     expected_mapping_version: int,
     expected_urdf_crc: int,
 ) -> JointWorkspaceRange:
-    """Resolve dynamic Min and static URDF Max without accepting legacy mappings."""
+    """校验 V4 标定有效性，并返回固定的 URDF Min/Max 控制区间。"""
 
     idx = int(joint_index)
     urdf_min = float(urdf_min_deg)
@@ -508,9 +508,9 @@ def resolve_joint_workspace_range(
     results = list(getattr(model, "joint_calib_results", []) or [])
     result = results[idx] if idx < len(results) else None
     if not isinstance(result, dict) or not bool(result.get("success", False)):
-        return JointWorkspaceRange(**base, reason="v3 calibration result missing")
-    if not bool(result.get("hasManualScaledV3Fields", False)):
-        return JointWorkspaceRange(**base, reason="v3 calibration fields missing")
+        return JointWorkspaceRange(**base, reason="v4 calibration result missing")
+    if not bool(result.get("hasManualScaledV4Fields", False)):
+        return JointWorkspaceRange(**base, reason="v4 calibration fields missing")
     try:
         mapping_version = int(result.get("mappingVersion", 0) or 0)
         mapping_crc = int(result.get("urdfConfigCrc", 0) or 0)
@@ -520,7 +520,7 @@ def resolve_joint_workspace_range(
         angle_min = float(result.get("angleMin"))
         angle_max = float(result.get("angleMax"))
     except (TypeError, ValueError):
-        return JointWorkspaceRange(**base, reason="invalid v3 calibration fields")
+        return JointWorkspaceRange(**base, reason="invalid v4 calibration fields")
 
     manual_min_values = list(
         getattr(model, "manual_reference_min_raw", []) or []
@@ -538,8 +538,8 @@ def resolve_joint_workspace_range(
         return JointWorkspaceRange(**base, reason="Manual endpoint data missing")
     manual_crc_match = result_manual_crc == manual_entry_crc
     mapping_valid = (
-        int(expected_mapping_version) == 3
-        and mapping_version == 3
+        int(expected_mapping_version) == 4
+        and mapping_version == 4
         and mapping_crc == (int(expected_urdf_crc) & 0xFFFFFFFF)
     )
     base["manual_crc_match"] = manual_crc_match
@@ -553,12 +553,12 @@ def resolve_joint_workspace_range(
         or not math.isfinite(reported_current_max)
         or not math.isfinite(angle_min)
         or not math.isfinite(angle_max)
-        or current_min >= urdf_max
+        or abs(current_min - urdf_min) > 0.01
         or abs(reported_current_max - urdf_max) > 0.01
         or abs(angle_min - current_min) > 0.01
         or abs(angle_max - urdf_max) > 0.01
     ):
-        return JointWorkspaceRange(**base, reason="invalid dynamic Min or non-static Max")
+        return JointWorkspaceRange(**base, reason="V4 range must equal static URDF Min/Max")
 
     base["current_min_deg"] = current_min
     base["ready"] = True

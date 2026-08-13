@@ -10,30 +10,6 @@
 
 namespace {
 
-// LUT 的采样横坐标沿用自动标定内部行程角，而控制输入使用 URDF 角度。
-// 映射在这里集中完成，避免单电机与双电机各自重复换算造成双重缩放。
-bool mapUrdfToLutDeg(const JointCalibrationResult& calibration,
-                     float urdfDeg,
-                     float* outLutDeg)
-{
-    if (!outLutDeg || !isfinite(urdfDeg)) {
-        return false;
-    }
-
-    if (calibration.mappingVersion != kManualScaledUrdfFeedbackMappingVersion) {
-        return false;
-    }
-    const float urdfSpan = calibration.angleMax - calibration.angleMin;
-    if (!isfinite(urdfSpan) || urdfSpan <= 0.0f ||
-        !isfinite(calibration.totalDeg) || calibration.totalDeg <= 0.0f) {
-        return false;
-    }
-    const float lutDeg = calibration.startDeg +
-        ((urdfDeg - calibration.angleMin) / urdfSpan) * calibration.totalDeg;
-    *outLutDeg = lutDeg;
-    return isfinite(lutDeg);
-}
-
 bool calibrationHasUsableTendonLut(const JointCalibrationResult& calibration,
                                    uint8_t actuatorIndex)
 {
@@ -81,27 +57,27 @@ bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult& calibrat
         return false;
     }
 
-    float lutDeg = 0.0f;
-    if (!mapUrdfToLutDeg(calibration, urdfDeg, &lutDeg)) {
+    if (!isfinite(urdfDeg) ||
+        calibration.mappingVersion != kManualScaledUrdfFeedbackMappingVersion) {
         return false;
     }
 
     const float firstDeg = calibration.tendonLutAngleStartDeg;
     const float stepDeg = calibration.tendonLutAngleStepDeg;
-    if (lutDeg <= firstDeg) {
+    if (urdfDeg <= firstDeg) {
         *outMotorAbs = (float)calibration.tendonLutMotorAbs[actuatorIndex][0];
         return true;
     }
 
     const uint8_t lastIndex = calibration.tendonLutCount - 1;
     const float lastDeg = firstDeg + stepDeg * (float)lastIndex;
-    if (lutDeg >= lastDeg) {
+    if (urdfDeg >= lastDeg) {
         *outMotorAbs =
             (float)calibration.tendonLutMotorAbs[actuatorIndex][lastIndex];
         return true;
     }
 
-    const float position = (lutDeg - firstDeg) / stepDeg;
+    const float position = (urdfDeg - firstDeg) / stepDeg;
     uint8_t lowerIndex = (uint8_t)floorf(position);
     if (lowerIndex >= lastIndex) {
         lowerIndex = lastIndex - 1;

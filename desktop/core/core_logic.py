@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 
 from desktop.paths import PACKAGE_DIR
 
-from .angle_mapping import urdf_manual_scaled_mapping_metadata
+from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .calibration_snapshot import (
     CALIBRATION_SNAPSHOT_SCHEMA_VERSION,
     CalibrationSnapshotError,
@@ -1484,6 +1484,39 @@ class HandController:
             return False, (
                 f"snapshot URDF mapping mismatch: {mapping_text}; "
                 f"expected v{expected_mapping_version}/0x{expected_urdf_crc:08X}"
+            )
+
+        # V4 的四个范围字段必须全部等于当前 URDF Min/Max。这里在发送前
+        # 拒绝旧动态 Min 快照，P4 仍会使用本机 Manual 再计算一次形成双重门禁。
+        incompatible_ranges = []
+        for joint_idx in range(ENCODER_COUNT):
+            if (active_joint_mask & (1 << joint_idx)) == 0:
+                continue
+            result = joint_results[joint_idx]
+            urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
+            try:
+                values = (
+                    float(result.get("angleMin")),
+                    float(result.get("currentMinDeg")),
+                    float(result.get("angleMax")),
+                    float(result.get("currentMaxDeg")),
+                )
+            except (TypeError, ValueError):
+                incompatible_ranges.append(joint_idx)
+                continue
+            if (
+                not all(math.isfinite(value) for value in values)
+                or abs(values[0] - urdf_min) > 0.01
+                or abs(values[1] - urdf_min) > 0.01
+                or abs(values[2] - urdf_max) > 0.01
+                or abs(values[3] - urdf_max) > 0.01
+            ):
+                incompatible_ranges.append(joint_idx)
+        if incompatible_ranges:
+            range_text = ",".join(f"J{idx:02d}" for idx in incompatible_ranges)
+            return False, (
+                f"snapshot V4 range mismatch: {range_text}; "
+                "re-run automatic calibration with the current firmware"
             )
 
         if not self.query_manual_encoder_references(

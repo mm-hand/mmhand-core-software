@@ -78,8 +78,6 @@ def test_joint_calibration_current_protocol_round_trip():
             for _ in range(TENDON_LUT_ACTUATOR_COUNT)
         ],
         "mappingVersion": mapping_version,
-        "encoderAtUrdfMin": 1200,
-        "encoderAtUrdfMax": 4600,
         "angleMin": 0.0,
         "urdfConfigCrc": mapping_crc,
         "autoMinRaw": 1200,
@@ -98,8 +96,6 @@ def test_joint_calibration_current_protocol_round_trip():
     assert parsed is not None
     assert parsed["joint"] == result["joint"]
     assert parsed["mappingVersion"] == mapping_version
-    assert parsed["encoderAtUrdfMin"] == 1200
-    assert parsed["encoderAtUrdfMax"] == 4600
     assert parsed["angleMin"] == 0.0
     assert parsed["angleMax"] == 63.0
     assert parsed["urdfConfigCrc"] == mapping_crc
@@ -108,7 +104,7 @@ def test_joint_calibration_current_protocol_round_trip():
     assert parsed["manualReferenceCrc"] == 0x12345678
     assert parsed["currentMinDeg"] == 0.0
     assert parsed["currentMaxDeg"] == 63.0
-    assert parsed["hasManualScaledV3Fields"] is True
+    assert parsed["hasManualScaledV4Fields"] is True
     assert parsed["hasAssemblyWarningFields"] is False
     assert parsed["tendonLutValid"] is True
     assert parsed["tendonLutCount"] == 3
@@ -180,8 +176,6 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
         "scaled": True,
         "encoderDirection": 1,
         "mappingVersion": mapping_version,
-        "encoderAtUrdfMin": 1000,
-        "encoderAtUrdfMax": 3400,
         "angleMin": 0.0,
         "urdfConfigCrc": mapping_crc,
         "autoMinRaw": 1000,
@@ -235,14 +229,12 @@ def test_direction_negative_snapshot_requires_physical_raw_endpoints():
         "scaled": True,
         "encoderDirection": -1,
         "mappingVersion": mapping_version,
-        "encoderAtUrdfMin": 6398,
-        "encoderAtUrdfMax": 10598,
-        "angleMin": -8.609,
+        "angleMin": -9.0,
         "urdfConfigCrc": mapping_crc,
         "autoMinRaw": 9986,
         "autoMaxRaw": 5786,
         "manualReferenceCrc": 0x12345678,
-        "currentMinDeg": -8.609,
+        "currentMinDeg": -9.0,
         "currentMaxDeg": 88.0,
     }
 

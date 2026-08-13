@@ -68,7 +68,7 @@ def urdf_feedback_mapping_metadata(
 def urdf_manual_scaled_mapping_metadata(
     mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
 ) -> tuple[int, int]:
-    """Return staged manual-scaled mapping v3 version and canonical CRC32."""
+    """Return the V4 Manual-to-URDF mapping version and canonical CRC32."""
     return _urdf_mapping_metadata(
         "manual_scaled_mapping_version", "manual-scaled", mapping_path
     )
@@ -262,7 +262,7 @@ def get_spec(joint: int | str) -> JointAngleSpec:
     return JOINT_SPECS[resolve_joint(joint)]
 
 
-def _has_consistent_v3_raw_endpoints(item: dict) -> bool:
+def _has_consistent_auto_raw_endpoints(item: dict) -> bool:
     try:
         direction = -1 if int(item.get("encoderDirection", 1)) < 0 else 1
         start_oriented = int(item.get("startEncoder", 0)) % 16384
@@ -310,17 +310,27 @@ def load_calibrated_ranges(
                 mapping_crc = int(item.get("urdfConfigCrc", 0) or 0)
                 angle_min = float(item.get("angleMin", 0.0))
                 angle_max = float(item.get("angleMax", 0.0))
+                current_min = float(item.get("currentMinDeg", float("nan")))
+                current_max = float(item.get("currentMaxDeg", float("nan")))
             except (TypeError, ValueError):
                 continue
+            urdf_min, urdf_max = JOINT_SPECS[idx].urdf_range_deg
             if (
                 mapping_version == expected_version
                 and mapping_crc == expected_crc
                 and math.isfinite(angle_min)
                 and math.isfinite(angle_max)
-                and angle_min < angle_max
-                and _has_consistent_v3_raw_endpoints(item)
+                and math.isfinite(current_min)
+                and math.isfinite(current_max)
+                and abs(angle_min - urdf_min) <= 0.01
+                and abs(angle_max - urdf_max) <= 0.01
+                and abs(current_min - urdf_min) <= 0.01
+                and abs(current_max - urdf_max) <= 0.01
+                and _has_consistent_auto_raw_endpoints(item)
             ):
-                ranges[idx] = (angle_min, angle_max)
+                # V4 快照只证明该关节已有有效 Auto/LUT；实际命令范围始终取
+                # 当前 URDF 静态上下限，不能让历史 Auto Span 再次改变比例。
+                ranges[idx] = (urdf_min, urdf_max)
 
     if path == CALIB_LOAD_SNAPSHOT_PATH:
         _CALIB_CACHE = (mtime, dict(ranges))
@@ -372,7 +382,7 @@ def urdf_to_calibrated(
     """URDF rad -> calibrated/hardware command degrees.
 
     This is a temporary linear mapping framework. The measured calibration
-    range is read from the active V5 calibration bundle. If no
+    range is read from the active V6 calibration bundle. If no
     calibrated range is available and allow_default is False, this raises.
     """
     idx = resolve_joint(joint)
@@ -458,7 +468,7 @@ def legacy_calibrated_to_urdf(
     """Legacy pre-URDF q_target degrees -> active URDF radians.
 
     Unlike :func:`calibrated_to_urdf`, this conversion never reads the current
-    v3 Auto/Manual workspace. The legacy producer contract is fixed by
+    V4 Manual/URDF workspace. The legacy producer contract is fixed by
     ``calibrated_default_range_deg`` in the URDF mapping JSON, while the
     runtime workspace guard is applied later by HandBackend.
     """

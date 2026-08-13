@@ -425,7 +425,7 @@ class DeviceCheckView(QtWidgets.QWidget):
                 auto_mask & bit
                 and result
                 and result.get("success")
-                and result.get("hasManualScaledV3Fields")
+                and result.get("hasManualScaledV4Fields")
             )
             self._auto_min_items[joint].setText(str(int(result.get("autoMinRaw"))) if has_auto_fields else "-")
             self._auto_max_items[joint].setText(str(int(result.get("autoMaxRaw"))) if has_auto_fields else "-")

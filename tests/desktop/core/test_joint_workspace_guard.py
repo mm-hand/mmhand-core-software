@@ -11,7 +11,7 @@ from desktop.core.protocol import (
 )
 
 
-def _ready_state(joint_idx=0, current_min=12.5):
+def _ready_state(joint_idx=0, current_min=None):
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(joint_idx)
     state = HandModel()
@@ -22,6 +22,8 @@ def _ready_state(joint_idx=0, current_min=12.5):
     state.manual_reference_max_raw[joint_idx] = 5000
     state.auto_calibration_valid_bitmap = 1 << joint_idx
     state.active_joint_mask = 1 << joint_idx
+    # current_min 参数仅保留给既有测试调用；V4 下它不再改变工作区。
+    _ = current_min
     state.joint_calib_results[joint_idx] = {
         "success": True,
         "mappingVersion": version,
@@ -31,17 +33,17 @@ def _ready_state(joint_idx=0, current_min=12.5):
             state.manual_reference_min_raw[joint_idx],
             state.manual_reference_max_raw[joint_idx],
         ),
-        "currentMinDeg": current_min,
+        "currentMinDeg": spec.urdf_range_deg[0],
         "currentMaxDeg": spec.urdf_range_deg[1],
-        "angleMin": current_min,
+        "angleMin": spec.urdf_range_deg[0],
         "angleMax": spec.urdf_range_deg[1],
-        "hasManualScaledV3Fields": True,
+        "hasManualScaledV4Fields": True,
     }
     return state
 
 
-def test_workspace_uses_dynamic_min_and_static_urdf_max():
-    state = _ready_state(current_min=12.5)
+def test_workspace_uses_static_urdf_min_and_max():
+    state = _ready_state()
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(0)
 
@@ -55,15 +57,18 @@ def test_workspace_uses_dynamic_min_and_static_urdf_max():
     )
 
     assert workspace.ready
-    assert workspace.current_min_deg == pytest.approx(12.5)
+    assert workspace.current_min_deg == pytest.approx(spec.urdf_range_deg[0])
     assert workspace.current_max_deg == pytest.approx(spec.urdf_range_deg[1])
-    assert workspace.clamp(-1000.0) == pytest.approx(12.5)
+    assert workspace.clamp(-1000.0) == pytest.approx(spec.urdf_range_deg[0])
     assert workspace.clamp(1000.0) == pytest.approx(spec.urdf_range_deg[1])
-    assert workspace.open_pose_target() == pytest.approx(17.5)
+    assert workspace.open_pose_target() == pytest.approx(
+        min(spec.urdf_range_deg[0] + 5.0, spec.urdf_range_deg[1])
+    )
 
 
-def test_workspace_open_pose_target_clamps_at_urdf_max():
-    state = _ready_state(current_min=52.0)
+def test_workspace_rejects_dynamic_min_from_removed_mapping():
+    state = _ready_state()
+    state.joint_calib_results[0]["currentMinDeg"] = 52.0
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(0)
 
@@ -76,8 +81,8 @@ def test_workspace_open_pose_target_clamps_at_urdf_max():
         urdf_crc,
     )
 
-    assert workspace.ready
-    assert workspace.open_pose_target() == pytest.approx(spec.urdf_range_deg[1])
+    assert not workspace.ready
+    assert workspace.reason == "V4 range must equal static URDF Min/Max"
 
 
 def test_workspace_rejects_manual_crc_mismatch():
@@ -146,18 +151,18 @@ class _Controller:
         return True
 
 
-def test_backend_clamps_active_joint_to_dynamic_workspace():
+def test_backend_clamps_active_joint_to_static_urdf_workspace():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)
     backend = HandBackend(controller=controller)
-    targets = [0.0] * ENCODER_COUNT
+    targets = [-1000.0] * ENCODER_COUNT
 
     result = backend.send_joint_targets(targets, source="test", live=False)
 
     assert result.sent
     assert result.clamped == [0]
-    assert result.targets[0] == pytest.approx(12.5)
-    assert controller.sent[0][1][0] == pytest.approx(12.5)
+    assert result.targets[0] == pytest.approx(get_spec(0).urdf_range_deg[0])
+    assert controller.sent[0][1][0] == pytest.approx(get_spec(0).urdf_range_deg[0])
     assert controller.run_requests == 1
 
 

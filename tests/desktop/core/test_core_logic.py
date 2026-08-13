@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, call
 
 import desktop.core.core_logic as core_logic
+from desktop.core.angle_mapping import get_spec
 from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.core_logic import HandController
 from desktop.core.protocol import (
@@ -431,7 +432,7 @@ class TestLoadCalibrationSnapshot:
         controller.current_state.manual_reference_min_raw = [1000] * ENCODER_COUNT
         controller.current_state.manual_reference_max_raw = [5000] * ENCODER_COUNT
 
-        mapping_version = 3
+        mapping_version = 4
         urdf_crc = 0x12345678
         manual_crc = 0x00ABCDEF
         monkeypatch.setattr(
@@ -457,11 +458,16 @@ class TestLoadCalibrationSnapshot:
 
         joint_results = [None] * ENCODER_COUNT
         for joint, motor in ((9, 12), (10, 13)):
+            urdf_min, urdf_max = get_spec(joint).urdf_range_deg
             joint_results[joint] = {
                 "success": True,
                 "mappingVersion": mapping_version,
                 "urdfConfigCrc": urdf_crc,
                 "manualReferenceCrc": manual_crc,
+                "angleMin": urdf_min,
+                "angleMax": urdf_max,
+                "currentMinDeg": urdf_min,
+                "currentMaxDeg": urdf_max,
                 "tendonLutValid": True,
                 "tendonLutCount": 3,
                 "tendonLutMotor": [motor, 0xFF],
@@ -474,7 +480,7 @@ class TestLoadCalibrationSnapshot:
             }
         snapshot = seal_snapshot({
             "format": "mmhand_calibration_bundle",
-            "schema_version": 5,
+            "schema_version": 6,
             "hand_profile": "v2",
             "active_joint_mask": (1 << 9) | (1 << 10),
             "active_motor_mask": (1 << 12) | (1 << 13),

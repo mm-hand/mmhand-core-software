@@ -37,27 +37,26 @@ struct CalibrationAssemblyWarningInfo {
     uint16_t spanDifferenceCounts;   // Manual Span 与 URDF Span 的绝对差。
 };
 
-// 每个关节的自动标定结果。当前结构只表达 Manual 缩放映射 V3；旧 Auto V2
-// 的 encoderMin/encoderMax/offset/encoderAtUrdf* 字段已经从运行链和协议删除。
+// 每个关节的自动标定结果。当前结构只表达 Manual 全行程映射 V4。
 struct JointCalibrationResult {
     bool success;       // true 表示该结构中的 Auto 结果已完整生成。
-    float angleMax;     // 当前工作区最大角，V3 中等于 URDF Max。
+    float angleMax;     // 控制工作区最大角，V4 中固定等于 URDF Max。
 
-    // 映射版本与模型契约。mappingVersion 只允许当前 V3。
+    // 映射版本与模型契约。mappingVersion 只允许当前 V4。
     uint8_t mappingVersion;
-    float angleMin;           // V3 中为动态 Current Min。
+    float angleMin;           // 控制工作区最小角，V4 中固定等于 URDF Min。
     uint32_t urdfConfigCrc;   // 标定结果绑定的 URDF/映射契约 CRC。
 
-    // Manual 缩放映射 V3。修改某一关节 Manual 后，只使该关节 Auto 失效。
+    // Manual 全行程映射 V4。修改某一关节 Manual 后，只使该关节 Auto 失效。
     uint16_t autoMinRaw;       // 自动标定松端原始磁编值。
     uint16_t autoMaxRaw;       // 自动标定紧端原始磁编值。
     int32_t manualSpanCounts;  // 沿安装正方向计算的 Manual Span。
     int32_t autoSpanCounts;    // 沿安装正方向计算的 Auto Span。
     uint32_t manualReferenceCrc; // 该关节 Manual Min/Max 的条目 CRC。
-    float currentMinDeg;       // Auto Span 按 Manual 比例换算出的动态最小角。
-    float currentMaxDeg;       // 动态最大角，当前固定为 URDF Max。
+    float currentMinDeg;       // Manual Min 对应的 URDF Min。
+    float currentMaxDeg;       // Manual Max 对应的 URDF Max。
 
-    // 标定内部轨迹坐标，同时由当前 V3 快照和 Tendon LUT 使用。
+    // 标定内部轨迹坐标仅用于诊断和原始采样定位；V4 Tendon LUT 横轴使用 URDF 角。
     int32_t startEncoder;  // 搜索起点磁编方向坐标，对应 startDeg。
     int32_t tightEncoder;  // 紧端磁编方向坐标，对应 tightDeg。
     int32_t zeroEncoder;   // 内部 0° 参考磁编方向坐标。
@@ -72,11 +71,11 @@ struct JointCalibrationResult {
 
     // 通用腱绳传动 LUT。单电机关节只使用第 0 行并将第 1 路电机记为
     // 0xFF；双电机关节使用两行。字段顺序和尺寸保持不变，避免破坏
-    // 当前 V3 标定快照的二进制布局。
+    // 当前 V4 标定快照的二进制布局。
     uint8_t tendonLutValid; // 1 表示 LUT 样本与电机索引有效。
     uint8_t tendonLutCount; // 每路有效样本数。
     uint8_t tendonLutMotor[TENDON_LUT_ACTUATOR_COUNT]; // LUT 对应 Mxx。
-    float tendonLutAngleStartDeg; // 第一个 LUT 样本的内部轨迹角。
+    float tendonLutAngleStartDeg; // 第一个 LUT 样本的 URDF 角。
     float tendonLutAngleStepDeg;  // 相邻样本的角度步长。
     int32_t tendonLutMotorAbs[TENDON_LUT_ACTUATOR_COUNT][TENDON_LUT_MAX_SAMPLES];
 };
