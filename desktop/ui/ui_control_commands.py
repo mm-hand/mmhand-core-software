@@ -119,6 +119,8 @@ class ControlCommandController:
         self.raw_ik_enable_btn.setChecked(actual)
         self.raw_ik_enable_btn.setText("RAW IK ON" if actual else "RAW IK ENABLE")
         self.raw_ik_enable_btn.blockSignals(False)
+        if not actual:
+            self.clear_ros2_joint_targets()
         self.context.emit_action(
             "RAW IK output enabled" if actual else "RAW IK output disabled"
         )
@@ -141,6 +143,7 @@ class ControlCommandController:
             self.context.cancel_replay("E-STOP")
             self.stop_all_tests("stopped by E-STOP", update_status=False)
             self._clear_run_states()
+            self.clear_ros2_joint_targets()
             self.context.emit_action("Stop")
         finally:
             self._estop_in_progress = False
@@ -152,6 +155,7 @@ class ControlCommandController:
             self.backend.pause()
         except Exception:
             pass
+        self.clear_ros2_joint_targets()
         self.context.emit_action("Pause")
         self._set_status("Pause requested: target cache kept for resume")
 

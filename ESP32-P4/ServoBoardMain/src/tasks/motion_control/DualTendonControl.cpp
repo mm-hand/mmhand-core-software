@@ -281,6 +281,12 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                             &lutMaxAbs)) {
             return false;
         }
+
+        // LUT 样本仍负责生成理论电机参考；这里只给运行目标增加有限的端点余量，
+        // 用于验证“正常闭环预紧状态无法完全复现标定末端姿态”是否为剩余角度误差的主因。
+        // 最终命令仍会经过 Gateway 硬件范围检查，并在 LOCK 开启时受标定 ABS 限位约束。
+        lutMinAbs -= kDualTendonLutMarginCounts;
+        lutMaxAbs += kDualTendonLutMarginCounts;
         int32_t boundedTarget = rawTarget;
         if (boundedTarget < lutMinAbs) boundedTarget = lutMinAbs;
         if (boundedTarget > lutMaxAbs) boundedTarget = lutMaxAbs;

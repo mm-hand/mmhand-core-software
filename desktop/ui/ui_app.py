@@ -120,6 +120,8 @@ FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
 class HandGUI(QtWidgets.QMainWindow):
     test_recording_stop_finished = Signal(str, str, str)
     replay_event_received = Signal(str, str)
+    # ROS2 executor 线程不能直接操作 Qt 控件；该信号负责切回 GUI 主线程。
+    ros2_joint_target_received = Signal(object)
 
     def __init__(
         self,
@@ -167,6 +169,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._test_recording_stop_thread: Optional[threading.Thread] = None
         self.test_recording_stop_finished.connect(self._on_test_recording_stop_finished)
         self.replay_event_received.connect(self._on_replay_event)
+        self.ros2_joint_target_received.connect(self._on_ros2_joint_target_received)
         self._recording_status_note = ""
         self._recording_csv_path = ""
         self._last_recorded_proto_ack_sequence = 0
@@ -1594,11 +1597,14 @@ class HandGUI(QtWidgets.QMainWindow):
         return result
 
     def _on_joint_target_command(self, payload: Dict[str, object]) -> None:
-        """记录所有关节动作；连续流20 Hz降采样，离散UI命令逐条保留。"""
+        """分流关节命令：ROS2实时显示全帧，数据记录按20 Hz降采样。"""
+        source = str(payload.get("source", ""))
+        if source.upper().startswith("ROS2:"):
+            # 实时显示不依赖 Save Data；复制后跨线程投递，避免回调方继续修改对象。
+            self.ros2_joint_target_received.emit(dict(payload))
         if not self._data_logger.is_running():
             return
         host_time = time.time()
-        source = str(payload.get("source", ""))
         p4_time_ms = payload.get("p4_time_ms", "")
         input_targets = payload.get("input_targets", [])
         raw_input_targets = payload.get("raw_input_targets", input_targets)
@@ -1648,6 +1654,12 @@ class HandGUI(QtWidgets.QMainWindow):
         }
         for sampled_row in self._motion_record_sampler.submit(row):
             self._data_logger.write("teleop_input", sampled_row)
+
+    def _on_ros2_joint_target_received(self, payload: object) -> None:
+        """在 Qt 主线程把 ROS2 最终目标交给 Joint Channels 表格。"""
+        control_panel = getattr(self, "control_panel", None)
+        if isinstance(payload, dict) and control_panel is not None:
+            control_panel.update_ros2_joint_targets(payload)
 
     def _flush_motion_recording_due(self, *, force: bool = False) -> None:
         """补写连续动作末帧；关闭记录时必须强制执行一次。"""

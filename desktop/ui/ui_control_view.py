@@ -242,6 +242,7 @@ class ControlPanelViewMixin:
         self.test_freq_spins = []
         self.test_phase_spins = []
         self.joint_current_items = []
+        self.joint_ros2_target_items = []
         self.joint_encoder_items = []
         self.joint_abs_limit_items = []
         self.joint_status_items = []

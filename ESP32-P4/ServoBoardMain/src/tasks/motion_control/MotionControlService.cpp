@@ -464,8 +464,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         FW_LOG_INFO_PRINTF(
             "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f tc=%u br=%u ld=%d s=%d k=%u "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f tc=%u br=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u br=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u br=%u ld=%d s=%d k=%u "
             "tel=%u\r\n",
             (unsigned long)diagNowMs,
             (unsigned)jointIndex,
@@ -479,6 +479,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (long)((int32_t)runtimeTargets[0].targetAbs - abs0),
             (double)tendonTargets.motorErr[0],
             (double)tendonTargets.pidCorrection[0],
+            (long)tendonTargets.lutMinAbs[0],
+            (long)tendonTargets.lutMaxAbs[0],
             (unsigned)tendonTargets.lutTargetClamped[0],
             (unsigned)actualBoundaryReached[0],
             (int)load0,
@@ -491,6 +493,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (long)((int32_t)runtimeTargets[1].targetAbs - abs1),
             (double)tendonTargets.motorErr[1],
             (double)tendonTargets.pidCorrection[1],
+            (long)tendonTargets.lutMinAbs[1],
+            (long)tendonTargets.lutMaxAbs[1],
             (unsigned)tendonTargets.lutTargetClamped[1],
             (unsigned)actualBoundaryReached[1],
             (int)load1,

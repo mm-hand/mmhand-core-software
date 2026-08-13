@@ -3,6 +3,7 @@ from desktop.core.protocol import ENCODER_COUNT, VALID_MOTOR_MASK, manual_encode
 from desktop.ui.ui_control_device import DeviceControlBar
 from desktop.ui.ui_control_scope import ControlScopeModel, FINGER_JOINT_RANGES
 from desktop.ui.ui_control_target_model import JointTargetModel
+from desktop.ui.ui_app import HandGUI
 from desktop.ui.ui_qt_compat import ensure_app
 
 
@@ -97,3 +98,120 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
         "rope",
         "nvs",
     ]
+
+
+def test_joint_table_displays_ros2_targets_next_to_current() -> None:
+    """Joint Channels 应在 Current 右侧展示实际送往 P4 的 ROS2 目标角。"""
+    from desktop.ui.ui_control_panels import ControlPanel
+
+    class _Backend:
+        def raw_ik_output_enabled(self):
+            return False
+
+        def get_current_state(self):
+            return HandModel()
+
+        def set_pid_control(self, _enabled):
+            return None
+
+        def set_control_mode(self, _mode):
+            return None
+
+    class _Context:
+        backend = _Backend()
+        ros2_enabled = True
+
+        @staticmethod
+        def is_comm_connected():
+            return False
+
+        @staticmethod
+        def set_status(_text):
+            return None
+
+        @staticmethod
+        def emit_action(_text):
+            return None
+
+        @staticmethod
+        def connect_selected_port():
+            return False
+
+        @staticmethod
+        def get_state():
+            return HandModel()
+
+        @staticmethod
+        def cancel_replay(_reason):
+            return None
+
+    panel = ControlPanel(_Context())
+    assert panel.joint_table.columnCount() == 13
+    assert panel.joint_table.horizontalHeaderItem(4).text() == "Current"
+    assert panel.joint_table.horizontalHeaderItem(5).text() == "ROS2 Target"
+
+    inputs = [float(idx) for idx in range(ENCODER_COUNT)]
+    outputs = list(inputs)
+    outputs[0] = 5.5
+    panel.update_ros2_joint_targets(
+        {
+            "source": "ROS2:/raw_ik_target",
+            "sent": True,
+            "input_targets": inputs,
+            "output_targets": outputs,
+            "command_joint_mask": 1,
+            "clamped": [0],
+            "message": "",
+        }
+    )
+
+    assert panel.joint_ros2_target_items[0].text() == "5.50"
+    assert "clamped from 0.00 deg to 5.50 deg" in panel.joint_ros2_target_items[0].toolTip()
+    assert panel.joint_ros2_target_items[1].text() == "1.00"
+    assert "was not sent" in panel.joint_ros2_target_items[1].toolTip()
+
+    panel.update_ros2_joint_targets(
+        {
+            "source": "ROS2:/raw_ik_target",
+            "sent": False,
+            "message": "ROS2 joint target dropped: not_armed",
+        }
+    )
+    assert panel.joint_ros2_target_items[0].text() == "5.50"
+    assert "not_armed" in panel.joint_ros2_target_items[0].toolTip()
+
+    panel.clear_ros2_joint_targets()
+    assert all(item.text() == "-" for item in panel.joint_ros2_target_items)
+
+
+def test_ros2_target_reaches_ui_when_save_data_is_disabled() -> None:
+    """实时目标显示不得再被 Save Data 开关提前截断。"""
+    emitted = []
+
+    class _Signal:
+        @staticmethod
+        def emit(payload):
+            emitted.append(payload)
+
+    class _StoppedLogger:
+        @staticmethod
+        def is_running():
+            return False
+
+    owner = type(
+        "JointTargetOwner",
+        (),
+        {
+            "ros2_joint_target_received": _Signal(),
+            "_data_logger": _StoppedLogger(),
+        },
+    )()
+    payload = {
+        "source": "ROS2:/raw_ik_target",
+        "sent": True,
+        "output_targets": [1.0] * ENCODER_COUNT,
+    }
+
+    HandGUI._on_joint_target_command(owner, payload)
+
+    assert emitted == [payload]

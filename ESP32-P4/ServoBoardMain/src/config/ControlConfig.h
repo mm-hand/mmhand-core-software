@@ -19,8 +19,8 @@ inline constexpr float kPeriodSec = 0.010f;
 inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-/** PID 诊断默认关闭；实机调参时临时开启，并在 active scope 内轮询输出。 */
-inline constexpr bool kPidDiagLogEnabled = false;
+/** PID 诊断实验期开启，并在 active scope 内轮询输出；验证结束后应恢复为 false。 */
+inline constexpr bool kPidDiagLogEnabled = true;
 inline constexpr uint32_t kPidDiagLogPeriodMs = 50;
 
 inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;
@@ -63,6 +63,11 @@ inline constexpr float kDualTendonKd = 0.0f;
 inline constexpr float kDualTendonIntegralLimit = 0.0f;
 inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
 inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
+/**
+ * 双腱闭环允许越过标定 LUT 端点的实验裕量，单位为舵机 logical ABS counts。
+ * 该裕量只放宽运行目标，不修改 LUT 样本；后续硬件绝对范围及已启用的 LOCK 限位仍会兜底。
+ */
+inline constexpr int32_t kDualTendonLutMarginCounts = 480;
 
 /** 碰撞检测状态机参数。 */
 inline constexpr float kCollisionMinErrorDeg = 4.0f;

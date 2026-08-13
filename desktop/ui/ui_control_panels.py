@@ -77,6 +77,7 @@ class ControlPanel(
     def _init_joint_panel_state(self) -> None:
         """Initialize joint table state and target caches."""
         self.joint_current_items: List[QtWidgets.QTableWidgetItem] = []
+        self.joint_ros2_target_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_encoder_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_abs_limit_items: List[QtWidgets.QTableWidgetItem] = []
         self.joint_status_items: List[QtWidgets.QTableWidgetItem] = []
@@ -88,6 +89,15 @@ class ControlPanel(
         self._joint_target_user_set: List[bool] = []
         self._joint_target_initialized = False
         self._joint_run_states = [False] * ENCODER_COUNT
+        # ROS2 executor 线程只投递消息；以下快照只允许 Qt 主线程更新和展示。
+        # target_values 保存经过 URDF 适配及动态工作空间钳位后的最终发送角度。
+        self._ros2_target_values: List[Optional[float]] = [None] * ENCODER_COUNT
+        self._ros2_target_input_values: List[Optional[float]] = [None] * ENCODER_COUNT
+        self._ros2_target_command_mask = 0
+        self._ros2_target_clamped_mask = 0
+        self._ros2_target_last_sent = False
+        self._ros2_target_message = ""
+        self._ros2_target_updated_at = 0.0
         self._motors_by_joint = ControlScopeModel.motors_by_joint_index()
         # 21 路磁编共用 S3 的 SPI MISO/MOSI。公共返回线被拉低时，固件可能把
         # 0x0000 当作合法零角度并继续上报全在线；在上位机侧对这一特征做短时去抖。

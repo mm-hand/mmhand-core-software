@@ -31,15 +31,16 @@ class JointChannelTable(QtWidgets.QTableWidget):
     def build(panel) -> QtWidgets.QTableWidget:
         """Build the joint table UI section."""
         joint_rows, group_ranges = ControlScopeModel.joint_rows_by_finger_group()
-        table = JointChannelTable(len(joint_rows), 12)
+        table = JointChannelTable(len(joint_rows), 13)
         table.setWordWrap(False)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Joint", "Enc", "Current", "Raw", "ABS Limit", "Min", "Target", "Max",
-            "Action", "Target Slider",
+            "Group", "Use", "Joint", "Enc", "Current", "ROS2 Target", "Raw", "ABS Limit", "Min",
+            "Target", "Max", "Action", "Target Slider",
         ])
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         panel.joint_current_items = [None] * ENCODER_COUNT
+        panel.joint_ros2_target_items = [None] * ENCODER_COUNT
         panel.joint_encoder_items = [None] * ENCODER_COUNT
         panel.joint_abs_limit_items = [None] * ENCODER_COUNT
         panel.joint_status_items = [None] * ENCODER_COUNT
@@ -116,22 +117,28 @@ class JointChannelTable(QtWidgets.QTableWidget):
             status.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
             enc = panel._make_item("-")
             cur = panel._make_item("-")
+            ros2_target = panel._make_item("-")
+            ros2_target.setTextAlignment(QtCore.Qt.AlignCenter)
+            ros2_target.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+            ros2_target.setToolTip("No ROS2 target received")
             abs_limit = panel._make_item("-")
             min_item = panel._make_item(f"{panel._joint_target_min_deg(i):.2f}")
             max_item = panel._make_item(f"{panel._joint_target_max_deg(i):.2f}")
-            for item in (status, enc, cur, abs_limit, min_item, max_item):
+            for item in (status, enc, cur, ros2_target, abs_limit, min_item, max_item):
                 apply_group_background(item, row)
             panel.joint_status_items[i] = status
             panel.joint_current_items[i] = cur
+            panel.joint_ros2_target_items[i] = ros2_target
             panel.joint_encoder_items[i] = enc
             panel.joint_abs_limit_items[i] = abs_limit
             panel.joint_min_items[i] = min_item
             panel.joint_max_items[i] = max_item
             table.setItem(row, 3, status)
             table.setItem(row, 4, cur)
-            table.setItem(row, 5, enc)
-            table.setItem(row, 6, abs_limit)
-            table.setItem(row, 7, min_item)
+            table.setItem(row, 5, ros2_target)
+            table.setItem(row, 6, enc)
+            table.setItem(row, 7, abs_limit)
+            table.setItem(row, 8, min_item)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(panel._joint_target_min_deg(i), panel._joint_target_max_deg(i))
             spin.setDecimals(2)
@@ -140,19 +147,19 @@ class JointChannelTable(QtWidgets.QTableWidget):
             spin.editingFinished.connect(lambda idx=i: panel._mark_joint_target_user_set(idx))
             apply_group_widget_background(spin, row)
             panel.joint_target_spins[i] = spin
-            table.setCellWidget(row, 8, spin)
-            table.setItem(row, 9, max_item)
+            table.setCellWidget(row, 9, spin)
+            table.setItem(row, 10, max_item)
             send = QtWidgets.QPushButton("Send")
             send.clicked.connect(lambda _=False, idx=i: panel.send_joint_row(idx))
             apply_group_widget_background(send, row)
             panel.joint_send_buttons[i] = send
-            table.setCellWidget(row, 10, send)
+            table.setCellWidget(row, 11, send)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
             slider.setRange(int(panel._joint_target_min_deg(i) * 100), int(panel._joint_target_max_deg(i) * 100))
             slider.valueChanged.connect(lambda value, idx=i: panel._joint_slider_changed(idx, value))
             apply_group_widget_background(slider, row)
             panel.joint_sliders[i] = slider
-            table.setCellWidget(row, 11, slider)
+            table.setCellWidget(row, 12, slider)
             panel._control_widgets.extend([spin, send, slider])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
@@ -166,19 +173,21 @@ class JointChannelTable(QtWidgets.QTableWidget):
         table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(4, 70)
         table.horizontalHeader().setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(5, 68)
+        table.setColumnWidth(5, 92)
         table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(6, 190)
+        table.setColumnWidth(6, 68)
         table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(7, 64)
+        table.setColumnWidth(7, 190)
         table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(8, 78)
+        table.setColumnWidth(8, 64)
         table.horizontalHeader().setSectionResizeMode(9, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(9, 60)
+        table.setColumnWidth(9, 78)
         table.horizontalHeader().setSectionResizeMode(10, QtWidgets.QHeaderView.Fixed)
-        table.setColumnWidth(10, 82)
-        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Stretch)
-        table.setColumnWidth(11, 420)
+        table.setColumnWidth(10, 60)
+        table.horizontalHeader().setSectionResizeMode(11, QtWidgets.QHeaderView.Fixed)
+        table.setColumnWidth(11, 82)
+        table.horizontalHeader().setSectionResizeMode(12, QtWidgets.QHeaderView.Stretch)
+        table.setColumnWidth(12, 420)
         return table
 
 

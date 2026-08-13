@@ -8,6 +8,9 @@
 禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
 """
 
+import math
+import time
+
 from .ui_control_common import (
     ControlMode,
     ControlScopeModel,
@@ -63,6 +66,7 @@ class ControlPanelStateMixin:
     _ENCODER_ALL_MASK = (1 << ENCODER_COUNT) - 1
     _ENCODER_COMMON_ZERO_CONFIRM_S = 0.20
     _ENCODER_COMMON_ZERO_RECOVERY_FRAMES = 3
+    _ROS2_TARGET_STALE_AFTER_S = 0.50
     _ENCODER_COMMON_BUS_MESSAGE = (
         "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
         "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
@@ -71,6 +75,12 @@ class ControlPanelStateMixin:
     def update_state(self, state) -> None:
         """Run the update state workflow."""
         self._state = state
+        # active scope、RESET、Replay 等路径会在后端撤销 RAW IK 授权；下一帧状态到达时
+        # 同步清除旧 ROS2 目标，避免用户把历史值误认为仍在实时下发。
+        raw_ik_enabled_getter = getattr(self.backend, "raw_ik_output_enabled", None)
+        raw_ik_enabled = bool(raw_ik_enabled_getter()) if callable(raw_ik_enabled_getter) else False
+        if any(value is not None for value in self._ros2_target_values) and not raw_ik_enabled:
+            self.clear_ros2_joint_targets()
         self._update_encoder_common_bus_guard(state)
         unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & VALID_MOTOR_MASK
         if unknown_bitmap == 0:
@@ -471,6 +481,7 @@ class ControlPanelStateMixin:
         self._encoder_common_bus_fault = False
         self._joint_target_user_set = [False] * ENCODER_COUNT
         self._motor_target_user_set = [False] * MOTOR_COUNT
+        self.clear_ros2_joint_targets()
         self._clear_run_states()
         self._updating = True
         try:
@@ -495,6 +506,135 @@ class ControlPanelStateMixin:
                 self._set_joint_encoder_dot(i, None)
         finally:
             self._updating = False
+
+    def update_ros2_joint_targets(self, payload) -> None:
+        """接收 ROS2 最终目标并刷新 Joint Channels。
+
+        该函数只在 Qt 主线程调用。被拒绝的帧不会覆盖最近一次成功下发的目标，
+        防止把未执行的输入误显示为 P4 已接收命令。
+        """
+        if not isinstance(payload, dict):
+            return
+        source = str(payload.get("source", "") or "")
+        if not source.upper().startswith("ROS2:"):
+            return
+
+        self._ros2_target_last_sent = bool(payload.get("sent", False))
+        self._ros2_target_message = str(payload.get("message", "") or "")
+        if not self._ros2_target_last_sent:
+            self._refresh_ros2_target_view()
+            return
+
+        try:
+            output_values = [float(value) for value in payload.get("output_targets", [])]
+        except (TypeError, ValueError):
+            return
+        if len(output_values) != ENCODER_COUNT or not all(
+            math.isfinite(value) for value in output_values
+        ):
+            return
+
+        try:
+            input_values = [float(value) for value in payload.get("input_targets", [])]
+        except (TypeError, ValueError):
+            input_values = []
+        if len(input_values) != ENCODER_COUNT or not all(
+            math.isfinite(value) for value in input_values
+        ):
+            input_values = list(output_values)
+
+        valid_mask = (1 << ENCODER_COUNT) - 1
+        command_mask = payload.get("command_joint_mask")
+        if command_mask is None:
+            command_mask = int(getattr(self._state, "active_joint_mask", 0) or 0)
+        try:
+            self._ros2_target_command_mask = int(command_mask) & valid_mask
+        except (TypeError, ValueError):
+            self._ros2_target_command_mask = 0
+
+        clamped_mask = 0
+        for joint_idx in payload.get("clamped", []) or []:
+            try:
+                idx = int(joint_idx)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < ENCODER_COUNT:
+                clamped_mask |= 1 << idx
+
+        self._ros2_target_values = output_values
+        self._ros2_target_input_values = input_values
+        self._ros2_target_clamped_mask = clamped_mask
+        self._ros2_target_updated_at = time.monotonic()
+        self._refresh_ros2_target_view()
+
+    def clear_ros2_joint_targets(self) -> None:
+        """清除 ROS2 目标快照，避免停机或断连后继续显示旧命令。"""
+        self._ros2_target_values = [None] * ENCODER_COUNT
+        self._ros2_target_input_values = [None] * ENCODER_COUNT
+        self._ros2_target_command_mask = 0
+        self._ros2_target_clamped_mask = 0
+        self._ros2_target_last_sent = False
+        self._ros2_target_message = ""
+        self._ros2_target_updated_at = 0.0
+        self._refresh_ros2_target_view()
+
+    def _refresh_ros2_target_view(self) -> None:
+        """根据发送范围、钳位状态和新鲜度刷新21路 ROS2 Target。"""
+        items = getattr(self, "joint_ros2_target_items", [])
+        if not items:
+            return
+        age_s = (
+            time.monotonic() - self._ros2_target_updated_at
+            if self._ros2_target_updated_at > 0.0
+            else float("inf")
+        )
+        stale = age_s >= self._ROS2_TARGET_STALE_AFTER_S
+        for joint_idx in range(min(ENCODER_COUNT, len(items))):
+            item = items[joint_idx]
+            if item is None:
+                continue
+            value = self._ros2_target_values[joint_idx]
+            if value is None:
+                self._set_item_text_if_changed(item, "-")
+                item.setForeground(QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+                self._set_item_tooltip_if_changed(
+                    item,
+                    self._ros2_target_message or "No successfully sent ROS2 target",
+                )
+                continue
+
+            in_command_scope = (
+                self._ros2_target_command_mask & (1 << joint_idx)
+            ) != 0
+            clamped = (self._ros2_target_clamped_mask & (1 << joint_idx)) != 0
+            self._set_item_text_if_changed(item, f"{value:.2f}")
+            if not in_command_scope:
+                color = "#9aa0a6"
+                tooltip = (
+                    f"ROS2 value received, but J{joint_idx:02d} was outside "
+                    "the command scope and was not sent"
+                )
+            elif not self._ros2_target_last_sent:
+                color = "#9aa0a6"
+                tooltip = self._ros2_target_message or "Latest ROS2 target was rejected"
+            elif stale:
+                color = "#9aa0a6"
+                tooltip = (
+                    "Last ROS2 target is stale; no fresh frame has been sent "
+                    f"for {age_s * 1000.0:.0f} ms"
+                )
+            elif clamped:
+                color = "#d97706"
+                raw_value = self._ros2_target_input_values[joint_idx]
+                tooltip = (
+                    f"ROS2 target clamped from {raw_value:.2f} deg to "
+                    f"{value:.2f} deg before sending"
+                )
+            else:
+                color = "#1565c0"
+                tooltip = "Latest ROS2 target successfully sent to P4"
+            item.setForeground(QtGui.QBrush(QtGui.QColor(color)))
+            self._set_item_tooltip_if_changed(item, tooltip)
 
     def stop_all_tests(self, reason: str = "stopped", update_status: bool = True) -> None:
         """停止全部由上位机生成目标轨迹的测试。"""
@@ -1243,6 +1383,7 @@ class ControlPanelStateMixin:
             table.setUpdatesEnabled(False)
         self._updating = True
         try:
+            self._refresh_ros2_target_view()
             for i in range(ENCODER_COUNT):
                 self._refresh_joint_target_range(i, state)
                 self._refresh_joint_abs_limit_item(i, state)
