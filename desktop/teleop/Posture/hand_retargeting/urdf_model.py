@@ -287,6 +287,9 @@ class URDFRobotHandModel:
             "pinky": (
                 "4",
                 (
+                    # 当前活动 URDF 将小拇指根部编号命名为 5；保留旧候选用于解析
+                    # 历史结构模型，避免因固定关节命名变化而丢失整条小拇指链。
+                    ("palm_1_fixed_joint", "palm_1_finger_base_5_fixed_joint"),
                     ("base_link_1_finger_base_4_fixed_joint",),
                     ("palm_1_fixed_joint", "palm_1_finger_base_4_fixed_joint"),
                     ("palm_fix_joint", "palm_1_finger_base_4_fixed_joint"),

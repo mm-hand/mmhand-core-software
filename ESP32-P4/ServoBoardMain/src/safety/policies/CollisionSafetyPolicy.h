@@ -15,6 +15,13 @@ enum FeedbackCollisionReleaseReason : uint8_t {
     FEEDBACK_COLLISION_RELEASE_TARGET_RETREAT = 3,   ///< 新目标沿碰撞反方向退让。
 };
 
+// 碰撞候选段按主执行器的物理腱绳方向选择进展阈值。
+// 全部舵机约定 logical ABS 增加为收绳，减少为放绳。
+enum FeedbackCollisionMotionMode : uint8_t {
+    FEEDBACK_COLLISION_MOTION_RELEASE = 0,
+    FEEDBACK_COLLISION_MOTION_TIGHTEN = 1,
+};
+
 // 记录碰撞监测运动段被重新创建的原因，便于实机日志定位误判。
 enum FeedbackCollisionMonitorResetReason : uint8_t {
     FEEDBACK_COLLISION_MONITOR_RESET_NONE = 0,
@@ -22,7 +29,11 @@ enum FeedbackCollisionMonitorResetReason : uint8_t {
     FEEDBACK_COLLISION_MONITOR_RESET_DIRECTION_CHANGED = 2,
     FEEDBACK_COLLISION_MONITOR_RESET_ERROR_DEADBAND = 3,
     FEEDBACK_COLLISION_MONITOR_RESET_HOLD_RELEASED = 4,
+    FEEDBACK_COLLISION_MONITOR_RESET_MOTION_MODE_CHANGED = 5,
 };
+
+/** 返回稳定模式名，供控制日志与上位机诊断使用。 */
+const char* feedbackCollisionMotionModeName(uint8_t mode);
 
 struct FeedbackCollisionInput {
     uint32_t timestampMs; ///< 当前控制周期单调时间。
@@ -31,6 +42,7 @@ struct FeedbackCollisionInput {
     float targetDeg;      ///< 当前钳位后的关节目标角。
     float feedbackDeg;    ///< 当前磁编实际角。
     bool pidPushActive;   ///< PID 是否仍沿目标方向产生有效推进。
+    uint8_t driveMotionMode; ///< FeedbackCollisionMotionMode；双腱固定传 RELEASE 档。
     // 只有执行器实际位置已抵达当前推进方向的 LUT 边界时才置位。
     bool workspaceBoundaryReached;
 };
@@ -44,10 +56,13 @@ struct FeedbackCollisionResult {
     bool monitorReset;      ///< 目标/方向变化导致监视窗口重建。
     uint8_t releaseReason;  ///< FeedbackCollisionReleaseReason。
     uint8_t monitorResetReason; ///< FeedbackCollisionMonitorResetReason。
+    uint8_t motionMode; ///< 当前候选段锁存的 FeedbackCollisionMotionMode。
     uint32_t candidateAgeMs; ///< 当前运动候选段持续时间。
+    uint32_t progressWindowMs; ///< 当前模式使用的低进展判定窗口。
     float targetDeltaDeg;   ///< 目标相对反馈的带符号误差。
     float directionVelocityDegPerSec; ///< 200 ms 窗口沿目标方向平均速度。
-    float directionProgressDeg; ///< 400 ms 窗口沿目标方向角度进展。
+    float directionProgressDeg; ///< 当前模式窗口内沿目标方向的角度进展。
+    float minProgressDeg; ///< 当前模式要求的最小方向进展。
     float holdAngleDeg;     ///< 触发 HOLD 时的磁编角。
     float holdTargetDeg;    ///< 触发 HOLD 时的目标角。
     float holdDirection;    ///< 触发时推进方向，仅为 -1 或 +1。
@@ -70,7 +85,8 @@ public:
     float holdAngleDeg(uint8_t jointIndex) const;
 
 private:
-    static const uint8_t kHistoryCapacity = 64;
+    // 750 ms 收绳窗口加上传感器抖动余量，按 10 ms 样本可覆盖约 960 ms。
+    static const uint8_t kHistoryCapacity = 96;
 
     struct AngleSample {
         uint32_t timestampMs; ///< 样本时间。
@@ -78,7 +94,7 @@ private:
     };
 
     struct JointState {
-        AngleSample history[kHistoryCapacity]; ///< 约 640 ms 的 10 ms 角度环形缓存。
+        AngleSample history[kHistoryCapacity]; ///< 覆盖约 960 ms 的 10 ms 角度环形缓存。
         uint8_t historyWriteIndex; ///< 下一样本写入位置。
         uint8_t historyCount;      ///< 当前有效样本数。
         bool contextActive;        ///< 上周期控制上下文是否有效。
@@ -88,6 +104,9 @@ private:
         bool targetInitialized;    ///< lastTargetDeg 是否有效。
         uint32_t candidateStartMs; ///< 当前候选运动段起点。
         float candidateDirection;  ///< 当前推进方向。
+        uint8_t candidateMotionMode; ///< 候选段开始时锁存的物理腱绳方向。
+        uint32_t progressWindowMs; ///< 该候选段固定使用的进展窗口。
+        float minProgressDeg; ///< 该候选段固定使用的最小进展。
         float lastTargetDeg;       ///< 上周期目标，用于识别目标跳变。
         float holdAngleDeg;        ///< 碰撞时磁编角快照。
         float holdTargetDeg;       ///< 碰撞时目标角快照。
@@ -102,7 +121,8 @@ private:
     void startCandidate(JointState& state,
                         uint32_t timestampMs,
                         float feedbackDeg,
-                        float direction);
+                        float direction,
+                        uint8_t motionMode);
     // 清空角度窗口，不改变关节控制上下文。
     void clearHistory(JointState& state);
     // 向固定容量环形缓存追加一个磁编样本。

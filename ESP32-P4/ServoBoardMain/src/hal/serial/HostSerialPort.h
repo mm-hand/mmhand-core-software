@@ -11,7 +11,11 @@
 
 class HostSerialPort {
 public:
+    using RxWakeHandler = void (*)(void* context);
+
     static void begin(uint32_t baudRate);
+    /** 注册接收事件回调；回调只允许唤醒任务，禁止在 Serial 事件线程解析协议。 */
+    static void setRxWakeHandler(RxWakeHandler handler, void* context);
     static int available();
     static int readByte();
     static size_t write(const uint8_t* data, size_t length);

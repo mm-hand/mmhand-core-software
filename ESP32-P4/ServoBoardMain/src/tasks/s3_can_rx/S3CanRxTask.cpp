@@ -9,6 +9,7 @@
 
 #include "S3CanRxService.h"
 #include "../../platform/time/Clock.h"
+#include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
 void s3CanRxTask(void* parameter)

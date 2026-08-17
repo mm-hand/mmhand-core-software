@@ -69,15 +69,40 @@ struct ServoFeedbackInternal {
     uint32_t lastUpdate; ///< 最近一次有效反馈时间。
 };
 
+/** 多圈模式按需配置事务的单步结果；Pending 表示等待下一次 10 ms 服务周期继续。 */
+enum class ServoMultiTurnConfigResult : uint8_t {
+    Pending = 0,
+    Complete = 1,
+    Failed = 2,
+};
+
+/** 多圈配置内部阶段；每次 step 最多执行一笔飞特协议事务，禁止在任务内 delay。 */
+enum class ServoMultiTurnConfigPhase : uint8_t {
+    Idle = 0,
+    VerifyLimits,
+    UnlockEeprom,
+    WriteZeroLimits,
+    LockEeprom,
+    Finalize,
+};
+
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
 public:
     /** 构造空驱动；必须先调用 begin() 绑定一条硬件 UART。 */
     FeetechServoDriver()
         : _serial(NULL),
+          _busIndex(0xFF),
+          _rxPin(-1),
+          _txPin(-1),
+          _baud(0),
           _writeCount(0),
           _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT),
-          _currentReadDivider(0)
+          _currentReadDivider(0),
+          _multiTurnConfigId(0xFF),
+          _multiTurnConfigPhase(ServoMultiTurnConfigPhase::Idle),
+          _multiTurnConfigNotBeforeMs(0),
+          _multiTurnConfigFailed(false)
     {
         memset(_feedback, 0, sizeof(_feedback));
         memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
@@ -97,8 +122,40 @@ public:
         }
 
         _serial = serial;
+        _busIndex = busIndex;
+        _rxPin = rxPin;
+        _txPin = txPin;
+        _baud = baud;
         _serial->begin(baud, SERIAL_8N1, rxPin, txPin);
         _sms.pSerial = _serial;
+    }
+
+    /**
+     * 仅重建当前 BUS 的 UART 传输层，不改舵机反馈、多圈 offset 或 NVS 恢复锚点。
+     * HardwareSerial::end() 会删除底层 UART 驱动及事件任务，因此同时清除了
+     * 残留 RX 数据和 UART 事件；重新 begin 后必须把飞特 SDK 重新绑定到该串口。
+     */
+    bool restartTransport()
+    {
+        if (!_serial || _busIndex >= NUM_BUSES || _baud == 0) {
+            return false;
+        }
+
+        // 丢弃尚未送入 SDK 的同步写批次，禁止 UART 重启后误发旧目标。
+        _writeCount = 0;
+        memset(_writeIDs, 0, sizeof(_writeIDs));
+        memset(_writePos, 0, sizeof(_writePos));
+        memset(_writeSpd, 0, sizeof(_writeSpd));
+        memset(_writeAcc, 0, sizeof(_writeAcc));
+        resetMultiTurnConfigurationJob();
+        // flush(false) 等待硬件 TX 空闲并清除底层 RX FIFO；end() 随后删除
+        // Arduino UART 事件任务，保证旧响应和旧事件都不会进入新会话。
+        _serial->flush(false);
+        _sms.pSerial = NULL;
+        _serial->end();
+        _serial->begin(_baud, SERIAL_8N1, _rxPin, _txPin);
+        _sms.pSerial = _serial;
+        return true;
     }
 
     /** 清除角度限制以启用 ST3215 多圈模式；会解锁并写入舵机 EEPROM。 */
@@ -120,6 +177,98 @@ public:
             _multiTurnConfigured[id] = true;
         }
         return ok;
+    }
+
+    /**
+     * 按需推进一台舵机的多圈配置。
+     *
+     * 首先读取 9..12 号角度限位寄存器；四字节已经为 0 时只登记本次会话已验证，
+     * 不再重复擦写 EEPROM。只有配置确实不符时，才把解锁、写入、加锁和三段等待
+     * 分散到后续服务周期，消除 27 台舵机集中配置造成的数百毫秒阻塞。
+     */
+    ServoMultiTurnConfigResult stepMultiTurnConfiguration(uint8_t id,
+                                                           uint32_t nowMs)
+    {
+        if (!_serial || id > MAX_SERVO_ID) {
+            return ServoMultiTurnConfigResult::Failed;
+        }
+        if (_multiTurnConfigured[id]) {
+            return ServoMultiTurnConfigResult::Complete;
+        }
+        if (_multiTurnConfigId == 0xFF) {
+            _multiTurnConfigId = id;
+            _multiTurnConfigPhase = ServoMultiTurnConfigPhase::VerifyLimits;
+            _multiTurnConfigNotBeforeMs = 0;
+            _multiTurnConfigFailed = false;
+        } else if (_multiTurnConfigId != id) {
+            // 一条物理 BUS 同时只允许一个 EEPROM 事务；调用方下周期继续当前舵机。
+            return ServoMultiTurnConfigResult::Pending;
+        }
+        if ((int32_t)(nowMs - _multiTurnConfigNotBeforeMs) < 0) {
+            return ServoMultiTurnConfigResult::Pending;
+        }
+
+        switch (_multiTurnConfigPhase) {
+            case ServoMultiTurnConfigPhase::VerifyLimits: {
+                uint8_t limits[4] = {0, 0, 0, 0};
+                if (_sms.Read(id,
+                              SMS_STS_MIN_ANGLE_LIMIT_L,
+                              limits,
+                              sizeof(limits)) != (int)sizeof(limits)) {
+                    return failMultiTurnConfiguration();
+                }
+                if (limits[0] == 0 && limits[1] == 0 &&
+                    limits[2] == 0 && limits[3] == 0) {
+                    _multiTurnConfigured[id] = true;
+                    resetMultiTurnConfigurationJob();
+                    return ServoMultiTurnConfigResult::Complete;
+                }
+                _multiTurnConfigPhase =
+                    ServoMultiTurnConfigPhase::UnlockEeprom;
+                return ServoMultiTurnConfigResult::Pending;
+            }
+            case ServoMultiTurnConfigPhase::UnlockEeprom:
+                if (_sms.unLockEprom(id) < 0) {
+                    return failMultiTurnConfiguration();
+                }
+                _multiTurnConfigPhase =
+                    ServoMultiTurnConfigPhase::WriteZeroLimits;
+                _multiTurnConfigNotBeforeMs = nowMs + kMultiTurnConfigDelayMs;
+                return ServoMultiTurnConfigResult::Pending;
+
+            case ServoMultiTurnConfigPhase::WriteZeroLimits: {
+                uint8_t zeroLimits[4] = {0, 0, 0, 0};
+                if (_sms.genWrite(id,
+                                  SMS_STS_MIN_ANGLE_LIMIT_L,
+                                  zeroLimits,
+                                  sizeof(zeroLimits)) < 0) {
+                    // EEPROM 已经解锁，即使写入失败也必须继续执行 LockEeprom。
+                    _multiTurnConfigFailed = true;
+                }
+                _multiTurnConfigPhase = ServoMultiTurnConfigPhase::LockEeprom;
+                _multiTurnConfigNotBeforeMs = nowMs + kMultiTurnConfigDelayMs;
+                return ServoMultiTurnConfigResult::Pending;
+            }
+            case ServoMultiTurnConfigPhase::LockEeprom:
+                if (_sms.LockEprom(id) < 0) {
+                    return failMultiTurnConfiguration();
+                }
+                _multiTurnConfigPhase = ServoMultiTurnConfigPhase::Finalize;
+                _multiTurnConfigNotBeforeMs = nowMs + kMultiTurnConfigDelayMs;
+                return ServoMultiTurnConfigResult::Pending;
+
+            case ServoMultiTurnConfigPhase::Finalize:
+                if (_multiTurnConfigFailed) {
+                    return failMultiTurnConfiguration();
+                }
+                _multiTurnConfigured[id] = true;
+                resetMultiTurnConfigurationJob();
+                return ServoMultiTurnConfigResult::Complete;
+
+            case ServoMultiTurnConfigPhase::Idle:
+            default:
+                return failMultiTurnConfiguration();
+        }
     }
 
     /** 将 logical ABS 转换为本次上电会话 hardware ABS 后加入同步写批次。 */
@@ -509,6 +658,22 @@ public:
     }
 
 private:
+    /** 清理总线内唯一的多圈配置事务，不修改任何舵机的已验证标志。 */
+    void resetMultiTurnConfigurationJob()
+    {
+        _multiTurnConfigId = 0xFF;
+        _multiTurnConfigPhase = ServoMultiTurnConfigPhase::Idle;
+        _multiTurnConfigNotBeforeMs = 0;
+        _multiTurnConfigFailed = false;
+    }
+
+    /** 统一结束失败事务，确保后续恢复重试可以从寄存器核验阶段重新开始。 */
+    ServoMultiTurnConfigResult failMultiTurnConfiguration()
+    {
+        resetMultiTurnConfigurationJob();
+        return ServoMultiTurnConfigResult::Failed;
+    }
+
     /** 合并一帧有效反馈，并执行上线去抖和掉电前可信快照更新。 */
     void recordFeedbackSuccess(uint8_t id,
                                int16_t rawPos,
@@ -584,6 +749,9 @@ private:
             fb.recoveryFailed = false;
             fb.nextRecoveryAttemptMs = 0;
             _multiTurnConfigured[id] = false;
+            if (_multiTurnConfigId == id) {
+                resetMultiTurnConfigurationJob();
+            }
             invalidateMultiTurnTrust(id);
         }
     }
@@ -672,6 +840,10 @@ private:
 
     SMS_STS _sms; ///< 唯一允许接触的飞特 SDK 实例。
     HardwareSerial* _serial; ///< 当前驱动绑定的 UART，未 begin 时为空。
+    uint8_t _busIndex; ///< 当前 HardwareSerial 对应的物理 BUS 编号。
+    int _rxPin; ///< restartTransport() 复用的 RX 引脚。
+    int _txPin; ///< restartTransport() 复用的 TX 引脚。
+    uint32_t _baud; ///< restartTransport() 复用的总线波特率。
     uint8_t _writeIDs[MAX_SERVOS_PER_BUS]; ///< 同步写 ID 缓存。
     int16_t _writePos[MAX_SERVOS_PER_BUS]; ///< 同步写 hardware ABS 缓存。
     uint16_t _writeSpd[MAX_SERVOS_PER_BUS]; ///< 同步写速度缓存。
@@ -682,6 +854,10 @@ private:
     bool _multiTurnConfigured[MAX_SERVO_ID + 1]; ///< 本次上线是否已完成多圈配置。
     uint16_t _syncReadTimeoutMs; ///< 单次同步读响应时限。
     uint8_t _currentReadDivider; ///< 降频读取 Present Current 的分频计数器。
+    uint8_t _multiTurnConfigId; ///< 当前 BUS 正在配置的舵机 ID，0xFF 表示空闲。
+    ServoMultiTurnConfigPhase _multiTurnConfigPhase; ///< EEPROM 非阻塞配置阶段。
+    uint32_t _multiTurnConfigNotBeforeMs; ///< 下一阶段允许执行的单调时钟时间。
+    bool _multiTurnConfigFailed; ///< 写入失败后仍先执行 EEPROM 加锁，再向上层报告失败。
 };
 
 

@@ -9,9 +9,13 @@
 #include "../../config/topology/HardwareMap.h"
 #include "../../config/ServoConfig.h"
 #include "../../platform/log/FirmwareLog.h"
+#include <string.h>
 
 using mmhand::config::servo::kDiscoveryProbeTimeoutMs;
 using mmhand::config::servo::kOfflineRouteRescanIntervalMs;
+using mmhand::config::servo::kTransportRestartAfterFailedScans;
+using mmhand::config::servo::kRecoveryProbeTimeoutMs;
+using mmhand::config::servo::kTransportRestartSettleMs;
 
 ServoDiscoveryManager& servoDiscoveryManager()
 {
@@ -21,14 +25,21 @@ ServoDiscoveryManager& servoDiscoveryManager()
 
 void ServoDiscoveryManager::begin()
 {
+    memset(lastKnownBus_, SERVO_ROUTE_BUS_UNKNOWN, sizeof(lastKnownBus_));
+    memset(failedScanCount_, 0, sizeof(failedScanCount_));
+    unknownBusRestartCursor_ = 0;
     servoRouteTable().begin();
     fullScanPending_ = true;
     startPendingScan(0);
 }
 
-void ServoDiscoveryManager::requestMotorScan(uint8_t motorChannel)
+void ServoDiscoveryManager::requestMotorScan(uint8_t motorChannel,
+                                             uint8_t lastKnownBus)
 {
     if (motorChannel < SERVO_TOTAL_NUM) {
+        if (lastKnownBus < NUM_BUSES) {
+            lastKnownBus_[motorChannel] = lastKnownBus;
+        }
         pendingMotorMask_ |= 1UL << motorChannel;
         hotplugWatchMask_ |= 1UL << motorChannel;
     }
@@ -39,12 +50,14 @@ void ServoDiscoveryManager::startPendingScan(uint32_t nowMs)
     if (servoRouteTable().scanActive()) {
         return;
     }
-    scanBus_ = 0;
     if (fullScanPending_) {
         fullScanPending_ = false;
         // 全量扫描已经覆盖所有 Mxx，旧的定向重扫请求不应在其结束后再次执行。
         pendingMotorMask_ = 0;
         targetedMotor_ = 0xFF;
+        targetedPreferredBus_ = SERVO_ROUTE_BUS_UNKNOWN;
+        targetedProbeCount_ = 0;
+        scanBus_ = 0;
         scanMotor_ = 0;
         servoRouteTable().beginFullScan();
         FW_LOG_INFO_PRINTF("[SERVO ROUTE] full scan started\r\n");
@@ -55,17 +68,10 @@ void ServoDiscoveryManager::startPendingScan(uint32_t nowMs)
     if (pendingMotorMask_ == 0 && hotplugWatchMask_ != 0 &&
         (uint32_t)(nowMs - lastHotplugRescanMs_) >=
             kOfflineRouteRescanIntervalMs) {
-        for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; ++offset) {
-            const uint8_t motor = static_cast<uint8_t>(
-                (nextHotplugMotor_ + offset) % SERVO_TOTAL_NUM);
-            if ((hotplugWatchMask_ & (1UL << motor)) != 0) {
-                pendingMotorMask_ |= 1UL << motor;
-                nextHotplugMotor_ = static_cast<uint8_t>(
-                    (motor + 1U) % SERVO_TOTAL_NUM);
-                lastHotplugRescanMs_ = nowMs;
-                break;
-            }
-        }
+        // 一轮登记全部离线 Mxx，随后仍由 step() 每周期只探测一个 BUS/ID。
+        // 这样整组舵机重新上电时无需等待 27 个 500 ms 轮询周期。
+        pendingMotorMask_ |= hotplugWatchMask_;
+        lastHotplugRescanMs_ = nowMs;
     }
     if (pendingMotorMask_ != 0) {
         targetedMotor_ = 0;
@@ -75,16 +81,73 @@ void ServoDiscoveryManager::startPendingScan(uint32_t nowMs)
         }
         pendingMotorMask_ &= ~(1UL << targetedMotor_);
         scanMotor_ = targetedMotor_;
+        targetedPreferredBus_ = lastKnownBus_[targetedMotor_];
+        targetedProbeCount_ = 0;
+        scanBus_ = targetedBusForProbe(0);
         servoRouteTable().beginMotorScan(targetedMotor_);
-        FW_LOG_INFO_PRINTF("[SERVO ROUTE] targeted scan M%02u started\r\n",
-                           (unsigned)targetedMotor_);
+        FW_LOG_INFO_PRINTF(
+            "[SERVO ROUTE] targeted scan M%02u started preferred_bus=%d\r\n",
+            (unsigned)targetedMotor_,
+            targetedPreferredBus_ < NUM_BUSES
+                ? (int)targetedPreferredBus_
+                : -1);
     }
 }
 
-void ServoDiscoveryManager::finishCurrentScan()
+/**
+ * 生成定向恢复的 BUS 探测顺序：先探测掉电前 BUS，再按编号探测其余 BUS。
+ * 全量启动扫描不使用本函数，因此不会改变重复 ID 和 BUS 容量检查的覆盖范围。
+ */
+uint8_t ServoDiscoveryManager::targetedBusForProbe(uint8_t probeIndex) const
 {
+    if (targetedPreferredBus_ >= NUM_BUSES) {
+        return probeIndex < NUM_BUSES ? probeIndex : 0;
+    }
+    if (probeIndex == 0) {
+        return targetedPreferredBus_;
+    }
+
+    uint8_t remainingIndex = (uint8_t)(probeIndex - 1U);
+    for (uint8_t bus = 0; bus < NUM_BUSES; ++bus) {
+        if (bus == targetedPreferredBus_) {
+            continue;
+        }
+        if (remainingIndex == 0) {
+            return bus;
+        }
+        --remainingIndex;
+    }
+    return targetedPreferredBus_;
+}
+
+void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs,
+                                              bool motionActive)
+{
+    const uint8_t completedMotor = targetedMotor_;
     servoRouteTable().finishScan();
     const ServoRouteSnapshot routes = servoRouteTable().snapshot();
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+        if (routes.routes[motor].busIndex < NUM_BUSES &&
+            routes.routes[motor].state == ServoRouteState::Online) {
+            lastKnownBus_[motor] = routes.routes[motor].busIndex;
+            failedScanCount_[motor] = 0;
+        }
+    }
+    if (completedMotor >= SERVO_TOTAL_NUM) {
+        // P4 启动时舵机电源可能尚未开启。旧逻辑只监视“曾在线后掉线”的 Mxx，
+        // 导致首次全量扫描缺失的舵机永远不再探测，只能依靠 P4 Reset 恢复。
+        // 全量扫描结束后先把全部缺失通道安排一次快速补扫；补扫结束仍未上线的
+        // 通道继续进入低频热插拔轮询，真正收到反馈后会从 watch mask 中移除。
+        const uint32_t missingMask =
+            validMotorChannelMask() & ~routes.validMotorMask;
+        pendingMotorMask_ |= missingMask;
+        hotplugWatchMask_ |= missingMask;
+        if (missingMask != 0) {
+            FW_LOG_INFO_PRINTF(
+                "[SERVO ROUTE] initial missing motors queued for hotplug scan mask=0x%08lx\r\n",
+                (unsigned long)missingMask);
+        }
+    }
     // 唯一且未超容量的路由已经恢复，不再继续低频探测对应 Mxx。
     hotplugWatchMask_ &= ~routes.controllableMotorMask;
     FW_LOG_INFO_PRINTF(
@@ -102,11 +165,92 @@ void ServoDiscoveryManager::finishCurrentScan()
                 (unsigned)mmhand::config::servo::kMaxControllableServosPerBus);
         }
     }
+    if (completedMotor < SERVO_TOTAL_NUM &&
+        routes.routes[completedMotor].state == ServoRouteState::Offline) {
+        if (failedScanCount_[completedMotor] < 0xFF) {
+            ++failedScanCount_[completedMotor];
+        }
+        const uint8_t oldBus = lastKnownBus_[completedMotor];
+        if (failedScanCount_[completedMotor] >=
+            kTransportRestartAfterFailedScans) {
+            // 首次启动缺失的舵机没有历史 BUS。此时轮流重启四条 UART；
+            // 全局游标使多台同时缺失时不会反复只冲击 BUS0。
+            const uint8_t restartBus = oldBus < NUM_BUSES
+                ? oldBus
+                : unknownBusRestartCursor_;
+            if (oldBus >= NUM_BUSES) {
+                unknownBusRestartCursor_ =
+                    (uint8_t)((unknownBusRestartCursor_ + 1U) % NUM_BUSES);
+            }
+            if (servoBusRegistry().restartBus(
+                    restartBus, nowMs, motionActive)) {
+                restartProbeMotor_ = completedMotor;
+                restartProbeBus_ = restartBus;
+                restartProbeNotBeforeMs_ = nowMs + kTransportRestartSettleMs;
+                // 保持路由扫描态直到重启后确认探测结束，防止 20 ms 等待窗口内
+                // 状态机提前进入 READY 并开始运动。
+                servoRouteTable().beginMotorScan(completedMotor);
+                FW_LOG_WARN_PRINTF(
+                    "[SERVO HOTPLUG] M%02u BUS%u UART restarted after %u failed scans\r\n",
+                    (unsigned)completedMotor,
+                    (unsigned)restartBus,
+                    (unsigned)failedScanCount_[completedMotor]);
+            }
+        }
+    }
     targetedMotor_ = 0xFF;
+    targetedPreferredBus_ = SERVO_ROUTE_BUS_UNKNOWN;
+    targetedProbeCount_ = 0;
+    scanBus_ = 0;
+}
+
+bool ServoDiscoveryManager::stepRestartProbe(uint32_t nowMs,
+                                             bool motionActive)
+{
+    if (restartProbeMotor_ >= SERVO_TOTAL_NUM ||
+        restartProbeBus_ >= NUM_BUSES) {
+        return false;
+    }
+    // 只允许在非运动状态完成 BUS 恢复；等待期不阻塞 RTOS，也不访问其他 UART。
+    if (motionActive) {
+        return false;
+    }
+    if ((int32_t)(nowMs - restartProbeNotBeforeMs_) < 0) {
+        return true;
+    }
+
+    const uint8_t motor = restartProbeMotor_;
+    const uint8_t busIndex = restartProbeBus_;
+    const uint8_t servoId = motorMap[motor].servoID;
+    FeetechServoDriver* driver = servoBusRegistry().driver(busIndex);
+    const bool present = driver &&
+        driver->probeFeedback(servoId, kRecoveryProbeTimeoutMs);
+    servoRouteTable().recordProbe(busIndex, servoId, present);
+    servoRouteTable().finishScan();
+
+    const ServoRouteSnapshot routes = servoRouteTable().snapshot();
+    if (present && routes.routes[motor].state == ServoRouteState::Online) {
+        hotplugWatchMask_ &= ~(1UL << motor);
+        failedScanCount_[motor] = 0;
+        lastKnownBus_[motor] = busIndex;
+    }
+    FW_LOG_INFO_PRINTF(
+        "[SERVO HOTPLUG] M%02u BUS%u restart probe present=%u route=%u\r\n",
+        (unsigned)motor,
+        (unsigned)busIndex,
+        present ? 1U : 0U,
+        (unsigned)routes.routes[motor].state);
+    restartProbeMotor_ = 0xFF;
+    restartProbeBus_ = SERVO_ROUTE_BUS_UNKNOWN;
+    restartProbeNotBeforeMs_ = 0;
+    return true;
 }
 
 bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
 {
+    if (restartProbeMotor_ < SERVO_TOTAL_NUM) {
+        return stepRestartProbe(nowMs, motionActive);
+    }
     // 运行中禁止开始新扫描；已经开始的上电扫描必须在进入运动状态前完成。
     if (!servoRouteTable().scanActive()) {
         if (motionActive) {
@@ -118,30 +262,47 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
         return false;
     }
 
-    FeetechServoDriver* driver = servoBusRegistry().driver(scanBus_);
+    const uint8_t probedBus = scanBus_;
+    const bool targetedScan = targetedMotor_ < SERVO_TOTAL_NUM;
+    FeetechServoDriver* driver = servoBusRegistry().driver(probedBus);
     const uint8_t servoId = motorMap[scanMotor_].servoID;
-    const bool present = driver &&
-        driver->probeFeedback(servoId, kDiscoveryProbeTimeoutMs);
-    servoRouteTable().recordProbe(scanBus_, servoId, present);
+    const bool present = driver && driver->probeFeedback(
+        servoId,
+        targetedScan ? kRecoveryProbeTimeoutMs : kDiscoveryProbeTimeoutMs);
+    servoRouteTable().recordProbe(probedBus, servoId, present);
 
-    ++scanBus_;
-    if (scanBus_ >= NUM_BUSES) {
-        scanBus_ = 0;
-        if (targetedMotor_ < SERVO_TOTAL_NUM) {
-            finishCurrentScan();
+    bool scanFinished = false;
+    if (targetedScan) {
+        // 第一周期优先探测上次 BUS，但仍分周期核验其余 BUS；这样既缩短首次响应等待，
+        // 又保留热插拔后重复 ID 检测，不能因旧 BUS 命中就静默接受冲突路由。
+        ++targetedProbeCount_;
+        if (targetedProbeCount_ >= NUM_BUSES) {
+            finishCurrentScan(nowMs, motionActive);
+            scanFinished = true;
         } else {
+            scanBus_ = targetedBusForProbe(targetedProbeCount_);
+        }
+    } else {
+        ++scanBus_;
+        if (scanBus_ >= NUM_BUSES) {
+            scanBus_ = 0;
             ++scanMotor_;
             if (scanMotor_ >= SERVO_TOTAL_NUM) {
-                finishCurrentScan();
+                finishCurrentScan(nowMs, motionActive);
+                scanFinished = true;
             }
         }
     }
     const uint16_t completed =
-        targetedMotor_ < SERVO_TOTAL_NUM
-            ? scanBus_
-            : static_cast<uint16_t>(scanMotor_) * NUM_BUSES + scanBus_;
+        scanFinished
+            ? (targetedScan
+                   ? NUM_BUSES
+                   : static_cast<uint16_t>(SERVO_TOTAL_NUM) * NUM_BUSES)
+            : (targetedScan
+                   ? targetedProbeCount_
+                   : static_cast<uint16_t>(scanMotor_) * NUM_BUSES + scanBus_);
     const uint16_t total =
-        targetedMotor_ < SERVO_TOTAL_NUM
+        targetedScan
             ? NUM_BUSES
             : static_cast<uint16_t>(SERVO_TOTAL_NUM) * NUM_BUSES;
     servoRouteTable().setScanProgress(
@@ -151,5 +312,6 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
 
 bool ServoDiscoveryManager::active() const
 {
-    return servoRouteTable().scanActive();
+    return servoRouteTable().scanActive() ||
+        restartProbeMotor_ < SERVO_TOTAL_NUM;
 }

@@ -150,6 +150,5 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 
 inline constexpr uint32_t kFaultStatusHeartbeatMs = 200; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 inline constexpr uint32_t kSystemStatusHeartbeatMs = 100; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kTaskDiagHeartbeatMs = 250; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 
 #endif // MMHAND_UPPER_PROTOCOL_GENERATED_H

@@ -321,12 +321,13 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
 /** 上报一个 TaskRuntimeSnapshot，字段单位由 TaskRuntimeMonitor.h 约定。 */
 bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
 {
-    uint8_t buffer[64];
+    // v3 新增一秒窗口统计，96 byte 足以容纳固定字段且不使用堆内存。
+    uint8_t buffer[96];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
     buffer[idx++] = PACKET_TYPE_TASK_DIAG;
-    buffer[idx++] = 2; // Payload version.
+    buffer[idx++] = 3; // Payload version.
     buffer[idx++] = diag.taskId;
     buffer[idx++] = diag.active;
     buffer[idx++] = diag.priority;
@@ -337,6 +338,14 @@ bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
     appendU32BigEndian(buffer, &idx, diag.loopCount);
     appendU32BigEndian(buffer, &idx, diag.maxGapUs);
     appendU32BigEndian(buffer, &idx, diag.maxExecUs);
+    appendU32BigEndian(buffer, &idx, diag.windowSequence);
+    appendU32BigEndian(buffer, &idx, diag.windowDurationUs);
+    appendU32BigEndian(buffer, &idx, diag.windowLoopCount);
+    appendU32BigEndian(buffer, &idx, diag.avgExecUs);
+    appendU32BigEndian(buffer, &idx, diag.p95ExecUs);
+    appendU32BigEndian(buffer, &idx, diag.p99ExecUs);
+    appendU32BigEndian(buffer, &idx, diag.windowMaxExecUs);
+    appendU16BigEndian(buffer, &idx, diag.cpuPermille);
     appendU32BigEndian(buffer, &idx, diag.overrunCount);
     appendU16BigEndian(buffer, &idx, diag.consecutiveOverruns);
     appendU16BigEndian(buffer, &idx, diag.maxConsecutiveOverruns);

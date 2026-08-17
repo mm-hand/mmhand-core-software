@@ -9,13 +9,14 @@
 
 #include "RuntimeMonitorService.h"
 #include "../../platform/time/Clock.h"
+#include "../../runtime/metrics/RuntimeMonitorConfig.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
 void runtimeMonitorTask(void* parameter)
 {
     (void)parameter;
     TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t periodTicks = pdMS_TO_TICKS(1000);
+    const TickType_t periodTicks = pdMS_TO_TICKS(kTaskRuntimeWindowMs);
     for (;;) {
         taskRuntimeMarkLoopStart(TASK_RUNTIME_MONITOR);
         stepRuntimeMonitorService(p4::platform::time::monotonicMillis());

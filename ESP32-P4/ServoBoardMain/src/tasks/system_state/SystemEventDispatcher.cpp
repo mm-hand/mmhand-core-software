@@ -95,6 +95,9 @@ bool requestEmergencyStop(SystemRuntimeContext* sharedData)
     // 两个 token 单调递增，即使普通事件队列已满也不会丢失急停。
     sharedAtomicAddFetch(&sharedData->emergency_stop_request_token, (uint32_t)1);
     sharedAtomicAddFetch(&sharedData->servo_emergency_stop_token, (uint32_t)1);
+    // STOP 不能等待状态机的下一个固定周期；状态机负责状态收敛，ServoBus 负责立即断力矩。
+    sharedData->systemStateWake.notify(p4::runtime::wake::kStateEmergencyStop);
+    sharedData->servoBusWake.notify(p4::runtime::wake::kServoEmergencyStop);
     taskRuntimeMarkStopRequested();
     return true;
 }
@@ -112,7 +115,11 @@ bool postSystemEventForToken(SystemRuntimeContext* sharedData, uint8_t event, ui
     msg.event = event;
     msg.timestamp = p4::platform::time::monotonicMillis();
     msg.token = token;
-    return sharedData->stateEventQueue.send(msg);
+    const bool queued = sharedData->stateEventQueue.send(msg);
+    if (queued) {
+        sharedData->systemStateWake.notify(p4::runtime::wake::kStateEvent);
+    }
+    return queued;
 }
 
 void requestMultiTurnNvsSave(SystemRuntimeContext* sharedData, uint8_t reason)

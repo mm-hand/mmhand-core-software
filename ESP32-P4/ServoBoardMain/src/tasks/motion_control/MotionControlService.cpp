@@ -67,6 +67,8 @@ struct ControlServiceRuntime {
     int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS];
     bool feedbackCollisionPidPushActive[ENCODER_TOTAL_NUM];
     bool feedbackCollisionWorkspaceBoundaryReached[ENCODER_TOTAL_NUM];
+    // 上一控制周期采用的碰撞窗口档位；单电机按物理方向更新，双电机固定 RELEASE。
+    uint8_t feedbackCollisionDriveMotionMode[ENCODER_TOTAL_NUM];
     uint32_t lastFeedbackCollisionSensorTimestamp;
     uint8_t upperWorkspaceHighCount[ENCODER_TOTAL_NUM];
     uint32_t upperWorkspaceWarningBitmap;
@@ -290,6 +292,8 @@ static const char* feedbackCollisionResetReasonName(uint8_t reason)
             return "error_deadband";
         case FEEDBACK_COLLISION_MONITOR_RESET_HOLD_RELEASED:
             return "hold_released";
+        case FEEDBACK_COLLISION_MONITOR_RESET_MOTION_MODE_CHANGED:
+            return "motion_mode_changed";
         default:
             return "none";
     }
@@ -347,6 +351,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        uint8_t jointIndex,
                                        float qRefDeg,
                                        float qFbDeg,
+                                       float pidDtSeconds,
                                        const ServoAngleData_t& servoData,
                                        const ServoTelemetryData_t& telemetryData,
                                        bool telemetryFresh,
@@ -368,6 +373,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     if (!computeDualTendonMotorTargets(jointIndex,
                                        qRefDeg,
                                        qFbDeg,
+                                       pidDtSeconds,
                                        &servoData,
                                        &tendonTargets)) {
         resetDualTendonController(jointIndex);
@@ -381,6 +387,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     int32_t firstRequestedAbs = 0;
     int32_t firstAppliedAbs = 0;
     uint8_t targetCount = 0;
+    // 双腱两台电机始终反向运动，不能用其中一台的物理方向代表整个关节。
+    // 双电机关节统一锁定为 RELEASE 档，即固定使用 400 ms / 0.4 度阈值。
     const uint32_t diagNowMs = nowMs;
     const bool logPidDiag =
         sharedAtomicLoad(&sharedData->system_state) == SYSTEM_STATE_RUN_FEEDBACK &&
@@ -569,6 +577,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& feedbackCollisionPidPushActive = runtime.feedbackCollisionPidPushActive;
     auto& feedbackCollisionWorkspaceBoundaryReached =
         runtime.feedbackCollisionWorkspaceBoundaryReached;
+    auto& feedbackCollisionDriveMotionMode =
+        runtime.feedbackCollisionDriveMotionMode;
     auto& lastFeedbackCollisionSensorTimestamp =
         runtime.lastFeedbackCollisionSensorTimestamp;
     auto& upperWorkspaceHighCount = runtime.upperWorkspaceHighCount;
@@ -982,7 +992,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             lastFeedbackCollisionSensorTimestamp = sensorData.timestamp;
         }
 
-        // 碰撞检测只消费磁编新帧。200 ms 速度窗与 400 ms 进展窗同步滚动，
+        // 碰撞检测只消费磁编新帧。200 ms 速度窗与按物理方向选择的进展窗同步滚动，
         // PID 推进和 LUT 边界证据使用上一控制周期的输出，最多只引入 10 ms 延迟。
         for (uint8_t jointIndex = 0;
              jointIndex < ENCODER_TOTAL_NUM;
@@ -1014,6 +1024,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     feedbackCollisionPidPushActive[jointIndex];
                 input.workspaceBoundaryReached =
                     feedbackCollisionWorkspaceBoundaryReached[jointIndex];
+                input.driveMotionMode =
+                    feedbackCollisionDriveMotionMode[jointIndex];
                 collisionResult =
                     g_feedbackCollisionGuard.update(jointIndex, input);
             } else {
@@ -1028,10 +1040,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             if (collisionResult.armedChanged && collisionResult.armed) {
                 FW_LOG_INFO_PRINTF(
                     "[COLLISION_ARM] J%02u qRef=%.3f qFb=%.3f "
-                    "v200=%.3fdeg/s source=velocity candidate_ms=%lu\r\n",
+                    "mode=%s v200=%.3fdeg/s source=velocity candidate_ms=%lu\r\n",
                     (unsigned)jointIndex,
                     (double)localTargets[jointIndex],
                     (double)magAngles[jointIndex],
+                    feedbackCollisionMotionModeName(collisionResult.motionMode),
                     (double)collisionResult.directionVelocityDegPerSec,
                     (unsigned long)collisionResult.candidateAgeMs);
             }
@@ -1084,13 +1097,16 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     static_cast<int32_t>(lroundf(collisionResult.holdAngleDeg * 1000.0f)));
                 FW_LOG_INFO_PRINTF(
                     "[COLLISION_HOLD] J%02u blockedTarget=%.3f holdAngle=%.3f "
-                    "v200=%.3fdeg/s progress400=%.3fdeg "
+                    "mode=%s v200=%.3fdeg/s progress%lu=%.3fdeg min=%.3f "
                     "candidate_ms=%lu\r\n",
                     (unsigned)jointIndex,
                     (double)collisionResult.holdTargetDeg,
                     (double)collisionResult.holdAngleDeg,
+                    feedbackCollisionMotionModeName(collisionResult.motionMode),
                     (double)collisionResult.directionVelocityDegPerSec,
+                    (unsigned long)collisionResult.progressWindowMs,
                     (double)collisionResult.directionProgressDeg,
+                    (double)collisionResult.minProgressDeg,
                     (unsigned long)collisionResult.candidateAgeMs);
             }
 
@@ -1129,6 +1145,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             if (!contextActive) {
                 feedbackCollisionPidPushActive[jointIndex] = false;
                 feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
+                feedbackCollisionDriveMotionMode[jointIndex] =
+                    FEEDBACK_COLLISION_MOTION_RELEASE;
             }
         }
         const bool feedbackOneShotActive =
@@ -1290,6 +1308,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
                 feedbackCollisionPidPushActive[jointIndex] = false;
                 feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
+                feedbackCollisionDriveMotionMode[jointIndex] =
+                    FEEDBACK_COLLISION_MOTION_RELEASE;
 
                 if (!jointInScope)
                 {
@@ -1370,6 +1390,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                                 jointIndex,
                                                 localTargets[jointIndex],
                                                 magAngles[jointIndex],
+                                                pidDtSeconds,
                                                 servoData,
                                                 telemetryData,
                                                 telemetryFresh,
@@ -1436,6 +1457,16 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     feedbackCollisionPidPushActive[jointIndex] =
                         fabsf(pidOutput) >= 1.0f &&
                         pidOutput * angleError > 0.0f;
+                    // 单电机直接使用本周期原始 PID 目标与实际 ABS 的差值。
+                    // ABS 增加统一代表收绳；相等时保留本轮默认放绳，且不会触发
+                    // HOLD（pidPushActive 通常同时为 false）。
+                    if (rawPidTargetAbs > actualMotorAbs) {
+                        feedbackCollisionDriveMotionMode[jointIndex] =
+                            FEEDBACK_COLLISION_MOTION_TIGHTEN;
+                    } else if (rawPidTargetAbs < actualMotorAbs) {
+                        feedbackCollisionDriveMotionMode[jointIndex] =
+                            FEEDBACK_COLLISION_MOTION_RELEASE;
+                    }
                     // PID 目标是否被 LUT 钳位只用于诊断。碰撞检测必须读取当前实际 ABS，
                     // 并仅在实际位置已进入本次推进方向的 LUT 边界容差时排除 HOLD。
                     const bool actualBoundaryReached =

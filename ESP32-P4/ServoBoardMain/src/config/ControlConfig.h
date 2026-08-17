@@ -74,8 +74,12 @@ inline constexpr float kCollisionMinErrorDeg = 4.0f;
 inline constexpr float kCollisionTargetResetDeg = 1.0f;
 inline constexpr uint32_t kCollisionVelocityWindowMs = 200;
 inline constexpr float kCollisionArmVelocityDegPerSec = 8.0f;
-inline constexpr uint32_t kCollisionProgressWindowMs = 400;
-inline constexpr float kCollisionMinProgressDeg = 0.4f;
+// 所有舵机 ABS 增加均代表收绳。放绳侧保留较快的停滞判定，
+// 收绳侧给弹簧、摩擦与抓取形变更长建立时间，降低正常收紧时的误判。
+inline constexpr uint32_t kCollisionReleaseProgressWindowMs = 400;
+inline constexpr float kCollisionReleaseMinProgressDeg = 0.4f;
+inline constexpr uint32_t kCollisionTightenProgressWindowMs = 750;
+inline constexpr float kCollisionTightenMinProgressDeg = 0.5f;
 inline constexpr float kCollisionTargetRetreatReleaseDeg = 1.0f;
 
 } // namespace mmhand::config::control

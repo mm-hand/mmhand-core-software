@@ -120,8 +120,7 @@
     "serial_rx_buffer_size": 512,
     "heartbeats_ms": {
       "kFaultStatusHeartbeatMs": 200,
-      "kSystemStatusHeartbeatMs": 100,
-      "kTaskDiagHeartbeatMs": 250
+      "kSystemStatusHeartbeatMs": 100
     }
   }
 }

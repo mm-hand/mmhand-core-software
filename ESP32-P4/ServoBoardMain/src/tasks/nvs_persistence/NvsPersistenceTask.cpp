@@ -9,6 +9,7 @@
 
 #include "NvsPersistenceService.h"
 #include "../../platform/time/Clock.h"
+#include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/adapters/ServiceContextAdapter.h"
 
 void nvsNvsPersistenceTask(void* parameter)

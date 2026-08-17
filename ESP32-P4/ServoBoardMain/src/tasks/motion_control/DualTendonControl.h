@@ -48,6 +48,7 @@ void resetDualTendonController(uint8_t jointIndex);
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,
+                                   float dtSeconds,
                                    const ServoAngleData_t* servoData,
                                    DualTendonMotorTargets* outTargets);
 

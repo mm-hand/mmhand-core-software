@@ -9,6 +9,7 @@
 
 #include "MotionControlService.h"
 #include "../../platform/time/Clock.h"
+#include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/adapters/ServiceContextAdapter.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
@@ -22,9 +23,10 @@ void motionControlTask(void* parameter)
         return;
     }
 
-    TickType_t lastWakeTime = xTaskGetTickCount();
+    sharedData->motionControlWake.bind(xTaskGetCurrentTaskHandle());
     const TickType_t periodTicks = pdMS_TO_TICKS(10);
     for (;;) {
+        const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_MOTION_CONTROL);
         const uint32_t nowMs = p4::platform::time::monotonicMillis();
         const ControlServiceInputSnapshot input =
@@ -34,13 +36,13 @@ void motionControlTask(void* parameter)
         stepMotionControlService(sharedData, input, output);
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_MOTION_CONTROL);
 
-        const TickType_t nextWakeTime = lastWakeTime + periodTicks;
         const bool periodOverrun =
-            (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+            (xTaskGetTickCount() - loopBegin) >= periodTicks;
         taskRuntimeMarkPeriodResult(TASK_RUNTIME_MOTION_CONTROL, periodOverrun);
-        vTaskDelayUntil(&lastWakeTime, periodTicks);
         if (periodOverrun) {
             vTaskDelay(1);
+        } else {
+            (void)sharedData->motionControlWake.wait(periodTicks);
         }
     }
     vTaskDelete(NULL);

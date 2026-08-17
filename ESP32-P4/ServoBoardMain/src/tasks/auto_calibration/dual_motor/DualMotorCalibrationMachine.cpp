@@ -2395,8 +2395,7 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
             readyRaw,
             g_encoderDirection[jointIndex],
             &readyMap) ||
-        !readyMap.valid ||
-        readyMap.outsideCounts < -kFeedbackReadyEnterOutsideToleranceCounts) {
+        !readyMap.valid) {
         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_FINAL_READY_MAP J%02u raw=%u oriented=%ld valid=%u ready=%u outside=%ld enterTolerance=%ld\r\n",
                            jointIndex,
                            (unsigned)readyRaw,
@@ -2415,6 +2414,21 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                            secondaryMotor,
                            (1UL << primaryMotor) | (1UL << secondaryMotor));
         return false;
+    }
+
+    // 标定成功的判据是机械端点、Auto 区间和 LUT 已经建立完成，最终姿态
+    // 不要求立即回到 READY 工作区。若双绳预紧结束后仍位于下边界外，保留
+    // 真实角度并完成结果提交，状态机继续维持 IDLE；用户随后通过 Rope Init
+    // 回到工作区。这里不能再把“尚未 Rope Init”误报成工作空间准备失败。
+    const bool finalPoseInsideReadyWindow =
+        readyMap.outsideCounts >= -kFeedbackReadyEnterOutsideToleranceCounts;
+    if (!finalPoseInsideReadyWindow) {
+        FW_LOG_WARN_PRINTF("[AUTO CALIB] DUAL_FINAL_OUTSIDE_READY J%02u raw=%u oriented=%ld outside=%ld enterTolerance=%ld; calibration result kept, Rope Init required\r\n",
+                           jointIndex,
+                           (unsigned)readyRaw,
+                           (long)readyEncoder,
+                           (long)readyMap.outsideCounts,
+                           (long)kFeedbackReadyEnterOutsideToleranceCounts);
     }
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_ENCODER_RESULT J%02u defaultDir=%d runtimeDir=%d signed=%ld resultStart=%ld resultZero=%ld resultTight=%ld\r\n",
@@ -2477,7 +2491,7 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
     setCalibratedMotorAbsLimit(sharedData, primaryMotor, primaryLimitTightAbs);
     setCalibratedMotorAbsLimit(sharedData, secondaryMotor, secondaryLimitTightAbs);
 
-    if (workspaceState) {
+    if (workspaceState && finalPoseInsideReadyWindow) {
         // 缓存最终双绳预紧姿态，而不是主电机处于放绳状态的早期机械端点。
         // 后续关节可直接复用该 A 姿态，不会再次引入松绳。
         workspaceState->primaryMotor = primaryMotor;
@@ -2494,6 +2508,12 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                            (long)secondaryReadyAbs,
                            primaryReadyLoad,
                            secondaryReadyLoad);
+    } else if (workspaceState) {
+        // 区间外姿态不能登记为可复用 A 姿态，否则后续标定会错误跳过 Rope Init。
+        workspaceState->valid = 0;
+        FW_LOG_WARN_PRINTF("[AUTO CALIB] WORKSPACE_POST_CALIB_CACHE_SKIP J%02u outside=%ld; pose remains unknown until Rope Init\r\n",
+                           (unsigned)jointIndex,
+                           (long)readyMap.outsideCounts);
     }
 
     FW_LOG_INFO_PRINTF("[AUTO CALIB] DUAL_RESULT J%02u neg3Raw=%u neg3=%ld pos80Raw=%u pos80=%ld span=%ld zero=%ld primary80Abs=%ld primaryNeg3Abs=%ld secondaryPreloadRaw=%u secondaryPreloadEncoder=%ld secondaryPreloadAbs=%ld secondaryNeg3Abs=%ld loadPrimary=%d loadSecondaryPreload=%d loadSecondaryNeg3=%d readyRaw=%u readyEncoder=%ld readyDeg=%.3f primaryReadyAbs=%ld primaryReadyLoad=%d secondaryReadyAbs=%ld secondaryReadyLoad=%d\r\n",

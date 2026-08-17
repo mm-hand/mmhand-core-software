@@ -15,7 +15,7 @@ inline constexpr uint8_t SERVO_TOTAL_NUM = 27;         ///< 飞特舵机通道�
 inline constexpr uint8_t JOINT_COUNT = ENCODER_TOTAL_NUM; ///< 供控制域使用的关节数别名。
 inline constexpr uint8_t MAX_JOINT_ACTUATORS = 2;      ///< 一个关节最多关联两台拮抗舵机。
 inline constexpr uint8_t NUM_BUSES = 4;                ///< 独立飞特 UART 总线数量。
-inline constexpr uint8_t MAX_SERVOS_PER_BUS = 10;      ///< 单条 BUS 允许参与控制的舵机硬上限。
+inline constexpr uint8_t MAX_SERVOS_PER_BUS = 12;      ///< 单条 BUS 允许参与控制的舵机硬上限。
 inline constexpr uint8_t MAX_SERVO_ID = 26;            ///< 当前产品只接受 ID0..ID26，对应 M00..M26。
 
 inline constexpr uint8_t TACTILE_GROUP_NUM = 5;        ///< 五根手指对应的触觉组数。

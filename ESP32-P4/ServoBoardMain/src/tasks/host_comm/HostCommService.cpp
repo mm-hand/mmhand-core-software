@@ -67,7 +67,8 @@ struct HostCommRuntimeContext {
     bool servoLogicalRangeSentInitialized;
     uint32_t lastCalibrationCompletedMask;
     uint32_t lastCalibrationDiagSequenceSent;
-    uint32_t lastTaskDiagSentMs;
+    uint32_t lastTaskDiagWindowSequence;
+    uint32_t sendingTaskDiagWindowSequence;
     uint8_t nextTaskDiagId;
     bool taskDiagSubscribed;
     uint32_t pendingStateSyncMask;
@@ -116,7 +117,8 @@ void requestHostStateSync(uint32_t syncMask)
 void setHostTaskDiagSubscribed(bool subscribed)
 {
     g_hostCommRuntime.taskDiagSubscribed = subscribed;
-    g_hostCommRuntime.lastTaskDiagSentMs = 0;
+    g_hostCommRuntime.lastTaskDiagWindowSequence = 0;
+    g_hostCommRuntime.sendingTaskDiagWindowSequence = 0;
     g_hostCommRuntime.nextTaskDiagId = 0;
 }
 bool initHostCommService(SystemRuntimeContext* sharedData)
@@ -176,7 +178,8 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     auto& servoLogicalRangeSentInitialized = runtime.servoLogicalRangeSentInitialized;
     auto& lastCalibrationCompletedMask = runtime.lastCalibrationCompletedMask;
     auto& lastCalibrationDiagSequenceSent = runtime.lastCalibrationDiagSequenceSent;
-    auto& lastTaskDiagSentMs = runtime.lastTaskDiagSentMs;
+    auto& lastTaskDiagWindowSequence = runtime.lastTaskDiagWindowSequence;
+    auto& sendingTaskDiagWindowSequence = runtime.sendingTaskDiagWindowSequence;
     auto& nextTaskDiagId = runtime.nextTaskDiagId;
     auto& taskDiagSubscribed = runtime.taskDiagSubscribed;
     auto& pendingStateSyncMask = runtime.pendingStateSyncMask;
@@ -365,18 +368,32 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                 nowMs, sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms))) {
             setHostTaskDiagSubscribed(false);
         }
-        if (taskDiagSubscribed &&
-            (uint32_t)(nowMs - lastTaskDiagSentMs) >= kTaskDiagHeartbeatMs) {
+        // 仅在 RuntimeMonitor 冻结出新的一秒窗口后发送一组诊断；每次只发一个任务包，
+        // 避免诊断窗口抢占正常状态、传感器和舵机协议带宽。
+        const uint32_t latestTaskDiagWindow = taskRuntimeGetWindowSequence();
+        if (taskDiagSubscribed && latestTaskDiagWindow != 0U &&
+            latestTaskDiagWindow != lastTaskDiagWindowSequence &&
+            latestTaskDiagWindow != sendingTaskDiagWindowSequence) {
+            sendingTaskDiagWindowSequence = latestTaskDiagWindow;
+            nextTaskDiagId = 0;
+        }
+        if (taskDiagSubscribed && sendingTaskDiagWindowSequence != 0U) {
             TaskRuntimeSnapshot runtimeDiag;
             if (taskRuntimeGetSnapshot(nextTaskDiagId, &runtimeDiag)) {
-                if (sendTaskRuntimePacket(runtimeDiag)) {
+                if (runtimeDiag.windowSequence != sendingTaskDiagWindowSequence) {
+                    // 发送过程中恰好切入下一秒窗口，丢弃半组旧包并从新窗口重新开始。
+                    sendingTaskDiagWindowSequence = runtimeDiag.windowSequence;
+                    nextTaskDiagId = 0;
+                } else if (sendTaskRuntimePacket(runtimeDiag)) {
                     nextTaskDiagId =
                         (uint8_t)((nextTaskDiagId + 1) % TASK_RUNTIME_COUNT);
-                    lastTaskDiagSentMs = nowMs;
+                    if (nextTaskDiagId == 0U) {
+                        lastTaskDiagWindowSequence = sendingTaskDiagWindowSequence;
+                        sendingTaskDiagWindowSequence = 0;
+                    }
                 }
             } else {
-                nextTaskDiagId =
-                    (uint8_t)((nextTaskDiagId + 1) % TASK_RUNTIME_COUNT);
+                sendingTaskDiagWindowSequence = 0;
             }
         }
 

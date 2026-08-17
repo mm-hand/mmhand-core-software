@@ -29,7 +29,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         self.setWindowTitle("Task Runtime")
         # 关闭即销毁，确保 UI 能在 destroyed 回调中及时退订 P4 诊断流。
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
-        self.resize(1180, 430)
+        self.resize(1500, 460)
         self._last_logged_keys: Dict[int, Tuple[int, int]] = {}
         self._csv_file = None
         self._csv_writer = None
@@ -59,21 +59,25 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         summary.addStretch(1)
         layout.addLayout(summary)
 
-        self.table = QtWidgets.QTableWidget(0, 13, self)
+        self.table = QtWidgets.QTableWidget(0, 17, self)
         self.table.setHorizontalHeaderLabels([
             "Task",
             "Active",
             "Prio",
             "Core",
+            "CPU %",
+            "Avg ms",
+            "P95 ms",
+            "P99 ms",
+            "1s Max ms",
+            "Hist Max ms",
             "Max Gap ms",
-            "Max Exec ms",
             "Overruns",
             "Consec",
-            "Max Consec",
             "Stack Current",
             "Stack Min",
             "Min %",
-            "Loops",
+            "Loops/s",
         ])
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -84,7 +88,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         layout.addWidget(self.table, 1)
 
-        hint = QtWidgets.QLabel("Thresholds: StateMachine max gap <20 ms, SYSTEM_STATUS max gap <300 ms, STOP unload <30 ms, core idle >=15%, historical min stack free >=25%.")
+        hint = QtWidgets.QLabel("窗口: 1 s；CPU 为该任务占全系统运行时间比例；P95/P99 为窗口执行时间分位数。")
         hint.setStyleSheet("color:#57606a;")
         layout.addWidget(hint)
 
@@ -183,21 +187,32 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         min_free = int(diag.get("stack_min_free_bytes", 0) or 0)
         stack_pct = (min_free * 100.0 / alloc) if alloc > 0 else 0.0
         max_gap_ms = int(diag.get("max_gap_us", 0) or 0) / 1000.0
+        avg_exec_ms = int(diag.get("avg_exec_us", 0) or 0) / 1000.0
+        p95_exec_ms = int(diag.get("p95_exec_us", 0) or 0) / 1000.0
+        p99_exec_ms = int(diag.get("p99_exec_us", 0) or 0) / 1000.0
+        window_max_exec_ms = int(diag.get("window_max_exec_us", 0) or 0) / 1000.0
         max_exec_ms = int(diag.get("max_exec_us", 0) or 0) / 1000.0
+        window_duration_us = int(diag.get("window_duration_us", 0) or 0)
+        window_loop_count = int(diag.get("window_loop_count", 0) or 0)
+        loops_per_s = window_loop_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
         values = [
             str(diag.get("task_name") or TASK_RUNTIME_NAMES.get(task_id, f"Task{task_id}")),
             "Y" if bool(diag.get("active", False)) else "N",
             str(int(diag.get("priority", 0) or 0)),
             str(int(diag.get("core_id", -1) or -1)),
-            f"{max_gap_ms:.2f}",
+            self._format_permille(int(diag.get("cpu_permille", UNKNOWN_PERMILLE) or UNKNOWN_PERMILLE)),
+            f"{avg_exec_ms:.2f}",
+            f"{p95_exec_ms:.2f}",
+            f"{p99_exec_ms:.2f}",
+            f"{window_max_exec_ms:.2f}",
             f"{max_exec_ms:.2f}",
+            f"{max_gap_ms:.2f}",
             str(int(diag.get("overrun_count", 0) or 0)),
             str(int(diag.get("consecutive_overruns", 0) or 0)),
-            str(int(diag.get("max_consecutive_overruns", 0) or 0)),
             f"{current_free}/{alloc}" if current_free > 0 else "-",
             f"{min_free}/{alloc}",
             f"{stack_pct:.1f}%",
-            str(int(diag.get("loop_count", 0) or 0)),
+            f"{loops_per_s:.1f}",
         ]
         row_state = self._row_state(task_id, diag, stack_pct, max_gap_ms)
         for col, text in enumerate(values):
@@ -244,7 +259,16 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "stack_current_free_bytes",
             "stack_min_free_bytes",
             "stack_min_free_pct",
-            "loop_count",
+            "window_sequence",
+            "window_duration_us",
+            "window_loop_count",
+            "loops_per_s",
+            "cpu_permille",
+            "avg_exec_us",
+            "p95_exec_us",
+            "p99_exec_us",
+            "window_max_exec_us",
+            "historical_loop_count",
             "max_gap_us",
             "max_exec_us",
             "overrun_count",
@@ -280,8 +304,8 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         if self._csv_writer is None:
             return
         key = (
+            int(diag.get("window_sequence", 0) or 0),
             int(diag.get("device_timestamp_ms", 0) or 0),
-            int(diag.get("loop_count", 0) or 0),
         )
         if self._last_logged_keys.get(task_id) == key:
             return
@@ -290,6 +314,9 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         current_free = int(diag.get("stack_current_free_bytes", diag.get("stack_min_free_bytes", 0)) or 0)
         min_free = int(diag.get("stack_min_free_bytes", 0) or 0)
         stack_pct = (min_free * 100.0 / alloc) if alloc > 0 else 0.0
+        window_duration_us = int(diag.get("window_duration_us", 0) or 0)
+        window_loop_count = int(diag.get("window_loop_count", 0) or 0)
+        loops_per_s = window_loop_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
         row = {
             "host_ts": f"{time.time():.3f}",
             "task_id": task_id,
@@ -301,7 +328,16 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "stack_current_free_bytes": current_free,
             "stack_min_free_bytes": min_free,
             "stack_min_free_pct": f"{stack_pct:.1f}",
-            "loop_count": int(diag.get("loop_count", 0) or 0),
+            "window_sequence": int(diag.get("window_sequence", 0) or 0),
+            "window_duration_us": window_duration_us,
+            "window_loop_count": window_loop_count,
+            "loops_per_s": f"{loops_per_s:.3f}",
+            "cpu_permille": int(diag.get("cpu_permille", UNKNOWN_PERMILLE) or UNKNOWN_PERMILLE),
+            "avg_exec_us": int(diag.get("avg_exec_us", 0) or 0),
+            "p95_exec_us": int(diag.get("p95_exec_us", 0) or 0),
+            "p99_exec_us": int(diag.get("p99_exec_us", 0) or 0),
+            "window_max_exec_us": int(diag.get("window_max_exec_us", 0) or 0),
+            "historical_loop_count": int(diag.get("loop_count", 0) or 0),
             "max_gap_us": int(diag.get("max_gap_us", 0) or 0),
             "max_exec_us": int(diag.get("max_exec_us", 0) or 0),
             "overrun_count": int(diag.get("overrun_count", 0) or 0),

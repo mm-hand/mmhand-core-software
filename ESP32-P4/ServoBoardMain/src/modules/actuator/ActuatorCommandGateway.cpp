@@ -42,7 +42,12 @@ bool publishLatest(SystemRuntimeContext* sharedData,
     if (!producerOwnsOutput(sharedData, batch.source)) {
         return false;
     }
-    return sharedData->servoTargetQueue.overwrite(batch);
+    const bool queued = sharedData->servoTargetQueue.overwrite(batch);
+    if (queued) {
+        // 目标仍保存在容量为 1 的最新值邮箱；通知仅消除 ServoBusTask 的周期等待。
+        sharedData->servoBusWake.notify(p4::runtime::wake::kServoTarget);
+    }
+    return queued;
 }
 
 /** 模式切换、E-STOP 或 owner 释放时清空尚未执行的旧目标。 */

@@ -9,6 +9,7 @@
 
 #include "../../platform/rtos/FreeRtosKernel.h"
 #include "../../platform/rtos/MessageChannel.h"
+#include "../../platform/rtos/TaskSignal.h"
 #include "../../data/ActuatorTypes.h"
 #include "../../data/CalibrationTypes.h"
 #include "../../data/JointTypes.h"
@@ -19,6 +20,11 @@
 #include "../../data/TelemetryTypes.h"
 
 struct InterTaskChannels {
+    // 任务通知不传输业务载荷，只用于缩短“数据已到达但任务仍在 delay”的调度等待。
+    p4::platform::rtos::TaskSignal hostCommWake; ///< USB/UART 收到字节后唤醒 HostCommTask。
+    p4::platform::rtos::TaskSignal systemStateWake; ///< 上位机事件和 E-STOP 唤醒状态机。
+    p4::platform::rtos::TaskSignal motionControlWake; ///< 新关节目标或状态授权变化唤醒控制任务。
+    p4::platform::rtos::TaskSignal servoBusWake; ///< 新舵机批次或 E-STOP 唤醒舵机总线任务。
     MessageChannel<SystemEvent_t> stateEventQueue; ///< 顺序系统事件；急停另走 token。
     MessageChannel<RemoteSensorData_t> canRxQueue; ///< 最新 CAN 传感器快照。
     MessageChannel<ServoTargetBatch_t> servoTargetQueue; ///< 唯一舵机执行批次邮箱。

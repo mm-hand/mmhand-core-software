@@ -42,8 +42,6 @@ struct DualTendonJointState {
 
 static DualTendonJointState g_dualTendonState[ENCODER_TOTAL_NUM];
 
-static const float kDualTendonVelocityFilterAlpha =
-    kPeriodSec / (kDualTendonVelocityFilterTauSec + kPeriodSec);
 static bool getDualTendonConfig(uint8_t jointIndex, DualTendonJointConfig* out)
 {
     if (!out) {
@@ -159,6 +157,7 @@ void resetDualTendonController(uint8_t jointIndex)
 bool computeDualTendonMotorTargets(uint8_t jointIndex,
                                    float qRefDeg,
                                    float qFbDeg,
+                                   float dtSeconds,
                                    const ServoAngleData_t* servoData,
                                    DualTendonMotorTargets* outTargets)
 {
@@ -167,6 +166,12 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
     if (!servoData || !outTargets || jointIndex >= ENCODER_TOTAL_NUM) {
         return false;
     }
+    // 事件唤醒会使相邻两次计算间隔可变；异常间隔退回标称值，避免 I/D 突变。
+    if (!isfinite(dtSeconds) || dtSeconds < 0.001f || dtSeconds > 0.100f) {
+        dtSeconds = kPeriodSec;
+    }
+    const float velocityFilterAlpha =
+        dtSeconds / (kDualTendonVelocityFilterTauSec + dtSeconds);
 
     DualTendonJointConfig cfg;
     if (!getDualTendonConfig(jointIndex, &cfg) || !cfg.enabled) {
@@ -239,18 +244,18 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         const float motorCurrent = (float)servoData->servoAngles[motorChannel];
         const float refVelocity = resetState
             ? 0.0f
-            : (outTargets->motorRef[i] - state.prevMotorRef[i]) / kPeriodSec;
+            : (outTargets->motorRef[i] - state.prevMotorRef[i]) / dtSeconds;
         const float fbVelocity = resetState
             ? 0.0f
             : (outTargets->motorFbModel[i] - state.prevMotorFbModel[i]) /
-                  kPeriodSec;
+                  dtSeconds;
         const float velocityError = refVelocity - fbVelocity;
 
         state.filteredVelocityError[i] +=
-            kDualTendonVelocityFilterAlpha *
+            velocityFilterAlpha *
             (velocityError - state.filteredVelocityError[i]);
 
-        state.integral[i] += outTargets->motorErr[i] * kPeriodSec;
+        state.integral[i] += outTargets->motorErr[i] * dtSeconds;
         state.integral[i] = constrainFloat(state.integral[i],
                                            -cfg.integralLimit[i],
                                            cfg.integralLimit[i]);

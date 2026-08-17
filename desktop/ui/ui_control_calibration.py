@@ -1260,10 +1260,40 @@ class CalibrationWorkflowController:
             try:
                 previous_payload = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
             except CalibrationSnapshotError as exc:
-                self._set_status(
-                    f"Calib snapshot save blocked: existing V6 snapshot invalid: {exc}"
+                # V5 使用旧 URDF/映射语义，不能参与 V6 合并；归档后允许本轮标定建立新的 V6。
+                try:
+                    existing_payload = json.loads(
+                        CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8")
+                    )
+                    is_legacy_v5 = (
+                        isinstance(existing_payload, dict)
+                        and existing_payload.get("format") == "mmhand_calibration_bundle"
+                        and int(existing_payload.get("schema_version", 0) or 0) == 5
+                    )
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    is_legacy_v5 = False
+                if not is_legacy_v5:
+                    self._set_status(
+                        f"Calib snapshot save blocked: existing V6 snapshot invalid: {exc}"
+                    )
+                    return
+                archive_path = CALIB_LOAD_SNAPSHOT_PATH.with_name(
+                    f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.legacy_v5_"
+                    f"{time.strftime('%Y%m%d_%H%M%S')}{CALIB_LOAD_SNAPSHOT_PATH.suffix}"
                 )
-                return
+                try:
+                    CALIB_LOAD_SNAPSHOT_PATH.replace(archive_path)
+                except OSError as archive_exc:
+                    self._set_status(
+                        f"Calib snapshot save blocked: cannot archive V5 snapshot: {archive_exc}"
+                    )
+                    return
+                self.context.emit_action(
+                    f"Legacy V5 Calib snapshot archived: {archive_path.name}"
+                )
+                self._set_status(
+                    "Legacy V5 Calib snapshot archived; creating a new V6 snapshot"
+                )
 
         try:
             payload = merge_snapshot(

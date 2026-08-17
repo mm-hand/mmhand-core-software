@@ -701,11 +701,10 @@ def parse_calib_diag_packet(payload: bytes) -> Optional[dict]:
 
 
 def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
-    if len(payload) < 53 or payload[0] not in (1, 2):
+    """解析 P4 一秒窗口任务诊断包 v3；拒绝旧格式，避免不同统计口径混用。"""
+    if len(payload) != 87 or payload[0] != 3:
         return None
-    version = int(payload[0])
-    if version == 2 and len(payload) < 57:
-        return None
+    version = 3
     idx = 1
     task_id = payload[idx]
     idx += 1
@@ -738,17 +737,20 @@ def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
         "core_id": core_id,
         "stack_allocated_bytes": read_u32(),
     }
-    if version >= 2:
-        result["stack_current_free_bytes"] = read_u32()
-        result["stack_min_free_bytes"] = read_u32()
-    else:
-        min_free = read_u32()
-        result["stack_current_free_bytes"] = min_free
-        result["stack_min_free_bytes"] = min_free
+    result["stack_current_free_bytes"] = read_u32()
+    result["stack_min_free_bytes"] = read_u32()
     result.update({
         "loop_count": read_u32(),
         "max_gap_us": read_u32(),
         "max_exec_us": read_u32(),
+        "window_sequence": read_u32(),
+        "window_duration_us": read_u32(),
+        "window_loop_count": read_u32(),
+        "avg_exec_us": read_u32(),
+        "p95_exec_us": read_u32(),
+        "p99_exec_us": read_u32(),
+        "window_max_exec_us": read_u32(),
+        "cpu_permille": read_u16(),
         "overrun_count": read_u32(),
         "consecutive_overruns": read_u16(),
         "max_consecutive_overruns": read_u16(),

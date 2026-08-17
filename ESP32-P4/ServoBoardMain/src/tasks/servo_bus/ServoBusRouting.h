@@ -29,6 +29,5 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                                    uint32_t* restoredMask,
                                    uint32_t* rejectedMask);
 void beginServoBuses();
-void configureRoutedServosForMultiTurn();
 
 #endif // P4_TASKS_SERVO_BUS_SERVO_BUS_ROUTING_H

@@ -42,6 +42,7 @@ from ..protocol import (
     SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_UNCONTROLLABLE,
+    TASK_RUNTIME_NAMES,
 )
 from ..session_log import log_session
 from .ack_tracker import AckTracker
@@ -63,6 +64,10 @@ class StateReducer:
         self._last_model: Optional[HandModel] = None
         self._packet_router = packet_router
         self._ack_tracker = ack_tracker
+        # TASK_DIAG v3 由 P4 在约 35 ms 内分七包发出；先按窗口暂存，
+        # 避免 UI 把不同一秒统计窗口的任务行混合展示。
+        self._task_runtime_window_sequence: Optional[int] = None
+        self._task_runtime_window_packets: dict[int, dict] = {}
 
     def set_packet_router(self, packet_router: P4PacketRouter) -> None:
         """显式注入路由器，避免 reducer 自己重复维护 packet type 表。"""
@@ -81,6 +86,8 @@ class StateReducer:
     def reset(self) -> None:
         """连接新设备时清空旧设备状态，避免跨设备沿用在线位图或标定结果。"""
         self._last_model = None
+        self._task_runtime_window_sequence = None
+        self._task_runtime_window_packets.clear()
 
     def begin(self) -> tuple[HandModel, float]:
         """创建本批数据的工作副本，并继承不能被单包覆盖的通信有效位。"""
@@ -602,15 +609,23 @@ class StateReducer:
             elif packet_kind == "task_diagnostic":
                 parsed = owner._parse_protocol_payload("parse_task_diag_packet", payload)
                 if parsed is not None:
-                    task_id = int(parsed.get("task_id", -1) or -1)
+                    task_value = parsed.get("task_id")
+                    task_id = int(task_value) if task_value is not None else -1
                     if task_id >= 0:
                         now = time.time()
                         parsed["host_rx_ts"] = now
-                        model.task_runtime[task_id] = dict(parsed)
-                        model.task_runtime_last_rx_ts = now
-                        model.p4_time_ms = int(parsed.get("device_timestamp_ms", 0) or 0)
-                        model.has_p4_time = True
-                        emitted = True
+                        window_sequence = int(parsed.get("window_sequence", 0) or 0)
+                        if self._task_runtime_window_sequence != window_sequence:
+                            # 新窗口到达时丢弃上一个未收齐窗口，绝不拼接两组统计值。
+                            self._task_runtime_window_sequence = window_sequence
+                            self._task_runtime_window_packets.clear()
+                        self._task_runtime_window_packets[task_id] = dict(parsed)
+                        if len(self._task_runtime_window_packets) >= len(TASK_RUNTIME_NAMES):
+                            model.task_runtime = dict(self._task_runtime_window_packets)
+                            model.task_runtime_last_rx_ts = now
+                            model.p4_time_ms = int(parsed.get("device_timestamp_ms", 0) or 0)
+                            model.has_p4_time = True
+                            emitted = True
 
             # 汇总触觉持续刷新在线状态；全量触觉新鲜时不允许汇总包覆盖细粒度矩阵。
             elif packet_kind == "tactile_summary":

@@ -21,7 +21,36 @@ static float directionOf(float value)
     return value >= 0.0f ? 1.0f : -1.0f;
 }
 
+// 将异常输入收敛为放绳，保证策略不会因损坏枚举访问未定义参数。
+static uint8_t normalizeMotionMode(uint8_t mode)
+{
+    return mode == FEEDBACK_COLLISION_MOTION_TIGHTEN
+        ? FEEDBACK_COLLISION_MOTION_TIGHTEN
+        : FEEDBACK_COLLISION_MOTION_RELEASE;
+}
+
+static uint32_t progressWindowForMotionMode(uint8_t mode)
+{
+    return mode == FEEDBACK_COLLISION_MOTION_TIGHTEN
+        ? kCollisionTightenProgressWindowMs
+        : kCollisionReleaseProgressWindowMs;
+}
+
+static float minProgressForMotionMode(uint8_t mode)
+{
+    return mode == FEEDBACK_COLLISION_MOTION_TIGHTEN
+        ? kCollisionTightenMinProgressDeg
+        : kCollisionReleaseMinProgressDeg;
+}
+
 } // namespace
+
+const char* feedbackCollisionMotionModeName(uint8_t mode)
+{
+    return normalizeMotionMode(mode) == FEEDBACK_COLLISION_MOTION_TIGHTEN
+        ? "tighten"
+        : "release";
+}
 
 FeedbackCollisionGuard::FeedbackCollisionGuard()
 {
@@ -38,13 +67,18 @@ void FeedbackCollisionGuard::clearMonitoring(JointState& state)
 void FeedbackCollisionGuard::startCandidate(JointState& state,
                                             uint32_t timestampMs,
                                             float feedbackDeg,
-                                            float direction)
+                                            float direction,
+                                            uint8_t motionMode)
 {
     // 新运动段必须从未武装状态开始，禁止复用旧目标的速度与进展样本。
     clearMonitoring(state);
     state.candidateActive = true;
     state.candidateStartMs = timestampMs;
     state.candidateDirection = direction;
+    // 候选段开始后不再随每周期目标抖动切换阈值；改变物理方向时才重建窗口。
+    state.candidateMotionMode = normalizeMotionMode(motionMode);
+    state.progressWindowMs = progressWindowForMotionMode(state.candidateMotionMode);
+    state.minProgressDeg = minProgressForMotionMode(state.candidateMotionMode);
     appendSample(state, timestampMs, feedbackDeg);
 }
 
@@ -105,6 +139,9 @@ FeedbackCollisionResult FeedbackCollisionGuard::makeResult(
     result.holdAngleDeg = state.holdAngleDeg;
     result.holdTargetDeg = state.holdTargetDeg;
     result.holdDirection = state.holdDirection;
+    result.motionMode = state.candidateMotionMode;
+    result.progressWindowMs = state.progressWindowMs;
+    result.minProgressDeg = state.minProgressDeg;
     return result;
 }
 
@@ -239,24 +276,31 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     }
 
     const float direction = directionOf(errorDeg);
+    const uint8_t motionMode = normalizeMotionMode(input.driveMotionMode);
     const bool directionChanged =
         state.candidateActive && state.candidateDirection != direction;
-    if (targetChanged || directionChanged || !state.candidateActive) {
+    const bool motionModeChanged = state.candidateActive &&
+        state.candidateMotionMode != motionMode;
+    if (targetChanged || directionChanged || motionModeChanged ||
+        !state.candidateActive) {
         const bool hadMonitoring = state.candidateActive || state.armed;
         const bool wasArmed = state.armed;
         startCandidate(state,
                        input.timestampMs,
                        input.feedbackDeg,
-                       direction);
+                       direction,
+                       motionMode);
         result = makeResult(state);
         result.armedChanged = wasArmed;
         result.monitorReset = hadMonitoring &&
-            (targetChanged || directionChanged);
+            (targetChanged || directionChanged || motionModeChanged);
         result.monitorResetReason = targetChanged
             ? FEEDBACK_COLLISION_MONITOR_RESET_TARGET_CHANGED
             : (directionChanged
                 ? FEEDBACK_COLLISION_MONITOR_RESET_DIRECTION_CHANGED
-                : FEEDBACK_COLLISION_MONITOR_RESET_NONE);
+                : (motionModeChanged
+                    ? FEEDBACK_COLLISION_MONITOR_RESET_MOTION_MODE_CHANGED
+                    : FEEDBACK_COLLISION_MONITOR_RESET_NONE));
         result.targetDeltaDeg = targetDeltaDeg;
         return result;
     }
@@ -292,7 +336,7 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     const bool progressWindowReady = findWindowStart(
         state,
         input.timestampMs,
-        kCollisionProgressWindowMs,
+        state.progressWindowMs,
         state.candidateStartMs,
         &progressStart);
     float directionProgress = 0.0f;
@@ -302,10 +346,10 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     }
 
     // 200 ms 速度窗用于确认关节曾正常运动；武装后再用
-    // 400 ms 进展窗判断是否停滞。只有 PID 仍在推进，并且执行器实际 ABS
+    // 当前模式的进展窗判断是否停滞。只有 PID 仍在推进，并且执行器实际 ABS
     // 尚未抵达推进方向的 LUT 边界时，方可进入碰撞保持。
     if (state.armed && progressWindowReady &&
-        directionProgress < kCollisionMinProgressDeg &&
+        directionProgress < state.minProgressDeg &&
         input.pidPushActive && !input.workspaceBoundaryReached) {
         state.holdActive = true;
         state.holdAngleDeg = input.feedbackDeg;
@@ -320,6 +364,9 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     result.targetDeltaDeg = targetDeltaDeg;
     result.directionVelocityDegPerSec = directionVelocity;
     result.directionProgressDeg = directionProgress;
+    result.motionMode = state.candidateMotionMode;
+    result.progressWindowMs = state.progressWindowMs;
+    result.minProgressDeg = state.minProgressDeg;
     result.holdAngleDeg = state.holdAngleDeg;
     result.holdTargetDeg = state.holdTargetDeg;
     result.holdDirection = state.holdDirection;

@@ -9,6 +9,7 @@
 
 #include "ServoBusService.h"
 #include "../../platform/time/Clock.h"
+#include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/adapters/ServiceContextAdapter.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
@@ -22,9 +23,10 @@ void servoBusTask(void* parameter)
         return;
     }
 
-    TickType_t lastWakeTime = xTaskGetTickCount();
+    sharedData->servoBusWake.bind(xTaskGetCurrentTaskHandle());
     const TickType_t periodTicks = pdMS_TO_TICKS(10);
     for (;;) {
+        const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_SERVO_BUS);
         const uint32_t nowMs = p4::platform::time::monotonicMillis();
         const ServoServiceInputSnapshot input =
@@ -34,14 +36,14 @@ void servoBusTask(void* parameter)
         stepServoBusService(sharedData, input, output);
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_BUS);
 
-        const TickType_t nextWakeTime = lastWakeTime + periodTicks;
         const bool periodOverrun =
-            (int32_t)(xTaskGetTickCount() - nextWakeTime) >= 0;
+            (xTaskGetTickCount() - loopBegin) >= periodTicks;
         taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_BUS, periodOverrun);
-        vTaskDelayUntil(&lastWakeTime, periodTicks);
         if (periodOverrun) {
             // 离线 BUS 探测可能超过周期，至少让出一个 tick 给状态和通信任务。
             vTaskDelay(1);
+        } else {
+            (void)sharedData->servoBusWake.wait(periodTicks);
         }
     }
     vTaskDelete(NULL);

@@ -14,9 +14,9 @@
 // - 本模块不处理串口字节流，也不直接下发舵机目标。
 
 // 写入 21 个关节角目标，并切换到 joint PID 控制模式。
-void upperApplyTargetAngles(SystemRuntimeContext* sharedData, const float* angles, uint8_t count);
+bool upperApplyTargetAngles(SystemRuntimeContext* sharedData, const float* angles, uint8_t count);
 // 写入角度并限定本次负反馈实际参与 PID 的关节；未置位 active joint 保持当前 ABS。
-void upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
+bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
                                   const float* angles,
                                   uint8_t count,
                                   uint32_t jointMask);

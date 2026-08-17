@@ -535,95 +535,137 @@ static bool resolveServoRecoveryAnchor(
 }
 
 /** 处理每路离线->在线事务，选择 RAM/NVS 锚点并完成 raw 一致性恢复。 */
+struct ServoOnlineRecoveryContext {
+    uint8_t activeChannel; ///< 当前跨周期恢复的 Mxx，0xFF 表示尚未选择。
+    uint8_t nextChannel; ///< 下一轮查找 pending 舵机的起点，保证 27 路公平处理。
+    bool torqueOffComplete; ///< 当前舵机是否已完成一次关扭矩，避免每阶段重复写寄存器。
+};
+
+/** 处理离线到在线事务；多圈核验/配置按阶段推进，每周期最多执行一笔恢复写事务。 */
 static void processServoOnlineTransitions(
     SystemRuntimeContext* sharedData,
     const MultiTurnNvsRuntimeState* nvsState,
-    ServoHotplugRecoveryAnchors* hotplugAnchors)
+    ServoHotplugRecoveryAnchors* hotplugAnchors,
+    ServoOnlineRecoveryContext* recovery)
 {
-    if (!sharedData || !nvsState || !hotplugAnchors) {
+    if (!sharedData || !nvsState || !hotplugAnchors || !recovery) {
         return;
     }
-    static uint8_t nextChannel = 0;
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
-    // 每个 10 ms 周期最多处理一台舵机，避免多台同时上线时连续 EEPROM
-    // 事务长时间占用总线并拖慢反馈循环。
-    for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; offset++) {
-        const uint8_t ch =
-            (uint8_t)((nextChannel + offset) % SERVO_TOTAL_NUM);
-        const uint32_t bit = (1UL << ch);
-        ServoRoute route;
-        // 恢复过程会关闭力矩、改多圈模式并恢复 offset，属于物理写操作。
-        // BUS 超过十台时整条 BUS 必须保持只读，不能借恢复分支绕过容量门禁。
-        FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
-        if (!bus || !bus->isRecoveryAttemptDue(route.servoId, nowMs)) {
-            continue;
-        }
-        nextChannel = (uint8_t)((ch + 1) % SERVO_TOTAL_NUM);
 
-        const uint8_t id = route.servoId;
-        const bool torqueOffOk = bus->setTorqueEnabled(id, false);
-        bool configured = bus->isMultiTurnConfigured(id);
-        if (!configured) {
-            configured = bus->configureMultiTurnMode(id);
-        }
-
-        bool trusted = bus->isAbsoluteReliable(id);
-        int32_t recoveryLogicalAbs = 0;
-        ServoRecoveryAnchorSource anchorSource =
-            SERVO_RECOVERY_ANCHOR_NONE;
-        const bool hasAnchor = resolveServoRecoveryAnchor(
-            sharedData,
-            nvsState,
-            hotplugAnchors,
-            ch,
-            &recoveryLogicalAbs,
-            &anchorSource);
-        if (!trusted && torqueOffOk && configured && hasAnchor) {
-            trusted = bus->restoreAbsolutePosition(id,
-                                                   recoveryLogicalAbs,
-                                                   kNvsRestoreRawToleranceCounts);
-        }
-
-        const uint8_t attemptNumber =
-            (uint8_t)(bus->recoveryAttemptCount(id) + 1U);
-        const bool recoveryReady = torqueOffOk && configured;
-        // 无锚点的新舵机只需完成多圈模式配置并保持 Turn Unknown，后续允许
-        // New Device/自动标定重建基准；已有锚点但 raw 校验失败才属于恢复失败，
-        // 此时保留 pending 重试，不能把失败事务误当成成功消费。
-        const bool recoveryTransactionComplete =
-            recoveryReady && (trusted || !hasAnchor);
-        bus->finishRecoveryAttempt(id, recoveryTransactionComplete, nowMs);
-        if (recoveryReady) {
-            if (trusted) {
-                sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
-                                     ~bit);
-                hotplugAnchors->validMask &= ~bit;
-            } else {
-                // 多圈模式已配置但旧锚点无法证明时保持 Turn Unknown；
-                // 自动标定可以在安全预检后从当前 power-session ABS 重建。
-                sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap,
-                                    bit);
+    if (recovery->activeChannel >= SERVO_TOTAL_NUM) {
+        for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; ++offset) {
+            const uint8_t candidate = (uint8_t)(
+                (recovery->nextChannel + offset) % SERVO_TOTAL_NUM);
+            ServoRoute candidateRoute;
+            FeetechServoDriver* candidateBus =
+                resolveMotorDriver(candidate, &candidateRoute, true);
+            if (candidateBus &&
+                candidateBus->isRecoveryAttemptDue(candidateRoute.servoId,
+                                                    nowMs)) {
+                recovery->activeChannel = candidate;
+                recovery->nextChannel =
+                    (uint8_t)((candidate + 1U) % SERVO_TOTAL_NUM);
+                recovery->torqueOffComplete = false;
+                break;
             }
         }
-        FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u "
-                      "torque_off=%u configured=%u anchor=%u anchor_src=%u trusted=%u "
-                      "ready=%u failed=%u raw=%d unknown=0x%08lX\r\n",
-                      (unsigned)ch,
-                      (unsigned)route.busIndex,
-                      (unsigned)id,
-                      (unsigned)attemptNumber,
-                      (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
-                      torqueOffOk ? 1U : 0U,
-                      configured ? 1U : 0U,
-                      hasAnchor ? 1U : 0U,
-                      (unsigned)anchorSource,
-                      trusted ? 1U : 0U,
-                      recoveryReady ? 1U : 0U,
-                      bus->isRecoveryFailed(id) ? 1U : 0U,
-                      (int)bus->getRawPosition(id),
-                      (unsigned long)sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap));
-        break;
     }
+    if (recovery->activeChannel >= SERVO_TOTAL_NUM) {
+        return;
+    }
+
+    const uint8_t ch = recovery->activeChannel;
+    const uint32_t bit = 1UL << ch;
+    ServoRoute route;
+    FeetechServoDriver* bus = resolveMotorDriver(ch, &route, true);
+    if (!bus || !bus->isRecoveryAttemptDue(route.servoId, nowMs)) {
+        recovery->activeChannel = 0xFF;
+        recovery->torqueOffComplete = false;
+        return;
+    }
+    const uint8_t id = route.servoId;
+
+    // 恢复事务先关闭力矩；后续寄存器核验、EEPROM 配置与 offset 恢复都不重复执行该写操作。
+    if (!recovery->torqueOffComplete) {
+        if (!bus->setTorqueEnabled(id, false)) {
+            bus->finishRecoveryAttempt(id, false, nowMs);
+            recovery->activeChannel = 0xFF;
+            return;
+        }
+        recovery->torqueOffComplete = true;
+        return;
+    }
+
+    bool configured = bus->isMultiTurnConfigured(id);
+    if (!configured) {
+        const ServoMultiTurnConfigResult configResult =
+            bus->stepMultiTurnConfiguration(id, nowMs);
+        if (configResult == ServoMultiTurnConfigResult::Pending) {
+            return;
+        }
+        if (configResult == ServoMultiTurnConfigResult::Failed) {
+            bus->finishRecoveryAttempt(id, false, nowMs);
+            FW_LOG_WARN_PRINTF(
+                "[SERVO HOTPLUG] M%02u bus=%u id=%u multi-turn config failed\r\n",
+                (unsigned)ch,
+                (unsigned)route.busIndex,
+                (unsigned)id);
+            recovery->activeChannel = 0xFF;
+            recovery->torqueOffComplete = false;
+            return;
+        }
+        configured = true;
+    }
+
+    bool trusted = bus->isAbsoluteReliable(id);
+    int32_t recoveryLogicalAbs = 0;
+    ServoRecoveryAnchorSource anchorSource = SERVO_RECOVERY_ANCHOR_NONE;
+    const bool hasAnchor = resolveServoRecoveryAnchor(sharedData,
+                                                       nvsState,
+                                                       hotplugAnchors,
+                                                       ch,
+                                                       &recoveryLogicalAbs,
+                                                       &anchorSource);
+    if (!trusted && configured && hasAnchor) {
+        trusted = bus->restoreAbsolutePosition(id,
+                                               recoveryLogicalAbs,
+                                               kNvsRestoreRawToleranceCounts);
+    }
+
+    const uint8_t attemptNumber =
+        (uint8_t)(bus->recoveryAttemptCount(id) + 1U);
+    const bool recoveryTransactionComplete = configured &&
+        (trusted || !hasAnchor);
+    bus->finishRecoveryAttempt(id, recoveryTransactionComplete, nowMs);
+    if (configured) {
+        if (trusted) {
+            sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
+            hotplugAnchors->validMask &= ~bit;
+        } else {
+            // 没有可信锚点时保持 Turn Unknown，禁止把“多圈模式正确”误当作“圈数可信”。
+            sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
+        }
+    }
+    FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u "
+                  "configured=%u anchor=%u anchor_src=%u trusted=%u ready=%u "
+                  "failed=%u raw=%d unknown=0x%08lX\r\n",
+                  (unsigned)ch,
+                  (unsigned)route.busIndex,
+                  (unsigned)id,
+                  (unsigned)attemptNumber,
+                  (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
+                  configured ? 1U : 0U,
+                  hasAnchor ? 1U : 0U,
+                  (unsigned)anchorSource,
+                  trusted ? 1U : 0U,
+                  configured ? 1U : 0U,
+                  bus->isRecoveryFailed(id) ? 1U : 0U,
+                  (int)bus->getRawPosition(id),
+                  (unsigned long)sharedAtomicLoad(
+                      &sharedData->multi_turn_unknown_bitmap));
+    recovery->activeChannel = 0xFF;
+    recovery->torqueOffComplete = false;
 }
 
 /** 比较当前快照与最近落盘快照，决定是否值得写 Flash。 */
@@ -1390,7 +1432,6 @@ static void processBootNvsRestore(SystemRuntimeContext* sharedData,
  */
 struct ServoRuntimeContext {
     bool initialized;
-    uint32_t configuredRouteGeneration;
     uint8_t readBusPhase;
     uint32_t lastEmergencyStopToken;
     uint32_t lastRestoreToken;
@@ -1407,6 +1448,7 @@ struct ServoRuntimeContext {
     MultiTurnNvsSnapshot bootNvsSnapshot;
     MultiTurnNvsRuntimeState nvsSaveState;
     ServoHotplugRecoveryAnchors hotplugRecoveryAnchors;
+    ServoOnlineRecoveryContext onlineRecovery;
 #endif
 };
 
@@ -1430,6 +1472,7 @@ bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     g_servoRuntime.lastCalibrationTrustToken =
         sharedAtomicLoad(&sharedData->calibration_trust_request_token);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
+    g_servoRuntime.onlineRecovery.activeChannel = 0xFF;
     g_servoRuntime.lastServoResetZeroToken =
         sharedAtomicLoad(&sharedData->servo_reset_zero_request_token);
     g_servoRuntime.lastNvsSaveToken =
@@ -1504,7 +1547,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     const uint32_t nowMs = input.nowMs;
     ServoRuntimeContext& runtime = g_servoRuntime;
     const uint32_t loopStartMs = nowMs;
-    auto& configuredRouteGeneration = runtime.configuredRouteGeneration;
     auto& readBusPhase = runtime.readBusPhase;
     auto& lastEmergencyStopToken = runtime.lastEmergencyStopToken;
     auto& lastRestoreToken = runtime.lastRestoreToken;
@@ -1517,6 +1559,7 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     auto& lastNvsSaveToken = runtime.lastNvsSaveToken;
     auto& nvsSaveState = runtime.nvsSaveState;
     auto& hotplugRecoveryAnchors = runtime.hotplugRecoveryAnchors;
+    auto& onlineRecovery = runtime.onlineRecovery;
 #endif
         if (lastLoopStartMs != 0) {
             const uint32_t loopGapMs = loopStartMs - lastLoopStartMs;
@@ -1542,14 +1585,7 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         const bool discoveryUsedBus =
             servoDiscoveryManager().step(loopStartMs, motionActive);
         publishServoRouteSnapshot(sharedData);
-        const uint32_t routeGeneration =
-            sharedAtomicLoad(&sharedData->servo_route_generation);
-        if (!servoDiscoveryManager().active() &&
-            routeGeneration != configuredRouteGeneration) {
-            configureRoutedServosForMultiTurn();
-            configuredRouteGeneration = routeGeneration;
-        }
-        if (discoveryUsedBus) {
+        if (discoveryUsedBus && p4::actuator::pendingCount(sharedData) == 0) {
             // 扫描周期不混入同步读写，确保一轮最多产生一次短超时 UART 访问。
             return true;
         }
@@ -1667,8 +1703,9 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
             FeetechServoDriver* driver =
                 servoBusRegistry().driver(route.busIndex);
             if (driver && driver->isOfflineInvalidated(route.servoId)) {
+                const uint8_t offlineBus = route.busIndex;
                 servoRouteTable().markMotorOffline(motor);
-                servoDiscoveryManager().requestMotorScan(motor);
+                servoDiscoveryManager().requestMotorScan(motor, offlineBus);
             }
         }
         publishServoRouteSnapshot(sharedData);
@@ -1686,7 +1723,10 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                               runtime.nvsRestoreDeadlineMs);
         if (!calibrationMotionActive) {
             processServoOnlineTransitions(
-                sharedData, &nvsSaveState, &hotplugRecoveryAnchors);
+                sharedData,
+                &nvsSaveState,
+                &hotplugRecoveryAnchors,
+                &onlineRecovery);
         }
 #endif
         p4::servo::publishTurnOverflowState(sharedData);

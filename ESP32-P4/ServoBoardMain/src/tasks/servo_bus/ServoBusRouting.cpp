@@ -4,7 +4,6 @@
  */
 #include "ServoBusRouting.h"
 
-#include "../../config/ServoConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../hal/servo/FeetechServoDriver.h"
 #include "../../hal/servo/ServoBusRegistry.h"
@@ -127,19 +126,4 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
 void beginServoBuses()
 {
     servoBusRegistry().begin();
-}
-
-void configureRoutedServosForMultiTurn()
-{
-#if SERVO_CONFIGURE_MULTI_TURN_ON_BOOT
-    for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
-        ServoRoute route;
-        if (!servoRouteTable().resolveControllable(channel, &route)) continue;
-        FeetechServoDriver* driver =
-            servoBusRegistry().driver(route.busIndex);
-        if (driver && !driver->isMultiTurnConfigured(route.servoId)) {
-            driver->configureMultiTurnMode(route.servoId);
-        }
-    }
-#endif
 }

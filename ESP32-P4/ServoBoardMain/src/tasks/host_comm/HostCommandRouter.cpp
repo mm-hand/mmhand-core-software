@@ -45,13 +45,13 @@ static void cancelStagedDirectCommand(SystemRuntimeContext* sharedData,
 }
 
 // 提交一帧关节角目标；jointMask 与当前 active scope 取交集后才会参与 PID。
-void upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
+bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
                                   const float* angles,
                                   uint8_t count,
                                   uint32_t jointMask)
 {
     if (!sharedData || !angles) {
-        return;
+        return false;
     }
     if (count > ENCODER_TOTAL_NUM) count = ENCODER_TOTAL_NUM;
     const uint32_t appliedMask =
@@ -62,7 +62,7 @@ void upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
             "[UPPER] ANGLE_MASK rejected requested=0x%08lX active=0x%08lX\r\n",
             (unsigned long)jointMask,
             (unsigned long)sharedAtomicLoad(&sharedData->active_joint_mask));
-        return;
+        return false;
     }
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE)
@@ -78,23 +78,27 @@ void upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
         p4::platform::rtos::atomicAddFetch(&sharedData->joint_command_token,
                                      (uint32_t)1);
         xSemaphoreGive(lock);
+        // 目标帧已经完整写入命令邮箱；立即唤醒控制任务，不改变 10 ms 的看门狗周期。
+        sharedData->motionControlWake.notify(p4::runtime::wake::kMotionTarget);
         if (previousMask != appliedMask) {
             FW_LOG_INFO_PRINTF(
                 "[UPPER] ANGLE_MASK applied=0x%08lX previous=0x%08lX\r\n",
                 (unsigned long)appliedMask,
                 (unsigned long)previousMask);
         }
+        return true;
     }
+    return false;
 }
 
-void upperApplyTargetAngles(SystemRuntimeContext* sharedData,
+bool upperApplyTargetAngles(SystemRuntimeContext* sharedData,
                             const float* angles,
                             uint8_t count)
 {
     const uint32_t activeMask = sharedData
         ? sharedAtomicLoad(&sharedData->active_joint_mask)
         : 0;
-    upperApplyTargetAnglesMasked(sharedData, angles, count, activeMask);
+    return upperApplyTargetAnglesMasked(sharedData, angles, count, activeMask);
 }
 
 // 暂存整组舵机逻辑 ABS，generation 保证状态机只提升最新一帧直控命令。
