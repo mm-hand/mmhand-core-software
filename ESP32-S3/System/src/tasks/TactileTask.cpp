@@ -129,12 +129,12 @@ void flattenTactileFull(const TactileData& data, uint8_t* out, size_t outLen) {
     }
 }
 
-/** @brief 通过S3调试串口发送一帧带序号的45字节触觉摘要。 */
-void sendSerialTactileSummary(const TactileData& data, uint8_t seq) {
+/** @brief 通过S3调试串口发送摘要、序号和15位模块有效位图。 */
+void sendSerialTactileSummary(const TactileData& data, uint8_t seq, uint16_t moduleValidMask) {
     uint8_t payload[TACTILE_SUMMARY_BYTES] = {0};
     flattenTactileSummary(data, payload, sizeof(payload));
 
-    uint8_t buffer[2 + 1 + 1 + TACTILE_SUMMARY_BYTES + 1] = {0};
+    uint8_t buffer[2 + 1 + 1 + TACTILE_SUMMARY_BYTES + 2 + 1] = {0};
     size_t idx = 0;
     buffer[idx++] = kProtocolHeader;
     buffer[idx++] = 0;
@@ -142,6 +142,9 @@ void sendSerialTactileSummary(const TactileData& data, uint8_t seq) {
     buffer[idx++] = seq;
     memcpy(buffer + idx, payload, sizeof(payload));
     idx += sizeof(payload);
+    // 与CAN/P4摘要保持同一布局，避免直连S3和P4中继出现两套解析规则。
+    buffer[idx++] = (uint8_t)(moduleValidMask >> 8);
+    buffer[idx++] = (uint8_t)(moduleValidMask & 0xFF);
     buffer[idx++] = kProtocolTail;
     buffer[1] = (uint8_t)(idx - 2);
     Serial.write(buffer, idx);
@@ -204,17 +207,18 @@ void Task_Tactile(void* pvParameters) {
         // HAL先完成整轮采样，再取出一致快照供多种上报链路复用。
         tactile.update();
         const TactileData data = tactile.getData();
+        const TactileReadDiag diag = tactile.getDiagnostics();
 
 #if ENABLE_TACTILE_CAN_RELAY
-        // CAN摘要序号由HalTWAI生成，并复用于串口摘要/全量包以便对齐。
-        const uint8_t tactileSeq = twaiBus.sendTactileSummary(data);
+        // 只把摘要读取成功位图送往P4；全量读取失败不能误判摘要模块离线。
+        const uint8_t tactileSeq = twaiBus.sendTactileSummary(data, diag.summaryOkMask);
 #else
         static uint8_t tactileSeqCounter = 0;
         const uint8_t tactileSeq = tactileSeqCounter++;
 #endif
 
         // [待确认是否保留] 即使P4通过CAN转发，S3仍会额外从Serial直接发送一份摘要。
-        sendSerialTactileSummary(data, tactileSeq);
+        sendSerialTactileSummary(data, tactileSeq, diag.summaryOkMask);
 
         static uint8_t fullDumpDecimator = 0;
         fullDumpDecimator++;
@@ -234,13 +238,14 @@ void Task_Tactile(void* pvParameters) {
             FW_LOG_ENABLED(FW_LOG_LEVEL_TRACE) &&
             millis() - lastPrint > 1000) {
             lastPrint = millis();
-            const TactileReadDiag diag = tactile.getDiagnostics();
             FW_LOG_DEBUG_PRINTF(
-                "[Tactile] frame=%lu enabled=%04X ok=%u fail=%u mask=%04X miss=%04X st=%02X crc=%02X/%02X\n",
+                "[Tactile] frame=%lu enabled=%04X ok=%u fail=%u summary=%04X full=%04X both=%04X miss=%04X st=%02X crc=%02X/%02X\n",
                 (unsigned long)diag.frameCount,
                 diag.enabledMask,
                 diag.okReads,
                 diag.failedReads,
+                diag.summaryOkMask,
+                diag.fullOkMask,
                 diag.okMask,
                 (uint16_t)(diag.enabledMask & ~diag.okMask),
                 diag.lastStatus,

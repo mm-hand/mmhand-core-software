@@ -43,8 +43,6 @@ struct FeedbackCollisionInput {
     float feedbackDeg;    ///< 当前磁编实际角。
     bool pidPushActive;   ///< PID 是否仍沿目标方向产生有效推进。
     uint8_t driveMotionMode; ///< FeedbackCollisionMotionMode；双腱固定传 RELEASE 档。
-    // 只有执行器实际位置已抵达当前推进方向的 LUT 边界时才置位。
-    bool workspaceBoundaryReached;
 };
 
 struct FeedbackCollisionResult {

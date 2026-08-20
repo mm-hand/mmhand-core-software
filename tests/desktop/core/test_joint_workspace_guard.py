@@ -61,9 +61,6 @@ def test_workspace_uses_static_urdf_min_and_max():
     assert workspace.current_max_deg == pytest.approx(spec.urdf_range_deg[1])
     assert workspace.clamp(-1000.0) == pytest.approx(spec.urdf_range_deg[0])
     assert workspace.clamp(1000.0) == pytest.approx(spec.urdf_range_deg[1])
-    assert workspace.open_pose_target() == pytest.approx(
-        min(spec.urdf_range_deg[0] + 5.0, spec.urdf_range_deg[1])
-    )
 
 
 def test_workspace_rejects_dynamic_min_from_removed_mapping():
@@ -247,33 +244,33 @@ def _arm_ros2_backend(backend):
     assert ok, message
 
 
-def test_raw_ik_semantic_gate_reuses_ros2_authorization():
+def test_ros2_output_gate_reuses_ros2_authorization():
     state = _ready_state(current_min=12.5)
     backend = HandBackend(controller=_Controller(state))
     backend.is_comm_connected = lambda: True
     backend.is_started = lambda: True
 
-    ok, message = backend.set_raw_ik_output_enabled(True)
+    ok, message = backend.set_ros2_output_enabled(True)
     assert ok, message
-    assert backend.raw_ik_output_enabled()
+    assert backend.ros2_output_enabled()
     assert backend.ros2_output_armed()
 
-    ok, message = backend.set_raw_ik_output_enabled(False)
+    ok, message = backend.set_ros2_output_enabled(False)
     assert ok, message
-    assert not backend.raw_ik_output_enabled()
+    assert not backend.ros2_output_enabled()
 
 
-def test_raw_ik_gate_rejects_prearming_before_ordinary_enable():
+def test_ros2_output_gate_rejects_prearming_before_ordinary_enable():
     state = _ready_state(current_min=12.5)
     backend = HandBackend(controller=_Controller(state))
     backend.is_comm_connected = lambda: True
     backend.is_started = lambda: False
 
-    ok, message = backend.set_raw_ik_output_enabled(True)
+    ok, message = backend.set_ros2_output_enabled(True)
 
     assert not ok
     assert "press ENABLE first" in message
-    assert not backend.raw_ik_output_enabled()
+    assert not backend.ros2_output_enabled()
 
 
 def test_ros2_frame_requires_existing_enable_authorization():
@@ -292,12 +289,6 @@ def test_ros2_frame_requires_existing_enable_authorization():
     assert not blocked.sent
     assert blocked.message.endswith("not_armed")
     assert controller.sent == []
-    # 未授权的ROS2帧不能驱动硬件，但应保留为Replay页面的只读捕获预览。
-    preview = backend.get_latest_teleop_preview(max_age_s=1.0)
-    assert preview is not None
-    assert preview["valid"] is True
-    assert preview["targets"][0] == 20.0
-
     _arm_ros2_backend(backend)
     sent = backend.send_ros2_joint_targets(
         [20.0] * ENCODER_COUNT,

@@ -29,11 +29,28 @@ class ManualTestPanel(QtWidgets.QWidget):
         """Build the test panel UI section."""
         box = ManualTestPanel()
         layout = QtWidgets.QVBoxLayout(box)
+        layout.addWidget(ManualTestPanel.pose_test_box(panel))
         layout.addWidget(ManualTestPanel.sine_test_box(panel))
         layout.addWidget(ManualTestPanel.feedforward_test_box(panel))
         layout.addWidget(ManualTestPanel.triangle_test_box(panel))
         layout.addStretch(1)
         return box
+
+    @staticmethod
+    def pose_test_box(panel) -> QtWidgets.QGroupBox:
+        """构建只在 Test 页面使用的预设姿态测试入口。"""
+        group = QtWidgets.QGroupBox("Pose Test")
+        layout = QtWidgets.QHBoxLayout(group)
+        panel.open_btn = QtWidgets.QPushButton("Open Pose")
+        panel.open_btn.setToolTip("Send 0 deg to all 21 joint channels")
+        panel.fist_btn = QtWidgets.QPushButton("Fist Pose")
+        panel.fist_btn.setToolTip("Send the configured fist pose to the active joints")
+        panel.open_btn.clicked.connect(lambda _checked=False: panel.apply_open_pose())
+        panel.fist_btn.clicked.connect(lambda _checked=False: panel.apply_fist_pose())
+        layout.addWidget(panel.open_btn)
+        layout.addWidget(panel.fist_btn)
+        layout.addStretch(1)
+        return group
 
     @staticmethod
     def joint_choices() -> List[str]:
@@ -68,7 +85,6 @@ class ManualTestPanel(QtWidgets.QWidget):
             panel.test_max_spins.append(hi)
             panel.test_freq_spins.append(freq)
             panel.test_phase_spins.append(phase)
-            panel._control_widgets.extend([combo, lo, hi, freq, phase])
         row = QtWidgets.QHBoxLayout()
         panel.test_start_btn = QtWidgets.QPushButton("Start Test")
         panel.test_stop_btn = QtWidgets.QPushButton("Stop Test")
@@ -81,7 +97,6 @@ class ManualTestPanel(QtWidgets.QWidget):
             row.addWidget(widget)
         row.addStretch(1)
         layout.addLayout(row, TEST_ROW_COUNT + 1, 0, 1, 6)
-        panel._control_widgets.extend([panel.test_start_btn, panel.test_stop_btn, panel.test_hold_spin])
         return group
 
     @staticmethod
@@ -110,9 +125,6 @@ class ManualTestPanel(QtWidgets.QWidget):
         row.addWidget(panel.ff_stop_btn)
         row.addStretch(1)
         layout.addLayout(row, 2, 0, 1, 3)
-        panel._control_widgets.extend([
-            panel.ff_joint_combo, panel.ff_targets_edit, panel.ff_step_spin, panel.ff_start_btn, panel.ff_stop_btn,
-        ])
         return group
 
     @staticmethod
@@ -154,16 +166,6 @@ class ManualTestPanel(QtWidgets.QWidget):
         row.addWidget(panel.tri_stop_btn)
         row.addStretch(1)
         layout.addLayout(row, 2, 0, 1, 4)
-        panel._control_widgets.extend(
-            [
-                panel.tri_joint_combo,
-                panel.tri_min_spin,
-                panel.tri_max_spin,
-                panel.tri_freq_spin,
-                panel.tri_start_btn,
-                panel.tri_stop_btn,
-            ]
-        )
         return group
 
     @staticmethod

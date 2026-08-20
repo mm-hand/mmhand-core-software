@@ -11,7 +11,7 @@ from desktop.replay.replay_controller import (
     replay_start_state_allowed,
 )
 from desktop.replay.replay_models import ReplayFrame, ReplayTrace
-from desktop.teleop.joint_target_adapter import active_mapping_identity
+from desktop.core.joint_target_adapter import active_mapping_identity
 from desktop.core.protocol import (
     ENCODER_COUNT,
     SYSTEM_STATE_READY,

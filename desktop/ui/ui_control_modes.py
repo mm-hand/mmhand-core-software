@@ -10,11 +10,7 @@
 
 from .ui_control_common import (
     DeviceCheckView,
-    ENCODER_COUNT,
-    FINGER_JOINT_RANGES,
-    ControlScopeModel,
     QtWidgets,
-    TeleopView,
     WORKSPACE_MAPPING_VERSION,
     WORKSPACE_URDF_CRC,
     _ModeBody,
@@ -36,7 +32,6 @@ class ManualControlView(_ModeBody):
     @staticmethod
     def build(panel) -> None:
         """Build the manual body UI section."""
-        interaction_enabled = bool(getattr(panel, "_interaction_enabled", False))
         panel._clear_body()
         panel._reset_manual_widget_refs()
         panel._app_mode = "manual"
@@ -47,54 +42,26 @@ class ManualControlView(_ModeBody):
 
         workflow = QtWidgets.QGroupBox("Manual Workflow")
         wf_layout = QtWidgets.QHBoxLayout(workflow)
-        panel.manual_check = QtWidgets.QCheckBox("Control Enable")
-        panel.manual_check.setChecked(False)
-        panel.new_device_reset_btn = QtWidgets.QPushButton("New Device Reset")
-        panel.new_device_reset_btn.setToolTip(
-            "Repair only online Turn Unknown motors, then guide single-joint recalibration"
+        panel.calib_file_load_btn = QtWidgets.QPushButton("Load Calibration…")
+        panel.calib_file_load_btn.setToolTip(
+            "Select a saved or external calibration JSON; validate it and restore it to P4"
         )
-        panel.calib_load_btn = QtWidgets.QPushButton("Calib Load")
-        panel.calib_load_btn.setToolTip("Load the last saved calibration snapshot when mechanics have not changed")
-        panel.calib_import_btn = QtWidgets.QPushButton("Import Calib")
-        panel.calib_import_btn.setToolTip(
-            "Import and activate a portable MMHand calibration bundle"
-        )
-        panel.calib_export_btn = QtWidgets.QPushButton("Export Calib")
-        panel.calib_export_btn.setToolTip(
-            "Export the active calibration bundle to another computer"
-        )
-        panel.open_btn = QtWidgets.QPushButton("Open Pose")
         panel.release_half_turn_btn = QtWidgets.QPushButton("Release Half Turn")
         panel.tighten_half_turn_btn = QtWidgets.QPushButton("Tighten Half Turn")
-        panel.fist_btn = QtWidgets.QPushButton("Fist Pose")
-        wf_layout.addWidget(panel.manual_check)
         wf_layout.addStretch(1)
         for btn in [
-            panel.new_device_reset_btn,
-            panel.calib_load_btn,
-            panel.calib_import_btn,
-            panel.calib_export_btn,
-            panel.open_btn,
+            panel.calib_file_load_btn,
             panel.release_half_turn_btn,
             panel.tighten_half_turn_btn,
-            panel.fist_btn,
         ]:
             wf_layout.addWidget(btn)
         layout.addWidget(workflow)
 
-        panel.manual_check.toggled.connect(panel._apply_interaction_enabled)
-        panel.new_device_reset_btn.clicked.connect(lambda _checked=False: panel.new_device_reset())
-        panel.calib_load_btn.clicked.connect(lambda _checked=False: panel.load_calibration_snapshot())
-        panel.calib_import_btn.clicked.connect(
-            lambda _checked=False: panel.import_calibration_snapshot()
+        panel.calib_file_load_btn.clicked.connect(
+            lambda _checked=False: panel.load_calibration_from_file()
         )
-        panel.calib_export_btn.clicked.connect(
-            lambda _checked=False: panel.export_calibration_snapshot()
-        )
-        panel.open_btn.clicked.connect(lambda _checked=False: panel.apply_open_pose())
         panel.release_half_turn_btn.clicked.connect(lambda _checked=False: panel.release_all_motors_half_turn())
         panel.tighten_half_turn_btn.clicked.connect(lambda _checked=False: panel.tighten_all_motors_half_turn())
-        panel.fist_btn.clicked.connect(lambda _checked=False: panel.apply_fist_pose())
 
         panel.tabs = QtWidgets.QTabWidget()
         panel.device_check_view = DeviceCheckView(
@@ -104,6 +71,9 @@ class ManualControlView(_ModeBody):
         )
         panel.device_check_view.operation_finished.connect(
             panel._on_device_check_operation_finished
+        )
+        panel.device_check_view.manual_prepare_finished.connect(
+            panel._on_manual_prepare_finished
         )
         panel.joint_table = panel._build_joint_table()
         panel.motor_table = panel._build_motor_table()
@@ -128,24 +98,6 @@ class ManualControlView(_ModeBody):
         motor_page_layout = QtWidgets.QVBoxLayout(panel.motor_page)
         motor_page_layout.setContentsMargins(0, 0, 0, 0)
         motor_page_layout.setSpacing(4)
-        reset_zero_bar = QtWidgets.QWidget()
-        reset_zero_layout = QtWidgets.QHBoxLayout(reset_zero_bar)
-        reset_zero_layout.setContentsMargins(6, 2, 6, 2)
-        reset_zero_layout.addWidget(
-            QtWidgets.QLabel("Reset Zero trigger: outside -30715 .. +30715")
-        )
-        reset_zero_layout.addStretch(1)
-        panel.reset_zero_btn = QtWidgets.QPushButton("Reset Zero")
-        panel.reset_zero_btn.setMinimumWidth(100)
-        panel.reset_zero_btn.setToolTip(
-            "Reset only servos whose hardware ABS strictly exceeds ±30715; "
-            "the command hard limit remains ±30719"
-        )
-        panel.reset_zero_btn.clicked.connect(
-            lambda _checked=False: panel.reset_overflow_servo_zero()
-        )
-        reset_zero_layout.addWidget(panel.reset_zero_btn)
-        motor_page_layout.addWidget(reset_zero_bar)
         motor_page_layout.addWidget(panel.motor_table, 1)
         panel._sync_scope_group_checks()
         panel.test_panel = panel._build_test_panel()
@@ -159,90 +111,4 @@ class ManualControlView(_ModeBody):
         layout.addWidget(panel.tabs, 1)
         panel.body_layout.addWidget(body)
         panel._body_widget = body
-        panel._apply_interaction_enabled(interaction_enabled)
         panel._on_manual_tab_changed()
-
-
-
-class TeleopControlView(_ModeBody):
-    """Builds the Teleop mode body and active-scope selector."""
-    @staticmethod
-    def build(panel) -> None:
-        """Build the teleop body UI section."""
-        panel._clear_body()
-        panel._reset_manual_widget_refs()
-        panel._app_mode = "teleop"
-
-        body = TeleopControlView()
-        layout = QtWidgets.QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        workflow = TeleopControlView.scope_workflow(panel)
-        layout.addWidget(workflow)
-
-        teleop_view = TeleopView(
-            panel.context,
-            selected_joint_mask_getter=panel._teleop_selected_joint_mask_value,
-        )
-        body.child = teleop_view
-        layout.addWidget(teleop_view, 1)
-
-        panel.body_layout.addWidget(body)
-        panel._body_widget = body
-
-    @staticmethod
-    def scope_workflow(panel) -> QtWidgets.QGroupBox:
-        """Build the teleop scope workflow UI section."""
-        workflow = QtWidgets.QGroupBox("Teleop Workflow")
-        row_layout = QtWidgets.QHBoxLayout(workflow)
-        row_layout.setContentsMargins(8, 4, 8, 4)
-        row_layout.setSpacing(10)
-        panel._teleop_selected_motor_mask = panel._motor_mask_for_joint_mask(panel._teleop_selected_joint_mask)
-
-        all_joint_mask = (1 << ENCODER_COUNT) - 1
-        hand_check = QtWidgets.QCheckBox("Hand")
-        hand_check.setToolTip("Select all teleop joints")
-        hand_check.setChecked((panel._teleop_selected_joint_mask & all_joint_mask) == all_joint_mask)
-        hand_check.toggled.connect(lambda checked: panel._on_teleop_hand_use_changed(checked))
-        hand_check.setMinimumWidth(64)
-        panel.teleop_hand_use_check = hand_check
-        row_layout.addWidget(hand_check, 0)
-
-        separator = QtWidgets.QFrame()
-        separator.setFrameShape(QtWidgets.QFrame.VLine)
-        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
-        row_layout.addWidget(separator)
-
-        for label, start, end in FINGER_JOINT_RANGES:
-            group_mask = ControlScopeModel.joint_group_mask(label, start, end)
-            column = QtWidgets.QWidget()
-            col_layout = QtWidgets.QVBoxLayout(column)
-            col_layout.setContentsMargins(0, 0, 0, 0)
-            col_layout.setSpacing(2)
-            group_check = QtWidgets.QCheckBox(label)
-            group_check.setToolTip("Select this finger group for Teleop active scope")
-            group_check.setChecked((panel._teleop_selected_joint_mask & group_mask) == group_mask)
-            group_check.toggled.connect(
-                lambda checked, s=start, e=end: panel._on_teleop_joint_group_use_changed(s, e, checked)
-            )
-            panel.teleop_group_use_checks.append(group_check)
-            col_layout.addWidget(group_check)
-
-            joint_row = QtWidgets.QHBoxLayout()
-            joint_row.setContentsMargins(14, 0, 0, 0)
-            joint_row.setSpacing(4)
-            for joint_idx in ControlScopeModel.joint_indices_for_group(label, start, end):
-                use_check = QtWidgets.QCheckBox(f"J{joint_idx:02d}")
-                use_check.setToolTip(f"Use J{joint_idx:02d} in Teleop active scope")
-                use_check.setChecked((panel._teleop_selected_joint_mask & (1 << joint_idx)) != 0)
-                use_check.toggled.connect(
-                    lambda checked, idx=joint_idx: panel._on_teleop_joint_use_changed(idx, checked)
-                )
-                panel.teleop_joint_use_checks[joint_idx] = use_check
-                joint_row.addWidget(use_check)
-            col_layout.addLayout(joint_row)
-            row_layout.addWidget(column, 1)
-
-        row_layout.addStretch(1)
-        panel._sync_teleop_group_checks()
-        return workflow

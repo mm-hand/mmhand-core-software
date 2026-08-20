@@ -899,7 +899,7 @@ static bool waitWorkspaceFeedbackKnown(SystemRuntimeContext* sharedData,
                                0,
                                0,
                                unknownMask);
-            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail Turn UNKNOWN J%02u mask=0x%08lX; New Device Reset required\r\n",
+            FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail Turn UNKNOWN J%02u mask=0x%08lX; select joint and recalibrate\r\n",
                                (unsigned)jointIndex,
                                (unsigned long)unknownMask);
             return false;

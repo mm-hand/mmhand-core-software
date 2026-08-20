@@ -1,15 +1,13 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from desktop.core.data_models import HandModel, JointWorkspaceRange
-from desktop.core.protocol import (
-    SYSTEM_STATE_CALIBRATION_RUNNING,
-    SYSTEM_STATE_RUN_FEEDBACK,
-    SYSTEM_STATE_UNCONTROLLABLE,
-)
+from desktop.core.data_models import HandModel
+from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_UNCONTROLLABLE
 from desktop.ui.ui_control_panels import ControlPanel
+from desktop.ui import ui_control_calibration
 from desktop.ui.ui_qt_compat import QtWidgets, ensure_app
 
 
@@ -17,17 +15,13 @@ _APP = ensure_app()
 
 
 class _Backend:
-    def raw_ik_output_enabled(self):
-        """Return the raw IK arm state for ControlPanel construction."""
+    def ros2_output_enabled(self):
+        """Return the ROS2 output arm state for ControlPanel construction."""
         return False
 
     def get_current_state(self):
         """Return an empty state for ControlPanel construction."""
         return HandModel()
-
-    def set_pid_control(self, _enabled):
-        """Accept PID policy updates during ControlPanel construction."""
-        return None
 
     def set_control_mode(self, _mode):
         """Accept control-mode updates during mode-switch tests."""
@@ -75,35 +69,14 @@ def _panel() -> ControlPanel:
     return ControlPanel(_Context())
 
 
-def _ready_workspace(joint: int, current_min: float, current_max: float) -> JointWorkspaceRange:
-    """Build a ready workspace range for pose target tests."""
-    return JointWorkspaceRange(
-        joint_index=joint,
-        urdf_min_deg=-90.0,
-        urdf_max_deg=90.0,
-        current_min_deg=current_min,
-        current_max_deg=current_max,
-        manual_valid=True,
-        auto_valid=True,
-        manual_crc_match=True,
-        mapping_valid=True,
-        ready=True,
-    )
-
-
 def test_manual_workflow_buttons_keep_signals_after_module_split():
     """模块拆分后，工作流按钮仍应调用 ControlPanel 上的最新方法。"""
     panel = _panel()
     calls = []
     actions = (
-        ("new_device_reset_btn", "new_device_reset", "new-device"),
-        ("calib_load_btn", "load_calibration_snapshot", "load"),
-        ("calib_import_btn", "import_calibration_snapshot", "import"),
-        ("calib_export_btn", "export_calibration_snapshot", "export"),
-        ("open_btn", "apply_open_pose", "open"),
+        ("calib_file_load_btn", "load_calibration_from_file", "load-file"),
         ("release_half_turn_btn", "release_all_motors_half_turn", "release"),
         ("tighten_half_turn_btn", "tighten_all_motors_half_turn", "tighten"),
-        ("fist_btn", "apply_fist_pose", "fist"),
     )
     for button_name, method_name, marker in actions:
         setattr(panel, method_name, lambda value=marker: calls.append(value))
@@ -112,36 +85,171 @@ def test_manual_workflow_buttons_keep_signals_after_module_split():
         button.click()
 
     assert calls == [item[2] for item in actions]
+    assert not hasattr(panel, "manual_check")
+    assert not hasattr(panel, "calib_load_btn")
+    assert not hasattr(panel, "calib_import_btn")
+    assert not hasattr(panel, "calib_export_btn")
 
 
-def test_manual_workflow_signal_survives_mode_body_rebuild():
-    """切换页面并重建 Manual body 后，按钮必须重新连接到当前控制器。"""
+def test_pose_buttons_exist_only_in_test_panel_and_keep_signals():
+    """预设姿态应归属 Test 页面，不能重新出现在 Manual Workflow。"""
     panel = _panel()
-    panel.sync_app_mode("teleop")
+    calls = []
+    panel.apply_open_pose = lambda: calls.append("open")
+    panel.apply_fist_pose = lambda: calls.append("fist")
+
+    test_buttons = panel.test_panel.findChildren(QtWidgets.QPushButton)
+    workflow = next(
+        group
+        for group in panel.findChildren(QtWidgets.QGroupBox)
+        if group.title() == "Manual Workflow"
+    )
+    workflow_buttons = workflow.findChildren(QtWidgets.QPushButton)
+    assert panel.open_btn in test_buttons
+    assert panel.fist_btn in test_buttons
+    assert panel.open_btn not in workflow_buttons
+    assert panel.fist_btn not in workflow_buttons
+    panel.open_btn.setEnabled(True)
+    panel.fist_btn.setEnabled(True)
+    panel.open_btn.click()
+    panel.fist_btn.click()
+
+    assert calls == ["open", "fist"]
+
+
+def test_apply_preset_only_updates_controls_without_opening_hand_pose():
+    """动作按钮不能隐式创建 Hand Pose 窗口，否则会在发送前阻塞 GUI 线程。"""
+    panel = _panel()
+    assert not hasattr(panel.context, "draw_pose_angles")
+
+    panel.apply_preset([12.0] + [0.0] * 20, joint_indices=[0])
+
+    assert panel.joint_target_spins[0].value() == 12.0
+
+
+def test_calibration_load_signal_survives_mode_body_rebuild():
+    """切换模式后重建 Manual body，标定加载入口仍必须可用。"""
+    panel = _panel()
+    panel.sync_app_mode("monitor")
     panel.sync_app_mode("monitor")
     calls = []
-    panel.new_device_reset = lambda: calls.append("new-device")
-    panel.new_device_reset_btn.setEnabled(True)
+    panel.load_calibration_from_file = lambda: calls.append("load-file")
+    panel.calib_file_load_btn.setEnabled(True)
 
-    panel.new_device_reset_btn.click()
+    panel.calib_file_load_btn.click()
 
-    assert calls == ["new-device"]
+    assert calls == ["load-file"]
 
 
-def test_new_device_reset_available_while_feedback_is_running():
-    """Turn Unknown 恢复可从负反馈状态发起，后端会先执行安全维护复位。"""
+def test_load_calibration_opens_snapshot_directory_then_restores_selected_file(monkeypatch):
+    """单一入口必须先选文件、校验并激活，再复用既有 P4 恢复事务。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
+    panel._state = HandModel()
+    panel._manual_submode = lambda: "device_check"
+    selected_path = Path("C:/temporary/external_hand.mmcal.json")
+    snapshot = {"hand_profile": ui_control_calibration.HAND_PROFILE}
+    calls = []
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *_args: (
+            calls.append(_args[2]) or str(selected_path),
+            "MMHand Calibration (*.mmcal.json)",
+        ),
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.Yes,
+    )
+    monkeypatch.setattr(ui_control_calibration, "read_snapshot", lambda path: snapshot)
+    monkeypatch.setattr(
+        ui_control_calibration,
+        "atomic_write_snapshot",
+        lambda path, payload: calls.append((path, payload)),
+    )
+    panel._validate_calibration_snapshot_for_load = lambda _snapshot: None
+    panel.backend.load_calibration_snapshot = lambda payload: (
+        calls.append(("p4", payload)) or (True, "loaded 1 joints")
+    )
+
+    panel.load_calibration_from_file()
+
+    assert calls[0] == str(ui_control_calibration.CALIB_LOAD_SNAPSHOT_PATH.parent)
+    assert calls[1] == (ui_control_calibration.CALIB_LOAD_SNAPSHOT_PATH, snapshot)
+    assert calls[2] == ("p4", snapshot)
+
+
+def test_load_calibration_cancel_does_not_activate_or_send(monkeypatch):
+    """取消文件选择时不得覆盖本机快照或向 P4 发送恢复帧。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    panel._state = HandModel()
+    calls = []
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *_args: ("", ""),
+    )
+    monkeypatch.setattr(
+        ui_control_calibration,
+        "atomic_write_snapshot",
+        lambda *_args: calls.append("write"),
+    )
+    panel.backend.load_calibration_snapshot = lambda _payload: calls.append("p4")
+
+    panel.load_calibration_from_file()
+
+    assert calls == []
+
+
+def test_startup_restores_json_manual_before_auto_when_p4_ram_is_empty(
+    monkeypatch, tmp_path
+):
+    """P4 断电清空 Manual RAM 后，启动流程必须先写回 JSON，再加载 Auto/LUT。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    panel._startup_device_check_running = True
+    panel._startup_device_check_epoch = 7
     state = HandModel()
-    state.system_state = SYSTEM_STATE_RUN_FEEDBACK
-    state.multi_turn_unknown_bitmap = 1
-    state.has_servo_raw_data = True
+    state.manual_reference_nvs_valid = False
+    state.manual_reference_valid_bitmap = 0
     panel._state = state
+    panel.backend.get_state_snapshot = lambda: state
 
-    panel._update_manual_action_buttons()
+    snapshot_path = tmp_path / "calibration_bundle.mmcal.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    snapshot = {"hand_profile": ui_control_calibration.HAND_PROFILE}
+    calls = []
+    monkeypatch.setattr(
+        ui_control_calibration, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path
+    )
+    monkeypatch.setattr(
+        ui_control_calibration, "read_snapshot", lambda _path: snapshot
+    )
+    panel._validate_calibration_snapshot_for_load = lambda _snapshot: None
+    panel.backend.restore_manual_references_from_snapshot = lambda payload: (
+        calls.append(("manual", payload)) or (True, "manual restored")
+    )
+    panel.backend.load_calibration_snapshot = lambda payload: (
+        calls.append(("auto", payload)) or (True, "auto loaded")
+    )
 
-    assert panel.new_device_reset_btn.isEnabled()
-    assert "安全停止" in panel.new_device_reset_btn.toolTip()
+    class _ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(ui_control_calibration.threading, "Thread", _ImmediateThread)
+
+    panel._on_startup_device_check_finished(7, "query", True, "Manual received")
+
+    assert calls == [("manual", snapshot), ("auto", snapshot)]
+
+
 
 
 def test_calibration_stays_available_without_auto_snapshot():
@@ -161,62 +269,45 @@ def test_calibration_stays_available_without_auto_snapshot():
     assert not panel.enable_btn.isEnabled()
 
 
-def test_new_device_reset_stays_disabled_when_turns_are_trusted_or_task_busy():
-    """可信圈数和标定任务运行时仍保持硬门禁。"""
+def test_calibrate_resets_only_selected_joint_motors_before_starting():
+    """标定必须先归零所选关节舵机，再重放 scope；辅助工作空间舵机不能被提前清零。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
-    state = HandModel()
-    state.multi_turn_unknown_bitmap = 0
-    panel._state = state
-    panel._update_manual_action_buttons()
-    assert not panel.new_device_reset_btn.isEnabled()
-    assert "圈数可信" in panel.new_device_reset_btn.toolTip()
-
-    state.multi_turn_unknown_bitmap = 1
-    state.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
-    panel._update_manual_action_buttons()
-    assert not panel.new_device_reset_btn.isEnabled()
-    assert "正在运行" in panel.new_device_reset_btn.toolTip()
-
-
-def test_new_device_reset_reads_fresh_backend_snapshot():
-    """点击恢复前必须绕过旧 UI 帧并读取后端的最新 Turn Unknown 状态。"""
-    panel = _panel()
-    stale = HandModel()
-    stale.multi_turn_unknown_bitmap = 0
-    fresh = HandModel()
-    fresh.multi_turn_unknown_bitmap = 1 << 24
-    panel._state = stale
-    panel.backend.get_state_snapshot = lambda: fresh
-
-    assert panel._latest_new_device_reset_state() is fresh
-    assert panel._state is fresh
-
-
-def test_new_device_reset_reaches_backend_after_confirmation(monkeypatch):
-    """完整走过关节掩码转换，防止拆分后的缺失辅助函数再次漏测。"""
-    panel = _panel()
-    panel.context.is_comm_connected = lambda: True
-    state = HandModel()
-    state.multi_turn_unknown_bitmap = 1 << 4
-    state.has_servo_raw_data = True
-    state.servo_raw_online[4] = True
-    panel.backend.get_state_snapshot = lambda: state
+    panel._manual_submode = lambda: "joint"
+    panel._active_scope_manual_missing_indices = lambda: []
+    panel._state = SimpleNamespace(system_state=SYSTEM_STATE_UNCONTROLLABLE)
+    panel._active_joint_mask_from_ui = lambda: 1 << 4
+    panel._active_motor_mask_from_ui = lambda: (1 << 5) | (1 << 6)
     calls = []
-    panel.backend.reset_multiturn_baseline_for_new_device = lambda: (
-        calls.append("reset") or (False, "test stop", 1 << 4, 1 << 3)
+    panel.backend.prepare_calibration_turn_zero = lambda motor_mask: (
+        calls.append(("reset", motor_mask)) or (True, "ok", motor_mask, 0)
     )
-    panel._warn = lambda *_args: None
-    panel._error = lambda *_args: None
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "question",
-        lambda *_args, **_kwargs: QtWidgets.QMessageBox.Yes,
+    panel._reset_motor_target_cache_for_device_epoch = (
+        lambda _reason: calls.append(("clear-target-cache",))
     )
+    panel._invalidate_local_calibration_scope = (
+        lambda motor_mask, joint_mask: calls.append(
+            ("invalidate-local", motor_mask, joint_mask)
+        )
+    )
+    panel._backup_and_invalidate_calib_snapshot_scope = (
+        lambda motor_mask, joint_mask, reason: calls.append(
+            ("invalidate-snapshot", motor_mask, joint_mask, reason)
+        )
+    )
+    panel._apply_active_scope_for_current_mode = lambda: (
+        calls.append(("apply-scope",)) or True
+    )
+    panel._start_calibration_now = lambda: calls.append(("start",))
 
-    panel.new_device_reset()
+    panel.calibrate()
 
-    assert calls == ["reset"]
+    selected_motor_mask = (1 << 5) | (1 << 6)
+    assert calls[0] == ("reset", selected_motor_mask)
+    assert ("invalidate-local", selected_motor_mask, 1 << 4) in calls
+    assert calls[-2:] == [("apply-scope",), ("start",)]
+
+
 
 
 def test_spin_change_marks_target_before_state_refresh_can_resync_it():
@@ -243,7 +334,7 @@ def test_single_joint_command_uses_live_feedback_for_other_joints():
         angles=[30.0 + i for i in range(21)],
         target_angles=[10.1] * 21,
     )
-    panel._interaction_enabled = True
+    panel._controller_interaction_ready = lambda: True
     panel.context.is_comm_connected = lambda: True
     panel._guard_joint_command_started = lambda: True
     panel._joint_angle_display_calibrated = lambda _idx, _state: True
@@ -268,7 +359,7 @@ def test_single_joint_command_falls_back_to_last_target_when_feedback_invalid():
         angles=[30.0] * 21,
         target_angles=[12.5] * 21,
     )
-    panel._interaction_enabled = True
+    panel._controller_interaction_ready = lambda: True
     panel.context.is_comm_connected = lambda: True
     panel._guard_joint_command_started = lambda: True
     panel._joint_angle_display_calibrated = lambda _idx, _state: True
@@ -287,7 +378,7 @@ def test_single_joint_command_falls_back_to_last_target_when_feedback_invalid():
 
 def test_send_joint_row_passes_only_clicked_joint_mask():
     panel = _panel()
-    panel._interaction_enabled = True
+    panel._controller_interaction_ready = lambda: True
     panel.context.is_comm_connected = lambda: True
     panel._guard_joint_command_started = lambda: True
     panel._single_joint_command_targets = lambda _idx: [0.0] * 21
@@ -299,37 +390,20 @@ def test_send_joint_row_passes_only_clicked_joint_mask():
     assert panel.context.calls[0][1]["command_joint_mask"] == (1 << 3)
 
 
-def test_open_pose_uses_dual_midpoint_and_single_min_plus_five():
+def test_open_pose_sends_zero_to_all_joint_channels():
     panel = _panel()
-    panel._state = HandModel()
-    panel._active_scope_joint_indices = lambda: [0, 1]
-    panel.resolved_joint_targets = lambda: [0.0] * 21
-    workspaces = {
-        0: _ready_workspace(0, 10.0, 50.0),
-        1: _ready_workspace(1, 20.0, 80.0),
-    }
-    panel._joint_workspace_range = lambda joint, _state: workspaces[joint]
+    sent = []
+    applied = []
+    panel.apply_preset = lambda targets, joint_indices=None: applied.append(
+        (list(targets), list(joint_indices or []))
+    )
+    panel._guard_joint_command_started = lambda: True
+    panel._set_status = lambda _text: None
+    panel.context.send_joint_targets = lambda targets, **kwargs: (
+        sent.append((list(targets), kwargs)) or SimpleNamespace(sent=True)
+    )
 
-    pose = panel._build_open_pose_targets()
+    panel.apply_open_pose()
 
-    assert pose is not None
-    targets, joints = pose
-    assert joints == [0, 1]
-    assert targets[0] == 30.0
-    assert targets[1] == 25.0
-
-
-def test_current_min_pose_builder_keeps_min_plus_five_for_dual_joint():
-    panel = _panel()
-    panel._state = HandModel()
-    panel._active_scope_joint_indices = lambda: [0]
-    panel.resolved_joint_targets = lambda: [0.0] * 21
-    workspace = _ready_workspace(0, 10.0, 50.0)
-    panel._joint_workspace_range = lambda _joint, _state: workspace
-
-    pose = panel._build_current_min_open_pose_targets()
-
-    assert pose is not None
-    targets, joints = pose
-    assert joints == [0]
-    assert targets[0] == 15.0
+    assert applied == [([0.0] * ENCODER_COUNT, list(range(ENCODER_COUNT)))]
+    assert sent == [([0.0] * ENCODER_COUNT, {"source": "Open Pose", "live": False})]

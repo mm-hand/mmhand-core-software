@@ -17,7 +17,7 @@ class DeviceControlBar(QtWidgets.QGroupBox):
     start_requested = Signal()
     stop_requested = Signal()
     pause_requested = Signal()
-    raw_ik_toggled = Signal(bool)
+    ros2_output_toggled = Signal(bool)
     clear_fault_requested = Signal()
     calibrate_requested = Signal()
     rope_init_requested = Signal()
@@ -29,11 +29,11 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.enable_btn = QtWidgets.QPushButton("ENABLE")
         self.stop_btn = QtWidgets.QPushButton("E-STOP")
         self.pause_btn = QtWidgets.QPushButton("Pause")
-        self.raw_ik_enable_btn = QtWidgets.QPushButton("RAW IK ENABLE")
-        self.raw_ik_enable_btn.setCheckable(True)
-        self.raw_ik_enable_btn.setChecked(False)
-        self.raw_ik_enable_btn.setToolTip(
-            "Separately authorize ROS2 raw IK/joint target frames; ordinary ENABLE does not arm teleoperation"
+        self.ros2_output_btn = QtWidgets.QPushButton("ROS2 INPUT")
+        self.ros2_output_btn.setCheckable(True)
+        self.ros2_output_btn.setChecked(False)
+        self.ros2_output_btn.setToolTip(
+            "Authorize external ROS2 joint target input; ordinary ENABLE does not authorize continuous ROS2 control"
         )
         self.reset_btn = QtWidgets.QPushButton("Clear Fault")
         self.reset_btn.setToolTip(
@@ -46,8 +46,10 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         )
         self.nvs_control_btn = QtWidgets.QPushButton("Flash ON")
         self.nvs_control_btn.setToolTip(
-            "Toggle P4 Flash/NVS multi-turn persistence. P4 NVS is the only restore source."
+            "P4 Flash 持久化当前已关闭；Manual/Auto/LUT/多圈锚点由上位机 JSON 保存。"
         )
+        # 实机确认 JSON 恢复闭环前保留对象和信号接口，UI 暂不向用户开放旧 Flash 开关。
+        self.nvs_control_btn.setVisible(False)
         self._build()
 
     def _build(self) -> None:
@@ -59,7 +61,7 @@ class DeviceControlBar(QtWidgets.QGroupBox):
             self.enable_btn,
             self.stop_btn,
             self.pause_btn,
-            self.raw_ik_enable_btn,
+            self.ros2_output_btn,
         ):
             button.setMinimumHeight(46)
         for button in (
@@ -73,17 +75,17 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.enable_btn.setStyleSheet("font-weight:700;background:#2e7d32;color:white;")
         self.stop_btn.setStyleSheet("font-weight:700;background:#c62828;color:white;")
         self.pause_btn.setStyleSheet("font-weight:700;background:#f9a825;color:black;")
-        self.raw_ik_enable_btn.setStyleSheet("font-weight:700;background:#455a64;color:white;")
+        self.ros2_output_btn.setStyleSheet("font-weight:700;background:#455a64;color:white;")
         self.nvs_control_btn.setStyleSheet("font-weight:700;background:#e8f5e9;color:#1b5e20;")
 
         layout.addWidget(self._centered_action_cell(self.enable_btn), 0, 0, 2, 1)
         layout.addWidget(self._centered_action_cell(self.stop_btn), 0, 1, 2, 1)
         layout.addWidget(self._centered_action_cell(self.pause_btn), 0, 2, 2, 1)
-        layout.addWidget(self._centered_action_cell(self.raw_ik_enable_btn), 0, 3, 2, 1)
+        layout.addWidget(self._centered_action_cell(self.ros2_output_btn), 0, 3, 2, 1)
         layout.addWidget(self.calib_btn, 0, 4)
         layout.addWidget(self.reset_btn, 0, 5)
         layout.addWidget(self.rope_init_btn, 1, 4)
-        layout.addWidget(self.nvs_control_btn, 1, 5)
+        # 旧 Flash 控件暂留作回退接口，但不加入布局；实机确认后再删除相关代码。
         layout.setRowStretch(0, 1)
         layout.setRowStretch(1, 1)
         for col in range(6):
@@ -91,7 +93,7 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.enable_btn.clicked.connect(lambda _checked=False: self.start_requested.emit())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_requested.emit())
         self.pause_btn.clicked.connect(lambda _checked=False: self.pause_requested.emit())
-        self.raw_ik_enable_btn.toggled.connect(self.raw_ik_toggled.emit)
+        self.ros2_output_btn.toggled.connect(self.ros2_output_toggled.emit)
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_requested.emit())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate_requested.emit())
         self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_requested.emit())
@@ -113,7 +115,7 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.start_requested.connect(panel.start_controller)
         self.stop_requested.connect(panel.stop_controller)
         self.pause_requested.connect(panel.pause_controller)
-        self.raw_ik_toggled.connect(panel.toggle_raw_ik_output)
+        self.ros2_output_toggled.connect(panel.toggle_ros2_output)
         self.clear_fault_requested.connect(panel.clear_fault_with_confirm)
         self.calibrate_requested.connect(panel.calibrate)
         self.rope_init_requested.connect(panel.rope_init_controller)

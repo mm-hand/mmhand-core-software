@@ -75,6 +75,7 @@ def test_estop_is_enqueued_before_test_and_recorder_cleanup():
         ),
         stop_all_tests=lambda *_args, **_kwargs: events.append("stop_all_tests"),
         _clear_run_states=lambda: events.append("clear_run_states"),
+        clear_ros2_joint_targets=lambda: events.append("clear_ros2_targets"),
     )
 
     ControlCommandController.stop_controller(panel)
@@ -166,7 +167,8 @@ def test_direct_result_surfaces_p4_rejection_reason():
 
     assert len(actions) == 1
     assert "generation=9" in actions[0]
-    assert "state/E-STOP gate" in actions[0]
+    # 断言稳定规则编号，不绑定可能随本地化更新的中英文说明。
+    assert "DIR-3101" in actions[0]
     assert statuses == actions
 
 
@@ -219,7 +221,6 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
     events = []
     backend = SimpleNamespace(
         set_control_mode=lambda mode: events.append(("mode", mode)),
-        set_pid_control=lambda enabled: events.append(("pid", enabled)),
         set_motor_positions_absolute=lambda _targets: events.append("motor_abs"),
         reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
@@ -252,18 +253,16 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
     ControlCommandController.start_controller(panel)
 
     assert ("mode", ControlMode.JOINT_ANGLE) in events
-    assert ("pid", True) in events
     assert events.index("reset") < events.index("start")
     assert "start" in events
     assert "motor_abs" not in events
     assert "sync_motor" not in events
 
 
-def test_joint_enable_does_not_arm_raw_ik_output():
+def test_joint_enable_does_not_arm_ros2_output():
     events = []
     backend = SimpleNamespace(
         set_control_mode=lambda mode: events.append(("mode", mode)),
-        set_pid_control=lambda enabled: events.append(("pid", enabled)),
         reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
         set_ros2_output_armed=lambda armed, reason="": (
@@ -271,7 +270,7 @@ def test_joint_enable_does_not_arm_raw_ik_output():
         ),
     )
     panel = SimpleNamespace(
-        _app_mode="teleop",
+        _app_mode="manual",
         _manual_submode=lambda: "joint",
         _active_scope_offline_motor_indices=lambda _state: [],
         _active_scope_unroutable_motor_indices=lambda _state: [],
@@ -315,30 +314,30 @@ class _ToggleButton:
         self.text = str(text)
 
 
-def test_raw_ik_button_is_the_only_ui_path_that_arms_teleoperation():
+def test_ros2_output_button_is_the_only_ui_path_that_arms_external_targets():
     events = []
     state = {"enabled": False}
 
-    def set_raw_ik(enabled):
+    def set_ros2_output(enabled):
         state["enabled"] = bool(enabled)
-        events.append(("raw_ik", bool(enabled)))
-        return True, "RAW IK output enabled" if enabled else "RAW IK output disabled"
+        events.append(("ros2_output", bool(enabled)))
+        return True, "ROS2 output enabled" if enabled else "ROS2 output disabled"
 
     panel = SimpleNamespace(
         backend=SimpleNamespace(
-            set_raw_ik_output_enabled=set_raw_ik,
-            raw_ik_output_enabled=lambda: state["enabled"],
+            set_ros2_output_enabled=set_ros2_output,
+            ros2_output_enabled=lambda: state["enabled"],
         ),
-        raw_ik_enable_btn=_ToggleButton(),
+        ros2_output_btn=_ToggleButton(),
         context=SimpleNamespace(emit_action=lambda text: events.append(("action", text))),
         _set_status=lambda text: events.append(("status", text)),
     )
 
-    ControlCommandController.toggle_raw_ik_output(panel, True)
+    ControlCommandController.toggle_ros2_output(panel, True)
 
-    assert ("raw_ik", True) in events
-    assert panel.raw_ik_enable_btn.checked
-    assert panel.raw_ik_enable_btn.text == "RAW IK ON"
+    assert ("ros2_output", True) in events
+    assert panel.ros2_output_btn.checked
+    assert panel.ros2_output_btn.text == "ROS2 INPUT ON"
 
 
 def test_motor_enable_stages_direct_hold_without_extra_start_event():
@@ -346,7 +345,6 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
     targets = [100 + index for index in range(27)]
     backend = SimpleNamespace(
         set_control_mode=lambda mode: events.append(("mode", mode)),
-        set_pid_control=lambda enabled: events.append(("pid", enabled)),
         set_motor_positions_absolute=lambda values: events.append(("motor_abs", list(values))),
         reset=lambda: events.append("reset"),
         start=lambda: events.append("start"),
@@ -378,7 +376,6 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
     ControlCommandController.start_controller(panel)
 
     assert ("mode", ControlMode.DIRECT_MOTOR) in events
-    assert ("pid", False) in events
     assert ("motor_abs", targets) in events
     assert "start" in events
     assert events.index("reset") < events.index("start") < events.index(("motor_abs", targets))
@@ -402,7 +399,6 @@ def test_motor_enable_checks_servo_online_but_not_encoder_online():
         _estop_latched=False,
         backend=SimpleNamespace(
             set_control_mode=lambda _mode: events.append("mode"),
-            set_pid_control=lambda _enabled: events.append("pid"),
             start=lambda: events.append("start"),
             set_motor_positions_absolute=lambda _targets: events.append("direct"),
         ),
@@ -432,7 +428,6 @@ def test_joint_enable_requires_corresponding_servo_online_before_start():
         _format_joint_list=lambda indices: ",".join(f"J{idx:02d}" for idx in indices),
         backend=SimpleNamespace(
             set_control_mode=lambda _mode: None,
-            set_pid_control=lambda _enabled: None,
             start=lambda: events.append("start"),
         ),
         context=SimpleNamespace(

@@ -34,11 +34,44 @@ Signal = QtCore.Signal if QT_LIB == "PySide6" else QtCore.pyqtSignal
 Slot = QtCore.Slot if QT_LIB == "PySide6" else QtCore.pyqtSlot
 
 
+def configure_opengl_before_app() -> str:
+    """在 QApplication 创建前选择 OpenGL 后端。
+
+    少数仍使用 OpenGL 的窗口可通过 ``MMHAND_QT_OPENGL`` 选择后端。
+    默认保持桌面 OpenGL，与改动前的行为一致；只有定位显卡驱动问题时，
+    才设置 ``MMHAND_QT_OPENGL=software`` 使用软件实现。
+    """
+    requested = os.environ.get("MMHAND_QT_OPENGL", "desktop").strip().lower()
+    mode = requested if requested in {"software", "desktop", "angle"} else "desktop"
+    os.environ["QT_OPENGL"] = mode
+    if QtWidgets.QApplication.instance() is None:
+        attributes = getattr(QtCore.Qt, "ApplicationAttribute", QtCore.Qt)
+        attr_name = {
+            "software": "AA_UseSoftwareOpenGL",
+            "desktop": "AA_UseDesktopOpenGL",
+            "angle": "AA_UseOpenGLES",
+        }[mode]
+        attribute = getattr(attributes, attr_name, None)
+        if attribute is not None:
+            QtCore.QCoreApplication.setAttribute(attribute, True)
+    return mode
+
+
 def ensure_app():
     app = QtWidgets.QApplication.instance()
     if app is None:
+        configure_opengl_before_app()
         app = QtWidgets.QApplication(sys.argv[:1])
     return app
 
 
-__all__ = ["QtCore", "QtGui", "QtWidgets", "Signal", "Slot", "QT_LIB", "ensure_app"]
+__all__ = [
+    "QtCore",
+    "QtGui",
+    "QtWidgets",
+    "Signal",
+    "Slot",
+    "QT_LIB",
+    "configure_opengl_before_app",
+    "ensure_app",
+]

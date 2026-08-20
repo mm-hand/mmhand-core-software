@@ -9,9 +9,6 @@ class FakeBackend:
         self.calls.append(("connect", port))
         return True
 
-    def set_pid_control(self, enabled: bool) -> None:
-        self.calls.append(("set_pid_control", enabled))
-
     def start(self) -> None:
         self.calls.append(("start",))
 
@@ -25,9 +22,9 @@ class FakeBackend:
         self.calls.append(("calibrate",))
         return True
 
-    def set_raw_ik_output_enabled(self, enabled: bool):
-        self.calls.append(("raw_ik", bool(enabled)))
-        return True, "RAW IK output enabled" if enabled else "RAW IK output disabled"
+    def set_ros2_output_enabled(self, enabled: bool):
+        self.calls.append(("ros2_output", bool(enabled)))
+        return True, "ROS2 output enabled" if enabled else "ROS2 output disabled"
 
     def shutdown(self) -> None:
         self.calls.append(("shutdown",))
@@ -64,7 +61,6 @@ def test_cli_monitor_drives_backend_commands_only() -> None:
     assert code == 0
     assert backend.calls == [
         ("connect", "COM9"),
-        ("set_pid_control", False),
         ("start",),
         ("stop",),
         ("reset",),
@@ -81,7 +77,7 @@ class _FakeRosBridge:
         pass
 
 
-def test_cli_start_and_raw_ik_authorization_are_separate(monkeypatch) -> None:
+def test_cli_start_and_ros2_output_authorization_are_separate(monkeypatch) -> None:
     backend = FakeBackend()
     monkeypatch.setattr(
         "desktop.app.cli_monitor._make_ros2_bridge",
@@ -100,5 +96,5 @@ def test_cli_start_and_raw_ik_authorization_are_separate(monkeypatch) -> None:
 
     assert code == 0
     assert backend.calls.count(("start",)) == 1
-    assert ("raw_ik", True) in backend.calls
-    assert ("raw_ik", False) in backend.calls
+    assert ("ros2_output", True) in backend.calls
+    assert ("ros2_output", False) in backend.calls

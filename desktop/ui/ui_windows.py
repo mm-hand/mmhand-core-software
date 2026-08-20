@@ -11,7 +11,6 @@ import time
 from typing import Dict, Optional
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
-from .ui_camera_view import CameraView
 from .ui_pose_view import Pose3DView
 from .ui_tactile_view import TactileView
 
@@ -65,8 +64,14 @@ class DisplayWindowManager:
             lambda _checked=False: self.owner._open_joint_rt_window()
         )
         menu.addAction(plot_action)
+        # 任务诊断窗口独占 P4 高频订阅生命周期，不纳入可勾选的显示窗口管理器。
+        task_runtime_action = action_cls("Task Runtime", self.owner)
+        task_runtime_action.triggered.connect(
+            lambda _checked=False: self.owner.show_task_runtime_window()
+        )
+        menu.addAction(task_runtime_action)
         menu.addSeparator()
-        for key, label in [("pose", "Hand Pose"), ("tactile", "Tactile"), ("cameras", "Cameras")]:
+        for key, label in [("pose", "Hand Pose"), ("tactile", "Tactile")]:
             action = action_cls(label, self.owner)
             action.setCheckable(True)
             action.toggled.connect(lambda checked, k=key: self.open(k) if checked else self.close(k))
@@ -87,9 +92,6 @@ class DisplayWindowManager:
 
     def open_tactile(self) -> None:
         self.open("tactile")
-
-    def open_cameras(self) -> None:
-        self.open("cameras")
 
     def is_open(self, key: str) -> bool:
         win = self.windows.get(key)
@@ -128,8 +130,17 @@ class DisplayWindowManager:
             hidden.show()
             hidden.raise_()
             hidden.activateWindow()
+            # 视图在窗口 show 后再激活，避免首次显示和姿态刷新同时进入绘制事件。
+            QtCore.QTimer.singleShot(0, hidden.component.activate_renderer)
             return
-        title, component, size = self._make_component(key)
+        try:
+            title, component, size = self._make_component(key)
+        except Exception as exc:
+            if key == "pose":
+                self.owner._set_status(f"Hand Pose setup failed: {exc}")
+                self._set_action(key, False)
+                return
+            raise
         win = _DisplayWindow(key, title, component, self.owner)
         win.closed.connect(self._on_window_closed)
         win.resize(*size)
@@ -141,6 +152,8 @@ class DisplayWindowManager:
         self.layout_open_windows()
         win.show()
         win.raise_()
+        if key == "pose":
+            QtCore.QTimer.singleShot(0, component.activate_renderer)
 
     def close(self, key: str) -> None:
         win = self.windows.get(key) if key == "pose" else self.windows.pop(key, None)
@@ -188,6 +201,8 @@ class DisplayWindowManager:
         comp = self.components.get("pose")
         if comp is None:
             return
+        if not comp.is_renderer_ready():
+            return
         interval = POSE_REAL_INTERVAL_S if self.owner.is_comm_connected() else POSE_PREVIEW_INTERVAL_S
         now = time.time()
         if not force and now - self._last_pose_update_ts < interval:
@@ -200,13 +215,8 @@ class DisplayWindowManager:
         if comp is not None:
             comp.update_if_due(state, force=force)
 
-    def update_cameras(self) -> None:
-        comp = self.components.get("cameras")
-        if comp is not None:
-            comp.update()
-
     def layout_open_windows(self) -> None:
-        visible = [k for k in ("pose", "tactile", "cameras") if self.is_open(k)]
+        visible = [k for k in ("pose", "tactile") if self.is_open(k)]
         if not visible:
             return
         geo = self.owner.geometry()
@@ -246,6 +256,4 @@ class DisplayWindowManager:
             return "Hand Pose", Pose3DView(self.context), (760, 520)
         if key == "tactile":
             return "Tactile", TactileView(self.context), (760, 520)
-        if key == "cameras":
-            return "Cameras", CameraView(self.context), (860, 460)
         raise ValueError(f"Unknown display window: {key}")

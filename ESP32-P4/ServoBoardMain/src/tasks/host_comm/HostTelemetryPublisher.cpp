@@ -715,6 +715,9 @@ bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile)
     buffer[idx++] = tactile.seq;
     memcpy(buffer + idx, tactile.values, TACTILE_SUMMARY_BYTES);
     idx += TACTILE_SUMMARY_BYTES;
+    // 模块有效位图紧跟45字节摘要；bit=1表示本轮S3摘要SPI读取及CRC8均成功。
+    buffer[idx++] = static_cast<uint8_t>((tactile.moduleValidMask >> 8) & 0xFFU);
+    buffer[idx++] = static_cast<uint8_t>(tactile.moduleValidMask & 0xFFU);
     appendU32BigEndian(buffer, &idx, tactile.timestamp);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = static_cast<uint8_t>(idx - 2U);

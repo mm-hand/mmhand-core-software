@@ -1,6 +1,6 @@
 """hand_backend.py - MMHand Desktop 模块契约。
 
-职责：向 Qt、ROS2、遥操和 Replay 提供统一的设备能力门面。
+职责：向 Qt、ROS2 和 Replay 提供统一的设备能力门面。
 线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
 输入：P4 字节流、上层类型化命令、配置和持久化数据。
 输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
@@ -8,7 +8,6 @@
 禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
 """
 
-from collections import deque
 from dataclasses import dataclass, field
 import math
 import threading
@@ -17,7 +16,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
-from .core_logic import HandController
+from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT
 from .session_log import log_session
@@ -36,6 +35,9 @@ def clone_hand_model(model: HandModel) -> HandModel:
     snapshot.copy_state_from(model)
     snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
     snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
+    snapshot.tactile_source = str(getattr(model, "tactile_source", "NONE"))
+    snapshot.tactile_data_level = str(getattr(model, "tactile_data_level", "NONE"))
+    snapshot.tactile_module_valid_mask = int(getattr(model, "tactile_module_valid_mask", 0) or 0)
     snapshot.tactile_online = bool(getattr(model, "tactile_online", False))
     snapshot.tactile_last_rx_ts = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
     snapshot.tactile_module_online = list(getattr(model, "tactile_module_online", []) or [])
@@ -59,6 +61,11 @@ def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
     state.tactile_full_crc_errors = int(getattr(tactile_state, "tactile_full_crc_errors", 0))
     state.tactile_full_seq_mismatches = int(getattr(tactile_state, "tactile_full_seq_mismatches", 0))
     state.tactile_full_dropped = int(getattr(tactile_state, "tactile_full_dropped", 0))
+    state.tactile_source = str(getattr(tactile_state, "tactile_source", "S3_SERIAL"))
+    state.tactile_data_level = str(getattr(tactile_state, "tactile_data_level", "NONE"))
+    state.tactile_module_valid_mask = int(
+        getattr(tactile_state, "tactile_module_valid_mask", 0) or 0
+    )
     state.tactile_online = bool(getattr(tactile_state, "tactile_online", False))
     state.tactile_last_rx_ts = float(getattr(tactile_state, "tactile_last_rx_ts", 0.0) or 0.0)
     state.tactile_module_online = list(getattr(tactile_state, "tactile_module_online", []) or [])
@@ -104,9 +111,6 @@ class HandBackend:
         self._ros2_armed_scope: Optional[Tuple[int, int, bool]] = None
         self._ros2_last_drop_reason = ""
         self._ros2_last_drop_log_ts = 0.0
-        # 遥操预览不等于控制授权：RAW IK关闭时仍缓存最近帧供保存手势。
-        self._teleop_preview_lock = threading.Lock()
-        self._teleop_preview_frames = deque(maxlen=32)
         # generation令牌把Replay检查与每帧入队绑定，其他运动源可立即使旧令牌失效。
         self._replay_motion_lock = threading.RLock()
         self._replay_motion_generation = 0
@@ -121,10 +125,6 @@ class HandBackend:
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
         self._ensure_controller_callback_registered()
-
-    @property
-    def raw_controller(self) -> HandController:
-        return self._controller
 
     @property
     def comm(self):
@@ -271,12 +271,19 @@ class HandBackend:
                 except Exception:
                     pass
         latest = comm.get_latest_model()
-        if latest is None:
+        if latest is not None:
+            self._tactile_state = latest
+        tactile_state = self._tactile_state
+        if tactile_state is None:
             return False, state
-        self._tactile_state = latest
+        if not bool(getattr(tactile_state, "tactile_online", False)):
+            # S3直连只在数据新鲜时覆盖P4摘要；串口超时后立即回退到P4状态，
+            # 避免离线的S3空快照持续遮住仍然在线的CAN中继。
+            return latest is not None, self.get_state_snapshot()
         target = state or HandModel()
-        merge_tactile_state(target, latest)
-        return True, target
+        # 即使本轮没有新S3包，也要把最近的新鲜S3全量快照覆盖到新到的P4状态上。
+        merge_tactile_state(target, tactile_state)
+        return latest is not None, target
 
     def _joint_workspace_active_mask(self, state: Optional[HandModel]) -> int:
         valid_mask = (1 << ENCODER_COUNT) - 1
@@ -407,7 +414,7 @@ class HandBackend:
         command_joint_mask: Optional[int] = None,
         motion_token: Optional[int] = None,
     ) -> JointCommandResult:
-        from desktop.teleop.joint_target_adapter import active_mapping_identity
+        from desktop.core.joint_target_adapter import active_mapping_identity
 
         state = self.get_current_state()
         input_targets = list(angles)
@@ -554,13 +561,13 @@ class HandBackend:
                 int(bool(scope[2])),
             ),
         )
-        return True, "ROS2 joint output enabled; waiting for a valid P4 state"
+        return True, "ROS2 input enabled; waiting for a valid P4 state"
 
     def set_ros2_output_armed(self, armed: bool, *, reason: str = "") -> Tuple[bool, str]:
         """授权或撤销两条 ROS2 21 关节角输入链路。
 
-        该授权只由独立 RAW IK Enable 或 CLI 的独立按键建立，普通控制 ENABLE
-        不得隐式放行遥操。P4 在线、READY 和作用域一致性仍由每一帧发送前
+        该授权只由独立 ROS2 INPUT 或 CLI 的独立按键建立，普通控制 ENABLE
+        不得隐式放行外部目标。P4 在线、READY 和作用域一致性仍由每一帧发送前
         核验；E-STOP、Pause、断连和作用域切换会主动撤销授权。
         """
         with self._ros2_output_lock:
@@ -570,26 +577,26 @@ class HandBackend:
         with self._ros2_output_lock:
             return bool(self._ros2_output_armed)
 
-    def set_raw_ik_output_enabled(self, enabled: bool) -> Tuple[bool, str]:
-        """响应独立 RAW IK 开关，并复用线程安全的 ROS2 输出授权门。"""
+    def set_ros2_output_enabled(self, enabled: bool) -> Tuple[bool, str]:
+        """响应独立 ROS2 INPUT 开关，并复用线程安全的 ROS2 输出授权门。"""
         # UI 灰显不是安全门。CLI 或其他调用方也必须先启动普通控制器，
         # 防止提前预授权后某次普通 START 意外放行持续到来的遥操帧。
         if enabled and not self.is_started():
             return False, "ordinary controller is not enabled; press ENABLE first"
         if enabled:
-            self.cancel_replay_motion("RAW IK enabled")
+            self.cancel_replay_motion("ROS2 input enabled")
         ok, message = self.set_ros2_output_armed(
             bool(enabled),
-            reason="RAW_IK_ENABLE" if enabled else "RAW_IK_DISABLE",
+            reason="ROS2_OUTPUT_ENABLE" if enabled else "ROS2_OUTPUT_DISABLE",
         )
         if enabled and ok:
-            return True, "RAW IK output enabled; waiting for the next ROS2 frame"
+            return True, "ROS2 input enabled; waiting for the next ROS2 frame"
         if not enabled and ok:
-            return True, "RAW IK output disabled"
+            return True, "ROS2 input disabled"
         return ok, message
 
-    def raw_ik_output_enabled(self) -> bool:
-        """返回当前 RAW IK 用户授权；运行门禁仍在每一帧发送前复核。"""
+    def ros2_output_enabled(self) -> bool:
+        """返回当前 ROS2 用户授权；运行门禁仍在每一帧发送前复核。"""
         return self.ros2_output_armed()
 
     def _log_ros2_drop_locked(self, reason: str) -> None:
@@ -616,12 +623,6 @@ class HandBackend:
         """
         values = list(angles)
         raw_values = list(raw_targets) if raw_targets is not None else list(values)
-        self._cache_teleop_preview(
-            values,
-            raw_values,
-            source=source,
-            input_space=input_space,
-        )
         with self._ros2_output_lock:
             if not self._ros2_output_armed:
                 reason = "not_armed"
@@ -655,65 +656,8 @@ class HandBackend:
                 targets=values,
             )
 
-    def _cache_teleop_preview(
-        self,
-        targets: Iterable[float],
-        raw_targets: Iterable[float],
-        *,
-        source: str,
-        input_space: str,
-    ) -> None:
-        """缓存已映射到URDF空间的ROS2帧；未授权输出时仍可用于保存手势。"""
-        values = [float(value) for value in targets]
-        raw_values = [float(value) for value in raw_targets]
-        if (
-            len(values) != ENCODER_COUNT
-            or not all(math.isfinite(value) for value in values)
-        ):
-            return
-        state = self.get_current_state()
-        guarded, blocked, clamped, message = self._apply_joint_workspace_guard(
-            state,
-            values,
-            source="Replay teleop preview",
-            command_joint_mask=int(
-                getattr(state, "active_joint_mask", 0) or 0
-            ),
-        )
-        frame: Dict[str, object] = {
-            "monotonic_ts": time.monotonic(),
-            "source": str(source or "ROS2"),
-            "input_space": str(input_space or "urdf_deg"),
-            "targets": guarded if not blocked else values,
-            "raw_targets": raw_values if len(raw_values) == ENCODER_COUNT else [],
-            "active_joint_mask": int(
-                getattr(state, "active_joint_mask", 0) or 0
-            ) & ((1 << ENCODER_COUNT) - 1),
-            "valid": not blocked,
-            "blocked": list(blocked),
-            "clamped": list(clamped),
-            "message": str(message or ""),
-        }
-        with self._teleop_preview_lock:
-            self._teleop_preview_frames.append(frame)
-
-    def get_latest_teleop_preview(
-        self, *, max_age_s: float = 0.3
-    ) -> Optional[Dict[str, object]]:
-        """返回最新有效遥操预览的副本，过期帧不会被误保存为手势。"""
-        with self._teleop_preview_lock:
-            if not self._teleop_preview_frames:
-                return None
-            frame = dict(self._teleop_preview_frames[-1])
-        age = time.monotonic() - float(frame.get("monotonic_ts") or 0.0)
-        if age > max(0.0, float(max_age_s)):
-            return None
-        frame["targets"] = list(frame.get("targets") or [])
-        frame["raw_targets"] = list(frame.get("raw_targets") or [])
-        return frame
-
     def begin_replay_motion(self) -> Tuple[bool, int, str]:
-        """取得Replay独占令牌，并明确撤销RAW IK授权。"""
+        """取得 Replay 独占令牌，并明确撤销 ROS2 输出授权。"""
         if not self.is_comm_connected():
             return False, 0, "Replay拒绝：P4串口未连接"
         if not self.is_started():
@@ -790,9 +734,6 @@ class HandBackend:
     def get_control_mode(self) -> ControlMode:
         return self._controller.get_control_mode()
 
-    def set_pid_control(self, enabled: bool) -> None:
-        self._controller.set_pid_control(enabled)
-
     def invalidate_joint_commands(self) -> int:
         return self._controller.invalidate_joint_commands()
 
@@ -810,12 +751,6 @@ class HandBackend:
 
     def set_target_angles_live(self, angles: List[float]) -> JointCommandResult:
         return self.send_joint_targets(angles, source="Backend set_target_angles_live", live=True)
-
-    def set_motor_positions_raw(self, motor_pos_raw: List[int]) -> None:
-        self._controller.set_motor_positions_raw(motor_pos_raw)
-
-    def set_motor_positions_raw_sweep(self, motor_pos_raw: List[int]) -> None:
-        self._controller.set_motor_positions_raw_sweep(motor_pos_raw)
 
     def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
         self._controller.set_motor_positions_absolute(motor_abs)
@@ -871,17 +806,24 @@ class HandBackend:
     def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
         return self._controller.set_multiturn_nvs_enabled(enabled)
 
-    def reset_multiturn_baseline_for_new_device(
-        self,
+    def prepare_calibration_turn_zero(
+        self, motor_mask: int
     ) -> Tuple[bool, str, int, int]:
-        """局部重建 Turn Unknown 舵机，返回电机和受影响关节掩码。"""
-        return self._controller.reset_multiturn_baseline_for_new_device()
+        """标定前归零所选舵机，并返回成功与失败电机掩码。"""
+        return self._controller.prepare_calibration_turn_zero(motor_mask)
 
-    def reset_overflow_servo_turns(
-        self,
-    ) -> Tuple[bool, str, int, int, int]:
-        """重置超出 ST3215 七圈安全范围的舵机，并返回局部失效范围。"""
-        return self._controller.reset_overflow_servo_turns()
+    def manual_prepare_all_motors(self) -> ManualPrepareResult:
+        """停止外部连续输入后执行全手 turn0 与 1500-count 预松事务。"""
+        self.cancel_replay_motion("manual_prepare")
+        with self._ros2_output_lock:
+            self._set_ros2_output_armed_locked(False, reason="manual_prepare")
+            return self._controller.manual_prepare_all_motors()
+
+    def restore_manual_references_from_snapshot(
+        self, snapshot: dict
+    ) -> Tuple[bool, str]:
+        """从便携标定 JSON 恢复 P4 Manual RAM，并等待逐项读回核验。"""
+        return self._controller.restore_manual_references_from_snapshot(snapshot)
 
     def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
         return self._controller.load_calibration_snapshot(snapshot)

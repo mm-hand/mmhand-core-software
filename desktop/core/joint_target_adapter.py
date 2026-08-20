@@ -1,11 +1,11 @@
 """joint_target_adapter.py - MMHand Desktop 模块契约。
 
-职责：把不同遥操来源统一转换到 J00-J20 URDF 角度空间。
-线程：接收器可在 SDK/摄像头工作线程执行；纯映射和数学函数不创建线程。
-输入：手套、骨架或视觉关键点，以及活动 URDF/标定配置。
-输出：统一 J00-J20 目标、接收状态和可诊断质量信息。
-状态所有权：接收器拥有最近输入帧；角度映射和模型配置按只读快照使用。
-禁止依赖：禁止依赖 Qt/UI 或直接写串口，目标必须经过统一角度适配和后端门禁。
+职责：把外部关节目标统一转换到 J00-J20 的活动 URDF 角度空间。
+线程：纯映射和数学函数不创建线程，可由 ROS2 executor 或应用线程调用。
+输入：外部 ROS2 节点提供的关节角、活动 URDF/标定配置。
+输出：统一 J00-J20 目标、映射版本和可诊断质量信息。
+状态所有权：只读映射配置按缓存使用，不拥有设备状态或外部输入连接。
+禁止依赖：禁止依赖 Qt/UI、任何外部设备 SDK 或直接写串口。
 """
 
 from __future__ import annotations
@@ -138,10 +138,9 @@ def adapt_joint_targets(
     *,
     source_space: str,
 ) -> JointTargetAdaptation:
-    """Return a validated frame in active-URDF degrees.
+    """返回已校验、统一到活动 URDF 度数空间的一帧关节目标。
 
-    Dynamic Current Min/URDF Max limiting intentionally remains in
-    HandBackend; this adapter only resolves coordinate systems and units.
+    动态 Current Min/URDF Max 约束仍由 HandBackend 负责；此处只处理坐标空间与单位。
     """
     targets = _validated_targets(values)
     space = normalize_target_space(source_space)

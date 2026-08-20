@@ -43,7 +43,6 @@ inline constexpr uint32_t kFeedbackRunTimeoutMs = 8000;
 
 inline constexpr int32_t kUpperWorkspaceWarningCounts = 48;
 inline constexpr uint8_t kUpperWorkspaceWarningStableFrames = 3;
-inline constexpr int32_t kCollisionLutBoundaryToleranceCounts = 32;
 
 /**
  * 单腱关节角度 PID。2026-07-19 实测弹簧紧绳方向约有 1.5 度静差；
@@ -64,10 +63,12 @@ inline constexpr float kDualTendonIntegralLimit = 0.0f;
 inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
 inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
 /**
- * 双腱闭环允许越过标定 LUT 端点的实验裕量，单位为舵机 logical ABS counts。
- * 该裕量只放宽运行目标，不修改 LUT 样本；后续硬件绝对范围及已启用的 LOCK 限位仍会兜底。
+ * 双腱闭环允许越过 LUT 最小/最大样本的运行裕量，单位为 logical ABS counts。
+ * 仅双电机关节使用；单电机关节不做 LUT 端点钳位。
  */
-inline constexpr int32_t kDualTendonLutMarginCounts = 480;
+inline constexpr int32_t kDualTendonLutMarginCounts = 500;
+static_assert(kDualTendonLutMarginCounts >= 0,
+              "dual-tendon LUT margin must be non-negative");
 
 /** 碰撞检测状态机参数。 */
 inline constexpr float kCollisionMinErrorDeg = 4.0f;

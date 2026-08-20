@@ -433,11 +433,11 @@
       "code": "CTL-2006",
       "policy": {
         "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
-        "symbol": "actualAbsReachedDirectionalBoundary"
+        "symbol": "clampAbsToBoundary"
       },
       "caller": {
-        "file": "tasks/motion_control/MotionControlService.cpp",
-        "symbol": "actualAbsReachedDirectionalBoundary"
+        "file": "tasks/motion_control/DualTendonControl.cpp",
+        "symbol": "clampAbsToBoundary"
       },
       "event": {
         "file": "tasks/motion_control/MotionControlService.cpp",
@@ -445,7 +445,7 @@
       },
       "recovery": {
         "file": "tasks/motion_control/MotionControlService.cpp",
-        "symbol": "g_lutClampEventLatchedBitmap"
+        "symbol": "lutClampEventLatchedBitmap"
       },
       "registry_function": ""
     },

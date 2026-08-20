@@ -17,7 +17,8 @@ public:
 
     /**
      * 受控重启一条物理 BUS。调用方必须传入当前运动状态，本层同时执行
-     * 1000 ms 限频兜底；不会重启其他 BUS，也不会清除任何舵机逻辑状态。
+     * 1000 ms 限频兜底；不会重启其他 BUS。重启 BUS 上的旧在线和 logical
+     * ABS 信任会失效，必须由后续真实反馈及恢复事务重新建立。
      */
     bool restartBus(uint8_t busIndex, uint32_t nowMs, bool motionActive);
 

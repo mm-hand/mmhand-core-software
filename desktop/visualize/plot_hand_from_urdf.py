@@ -13,7 +13,6 @@ import argparse
 import os
 import re
 import sys
-import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -21,113 +20,17 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
 from matplotlib.widgets import Slider
 
-from desktop.paths import DEFAULT_URDF_PATH, HAND_GEO_PATH
-
-
-# 与 hku_hand_v2_urdf/config/joint_names_V2D18-URDF.yaml 中顺序一致（21 个）
-# 显示坐标系（左乘 T @ T_urdf）：
-# - Rx(-90°)：URDF +Z（掌心法向）→ 中间 +Y
-# - Ry(-90°)：URDF +X（手指大致方向）→ 显示 +Z（屏幕竖直向上）
-# - Rz(π)：将掌心法向从 +Y 翻成 -Y（垂直屏幕向外、朝向观察者），且保持 +Z（指尖向上）不变
-# 配合 view_init(elev≈5, azim≈90) 从 -Y 侧观察。
-def _make_display_transform() -> np.ndarray:
-    T = np.eye(4, dtype=float)
-    ax = -np.pi / 2
-    cx, sx = np.cos(ax), np.sin(ax)
-    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]])
-    ay = -np.pi / 2
-    cy, sy = np.cos(ay), np.sin(ay)
-    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]])
-    Rz_pi = np.array([[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]])
-    T[:3, :3] = Rz_pi @ Ry @ Rx
-    return T
-
-
-DISPLAY_TRANSFORM: np.ndarray = _make_display_transform()
+from desktop.paths import DEFAULT_URDF_PATH
+from desktop.core.angle_mapping import JOINT_SPECS
+from desktop.visualize.urdf_kinematics import (
+    DISPLAY_TRANSFORM,
+    UrdfKinematics,
+    apply_display_transform,
+)
 
 # 姿态窗口 Figure / Axes 统一底色（与 ui_app 中 Figure 一致）。mplot3d 的 ax.clear() 会把 axes 恢复成默认白底，必须与 fig.patch 一起设回，否则宽屏两侧「信箱」与绘图区会错色。
 POSE_VIEW_BG = "#e8eaee"
-JOINT_ORDER: List[str] = [
-    "1-1",
-    "1-2",
-    "1-3",
-    "1-4",
-    "2-1",
-    "2-2",
-    "2-3",
-    "2-4",
-    "3-1",
-    "3-2",
-    "3-3",
-    "3-4",
-    "4-1",
-    "4-2",
-    "4-3",
-    "4-4",
-    "5-1",
-    "5-2",
-    "5-3",
-    "5-4",
-    "5-5",
-]
-
-# 与当前硬件通道组顺序一致：pinky, ring, middle, index, thumb
-# URDF 手指编号：1=index, 2=middle, 3=ring, 4=pinky, 5=thumb
-URDF_PREFIX_BY_MAPPING_ROW: Tuple[str, ...] = ("4", "3", "2", "1", "5")
-
-_FALLBACK_ANGLE_MAPPING: List[List[int]] = [
-    [3, 0, 1, 2],
-    [4, 5, 6, 7],
-    [8, 9, 10, 11],
-    [12, 13, 14, 15],
-    [16, 17, 18, 19],
-]
-
-
-def load_angle_mapping_for_ui() -> List[List[int]]:
-    """从 config/hand_geo.json 读取 UI 使用的 angle_mapping。"""
-    try:
-        from desktop.core.hand_geometry import load_hand_geo
-
-        geo = load_hand_geo(str(HAND_GEO_PATH))
-        m = geo.get("angle_mapping")
-        if m and isinstance(m, list) and len(m) >= 5:
-            return [list(row) for row in m[:5]]
-    except Exception:
-        pass
-    return [list(row) for row in _FALLBACK_ANGLE_MAPPING]
-
-
-def motor_deg_to_urdf_joint_dict(
-    angles_deg: List[float],
-    *,
-    angle_mapping: Optional[List[List[int]]] = None,
-) -> Dict[str, float]:
-    """21 路电机角度（度）→ URDF 关节名 → 弧度（与 hand_geo / UI 映射一致）。
-
-    拇指 URDF 有 5 个关节：5-1..5-4 来自映射中 4 个电机；5-5 使用第 21 路（索引 20），
-    若不可用则与 5-4 相同。
-    """
-    from desktop.core.protocol import ENCODER_COUNT
-
-    m = angle_mapping if angle_mapping is not None else load_angle_mapping_for_ui()
-    deg = list(angles_deg)
-    while len(deg) < ENCODER_COUNT:
-        deg.append(0.0)
-    deg = deg[:ENCODER_COUNT]
-
-    out: Dict[str, float] = {}
-    for row_idx, motor_indices in enumerate(m):
-        prefix = URDF_PREFIX_BY_MAPPING_ROW[row_idx]
-        for ji, mi in enumerate(motor_indices):
-            name = f"{prefix}-{ji + 1}"
-            out[name] = float(np.deg2rad(deg[mi] if mi < len(deg) else 0.0))
-        if prefix == "5":
-            if len(deg) > 20:
-                out["5-5"] = float(np.deg2rad(deg[20]))
-            else:
-                out["5-5"] = out.get("5-4", 0.0)
-    return out
+JOINT_ORDER: List[str] = [JOINT_SPECS[index].urdf_joint_name for index in sorted(JOINT_SPECS)]
 
 
 def load_motor_degrees_from_text(path: str) -> List[float]:
@@ -159,141 +62,6 @@ def load_motor_degrees_from_text(path: str) -> List[float]:
         )
         nums = nums[:ENCODER_COUNT]
     return nums
-
-
-def _parse_floats(s: str) -> np.ndarray:
-    return np.array([float(x) for x in re.split(r"[\s,]+", s.strip()) if x], dtype=float)
-
-
-def _rpy_to_R(rpy: np.ndarray) -> np.ndarray:
-    roll, pitch, yaw = float(rpy[0]), float(rpy[1]), float(rpy[2])
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
-    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
-    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
-    return Rz @ Ry @ Rx
-
-
-def _homogeneous_from_origin(xyz: np.ndarray, rpy: np.ndarray) -> np.ndarray:
-    T = np.eye(4, dtype=float)
-    T[:3, :3] = _rpy_to_R(rpy)
-    T[:3, 3] = xyz
-    return T
-
-
-def _rodrigues(axis: np.ndarray, angle: float) -> np.ndarray:
-    v = np.asarray(axis, dtype=float).reshape(3)
-    n = np.linalg.norm(v)
-    if n < 1e-12:
-        return np.eye(3)
-    k = v / n
-    x, y, z = k
-    c, s = np.cos(angle), np.sin(angle)
-    K = np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
-    return np.eye(3) + s * K + (1 - c) * (K @ K)
-
-
-def _parse_origin(elem) -> Tuple[np.ndarray, np.ndarray]:
-    o = elem.find("origin")
-    if o is None:
-        return np.zeros(3), np.zeros(3)
-    xyz = _parse_floats(o.attrib.get("xyz", "0 0 0"))
-    rpy = _parse_floats(o.attrib.get("rpy", "0 0 0"))
-    return xyz, rpy
-
-
-class UrdfKinematics:
-    """仅解析 link/joint 树与关节限位，用于正向运动学。"""
-
-    def __init__(self, urdf_path: str):
-        self.urdf_path = os.path.abspath(urdf_path)
-        self.root_dir = os.path.dirname(self.urdf_path)
-        tree = ET.parse(self.urdf_path)
-        robot = tree.getroot()
-        self.link_names: List[str] = []
-        for lk in robot.findall("link"):
-            n = lk.attrib.get("name")
-            if n:
-                self.link_names.append(n)
-
-        self.joints: List[dict] = []
-        for j in robot.findall("joint"):
-            name = j.attrib.get("name", "")
-            jtype = j.attrib.get("type", "fixed")
-            parent_el = j.find("parent")
-            child_el = j.find("child")
-            if parent_el is None or child_el is None:
-                continue
-            parent = parent_el.attrib.get("link", "")
-            child = child_el.attrib.get("link", "")
-            xyz, rpy = _parse_origin(j)
-            axis_el = j.find("axis")
-            if axis_el is not None:
-                axis = _parse_floats(axis_el.attrib.get("xyz", "0 0 1"))
-            else:
-                axis = np.array([0.0, 0.0, 1.0])
-            lim = j.find("limit")
-            lower, upper = 0.0, 0.0
-            if lim is not None:
-                lower = float(lim.attrib.get("lower", "0"))
-                upper = float(lim.attrib.get("upper", "0"))
-            self.joints.append(
-                {
-                    "name": name,
-                    "type": jtype,
-                    "parent": parent,
-                    "child": child,
-                    "xyz": xyz,
-                    "rpy": rpy,
-                    "axis": axis,
-                    "limit": (lower, upper),
-                }
-            )
-
-        self._children: Dict[str, List[dict]] = {}
-        for j in self.joints:
-            p = j["parent"]
-            self._children.setdefault(p, []).append(j)
-
-        self.root_link = self._find_root()
-
-    def _find_root(self) -> str:
-        childs = {j["child"] for j in self.joints}
-        parents = {j["parent"] for j in self.joints}
-        roots = parents - childs
-        if not roots:
-            return self.link_names[0] if self.link_names else "base_link"
-        return sorted(roots)[0]
-
-    def joint_by_name(self) -> Dict[str, dict]:
-        return {j["name"]: j for j in self.joints if j["name"]}
-
-    def compute_link_poses(self, joint_positions: Dict[str, float]) -> Dict[str, np.ndarray]:
-        """返回每个 link 名称到 4x4 世界位姿（根连杆为原点）。"""
-        world: Dict[str, np.ndarray] = {self.root_link: np.eye(4)}
-
-        def visit(parent: str, T_world_parent: np.ndarray) -> None:
-            for j in self._children.get(parent, []):
-                T_origin = _homogeneous_from_origin(j["xyz"], j["rpy"])
-                if j["type"] == "fixed":
-                    T_pc = T_origin
-                elif j["type"] == "revolute":
-                    q = float(joint_positions.get(j["name"], 0.0))
-                    R = _rodrigues(j["axis"], q)
-                    T_rot = np.eye(4)
-                    T_rot[:3, :3] = R
-                    T_pc = T_origin @ T_rot
-                else:
-                    T_pc = T_origin
-                child = j["child"]
-                T_wc = T_world_parent @ T_pc
-                world[child] = T_wc
-                visit(child, T_wc)
-
-        visit(self.root_link, world[self.root_link])
-        return world
 
 
 def _default_joint_positions(kin: UrdfKinematics, mode: str) -> Dict[str, float]:

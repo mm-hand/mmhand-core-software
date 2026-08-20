@@ -3,7 +3,7 @@
 职责：分类控制输入并将连续运动轨迹降采样到记录频率。
 线程：采样入口可被通信线程调用，磁盘写入由记录器串行化；不得阻塞设备控制。
 输入：带双时间戳的类型化 Topic 样本、事件和会话配置。
-输出：CSV/HDF5/ROS bag 文件以及结构化写入状态。
+输出：CSV 文件以及结构化写入状态。
 状态所有权：记录会话拥有文件句柄、采样序号和降采样缓存，不拥有设备真值。
 禁止依赖：禁止依赖 UI 或改变控制状态，禁止在 writer 内重新解释协议业务语义。
 """
@@ -19,11 +19,11 @@ MOTION_RECORD_PERIOD_SECONDS = 0.05
 
 
 def classify_motion_source(source: str, live: bool) -> Tuple[str, str, bool]:
-    """把关节命令分类为来源、帧类型和是否允许Replay。
+    """把关节命令分类为来源、帧类型和是否允许 Replay。
 
-    ``live`` 表示调用方会持续刷新目标：遥操、视觉遥操和滑条拖动属于
-    continuous；按钮 Send/Open/Fist/Zero 属于 discrete。测试、保持和
-    Replay 自身仍可保存用于诊断，但不能再次作为 Replay 输入。
+    ``live`` 表示调用方会持续刷新目标：外部 ROS2 或滑条拖动属于 continuous；
+    按钮 Send/Open/Fist/Zero 属于 discrete。测试、保持和 Replay 自身仍可保存
+    用于诊断，但不能再次作为 Replay 输入。
     """
     text = str(source or "").strip()
     upper = text.upper()
@@ -33,16 +33,8 @@ def classify_motion_source(source: str, live: bool) -> Tuple[str, str, bool]:
         return "system_hold", "diagnostic", False
     if "TEST" in upper:
         return "test", "diagnostic", False
-    if "VISUAL RETARGETING" in upper:
-        source_kind = "visual_retargeting"
-    elif "MANUS" in upper:
-        source_kind = "teleop_manus"
-    elif "WUJI" in upper:
-        source_kind = "teleop_wuji"
-    elif "ROS2" in upper or "RAW_IK" in upper or "RAW IK" in upper:
-        source_kind = "teleop_ros2"
-    elif "TELEOP" in upper:
-        source_kind = "teleop"
+    if "ROS2" in upper or "RAW_IK" in upper or "RAW IK" in upper:
+        source_kind = "ros2_external"
     else:
         source_kind = "ui_feedback"
     return source_kind, "continuous" if live else "discrete", True

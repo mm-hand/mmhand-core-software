@@ -67,7 +67,7 @@ inline constexpr uint8_t CMD_MANUAL_ENCODER_SINGLE = 0xE8; ///< 写入单个 Jxx
 inline constexpr uint8_t CMD_ROPE_INIT = 0xE9; ///< 按 21 位关节掩码启动 P4 Rope Init
 inline constexpr uint8_t CMD_ANGLE_CTRL_MASKED = 0xEA; ///< 按关节掩码下发稀疏关节目标角
 inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位图清除关联关节 Auto/LUT
-inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 复位越过硬圈数阈值舵机并清除对应多圈快照
+inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
@@ -109,7 +109,7 @@ inline constexpr size_t kClearCalibrationScopePayloadBytes = 4;
 inline constexpr size_t kServoResetZeroPayloadBytes = 4;
 inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
 inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
-inline constexpr size_t kSerialRxBufferSize = 512;
+inline constexpr size_t kSerialRxBufferSize = 1024;
 inline constexpr int32_t kEncoderModulo = 16384;
 
 /** 查询固定命令 payload 长度；未知命令返回 SIZE_MAX。 */

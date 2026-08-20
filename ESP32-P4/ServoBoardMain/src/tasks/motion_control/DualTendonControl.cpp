@@ -13,6 +13,7 @@
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../modules/calibration/TendonCalibrationLut.h"
 #include "../../safety/policies/ControlInputSafetyPolicy.h"
+#include "../../safety/policies/ControlBoundarySafetyPolicy.h"
 #include "../../config/ControlConfig.h"
 #include "../../config/topology/HardwareMap.h"
 
@@ -281,22 +282,23 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         int32_t lutMinAbs = 0;
         int32_t lutMaxAbs = 0;
         if (!tendonCalibrationMotorAbsRange(g_jointCalibResult[jointIndex],
-                                            i,
-                                            &lutMinAbs,
-                                            &lutMaxAbs)) {
+                                             i,
+                                             &lutMinAbs,
+                                             &lutMaxAbs)) {
             return false;
         }
 
-        // LUT 样本仍负责生成理论电机参考；这里只给运行目标增加有限的端点余量，
-        // 用于验证“正常闭环预紧状态无法完全复现标定末端姿态”是否为剩余角度误差的主因。
-        // 最终命令仍会经过 Gateway 硬件范围检查，并在 LOCK 开启时受标定 ABS 限位约束。
+        // 双腱两台电机分别按自己的标定 LUT 建立边界，并向两端放宽 500 counts。
+        // 单电机控制不经过本分支，因此仍可越过单腱 LUT 端点。
         lutMinAbs -= kDualTendonLutMarginCounts;
         lutMaxAbs += kDualTendonLutMarginCounts;
-        int32_t boundedTarget = rawTarget;
-        if (boundedTarget < lutMinAbs) boundedTarget = lutMinAbs;
-        if (boundedTarget > lutMaxAbs) boundedTarget = lutMaxAbs;
-        outTargets->targetAbs[i] = boundedTarget;
-        outTargets->lutTargetClamped[i] = boundedTarget != rawTarget ? 1 : 0;
+        const p4::safety::AbsBoundaryClampDecision clampDecision =
+            p4::safety::clampAbsToBoundary(rawTarget, lutMinAbs, lutMaxAbs);
+        if (!clampDecision.valid) {
+            return false;
+        }
+        outTargets->targetAbs[i] = clampDecision.applied;
+        outTargets->lutTargetClamped[i] = clampDecision.clamped ? 1U : 0U;
         outTargets->lutMinAbs[i] = lutMinAbs;
         outTargets->lutMaxAbs[i] = lutMaxAbs;
         state.prevMotorRef[i] = outTargets->motorRef[i];

@@ -81,7 +81,7 @@
       "severity": "Blocking",
       "layer": "Actuator",
       "action_zh": "拒绝命令",
-      "recovery_zh": "执行 New Device Reset 并重标受影响关节。"
+      "recovery_zh": "等待 JSON 最近圈恢复；仍未恢复时勾选受影响关节并重新 Calibrate。"
     },
     {
       "rule_id": 1010,
@@ -95,11 +95,11 @@
     {
       "rule_id": 1011,
       "code": "ACT-1011",
-      "title_zh": "目标超出 logical/LUT 范围",
+      "title_zh": "目标超出 logical 范围",
       "severity": "Blocking",
       "layer": "Actuator",
       "action_zh": "拒绝命令",
-      "recovery_zh": "检查标定范围和上层角度钳位。"
+      "recovery_zh": "检查多圈恢复、逻辑偏移和上层角度换算。"
     },
     {
       "rule_id": 1012,
@@ -113,11 +113,11 @@
     {
       "rule_id": 1013,
       "code": "ACT-1013",
-      "title_zh": "舵机圈数达到 Reset Zero 阈值",
+      "title_zh": "舵机圈数达到安全阈值",
       "severity": "Emergency",
       "layer": "Actuator",
       "action_zh": "关闭扭矩",
-      "recovery_zh": "执行 Reset Zero 后重新标定。"
+      "recovery_zh": "勾选受影响关节并重新 Calibrate。"
     },
     {
       "rule_id": 2001,
@@ -167,11 +167,11 @@
     {
       "rule_id": 2006,
       "code": "CTL-2006",
-      "title_zh": "PID 输出触及 LUT 工作区边界",
+      "title_zh": "双腱 PID 输出触及 LUT 扩展边界",
       "severity": "Warning",
       "layer": "Control",
       "action_zh": "钳位到工作区边界",
-      "recovery_zh": "检查目标角、LUT 标定和绳路余量。"
+      "recovery_zh": "检查目标角、双腱 LUT 标定和 500 counts 运行裕量。"
     },
     {
       "rule_id": 2007,
@@ -270,7 +270,7 @@
       "severity": "Blocking",
       "layer": "System",
       "action_zh": "拒绝命令",
-      "recovery_zh": "执行 New Device Reset 后重试。"
+      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
     },
     {
       "rule_id": 3104,
@@ -333,7 +333,7 @@
       "severity": "Blocking",
       "layer": "System",
       "action_zh": "拒绝命令",
-      "recovery_zh": "执行 New Device Reset 并重标受影响关节。"
+      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
     },
     {
       "rule_id": 3205,
@@ -378,7 +378,7 @@
       "severity": "Blocking",
       "layer": "System",
       "action_zh": "转为不可控",
-      "recovery_zh": "执行 New Device Reset。"
+      "recovery_zh": "等待 JSON 最近圈恢复或重新 Calibrate。"
     },
     {
       "rule_id": 3303,
@@ -459,7 +459,7 @@
       "severity": "Emergency",
       "layer": "System",
       "action_zh": "转为不可控",
-      "recovery_zh": "执行 Reset Zero 并重新标定。"
+      "recovery_zh": "勾选受影响关节并重新 Calibrate。"
     },
     {
       "rule_id": 3401,
@@ -495,7 +495,7 @@
       "severity": "Blocking",
       "layer": "Calibration",
       "action_zh": "停止当前运动",
-      "recovery_zh": "先执行 New Device Reset。"
+      "recovery_zh": "先等待 JSON 最近圈恢复，或重新 Calibrate。"
     },
     {
       "rule_id": 3405,
@@ -585,7 +585,7 @@
       "severity": "Blocking",
       "layer": "Recovery",
       "action_zh": "转为不可控",
-      "recovery_zh": "执行 New Device Reset。"
+      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
     },
     {
       "rule_id": 4001,
@@ -887,11 +887,11 @@
     {
       "rule_id": 7003,
       "code": "PST-7003",
-      "title_zh": "Reset Zero 坐标写入 NVS 失败",
+      "title_zh": "标定前圈数复位写入 NVS 失败",
       "severity": "Emergency",
       "layer": "Persistence",
       "action_zh": "转为不可控",
-      "recovery_zh": "不要继续控制受影响舵机，重新执行 Reset Zero。"
+      "recovery_zh": "不要继续控制受影响舵机，重新 Calibrate。"
     },
     {
       "rule_id": 7004,
@@ -900,7 +900,7 @@
       "severity": "Warning",
       "layer": "Persistence",
       "action_zh": "转为不可控",
-      "recovery_zh": "重新写入 Manual 或执行 New Device Reset 建立新快照。"
+      "recovery_zh": "重新写入 Manual，并对受影响关节重新 Calibrate。"
     },
     {
       "rule_id": 8001,

@@ -55,6 +55,16 @@ def motor_mask_for_joint_mask(joint_mask: int) -> int:
     return motor_mask & VALID_MOTOR_MASK
 
 
+def joint_mask_for_motor_mask(motor_mask: int) -> int:
+    """根据正式电机映射返回受舵机坐标变化影响的全部关节。"""
+    motor_mask = int(motor_mask) & VALID_MOTOR_MASK
+    joint_mask = 0
+    for motor_idx, joint_idx in enumerate(MOTOR_TO_JOINT_INDEX[:MOTOR_COUNT]):
+        if (motor_mask & (1 << motor_idx)) and 0 <= int(joint_idx) < ENCODER_COUNT:
+            joint_mask |= 1 << int(joint_idx)
+    return joint_mask & _JOINT_MASK
+
+
 def _canonical_bytes(payload: dict) -> bytes:
     canonical = dict(payload)
     canonical.pop("integrity", None)
@@ -163,6 +173,189 @@ def _normalized_list(values, count: int, default):
     return normalized
 
 
+def _empty_v6_snapshot() -> dict:
+    """建立新的 V6 空快照；旧 V5 只归档，不把旧映射语义带入当前控制。"""
+    return {
+        "joint_calib_results": [None] * ENCODER_COUNT,
+        "motor_abs_limit_min": [0] * MOTOR_COUNT,
+        "motor_abs_limit_max": [0] * MOTOR_COUNT,
+        "motor_abs_limit_valid_bitmap": format_mask(0),
+        "motor_abs_limit_locked_bitmap": format_mask(0),
+        "manual_reference_min_raw": [0] * ENCODER_COUNT,
+        "manual_reference_max_raw": [0] * ENCODER_COUNT,
+        "manual_reference_valid_bitmap": format_mask(0),
+        "active_joint_mask": format_mask(0),
+        "active_motor_mask": format_mask(0),
+    }
+
+
+def _read_v6_or_archive_v5(target: Path) -> dict:
+    """读取 V6；遇到 V5 时先留档，再允许本次 Manual 写入创建干净 V6。"""
+    try:
+        return read_snapshot(target)
+    except CalibrationSnapshotError:
+        try:
+            legacy = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise
+        if (
+            legacy.get("format") != CALIBRATION_SNAPSHOT_FORMAT
+            or int(legacy.get("schema_version", 0) or 0) != 5
+        ):
+            raise
+        archive = target.with_name(
+            f"{target.stem}.legacy_v5_{time.strftime('%Y%m%d_%H%M%S')}"
+            f"{target.suffix}"
+        )
+        shutil.copy2(target, archive)
+        return _empty_v6_snapshot()
+
+
+def update_manual_snapshot(
+    path: Path | str,
+    *,
+    valid_mask: int,
+    min_raw: list[int],
+    max_raw: list[int],
+) -> dict:
+    """更新 V6 Manual 数据，并只失效端点真正变化关节的 Auto/LUT 与限位。"""
+    target = Path(path)
+    if target.exists():
+        payload = _read_v6_or_archive_v5(target)
+    else:
+        payload = _empty_v6_snapshot()
+    if len(min_raw) != ENCODER_COUNT or len(max_raw) != ENCODER_COUNT:
+        raise CalibrationSnapshotError("Manual endpoints must contain 21 entries")
+    valid_mask = int(valid_mask) & _JOINT_MASK
+    old_mask = parse_mask(payload.get("manual_reference_valid_bitmap"))
+    old_min = _normalized_list(
+        payload.get("manual_reference_min_raw"), ENCODER_COUNT, 0
+    )
+    old_max = _normalized_list(
+        payload.get("manual_reference_max_raw"), ENCODER_COUNT, 0
+    )
+    changed_mask = 0
+    for joint_idx in range(ENCODER_COUNT):
+        bit = 1 << joint_idx
+        old_valid = bool(old_mask & bit)
+        new_valid = bool(valid_mask & bit)
+        if (
+            old_valid != new_valid
+            or (new_valid and int(old_min[joint_idx]) != int(min_raw[joint_idx]))
+            or (new_valid and int(old_max[joint_idx]) != int(max_raw[joint_idx]))
+        ):
+            changed_mask |= bit
+
+    payload["manual_reference_min_raw"] = [int(value) for value in min_raw]
+    payload["manual_reference_max_raw"] = [int(value) for value in max_raw]
+    payload["manual_reference_valid_bitmap"] = format_mask(valid_mask)
+
+    results = _normalized_list(
+        payload.get("joint_calib_results"), ENCODER_COUNT, None
+    )
+    limit_valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
+    limit_locked = parse_mask(payload.get("motor_abs_limit_locked_bitmap"))
+    invalid_motor_mask = motor_mask_for_joint_mask(changed_mask)
+    for joint_idx in range(ENCODER_COUNT):
+        if changed_mask & (1 << joint_idx):
+            results[joint_idx] = None
+    payload["joint_calib_results"] = results
+    payload["motor_abs_limit_valid_bitmap"] = format_mask(
+        limit_valid & ~invalid_motor_mask
+    )
+    payload["motor_abs_limit_locked_bitmap"] = format_mask(
+        limit_locked & ~invalid_motor_mask
+    )
+
+    active_joint_mask = 0
+    for joint_idx, result in enumerate(results):
+        if isinstance(result, dict) and bool(result.get("success", False)):
+            motors = motor_mask_for_joint_mask(1 << joint_idx)
+            if motors and ((limit_valid & ~invalid_motor_mask) & motors) == motors:
+                active_joint_mask |= 1 << joint_idx
+    payload["active_joint_mask"] = format_mask(active_joint_mask)
+    payload["active_motor_mask"] = format_mask(
+        motor_mask_for_joint_mask(active_joint_mask)
+    )
+    payload["updated_joint_mask"] = format_mask(changed_mask)
+    payload["updated_motor_mask"] = format_mask(invalid_motor_mask)
+    payload["saved_at_host_time"] = time.time()
+    return atomic_write_snapshot(target, payload)
+
+
+def invalidate_calibration_snapshot_scope(
+    path: Path | str,
+    *,
+    motor_mask: int,
+    joint_mask: int,
+    reason: str,
+) -> str:
+    """原子失效指定 Auto/LUT/ABS Limit，同时保留独立的 Manual 端点。
+
+    Reset Zero 会改变舵机 logical ABS 坐标系，旧 Auto/LUT 不能继续加载；
+    Manual Min/Max 属于磁编码器原始端点，不依赖舵机圈数，必须继续保留。
+    """
+    target = Path(path)
+    if not target.exists():
+        return "no Calib Load snapshot"
+
+    motor_mask = int(motor_mask) & VALID_MOTOR_MASK
+    joint_mask = int(joint_mask) & _JOINT_MASK
+    reason_tag = str(reason).strip().lower() or "coordinate_reset"
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    archive = target.with_name(
+        f"{target.stem}.before_scoped_{reason_tag}_{stamp}{target.suffix}"
+    )
+
+    shutil.copy2(target, archive)
+    payload = read_snapshot(target)
+    results = _normalized_list(
+        payload.get("joint_calib_results"), ENCODER_COUNT, None
+    )
+    mins = _normalized_list(payload.get("motor_abs_limit_min"), MOTOR_COUNT, 0)
+    maxs = _normalized_list(payload.get("motor_abs_limit_max"), MOTOR_COUNT, 0)
+    valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
+    locked = parse_mask(payload.get("motor_abs_limit_locked_bitmap"))
+
+    for joint_idx in range(ENCODER_COUNT):
+        if joint_mask & (1 << joint_idx):
+            results[joint_idx] = None
+    for motor_idx in range(MOTOR_COUNT):
+        if motor_mask & (1 << motor_idx):
+            mins[motor_idx] = 0
+            maxs[motor_idx] = 0
+
+    payload["joint_calib_results"] = results
+    payload["motor_abs_limit_min"] = mins
+    payload["motor_abs_limit_max"] = maxs
+    payload["motor_abs_limit_valid_bitmap"] = format_mask(valid & ~motor_mask)
+    payload["motor_abs_limit_locked_bitmap"] = format_mask(locked & ~motor_mask)
+
+    remaining_joint_mask = 0
+    remaining_limit_mask = valid & ~motor_mask
+    for joint_idx, result in enumerate(results):
+        joint_motors = motor_mask_for_joint_mask(1 << joint_idx)
+        if (
+            isinstance(result, dict)
+            and bool(result.get("success", False))
+            and joint_motors
+            and (remaining_limit_mask & joint_motors) == joint_motors
+        ):
+            remaining_joint_mask |= 1 << joint_idx
+    payload["active_joint_mask"] = format_mask(remaining_joint_mask)
+    payload["active_motor_mask"] = format_mask(
+        motor_mask_for_joint_mask(remaining_joint_mask)
+    )
+    payload[f"scoped_{reason_tag}_invalidated_at"] = time.time()
+    payload[f"scoped_{reason_tag}_motor_mask"] = format_mask(motor_mask)
+    payload[f"scoped_{reason_tag}_joint_mask"] = format_mask(joint_mask)
+    atomic_write_snapshot(target, payload, backup=False)
+    return (
+        f"snapshot backed up as {archive.name}; Manual endpoints preserved; "
+        f"remaining Auto joints={remaining_joint_mask.bit_count()}"
+    )
+
+
 def merge_snapshot(
     previous: dict | None,
     current: dict,
@@ -179,16 +372,7 @@ def merge_snapshot(
         validate_snapshot(previous)
         merged = json.loads(json.dumps(previous, ensure_ascii=False))
     else:
-        merged = {
-            "joint_calib_results": [None] * ENCODER_COUNT,
-            "motor_abs_limit_min": [0] * MOTOR_COUNT,
-            "motor_abs_limit_max": [0] * MOTOR_COUNT,
-            "motor_abs_limit_valid_bitmap": format_mask(0),
-            "motor_abs_limit_locked_bitmap": format_mask(0),
-            "manual_reference_min_raw": [0] * ENCODER_COUNT,
-            "manual_reference_max_raw": [0] * ENCODER_COUNT,
-            "manual_reference_valid_bitmap": format_mask(0),
-        }
+        merged = _empty_v6_snapshot()
 
     current_results = _normalized_list(
         current.get("joint_calib_results"), ENCODER_COUNT, None
@@ -235,7 +419,7 @@ def merge_snapshot(
     merged["motor_abs_limit_valid_bitmap"] = format_mask(merged_valid)
     merged["motor_abs_limit_locked_bitmap"] = format_mask(merged_locked)
 
-    # Manual 端点来自 P4 Flash 的实时读回。只覆盖 P4 明确报告有效的条目，
+    # Manual 端点来自 P4 RAM 的实时读回。只覆盖 P4 明确报告有效的条目，
     # 避免未连接关节的默认 0 污染已有便携快照。
     current_manual_mask = parse_mask(current.get("manual_reference_valid_bitmap"))
     merged_manual_mask = parse_mask(merged.get("manual_reference_valid_bitmap"))

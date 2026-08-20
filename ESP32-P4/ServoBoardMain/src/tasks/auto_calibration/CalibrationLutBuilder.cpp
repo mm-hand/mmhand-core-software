@@ -116,7 +116,7 @@ static float tendonFitSampleAngleDeg(uint8_t jointIndex,
 }
 
 // 在原始样本中按角度线性插值。目标落在 Auto 实测区外但仍位于 URDF
-// 工作区时，沿首末两点斜率外推；最终命令仍受 LUT ABS 边界和硬件边界保护。
+// 工作区时，沿首末两点斜率外推；运行期只保留硬件范围和显式 LOCK 保护。
 static bool interpolateTendonFitAbs(float targetDeg,
                                   const float* sampleDeg,
                                   const int32_t* sampleAbs,
@@ -231,10 +231,17 @@ bool buildTendonLutFromRawSamples(uint8_t jointIndex,
     const float urdfMinDeg = kUrdfJointLimits[jointIndex].minDeg;
     const float urdfMaxDeg = kUrdfJointLimits[jointIndex].maxDeg;
     const float urdfSpanDeg = urdfMaxDeg - urdfMinDeg;
-    uint8_t lutCount =
-        (uint8_t)ceilf(urdfSpanDeg / kTendonFitSampleStepDeg) + 1;
+    // LUT 横轴保持真正的 5° 固定步长；若总行程不是 5° 的整数倍，
+    // 额外保留 URDF Max 作为最后一点，不能把余数均摊到前面所有样本。
+    const uint8_t fullStepCount =
+        (uint8_t)floorf((urdfSpanDeg + 0.001f) / kTendonFitSampleStepDeg);
+    const float remainderDeg =
+        urdfSpanDeg - (float)fullStepCount * kTendonFitSampleStepDeg;
+    const bool hasRemainder = remainderDeg > 0.001f;
+    const uint8_t lutCount =
+        (uint8_t)(fullStepCount + 1U + (hasRemainder ? 1U : 0U));
     if (lutCount > TENDON_LUT_MAX_SAMPLES) {
-        lutCount = TENDON_LUT_MAX_SAMPLES;
+        return false;
     }
     if (lutCount < 3) {
         return false;
@@ -245,13 +252,14 @@ bool buildTendonLutFromRawSamples(uint8_t jointIndex,
         result->tendonLutMotor[1] = secondaryMotor;
     }
     result->tendonLutAngleStartDeg = urdfMinDeg;
-    // V4 LUT 固定覆盖完整 URDF 区间；Auto 实测区外使用端部斜率外推。
-    result->tendonLutAngleStepDeg =
-        urdfSpanDeg / (float)(lutCount - 1);
+    // 该字段保存标称步长；最后一段不足 5° 时由 currentMaxDeg 标识真实终点。
+    // 保持现有快照结构不变，旧版均匀步长快照仍可继续加载。
+    result->tendonLutAngleStepDeg = kTendonFitSampleStepDeg;
     for (uint8_t i = 0; i < lutCount; i++) {
-        const float targetDeg =
-            result->tendonLutAngleStartDeg +
-            result->tendonLutAngleStepDeg * (float)i;
+        const bool finalSample = i == (uint8_t)(lutCount - 1U);
+        const float targetDeg = finalSample
+            ? urdfMaxDeg
+            : urdfMinDeg + kTendonFitSampleStepDeg * (float)i;
         if (!interpolateTendonFitAbs(targetDeg,
                                      sampleDeg,
                                      primaryAbs,

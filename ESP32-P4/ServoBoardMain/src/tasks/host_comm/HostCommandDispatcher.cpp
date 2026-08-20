@@ -22,6 +22,7 @@
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../config/topology/HardwareMap.h"
+#include "../../config/ServoConfig.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/ports/SystemEventPort.h"
@@ -52,10 +53,10 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     }
 
     const uint8_t cmd = frame[0];
+    const uint32_t nowMs = p4::platform::time::monotonicMillis();
     // 每一帧通过结构校验的上位机命令都刷新心跳，不要求它一定是运动命令。
     // SystemStateTask 在另一核心读取该字段，统一走原子接口避免租约边界读到撕裂值。
-    sharedAtomicStore(&sharedData->host_rx_heartbeat_ms,
-                      p4::platform::time::monotonicMillis());
+    sharedAtomicStore(&sharedData->host_rx_heartbeat_ms, nowMs);
 
     if (cmd == CMD_HOST_HEARTBEAT)
     {
@@ -93,7 +94,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_INVALID_DATA);
         } else {
-            setHostTaskDiagSubscribed(enabled != 0);
+            setHostTaskDiagSubscribed(enabled != 0, nowMs);
             sendProtoAckPacket(CMD_TASK_DIAG_SUBSCRIBE,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_OK);
@@ -346,12 +347,12 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 sharedAtomicLoad(&sharedData->servo_recovery_failed_bitmap) &
                 validMotorChannelMask();
             // 自动恢复仍在重试时不能插入人工 turn0，避免两条恢复路径竞争。
-            // 已经明确失败的舵机必须允许 New Device Reset 接管，否则
+            // 已经明确失败的舵机必须允许上位机 JSON 恢复接管，否则
             // recoveryFailed 会把唯一的人工恢复入口永久锁死。
             const uint32_t recoveryBusyMask =
                 recoveryPendingMask & ~recoveryFailedMask;
             int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
-            // 局部 New Device 只处理“在线、多圈模式已配置、当前确实 Unknown”
+            // JSON 局部恢复只处理“在线、多圈模式已配置、当前确实 Unknown”
             // 的舵机；自动恢复失败允许人工接管，但正常可信舵机仍不能重定义 turn0。
             if (motorMask == 0 ||
                 (motorMask & ~unknownMask) != 0 ||
@@ -723,7 +724,12 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         if (motionActive) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (action == 0) {
+#if P4_FLASH_PERSISTENCE_ENABLE
             const bool manualCleared = manualCalibrationNvsClear();
+#else
+            // Flash 关闭时只清当前会话 RAM；上位机负责同步删除 JSON 条目。
+            const bool manualCleared = true;
+#endif
             const SafetyRuleId manualClearRule =
                 p4::safety::persistenceManualWriteFailureRule(manualCleared);
             if (manualClearRule != SafetyRuleId::None) {
@@ -862,9 +868,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     {
         const uint32_t requestedMask =
             readU32BigEndian(frame + 1) & validMotorChannelMask();
-        const uint32_t overflowMask =
-            sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap) &
-            validMotorChannelMask();
         const uint32_t onlineMask =
             sharedAtomicLoad(&sharedData->servo_online_bitmap) &
             validMotorChannelMask();
@@ -875,7 +878,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sharedData->system_state == SYSTEM_STATE_READY ||
             sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED;
         if (requestedMask == 0 ||
-            (requestedMask & ~overflowMask) != 0 ||
             (requestedMask & ~onlineMask) != 0) {
             status = PROTO_ACK_STATUS_INVALID_DATA;
         } else if (!safeState ||
@@ -883,9 +885,11 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                    sharedData->servo_target_owner !=
                        SERVO_TARGET_OWNER_NONE) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+#if P4_FLASH_PERSISTENCE_ENABLE
         } else if (!sharedData->multiturn_nvs_enabled ||
                    !sharedData->multiturnNvsSaveQueue.valid()) {
             status = PROTO_ACK_STATUS_NVS_FAILURE;
+#endif
         } else if (sharedAtomicLoad(
                        &sharedData->servo_reset_zero_status) ==
                    SERVO_RESET_ZERO_STATUS_RUNNING) {

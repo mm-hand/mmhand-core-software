@@ -38,8 +38,8 @@ static_assert(
     CAN_TAC_SUMMARY_DLC == (1 + CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
     "Tactile DLC must be seq(1) + payload bytes.");
 static_assert(
-    CAN_TAC_SUMMARY_PACKET_BYTES <= (CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
-    "Tactile summary payload plus CRC budget too small.");
+    CAN_TAC_SUMMARY_PACKET_BYTES == (CAN_TAC_SUMMARY_FRAME_COUNT * CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME),
+    "Tactile summary payload, valid mask and CRC must fill seven frames exactly.");
 static_assert(
     CAN_TAC_FULL_DLC == (1 + CAN_TAC_FULL_PAYLOAD_PER_FRAME),
     "Tactile full DLC must be seq(1) + payload bytes.");
@@ -67,7 +67,7 @@ typedef struct {
     uint8_t active;                              ///< 是否正在重组触觉摘要。
     uint8_t seq;                                 ///< S3 摘要批次序号。
     uint8_t frameMask;                           ///< 七个摘要帧位图。
-    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES];///< 45 字节摘要+CRC16。
+    uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES];///< 45字节摘要+2字节有效位图+CRC16。
     uint32_t firstFrameTimeMs;                   ///< 首帧时间。
 } TactileReassemblyState;
 
@@ -495,12 +495,12 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                         tactileState.frameMask,
                         kAllTactileFramesMask)) {
                     const uint16_t expectedCrc =
-                        ((uint16_t)tactileState.packet[TACTILE_SUMMARY_BYTES] << 8) |
-                        tactileState.packet[TACTILE_SUMMARY_BYTES + 1];
+                        ((uint16_t)tactileState.packet[CAN_TAC_SUMMARY_CRC_INPUT_BYTES] << 8) |
+                        tactileState.packet[CAN_TAC_SUMMARY_CRC_INPUT_BYTES + 1];
                     const uint16_t actualCrc =
                         p4::integrity::crc16CcittFalse(
                             tactileState.packet,
-                            TACTILE_SUMMARY_BYTES);
+                            CAN_TAC_SUMMARY_CRC_INPUT_BYTES);
                     if (!p4::safety::communicationCrcValid(
                             true, actualCrc, expectedCrc)) {
                         reportCommunicationRule(
@@ -517,6 +517,10 @@ bool stepS3CanRxService(SystemRuntimeContext* sharedData, uint32_t nowMs)
 
                     static RemoteTactileData_t tactileData;
                     memcpy(latestTactileData.values, tactileState.packet, sizeof(latestTactileData.values));
+                    // 摘要值为零不能代表模块掉线，在线判断只使用S3 SPI读取有效位图。
+                    latestTactileData.moduleValidMask =
+                        ((uint16_t)tactileState.packet[TACTILE_SUMMARY_BYTES] << 8) |
+                        tactileState.packet[TACTILE_SUMMARY_BYTES + 1];
                     latestTactileData.seq = tactileState.seq;
                     latestTactileData.timestamp = nowMs;
                     latestTactileData.isValid = true;

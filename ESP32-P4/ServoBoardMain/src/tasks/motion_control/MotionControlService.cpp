@@ -16,7 +16,6 @@
 #include "ControlCommandSnapshotReader.h"
 #include "MotionCompletionEvaluator.h"
 #include "ServoTargetBuilder.h"
-#include "SingleTendonWorkspace.h"
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
@@ -45,9 +44,6 @@ static FeedbackCollisionGuard g_feedbackCollisionGuard;
 
 static uint32_t g_controlPidDiagLastLogMs = 0;
 static uint8_t g_controlPidDiagNextJoint = 0;
-// LUT 钳位事件按关节做边沿锁存；持续贴边期间只保留第一条证据。
-static uint32_t g_lutClampEventLatchedBitmap = 0;
-static uint32_t g_lutClampObservedBitmap = 0;
 
 /**
  * 控制服务跨周期状态。所有成员只由 MotionControlTask 访问，固定放在静态区，
@@ -66,7 +62,6 @@ struct ControlServiceRuntime {
     uint8_t overloadHighCount[SERVO_TOTAL_NUM];
     int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS];
     bool feedbackCollisionPidPushActive[ENCODER_TOTAL_NUM];
-    bool feedbackCollisionWorkspaceBoundaryReached[ENCODER_TOTAL_NUM];
     // 上一控制周期采用的碰撞窗口档位；单电机按物理方向更新，双电机固定 RELEASE。
     uint8_t feedbackCollisionDriveMotionMode[ENCODER_TOTAL_NUM];
     uint32_t lastFeedbackCollisionSensorTimestamp;
@@ -74,6 +69,9 @@ struct ControlServiceRuntime {
     uint32_t upperWorkspaceWarningBitmap;
     // 目标钳位按关节锁存；目标回到动态范围后清除，下一次越界才重新上报。
     uint32_t targetClampEventLatchedBitmap;
+    // 双腱 LUT 钳位同样按关节做边沿锁存，避免贴边时每 10 ms 重复上报。
+    uint32_t lutClampEventLatchedBitmap;
+    uint32_t lutClampObservedBitmap;
     uint32_t lastOverloadFaultResetToken;
     ControlCommandSnapshot_t commandSnapshot;
     uint32_t lastPidComputeMs;
@@ -134,31 +132,29 @@ static void clearRecoveredControlRule(SafetyRuleId ruleId,
     }
 }
 
-/** 记录本周期发生的 LUT 钳位；同一关节离开边界后才会重新上报。 */
-static void noteLutClampEvent(SystemRuntimeContext* sharedData,
-                              const ServiceOutputPort& output,
-                              uint8_t jointIndex,
-                              uint8_t motorChannel,
-                              int32_t requestedAbs,
-                              int32_t appliedAbs)
+/** 记录双腱 LUT 钳位；持续贴边只记录一次，离开边界后允许再次触发。 */
+static void noteDualTendonLutClamp(SystemRuntimeContext* sharedData,
+                                  uint8_t jointIndex,
+                                  uint8_t motorChannel,
+                                  int32_t requestedAbs,
+                                  int32_t appliedAbs)
 {
-    if (jointIndex >= ENCODER_TOTAL_NUM) {
+    if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
         return;
     }
     const uint32_t bit = 1UL << jointIndex;
-    g_lutClampObservedBitmap |= bit;
-    if ((g_lutClampEventLatchedBitmap & bit) != 0) {
+    g_controlRuntime.lutClampObservedBitmap |= bit;
+    if ((g_controlRuntime.lutClampEventLatchedBitmap & bit) != 0) {
         return;
     }
-    g_lutClampEventLatchedBitmap |= bit;
-    recordControlRuleEvent(output,
-                           sharedAtomicLoad(&sharedData->system_state),
-                           sharedAtomicLoad(&sharedData->servo_target_owner),
-                           SafetyRuleId::ControlLutBoundaryClamp,
-                           jointIndex,
-                           motorChannel,
-                           requestedAbs,
-                           appliedAbs);
+    g_controlRuntime.lutClampEventLatchedBitmap |= bit;
+    p4::safety::reportSafetyRuleEvent(
+        sharedData,
+        SafetyRuleId::ControlLutBoundaryClamp,
+        p4::safety::makeSafetyEventEvidence(jointIndex,
+                                            motorChannel,
+                                            requestedAbs,
+                                            appliedAbs));
 }
 
 static bool shouldLogControlPidDiag(uint8_t jointIndex,
@@ -207,8 +203,6 @@ static bool shouldLogControlPidDiag(uint8_t jointIndex,
     return false;
 }
 
-// 判断舵机实际 ABS 是否已抵达当前推进方向的 LUT 边界。
-// pushDeltaAbs 只表示正负方向，是否抵边始终由 actualAbs 与 LUT Min/Max 决定。
 // 协议字段使用 int16，保留 +32767 作为哨兵/无效值。
 static int16_t clampMappedCountForProtocol(int32_t value)
 {
@@ -346,7 +340,6 @@ static void publishFeedbackCollisionState(SystemRuntimeContext* sharedData,
 
 static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        SystemRuntimeContext* sharedData,
-                                       const ServiceOutputPort& output,
                                        uint32_t nowMs,
                                        uint8_t jointIndex,
                                        float qRefDeg,
@@ -357,13 +350,11 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        bool telemetryFresh,
                                        uint16_t speed,
                                        uint8_t acc,
-                                       bool* outPidPushActive,
-                                       bool* outWorkspaceBoundaryReached)
+                                       bool* outPidPushActive)
 {
     // 将逻辑关节目标转换成两个拮抗电机目标，并返回下一周期碰撞检测需要的
-    // PID 推进与“实际抵达 LUT 边界”证据；用户 LOCK 限位仍在最后独立执行。
+    // PID 推进证据；双腱 LUT 先按扩展边界钳位，用户 LOCK 再独立执行。
     if (outPidPushActive) *outPidPushActive = false;
-    if (outWorkspaceBoundaryReached) *outWorkspaceBoundaryReached = false;
     if (!batch || !sharedData) {
         return 0;
     }
@@ -381,11 +372,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     }
 
     JointActuatorRuntimeTarget runtimeTargets[MAX_JOINT_ACTUATORS];
-    uint8_t actualBoundaryReached[2] = {0, 0};
     bool anyLutTargetClamped = false;
-    uint8_t firstClampedMotor = 0xFF;
-    int32_t firstRequestedAbs = 0;
-    int32_t firstAppliedAbs = 0;
     uint8_t targetCount = 0;
     // 双腱两台电机始终反向运动，不能用其中一台的物理方向代表整个关节。
     // 双电机关节统一锁定为 RELEASE 档，即固定使用 400 ms / 0.4 度阈值。
@@ -425,38 +412,24 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         target.targetAbs = clampServoPosByMotorAbsLimit(sharedData,
                                                         motorChannel,
                                                         tendonTargets.targetAbs[i]);
-        if (tendonTargets.lutTargetClamped[i] != 0 && !anyLutTargetClamped) {
+        if (tendonTargets.lutTargetClamped[i] != 0) {
             anyLutTargetClamped = true;
-            firstClampedMotor = motorChannel;
-            firstRequestedAbs = tendonTargets.rawTargetAbs[i];
-            firstAppliedAbs = tendonTargets.targetAbs[i];
+            noteDualTendonLutClamp(sharedData,
+                                   jointIndex,
+                                   motorChannel,
+                                   tendonTargets.rawTargetAbs[i],
+                                   tendonTargets.targetAbs[i]);
         }
         if (outPidPushActive &&
+            tendonTargets.lutTargetClamped[i] == 0 &&
             fabsf(tendonTargets.pidCorrection[i]) >= 1.0f &&
             tendonTargets.pidCorrection[i] * tendonTargets.motorErr[i] > 0.0f) {
             *outPidPushActive = true;
         }
-        actualBoundaryReached[i] = p4::safety::actualAbsReachedDirectionalBoundary(
-            servoData.servoAngles[motorChannel],
-            tendonTargets.rawTargetAbs[i] -
-                servoData.servoAngles[motorChannel],
-            tendonTargets.lutMinAbs[i],
-            tendonTargets.lutMaxAbs[i],
-            kCollisionLutBoundaryToleranceCounts) ? 1 : 0;
-        // 双电机任意一侧实际抵达其推进方向边界时，才认为关节工作空间耗尽。
-        // “PID 原始目标被 LUT 钳位”本身不再禁止碰撞 HOLD。
-        if (outWorkspaceBoundaryReached && actualBoundaryReached[i] != 0) {
-            *outWorkspaceBoundaryReached = true;
-        }
     }
-
-    if (anyLutTargetClamped) {
-        noteLutClampEvent(sharedData,
-                          output,
-                          jointIndex,
-                          firstClampedMotor,
-                          firstRequestedAbs,
-                          firstAppliedAbs);
+    if (outPidPushActive && anyLutTargetClamped) {
+        // 实际下发目标已无法继续沿 PID 方向推进，不能把 LUT 边界误判成外物碰撞。
+        *outPidPushActive = false;
     }
 
     if (logPidDiag && targetCount == 2) {
@@ -472,8 +445,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         FW_LOG_INFO_PRINTF(
             "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u br=%u ld=%d s=%d k=%u "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u br=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d k=%u "
             "tel=%u\r\n",
             (unsigned long)diagNowMs,
             (unsigned)jointIndex,
@@ -490,7 +463,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (long)tendonTargets.lutMinAbs[0],
             (long)tendonTargets.lutMaxAbs[0],
             (unsigned)tendonTargets.lutTargetClamped[0],
-            (unsigned)actualBoundaryReached[0],
             (int)load0,
             (int)speed0,
             (unsigned)((lockedBitmap & (1UL << m0)) != 0),
@@ -504,7 +476,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (long)tendonTargets.lutMinAbs[1],
             (long)tendonTargets.lutMaxAbs[1],
             (unsigned)tendonTargets.lutTargetClamped[1],
-            (unsigned)actualBoundaryReached[1],
             (int)load1,
             (int)speed1,
             (unsigned)((lockedBitmap & (1UL << m1)) != 0),
@@ -575,8 +546,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& overloadHighCount = runtime.overloadHighCount;
     auto& feedbackCollisionHoldAbs = runtime.feedbackCollisionHoldAbs;
     auto& feedbackCollisionPidPushActive = runtime.feedbackCollisionPidPushActive;
-    auto& feedbackCollisionWorkspaceBoundaryReached =
-        runtime.feedbackCollisionWorkspaceBoundaryReached;
     auto& feedbackCollisionDriveMotionMode =
         runtime.feedbackCollisionDriveMotionMode;
     auto& lastFeedbackCollisionSensorTimestamp =
@@ -609,6 +578,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             // 命令互斥锁短暂繁忙时跳过本帧；任务层仍保持固定周期。
             return false;
         }
+        runtime.lutClampObservedBitmap = 0;
 
         const uint32_t motorCommandToken = commandSnapshot.motorCommandToken;
         if (motorCommandToken != lastMotorCommandToken)
@@ -1022,8 +992,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 input.feedbackDeg = magAngles[jointIndex];
                 input.pidPushActive =
                     feedbackCollisionPidPushActive[jointIndex];
-                input.workspaceBoundaryReached =
-                    feedbackCollisionWorkspaceBoundaryReached[jointIndex];
                 input.driveMotionMode =
                     feedbackCollisionDriveMotionMode[jointIndex];
                 collisionResult =
@@ -1144,7 +1112,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             }
             if (!contextActive) {
                 feedbackCollisionPidPushActive[jointIndex] = false;
-                feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
                 feedbackCollisionDriveMotionMode[jointIndex] =
                     FEEDBACK_COLLISION_MOTION_RELEASE;
             }
@@ -1253,8 +1220,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             }
             else
             {
-            // 每个控制周期重新收集仍处于 LUT 钳位的关节，周期结束后解除已离边界的锁存。
-            g_lutClampObservedBitmap = 0;
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++)
             {
                 // 关节模式会对每个关节独立决定：保持、使用双腱控制或输出普通 PID 目标。
@@ -1307,7 +1272,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 const bool jointActive =
                     (feedbackCommandJointMask & (1UL << jointIndex)) != 0;
                 feedbackCollisionPidPushActive[jointIndex] = false;
-                feedbackCollisionWorkspaceBoundaryReached[jointIndex] = false;
                 feedbackCollisionDriveMotionMode[jointIndex] =
                     FEEDBACK_COLLISION_MOTION_RELEASE;
 
@@ -1385,7 +1349,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     const uint8_t appended =
                         appendDualTendonTargets(&targetBatch,
                                                 sharedData,
-                                                output,
                                                 nowMs,
                                                 jointIndex,
                                                 localTargets[jointIndex],
@@ -1396,8 +1359,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                                 telemetryFresh,
                                                 kFeedbackServoSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT,
-                                                &feedbackCollisionPidPushActive[jointIndex],
-                                                &feedbackCollisionWorkspaceBoundaryReached[jointIndex]);
+                                                &feedbackCollisionPidPushActive[jointIndex]);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                        SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1406,12 +1368,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 }
 
                 if (jointActive) {
-                    // 普通单电机关节：先把腱绳空间 PID 结果转回电机 raw ABS，
-                    // 再强制限制到 LUT 实测工作空间，最后应用用户 LOCK 限位。
-                    bool lutWorkspaceValid = false;
-                    bool pidTargetLutClamped = false;
-                    int32_t lutWorkspaceMinAbs = 0;
-                    int32_t lutWorkspaceMaxAbs = 0;
+                    // 普通单电机关节：把腱绳空间 PID 结果转回电机 raw ABS。
+                    // LUT 不再钳位紧绳端或松绳端，只保留用户主动开启的 LOCK。
                     int32_t actualMotorAbs = targetPos;
                     int32_t rawPidTargetAbs = targetPos;
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
@@ -1419,34 +1377,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         actualMotorAbs = servoData.servoAngles[motorCh];
                         rawPidTargetAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
-                        int32_t lutClampedTarget = rawPidTargetAbs;
-                        lutWorkspaceValid =
-                            p4::control::clampSingleTendonTargetByLut(
-                            jointIndex,
-                            motorCh,
-                            rawPidTargetAbs,
-                            &lutClampedTarget,
-                            &lutWorkspaceMinAbs,
-                            &lutWorkspaceMaxAbs);
-                        if (lutWorkspaceValid) {
-                            pidTargetLutClamped =
-                                lutClampedTarget != rawPidTargetAbs;
-                            if (pidTargetLutClamped) {
-                                noteLutClampEvent(sharedData,
-                                                  output,
-                                                  jointIndex,
-                                                  motorCh,
-                                                  rawPidTargetAbs,
-                                                  lutClampedTarget);
-                            }
-                            targetPos = clampServoPosByMotorAbsLimit(sharedData,
-                                                                     motorCh,
-                                                                     lutClampedTarget);
-                        } else {
-                            // 标定结果或电机映射异常时保持当前位置，不能绕过
-                            // LUT 工作空间继续发送位置式 PID 输出。
-                            targetPos = servoData.servoAngles[motorCh];
-                        }
+                        targetPos = clampServoPosByMotorAbsLimit(sharedData,
+                                                                 motorCh,
+                                                                 rawPidTargetAbs);
                     } else {
                         targetPos = outPulsesTendon[jointIndex];
                     }
@@ -1467,19 +1400,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         feedbackCollisionDriveMotionMode[jointIndex] =
                             FEEDBACK_COLLISION_MOTION_RELEASE;
                     }
-                    // PID 目标是否被 LUT 钳位只用于诊断。碰撞检测必须读取当前实际 ABS，
-                    // 并仅在实际位置已进入本次推进方向的 LUT 边界容差时排除 HOLD。
-                    const bool actualBoundaryReached =
-                        lutWorkspaceValid &&
-                        p4::safety::actualAbsReachedDirectionalBoundary(
-                            actualMotorAbs,
-                            rawPidTargetAbs - actualMotorAbs,
-                            lutWorkspaceMinAbs,
-                            lutWorkspaceMaxAbs,
-                            kCollisionLutBoundaryToleranceCounts);
-                    feedbackCollisionWorkspaceBoundaryReached[jointIndex] =
-                        !lutWorkspaceValid || actualBoundaryReached;
-
                     if (feedbackOutputState && shouldLogControlPidDiag(
                             jointIndex,
                             nowMs,
@@ -1512,8 +1432,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                             const JointCalibrationResult& calibration =
                                 g_jointCalibResult[jointIndex];
-                            // 单环 PID 仍使用角度误差；这里插值得到的模型位置只用于
-                            // 诊断，LUT 的 ABS 最小/最大值已在上方参与最终硬钳位。
+                            // 单环 PID 仍使用角度误差；这里插值得到的模型位置只用于诊断。
                             lutValid = calibration.tendonLutMotor[0] ==
                                            (uint8_t)jointMotorCh &&
                                 interpolateTendonCalibrationMotorAbs(
@@ -1531,8 +1450,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
                             "out=%.2f abs=%ld cmd=%d lead=%ld load=%d mag=%d speed=%d "
                             "lock=%u telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
-                            "lutDelta=%.2f rawTarget=%ld lutRange=[%ld,%ld] "
-                            "lutClamp=%u boundary=%u\r\n",
+                            "lutDelta=%.2f rawTarget=%ld\r\n",
                             (unsigned long)nowMs,
                             (unsigned)jointIndex,
                             jointMotorCh,
@@ -1552,11 +1470,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (double)lutRefAbs,
                             (double)lutFbAbs,
                             (double)(lutRefAbs - lutFbAbs),
-                            (long)rawPidTargetAbs,
-                            (long)lutWorkspaceMinAbs,
-                            (long)lutWorkspaceMaxAbs,
-                            pidTargetLutClamped ? 1U : 0U,
-                            actualBoundaryReached ? 1U : 0U);
+                            (long)rawPidTargetAbs);
                     }
                 }
 
@@ -1571,13 +1485,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                                SERVO_TARGET_ACC_DEFAULT);
                 }
             }
-            const uint32_t recoveredLutClampMask =
-                g_lutClampEventLatchedBitmap & ~g_lutClampObservedBitmap;
-            clearRecoveredControlRule(SafetyRuleId::ControlLutBoundaryClamp,
-                                      recoveredLutClampMask);
-            g_lutClampEventLatchedBitmap &= g_lutClampObservedBitmap;
             }
         }
+
+        const uint32_t recoveredLutClampMask =
+            runtime.lutClampEventLatchedBitmap & ~runtime.lutClampObservedBitmap;
+        clearRecoveredControlRule(SafetyRuleId::ControlLutBoundaryClamp,
+                                  recoveredLutClampMask);
+        runtime.lutClampEventLatchedBitmap &= runtime.lutClampObservedBitmap;
 
         const uint8_t publishOwner =
             sharedAtomicLoad(&sharedData->servo_target_owner);

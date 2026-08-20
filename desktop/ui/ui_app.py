@@ -17,16 +17,13 @@ from desktop.paths import (
     CALIB_DEG_PATH,
     CALIB_LOAD_SNAPSHOT_PATH,
     HAND_GEO_PATH,
-    MANUS_CALIBRATION_PATH,
     MOTOR_MID_CALIB_PATH,
     POSE_FIST_PATH,
     PRODUCT_FINGERPRINT_PATH,
     PROJECT_ROOT,
-    RAW_IK_Q_TARGET_PATH,
     ROBOT_MODEL_MANIFEST_PATH,
     URDF_JOINT_MAPPING_PATH,
 )
-from desktop.core.auto_calib_logger import AUTO_CALIB_LOG_DIR
 from desktop.core.data_recording import DataSessionRecorder
 from desktop.core.data_recording.motion_sampler import (
     MOTION_RECORD_PERIOD_SECONDS,
@@ -34,7 +31,6 @@ from desktop.core.data_recording.motion_sampler import (
 )
 from desktop.core.data_recording.topic_schema import (
     DEFAULT_CSV_TOPICS,
-    DEFAULT_TOPICS,
     TACTILE_FULL_TOPICS,
 )
 from desktop.core.data_models import HandModel
@@ -110,8 +106,8 @@ from .ui_windows import DisplayWindowManager
 
 PROJECT_ROOT_DIR = str(PROJECT_ROOT)
 DISPLAY_POLL_MS = 33
-CAMERA_UI_POLL_MS = 50
 STATE_RECORD_POLL_MS = 50
+TASK_DIAG_RENEW_INTERVAL_MS = 2000
 SYSTEM_STATUS_STALE_AFTER_S = 1.0
 FAULT_STATUS_STALE_AFTER_S = 1.0
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
@@ -160,7 +156,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._state_buffer = LatestStateBuffer()
         self._state_buffer_version = 0
         self._data_logger = DataSessionRecorder(flush_every=10)
-        # P4控制仍为100 Hz；状态与连续动作只以20 Hz落盘，降低CSV/HDF5体积。
+        # P4控制仍为100 Hz；状态与连续动作只以20 Hz写入 CSV，控制与磁盘写入解耦。
         self._motion_record_sampler = MotionCommandSampler(
             MOTION_RECORD_PERIOD_SECONDS
         )
@@ -173,8 +169,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self._recording_status_note = ""
         self._recording_csv_path = ""
         self._last_recorded_proto_ack_sequence = 0
-        self._recording_format_options = {"csv": True, "hdf5": True, "rosbag": False, "tactile_full": False}
+        self._last_recorded_safety_event_sequence = 0
+        self._recording_format_options = {"tactile_full": False}
         self._record_tactile_full = False
+        self._recording_error_popup_seen = False
         self._last_draw = 0.0
         self._draw_interval = 0.033
         self._last_status_refresh = 0.0
@@ -204,7 +202,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._display_windows = DisplayWindowManager(self)
         self._attach_mode_menu()
         self._display_windows.attach_menu(self.menuBar())
-        self._attach_device_menu()
         self._display_windows.apply_main_geometry()
         shortcut_cls = getattr(QtGui, "QShortcut", getattr(QtWidgets, "QShortcut", None))
         self._esc_shortcut = shortcut_cls(QtGui.QKeySequence("Esc"), self) if shortcut_cls is not None else None
@@ -214,12 +211,13 @@ class HandGUI(QtWidgets.QMainWindow):
         self._display_timer = QtCore.QTimer(self)
         self._display_timer.timeout.connect(self._display_poll)
         self._display_timer.start(DISPLAY_POLL_MS)
+        # Task Runtime 使用独立诊断租约；窗口存活期间周期续订，不能依赖运动控制心跳。
+        self._task_diag_renew_timer = QtCore.QTimer(self)
+        self._task_diag_renew_timer.setInterval(TASK_DIAG_RENEW_INTERVAL_MS)
+        self._task_diag_renew_timer.timeout.connect(self._renew_task_runtime_subscription)
         self._recording_timer = QtCore.QTimer(self)
         self._recording_timer.timeout.connect(self._recording_poll)
         self._recording_timer.start(STATE_RECORD_POLL_MS)
-        self._camera_timer = QtCore.QTimer(self)
-        self._camera_timer.timeout.connect(self._display_windows.update_cameras)
-        self._camera_timer.start(CAMERA_UI_POLL_MS)
         if self.tactile_port:
             self._start_tactile_port(self.tactile_port)
         QtCore.QTimer.singleShot(250, self._clear_live_displays)
@@ -236,7 +234,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self.connect_btn = QtWidgets.QPushButton("Refresh")
         self.connect_btn.clicked.connect(lambda _checked=False: self.refresh_ports())
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
-        self.save_data_check.setChecked(False)
+        # 基础 CSV 记录默认开启；在连接 P4 后自动创建会话。触觉全量数据仍由
+        # _recording_format_options 控制，默认不写入，用户可随时取消勾选停止记录。
+        self.save_data_check.setChecked(True)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.comm_conn_light = self._make_toolbar_connection_light()
         self.start_indicator = QtWidgets.QLabel("STOP")
@@ -338,7 +338,7 @@ class HandGUI(QtWidgets.QMainWindow):
         if self._mode_action_group is not None:
             self._mode_action_group.setExclusive(True)
         self._mode_actions = {}
-        for label in ["Manual", "Teleop", "Replay"]:
+        for label in ["Manual", "Replay"]:
             action = action_cls(label, self)
             action.setCheckable(True)
             action.triggered.connect(lambda checked=False, name=label: self._on_mode_action_triggered(name, checked))
@@ -360,31 +360,12 @@ class HandGUI(QtWidgets.QMainWindow):
             action.setChecked(label == selected)
             action.blockSignals(False)
 
-    def _attach_device_menu(self) -> None:
-        action_cls = getattr(QtGui, "QAction", None) or getattr(QtWidgets, "QAction")
-        menu = self.menuBar().addMenu("Device")
-        refresh_ports = action_cls("Refresh Ports", self)
-        refresh_ports.triggered.connect(self.refresh_ports)
-        connect = action_cls("Connect / Disconnect", self)
-        connect.triggered.connect(self._toggle_connection)
-        refresh_cameras = action_cls("Refresh Cameras", self)
-        refresh_cameras.triggered.connect(self.refresh_cameras)
-        servo_status = action_cls("Servo Status", self)
-        servo_status.triggered.connect(self.show_servo_status_dialog)
-        protocol_status = action_cls("Protocol / Comm Status", self)
-        protocol_status.triggered.connect(self.show_protocol_status_dialog)
-        task_runtime = action_cls("Task Runtime", self)
-        task_runtime.triggered.connect(self.show_task_runtime_window)
-        auto_calib_log = action_cls("Auto Calib Log", self)
-        auto_calib_log.triggered.connect(self.show_auto_calib_log_dialog)
-        for action in [refresh_ports, connect, refresh_cameras, servo_status, protocol_status, task_runtime, auto_calib_log]:
-            menu.addAction(action)
-
     def show_task_runtime_window(self) -> None:
         if self._task_runtime_window is None:
             self._task_runtime_window = TaskRuntimeWindow(self)
             self._task_runtime_window.destroyed.connect(self._on_task_runtime_window_destroyed)
-            self.backend.set_task_diag_subscription(True)
+            self._renew_task_runtime_subscription()
+            self._task_diag_renew_timer.start()
         if self._state is not None:
             self._task_runtime_window.update_state(self._state)
         self._task_runtime_window.show()
@@ -394,77 +375,25 @@ class HandGUI(QtWidgets.QMainWindow):
     def _on_task_runtime_window_destroyed(self, _obj=None) -> None:
         """窗口关闭后立即退订，避免纯诊断数据继续占用串口带宽。"""
         self._task_runtime_window = None
-        self.backend.set_task_diag_subscription(False)
+        self._stop_task_runtime_subscription()
 
-    def show_auto_calib_log_dialog(self) -> None:
-        latest = self._latest_auto_calib_log_path()
-        if not latest:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Auto Calib Log",
-                f"No auto calibration log found.\nFolder: {AUTO_CALIB_LOG_DIR}",
-            )
+    def _renew_task_runtime_subscription(self) -> None:
+        """续订独立诊断租约；重复订阅不会重置 P4 正在发送的七包窗口。"""
+        if self._task_runtime_window is None:
+            self._task_diag_renew_timer.stop()
             return
         try:
-            with open(latest, "r", encoding="utf-8", errors="replace") as handle:
-                lines = handle.readlines()
-        except OSError as exc:
-            QtWidgets.QMessageBox.warning(self, "Auto Calib Log", f"Failed to read:\n{latest}\n\n{exc}")
-            return
-        log_text = "".join(lines).strip() or "(empty)"
+            self.backend.set_task_diag_subscription(True)
+        except Exception as exc:
+            log_session("TASK_RUNTIME", f"subscription renew failed: {exc}")
 
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Auto Calib Log")
-        layout = QtWidgets.QVBoxLayout(dialog)
-
-        path_label = QtWidgets.QLabel(f"Latest log: {latest}")
-        path_label.setWordWrap(True)
-        path_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        layout.addWidget(path_label)
-
-        log_view = QtWidgets.QPlainTextEdit()
-        log_view.setReadOnly(True)
-        log_view.setFont(QtGui.QFont("Consolas", 10))
+    def _stop_task_runtime_subscription(self) -> None:
+        """停止续订并显式退订；重复调用保持幂等。"""
+        self._task_diag_renew_timer.stop()
         try:
-            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-        except AttributeError:
-            log_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
-        log_view.setPlainText(log_text)
-        layout.addWidget(log_view, 1)
-
-        close_button = QtWidgets.QPushButton("Close")
-        close_button.clicked.connect(dialog.accept)
-        layout.addWidget(close_button, 0, QtCore.Qt.AlignRight)
-
-        screen = dialog.screen() or QtWidgets.QApplication.primaryScreen()
-        if screen is not None:
-            area = screen.availableGeometry()
-            width = min(max(760, int(area.width() * 0.80)), max(480, area.width() - 80))
-            height = min(max(520, int(area.height() * 0.78)), max(360, area.height() - 80))
-            dialog.resize(width, height)
-            dialog.setMinimumSize(min(760, width), min(460, height))
-        else:
-            dialog.resize(1100, 700)
-            dialog.setMinimumSize(760, 460)
-
-        scroll_bar = log_view.verticalScrollBar()
-        scroll_bar.setValue(scroll_bar.maximum())
-        dialog.exec()
-
-    @staticmethod
-    def _latest_auto_calib_log_path() -> str:
-        try:
-            paths = [
-                os.path.join(AUTO_CALIB_LOG_DIR, name)
-                for name in os.listdir(AUTO_CALIB_LOG_DIR)
-                if name.startswith("auto_calib_") and name.lower().endswith(".log")
-            ]
-        except OSError:
-            return ""
-        if not paths:
-            return ""
-        paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-        return paths[0]
+            self.backend.set_task_diag_subscription(False)
+        except Exception as exc:
+            log_session("TASK_RUNTIME", f"unsubscribe failed: {exc}")
 
     def refresh_ports(self) -> None:
         current = self.current_port
@@ -478,18 +407,6 @@ class HandGUI(QtWidgets.QMainWindow):
             if idx >= 0:
                 self.port_combo.setCurrentIndex(idx)
         self.port_combo.blockSignals(False)
-
-    def refresh_cameras(self) -> None:
-        comp = self._display_windows.components.get("cameras") if hasattr(self, "_display_windows") else None
-        if comp is not None and hasattr(comp, "refresh_devices"):
-            comp.refresh_devices()
-        self._set_status("Camera devices refreshed")
-
-    def _toggle_connection(self) -> None:
-        if self.is_comm_connected():
-            self._disconnect_current_port("Disconnected")
-            return
-        self._connect_selected_port()
 
     def connect_selected_port(self) -> bool:
         return self._connect_selected_port()
@@ -565,7 +482,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.current_mode = self._normalize_mode(mode_name)
         if previous_mode == "Replay" and self.current_mode != "Replay":
             self.cancel_replay("mode changed")
-        self.backend.set_pid_control(self.current_mode != "Monitor")
         self.control_panel.sync_app_mode(self.current_mode)
         self._sync_mode_actions()
         self._set_status(f"Mode: {self._mode_display_name(self.current_mode)}")
@@ -608,11 +524,37 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _recording_poll(self) -> None:
         """以独立50 ms时钟保存最新状态，避免UI 33 ms刷新周期把20 Hz降成15 Hz。"""
+        error = self._data_logger.consume_error()
+        if error:
+            self._handle_recording_error(error)
+            return
         if not self._data_logger.is_running():
             return
         if self._state is not None:
             self._maybe_write_run_data_row(self._state)
         self._flush_motion_recording_due()
+
+    def _handle_recording_error(self, error: str) -> None:
+        """在 GUI 线程停止失败会话；磁盘满等错误每次会话只提示一次。"""
+        path = self._data_logger.path
+        self.save_data_check.blockSignals(True)
+        self.save_data_check.setChecked(False)
+        self.save_data_check.blockSignals(False)
+        self._data_logger.stop()
+        # close/flush 可能重复报告同一磁盘错误，当前会话统一丢弃后续副本。
+        self._data_logger.consume_error()
+        message = f"数据记录已停止：{error}"
+        log_session("RECORDER", f"fatal write error path={path} error={error}")
+        self._set_status(message)
+        if self._recording_error_popup_seen:
+            return
+        self._recording_error_popup_seen = True
+        show_scrollable_message(
+            self,
+            "数据记录失败",
+            f"{message}\n\n保存目录：{path}\n\n请释放磁盘空间后重新勾选 Save Data。",
+            severity="warning",
+        )
 
     def _start_tactile_port(self, port: str) -> bool:
         if not port:
@@ -633,12 +575,10 @@ class HandGUI(QtWidgets.QMainWindow):
     def _stop_tactile_port(self) -> None:
         self.backend.disconnect_tactile_serial()
         self._tactile_state = None
-        if self._state is not None:
-            self._state.tactile_data = []
-            self._state.tactile_online = False
-            self._state.tactile_module_online = [False] * 15
-            self._state.tactile_module_last_rx_ts = [0.0] * 15
-            self._update_display(self._state)
+        # S3串口只是全量触觉覆盖层；断开后立即恢复控制器持有的P4摘要，
+        # 不能把仍然在线的P4 CAN中继状态一并清空。
+        self._state = self.backend.get_state_snapshot()
+        self._update_display(self._state)
 
     def connect_tactile_serial(self, port: str) -> bool:
         return self._start_tactile_port(port)
@@ -1089,10 +1029,10 @@ class HandGUI(QtWidgets.QMainWindow):
                 suggestions.append("检查对应舵机电源、串口总线、ID 映射和接线；反馈稳定后 Clear Fault 并重新标定。")
             elif reason == CALIB_DIAG_REASON_ZERO_CROSS_INVALID:
                 lines.append(f"数据：taut={value_a}, zero={value_b}, tight={value_c}")
-                suggestions.append("零点不在有效区间内。检查编码器方向、标定起始姿态和绳索预紧；必要时 New Device Reset 后重新标定。")
+                suggestions.append("零点不在有效区间内。检查编码器方向、标定起始姿态和绳索预紧，然后重新标定该关节。")
             elif reason == CALIB_DIAG_REASON_WRAP_TOO_LARGE:
                 lines.append(f"数据：encoder_span={value_a}, tight={value_b}, max={value_c}")
-                suggestions.append("编码器跨度异常接近整圈，通常是方向/映射错误或多圈状态错误；先 New Device Reset，再检查方向和映射。")
+                suggestions.append("编码器跨度异常接近整圈，通常是方向/映射或多圈锚点错误；检查后重新标定该关节。")
             elif reason == CALIB_DIAG_REASON_ABS_LIMIT_INVALID:
                 lines.append(f"数据：command_abs={value_a}, min={value_b}, max={value_c}")
                 suggestions.append("舵机绝对目标超出安全范围。先确认多圈读数、舵机 ID 和绳路，再重新 Rope Init/标定。")
@@ -1184,10 +1124,10 @@ class HandGUI(QtWidgets.QMainWindow):
                         f"姿态={pose_text}，阶段={workspace_stage_names[value_c]}，"
                         f"相关电机=0x{bitmap:08X}"
                     )
-                    suggestions.append("工作空间准备会先处理辅助关节、最后处理标定目标。检查失败关节的舵机在线状态、ABS/load 反馈和 Turn 是否 known；多圈未知时先执行 New Device Reset，再 Rope Init/标定。")
+                    suggestions.append("工作空间准备会先处理辅助关节、最后处理标定目标。检查失败关节的舵机在线状态、ABS/load 反馈和 Turn 是否 known；多圈未知时重新勾选对应关节并点击 Calibrate。")
                 else:
                     lines.append(f"数据：value_a={value_a}, value_b={value_b}, value_c={value_c}, motor_mask=0x{bitmap:08X}")
-                    suggestions.append("自动标定无法安全安排四指侧摆关节的工作空间。检查相关电机是否在线、Turn 是否 known；若出现多圈未知，先执行 New Device Reset 后重新 Rope Init/标定。")
+                    suggestions.append("自动标定无法安全安排四指侧摆关节的工作空间。检查相关电机是否在线、Turn 是否 known；若多圈未知，重新勾选对应关节并点击 Calibrate。")
             elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
                 lines.append(
                     f"数据：completed_mask=0x{value_a:08X}, failed_mask=0x{value_b:08X}, "
@@ -1276,15 +1216,21 @@ class HandGUI(QtWidgets.QMainWindow):
             else:
                 lines.append("多圈位置未知：故障已锁存，当前 unknown mask 已清除。")
             suggestions.append(
-                "不要继续发运动命令。若刚换机械/舵机/映射，或舵机单独断电、手动转动过机构，"
-                "先点击 New Device Reset，把当前 raw 作为 turn0。确认 Turn 恢复正常后，再点击 Clear Fault，"
-                "然后重新 ENABLE / Rope Init / 标定。"
+                "不要继续发运动命令。先等待上位机按 JSON SavedRaw/logical ABS 做最近圈恢复；"
+                "若 Turn UNKNOWN 仍未清除，勾选受影响关节并点击 Calibrate。"
+                "Calibrate 会先统一硬件圈数和 JSON 锚点，然后重建 Auto/LUT。"
             )
 
         if not lines and bitmap != 0:
             titles.append("未知系统故障")
             lines.append(f"未知系统故障 bitmap=0x{bitmap:08X}")
             suggestions.append("记录日志后检查下位机状态机和通信包解析。")
+
+        # 安全事件由 P4 已完成裁决；此处仅在已有故障时补充诊断上下文，
+        # 不能把一条历史事件本身当作新的停机条件。
+        safety_event_text = self._latest_safety_event_text(state)
+        if lines and safety_event_text:
+            lines.append("最近 P4 安全事件：" + safety_event_text)
 
         active = bool(lines or bitmap != 0)
         offline_bits = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE
@@ -1364,8 +1310,6 @@ class HandGUI(QtWidgets.QMainWindow):
         summary = self._build_fault_summary(state)
         if not summary.get("active"):
             self._last_overload_popup_mask = 0
-            self._fault_popup_episode_active = False
-            self._last_fault_popup_key = ""
             self._fault_stop_sent = False
             self._fault_previous_runtime_active = bool(runtime_state)
             self._calib_diag_wait_started_at = 0.0
@@ -1401,7 +1345,9 @@ class HandGUI(QtWidgets.QMainWindow):
         else:
             self._calib_diag_wait_started_at = 0.0
         popup_key = str(summary.get("key") or "")
-        if self._fault_popup_episode_active and popup_key == self._last_fault_popup_key:
+        # 一次故障处理周期只允许一个窗口。后续故障位变化、详细诊断补到或
+        # 短暂恢复后再次置位只更新状态栏/日志；Clear Fault 后才重新允许弹窗。
+        if self._fault_popup_episode_active:
             return
         if self._fault_dialog_active:
             return
@@ -1432,6 +1378,8 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _on_clear_fault_confirmed(self) -> None:
         self._last_overload_popup_mask = 0
+        self._fault_popup_episode_active = False
+        self._last_fault_popup_key = ""
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
 
@@ -1467,6 +1415,11 @@ class HandGUI(QtWidgets.QMainWindow):
             if body:
                 lines.append("")
                 lines.append(body)
+
+        # 即使系统当前未处于故障，也在状态提示中保留最近事件，便于联调定位。
+        safety_event_text = self._latest_safety_event_text(state)
+        if safety_event_text and not summary.get("active"):
+            lines.append("最近 P4 安全事件：" + safety_event_text)
 
         return text, "\n".join(lines)
 
@@ -1666,12 +1619,6 @@ class HandGUI(QtWidgets.QMainWindow):
         for row in self._motion_record_sampler.flush_due(force=force):
             self._data_logger.write("teleop_input", row)
 
-    def draw_pose_angles(self, angles: List[float]) -> None:
-        self._display_windows.open_pose()
-        comp = self._display_windows.components.get("pose")
-        if comp is not None:
-            comp.draw_angles(angles, None, generate=False)
-
     def start_calibration(self) -> None:
         if not self.is_comm_connected():
             if not self._connect_selected_port():
@@ -1688,7 +1635,7 @@ class HandGUI(QtWidgets.QMainWindow):
         options = dict(options or self._recording_format_options)
         self._record_tactile_full = bool(options.get("tactile_full", False))
         meta = {
-            "format_version": 3,
+            "format_version": 4,
             "app_mode": self.current_mode,
             "port": self.current_port,
             "ros2_enabled": self.ros2_enabled,
@@ -1725,44 +1672,34 @@ class HandGUI(QtWidgets.QMainWindow):
             "product_fingerprint": self._recording_product_fingerprint(),
             "config_files": self._recording_config_snapshot(),
         }
-        recording_topics = list(DEFAULT_TOPICS)
         csv_topics = list(DEFAULT_CSV_TOPICS)
         if self._record_tactile_full:
-            recording_topics.extend(TACTILE_FULL_TOPICS)
-            csv_topics.append("tactile_full")
+            csv_topics.extend(TACTILE_FULL_TOPICS)
         self._data_logger.start(
             self._run_data_root_dir(),
             meta=meta,
-            topics=recording_topics,
+            topics=csv_topics,
             csv_topics=csv_topics,
-            enable_csv=bool(options.get("csv", True)),
-            enable_hdf5=bool(options.get("hdf5", True)),
-            enable_rosbag=bool(options.get("rosbag", False)),
         )
+        self._recording_error_popup_seen = False
         self._motion_record_sampler.reset()
         self._last_state_record_signature = None
         path = self._data_logger.path
         self._last_recorded_proto_ack_sequence = int(
             getattr(self._state, "proto_ack_sequence", 0) or 0
         )
+        # 记录从本次会话启动后新发生的 P4 安全事件，历史事件仍保留在诊断提示中。
+        latest_safety_event = (
+            getattr(self._state, "latest_safety_event", {}) if self._state is not None else {}
+        )
+        self._last_recorded_safety_event_sequence = (
+            self._safety_event_int(latest_safety_event, "sequence")
+            if isinstance(latest_safety_event, dict)
+            else 0
+        )
         self._recording_status_note = path
         self._recording_csv_path = path
-        notes = []
-        if bool(options.get("csv", True)):
-            notes.append("CSV: on")
-        else:
-            notes.append("CSV: off")
-        h5_note = f"HDF5: {self._data_logger.hdf5_path}" if self._data_logger.hdf5_enabled else ""
-        if self._data_logger.hdf5_error:
-            h5_note = f"HDF5 disabled: {self._data_logger.hdf5_error}"
-        if h5_note:
-            notes.append(h5_note)
-        bag_note = f"ROS2 bag: {self._data_logger.rosbag_path}" if self._data_logger.rosbag_enabled else ""
-        if self._data_logger.rosbag_error and bool(options.get("rosbag", False)):
-            bag_note = f"ROS2 bag disabled: {self._data_logger.rosbag_error}"
-        if bag_note:
-            notes.append(bag_note)
-        self._set_status(f"Recording: {path}" + (f" | {' | '.join(notes)}" if notes else ""))
+        self._set_status(f"CSV recording: {path}")
 
     def _stop_data_recording(self, reason: str = "stopped") -> None:
         if self._test_recording_stop_active():
@@ -1874,25 +1811,12 @@ class HandGUI(QtWidgets.QMainWindow):
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Save Data Format")
         layout = QtWidgets.QVBoxLayout(dialog)
-        label = QtWidgets.QLabel("选择本次保存格式：")
+        label = QtWidgets.QLabel("本次记录固定保存为 CSV；可选是否额外保存触觉全量表。")
         layout.addWidget(label)
 
-        csv_check = QtWidgets.QCheckBox("CSV 多文件（方便直接查看）")
-        csv_check.setChecked(bool(self._recording_format_options.get("csv", True)))
-        hdf5_check = QtWidgets.QCheckBox("HDF5 session.h5（训练/分析）")
-        hdf5_check.setChecked(bool(self._recording_format_options.get("hdf5", True)))
-        rosbag_check = QtWidgets.QCheckBox("ROS2 bag（Linux/ROS2 环境，可选）")
-        rosbag_check.setChecked(bool(self._recording_format_options.get("rosbag", False)))
         tactile_full_check = QtWidgets.QCheckBox("触觉全量数据（数据量大，需要时勾选）")
         tactile_full_check.setChecked(bool(self._recording_format_options.get("tactile_full", False)))
-        layout.addWidget(csv_check)
-        layout.addWidget(hdf5_check)
-        layout.addWidget(rosbag_check)
         layout.addWidget(tactile_full_check)
-
-        hint = QtWidgets.QLabel("ROS2 bag 需要系统已安装 ROS2 的 rosbag2_py、rclpy 和 std_msgs。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
 
         ok_button = getattr(QtWidgets.QDialogButtonBox, "Ok", None)
         cancel_button = getattr(QtWidgets.QDialogButtonBox, "Cancel", None)
@@ -1912,14 +1836,8 @@ class HandGUI(QtWidgets.QMainWindow):
         if exec_dialog() != accepted:
             return None
         options = {
-            "csv": csv_check.isChecked(),
-            "hdf5": hdf5_check.isChecked(),
-            "rosbag": rosbag_check.isChecked(),
             "tactile_full": tactile_full_check.isChecked(),
         }
-        if not any(options.get(name, False) for name in ("csv", "hdf5", "rosbag")):
-            QtWidgets.QMessageBox.warning(self, "Save Data Format", "至少选择一种保存格式。")
-            return None
         return options
 
     def _maybe_write_run_data_row(
@@ -2007,64 +1925,18 @@ class HandGUI(QtWidgets.QMainWindow):
                 host_time=host_time,
             )
 
+        self._record_new_safety_events(
+            state,
+            host_time=host_time,
+            active_scope_label=scope_label,
+            active_motor_mask=active_motor_mask,
+            active_joint_mask=active_joint_mask,
+        )
+
         targets = self.control_panel.resolved_joint_targets()
-        for i in range(ENCODER_COUNT):
-            encoder = state.encoders[i] if i < len(state.encoders) else None
-            self._data_logger.write(
-                "joint_state",
-                {
-                    "host_time": host_time,
-                    "p4_time_ms": p4_time_ms,
-                    "joint_index": i,
-                    "is_active_joint": 1 if self._mask_has_bit(active_joint_mask, i) else 0,
-                    "joint_deg": state.angles[i] if i < len(state.angles) else "",
-                    "joint_target_deg": targets[i] if i < len(targets) else "",
-                    "joint_encoder_raw": (
-                        getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
-                    ),
-                },
-            )
         self._write_joint_wide_row(state, host_time, p4_time_ms, active_joint_mask, targets)
 
         motor_targets = self.control_panel.resolved_motor_targets()
-        for i in range(MOTOR_COUNT):
-            joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
-            load_value = self._seq_value(getattr(state, "servo_load", []), i)
-            flash_raw = self._servo_flash_raw_value(state, i)
-            flash_raw_diff = self._servo_flash_raw_diff(state, i, flash_raw)
-            self._data_logger.write(
-                "servo_state",
-                {
-                    "host_time": host_time,
-                    "p4_time_ms": p4_time_ms,
-                    "motor_index": i,
-                    "joint_index": joint_idx,
-                    "is_active_motor": 1 if self._mask_has_bit(active_motor_mask, i) else 0,
-                    "is_active_joint": 1 if joint_idx >= 0 and self._mask_has_bit(active_joint_mask, joint_idx) else 0,
-                    "motor_target_abs": motor_targets[i] if i < len(motor_targets) else "",
-                    "servo_raw": self._seq_value(getattr(state, "servo_raw_positions", []), i),
-                    "servo_abs": self._seq_value(getattr(state, "servo_angles", []), i),
-                    "servo_flash_raw": flash_raw,
-                    "servo_flash_raw_diff": flash_raw_diff,
-                    "online": 1 if i < len(getattr(state, "servo_online", [])) and state.servo_online[i] else 0,
-                    "raw_online": (
-                        1 if i < len(getattr(state, "servo_raw_online", [])) and state.servo_raw_online[i] else 0
-                    ),
-                    "telem_online": (
-                        1 if i < len(getattr(state, "servo_telem_online", [])) and state.servo_telem_online[i] else 0
-                    ),
-                    "speed": self._seq_value(getattr(state, "servo_speed", []), i),
-                    "load": load_value,
-                    "load_mag": self._servo_load_mag(load_value),
-                    "load_dir": self._servo_load_dir(load_value),
-                    "current_raw": self._seq_value(getattr(state, "servo_current", []), i),
-                    "voltage": self._seq_value(getattr(state, "servo_voltage", []), i),
-                    "temperature": self._seq_value(getattr(state, "servo_temperature", []), i),
-                    "overload_fault": (
-                        1 if i < len(getattr(state, "servo_overload_fault", [])) and state.servo_overload_fault[i] else 0
-                    ),
-                },
-            )
         self._write_servo_wide_row(
             state,
             host_time,
@@ -2128,14 +2000,14 @@ class HandGUI(QtWidgets.QMainWindow):
             label = f"M{i:02d}"
             joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
             load_value = self._seq_value(getattr(state, "servo_load", []), i)
-            flash_raw = self._servo_flash_raw_value(state, i)
+            saved_raw = self._servo_flash_raw_value(state, i)
             row[f"{label}_joint_index"] = joint_idx
             row[f"{label}_target_abs"] = motor_targets[i] if i < len(motor_targets) else ""
             row[f"{label}_raw"] = self._seq_value(getattr(state, "servo_raw_positions", []), i)
             row[f"{label}_abs"] = self._seq_value(getattr(state, "servo_angles", []), i)
-            row[f"{label}_flash_raw"] = flash_raw
-            row[f"{label}_flash_raw_diff"] = self._servo_flash_raw_diff(
-                state, i, flash_raw
+            row[f"{label}_saved_raw"] = saved_raw
+            row[f"{label}_saved_raw_diff"] = self._servo_flash_raw_diff(
+                state, i, saved_raw
             )
             row[f"{label}_load"] = load_value
             row[f"{label}_load_mag"] = self._servo_load_mag(load_value)
@@ -2191,13 +2063,13 @@ class HandGUI(QtWidgets.QMainWindow):
 
     @staticmethod
     def _servo_flash_raw_value(state: HandModel, motor_index: int) -> object:
-        """返回有效 Flash 快照 raw；valid mask 未覆盖该电机时保持 CSV 空白。"""
+        """返回有效上位机 JSON 锚点 raw；无效通道在 CSV 中保持空白。"""
         valid_mask = int(
-            getattr(state, "multiturn_nvs_save_valid_mask", 0) or 0
+            getattr(state, "host_multiturn_valid_mask", 0) or 0
         )
         if (valid_mask & (1 << int(motor_index))) == 0:
             return ""
-        values = getattr(state, "servo_flash_raw_positions", []) or []
+        values = getattr(state, "host_multiturn_saved_raw_positions", []) or []
         if motor_index < 0 or motor_index >= len(values):
             return ""
         return int(values[motor_index]) % 4096
@@ -2206,7 +2078,7 @@ class HandGUI(QtWidgets.QMainWindow):
     def _servo_flash_raw_diff(
         state: HandModel, motor_index: int, flash_raw: object
     ) -> object:
-        """按 4096-count 环形坐标计算 RawNow 与 FlashRaw 的最短距离。"""
+        """按 4096-count 环形坐标计算 RawNow 与 SavedRaw 的最短距离。"""
         if flash_raw == "" or not bool(getattr(state, "has_servo_raw_data", False)):
             return ""
         online = getattr(state, "servo_raw_online", []) or []
@@ -2250,58 +2122,7 @@ class HandGUI(QtWidgets.QMainWindow):
         return max(vals) if vals else 0.0
 
     def _write_tactile_summary_rows(self, state: HandModel, host_time: float, p4_time_ms) -> None:
-        tactile = getattr(state, "tactile_data", []) or []
-        if not tactile:
-            self._data_logger.write(
-                "tactile_summary",
-                {
-                    "host_time": host_time,
-                    "p4_time_ms": p4_time_ms,
-                    "finger_index": -1,
-                    "finger_name": "",
-                    "sensor_count": 0,
-                    "max_force": 0.0,
-                    "mean_force": 0.0,
-                    "contact_count": 0,
-                    "tactile_online": 1 if getattr(state, "tactile_online", False) else 0,
-                    "tactile_summary_seq": self._none_to_empty(getattr(state, "tactile_summary_seq", "")),
-                    "tactile_full_seq": self._none_to_empty(getattr(state, "tactile_full_seq", "")),
-                    "tactile_full_crc": self._none_to_empty(getattr(state, "tactile_full_crc", "")),
-                    "tactile_full_crc_errors": int(getattr(state, "tactile_full_crc_errors", 0) or 0),
-                    "tactile_full_seq_mismatches": int(getattr(state, "tactile_full_seq_mismatches", 0) or 0),
-                    "tactile_full_dropped": int(getattr(state, "tactile_full_dropped", 0) or 0),
-                },
-            )
-            self._write_tactile_summary_wide_row(state, host_time, p4_time_ms)
-            return
-
-        for finger_index, finger in enumerate(tactile):
-            mags: List[float] = []
-            for sensor in getattr(finger, "sensors", []) or []:
-                try:
-                    mags.append(float(getattr(sensor, "magnitude", 0.0)))
-                except Exception:
-                    pass
-            self._data_logger.write(
-                "tactile_summary",
-                {
-                    "host_time": host_time,
-                    "p4_time_ms": p4_time_ms,
-                    "finger_index": finger_index,
-                    "finger_name": self._finger_name(finger_index),
-                    "sensor_count": len(mags),
-                    "max_force": max(mags) if mags else 0.0,
-                    "mean_force": (sum(mags) / len(mags)) if mags else 0.0,
-                    "contact_count": sum(1 for value in mags if value > 0.0),
-                    "tactile_online": 1 if getattr(state, "tactile_online", False) else 0,
-                    "tactile_summary_seq": self._none_to_empty(getattr(state, "tactile_summary_seq", "")),
-                    "tactile_full_seq": self._none_to_empty(getattr(state, "tactile_full_seq", "")),
-                    "tactile_full_crc": self._none_to_empty(getattr(state, "tactile_full_crc", "")),
-                    "tactile_full_crc_errors": int(getattr(state, "tactile_full_crc_errors", 0) or 0),
-                    "tactile_full_seq_mismatches": int(getattr(state, "tactile_full_seq_mismatches", 0) or 0),
-                    "tactile_full_dropped": int(getattr(state, "tactile_full_dropped", 0) or 0),
-                },
-            )
+        """CSV 仅保留一张五指摘要总表，不再生成逐指长表。"""
         self._write_tactile_summary_wide_row(state, host_time, p4_time_ms)
 
     def _write_tactile_summary_wide_row(self, state: HandModel, host_time: float, p4_time_ms) -> None:
@@ -2334,13 +2155,6 @@ class HandGUI(QtWidgets.QMainWindow):
     def _write_tactile_full_rows(self, state: HandModel, host_time: float, p4_time_ms) -> None:
         tactile = getattr(state, "tactile_data", []) or []
         for finger_index, finger in enumerate(tactile):
-            finger_wide_row: Dict[str, object] = {
-                "host_time": host_time,
-                "p4_time_ms": p4_time_ms,
-                "finger_index": finger_index,
-                "finger_name": self._finger_name(finger_index),
-            }
-            finger_has_full = False
             for sensor_index, sensor in enumerate(getattr(finger, "sensors", []) or []):
                 forces = getattr(sensor, "contact_forces", None)
                 if forces is None:
@@ -2375,15 +2189,6 @@ class HandGUI(QtWidgets.QMainWindow):
                                 "force_mag": force_mag,
                             },
                         )
-                        prefix = f"S{sensor_index}_R{row_idx}_C{col_idx}"
-                        finger_wide_row[f"{prefix}_fx"] = fx
-                        finger_wide_row[f"{prefix}_fy"] = fy
-                        finger_wide_row[f"{prefix}_fz"] = fz
-                        finger_wide_row[f"{prefix}_mag"] = force_mag
-                        finger_has_full = True
-            if finger_has_full:
-                topic = f"tactile_full_{self._finger_name(finger_index)}_wide"
-                self._data_logger.write(topic, finger_wide_row)
 
     def _record_event(
         self,
@@ -2406,6 +2211,88 @@ class HandGUI(QtWidgets.QMainWindow):
             active_motor_mask=active_motor_mask,
             active_joint_mask=active_joint_mask,
         )
+
+    @staticmethod
+    def _safety_event_int(event: dict, key: str, default: int = 0) -> int:
+        """安全事件字段按整数读取，保留通道 0 这类合法的零值。"""
+        try:
+            return int(event.get(key, default))
+        except (AttributeError, TypeError, ValueError):
+            return int(default)
+
+    @classmethod
+    def _format_safety_event(cls, event: dict) -> str:
+        """将 P4 已裁决的安全事件格式化为诊断文本，不参与上位机控制决策。"""
+        if not isinstance(event, dict):
+            return ""
+        sequence = cls._safety_event_int(event, "sequence")
+        if sequence <= 0:
+            return ""
+        motor = cls._safety_event_int(event, "motor_channel", 0xFF)
+        joint = cls._safety_event_int(event, "joint_index", 0xFF)
+        motor_text = "-" if motor == 0xFF else f"M{motor:02d}"
+        joint_text = "-" if joint == 0xFF else f"J{joint:02d}"
+        return (
+            f"seq={sequence} rule={cls._safety_event_int(event, 'rule_id')} "
+            f"motor={motor_text} joint={joint_text} "
+            f"request={cls._safety_event_int(event, 'requested_value')} "
+            f"observed={cls._safety_event_int(event, 'observed_value')} "
+            f"owner={cls._safety_event_int(event, 'owner')} "
+            f"overflow={cls._safety_event_int(event, 'overflow_count')}"
+        )
+
+    def _latest_safety_event_text(self, state: HandModel) -> str:
+        event = getattr(state, "latest_safety_event", {}) or {}
+        return self._format_safety_event(event)
+
+    def _record_new_safety_events(
+        self,
+        state: HandModel,
+        *,
+        host_time: float,
+        active_scope_label: str,
+        active_motor_mask: int,
+        active_joint_mask: int,
+    ) -> None:
+        """按 P4 sequence 补记本次记录会话中的全部安全事件。"""
+        if not bool(getattr(state, "has_safety_event", False)):
+            return
+        latest = getattr(state, "latest_safety_event", {}) or {}
+        if not isinstance(latest, dict):
+            return
+        latest_sequence = self._safety_event_int(latest, "sequence")
+        if latest_sequence <= 0:
+            return
+        if latest_sequence < self._last_recorded_safety_event_sequence:
+            # P4 重启后 sequence 从较小值重新开始，不能因旧会话序号而漏记。
+            self._last_recorded_safety_event_sequence = 0
+
+        history = getattr(state, "safety_event_history", []) or []
+        events = [
+            dict(item)
+            for item in history
+            if isinstance(item, dict)
+            and self._safety_event_int(item, "sequence") > self._last_recorded_safety_event_sequence
+        ]
+        if not events and latest_sequence > self._last_recorded_safety_event_sequence:
+            events = [dict(latest)]
+
+        for event in sorted(events, key=lambda item: self._safety_event_int(item, "sequence")):
+            sequence = self._safety_event_int(event, "sequence")
+            if sequence <= self._last_recorded_safety_event_sequence:
+                continue
+            detail = self._format_safety_event(event)
+            self._data_logger.event(
+                "p4_safety_event",
+                source="p4",
+                detail=detail,
+                p4_time_ms=self._safety_event_int(event, "device_timestamp_ms"),
+                active_scope_label=active_scope_label,
+                active_motor_mask=active_motor_mask,
+                active_joint_mask=active_joint_mask,
+                host_time=host_time,
+            )
+            self._last_recorded_safety_event_sequence = sequence
 
     @staticmethod
     def _mask_has_bit(mask_hex, idx: int) -> bool:
@@ -2436,8 +2323,6 @@ class HandGUI(QtWidgets.QMainWindow):
             "calib_deg": CALIB_DEG_PATH,
             "hand_geo": HAND_GEO_PATH,
             "motor_mid_calib": MOTOR_MID_CALIB_PATH,
-            "manus_calibration": MANUS_CALIBRATION_PATH,
-            "raw_ik_q_target": RAW_IK_Q_TARGET_PATH,
             "robot_model_manifest": ROBOT_MODEL_MANIFEST_PATH,
             "urdf_joint_mapping": URDF_JOINT_MAPPING_PATH,
             "generated_product_fingerprint": PRODUCT_FINGERPRINT_PATH,
@@ -2465,32 +2350,6 @@ class HandGUI(QtWidgets.QMainWindow):
             ),
         }
 
-    def show_servo_status_dialog(self) -> None:
-        state = self._state or self.backend.get_current_state()
-        rows = []
-        for idx in range(MOTOR_COUNT):
-            joint_idx = MOTOR_TO_JOINT_INDEX[idx] if idx < len(MOTOR_TO_JOINT_INDEX) else -1
-            rows.append(
-                f"M{idx:02d} -> J{joint_idx:02d} | "
-                f"angle={self._seq_value(getattr(state, 'servo_angles', []), idx)} "
-                f"raw={self._seq_value(getattr(state, 'servo_raw_positions', []), idx)} "
-                f"online={bool(idx < len(getattr(state, 'servo_online', [])) and state.servo_online[idx])} "
-                f"overload={bool(idx < len(getattr(state, 'servo_overload_fault', [])) and state.servo_overload_fault[idx])}"
-            )
-        QtWidgets.QMessageBox.information(self, "Servo Status", "\n".join(rows))
-
-    def show_protocol_status_dialog(self) -> None:
-        lines = [
-            f"Port: {self.current_port or '-'}",
-            f"Connected: {self.is_comm_connected()}",
-            f"Started: {self.backend.is_started()}",
-            f"Mode: {self.current_mode}",
-            f"Recording: {self._data_logger.is_running()}",
-        ]
-        for name, value in self.backend.protocol_diag_items():
-            lines.append(f"{name}: {value}")
-        QtWidgets.QMessageBox.information(self, "Protocol / Comm Status", "\n".join(lines))
-
     def is_comm_connected(self) -> bool:
         return self.backend.is_comm_connected()
 
@@ -2516,7 +2375,7 @@ class HandGUI(QtWidgets.QMainWindow):
             pass
 
     def _on_replay_event(self, event_type: str, detail: str) -> None:
-        """将Replay资产与运行事件写入现有CSV/HDF5/rosbag事件链路。"""
+        """将 Replay 资产与运行事件写入当前 CSV 事件链路。"""
         self._record_event(str(event_type), detail=str(detail), source="replay")
         self._set_status(f"{event_type}: {detail}")
 
@@ -2536,8 +2395,6 @@ class HandGUI(QtWidgets.QMainWindow):
             return "clear_fault"
         if "side adjust" in lower:
             return "side_adjust"
-        if "new device reset" in lower:
-            return "new_device_reset"
         if "manual" in lower:
             if "clear" in lower:
                 return "manual_reference_clear"
@@ -2550,8 +2407,6 @@ class HandGUI(QtWidgets.QMainWindow):
             return "rope_init"
         if "ros2" in lower:
             return "ros2"
-        if "manus" in lower or "teleop" in lower:
-            return "teleop"
         if "fault" in lower:
             return "fault"
         return "action"
@@ -2616,8 +2471,6 @@ class HandGUI(QtWidgets.QMainWindow):
         mapping = {
             "manual": "Monitor",
             "monitor": "Monitor",
-            "teleop": "Teleoperation",
-            "teleoperation": "Teleoperation",
             "replay": "Replay",
         }
         return mapping.get(text.lower(), text or "Monitor")
@@ -2627,8 +2480,6 @@ class HandGUI(QtWidgets.QMainWindow):
         normalized = HandGUI._normalize_mode(mode_name)
         if normalized == "Monitor":
             return "Manual"
-        if normalized == "Teleoperation":
-            return "Teleop"
         return normalized
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
@@ -2642,6 +2493,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self._wait_for_test_recording_stop()
             self._display_windows.close_all()
             if self._task_runtime_window is not None:
+                self._stop_task_runtime_subscription()
                 self._task_runtime_window.close()
                 self._task_runtime_window = None
             self.joint_plot.close()

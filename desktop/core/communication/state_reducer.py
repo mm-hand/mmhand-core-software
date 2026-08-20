@@ -13,7 +13,13 @@ from __future__ import annotations
 import time
 from typing import Callable, Iterable, Optional
 
-from ..data_models import HandModel, MotorState
+from ..data_models import (
+    HandModel,
+    MotorState,
+    TACTILE_DATA_LEVEL_FULL,
+    TACTILE_DATA_LEVEL_SUMMARY,
+    TACTILE_SOURCE_P4_CAN_RELAY,
+)
 from ..protocol import (
     CMD_ACTIVE_SCOPE,
     CMD_CALIBRATE,
@@ -68,10 +74,7 @@ class StateReducer:
         # 避免 UI 把不同一秒统计窗口的任务行混合展示。
         self._task_runtime_window_sequence: Optional[int] = None
         self._task_runtime_window_packets: dict[int, dict] = {}
-
-    def set_packet_router(self, packet_router: P4PacketRouter) -> None:
-        """显式注入路由器，避免 reducer 自己重复维护 packet type 表。"""
-        self._packet_router = packet_router
+        self._task_runtime_dropped_windows = 0
 
     @property
     def last_model(self) -> Optional[HandModel]:
@@ -88,6 +91,7 @@ class StateReducer:
         self._last_model = None
         self._task_runtime_window_sequence = None
         self._task_runtime_window_packets.clear()
+        self._task_runtime_dropped_windows = 0
 
     def begin(self) -> tuple[HandModel, float]:
         """创建本批数据的工作副本，并继承不能被单包覆盖的通信有效位。"""
@@ -218,13 +222,10 @@ class StateReducer:
                     "parse_multiturn_snapshot_raw_packet", payload
                 )
                 if parsed is not None:
-                    token, valid_mask, raw_values = parsed
-                    model.multiturn_snapshot_result_token = int(token)
-                    model.multiturn_snapshot_valid_mask = int(valid_mask)
+                    _token, valid_mask, raw_values = parsed
                     for i in range(min(MOTOR_COUNT, len(raw_values))):
                         model.servo_flash_raw_positions[i] = int(raw_values[i])
                     model.has_servo_flash_raw_data = int(valid_mask) != 0
-                    model.multiturn_snapshot_last_rx_ts = time.time()
                     emitted = True
 
             # 舵机遥测：速度、负载、电流、电压和温度保持同一帧原子更新。
@@ -463,8 +464,6 @@ class StateReducer:
                     "parse_servo_route_status_packet", payload
                 )
                 if parsed is not None:
-                    model.servo_route_generation = int(parsed["generation"])
-                    model.servo_route_valid_bitmap = int(parsed["valid_bitmap"])
                     model.servo_route_controllable_bitmap = int(
                         parsed["controllable_bitmap"]
                     )
@@ -475,7 +474,6 @@ class StateReducer:
                     model.servo_bus_device_count = list(parsed["bus_device_count"])
                     model.servo_route_bus = list(parsed["route_bus"])
                     model.servo_route_state = list(parsed["route_state"])
-                    model.servo_route_last_rx_ts = time.time()
                     model.has_servo_route_status = True
                     emitted = True
 
@@ -484,7 +482,6 @@ class StateReducer:
                 if parsed is not None:
                     # CRC 在模型中保留整数，写 meta.json 时统一格式化为 8 位十六进制。
                     model.product_fingerprint = dict(parsed)
-                    model.product_fingerprint_last_rx_ts = time.time()
                     model.has_product_fingerprint = True
                     emitted = True
 
@@ -533,7 +530,6 @@ class StateReducer:
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.servo_logical_range_min[i] = int(mins[i])
                         model.servo_logical_range_max[i] = int(maxs[i])
-                    model.has_servo_logical_range_status = True
                     emitted = True
 
             # Manual Min/Max 是 Auto 标定前置基准，跨圈方向由独立 direction 字段表达。
@@ -611,16 +607,32 @@ class StateReducer:
                 if parsed is not None:
                     task_value = parsed.get("task_id")
                     task_id = int(task_value) if task_value is not None else -1
-                    if task_id >= 0:
+                    task_count = len(TASK_RUNTIME_NAMES)
+                    if 0 <= task_id < task_count:
                         now = time.time()
                         parsed["host_rx_ts"] = now
                         window_sequence = int(parsed.get("window_sequence", 0) or 0)
                         if self._task_runtime_window_sequence != window_sequence:
                             # 新窗口到达时丢弃上一个未收齐窗口，绝不拼接两组统计值。
+                            if (
+                                self._task_runtime_window_sequence is not None
+                                and 0 < len(self._task_runtime_window_packets) < task_count
+                            ):
+                                self._task_runtime_dropped_windows += 1
                             self._task_runtime_window_sequence = window_sequence
                             self._task_runtime_window_packets.clear()
                         self._task_runtime_window_packets[task_id] = dict(parsed)
-                        if len(self._task_runtime_window_packets) >= len(TASK_RUNTIME_NAMES):
+                        received_mask = 0
+                        for received_task_id in self._task_runtime_window_packets:
+                            received_mask |= 1 << int(received_task_id)
+                        model.task_runtime_window_sequence = window_sequence
+                        model.task_runtime_received_mask = received_mask
+                        model.task_runtime_expected_mask = (1 << task_count) - 1
+                        model.task_runtime_dropped_windows = self._task_runtime_dropped_windows
+                        model.task_runtime_last_packet_rx_ts = now
+                        # 分包进度也发布给诊断 UI，避免“旧表还在但不知道缺了哪一包”。
+                        emitted = True
+                        if len(self._task_runtime_window_packets) >= task_count:
                             model.task_runtime = dict(self._task_runtime_window_packets)
                             model.task_runtime_last_rx_ts = now
                             model.p4_time_ms = int(parsed.get("device_timestamp_ms", 0) or 0)
@@ -631,22 +643,40 @@ class StateReducer:
             elif packet_kind == "tactile_summary":
                 parsed = owner._parse_protocol_payload("parse_tactile_packet", payload)
                 if parsed is not None:
-                    _seq, groups = parsed
+                    _seq, groups, module_valid_mask = parsed
+                    now = time.time()
                     stable_groups = owner._stabilize_tactile_groups(groups)
                     owner._last_tactile_summary_groups = stable_groups
                     owner._last_tactile_summary_seq = int(_seq)
                     model.tactile_summary_seq = int(_seq)
+                    model.tactile_source = TACTILE_SOURCE_P4_CAN_RELAY
+                    model.tactile_module_valid_mask = int(module_valid_mask)
+                    model.tactile_online = True
+                    model.tactile_last_rx_ts = now
+                    model.tactile_module_online = [
+                        bool(int(module_valid_mask) & (1 << module_index))
+                        for module_index in range(15)
+                    ]
+                    module_rx_times = list(model.tactile_module_last_rx_ts)
+                    while len(module_rx_times) < 15:
+                        module_rx_times.append(0.0)
+                    for module_index in range(15):
+                        if int(module_valid_mask) & (1 << module_index):
+                            module_rx_times[module_index] = now
+                    model.tactile_module_last_rx_ts = module_rx_times[:15]
                     model.tactile_full_crc_errors = owner._tactile_full_crc_errors
                     model.tactile_full_seq_mismatches = owner._tactile_full_seq_mismatches
                     model.tactile_full_dropped = owner._tactile_full_dropped
                     if owner._summary_groups_all_zero(stable_groups):
                         owner._last_tactile_full_ts = 0.0
                         model.tactile_data = owner._build_tactile_fingers(stable_groups)
+                        model.tactile_data_level = TACTILE_DATA_LEVEL_SUMMARY
                     elif (
                         not model.tactile_data or
                         (time.time() - owner._last_tactile_full_ts) > owner._tactile_full_stale_after_s
                     ):
                         model.tactile_data = owner._build_tactile_fingers(stable_groups)
+                        model.tactile_data_level = TACTILE_DATA_LEVEL_SUMMARY
                     emitted = True
 
             # 全量触觉分片需先完成序号、片数和 CRC 闭环，再发布完整一帧。
@@ -676,6 +706,10 @@ class StateReducer:
                             raw,
                             owner._last_tactile_summary_groups,
                         )
+                        model.tactile_source = TACTILE_SOURCE_P4_CAN_RELAY
+                        model.tactile_data_level = TACTILE_DATA_LEVEL_FULL
+                        model.tactile_online = True
+                        model.tactile_last_rx_ts = time.time()
                         model.tactile_full_seq = int(seq)
                         model.tactile_full_summary_seq = (
                             int(accepted_summary_seq)

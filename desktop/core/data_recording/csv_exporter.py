@@ -3,7 +3,7 @@
 职责：将类型化 Topic 样本输出为便于人工查看的分表 CSV。
 线程：采样入口可被通信线程调用，磁盘写入由记录器串行化；不得阻塞设备控制。
 输入：带双时间戳的类型化 Topic 样本、事件和会话配置。
-输出：CSV/HDF5/ROS bag 文件以及结构化写入状态。
+输出：CSV 文件以及结构化写入状态。
 状态所有权：记录会话拥有文件句柄、采样序号和降采样缓存，不拥有设备真值。
 禁止依赖：禁止依赖 UI 或改变控制状态，禁止在 writer 内重新解释协议业务语义。
 """
@@ -75,8 +75,16 @@ class CsvSessionExporter:
             self._fieldnames = {}
             self._topic_filenames = {}
             self.session_dir = ""
+        first_error: Optional[Exception] = None
         for writer in writers:
-            writer.close()
+            try:
+                writer.close()
+            except Exception as exc:
+                # 一个文件写满不能阻止其余文件句柄关闭；首个错误交给记录器统一上报。
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def write_row(self, topic: str, row: Dict[str, object]) -> None:
         with self._lock:

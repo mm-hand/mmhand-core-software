@@ -212,7 +212,7 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
         )
     print("-" * 88)
     print(
-        "Controls: 's' start, 'i' RAW IK enable, 'o' RAW IK disable, "
+        "Controls: 's' start, 'i' ROS2 input enable, 'o' ROS2 input disable, "
         "'x' stop, 'r' reset, 'c' calibrate, 'q' quit."
     )
     print(f"Calibration: {_render_calib_status(str(snap['calib_status']))}")
@@ -317,7 +317,7 @@ def run_cli_monitor(
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     no_plot: bool = False,
-    ros2_enabled: bool = False,
+    ros2_enabled: bool = True,
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
@@ -338,7 +338,6 @@ def run_cli_monitor(
         return 2
 
     print(f"Connecting to {selected_port} ...")
-    backend.set_pid_control(bool(ros2_enabled))
     if tactile_port:
         if backend.connect_tactile_serial(tactile_port):
             print(f"Connected tactile serial: {tactile_port}")
@@ -371,7 +370,7 @@ def run_cli_monitor(
             ros_bridge.start()
             ros_status = f"ON {ros2_input} {ros_topic}"
             if auto_start:
-                print("Controller auto-started; RAW IK output remains disabled")
+                print("Controller auto-started; ROS2 input remains unauthorized")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             ros_bridge = None
@@ -393,10 +392,10 @@ def run_cli_monitor(
                     backend.start()
                 if key == "i" and ros_bridge is not None:
                     # CLI 与 GUI 使用同一独立授权门；普通 start 不得放行遥操。
-                    ok, message = backend.set_raw_ik_output_enabled(True)
-                    print(message if ok else f"RAW IK enable blocked: {message}")
+                    ok, message = backend.set_ros2_output_enabled(True)
+                    print(message if ok else f"ROS2 input enable blocked: {message}")
                 if key == "o" and ros_bridge is not None:
-                    _, message = backend.set_raw_ik_output_enabled(False)
+                    _, message = backend.set_ros2_output_enabled(False)
                     print(message)
                 if key == "x":
                     backend.stop()

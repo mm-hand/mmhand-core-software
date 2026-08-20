@@ -25,7 +25,7 @@ from .ui_control_common import (
 from .ui_control_device import DeviceControlBar
 from .ui_control_tables import JointChannelTable, MotorChannelTable
 from .ui_control_test_panel import ManualTestPanel
-from .ui_control_modes import ManualControlView, TeleopControlView
+from .ui_control_modes import ManualControlView
 from .ui_dialogs import show_scrollable_message
 
 
@@ -39,7 +39,7 @@ class ControlPanelViewMixin:
         self.enable_btn = device.enable_btn
         self.stop_btn = device.stop_btn
         self.pause_btn = device.pause_btn
-        self.raw_ik_enable_btn = device.raw_ik_enable_btn
+        self.ros2_output_btn = device.ros2_output_btn
         self.reset_btn = device.reset_btn
         self.calib_btn = device.calib_btn
         self.rope_init_btn = device.rope_init_btn
@@ -201,13 +201,7 @@ class ControlPanelViewMixin:
         self._reset_manual_widget_refs()
 
     def _reset_manual_widget_refs(self) -> None:
-        self._control_widgets = []
-        self.manual_check = None
-        self.new_device_reset_btn = None
-        self.reset_zero_btn = None
-        self.calib_load_btn = None
-        self.calib_import_btn = None
-        self.calib_export_btn = None
+        self.calib_file_load_btn = None
         self.open_btn = None
         self.release_half_turn_btn = None
         self.tighten_half_turn_btn = None
@@ -253,9 +247,6 @@ class ControlPanelViewMixin:
         self.joint_send_buttons = []
         self.joint_use_checks = [None] * ENCODER_COUNT
         self.joint_group_use_checks = []
-        self.teleop_joint_use_checks = [None] * ENCODER_COUNT
-        self.teleop_group_use_checks = []
-        self.teleop_hand_use_check = None
         self._joint_target_user_set = []
         self.motor_turn_items = []
         self.motor_raw_items = []
@@ -266,6 +257,7 @@ class ControlPanelViewMixin:
         self.motor_target_spins = []
         self.motor_sliders = []
         self.motor_send_buttons = []
+        self.motor_step_buttons = []
         self.abs_limit_lock_toggle_btn = None
         self.motor_use_checks = [None] * MOTOR_COUNT
         self.motor_group_use_checks = []
@@ -282,14 +274,6 @@ class ControlPanelViewMixin:
     def _build_manual_body(self) -> None:
         """Build the manual body UI section."""
         ManualControlView.build(self)
-
-    def _build_teleop_body(self) -> None:
-        """Build the teleop body UI section."""
-        TeleopControlView.build(self)
-
-    def _build_teleop_scope_workflow(self) -> QtWidgets.QGroupBox:
-        """Build the teleop scope workflow UI section."""
-        return TeleopControlView.scope_workflow(self)
 
     def _make_item(self, text: str = "-") -> QtWidgets.QTableWidgetItem:
         """Create the item widget or helper."""

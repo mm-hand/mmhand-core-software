@@ -37,7 +37,11 @@ def _packets(sequence: int):
 def test_task_runtime_is_published_only_after_full_window() -> None:
     reducer = _reducer()
     owner = _Owner()
-    assert reducer.process_packets(owner, _packets(1)[:6]) is None
+    partial = reducer.process_packets(owner, _packets(1)[:6])
+    assert partial is not None
+    assert partial.task_runtime == {}
+    assert partial.task_runtime_received_mask == 0x3F
+    assert partial.task_runtime_expected_mask == 0x7F
 
     model = reducer.process_packets(owner, _packets(1)[6:])
     assert model is not None
@@ -48,8 +52,10 @@ def test_task_runtime_is_published_only_after_full_window() -> None:
 def test_new_window_discards_partial_old_window() -> None:
     reducer = _reducer()
     owner = _Owner()
-    assert reducer.process_packets(owner, _packets(1)[:6]) is None
+    assert reducer.process_packets(owner, _packets(1)[:6]) is not None
 
     model = reducer.process_packets(owner, _packets(2))
     assert model is not None
     assert {diag["window_sequence"] for diag in model.task_runtime.values()} == {2}
+    assert model.task_runtime_received_mask == 0x7F
+    assert model.task_runtime_dropped_windows == 1

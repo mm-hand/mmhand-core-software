@@ -10,6 +10,8 @@ struct TactileReadDiag {
     uint16_t enabledMask;      ///< 15个逻辑模块中启用的位图。
     uint16_t okReads;          ///< 本轮摘要和全量都成功的模块数。
     uint16_t failedReads;      ///< 本轮任一读取失败的模块数。
+    uint16_t summaryOkMask;    ///< 本轮摘要寄存器读取成功模块位图。
+    uint16_t fullOkMask;       ///< 本轮全量触元读取成功模块位图。
     uint16_t okMask;           ///< 本轮读取成功模块位图。
     uint8_t lastStatus;        ///< 最近一次响应状态字节。
     uint8_t lastRecvCrc;       ///< 最近一次设备返回CRC8。

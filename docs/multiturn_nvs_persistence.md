@@ -1,270 +1,105 @@
-# 下位机多圈圈数 NVS 保存与烧录注意事项
+# 多圈与标定数据的上位机 JSON 持久化
 
-> 当前专项文档，最后核对：2026-08-01。当前实现为 `mt_abs` namespace、V2 A/B 双槽、sequence、CRC32、mappingSignature 和异步低优先级保存；所有业务目标须经 ActuatorCommandGateway，文中的直控/反馈流程图若直接写 `servoTargetQueue`，应理解为 Gateway 内部的 latest-value 邮箱，不是允许业务任务直接访问。
+> 当前实现，最后核对：2026-08-20。P4 Flash/NVS 业务持久化由
+> `P4_FLASH_PERSISTENCE_ENABLE=0` 暂停启用；多圈运行锚点由上位机 JSON 管理。
 
-本文档说明当前 ESP32-P4 下位机如何保存飞特舵机多圈圈数、为什么需要逻辑坐标/硬件坐标分离、换舵机时如何关闭 NVS，以及 Arduino 烧录时需要注意的位置。
+## 1. 数据文件
 
-## 背景
+| 文件 | 内容 | 更新时机 |
+|---|---|---|
+| `desktop/resources/config/calibration_bundle.mmcal.json` | 21 路 Manual、Auto/LUT 和 27 路 ABS Limit | Manual 写入、自动标定成功、Calib Load |
+| `desktop/resources/config/device_state/multiturn_runtime.json` | 27 路 logical ABS、同帧 SavedRaw、有效掩码、设备身份和 SHA-256 | 运动时 20 Hz，静止时 2 Hz |
 
-飞特 ST-3215 多圈模式掉电后，舵机内部多圈圈数不会保存。再次上电时，舵机只能可靠提供当前单圈 raw 位置。
-如果系统仍把上一次的多圈 ABS 直接写给舵机，舵机会按本次上电后的硬件坐标运动，可能多跑一整圈。
+运行锚点按电机独立有效。某一台舵机重新标定或恢复失败，不会擦除其它电机的可信锚点。
 
-因此当前方案是：
+## 2. 最近圈恢复
 
-1. 下位机在 NVS 中保存每个电机的 `turn + raw` 快照。
-2. 下位机重新上电后，先读取当前舵机 raw。
-3. 只有当前 raw 与 NVS 快照 raw 足够接近时，才恢复该电机的逻辑多圈 ABS。
-4. 控制时对外继续使用逻辑 ABS，但真正写给舵机前转换成本次上电的硬件坐标。
-
-## 坐标定义
-
-当前代码里有两套坐标：
-
-- 逻辑多圈 ABS：上位机、NVS、状态机、PID 控制层看到的位置。
-- 硬件坐标：飞特舵机本次上电后自己认为的位置。
-
-恢复成功后使用：
+上位机不再使用固定 400 counts 容差。对每台 Turn Unknown 舵机，使用最后一组
+`savedLogicalAbs + SavedRaw` 和当前 `currentRaw` 计算最近的相邻圈：
 
 ```text
-logical_abs = hardware_abs + logical_offset
-hardware_target = logical_target - logical_offset
+delta = ((currentRaw - SavedRaw + 2048) mod 4096) - 2048
+restoredLogicalAbs = savedLogicalAbs + delta
 ```
 
-例如：
+`delta` 位于 `[-2048, 2048)`，因此能够正确处理 `4095 -> 0` 和 `0 -> 4095`。
+上位机已经算出最终 logical ABS，P4 收到后只建立 logical offset，不能再次按 raw 展开，
+否则在 logical offset 非零时会把相位差重复计算。
+
+```mermaid
+flowchart LR
+    A[JSON savedLogicalAbs + SavedRaw] --> B[读取当前 currentRaw]
+    B --> C[最短环形差 delta]
+    C --> D[最终 restoredLogicalAbs]
+    D --> E[P4 建立 logical offset]
+    E --> F[标记为待方向验证]
+```
+
+## 3. 运行方向验证
+
+最近圈算法解决的是单圈跨界，不能证明绳路、舵机或机械结构从未改变。因此恢复后不会
+立即永久信任，而是在第一次有意义的运动命令中验证方向：
+
+- 命令相对当前 ABS 至少前进 64 counts 才开始观察。
+- 实际 ABS 沿命令方向前进至少 32 counts，确认该电机恢复可信。
+- 实际 ABS 反向移动至少 24 counts，立即判定圈数错误。
+- 600 ms 内没有足够证据时结束本轮观察，但保留待验证状态，等待下一条有效命令。
+
+反向证据成立后，P4 清除目标批次、关闭该舵机力矩、置 `Turn Unknown` 并上报规则事件；
+上位机提示用户勾选对应关节重新执行 `Calibrate`。
+
+## 4. Calibrate 统一重建
+
+界面不再提供独立的 `New Device Reset` 或 `Reset Zero` 按钮。`Calibrate` 是唯一人工重建入口：
 
 ```text
-NVS 恢复逻辑位置 = 4309
-舵机上电后当前 raw/hardware = 213
-logical_offset = 4096
-
-上位机发送 rel=200：
-logical_target = 4509
-真正写给舵机的 hardware_target = 4509 - 4096 = 413
+勾选关节
+  -> 校验该关节 Manual 已存在
+  -> 对所选关节对应舵机下发硬件圈数归零
+  -> 清除这些舵机的 JSON 多圈锚点
+  -> 仅失效对应关节的 Auto/LUT/ABS Limit 快照
+  -> 重新下发 active scope
+  -> 启动自动标定
+  -> 标定成功后建立新的 turn0、Auto/LUT 和运行锚点
 ```
 
-这样物理上只会从 `213` 走到 `413`，也就是 `+200`，不会多跨一圈。
+辅助工作空间舵机由自动标定规划器按在线状态动态使用，但不属于标定前归零 mask，避免
+只标一个关节时清掉其它手指的多圈基准。
 
-核心代码位置：
+## 5. 身份与完整性门禁
 
-- `ESP32-P4/ServoBoardMain/src/communication/servo/ServoCommunicationTask.cpp`
-  - `ServoFeedbackInternal::logicalOffset`
-  - `restoreAbsolutePosition()`
-  - `logicalToHardwareTarget()`
-  - `setTarget()`
+JSON 恢复还要求：
 
-## NVS 保存内容
+- 产品指纹一致：协议、映射、硬件拓扑、参数、固件和 structure CRC。
+- 当前 V6 标定快照摘要一致。
+- JSON 自身 SHA-256 完整。
+- 电机在线且该条目仍在 `valid_motor_mask` 中。
 
-NVS 保存的是下位机侧的多圈安全快照：
+任一条件不满足时保持 `Turn Unknown`，不能把其它设备或旧机械配置的圈数回灌到当前手。
 
-```cpp
-struct MultiTurnNvsSnapshot {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t motorCount;
-    uint32_t sequence;
-    uint32_t validMask;
-    int16_t turns[SERVO_TOTAL_NUM];
-    int16_t raw[SERVO_TOTAL_NUM];
-    uint32_t crc32;
-};
-```
+## 6. P4 RAM/NVS 锚点与上位机锚点的区别
 
-保存 `turn + raw` 的原因：
+- 上位机下发的是已经计算完成的最终 logical ABS，P4 直接绑定。
+- P4 热插拔恢复若使用同一运行周期内的 RAM/NVS 锚点，锚点同时包含 logical ABS 和 raw，
+  可由 `restoreAbsolutePositionNearAnchor()` 在 P4 内执行相同的最近圈展开。
 
-- `turn` 用于恢复多圈。
-- `raw` 用于重新上电时和当前物理单圈位置做校验。
-- CRC 和 A/B slot 用于避免写入过程中掉电导致坏快照被误用。
+两条接口不可混用，否则 logical offset 非零时可能重复叠加 raw 差值。
 
-核心代码位置：
+## 7. 实机验收
 
-- `ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.h`
-- `ESP32-P4/ServoBoardMain/src/persistence/MultiTurnNvsStore.cpp`
+1. `SavedRaw=4090`、重新上电 `currentRaw=6`，应按 `+12 counts` 连续恢复。
+2. `SavedRaw=6`、重新上电 `currentRaw=4090`，应按 `-12 counts` 连续恢复。
+3. 只让 M24 掉电，M24 可独立恢复，其它电机锚点和 Auto 不变。
+4. 恢复后正向命令、实际同向运动，待验证标志被清除。
+5. 恢复后正向命令、实际反向运动，Mxx 进入 Turn Unknown、力矩关闭并提示重新标定。
+6. 勾选单关节执行 Calibrate，只归零该关节对应舵机；辅助工作空间舵机不归零。
+7. 删除、截断或篡改 JSON，系统保持 Turn Unknown，不静默生成可信圈数。
 
-## 什么时候保存
+核心代码：
 
-下位机当前会在这些时机尝试保存 NVS 快照：
-
-- 运行开始
-- 运行结束
-- 上位机心跳丢失，判断上位机离线
-- 上位机恢复多圈成功后
-- 自动标定完成后
-- 上位机离线期间检测到运动
-- 上位机离线期间接近跨圈边界
-
-保存前会过滤不可信通道：
-
-- `multi_turn_unknown_bitmap` 中仍为 unknown 的电机不会保存。
-- 离线或无反馈的电机不会覆盖当前值。
-- 本次未采样到的电机沿用旧快照，避免局部 active scope 把其它电机数据清掉。
-
-相关代码：
-
-- `ServoCommunicationTask.cpp`
-  - `saveCurrentMultiTurnSnapshot()`
-  - `processMultiTurnNvsSave()`
-  - `collectTrustedMultiTurnSnapshot()`
-- `StateMachineTask.cpp`
-  - `requestMultiTurnNvsSave()`
-
-## 上位机心跳与离线保存
-
-上位机在线时每 500 ms 发送一次 heartbeat。
-下位机 1000 ms 内没有收到合法上位机帧，就认为上位机离线，并触发一次 NVS 保存。
-
-相关代码：
-
-- 上位机：
-  - `desktop/core/protocol.py`
-  - `desktop/core/comm_layer.py`
-- 下位机：
-  - `ESP32-P4/ServoBoardMain/src/communication/upper/UpperCommTask.cpp`
-  - `ESP32-P4/ServoBoardMain/src/communication/servo/ServoCommunicationTask.cpp`
-
-## NVS ON / OFF 按钮
-
-上位机 Device 区有 `Flash ON / Flash OFF` 按钮，用于控制多圈缓存是否写入下位机 flash，并同步启用或禁用上位机缓存恢复。
-
-### NVS ON
-
-- 允许下位机开机读取 NVS 快照。
-- 允许后续运行中继续保存多圈快照。
-- 不会主动恢复已经被清除的旧快照。
-
-### NVS OFF
-
-用于更换舵机、重新装配、或者不希望继承旧多圈数据的维护场景。
-
-点击后下位机会：
-
-1. 将 `enabled=0` 持久写入 NVS。
-2. 清空旧的 `slot0/slot1` 多圈快照。
-3. 禁止后续保存。
-4. 下次上电跳过 NVS 恢复。
-5. 在线舵机使用当前单圈 raw 作为新的 0 圈起点。
-
-推荐换舵机流程：
-
-1. 保持下位机和上位机在线。
-2. 点击 `NVS OFF`。
-3. 确认按钮显示 `NVS OFF`。
-4. 断电并更换舵机。
-5. 下位机重新上电，此时不会恢复旧圈数。
-6. 确认单圈/多圈方向和控制正常后，再点击 `NVS ON`。
-7. 后续重新运行或校准后生成新的 NVS 快照。
-
-相关代码：
-
-- 协议命令：`CMD_MULTITURN_NVS_CONTROL = 0xDD`
-- 上位机：
-  - `desktop/ui/ui_control_panels.py`
-  - `desktop/core/core_logic.py`
-  - `desktop/core/comm_layer.py`
-  - `desktop/core/protocol.py`
-- 下位机：
-  - `UpperCommTask.cpp`
-  - `MultiTurnNvsStore.cpp`
-
-## 直控模式与负反馈模式是否都正确
-
-当前逻辑坐标到硬件坐标的转换在舵机通信层统一完成：
-
-```cpp
-ServoBusDriver::setTarget()
-```
-
-直控模式路径：
-
-```text
-上位机 motor absolute/direct command
--> UpperCommCommandRouter::upperApplyMotorTargets()
--> ControlTask 组装 ServoTargetBatch
--> ActuatorCommandGateway::submit()
--> ServoSafetyPolicy 校验并写入内部 servoTargetQueue
--> ServoCommunicationTask::applyServoTargetBatch()
--> ServoBusDriver::setTarget()
--> logicalToHardwareTarget()
--> 飞特舵机
-```
-
-负反馈模式路径：
-
-```text
-上位机 joint target / run feedback
--> ControlTask
--> ControlSolver PID 输出 outPulses
--> appendServoTarget()
--> ActuatorCommandGateway::submit()
--> ServoSafetyPolicy 校验并写入内部 servoTargetQueue
--> ServoCommunicationTask::applyServoTargetBatch()
--> ServoBusDriver::setTarget()
--> logicalToHardwareTarget()
--> 飞特舵机
-```
-
-所以只要目标最终通过 `ServoTargetBatch` 进入 `ServoCommunicationTask::applyServoTargetBatch()`，直控和负反馈都会走同一个转换点。
-目前代码是这样走的，因此这次修正不是只对直控生效，负反馈模式也会生效。
-
-但实际硬件上仍建议再做一次负反馈验证：
-
-1. 让某个电机处在 `turn=1` 附近并保存 NVS。
-2. 先关上位机，再关下位机。
-3. 重新上电并确认恢复成功，串口应出现类似：
-
-```text
-[SERVO RESTORE OFFSET] id=1 logical=4309 hardware=213 offset=4096 raw=213
-```
-
-4. 在 Joint Channel 进入负反馈模式。
-5. 给对应 joint 一个小目标，例如产生约 100 到 200 pulse 的 PID 输出。
-6. 观察 Motor Channel：
-   - 逻辑 ABS 应连续变化。
-   - raw 只变化对应的小步数。
-   - 不应额外跨一整圈。
-
-## Arduino 烧录注意事项
-
-工程目录：
-
-```text
-ESP32-P4/ServoBoardMain
-```
-
-注意事项：
-
-1. 使用 Arduino IDE 打开该工程目录下的主 `.ino` 工程。
-2. 确认选择的是 ESP32-P4 对应开发板。
-3. 你的板子是 32MB Flash，Arduino IDE 里 `Tools -> Flash Size` 要选择 32MB。
-4. 当前仓库没有使用自定义 `partitions.csv`。不要为了 NVS 手动添加旧的 `partitions.csv`，否则可能导致烧录分区和实际板卡配置不一致。
-5. 之前 `Preferences.h` 编译失败的问题已经处理，现在下位机 NVS 使用 ESP-IDF 原生接口：
-
-```cpp
-#include <nvs.h>
-#include <nvs_flash.h>
-```
-
-6. 如果改过分区表或怀疑 NVS 里有旧脏数据，可以选择：
-   - 优先使用上位机 `NVS OFF` 清空多圈快照。
-   - 或者 Arduino IDE 开启 `Erase All Flash Before Sketch Upload` 后重新烧录。
-7. 如果只是普通更新代码，不建议每次都擦全 Flash，因为会清掉 NVS 中的开关和快照。
-8. 烧录后建议先看串口日志：
-
-```text
-[NVS MULTITURN] loaded seq=...
-[NVS MULTITURN] no valid boot snapshot
-[NVS MULTITURN] disabled by user, boot restore skipped
-[SERVO RESTORE OFFSET] ...
-```
-
-这些日志可以判断当前到底是恢复了快照、没有快照，还是 NVS 被用户关闭。
-
-## 风险边界
-
-NVS 只能保存“下位机断电前已经知道的位置”。以下情况仍然不安全：
-
-- 舵机断电后被外力转动。
-- 更换舵机但没有先 `NVS OFF` 清快照。
-- 当前 raw 与保存 raw 差距过大，此时恢复会被拒绝并保持 unknown。
-- NVS 写入过程中电源反复抖动，可能只保留上一个有效 slot。
-
-因此硬件更换、拆装、手动转动后，建议先 `NVS OFF`，重新确认机械位置和控制方向，再 `NVS ON` 生成新的快照。
+- `desktop/core/device_state_store.py`
+- `desktop/core/core_logic.py`
+- `desktop/ui/ui_control_calibration.py`
+- `ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.h`
+- `ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.cpp`
+- `ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCalibrationCommandHandler.cpp`

@@ -12,7 +12,7 @@
 4. [通信协议与数据校验](通信协议与数据校验.md)：上位机串口、S3-P4 CAN、舵机总线、CRC/奇偶校验和时延估算。
 5. [持久化与掉电恢复](持久化与掉电恢复.md)：Manual 标定、多圈坐标、A/B 双槽、舵机单独掉电和 Reset Zero。
 6. [硬件映射与连线](硬件映射与连线.md)：21 关节/27 电机映射、总线、引脚、SPI 模式和手指顺序。
-7. [ROS2与遥操链路](ROS2与遥操链路.md)：Wuji、MANUS、ROS2 topic、URDF 契约和输出授权门。
+7. [ROS2与遥操链路](ROS2与遥操链路.md)：外部发布者、ROS2 topic、URDF 契约、输出授权与 Replay。
 8. [实机验证与故障排查](实机验证与故障排查.md)：ENC 灯、磁编无读数、RopeInit 黄灯、通信与标定排查顺序。
 
 ## P4 架构专题
@@ -28,10 +28,10 @@
 ## 当前专项说明
 
 - 控制与状态：[当前单/双电机 PID](pid_control_mode_current.md)、[当前系统与碰撞检测状态机](当前系统与碰撞检测状态机.md)、[状态机优化说明](状态机优化说明.md)、[对抗双电机标定与 RopeInit](对抗双电机标定与RopeInit说明.md)。
-- 标定与恢复：[CalibLoad 标定快照恢复](CalibLoad标定快照恢复说明.md)、[多圈 NVS 保存](multiturn_nvs_persistence.md)、[多圈断电恢复闭环](多圈断电恢复闭环修改说明.md)、[舵机单独掉电恢复](舵机单独掉电_多圈坐标与动态行程恢复说明.md)。
+- 标定与恢复：[CalibLoad 标定快照恢复](CalibLoad标定快照恢复说明.md)、[多圈与标定 JSON 持久化](multiturn_nvs_persistence.md)、[多圈断电恢复闭环](多圈断电恢复闭环修改说明.md)、[舵机单独掉电恢复](舵机单独掉电_多圈坐标与动态行程恢复说明.md)。
 - 硬件与传感：[当前硬件映射](current_mapping_readme.md)、[SPI 模式与磁编/触觉](SPI模式与磁编触觉连线说明.md)、[舵机/磁编/触觉连线总结](舵机磁编触觉连线总结.md)、[触觉与磁编改进详解](触觉与磁编改进详解.md)、[电路接口清单](电路.md)。
 - 通信：[详细通信说明](通信.md)、[通信帧与面试指南](通信帧详解与面试指南.md)、[校验算法入门](校验算法入门与代码说明.md)。
-- 遥操：[Wuji URDF 与 ROS2](wuji_URDF_适配与ROS2链路说明.md)、[MANUS 遥操链路](manus_teleop_chain.md)。
+- 外部控制：[Wuji URDF 与 ROS2](wuji_URDF_适配与ROS2链路说明.md)、[ROS2 输入与 Replay](ROS2与遥操链路.md)。
 - 工具与流程：[Arduino IDE 快速开始](start.md)、[算法开发路线](1.0算法.md)、[V1/V2 兼容审计](V1_V2兼容与禁用逻辑清理审计_20260718.md)。
 
 ## 历史故障与审计

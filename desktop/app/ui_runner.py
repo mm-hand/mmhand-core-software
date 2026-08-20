@@ -10,20 +10,45 @@
 
 from __future__ import annotations
 
+import faulthandler
+import sys
 import threading
+import traceback
 from enum import Enum
 from typing import Optional
 
 from desktop.core.hand_backend import HandBackend
+from desktop.core.session_log import log_session
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
 POSE_DISPLAY_FROM_TEXT = False
 
 
+def _configure_gui_diagnostics() -> None:
+    """在 Qt 应用创建前固定渲染后端，并保留原生崩溃的控制台诊断。"""
+    from desktop.ui.ui_qt_compat import QT_LIB, configure_opengl_before_app
+
+    mode = configure_opengl_before_app()
+    try:
+        faulthandler.enable()
+    except (OSError, RuntimeError):
+        pass
+    previous_hook = sys.excepthook
+
+    def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
+        detail = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_traceback)
+        ).strip()
+        log_session("GUI", f"uncaught exception:\n{detail}")
+        previous_hook(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = _log_uncaught_exception
+    log_session("GUI", f"Qt={QT_LIB} requested_opengl={mode}")
+
+
 class Mode(Enum):
     MONITOR = "monitor"
-    TELEOP = "teleop"
     REPLAY = "replay"
 
 
@@ -32,7 +57,7 @@ def _run_monitor_gui(
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     *,
-    ros2_enabled: bool = False,
+    ros2_enabled: bool = True,
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
 ) -> None:
     backend.reset()
@@ -50,36 +75,6 @@ def _run_monitor_gui(
         ros_topic=ros_topic,
     )
     gui_win.run()
-
-
-def _run_teleop_gui(
-    backend: HandBackend,
-    port: Optional[str] = None,
-    tactile_port: Optional[str] = None,
-    ros2_enabled: bool = False,
-    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
-) -> None:
-    backend.reset()
-    try:
-        from desktop.teleop.example_teleop import run as teleop_run
-    except ImportError:
-        print("desktop.teleop.example_teleop module not found. Please implement run(backend, port=None).")
-        return
-    if not callable(teleop_run):
-        print("example_teleop.run must be callable: run(backend, port).")
-        return
-    try:
-        teleop_run(
-            backend,
-            port,
-            tactile_port=tactile_port,
-            ros2_enabled=ros2_enabled,
-            ros_topic=ros_topic,
-        )
-    except TypeError as exc:
-        if not any(name in str(exc) for name in ("tactile_port", "ros2_enabled", "ros_topic")):
-            raise
-        teleop_run(backend, port)
 
 
 def _run_replay_gui(
@@ -148,15 +143,6 @@ def run(
             ros_topic=ros_topic,
         )
         return
-    if mode == Mode.TELEOP:
-        _run_teleop_gui(
-            backend,
-            port,
-            tactile_port,
-            ros2_enabled=ros2_enabled,
-            ros_topic=ros_topic,
-        )
-        return
     if mode == Mode.REPLAY:
         _run_replay_gui(
             backend,
@@ -174,13 +160,14 @@ def run_ui(
     mode: str = "monitor",
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
-    ros2_enabled: bool = False,
+    ros2_enabled: bool = True,
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
     ros2_raw_ik_space: str = "legacy_calibrated_deg",
     backend: Optional[HandBackend] = None,
 ) -> int:
+    _configure_gui_diagnostics()
     backend = backend or HandBackend()
     if port:
         if backend.connect(port):
@@ -203,10 +190,10 @@ def run_ui(
             bridge.start()
             print(f"ROS2 {ros2_input} input enabled on {ros_topic}")
             if auto_start:
-                # --auto-start 只启动普通控制器，不授予遥操输出权限。
-                # ROS2 可继续接收和刷新最新帧，用户必须显式点击 RAW IK ENABLE。
+                # --auto-start 只启动普通控制器，不授予外部 ROS2 输出权限。
+                # ROS2 可继续接收和刷新最新帧，用户必须显式点击 ROS2 INPUT。
                 backend.start()
-                print("Controller auto-started; RAW IK output remains disabled")
+                print("Controller auto-started; ROS2 input remains unauthorized")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             bridge = None

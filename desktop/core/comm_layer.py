@@ -23,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - depends on local environment
     serial = None
 
 from .auto_calib_logger import AutoCalibLogger
+from . import protocol as protocol_codec
 from .communication import (
     AckTracker,
     FrameDecoder,
@@ -30,7 +31,18 @@ from .communication import (
     SerialTransport,
     StateReducer,
 )
-from .data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
+from .data_models import (
+    FingerTactile,
+    HandModel,
+    MotorState,
+    TACTILE_DATA_LEVEL_FULL,
+    TACTILE_DATA_LEVEL_NONE,
+    TACTILE_DATA_LEVEL_SUMMARY,
+    TACTILE_SOURCE_P4_CAN_RELAY,
+    TACTILE_SOURCE_S3_SERIAL,
+    TactileSensor,
+    tactile_segment_shape,
+)
 from .protocol import (
     BAUDRATE,
     ENCODER_COUNT,
@@ -73,10 +85,8 @@ from .protocol import (
     build_servo_reset_zero_cmd,
     build_host_heartbeat_cmd,
     build_motor_abs_limit_lock_cmd,
-    build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_abs_one_cmd,
-    build_motor_pos_sweep_cmd,
     build_multiturn_nvs_control_cmd,
     build_manual_encoder_reference_cmd,
     build_clear_manual_encoder_reference_cmd,
@@ -91,52 +101,6 @@ from .protocol import (
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
-    CMD_CALIBRATE,
-    CMD_CLEAR_CALIBRATION,
-    CMD_CLEAR_CALIBRATION_SCOPE,
-    CMD_SERVO_RESET_ZERO,
-    CMD_CALIB_LOAD_JOINT,
-    CMD_CALIB_LOAD_LIMITS,
-    CMD_ACTIVE_SCOPE,
-    CMD_START,
-    CMD_STOP,
-    CMD_RESET,
-    CMD_RUN_FEEDBACK,
-    CMD_PAUSE,
-    CMD_RESTORE_MULTITURN,
-    CMD_MOTOR_ABS_LIMIT_LOCK,
-    CMD_MULTITURN_NVS_CONTROL,
-    CMD_MANUAL_ENCODER_REFERENCE,
-    CMD_MANUAL_ENCODER_QUERY,
-    CMD_MANUAL_ENCODER_SINGLE,
-    CMD_ROPE_INIT,
-    CMD_ANGLE_CTRL_MASKED,
-    SYSTEM_STATE_UNCONTROLLABLE,
-    SYSTEM_STATE_RUN_FEEDBACK,
-    SYSTEM_STATE_IDLE,
-    SYSTEM_STATE_CALIBRATION_RUNNING,
-    SYSTEM_STATE_RECOVERY_REQUIRED,
-    SYSTEM_STATE_READY,
-    SYSTEM_STATE_PAUSED,
-    SYSTEM_FAULT_CALIBRATION,
-    parse_calib_diag_packet,
-    parse_fault_status_packet,
-    parse_joint_calib_snapshot_packet,
-    parse_manual_encoder_reference_packet,
-    parse_motor_abs_limit_packet,
-    parse_multiturn_restore_result_packet,
-    parse_multiturn_snapshot_raw_packet,
-    parse_product_fingerprint_packet,
-    parse_servo_route_status_packet,
-    parse_safety_event_packet,
-    parse_servo_logical_range_packet,
-    parse_proto_ack,
-    parse_sensor_packet,
-    parse_servo_angle_packet,
-    parse_servo_raw_packet,
-    parse_servo_telem_packet,
-    parse_system_status_packet,
-    parse_task_diag_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
     split_p4_timestamp,
@@ -145,8 +109,6 @@ from .protocol import (
     TACTILE_SENSOR_PER_GROUP,
     TACTILE_SENSOR_TAXEL_COUNTS,
     crc16_ccitt,
-    PROTO_ACK_STATUS_OK,
-    PROTO_ACK_STATUS_QUEUED,
 )
 from .session_log import log_session
 
@@ -159,7 +121,7 @@ TACTILE_ZERO_HOLD_FRAMES = 6
 TACTILE_HOLD_MIN_MAGNITUDE = 12
 TACTILE_FULL_STALE_AFTER_S = 1.0
 TACTILE_SERIAL_OFFLINE_AFTER_S = 0.6
-TACTILE_MODULE_OFFLINE_AFTER_S = 0.6
+TACTILE_P4_RELAY_OFFLINE_AFTER_S = 0.2
 TERMINAL_LOG_LEVEL_ERROR = 1
 TERMINAL_LOG_LEVEL_WARN = 2
 TERMINAL_LOG_LEVEL_INFO = 3
@@ -439,6 +401,7 @@ class TactileSerialComm:
         self._tactile_full_dropped = 0
         self._last_tactile_full_ts = 0.0
         self._last_tactile_rx_ts = 0.0
+        self._last_tactile_module_valid_mask = 0
         self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         self._tactile_offline_emitted = False
         self._rx_diag_last_print = time.time()
@@ -468,6 +431,7 @@ class TactileSerialComm:
             self._last_tactile_summary_seq = None
             self._last_tactile_full_ts = 0.0
             self._last_tactile_rx_ts = 0.0
+            self._last_tactile_module_valid_mask = 0
             self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
             self._tactile_offline_emitted = False
             self._rx_diag_last_print = time.time()
@@ -529,6 +493,9 @@ class TactileSerialComm:
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
         model.tactile_data = []
+        model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+        model.tactile_data_level = TACTILE_DATA_LEVEL_NONE
+        model.tactile_module_valid_mask = 0
         model.tactile_online = False
         model.tactile_last_rx_ts = self._last_tactile_rx_ts
         model.tactile_module_online = [False] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
@@ -538,88 +505,31 @@ class TactileSerialComm:
         self._tactile_offline_emitted = True
         return model
 
-    @staticmethod
-    def _summary_sensor_has_tactile_data(values: Optional[List[int]]) -> bool:
-        if not values:
-            return False
-        padded = list(values[:3])
-        while len(padded) < 3:
-            padded.append(0)
-        return (
-            abs(int(padded[0])) > TACTILE_ZERO_NOISE_FLOOR or
-            abs(int(padded[1])) > TACTILE_ZERO_NOISE_FLOOR or
-            int(padded[2]) > TACTILE_ZERO_NOISE_FLOOR
-        )
-
-    @staticmethod
-    def _full_sensor_has_tactile_data(raw: bytes, cursor: int, taxel_count: int) -> bool:
-        end = min(len(raw), int(cursor) + int(taxel_count) * 3)
-        idx = int(cursor)
-        while idx + 2 < end:
-            x = _u8_to_i8(raw[idx])
-            y = _u8_to_i8(raw[idx + 1])
-            z = int(raw[idx + 2])
-            if (
-                abs(int(x)) > TACTILE_ZERO_NOISE_FLOOR or
-                abs(int(y)) > TACTILE_ZERO_NOISE_FLOOR or
-                z > TACTILE_ZERO_NOISE_FLOOR
-            ):
-                return True
-            idx += 3
-        return False
-
-    def _mark_tactile_modules_seen(
-        self,
-        groups: Optional[List[List[List[int]]]] = None,
-        full_raw: Optional[bytes] = None,
-    ) -> None:
+    def _mark_tactile_summary_received(self, module_valid_mask: int) -> None:
+        """记录S3摘要链路和模块有效性；零受力不再被当成模块离线。"""
         now = time.time()
         self._last_tactile_rx_ts = now
         self._tactile_offline_emitted = False
-        full_active = [[False] * TACTILE_SENSOR_PER_GROUP for _ in range(TACTILE_GROUP_COUNT)]
-        if full_raw is not None:
-            cursor = 0
-            raw_bytes = bytes(full_raw)
-            for group_idx in range(TACTILE_GROUP_COUNT):
-                for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
-                    taxel_count = (
-                        TACTILE_SENSOR_TAXEL_COUNTS[sensor_idx]
-                        if sensor_idx < len(TACTILE_SENSOR_TAXEL_COUNTS)
-                        else 0
-                    )
-                    full_active[group_idx][sensor_idx] = self._full_sensor_has_tactile_data(
-                        raw_bytes,
-                        cursor,
-                        int(taxel_count),
-                    )
-                    cursor += int(taxel_count) * 3
-        for group_idx in range(TACTILE_GROUP_COUNT):
-            src_group = groups[group_idx] if groups and group_idx < len(groups) else None
-            for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
-                if src_group is not None and sensor_idx >= len(src_group):
-                    continue
-                summary_active = (
-                    src_group is not None and
-                    sensor_idx < len(src_group) and
-                    self._summary_sensor_has_tactile_data(src_group[sensor_idx])
-                )
-                if not summary_active and not full_active[group_idx][sensor_idx]:
-                    continue
-                self._tactile_module_last_rx_ts[
-                    group_idx * TACTILE_SENSOR_PER_GROUP + sensor_idx
-                ] = now
+        valid_mask = int(module_valid_mask) & ((1 << (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)) - 1)
+        self._last_tactile_module_valid_mask = valid_mask
+        for module_index in range(TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP):
+            if valid_mask & (1 << module_index):
+                self._tactile_module_last_rx_ts[module_index] = now
 
     def _apply_tactile_status(self, model: HandModel) -> None:
         now = time.time()
         online = self._last_tactile_rx_ts > 0.0 and (
             now - self._last_tactile_rx_ts
         ) <= TACTILE_SERIAL_OFFLINE_AFTER_S
+        valid_mask = self._last_tactile_module_valid_mask if online else 0
+        model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+        model.tactile_module_valid_mask = int(valid_mask)
         model.tactile_online = bool(online)
         model.tactile_last_rx_ts = float(self._last_tactile_rx_ts)
-        module_online: List[bool] = []
-        for ts in self._tactile_module_last_rx_ts:
-            module_online.append(bool(online and ts > 0.0 and (now - ts) <= TACTILE_MODULE_OFFLINE_AFTER_S))
-        model.tactile_module_online = module_online
+        model.tactile_module_online = [
+            bool(valid_mask & (1 << module_index))
+            for module_index in range(TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
+        ]
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
 
     @staticmethod
@@ -772,18 +682,26 @@ class TactileSerialComm:
                 parsed = parse_tactile_packet(payload)
                 if parsed is None:
                     continue
-                seq, groups = parsed
+                seq, groups, module_valid_mask = parsed
                 stable_groups = self._stabilize_tactile_groups(groups)
-                self._mark_tactile_modules_seen(stable_groups)
+                self._mark_tactile_summary_received(module_valid_mask)
                 self._last_tactile_summary_groups = stable_groups
                 self._last_tactile_summary_seq = int(seq)
                 model.tactile_summary_seq = int(seq)
+                model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+                model.tactile_module_valid_mask = int(module_valid_mask)
                 model.tactile_full_crc_errors = self._tactile_full_crc_errors
                 model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
                 model.tactile_full_dropped = self._tactile_full_dropped
                 if _summary_groups_all_zero(stable_groups):
                     self._last_tactile_full_ts = 0.0
-                model.tactile_data = _build_tactile_fingers(stable_groups)
+                full_is_fresh = (
+                    bool(model.tactile_data) and
+                    (time.time() - self._last_tactile_full_ts) <= TACTILE_FULL_STALE_AFTER_S
+                )
+                if not full_is_fresh:
+                    model.tactile_data = _build_tactile_fingers(stable_groups)
+                    model.tactile_data_level = TACTILE_DATA_LEVEL_SUMMARY
                 emitted = True
 
             elif pkt_type in TACTILE_SERIAL_FULL_PACKET_TYPES:
@@ -814,7 +732,8 @@ class TactileSerialComm:
                     raw,
                     self._last_tactile_summary_groups,
                 )
-                self._mark_tactile_modules_seen(self._last_tactile_summary_groups, raw)
+                model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+                model.tactile_data_level = TACTILE_DATA_LEVEL_FULL
                 model.tactile_full_seq = int(seq)
                 model.tactile_full_summary_seq = (
                     int(accepted_summary_seq)
@@ -912,12 +831,14 @@ class LowerComputerComm:
 
     @staticmethod
     def _parse_protocol_payload(parser_name: str, payload: bytes):
-        """动态取得旧模块 parser，保留测试替换 parser 的兼容能力。
+        """从唯一协议模块取得 parser，并保留临时覆盖 parser 的能力。
 
-        P1 只拆通信职责，不改变 ``desktop.core.comm_layer.parse_xxx`` 的历史
-        monkeypatch 接口。解析函数完成稳定后，可在后续阶段改为构造时显式注入。
+        生产解析器统一归属 ``protocol.py``；局部同名函数只作为调试覆盖点。
+        这样通信拆分后不会因漏写某个重复 import 让整条 RX 链路掉线。
         """
         parser = globals().get(str(parser_name))
+        if not callable(parser):
+            parser = getattr(protocol_codec, str(parser_name), None)
         if not callable(parser):
             raise RuntimeError(f"protocol parser is unavailable: {parser_name}")
         return parser(payload)
@@ -954,10 +875,6 @@ class LowerComputerComm:
     def _ack_lock(self) -> threading.Condition:
         """兼容旧代码的条件变量名称；新代码统一通过 ``AckTracker`` 操作。"""
         return self._ack_tracker.condition
-
-    @property
-    def _last_proto_ack(self) -> Optional[tuple]:
-        return self._ack_tracker.last_ack
 
     @property
     def _proto_ack_sequence(self) -> int:
@@ -1116,7 +1033,6 @@ class LowerComputerComm:
         model.has_fault_status_data = False
         model.servo_online_bitmap = 0
         model.has_servo_route_status = False
-        model.servo_route_valid_bitmap = 0
         model.servo_route_controllable_bitmap = 0
         model.servo_route_conflict_bitmap = 0
         model.servo_bus_overload_mask = 0
@@ -1429,6 +1345,18 @@ class LowerComputerComm:
 
     @staticmethod
     def _apply_connectivity_visibility(model: HandModel) -> None:
+        # P4仍有其他遥测包到达时，在统一收尾阶段根据摘要时间判定触觉中继超时。
+        # 链路在线与模块有效必须分开：即使15位均为0，刚收到摘要也说明CAN中继在线。
+        if (
+            getattr(model, "tactile_source", "") == TACTILE_SOURCE_P4_CAN_RELAY and
+            bool(getattr(model, "tactile_online", False))
+        ):
+            last_rx = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
+            if last_rx <= 0.0 or (time.time() - last_rx) > TACTILE_P4_RELAY_OFFLINE_AFTER_S:
+                model.tactile_online = False
+                model.tactile_module_valid_mask = 0
+                model.tactile_module_online = [False] * 15
+
         if bool(getattr(model, "has_connectivity_status", False)):
             servo_mask = int(getattr(model, "servo_online_bitmap", 0) or 0)
             for i in range(MOTOR_COUNT):
@@ -1501,7 +1429,6 @@ class LowerComputerComm:
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
         return isinstance(cmd, tuple) and cmd[0] in (
-            "motor_pos_sweep",
             "motor_pos_abs",
             "motor_pos_abs_one",
             "angle_live",
@@ -1683,10 +1610,6 @@ class LowerComputerComm:
             return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":
             return build_rope_init_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
-            return build_motor_pos_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":
-            return build_motor_pos_sweep_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":

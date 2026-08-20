@@ -1,6 +1,6 @@
 /**
  * @file TendonCalibrationLut.h
- * @brief 定义 Tendon LUT 访问接口和边界钳位结果。
+ * @brief 定义 Tendon LUT 访问、插值和端部线性外推接口。
  */
 #ifndef TENDON_CALIBRATION_LUT_H
 #define TENDON_CALIBRATION_LUT_H
@@ -9,7 +9,7 @@
 #include "../calibration/CalibrationRuntimeStore.h"
 
 // 将 URDF 关节角转换到标定 LUT 的内部角度坐标，再对指定执行器的
-// raw ABS counts 做线性插值。超出 LUT 角度端点时钳到最近端点，不外推。
+// raw ABS counts 做线性插值；超出 LUT 角度端点时沿首末段斜率外推。
 bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult& calibration,
                                           uint8_t actuatorIndex,
                                           float urdfDeg,

@@ -16,7 +16,7 @@ import time
 from typing import Callable, Iterable, Optional
 
 from desktop.core.hand_backend import HandBackend
-from desktop.teleop.joint_target_adapter import URDF_DEG, adapt_joint_targets
+from desktop.core.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 

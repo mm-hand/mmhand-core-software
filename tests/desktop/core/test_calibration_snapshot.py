@@ -5,9 +5,12 @@ import pytest
 from desktop.core.calibration_snapshot import (
     CalibrationSnapshotError,
     atomic_write_snapshot,
+    invalidate_calibration_snapshot_scope,
     merge_snapshot,
+    parse_mask,
     read_snapshot,
     seal_snapshot,
+    update_manual_snapshot,
 )
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 
@@ -117,3 +120,59 @@ def test_seal_does_not_make_legacy_shape_valid():
         from desktop.core.calibration_snapshot import validate_snapshot
 
         validate_snapshot(seal_snapshot({"joint_calib_results": []}))
+
+
+def test_manual_update_archives_v5_and_creates_v6(tmp_path):
+    """旧 V5 不再阻断新的 Manual 数据，但也不能混入 V6 映射结果。"""
+    path = tmp_path / "calibration_bundle.mmcal.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format": "mmhand_calibration_bundle",
+                "schema_version": 5,
+                "legacy": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    updated = update_manual_snapshot(
+        path,
+        valid_mask=1 << 3,
+        min_raw=[100] * ENCODER_COUNT,
+        max_raw=[200] * ENCODER_COUNT,
+    )
+
+    assert updated["schema_version"] == 6
+    assert parse_mask(updated["manual_reference_valid_bitmap"]) == 1 << 3
+    assert updated["joint_calib_results"] == [None] * ENCODER_COUNT
+    assert len(list(tmp_path.glob("*.legacy_v5_*.json"))) == 1
+
+
+def test_scope_invalidation_preserves_manual_when_all_auto_is_removed(tmp_path):
+    """全手 Reset Zero 只能清 Auto/LUT/限位，不能删除 Manual JSON。"""
+    path = tmp_path / "calibration_bundle.mmcal.json"
+    payload = merge_snapshot(
+        None,
+        _current_payload(0, _result(0, 0, 1)),
+        updated_joint_mask=1 << 0,
+    )
+    atomic_write_snapshot(path, payload)
+
+    invalidate_calibration_snapshot_scope(
+        path,
+        motor_mask=(1 << MOTOR_COUNT) - 1,
+        joint_mask=(1 << ENCODER_COUNT) - 1,
+        reason="manual_prepare",
+    )
+
+    updated = read_snapshot(path)
+    assert parse_mask(updated["manual_reference_valid_bitmap"]) == (
+        1 << ENCODER_COUNT
+    ) - 1
+    assert updated["manual_reference_min_raw"] == [100] * ENCODER_COUNT
+    assert updated["manual_reference_max_raw"] == [5000] * ENCODER_COUNT
+    assert updated["joint_calib_results"] == [None] * ENCODER_COUNT
+    assert parse_mask(updated["motor_abs_limit_valid_bitmap"]) == 0
+    assert parse_mask(updated["active_joint_mask"]) == 0
+    assert len(list(tmp_path.glob("*.before_scoped_manual_prepare_*.json"))) == 1

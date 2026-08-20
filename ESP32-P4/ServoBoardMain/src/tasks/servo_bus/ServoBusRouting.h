@@ -24,7 +24,6 @@ bool addServoReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
 bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                                    uint32_t motorMask,
                                    const int32_t* motorAbs,
-                                   uint16_t rawToleranceCounts,
                                    bool clearRecoveryTransaction,
                                    uint32_t* restoredMask,
                                    uint32_t* rejectedMask);

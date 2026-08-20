@@ -1,6 +1,7 @@
 import csv
 import json
 import struct
+import time
 from datetime import datetime
 
 import pytest
@@ -55,9 +56,6 @@ def test_csv_exposes_only_host_and_p4_time_axes(tmp_path) -> None:
         str(tmp_path),
         session_name="timestamp_test",
         topics=["core_state"],
-        enable_csv=True,
-        enable_hdf5=False,
-        enable_rosbag=False,
     )
     session_dir = recorder.path
     recorder.write(
@@ -94,37 +92,26 @@ def test_csv_exposes_only_host_and_p4_time_axes(tmp_path) -> None:
         assert legacy_field not in TOPIC_FIELDNAMES["core_state"]
 
 
-def test_hdf5_uses_the_same_two_time_axes(tmp_path) -> None:
-    h5py = pytest.importorskip("h5py")
+def test_background_disk_error_stops_recorder_without_thread_exception(
+    tmp_path, monkeypatch
+) -> None:
     recorder = DataSessionRecorder()
-    recorder.start(
-        str(tmp_path),
-        session_name="hdf5_timestamp_test",
-        topics=["core_state"],
-        enable_csv=False,
-        enable_hdf5=True,
-        enable_rosbag=False,
+    recorder.start(str(tmp_path), session_name="disk_error", topics=["core_state"])
+    monkeypatch.setattr(
+        recorder._csv,
+        "write_row",
+        lambda _topic, _row: (_ for _ in ()).throw(OSError(28, "No space left on device")),
     )
-    hdf5_path = recorder.hdf5_path
-    recorder.write(
-        "core_state",
-        {
-            "host_time": 1_700_000_000.5,
-            "p4_time_ms": 9876,
-            "mode": "monitor",
-        },
-    )
-    recorder.stop()
 
-    with h5py.File(hdf5_path, "r") as handle:
-        group = handle["topics/core_state"]
-        host_value = group["host_time"][-1]
-        if isinstance(host_value, bytes):
-            host_value = host_value.decode("utf-8")
-        assert str(host_value).endswith(".500")
-        assert int(group["p4_time_ms"][-1]) == 9876
-    assert "device_timestamp" not in group
-    assert "elapsed_s" not in group
+    recorder.write("core_state", {"host_time": time.time(), "mode": "monitor"})
+    deadline = time.time() + 1.0
+    while recorder.is_running() and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert recorder.is_running() is False
+    assert "No space left on device" in recorder.consume_error()
+    assert recorder.consume_error() == ""
+    recorder.stop()
 
 
 def test_teleop_recording_is_one_self_contained_trajectory_topic() -> None:
@@ -143,9 +130,6 @@ def test_recorded_teleop_csv_can_restore_every_sent_output_frame(tmp_path) -> No
         str(tmp_path),
         session_name="teleop_replay_roundtrip",
         topics=["teleop_input"],
-        enable_csv=True,
-        enable_hdf5=False,
-        enable_rosbag=False,
     )
     for index, target in enumerate((1.0, 2.0, 3.0)):
         values = [target] * 21
@@ -186,14 +170,9 @@ def test_default_csv_layout_contains_only_six_merged_tables(tmp_path) -> None:
         str(tmp_path),
         session_name="merged_csv_layout",
         topics=DEFAULT_TOPICS,
-        enable_csv=True,
-        enable_hdf5=False,
-        enable_rosbag=False,
     )
-    # 即便内部仍写入长表和原始包，CSV导出层也不得重新创建这些旧文件。
-    recorder.write("joint_state", {"joint_index": 0, "joint_deg": 1.0})
-    recorder.write("servo_state", {"motor_index": 0, "current_raw": 12})
-    recorder.write("joint_debug_packets", {"joint_index": 0, "valid": 1})
+    # 未选择的旧数据 Topic 不能重新创建额外 CSV 文件。
+    recorder.write("deprecated_topic", {"joint_index": 0, "valid": 1})
     recorder.stop()
 
     session_dir = tmp_path / "merged_csv_layout"
@@ -202,6 +181,11 @@ def test_default_csv_layout_contains_only_six_merged_tables(tmp_path) -> None:
 
     assert csv_names == expected_names
     assert len(csv_names) == 6
+    assert {path.name for path in session_dir.iterdir()} == {
+        *expected_names,
+        "meta.json",
+        "00_说明_meta.json",
+    }
 
 
 def test_tactile_full_option_adds_exactly_one_csv_table(tmp_path) -> None:
@@ -211,9 +195,6 @@ def test_tactile_full_option_adds_exactly_one_csv_table(tmp_path) -> None:
         session_name="merged_csv_with_tactile_full",
         topics=[*DEFAULT_TOPICS, "tactile_full"],
         csv_topics=[*DEFAULT_CSV_TOPICS, "tactile_full"],
-        enable_csv=True,
-        enable_hdf5=False,
-        enable_rosbag=False,
     )
     recorder.stop()
 

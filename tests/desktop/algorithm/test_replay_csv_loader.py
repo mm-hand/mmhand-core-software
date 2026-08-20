@@ -157,10 +157,10 @@ def test_loader_reads_legacy_input_csv_without_reintroducing_legacy_writes(tmp_p
     assert trace.active_joint_mask == (1 << ENCODER_COUNT) - 1
 
 
-def test_loader_accepts_visual_retargeting_continuous_stream(tmp_path):
+def test_loader_accepts_external_ros2_continuous_stream(tmp_path):
     path = tmp_path / "07_遥操作总表.csv"
     base = {
-        "source": "Visual Retargeting",
+        "source": "ROS2:/raw_ik_target",
         "valid": 1,
         "active_joint_mask": "0x00000003",
         "command_joint_mask": "0x00000003",
@@ -190,7 +190,7 @@ def test_loader_accepts_visual_retargeting_continuous_stream(tmp_path):
     trace = load_replay_csv(path)
 
     assert trace.frame_count == 2
-    assert trace.frames[0].source_kind == "visual_retargeting"
+    assert trace.frames[0].source_kind == "ros2_external"
     assert all(frame.frame_kind == "continuous" for frame in trace.frames)
 
 

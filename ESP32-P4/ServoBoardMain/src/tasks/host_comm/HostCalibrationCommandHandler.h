@@ -29,12 +29,12 @@ uint32_t jointMaskForMotorMask(uint32_t motorMask);
 void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
                                     uint32_t jointMask);
 
-/** 写入 Manual A/B NVS、读回 RAM 镜像并失效真正变化的关节。 */
+/** 提交 Manual；默认写 RAM，Flash 回退分支启用时才写 A/B NVS。 */
 uint8_t commitManualReferences(
     SystemRuntimeContext* sharedData,
     const ManualEncoderReference references[ENCODER_TOTAL_NUM]);
 
-/** 消费 NVS 任务返回的最新 Manual 结果；成功或失败状态被消费时返回 true。 */
+/** 消费 Flash 回退分支的 Manual 结果；默认关闭时固定返回 false。 */
 bool processManualNvsSaveResult(SystemRuntimeContext* sharedData);
 
 /** 消费一次 Reset Zero 完成结果，并联动失效对应关节标定。 */

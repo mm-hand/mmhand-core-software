@@ -14,6 +14,7 @@
 #include "ServoValue.h"
 #include "../libraries/FTServo_Arduino/src/SMS_STS.h"
 #include "../../config/safety/ServoPositionRange.h"
+#include "../../config/BoardConfig.h"
 #include "../../config/ServoConfig.h"
 #include "../../config/topology/HardwareMap.h"
 
@@ -22,6 +23,10 @@ using mmhand::config::servo::kOfflineInvalidateMisses;
 using mmhand::config::servo::kOnlineConfirmReads;
 using mmhand::config::servo::kRecoveryMaxAttempts;
 using mmhand::config::servo::kRecoveryRetryIntervalMs;
+
+static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <=
+                  SCS::kSyncReadRxBufferCapacity,
+              "Feetech sync-read buffer is smaller than one full BUS response");
 
 inline int16_t normalizeServoRawSingleTurn(int32_t value)
 {
@@ -126,12 +131,14 @@ public:
         _rxPin = rxPin;
         _txPin = txPin;
         _baud = baud;
+        // 必须在 begin() 前扩大 Arduino UART RX ring；不设置 TX ring，命令立即下发。
+        _serial->setRxBufferSize(kServoBusUartRxBufferBytes);
         _serial->begin(baud, SERIAL_8N1, rxPin, txPin);
         _sms.pSerial = _serial;
     }
 
     /**
-     * 仅重建当前 BUS 的 UART 传输层，不改舵机反馈、多圈 offset 或 NVS 恢复锚点。
+     * 重建当前 BUS 的 UART 传输层，并撤销该 BUS 上全部旧反馈的在线/多圈可信状态。
      * HardwareSerial::end() 会删除底层 UART 驱动及事件任务，因此同时清除了
      * 残留 RX 数据和 UART 事件；重新 begin 后必须把飞特 SDK 重新绑定到该串口。
      */
@@ -148,11 +155,19 @@ public:
         memset(_writeSpd, 0, sizeof(_writeSpd));
         memset(_writeAcc, 0, sizeof(_writeAcc));
         resetMultiTurnConfigurationJob();
+        // UART 会话已经中断，旧反馈即使数值看似正常也不能继续作为在线证据。
+        // 冻结锚点后统一等待连续新反馈和恢复事务重新建立可信坐标。
+        for (uint8_t id = 0; id <= MAX_SERVO_ID; ++id) {
+            if (_feedback[id].online || _feedback[id].absoluteReliable) {
+                invalidateFeedbackSession(id);
+            }
+        }
         // flush(false) 等待硬件 TX 空闲并清除底层 RX FIFO；end() 随后删除
         // Arduino UART 事件任务，保证旧响应和旧事件都不会进入新会话。
         _serial->flush(false);
         _sms.pSerial = NULL;
         _serial->end();
+        _serial->setRxBufferSize(kServoBusUartRxBufferBytes);
         _serial->begin(_baud, SERIAL_8N1, _rxPin, _txPin);
         _sms.pSerial = _serial;
         return true;
@@ -443,6 +458,34 @@ public:
                _feedback[id].missedReadCount >= kOfflineInvalidateMisses;
     }
 
+    /**
+     * 反馈时间超过上限时强制判离线。
+     *
+     * 这是连续读失败之外的独立兜底，专门覆盖路由扫描占用 UART、任务长间隔
+     * 等没有机会调用 markReadFailure() 的场景。返回 true 表示本次发生了边沿。
+     */
+    bool invalidateIfFeedbackStale(uint8_t id,
+                                   uint32_t nowMs,
+                                   uint32_t timeoutMs)
+    {
+        if (id > MAX_SERVO_ID || timeoutMs == 0) {
+            return false;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        if (!fb.online || fb.lastUpdate == 0) {
+            return false;
+        }
+        const uint32_t ageMs = nowMs - fb.lastUpdate;
+        // 调用方可能在本周期开始时采样 nowMs，而反馈在本周期稍后更新。
+        // 此时 ageMs 会发生无符号下溢；把半圈时间范围外的差值视为“未来时间戳”，
+        // 禁止将刚收到的新反馈误判为长期陈旧。
+        if ((int32_t)ageMs < 0 || ageMs < timeoutMs) {
+            return false;
+        }
+        invalidateFeedbackSession(id);
+        return true;
+    }
+
     /** 舵机刚恢复通信但尚未完成扭矩关闭/多圈配置/NVS 对齐。 */
     bool hasOnlineTransitionPending(uint8_t id) const
     {
@@ -581,8 +624,14 @@ public:
         return true;
     }
 
-    /** 使用 NVS logical ABS 和当前 raw 建立 logicalOffset；raw 差值超限则拒绝。 */
-    bool restoreAbsolutePosition(uint8_t id, int32_t absPosition, uint16_t rawToleranceCounts)
+    /**
+     * 把上层已展开好的 logical ABS 绑定到当前硬件反馈。
+     *
+     * 上位机使用同一帧 SavedRaw + saved logical ABS 完成最近圈查找，
+     * 因此此处必须直接接受结果。logical ABS 可能包含非整圈 offset，
+     * 不能再用 logicalAbs % 4096 当作 SavedRaw 二次展开。
+     */
+    bool restoreAbsolutePosition(uint8_t id, int32_t restoredLogicalAbs)
     {
         if (id > MAX_SERVO_ID) {
             return false;
@@ -593,20 +642,9 @@ public:
         }
 
         const int16_t currentRaw = normalizeServoRawSingleTurn(fb.rawPosition);
-        const int16_t restoredRaw = normalizeServoRawSingleTurn(absPosition);
-        const uint16_t rawDistance = singleTurnDistanceCounts(currentRaw, restoredRaw);
-        if (rawDistance > rawToleranceCounts) {
-            return false;
-        }
-
-        const int32_t restoredLogicalAbs = absPosition;
-        // New Device Reset 会把当前单圈 raw 作为 turn0。若仅舵机掉电而
-        // P4 持续运行，旧的软件多圈锚点已经失效，这里禁止继续复用。
-        const bool restoreToCurrentSingleTurn =
-            (restoredLogicalAbs >= 0 && restoredLogicalAbs < 4096);
-        const int32_t hardwareAbs = restoreToCurrentSingleTurn
-            ? (int32_t)currentRaw
-            : (fb.initialized ? fb.absolutePosition : (int32_t)currentRaw);
+        const int32_t hardwareAbs = fb.initialized
+            ? fb.absolutePosition
+            : (int32_t)currentRaw;
         fb.rawPosition = currentRaw;
         fb.lastRawPosition = currentRaw;
         fb.absolutePosition = hardwareAbs;
@@ -616,6 +654,23 @@ public:
         fb.absoluteReliable = true;
         fb.lastUpdate = millis();
         return true;
+    }
+
+    /** P4 RAM/NVS 锚点同时保存 raw 时，在驱动层完成跨 0/4095 的最近圈展开。 */
+    bool restoreAbsolutePositionNearAnchor(uint8_t id,
+                                           int32_t anchorLogicalAbs,
+                                           int16_t anchorRaw)
+    {
+        if (id > MAX_SERVO_ID) {
+            return false;
+        }
+        const int16_t currentRaw =
+            normalizeServoRawSingleTurn(_feedback[id].rawPosition);
+        int32_t rawDelta =
+            (int32_t)currentRaw - (int32_t)normalizeServoRawSingleTurn(anchorRaw);
+        if (rawDelta > 2047) rawDelta -= 4096;
+        if (rawDelta < -2048) rawDelta += 4096;
+        return restoreAbsolutePosition(id, anchorLogicalAbs + rawDelta);
     }
 
     // 自动标定已经重新建立机械端点后，当前 power-session ABS 可作为新的
@@ -729,31 +784,43 @@ private:
             fb.missedReadCount++;
         }
         if (fb.missedReadCount >= kOfflineInvalidateMisses && fb.online) {
-            // 在清除 logicalOffset/turnCount 之前冻结最后可信反馈。这里只写
-            // RAM，不在舵机总线任务里直接写 Flash。
-            if (fb.absoluteReliable) {
-                const int32_t logicalAbs =
-                    fb.absolutePosition + fb.logicalOffset;
-                const int16_t trustedRaw =
-                    normalizeServoRawSingleTurn(fb.rawPosition);
-                fb.offlineLastTrustedAbs = logicalAbs;
-                fb.offlineLastTrustedRaw = trustedRaw;
-                fb.offlineLastTrustedTurn =
-                    (int16_t)((logicalAbs - trustedRaw) / 4096);
-                fb.offlineLastTrustedTimestampMs = fb.lastUpdate;
-                fb.offlineTrustedSnapshotPending = true;
-            }
-            fb.online = false;
-            fb.onlineTransitionPending = false;
-            fb.recoveryAttemptCount = 0;
-            fb.recoveryFailed = false;
-            fb.nextRecoveryAttemptMs = 0;
-            _multiTurnConfigured[id] = false;
-            if (_multiTurnConfigId == id) {
-                resetMultiTurnConfigurationJob();
-            }
-            invalidateMultiTurnTrust(id);
+            invalidateFeedbackSession(id);
         }
+    }
+
+    /** 冻结最后可信位置，并统一撤销在线、多圈配置及逻辑 ABS 信任。 */
+    void invalidateFeedbackSession(uint8_t id)
+    {
+        if (id > MAX_SERVO_ID) {
+            return;
+        }
+        ServoFeedbackInternal& fb = _feedback[id];
+        // 在清除 logicalOffset/turnCount 之前冻结最后可信反馈。这里只写
+        // RAM，不在舵机总线任务里直接写 Flash。
+        if (fb.absoluteReliable) {
+            const int32_t logicalAbs =
+                fb.absolutePosition + fb.logicalOffset;
+            const int16_t trustedRaw =
+                normalizeServoRawSingleTurn(fb.rawPosition);
+            fb.offlineLastTrustedAbs = logicalAbs;
+            fb.offlineLastTrustedRaw = trustedRaw;
+            fb.offlineLastTrustedTurn =
+                (int16_t)((logicalAbs - trustedRaw) / 4096);
+            fb.offlineLastTrustedTimestampMs = fb.lastUpdate;
+            fb.offlineTrustedSnapshotPending = true;
+        }
+        fb.online = false;
+        fb.successfulReadCount = 0;
+        fb.missedReadCount = kOfflineInvalidateMisses;
+        fb.onlineTransitionPending = false;
+        fb.recoveryAttemptCount = 0;
+        fb.recoveryFailed = false;
+        fb.nextRecoveryAttemptMs = 0;
+        _multiTurnConfigured[id] = false;
+        if (_multiTurnConfigId == id) {
+            resetMultiTurnConfigurationJob();
+        }
+        invalidateMultiTurnTrust(id);
     }
 
     /** 清除本次上电会话的软件多圈锚点，但保留最后掉线快照。 */

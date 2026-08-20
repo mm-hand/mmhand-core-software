@@ -117,8 +117,6 @@ Wuji 重定向不是“手套角度 = 机器人角度”的直接比例关系。
 3. `fist_flex`
 4. `thumb_pinky_root`
 
-当前版本在 `manus_calibration.py` 中更新了与新 URDF 对应的根关节参考值，例如四指 AA 和拇指 J16/J20 的参考角使用新 URDF 范围内的直接角度。
-
 `wuji_calibration.py` 额外把 `robot_model_id` 写入标定 JSON。读取旧标定文件时，如果模型 ID 与当前 `structure_urdf_v2:v3:73FD45FA` 不一致，会清空四个姿态结果并要求重新采集，而不是静默沿用旧模型数据。
 
 ### 4.4 发布节点与 Wuji UI
@@ -198,7 +196,7 @@ source install/setup.bash
    ```bash
    source /opt/ros/jazzy/setup.bash
    cd /path/to/mmhand-cl
-   python -m desktop ui --mode teleop --port /dev/ttyUSB0 \
+   python -m desktop ui --mode monitor --port /dev/ttyUSB0 \
      --ros2 \
      --ros2-input raw_ik \
      --ros2-raw-ik-topic /raw_ik_target \

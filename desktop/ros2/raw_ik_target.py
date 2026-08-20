@@ -16,7 +16,7 @@ from typing import Optional
 
 from desktop.core.hand_backend import HandBackend
 from desktop.ros2.joint_targets import JointTargetCommandHandler
-from desktop.teleop.joint_target_adapter import LEGACY_CALIBRATED_DEG
+from desktop.core.joint_target_adapter import LEGACY_CALIBRATED_DEG
 
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 
@@ -29,7 +29,7 @@ class Ros2RawIkTargetConfig:
 
 
 class RawIkTargetBridge:
-    """Background ROS2 subscriber for external MANUS/IK 21-angle output."""
+    """Background ROS2 subscriber for external raw-IK 21-angle output."""
 
     def __init__(
         self,

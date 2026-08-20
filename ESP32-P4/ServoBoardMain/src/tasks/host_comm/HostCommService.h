@@ -24,7 +24,10 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs);
  */
 void requestHostStateSync(uint32_t syncMask);
 
-/** 打开或关闭 Task Runtime 窗口所需的按需任务诊断流。 */
-void setHostTaskDiagSubscribed(bool subscribed);
+/**
+ * 打开、续订或关闭 Task Runtime 诊断流。
+ * 重复打开只更新独立诊断租约，不能重置正在发送的七包窗口。
+ */
+void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs);
 
 #endif // P4_TASKS_HOST_COMM_HOST_COMM_SERVICE_H

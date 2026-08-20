@@ -11,6 +11,7 @@
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../platform/time/Clock.h"
 #include "../../config/topology/HardwareMap.h"
+#include "../../config/ServoConfig.h"
 #include "../../data/SafetyTypes.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../platform/rtos/AtomicValue.h"
@@ -174,6 +175,7 @@ uint8_t commitManualReferences(
         return PROTO_ACK_STATUS_INVALID_DATA;
     }
 
+#if P4_FLASH_PERSISTENCE_ENABLE
     if (!sharedData->manualNvsSaveQueue.valid()) {
         sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_FAILED;
         return PROTO_ACK_STATUS_NVS_FAILURE;
@@ -197,10 +199,47 @@ uint8_t commitManualReferences(
     // NONE 表示事务已受理但尚未收到 NVS 任务的读回校验结果。
     sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_NONE;
     return PROTO_ACK_STATUS_QUEUED;
+#else
+    ManualEncoderReference previous[ENCODER_TOTAL_NUM] = {};
+    {
+        SharedSafetyGuard guard;
+        memcpy(previous, g_manualEncoderReference, sizeof(previous));
+    }
+    const uint32_t changedMask =
+        changedManualReferenceMask(previous, references);
+
+    // P4 先提交本次会话 RAM 镜像并供上位机读回校验；上位机确认内容一致后，
+    // 再把同一组 Manual 数据原子写入便携 V6 JSON。
+    // legacy nvs_valid 字段在协议删除前临时表示“当前 RAM 镜像已完整提交”，
+    // 使现有 ACK/读回闭环无需再维护第二套状态包。
+    sharedData->manual_reference_nvs_valid = 0;
+    manualEncoderReferencesApplyRam(references);
+    sharedAtomicStore(&sharedData->manual_reference_valid_bitmap, validMask);
+    sharedAtomicStore(
+        &sharedData->manual_reference_crc,
+        manualEncoderReferencesCrc(references));
+    sharedAtomicAddFetch(
+        &sharedData->manual_reference_nvs_sequence,
+        static_cast<uint32_t>(1));
+    invalidateAutomaticCalibration(sharedData, changedMask);
+    sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
+    sharedData->manual_reference_nvs_valid = 1;
+    postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
+    FW_LOG_INFO_PRINTF(
+        "[MANUAL RAM] committed mask=0x%08lX changed=0x%08lX crc=0x%08lX\r\n",
+        (unsigned long)validMask,
+        (unsigned long)changedMask,
+        (unsigned long)sharedAtomicLoad(&sharedData->manual_reference_crc));
+    return PROTO_ACK_STATUS_OK;
+#endif
 }
 
 bool processManualNvsSaveResult(SystemRuntimeContext* sharedData)
 {
+#if !P4_FLASH_PERSISTENCE_ENABLE
+    (void)sharedData;
+    return false;
+#else
     if (!sharedData || !sharedData->manualNvsResultQueue.valid()) {
         return false;
     }
@@ -249,6 +288,7 @@ bool processManualNvsSaveResult(SystemRuntimeContext* sharedData)
     sharedData->manual_reference_nvs_valid = 1;
     postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
     return true;
+#endif
 }
 
 void processServoResetZeroResult(SystemRuntimeContext* sharedData,

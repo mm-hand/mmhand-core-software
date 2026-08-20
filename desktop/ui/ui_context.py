@@ -95,12 +95,6 @@ class HandGuiContext:
     def stop_recording_for_test(self, reason: str = "test stopped") -> None:
         self._app.stop_recording_for_test(reason)
 
-    def refresh_cameras(self) -> None:
-        self._app.refresh_cameras()
-
-    def draw_pose_angles(self, angles) -> None:
-        self._app.draw_pose_angles(angles)
-
     def start_calibration(self) -> None:
         self._app.start_calibration()
 

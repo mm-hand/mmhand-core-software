@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -37,42 +38,37 @@ def test_every_registered_rule_has_a_closed_safety_path() -> None:
             for key in ("registration", "policy", "caller", "mapping", "event", "recovery")
         )
     }
-    assert report["rule_count"] == 101
+    assert report["rule_count"] == len(checker.load_rule_definitions())
     assert failures == {}
     assert report["registry_mapped_rule_count"] > 0
     assert report["direct_rule_count"] > 0
 
 
-def test_collision_and_lut_rules_use_dedicated_state_machine_contracts() -> None:
-    """碰撞保持和 LUT 钳位不能被 CTL 公共探针误判为已经闭环。"""
+def test_collision_rule_uses_dedicated_state_machine_contract() -> None:
+    """碰撞保持不能被 CTL 公共探针误判为已经闭环。"""
 
     checker = _load_checker()
     collision_rule = next(
         rule for rule in checker.load_rule_definitions()
         if rule["name"] == "ControlCollisionHold"
     )
-    lut_rule = next(
-        rule for rule in checker.load_rule_definitions()
-        if rule["name"] == "ControlLutBoundaryClamp"
-    )
     collision = checker.resolve_rule_binding(collision_rule)
-    lut_clamp = checker.resolve_rule_binding(lut_rule)
 
     assert collision is not None
-    assert lut_clamp is not None
     assert "CollisionSafetyPolicy.cpp" in collision.policy.path
     assert "holdReleased" in collision.recovery.token
-    assert "ControlLutBoundaryClamp" in lut_clamp.event.token
-    assert "g_lutClampEventLatchedBitmap" in lut_clamp.recovery.token
 
 
 def test_generated_index_contains_every_rule() -> None:
-    """生成 C++ 索引必须与规则目录一一对应，不允许只生成部分规则。"""
+    """生成 JSON 索引必须与规则目录一一对应，不允许只生成部分规则。"""
 
     checker = _load_checker()
-    generated = checker.FIRMWARE_INDEX_SOURCE.read_text(encoding="utf-8")
+    generated = json.loads(
+        checker.FIRMWARE_INDEX_JSON.read_text(encoding="utf-8")
+    )
     rules = checker.load_rule_definitions()
 
-    assert generated.count("{SafetyRuleId::") == len(rules) == 101
+    generated_names = {item["name"] for item in generated["rules"]}
+    assert len(generated["rules"]) == len(rules)
     for rule in rules:
-        assert f"SafetyRuleId::{rule['name']}" in generated
+        assert rule["name"] in generated_names

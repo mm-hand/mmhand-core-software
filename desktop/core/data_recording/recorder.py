@@ -1,9 +1,9 @@
 """recorder.py - MMHand Desktop 模块契约。
 
-职责：编排 CSV、HDF5、ROS bag 和事件记录会话生命周期。
+职责：编排 CSV 和事件记录会话生命周期。
 线程：采样入口可被通信线程调用，磁盘写入由记录器串行化；不得阻塞设备控制。
 输入：带双时间戳的类型化 Topic 样本、事件和会话配置。
-输出：CSV/HDF5/ROS bag 文件以及结构化写入状态。
+输出：CSV 文件以及结构化写入状态。
 状态所有权：记录会话拥有文件句柄、采样序号和降采样缓存，不拥有设备真值。
 禁止依赖：禁止依赖 UI 或改变控制状态，禁止在 writer 内重新解释协议业务语义。
 """
@@ -20,75 +20,40 @@ from typing import Dict, Iterable, Optional
 
 from .csv_exporter import CsvSessionExporter
 from .event_recorder import EventRecorder
-from .hdf5_recorder import Hdf5SessionRecorder
 from .topic_schema import (
     CSV_TOPIC_FILENAMES,
-    DEFAULT_CSV_TOPICS,
     DEFAULT_TOPICS,
     TOPIC_FIELDNAMES,
 )
-from desktop.recording.rosbag_recorder import RosbagSessionRecorder
 
 
 RUN_DATA_SESSION_KEEP_DIRS = 20
 
 
 class DataSessionRecorder:
-    """Topic-oriented multimodal recorder.
+    """按 Topic 异步写入人工可读 CSV 的会话记录器。"""
 
-    The recorder writes human-readable per-topic CSV files immediately and can
-    optionally emit HDF5 plus ROS2 bag streams for analysis and replay.
-    """
-
-    def __init__(self, flush_every: int = 10, max_queue: int = 5000, hdf5_compression: str = "gzip"):
+    def __init__(self, flush_every: int = 10, max_queue: int = 5000):
         self.flush_every = max(1, int(flush_every))
         self.max_queue = max(100, int(max_queue))
         self._csv = CsvSessionExporter(flush_every=flush_every)
-        self._hdf5 = Hdf5SessionRecorder(compression=hdf5_compression, flush_every=flush_every)
-        self._rosbag = RosbagSessionRecorder()
         self._event = EventRecorder(self.write)
         self._queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue(maxsize=self.max_queue)
-        # Replay要求恢复每一帧已记录动作，动作轨迹不能沿用普通遥测的“队满丢最旧”策略。
-        # 独立队列由同一个writer线程落盘，因此不引入CSV/HDF5并发写入。
-        self._teleop_queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue()
+        # Replay 要恢复每一帧已记录动作，轨迹不能沿用普通遥测的“队满丢最旧”策略。
+        # 独立队列由同一个 writer 线程落盘，保证外部 ROS2 轨迹不被普通遥测挤掉。
+        self._trajectory_queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._running = False
         self._session_dir = ""
-        self._hdf5_path = ""
-        self._rosbag_path = ""
-        self._csv_enabled = False
-        self._topic_fieldnames: Dict[str, Iterable[str]] = {}
         self._topic_sample_indices: Dict[str, int] = {}
+        self._selected_topics: set[str] = set()
+        self._fatal_error = ""
 
     @property
     def path(self) -> str:
         return self._session_dir
-
-    @property
-    def hdf5_path(self) -> str:
-        return self._hdf5_path
-
-    @property
-    def hdf5_enabled(self) -> bool:
-        return bool(self._hdf5.enabled)
-
-    @property
-    def hdf5_error(self) -> str:
-        return self._hdf5.error
-
-    @property
-    def rosbag_path(self) -> str:
-        return self._rosbag_path
-
-    @property
-    def rosbag_enabled(self) -> bool:
-        return bool(self._rosbag.enabled)
-
-    @property
-    def rosbag_error(self) -> str:
-        return self._rosbag.error
 
     def start(
         self,
@@ -98,9 +63,6 @@ class DataSessionRecorder:
         meta: Optional[Dict[str, object]] = None,
         topics: Optional[Iterable[str]] = None,
         csv_topics: Optional[Iterable[str]] = None,
-        enable_csv: bool = True,
-        enable_hdf5: bool = True,
-        enable_rosbag: bool = False,
     ) -> None:
         self.stop()
         os.makedirs(root_dir, exist_ok=True)
@@ -109,8 +71,7 @@ class DataSessionRecorder:
         session_dir = os.path.join(root_dir, session)
         os.makedirs(session_dir, exist_ok=True)
         selected_topics = list(topics or DEFAULT_TOPICS)
-        fieldnames = {topic: TOPIC_FIELDNAMES[topic] for topic in selected_topics if topic in TOPIC_FIELDNAMES}
-        selected_csv_topics = list(csv_topics or DEFAULT_CSV_TOPICS)
+        selected_csv_topics = list(csv_topics if csv_topics is not None else selected_topics)
         csv_fieldnames = {
             topic: TOPIC_FIELDNAMES[topic]
             for topic in selected_csv_topics
@@ -129,49 +90,22 @@ class DataSessionRecorder:
                     topic: CSV_TOPIC_FILENAMES.get(topic, f"{topic}.csv")
                     for topic in selected_csv_topics
                 },
-                "csv_requested": bool(enable_csv),
-                "hdf5_requested": bool(enable_hdf5),
-                "rosbag_requested": bool(enable_rosbag),
-                "csv_enabled": bool(enable_csv),
+                "csv_enabled": True,
             }
         )
         self._write_meta(session_dir, meta_row)
-        if enable_csv:
-            self._csv.start(
-                session_dir,
-                csv_fieldnames,
-                topic_filenames=CSV_TOPIC_FILENAMES,
-            )
-        else:
-            self._csv.stop()
-        hdf5_path = os.path.join(session_dir, "训练数据_session.h5")
-        if enable_hdf5:
-            self._hdf5.start(hdf5_path, fieldnames, meta=meta_row)
-        else:
-            self._hdf5.start("", fieldnames, meta=meta_row)
-            self._hdf5.enabled = False
-            self._hdf5.error = "disabled"
-        rosbag_path = os.path.join(session_dir, "ROS2_bag")
-        if enable_rosbag:
-            self._rosbag.start(rosbag_path, fieldnames, meta=meta_row)
-        else:
-            self._rosbag.stop()
-            self._rosbag.error = "disabled"
-        meta_row["hdf5_enabled"] = self._hdf5.enabled
-        meta_row["hdf5_error"] = self._hdf5.error
-        meta_row["rosbag_enabled"] = self._rosbag.enabled
-        meta_row["rosbag_error"] = self._rosbag.error
-        meta_row["rosbag_path"] = rosbag_path if self._rosbag.enabled else ""
-        self._write_meta(session_dir, meta_row)
+        self._csv.start(
+            session_dir,
+            csv_fieldnames,
+            topic_filenames=CSV_TOPIC_FILENAMES,
+        )
 
         with self._lock:
             self._session_dir = session_dir
-            self._hdf5_path = hdf5_path if self._hdf5.enabled else ""
-            self._rosbag_path = rosbag_path if self._rosbag.enabled else ""
-            self._csv_enabled = bool(enable_csv)
-            self._topic_fieldnames = fieldnames
             self._topic_sample_indices = {}
+            self._selected_topics = set(csv_fieldnames)
             self._stop.clear()
+            self._fatal_error = ""
             self._running = True
             self._thread = threading.Thread(target=self._worker, daemon=True)
             self._thread.start()
@@ -181,43 +115,54 @@ class DataSessionRecorder:
     def stop(self) -> None:
         thread = None
         with self._lock:
-            if not self._running:
-                self._csv.stop()
-                self._hdf5.stop(write_file=False)
-                self._rosbag.stop()
-                return
             self._running = False
             self._stop.set()
             thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            # The worker owns all CSV/HDF5/rosbag writes. Let it drain the
-            # bounded queue before closing writers so two threads never write
-            # or close the same file concurrently.
+            # writer 线程负责排空队列后再关闭文件，避免跨线程关闭同一 CSV。
             thread.join()
         elif thread is None:
             self._drain_queue()
-        self._csv.stop()
-        self._hdf5.stop(write_file=True)
-        self._rosbag.stop()
+        try:
+            self._csv.stop()
+        except Exception as exc:
+            self._mark_failed(exc)
         with self._lock:
             self._thread = None
             self._session_dir = ""
-            self._hdf5_path = ""
-            self._rosbag_path = ""
-            self._csv_enabled = False
-            self._topic_fieldnames = {}
             self._topic_sample_indices = {}
+            self._selected_topics = set()
 
     def is_running(self) -> bool:
         with self._lock:
             return self._running
 
+    def consume_error(self) -> str:
+        """取走后台写线程的首个致命错误，供 UI 主线程只提示一次。"""
+        with self._lock:
+            message = self._fatal_error
+            self._fatal_error = ""
+            return message
+
+    def _mark_failed(self, exc: BaseException) -> None:
+        """记录磁盘写入失败并关闭采样入口，禁止异常逃出后台线程。"""
+        message = f"{type(exc).__name__}: {exc}"
+        with self._lock:
+            if not self._fatal_error:
+                self._fatal_error = message
+            self._running = False
+            self._stop.set()
+
     def write(self, topic: str, row: Dict[str, object]) -> None:
         if not self.is_running():
             return
-        item = (str(topic), dict(row))
-        if str(topic) == "teleop_input":
-            self._teleop_queue.put_nowait(item)
+        topic = str(topic)
+        # CSV 以会话启动时的表清单为准；未选择的旧长表数据不进入写队列。
+        if topic not in self._selected_topics:
+            return
+        item = (topic, dict(row))
+        if topic == "teleop_input":
+            self._trajectory_queue.put_nowait(item)
             return
         try:
             self._queue.put_nowait(item)
@@ -238,34 +183,41 @@ class DataSessionRecorder:
         self._event.event(event_type, **kwargs)
 
     def _worker(self) -> None:
-        while (
-            not self._stop.is_set()
-            or not self._teleop_queue.empty()
-            or not self._queue.empty()
-        ):
-            try:
-                topic, row = self._teleop_queue.get_nowait()
-            except queue.Empty:
-                pass
-            else:
-                self._write_now(topic, row)
-                self._teleop_queue.task_done()
-                continue
-            try:
-                topic, row = self._queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            self._write_now(topic, row)
-            self._queue.task_done()
+        try:
+            while (
+                not self._stop.is_set()
+                or not self._trajectory_queue.empty()
+                or not self._queue.empty()
+            ):
+                try:
+                    topic, row = self._trajectory_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    try:
+                        self._write_now(topic, row)
+                    finally:
+                        self._trajectory_queue.task_done()
+                    continue
+                try:
+                    topic, row = self._queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                try:
+                    self._write_now(topic, row)
+                finally:
+                    self._queue.task_done()
+        except Exception as exc:
+            self._mark_failed(exc)
 
     def _drain_queue(self) -> None:
         while True:
             try:
-                topic, row = self._teleop_queue.get_nowait()
+                topic, row = self._trajectory_queue.get_nowait()
             except queue.Empty:
                 break
             self._write_now(topic, row)
-            self._teleop_queue.task_done()
+            self._trajectory_queue.task_done()
         while True:
             try:
                 topic, row = self._queue.get_nowait()
@@ -276,10 +228,7 @@ class DataSessionRecorder:
 
     def _write_now(self, topic: str, row: Dict[str, object]) -> None:
         row = self._normalize_time_fields(topic, row)
-        if self._csv_enabled:
-            self._csv.write_row(topic, row)
-        self._hdf5.write_row(topic, row)
-        self._rosbag.write_row(topic, row)
+        self._csv.write_row(topic, row)
 
     def _normalize_time_fields(self, topic: str, row: Dict[str, object]) -> Dict[str, object]:
         """统一生成上位机/P4两条时间轴，并彻底移除旧的伪设备时间与 elapsed 字段。"""
@@ -288,8 +237,6 @@ class DataSessionRecorder:
         if host_time is None:
             host_time = time.time()
         out["host_time"] = _host_time_text(host_time)
-        # ROS bag 仍需 Unix ns 作为索引，但该内部字段不会写入 CSV/HDF5/消息正文。
-        out["_host_time_ns"] = int(host_time * 1_000_000_000)
         p4_time_ms = out.get("p4_time_ms", "")
         if p4_time_ms not in ("", None):
             try:

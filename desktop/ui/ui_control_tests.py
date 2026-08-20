@@ -119,7 +119,7 @@ class ManualTestPanelMixin:
             or self._ff_test_running
             or self._tri_test_running
         )
-        manual = bool(self._interaction_enabled)
+        controller_ready = self._controller_interaction_ready()
         for btn, running in [
             (getattr(self, "test_stop_btn", None), self._test_running),
             (getattr(self, "ff_stop_btn", None), self._ff_test_running),
@@ -137,7 +137,7 @@ class ManualTestPanelMixin:
         ]:
             if btn is not None:
                 try:
-                    btn.setEnabled(manual and not any_running and not running)
+                    btn.setEnabled(controller_ready and not any_running and not running)
                 except RuntimeError:
                     pass
 
@@ -152,8 +152,8 @@ class ManualTestPanelMixin:
 
     def _on_start_test(self) -> None:
         """Handle the start test event."""
-        if not self._interaction_enabled:
-            self._set_status("Start Test blocked: Control Enable must be ON")
+        if not self._controller_interaction_ready():
+            self._set_status("Start Test blocked: press ENABLE and wait for P4 to become controllable")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -221,8 +221,8 @@ class ManualTestPanelMixin:
 
     def _on_start_ff_test(self) -> None:
         """Handle the start ff test event."""
-        if not self._interaction_enabled:
-            self._set_status("Feedforward Test blocked: Control Enable must be ON")
+        if not self._controller_interaction_ready():
+            self._set_status("Feedforward Test blocked: press ENABLE and wait for P4 to become controllable")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -266,11 +266,8 @@ class ManualTestPanelMixin:
         if self._manual_submode() != "test":
             self._on_stop_test("stopped on mode switch", update_status=False)
             return
-        if not self._interaction_enabled:
-            self._on_stop_test("stopped: Control Enable OFF")
-            return
         if not self.backend.is_started():
-            self._on_stop_test("stopped: press Enable to start controller")
+            self._on_stop_test("stopped: P4 controller is no longer controllable")
             return
         elapsed = max(0.0, time.time() - self._test_t0)
         angles = self.resolved_joint_targets()
@@ -297,11 +294,8 @@ class ManualTestPanelMixin:
         if self._manual_submode() != "test":
             self._on_stop_ff_test("stopped on mode switch", update_status=False)
             return
-        if not self._interaction_enabled:
-            self._on_stop_ff_test("stopped: Control Enable OFF")
-            return
         if not self.backend.is_started():
-            self._on_stop_ff_test("stopped: press Enable to start controller")
+            self._on_stop_ff_test("stopped: P4 controller is no longer controllable")
             return
         if not self._ff_test_targets:
             self._on_stop_ff_test("stopped: no feedforward targets")
@@ -374,8 +368,8 @@ class ManualTestPanelMixin:
         return joint_idx, lo, hi, freq
 
     def _on_start_tri_test(self) -> None:
-        if not self._interaction_enabled:
-            self._set_status("Triangle Wave Test blocked: Control Enable must be ON")
+        if not self._controller_interaction_ready():
+            self._set_status("Triangle Wave Test blocked: press ENABLE and wait for P4 to become controllable")
             return
         if self._manual_submode() != "test" and hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(self.test_panel)
@@ -412,11 +406,8 @@ class ManualTestPanelMixin:
         if self._manual_submode() != "test":
             self._on_stop_tri_test("stopped on mode switch", update_status=False)
             return
-        if not self._interaction_enabled:
-            self._on_stop_tri_test("stopped: Control Enable OFF")
-            return
         if not self.backend.is_started():
-            self._on_stop_tri_test("stopped: press Enable to start controller")
+            self._on_stop_tri_test("stopped: P4 controller is no longer controllable")
             return
         elapsed = max(0.0, time.time() - self._tri_test_t0)
         phase = (elapsed * self._tri_test_freq_hz) % 1.0

@@ -568,6 +568,33 @@ def batch_calibrated_to_urdf(
     return out
 
 
+def calibrated_angles_to_urdf_joint_positions(
+    angles_deg: Iterable[float],
+    *,
+    allow_default: bool = True,
+    clamp: bool = True,
+) -> Dict[str, float]:
+    """把 21 路标定角转换为活动 URDF 的真实关节名和弧度。
+
+    Hand Pose 只能消费活动模型的 ``urdf_joint_name``。此函数统一复用现有
+    标定角→URDF 映射，避免显示端再维护一份旧手型的 ``1-1`` 风格关节表。
+    """
+    values = list(angles_deg)
+    if len(values) != ENCODER_COUNT:
+        raise AngleMappingError(
+            f"need exactly {ENCODER_COUNT} calibrated joint angles, got {len(values)}"
+        )
+    return {
+        JOINT_SPECS[index].urdf_joint_name: calibrated_to_urdf(
+            index,
+            float(value),
+            allow_default=allow_default,
+            clamp=clamp,
+        )
+        for index, value in enumerate(values)
+    }
+
+
 def mapping_debug(
     joint: int | str,
     q_urdf_rad: float,
@@ -640,10 +667,6 @@ def _linear_map(value: float, src_lo: float, src_hi: float, dst_lo: float, dst_h
     return dst_lo + ratio * (dst_hi - dst_lo)
 
 
-def _range_text(rng: tuple[float, float]) -> str:
-    return f"[{rng[0]:+.3f},{rng[1]:+.3f}]"
-
-
 __all__ = [
     "AngleMappingDebug",
     "AngleMappingError",
@@ -651,6 +674,7 @@ __all__ = [
     "JointAngleSpec",
     "URDF_JOINT_MAPPING_PATH",
     "batch_calibrated_to_urdf",
+    "calibrated_angles_to_urdf_joint_positions",
     "batch_urdf_to_calibrated",
     "calibrated_range_deg",
     "calibrated_to_urdf",

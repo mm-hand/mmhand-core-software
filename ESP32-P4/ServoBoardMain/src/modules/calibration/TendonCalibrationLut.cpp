@@ -23,6 +23,23 @@ bool calibrationHasUsableTendonLut(const JointCalibrationResult& calibration,
         calibration.tendonLutAngleStepDeg > 0.0f;
 }
 
+// 新 LUT 使用固定 5° 标称步长，最后一个样本可能是不足 5° 的 URDF Max。
+// 旧快照的 nominalLast 与 currentMaxDeg 相同，因此仍按原均匀步长解释。
+float tendonLutSampleAngleDeg(const JointCalibrationResult& calibration,
+                              uint8_t sampleIndex)
+{
+    const float nominalDeg = calibration.tendonLutAngleStartDeg +
+        calibration.tendonLutAngleStepDeg * (float)sampleIndex;
+    const uint8_t lastIndex = calibration.tendonLutCount - 1U;
+    if (sampleIndex == lastIndex &&
+        isfinite(calibration.currentMaxDeg) &&
+        calibration.currentMaxDeg > calibration.tendonLutAngleStartDeg &&
+        calibration.currentMaxDeg < nominalDeg) {
+        return calibration.currentMaxDeg;
+    }
+    return nominalDeg;
+}
+
 } // namespace
 
 bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,
@@ -63,30 +80,33 @@ bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult& calibrat
     }
 
     const float firstDeg = calibration.tendonLutAngleStartDeg;
-    const float stepDeg = calibration.tendonLutAngleStepDeg;
-    if (urdfDeg <= firstDeg) {
-        *outMotorAbs = (float)calibration.tendonLutMotorAbs[actuatorIndex][0];
-        return true;
-    }
-
     const uint8_t lastIndex = calibration.tendonLutCount - 1;
-    const float lastDeg = firstDeg + stepDeg * (float)lastIndex;
+    const float lastDeg = tendonLutSampleAngleDeg(calibration, lastIndex);
+    if (!isfinite(lastDeg) || lastDeg <= firstDeg) {
+        return false;
+    }
+    uint8_t upperIndex = 1U;
     if (urdfDeg >= lastDeg) {
-        *outMotorAbs =
-            (float)calibration.tendonLutMotorAbs[actuatorIndex][lastIndex];
-        return true;
+        upperIndex = lastIndex;
+    } else if (urdfDeg > firstDeg) {
+        while (upperIndex < lastIndex &&
+               urdfDeg > tendonLutSampleAngleDeg(calibration, upperIndex)) {
+            ++upperIndex;
+        }
     }
-
-    const float position = (urdfDeg - firstDeg) / stepDeg;
-    uint8_t lowerIndex = (uint8_t)floorf(position);
-    if (lowerIndex >= lastIndex) {
-        lowerIndex = lastIndex - 1;
+    const uint8_t lowerIndex = upperIndex - 1U;
+    const float lowerDeg = tendonLutSampleAngleDeg(calibration, lowerIndex);
+    const float upperDeg = tendonLutSampleAngleDeg(calibration, upperIndex);
+    if (!isfinite(lowerDeg) || !isfinite(upperDeg) || upperDeg <= lowerDeg) {
+        return false;
     }
-    const float t = position - (float)lowerIndex;
+    // t 允许小于 0 或大于 1，使反馈角越过端点后仍沿端部斜率连续变化，
+    // 不会在紧绳端或松绳端被 LUT 固定为常数。
+    const float t = (urdfDeg - lowerDeg) / (upperDeg - lowerDeg);
     const float lower =
         (float)calibration.tendonLutMotorAbs[actuatorIndex][lowerIndex];
     const float upper =
-        (float)calibration.tendonLutMotorAbs[actuatorIndex][lowerIndex + 1];
+        (float)calibration.tendonLutMotorAbs[actuatorIndex][upperIndex];
     *outMotorAbs = lower + (upper - lower) * t;
     return true;
 }

@@ -1,9 +1,6 @@
 pyserial>=3.5
 numpy>=1.20.0
-h5py>=3.8.0
 matplotlib>=3.5.0
-opencv-python>=4.5.0
-mediapipe>=0.10.14
 requests>=2.31.0
 Pillow>=9.0.0
 PySide6>=6.5.0

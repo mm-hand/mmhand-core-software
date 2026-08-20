@@ -76,7 +76,7 @@ struct JointCalibrationResult {
     uint8_t tendonLutCount; // 每路有效样本数。
     uint8_t tendonLutMotor[TENDON_LUT_ACTUATOR_COUNT]; // LUT 对应 Mxx。
     float tendonLutAngleStartDeg; // 第一个 LUT 样本的 URDF 角。
-    float tendonLutAngleStepDeg;  // 相邻样本的角度步长。
+    float tendonLutAngleStepDeg;  // 标称步长；最后一段可小于该值并终止于 currentMaxDeg。
     int32_t tendonLutMotorAbs[TENDON_LUT_ACTUATOR_COUNT][TENDON_LUT_MAX_SAMPLES];
 };
 

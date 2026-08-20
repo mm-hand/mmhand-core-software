@@ -331,6 +331,11 @@ int	SCS::Ack(u8 ID)
 
 int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 {
+	// syncReadBegin 已发现容量不足时，不发送必然无法完整接收的广播请求。
+	if(!ID || IDN == 0 || syncReadRxBuffMax == 0){
+		u8Error = ERR_BUFF_LEN;
+		return 0;
+	}
 	rFlushSCS();
 	syncReadRxPacketLen = nLen;
 	u8 checkSum = (4+0xfe) + IDN + MemAddr + nLen + INST_SYNC_READ;
@@ -356,17 +361,19 @@ int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 
 void SCS::syncReadBegin(u8 IDN, u8 rxLen, u32 TimeOut)
 {
-	syncReadRxBuffMax = IDN*(rxLen+6);
-	syncReadRxBuff = new u8[syncReadRxBuffMax];
+	const u16 requestedBytes = (u16)IDN * ((u16)rxLen + 6U);
+	syncReadRxBuffMax =
+		(requestedBytes <= kSyncReadRxBufferCapacity) ? requestedBytes : 0;
+	syncReadRxBuffLen = 0;
 	syncTimeOut = TimeOut;
 }
 
 void SCS::syncReadEnd()
 {
-	if(syncReadRxBuff){
-		delete syncReadRxBuff;
-		syncReadRxBuff = NULL;
-	}
+	syncReadRxBuffLen = 0;
+	syncReadRxBuffMax = 0;
+	syncReadRxPacket = NULL;
+	syncReadRxPacketIndex = 0;
 }
 
 int SCS::syncReadPacketRx(u8 ID, u8 *nDat)

@@ -167,8 +167,8 @@ uint8_t HalTWAI::sendEncoderData(const EncoderData &encData) {
     return sent;
 }
 
-/** @brief 展平15组三轴摘要，附加CRC16后拆成7个带同序号的CAN帧。 */
-uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData) {
+/** @brief 展平15组三轴摘要和模块有效位图，附加CRC16后拆成7个CAN帧。 */
+uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData, uint16_t moduleValidMask) {
     uint8_t packet[CAN_TAC_SUMMARY_PACKET_BYTES] = {0};
     uint8_t cursor = 0;
 
@@ -186,9 +186,12 @@ uint8_t HalTWAI::sendTactileSummary(const TactileData &tacData) {
         }
     }
 
-    const uint16_t crc = crc16Ccitt(packet, TACTILE_SUMMARY_BYTES);
-    packet[TACTILE_SUMMARY_BYTES] = (uint8_t)(crc >> 8);
-    packet[TACTILE_SUMMARY_BYTES + 1] = (uint8_t)(crc & 0xFF);
+    // 高字节在前，和P4侧其他16位协议字段保持一致；bit0~bit14对应G0S0~G4S2。
+    packet[TACTILE_SUMMARY_BYTES] = (uint8_t)(moduleValidMask >> 8);
+    packet[TACTILE_SUMMARY_BYTES + 1] = (uint8_t)(moduleValidMask & 0xFF);
+    const uint16_t crc = crc16Ccitt(packet, CAN_TAC_SUMMARY_CRC_INPUT_BYTES);
+    packet[CAN_TAC_SUMMARY_CRC_INPUT_BYTES] = (uint8_t)(crc >> 8);
+    packet[CAN_TAC_SUMMARY_CRC_INPUT_BYTES + 1] = (uint8_t)(crc & 0xFF);
 
     static uint8_t seq = 0;
     const uint8_t thisSeq = seq++;

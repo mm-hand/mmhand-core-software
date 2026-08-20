@@ -8,17 +8,13 @@
 禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
 """
 
-from desktop.core.angle_mapping import get_spec
-
 from .ui_control_common import (
-    CALIB_LOAD_SNAPSHOT_PATH,
     ControlMode,
     ENCODER_COUNT,
     FIST_POSE_URDF_MAX_OFFSET_DEG,
     List,
     MOTOR_COUNT,
     MOTOR_RELEASE_HALF_TURN_COUNTS,
-    OPEN_POSE_CURRENT_MIN_OFFSET_DEG,
     Optional,
     ReplayView,
     SYSTEM_STATE_CALIBRATION_RUNNING,
@@ -29,7 +25,6 @@ from .ui_control_common import (
     SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_UNCONTROLLABLE,
-    Tuple,
     VALID_MOTOR_MASK,
     clamp_motor_abs,
     motor_abs_after_tendon_action,
@@ -93,42 +88,56 @@ class ControlPanelManualMixin:
         self._state = state
         self._update_manual_action_buttons()
 
-    def _apply_interaction_enabled(self, enabled: bool) -> None:
-        """Apply the interaction enabled selection or policy."""
-        self._interaction_enabled = bool(enabled)
-        if getattr(self, "manual_check", None) is not None:
-            self.manual_check.blockSignals(True)
-            self.manual_check.setChecked(self._interaction_enabled)
-            self.manual_check.blockSignals(False)
-        for widget in self._control_widgets:
-            try:
-                widget.setEnabled(self._interaction_enabled)
-            except Exception:
-                pass
-        if getattr(self, "joint_target_spins", None):
-            for idx in range(min(ENCODER_COUNT, len(self.joint_target_spins))):
-                self._refresh_joint_target_range(idx, self._state)
+    def _on_manual_prepare_finished(self, result) -> None:
+        """硬件 turn0 成功后同步清理 UI 目标和旧标定显示。
+
+        P4 与核心层已经分别失效 RAM Auto/LUT 和便携 JSON；此处只处理
+        Qt 主线程拥有的显示缓存，避免后台线程直接修改控件。
+        """
+        reset_mask = int(getattr(result, "reset_motor_mask", 0) or 0)
+        joint_mask = int(getattr(result, "invalidated_joint_mask", 0) or 0)
+        if reset_mask:
+            self._joint_target_initialized = False
+            self._reset_motor_target_cache_for_device_epoch(
+                "Manual Prepare: all motor turn counters reset"
+            )
+            self._invalidate_local_calibration_scope(reset_mask, joint_mask)
+            self._last_calib_snapshot_signature = None
+        try:
+            state = self.backend.get_state_snapshot()
+        except Exception:
+            state = None
+        if state is not None:
+            self._state = state
         self._update_manual_action_buttons()
-        self._apply_control_mode_policy()
-        self._set_status(f"Control Enable: {'ON' if self._interaction_enabled else 'OFF'}")
-        if not self._interaction_enabled:
-            self.stop_all_tests("stopped: Control Enable OFF", update_status=False)
+
+    def _controller_interaction_ready(self) -> bool:
+        """仅在 P4 已确认可控时放开会产生运动目标的控件。
+
+        ENABLE 的命令发送成功不代表下位机已经完成状态切换；以新鲜
+        SYSTEM_STATUS 驱动的 backend.is_started() 才是唯一真值。这样在
+        E-STOP、Pause、断线或状态包超时后，UI 不会继续产生控制指令。
+        """
+        if self._estop_latched or not self.context.is_comm_connected():
+            return False
+        try:
+            return bool(self.backend.is_started())
+        except Exception:
+            return False
 
     def _apply_control_mode_policy(self) -> None:
         """Apply the control mode policy selection or policy."""
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
         if mode == "device_check":
-            self.backend.set_pid_control(False)
-        elif mode == "motor":
+            return
+        if mode == "motor":
             self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.backend.set_pid_control(False)
         else:
             self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.backend.set_pid_control(bool(self._interaction_enabled))
 
     def _update_manual_action_buttons(self) -> None:
         mode = self._manual_submode() if self._app_mode == "manual" else "joint"
-        interaction = bool(self._interaction_enabled)
+        interaction = self._controller_interaction_ready()
         system_state = getattr(self._state, "system_state", None) if self._state is not None else None
         active_joints = self._active_scope_joint_indices()
         joint_workspace_ready = bool(active_joints) and not self._active_scope_joint_calib_missing_indices()
@@ -142,86 +151,31 @@ class ControlPanelManualMixin:
             bool(active_joints) and
             not self._active_scope_offline_encoder_indices(self._state)
         )
-        if getattr(self, "manual_check", None) is not None:
-            self.manual_check.setVisible(mode != "device_check")
-            self.manual_check.setEnabled(mode != "device_check")
         if getattr(self, "open_btn", None) is not None:
-            self.open_btn.setVisible(mode in ("joint", "test"))
-            self.open_btn.setEnabled(mode in ("joint", "test") and joint_workspace_ready)
+            self.open_btn.setVisible(mode == "test")
+            self.open_btn.setEnabled(
+                interaction and mode == "test" and joint_workspace_ready
+            )
         if getattr(self, "release_half_turn_btn", None) is not None:
             self.release_half_turn_btn.setVisible(mode == "motor")
             self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
         if getattr(self, "tighten_half_turn_btn", None) is not None:
             self.tighten_half_turn_btn.setVisible(mode == "motor")
             self.tighten_half_turn_btn.setEnabled(interaction and mode == "motor")
-        if getattr(self, "calib_load_btn", None) is not None:
-            can_load = (
-                bool(self.context.is_comm_connected()) and
-                CALIB_LOAD_SNAPSHOT_PATH.exists() and
-                system_state not in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
-            )
-            self.calib_load_btn.setEnabled(can_load)
-        if getattr(self, "calib_import_btn", None) is not None:
-            self.calib_import_btn.setEnabled(
-                system_state not in (
+        if getattr(self, "calib_file_load_btn", None) is not None:
+            self.calib_file_load_btn.setEnabled(
+                bool(self.context.is_comm_connected())
+                and system_state not in (
                     SYSTEM_STATE_RUN_DIRECT,
                     SYSTEM_STATE_RUN_FEEDBACK,
                     SYSTEM_STATE_CALIBRATION_RUNNING,
+                    SYSTEM_STATE_ROPE_INIT_RUNNING,
                 )
             )
-        if getattr(self, "calib_export_btn", None) is not None:
-            self.calib_export_btn.setEnabled(CALIB_LOAD_SNAPSHOT_PATH.exists())
-        if getattr(self, "new_device_reset_btn", None) is not None:
-            can_reset_device, reset_tip = self._new_device_reset_action_state(
-                self._state
-            )
-            self.new_device_reset_btn.setEnabled(can_reset_device)
-            self.new_device_reset_btn.setToolTip(reset_tip)
-        if getattr(self, "reset_zero_btn", None) is not None:
-            state = self._state
-            overflow_mask = (
-                int(getattr(state, "servo_turn_overflow_bitmap", 0) or 0)
-                & VALID_MOTOR_MASK
-                if state is not None
-                else 0
-            )
-            reset_running = (
-                int(getattr(state, "servo_reset_zero_status", 0) or 0) == 1
-                if state is not None
-                else False
-            )
-            flash_enabled = bool(
-                getattr(state, "multiturn_nvs_enabled", True)
-            ) if state is not None else False
-            safe_state = system_state not in (
-                SYSTEM_STATE_RUN_DIRECT,
-                SYSTEM_STATE_RUN_FEEDBACK,
-                SYSTEM_STATE_CALIBRATION_RUNNING,
-                SYSTEM_STATE_ROPE_INIT_RUNNING,
-            )
-            can_reset_zero = (
-                mode == "motor"
-                and bool(self.context.is_comm_connected())
-                and overflow_mask != 0
-                and flash_enabled
-                and safe_state
-                and not reset_running
-            )
-            self.reset_zero_btn.setVisible(mode == "motor")
-            self.reset_zero_btn.setEnabled(can_reset_zero)
-            if overflow_mask:
-                self.reset_zero_btn.setToolTip(
-                    "Reset overflow servos: "
-                    + self._format_motor_mask(overflow_mask, limit=MOTOR_COUNT)
-                )
-            else:
-                self.reset_zero_btn.setToolTip(
-                    "No servo hardware ABS strictly exceeds ±30715"
-                )
         if getattr(self, "fist_btn", None) is not None:
-            self.fist_btn.setVisible(mode in ("joint", "test"))
+            self.fist_btn.setVisible(mode == "test")
             self.fist_btn.setEnabled(
-                mode in ("joint", "test") and joint_workspace_ready
+                interaction and mode == "test" and joint_workspace_ready
             )
         if getattr(self, "rope_init_btn", None) is not None:
             self.rope_init_btn.setEnabled(
@@ -258,7 +212,7 @@ class ControlPanelManualMixin:
             else:
                 self.calib_btn.setToolTip(
                     "Start automatic calibration for the selected joints; "
-                    "Control Enable is not a calibration prerequisite"
+                    "ENABLE is not a calibration prerequisite"
                 )
         if getattr(self, "enable_btn", None) is not None:
             if mode == "motor":
@@ -297,28 +251,27 @@ class ControlPanelManualMixin:
                     )
             self.enable_btn.setEnabled(mode != "device_check" and enable_ready)
             self.enable_btn.setToolTip(tooltip)
-        if getattr(self, "raw_ik_enable_btn", None) is not None:
+        if getattr(self, "ros2_output_btn", None) is not None:
             # UI 必须显示 backend 的真实授权状态。E-STOP、Pause、断线或
             # active scope 改变后 backend 会撤权，按钮会在下一次刷新时复位。
             ros2_available = bool(self.context.ros2_enabled)
-            raw_ik_enabled = bool(self.backend.raw_ik_output_enabled())
-            self.raw_ik_enable_btn.blockSignals(True)
-            self.raw_ik_enable_btn.setChecked(raw_ik_enabled)
-            self.raw_ik_enable_btn.setText(
-                "RAW IK ON" if raw_ik_enabled else "RAW IK ENABLE"
+            ros2_output_enabled = bool(self.backend.ros2_output_enabled())
+            self.ros2_output_btn.blockSignals(True)
+            self.ros2_output_btn.setChecked(ros2_output_enabled)
+            self.ros2_output_btn.setText(
+                "ROS2 INPUT ON" if ros2_output_enabled else "ROS2 INPUT"
             )
-            self.raw_ik_enable_btn.blockSignals(False)
-            # ROS2 bridge 成功启动后才显示遥操授权按钮；普通控制和 Replay
-            # 模式未接入 ROS2 时保持隐藏，避免把不可用入口暴露给用户。
-            self.raw_ik_enable_btn.setVisible(ros2_available)
-            self.raw_ik_enable_btn.setToolTip(
-                "Authorize ROS2 raw IK/joint target output"
+            self.ros2_output_btn.blockSignals(False)
+            # ROS2 bridge 成功启动后才显示外部目标授权按钮；未接入 ROS2 时保持隐藏。
+            self.ros2_output_btn.setVisible(ros2_available)
+            self.ros2_output_btn.setToolTip(
+                "Authorize external ROS2 joint target input"
             )
-            self.raw_ik_enable_btn.setEnabled(
+            self.ros2_output_btn.setEnabled(
                 ros2_available and
                 mode != "device_check" and
                 (
-                    raw_ik_enabled or
+                    ros2_output_enabled or
                     (
                         bool(self.context.is_comm_connected()) and
                         bool(self.backend.is_started()) and
@@ -342,18 +295,13 @@ class ControlPanelManualMixin:
     def sync_app_mode(self, mode_name: str) -> None:
         """Run the sync app mode workflow."""
         mode = str(mode_name or "").lower()
-        if "teleop" in mode:
-            self._build_teleop_body()
-            self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.backend.set_pid_control(True)
-        elif "replay" in mode:
+        if "replay" in mode:
             self._clear_body()
             self._app_mode = "replay"
             self._replay_view = ReplayView(self.context)
             self._body_widget = self._replay_view
             self.body_layout.addWidget(self._body_widget)
             self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.backend.set_pid_control(True)
         else:
             self._build_manual_body()
             if self._state is not None:
@@ -378,7 +326,7 @@ class ControlPanelManualMixin:
         self.joint_target_spins[idx].blockSignals(True)
         self.joint_target_spins[idx].setValue(target)
         self.joint_target_spins[idx].blockSignals(False)
-        if self._interaction_enabled:
+        if self._controller_interaction_ready():
             self._on_joint_slider_change(idx, target)
 
     def _motor_spin_changed(self, idx: int, value: int) -> None:
@@ -400,7 +348,7 @@ class ControlPanelManualMixin:
         """Compute or update motor slider changed data."""
         if self._updating:
             return
-        if self._interaction_enabled:
+        if self._controller_interaction_ready():
             self._on_motor_slider_change(idx, int(value))
         else:
             self.motor_target_spins[idx].blockSignals(True)
@@ -452,13 +400,9 @@ class ControlPanelManualMixin:
         state = self._state
         return [self._motor_abs_for_command_packet(i, state) for i in range(MOTOR_COUNT)]
 
-    def motor_sweep_targets(self) -> List[int]:
-        """Run the motor sweep targets workflow."""
-        return [self._read_motor_target_slider_int(i) for i in range(MOTOR_COUNT)]
-
     def send_joint_row(self, idx: int) -> None:
         """Send the joint row command to the backend."""
-        if not self._interaction_enabled:
+        if not self._controller_interaction_ready():
             return
         self._mark_joint_target_user_set(idx)
         if not self._guard_joint_command_started():
@@ -475,7 +419,7 @@ class ControlPanelManualMixin:
 
     def send_motor_row(self, idx: int) -> None:
         """Send the motor row command to the backend."""
-        if not self._interaction_enabled:
+        if not self._controller_interaction_ready():
             return
         self._mark_motor_target_user_set(idx)
         self._sync_motor_abs_from_slider_before_send(idx)
@@ -489,7 +433,7 @@ class ControlPanelManualMixin:
 
     def release_all_motors_half_turn(self) -> None:
         """Run the release all motors half turn workflow."""
-        if not self._interaction_enabled:
+        if not self._controller_interaction_ready():
             return
         if self._manual_submode() != "motor":
             self._set_status("Release Half Turn is only available in Motor Channels")
@@ -498,7 +442,6 @@ class ControlPanelManualMixin:
             if not self.context.is_comm_connected():
                 raise RuntimeError("Serial port is not connected")
             self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.backend.set_pid_control(False)
             if self._estop_latched and not self.backend.is_started():
                 self._set_status("Release blocked: press ENABLE after E-STOP")
                 return
@@ -576,7 +519,7 @@ class ControlPanelManualMixin:
 
     def tighten_all_motors_half_turn(self) -> None:
         """Run the tighten all motors half turn workflow."""
-        if not self._interaction_enabled:
+        if not self._controller_interaction_ready():
             return
         if self._manual_submode() != "motor":
             self._set_status("Tighten Half Turn is only available in Motor Channels")
@@ -585,7 +528,6 @@ class ControlPanelManualMixin:
             if not self.context.is_comm_connected():
                 raise RuntimeError("Serial port is not connected")
             self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-            self.backend.set_pid_control(False)
             if self._estop_latched and not self.backend.is_started():
                 self._set_status("Tighten blocked: press ENABLE after E-STOP")
                 return
@@ -680,77 +622,15 @@ class ControlPanelManualMixin:
                 self._joint_target_user_set[i] = True
         finally:
             self._updating = False
-        self.context.draw_pose_angles(clamped_angles)
-
-    def _build_current_min_open_pose_targets(self) -> Optional[Tuple[List[float], List[int]]]:
-        joints = self._active_scope_joint_indices()
-        if not joints:
-            self._set_status("Open Pose blocked: no active joints selected")
-            return None
-        targets = self.resolved_joint_targets()
-        missing: List[str] = []
-        for joint in joints:
-            workspace = self._joint_workspace_range(joint, self._state)
-            if not workspace.ready:
-                missing.append(f"J{joint:02d} {workspace.reason}")
-                continue
-            targets[joint] = workspace.open_pose_target(OPEN_POSE_CURRENT_MIN_OFFSET_DEG)
-        if missing:
-            detail = "; ".join(missing[:4])
-            if len(missing) > 4:
-                detail += f"; +{len(missing) - 4} more"
-            self._set_status(f"Open Pose blocked: {detail}")
-            return None
-        return targets, joints
-
-    def _joint_uses_dual_motors(self, joint: int) -> bool:
-        """Return whether a joint is driven by two motor channels."""
-        try:
-            return len(get_spec(joint).motor_indices) >= 2
-        except (KeyError, TypeError, ValueError):
-            return False
-
-    def _build_open_pose_targets(self) -> Optional[Tuple[List[float], List[int]]]:
-        """Build open pose targets from each joint's active workspace."""
-        joints = self._active_scope_joint_indices()
-        if not joints:
-            self._set_status("Open Pose blocked: no active joints selected")
-            return None
-        targets = self.resolved_joint_targets()
-        missing: List[str] = []
-        for joint in joints:
-            workspace = self._joint_workspace_range(joint, self._state)
-            if not workspace.ready or workspace.current_min_deg is None:
-                missing.append(f"J{joint:02d} {workspace.reason}")
-                continue
-            if self._joint_uses_dual_motors(joint):
-                # 双腱关节在 Current Min 附近容易与预紧/防松绳约束打架，
-                # Open Pose 改用动态工作空间中点，给两根腱都留下调节余量。
-                targets[joint] = workspace.clamp(
-                    (workspace.current_min_deg + workspace.current_max_deg) * 0.5
-                )
-            else:
-                targets[joint] = workspace.open_pose_target(OPEN_POSE_CURRENT_MIN_OFFSET_DEG)
-        if missing:
-            detail = "; ".join(missing[:4])
-            if len(missing) > 4:
-                detail += f"; +{len(missing) - 4} more"
-            self._set_status(f"Open Pose blocked: {detail}")
-            return None
-        return targets, joints
 
     def apply_open_pose(self) -> None:
-        """Apply the open pose command to the UI or backend."""
-        pose = self._build_open_pose_targets()
-        if pose is None:
-            return
-        targets, joints = pose
+        """向全部关节发送固定的 0° Open Pose，不依赖标定工作区。"""
+        targets = [0.0] * ENCODER_COUNT
         self._apply_and_send_joint_pose(
             targets,
-            joints,
+            list(range(ENCODER_COUNT)),
             "Open Pose",
-            "dual Current Min/Max midpoint; single Current Min + "
-            f"{OPEN_POSE_CURRENT_MIN_OFFSET_DEG:.0f} deg",
+            "all joint targets = 0 deg",
         )
 
 

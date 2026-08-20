@@ -73,7 +73,6 @@ bool addServoReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
 bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                                    uint32_t motorMask,
                                    const int32_t* motorAbs,
-                                   uint16_t rawToleranceCounts,
                                    bool clearRecoveryTransaction,
                                    uint32_t* restoredMask,
                                    uint32_t* rejectedMask)
@@ -94,8 +93,7 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
             resolveMotorDriver(channel, &route, true);
         if (!driver || !driver->isMultiTurnConfigured(route.servoId) ||
             !driver->restoreAbsolutePosition(route.servoId,
-                                             motorAbs[channel],
-                                             rawToleranceCounts)) {
+                                             motorAbs[channel])) {
             rejected |= bit;
             continue;
         }
@@ -113,13 +111,12 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
     if (restoredMask) *restoredMask = restored;
     if (rejectedMask) *rejectedMask = rejected;
     FW_LOG_INFO_PRINTF(
-        "[SERVO RESTORE] request=0x%08lX restored=0x%08lX rejected=0x%08lX unknown=0x%08lX tol=%u\r\n",
+        "[SERVO RESTORE] request=0x%08lX restored=0x%08lX rejected=0x%08lX unknown=0x%08lX mode=nearest-circle\r\n",
         (unsigned long)requestMask,
         (unsigned long)restored,
         (unsigned long)rejected,
         (unsigned long)sharedAtomicLoad(
-            &sharedData->multi_turn_unknown_bitmap),
-        (unsigned)rawToleranceCounts);
+            &sharedData->multi_turn_unknown_bitmap));
     return requestMask != 0 && (requestMask & ~restored) == 0;
 }
 

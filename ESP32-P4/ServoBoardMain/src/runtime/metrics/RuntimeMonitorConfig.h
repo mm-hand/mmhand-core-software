@@ -11,6 +11,11 @@
 #include <stdint.h>
 
 inline constexpr uint32_t kTaskRuntimeWindowMs = 1000U;
+/**
+ * Task Runtime 订阅租约。上位机每 2 s 续订一次，连续 6 s 未续订才自动停发，
+ * 该租约与运动控制的 1 s 安全租约相互独立。
+ */
+inline constexpr uint32_t kTaskRuntimeSubscriptionLeaseMs = 6000U;
 inline constexpr uint8_t kTaskRuntimeExecBucketCount = 62U;
 inline constexpr uint16_t kTaskRuntimeUnknownPermille = 0xFFFFU;
 

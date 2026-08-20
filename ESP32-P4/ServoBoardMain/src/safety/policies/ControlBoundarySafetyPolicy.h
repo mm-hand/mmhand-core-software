@@ -1,6 +1,6 @@
 /**
  * @file ControlBoundarySafetyPolicy.h
- * @brief 集中定义控制域的角度/ABS 边界、热插拔保持和工作区告警判断。
+ * @brief 集中定义控制域的角度边界、热插拔保持和工作区告警判断。
  *
  * 本文件只接收事实并返回判断结果，不访问队列、不写系统状态，也不发送舵机命令。
  * MotionControlService 负责根据结果执行 HOLD、钳位、日志和安全事件上报。
@@ -20,27 +20,23 @@ struct BoundaryClampDecision {
     float applied;
 };
 
+/** @brief 舵机 logical ABS 整数边界判断结果。 */
+struct AbsBoundaryClampDecision {
+    bool valid;
+    bool clamped;
+    int32_t requested;
+    int32_t applied;
+};
+
 /** @brief 将浮点目标限制到有效闭区间；非法输入返回 valid=false。 */
 BoundaryClampDecision clampFloatToBoundary(float requested,
                                            float minimum,
                                            float maximum);
 
-/** @brief 将 ABS 目标限制到有效闭区间；返回值为实际允许下发的目标。 */
-int32_t clampAbsToBoundary(int32_t requested,
-                           int32_t minimum,
-                           int32_t maximum,
-                           bool* valid,
-                           bool* clamped);
-
-/**
- * @brief 判断实际舵机 ABS 是否已到达本次 PID 推进方向的 LUT 边界。
- * @param pushDeltaAbs 只用于表达推进方向，正值检查上界，负值检查下界。
- */
-bool actualAbsReachedDirectionalBoundary(int32_t actualAbs,
-                                         int32_t pushDeltaAbs,
-                                         int32_t minimum,
-                                         int32_t maximum,
-                                         int32_t toleranceCounts);
+/** @brief 将舵机 logical ABS 目标限制到有效闭区间。 */
+AbsBoundaryClampDecision clampAbsToBoundary(int32_t requested,
+                                            int32_t minimum,
+                                            int32_t maximum);
 
 /** @brief 上工作区越界的去抖结果。 */
 struct WorkspaceWarningDecision {

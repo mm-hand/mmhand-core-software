@@ -8,14 +8,12 @@ Replay 直接读取 `Save Data` 生成的动作指令或实际关节轨迹 CSV�
 
 1. 在任意控制页面连接 P4。
 2. 完成标定与 Rope Init，确认系统进入 `READY`。
-3. 勾选 `Save Data` 并选择 CSV 保存。
-4. 使用普通负反馈 UI、视觉遥操，或启用 `RAW IK ENABLE` 后使用 Wuji、MANUS、
-   其他 ROS2 节点遥操。
-5. 动作结束后取消 `Save Data`。
+3. `Save Data` 默认已开启；连接成功后自动保存基础 CSV。若此前手动关闭，重新勾选即可恢复记录。
+4. 使用普通负反馈 UI，或启用 `ROS2 INPUT` 后由外部 ROS2 节点下发目标。
+5. 动作结束后如不再需要记录，可取消 `Save Data`。
 
-也可以先启用 `RAW IK ENABLE` 再勾选 `Save Data`；记录器会从勾选成功后的下一帧
-开始保存，不会补录勾选前已经发送的动作。Wuji 必须继续向 `/raw_ik_target`
-发布新帧，CSV 才会增长。
+若先启用 `ROS2 INPUT` 再开启 `Save Data`，记录器会从开启后的下一帧开始保存，
+不会补录此前已经发送的动作。外部节点必须继续向 ROS2 topic 发布新帧，CSV 才会增长。
 
 新版本会在本次数据目录生成：
 
@@ -39,7 +37,7 @@ Replay 直接读取 `Save Data` 生成的动作指令或实际关节轨迹 CSV�
 
 Replay 只使用 `sent_to_backend=1` 且 `replayable=1` 的
 `output_joint_targets_json`，因此不会重放被拒绝的目标、Replay自身命令或系统
-Hold。普通按钮的单次 Send 是离散帧，只发送一次；连续遥操和滑条目标最多
+Hold。普通按钮的单次 Send 是离散帧，只发送一次；连续 ROS2 和滑条目标最多
 按20 Hz落盘。
 
 ## 2. 启动

@@ -25,6 +25,7 @@ from desktop.core.angle_mapping import (
 from desktop.core.calibration_snapshot import (
     CalibrationSnapshotError,
     atomic_write_snapshot,
+    invalidate_calibration_snapshot_scope,
     merge_snapshot,
     read_snapshot,
     validate_snapshot,
@@ -98,7 +99,6 @@ from desktop.core.motor_mapping import (
     motor_tendon_shorten_abs_sign,
     motor_target_from_servo_feedback,
 )
-from .ui_teleop_view import TeleopView
 from .ui_replay_view import ReplayView
 from .ui_control_scope import (
     AUTO_CALIBRATION_JOINT_INDICES,
@@ -112,8 +112,8 @@ from .ui_control_target_model import JointTargetModel
 MOTOR_TARGET_SCALE_LO = 0
 MOTOR_TARGET_SCALE_HI = 4095
 MOTOR_SINGLE_TURN_STEPS = 4096
-# 当前单圈 raw 与 Flash 快照的环形差达到该值时提示恢复锚点可能失配。
-MOTOR_FLASH_RAW_WARN_COUNTS = 256
+# 当前单圈 raw 与上位机 JSON 锚点的环形差达到该值时提示恢复可能失配。
+MOTOR_SAVED_RAW_WARN_COUNTS = 400
 MOTOR_RELEASE_HALF_TURN_COUNTS = MOTOR_SINGLE_TURN_STEPS // 2
 MOTOR_JUMP_RESYNC_THRESH = 2048
 MOTOR_SLIDER_WRAP_MARGIN = 512
@@ -149,7 +149,6 @@ try:
 except (OSError, TypeError, ValueError):
     WORKSPACE_MAPPING_VERSION, WORKSPACE_URDF_CRC = 0, 0
 
-OPEN_POSE_CURRENT_MIN_OFFSET_DEG = 5.0
 FIST_POSE_URDF_MAX_OFFSET_DEG = 7.0
 
 class _ModeBody(QtWidgets.QWidget):
@@ -206,7 +205,7 @@ __all__ = [
     "MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES",
     "MOTOR_DIR_HINT_CLEAR_TOL",
     "MOTOR_JUMP_RESYNC_THRESH",
-    "MOTOR_FLASH_RAW_WARN_COUNTS",
+    "MOTOR_SAVED_RAW_WARN_COUNTS",
     "MOTOR_MID_CALIB_PATH",
     "MOTOR_RELEASE_HALF_TURN_COUNTS",
     "MOTOR_SINGLE_TURN_STEPS",
@@ -215,7 +214,6 @@ __all__ = [
     "MOTOR_TARGET_SCALE_HI",
     "MOTOR_TARGET_SCALE_LO",
     "MOTOR_TO_JOINT_INDEX",
-    "OPEN_POSE_CURRENT_MIN_OFFSET_DEG",
     "Optional",
     "PROJECT_ROOT",
     "Path",
@@ -246,7 +244,6 @@ __all__ = [
     "TEST_ROW_COUNT",
     "TEST_TICK_MS",
     "TRI_TEST_DEFAULT_FREQ_HZ",
-    "TeleopView",
     "Tuple",
     "VALID_MOTOR_MASK",
     "WORKSPACE_MAPPING_VERSION",

@@ -11,33 +11,41 @@ from __future__ import annotations
 
 import math
 import threading
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 from desktop.core.angle_mapping import get_spec
 from desktop.core.data_models import HandModel, resolve_joint_workspace_range
-from desktop.core.protocol import ENCODER_COUNT, ENCODER_RAW_MODULO, directed_encoder_delta
+from desktop.core.protocol import (
+    ENCODER_COUNT,
+    ENCODER_RAW_MODULO,
+    MOTOR_COUNT,
+    directed_encoder_delta,
+)
 
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 
 
 class DeviceCheckView(QtWidgets.QWidget):
     operation_finished = Signal(str, bool, str)
+    manual_prepare_finished = Signal(object)
 
     COL_STATUS = 0
     COL_JOINT = 1
-    COL_CURRENT_RAW = 2
-    COL_MANUAL_MIN = 3
-    COL_CAPTURE_MIN = 4
-    COL_MANUAL_MAX = 5
-    COL_CAPTURE_MAX = 6
-    COL_MANUAL_SPAN = 7
-    COL_AUTO_MIN = 8
-    COL_AUTO_MAX = 9
-    COL_URDF_SPAN = 10
-    COL_URDF_MIN = 11
-    COL_CURRENT_MIN = 12
-    COL_URDF_MAX = 13
-    COL_FLASH = 14
+    COL_ENCODER_DIRECTION = 2
+    COL_CURRENT_RAW = 3
+    COL_MANUAL_MIN = 4
+    COL_CAPTURE_MIN = 5
+    COL_MANUAL_MAX = 6
+    COL_CAPTURE_MAX = 7
+    COL_MANUAL_SPAN = 8
+    COL_AUTO_MIN = 9
+    COL_AUTO_MAX = 10
+    COL_URDF_SPAN = 11
+    COL_URDF_MIN = 12
+    COL_CURRENT_MIN = 13
+    COL_URDF_MAX = 14
+    COL_FLASH = 15
 
     def __init__(
         self,
@@ -57,6 +65,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         self._dirty_rows: set[int] = set()
         self._current_raw: list[Optional[int]] = [None] * ENCODER_COUNT
         self._status_items: list[QtWidgets.QTableWidgetItem] = []
+        self._direction_items: list[QtWidgets.QTableWidgetItem] = []
         self._raw_items: list[QtWidgets.QTableWidgetItem] = []
         self._span_items: list[QtWidgets.QTableWidgetItem] = []
         self._auto_min_items: list[QtWidgets.QTableWidgetItem] = []
@@ -68,6 +77,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         self._capture_min_buttons: list[QtWidgets.QPushButton] = []
         self._capture_max_buttons: list[QtWidgets.QPushButton] = []
         self.operation_finished.connect(self._on_operation_finished)
+        self.manual_prepare_finished.connect(self._on_manual_prepare_finished)
         self._build()
 
     def _build(self) -> None:
@@ -79,21 +89,23 @@ class DeviceCheckView(QtWidgets.QWidget):
         toolbar_layout = QtWidgets.QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(4, 2, 4, 2)
         toolbar_layout.setSpacing(6)
-        self.summary_label = QtWidgets.QLabel("Manual 0/21 | Auto 0/21 | Flash unknown")
+        self.summary_label = QtWidgets.QLabel("Manual 0/21 | Auto 0/21 | P4 RAM unknown")
         self.summary_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         toolbar_layout.addWidget(self.summary_label)
         toolbar_layout.addStretch(1)
 
-        self.refresh_btn = QtWidgets.QPushButton("Refresh")
-        self.refresh_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
-        self.refresh_btn.setToolTip("Query Manual endpoints from P4 and verify the returned packet")
+        self.manual_prepare_btn = QtWidgets.QPushButton("Manual Prepare")
+        self.manual_prepare_btn.setToolTip(
+            "Reset all 27 servo turn counters, clear desktop multi-turn anchors, "
+            "invalidate Auto/LUT, then release every motor by 1500 counts"
+        )
         self.write_btn = QtWidgets.QPushButton("Write Modified")
         self.write_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
         self.write_btn.setToolTip("Persist only rows edited in this table, then read them back")
         self.clear_btn = QtWidgets.QPushButton("Clear Manual")
         self.clear_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogDiscardButton))
-        self.clear_btn.setToolTip("Clear all Manual endpoints from P4 Flash")
-        toolbar_layout.addWidget(self.refresh_btn)
+        self.clear_btn.setToolTip("Clear all Manual endpoints from P4 RAM and desktop JSON")
+        toolbar_layout.addWidget(self.manual_prepare_btn)
         toolbar_layout.addWidget(self.write_btn)
         toolbar_layout.addWidget(self.clear_btn)
         layout.addWidget(toolbar)
@@ -101,6 +113,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         headers = [
             "Status",
             "Joint",
+            "Raw Dir",
             "Current Raw",
             "Manual Min",
             "Use Raw",
@@ -113,10 +126,16 @@ class DeviceCheckView(QtWidgets.QWidget):
             "URDF Min",
             "Current Min",
             "URDF Max",
-            "Flash",
+            "RAM/JSON",
         ]
         self.table = QtWidgets.QTableWidget(ENCODER_COUNT, len(headers))
         self.table.setHorizontalHeaderLabels(headers)
+        direction_header = self.table.horizontalHeaderItem(self.COL_ENCODER_DIRECTION)
+        if direction_header is not None:
+            direction_header.setToolTip(
+                "Magnetic encoder raw direction from Manual Min toward Manual Max: "
+                "up means increasing, down means decreasing"
+            )
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -131,6 +150,8 @@ class DeviceCheckView(QtWidgets.QWidget):
             status = self._make_item("Waiting")
             joint_item = self._make_item(f"J{joint:02d}")
             joint_item.setToolTip(get_spec(joint).joint_name)
+            direction_item = self._make_item("?")
+            direction_item.setToolTip("Waiting for P4 encoderDirection")
             raw = self._make_item("-")
             span = self._make_item("-")
             auto_min = self._make_item("-")
@@ -158,6 +179,7 @@ class DeviceCheckView(QtWidgets.QWidget):
 
             self.table.setItem(joint, self.COL_STATUS, status)
             self.table.setItem(joint, self.COL_JOINT, joint_item)
+            self.table.setItem(joint, self.COL_ENCODER_DIRECTION, direction_item)
             self.table.setItem(joint, self.COL_CURRENT_RAW, raw)
             self.table.setCellWidget(joint, self.COL_MANUAL_MIN, min_spin)
             self.table.setCellWidget(joint, self.COL_CAPTURE_MIN, capture_min)
@@ -173,6 +195,7 @@ class DeviceCheckView(QtWidgets.QWidget):
             self.table.setItem(joint, self.COL_FLASH, flash)
 
             self._status_items.append(status)
+            self._direction_items.append(direction_item)
             self._raw_items.append(raw)
             self._span_items.append(span)
             self._auto_min_items.append(auto_min)
@@ -185,7 +208,9 @@ class DeviceCheckView(QtWidgets.QWidget):
             self._capture_max_buttons.append(capture_max)
 
         layout.addWidget(self.table, 1)
-        self.refresh_btn.clicked.connect(lambda _checked=False: self.refresh_from_p4())
+        self.manual_prepare_btn.clicked.connect(
+            lambda _checked=False: self.manual_prepare()
+        )
         self.write_btn.clicked.connect(lambda _checked=False: self.write_modified())
         self.clear_btn.clicked.connect(lambda _checked=False: self.clear_manual())
         self._refresh_buttons()
@@ -196,6 +221,15 @@ class DeviceCheckView(QtWidgets.QWidget):
         item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
         item.setTextAlignment(QtCore.Qt.AlignCenter)
         return item
+
+    @staticmethod
+    def _encoder_direction_display(direction: int) -> tuple[str, str]:
+        """把 P4 encoderDirection 转成用户可直接识别的 raw 增减箭头。"""
+        if int(direction) > 0:
+            return "↑", "Raw increases from Manual Min toward Manual Max"
+        if int(direction) < 0:
+            return "↓", "Raw decreases from Manual Min toward Manual Max"
+        return "?", "Waiting for P4 encoderDirection"
 
     def _make_raw_spin(self, joint: int) -> QtWidgets.QSpinBox:
         spin = QtWidgets.QSpinBox()
@@ -248,14 +282,53 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         threading.Thread(target=worker, name=f"mmhand-{name.lower().replace(' ', '-')}", daemon=True).start()
 
-    def refresh_from_p4(self) -> None:
-        self._run_operation(
-            "Manual refresh",
-            lambda: (
-                bool(self.backend.query_manual_encoder_references()),
-                "Manual endpoints read back" if self.backend.get_current_state() is not None else "Manual query completed",
+    def manual_prepare(self) -> None:
+        """确认后在后台执行全手 turn0 与统一预松，避免阻塞 Qt 主线程。"""
+        if self._busy:
+            return
+        if not self.context.is_comm_connected():
+            self.context.set_status("Manual Prepare blocked: serial port is not connected")
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Manual Prepare",
+            (
+                "该操作要求 27 台舵机全部在线，并将：\n\n"
+                "1. 重置全部舵机硬件圈数；\n"
+                "2. 清除上位机多圈 JSON 锚点；\n"
+                "3. 作废全部 Auto/LUT/ABS Limit（保留 Manual Min/Max）；\n"
+                "4. 将每台舵机向放绳方向移动 1500 counts。\n\n"
+                "完成后必须重新执行自动标定。确认继续？"
             ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
         )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._busy = True
+        self._refresh_buttons()
+        self.context.set_status("Manual Prepare: checking all 27 motors...")
+
+        def worker() -> None:
+            try:
+                result = self.backend.manual_prepare_all_motors()
+            except Exception as exc:
+                result = SimpleNamespace(
+                    ok=False,
+                    message=f"{type(exc).__name__}: {exc}",
+                    reset_motor_mask=0,
+                    failed_motor_mask=(1 << MOTOR_COUNT) - 1,
+                    invalidated_joint_mask=0,
+                    reached_motor_mask=0,
+                )
+            self.manual_prepare_finished.emit(result)
+
+        threading.Thread(
+            target=worker,
+            name="mmhand-manual-prepare",
+            daemon=True,
+        ).start()
 
     def write_modified(self) -> None:
         rows = sorted(self._dirty_rows)
@@ -278,7 +351,7 @@ class DeviceCheckView(QtWidgets.QWidget):
                     done = ",".join(f"J{idx:02d}" for idx in completed) or "none"
                     return False, (
                         f"Manual write failed: J{joint:02d} min={min_raw} max={max_raw}; "
-                        f"completed={done}; ACK/readback/CRC/Flash verification failed"
+                        f"completed={done}; ACK/readback/CRC/desktop JSON verification failed"
                     )
                 completed.append(joint)
             self.backend.query_manual_encoder_references()
@@ -288,7 +361,7 @@ class DeviceCheckView(QtWidgets.QWidget):
             )
             return True, (
                 f"Manual saved and verified: {details}; "
-                "ACK=ok, readback=ok, CRC=ok, Flash=saved; automatic calibration is required"
+                "ACK=ok, readback=ok, CRC=ok, desktop JSON=saved; automatic calibration is required"
             )
 
         self._run_operation("Manual write", write_rows)
@@ -297,7 +370,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         reply = QtWidgets.QMessageBox.question(
             self,
             "Clear Manual",
-            "Clear all 21 Manual endpoint pairs from P4 Flash? Calibration and feedback will be blocked until Manual is entered again.",
+            "Clear all 21 Manual endpoint pairs from P4 RAM and desktop JSON? Calibration and feedback will be blocked until Manual is entered again.",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
@@ -308,9 +381,9 @@ class DeviceCheckView(QtWidgets.QWidget):
             ok = bool(self.backend.clear_manual_encoder_references())
             return (
                 ok,
-                "Manual endpoints cleared; ACK=ok, readback=ok, Flash=empty"
+                "Manual endpoints cleared; ACK=ok, readback=ok, desktop JSON=empty"
                 if ok else
-                "Manual clear failed; ACK/readback/Flash verification failed",
+                "Manual clear failed; ACK/readback/desktop JSON verification failed",
             )
 
         self._run_operation("Manual clear", clear)
@@ -329,9 +402,24 @@ class DeviceCheckView(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _on_manual_prepare_finished(self, result) -> None:
+        """收敛维护事务的 UI 状态；详细缓存失效由父 ControlPanel 处理。"""
+        self._busy = False
+        self._refresh_buttons()
+        ok = bool(getattr(result, "ok", False))
+        message = str(getattr(result, "message", "Manual Prepare failed"))
+        self.context.set_status(message)
+        self.context.emit_action(message)
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, "Manual Prepare", message)
+        try:
+            self.update_state(self.backend.get_state_snapshot())
+        except Exception:
+            pass
+
     def _refresh_buttons(self) -> None:
         connected = bool(self.context.is_comm_connected())
-        self.refresh_btn.setEnabled(connected and not self._busy)
+        self.manual_prepare_btn.setEnabled(connected and not self._busy)
         self.write_btn.setEnabled(connected and not self._busy and bool(self._dirty_rows))
         self.clear_btn.setEnabled(connected and not self._busy)
         for joint in range(ENCODER_COUNT):
@@ -342,9 +430,11 @@ class DeviceCheckView(QtWidgets.QWidget):
     def clear_state(self) -> None:
         self._state = None
         self._current_raw = [None] * ENCODER_COUNT
-        self.summary_label.setText("Manual 0/21 | Auto 0/21 | Flash disconnected")
+        self.summary_label.setText("Manual 0/21 | Auto 0/21 | P4 RAM disconnected")
         for joint in range(ENCODER_COUNT):
             self._status_items[joint].setText("Disconnected")
+            self._direction_items[joint].setText("?")
+            self._direction_items[joint].setToolTip("Waiting for P4 encoderDirection")
             self._raw_items[joint].setText("-")
             self._span_items[joint].setText("-")
             self._auto_min_items[joint].setText("-")
@@ -364,11 +454,11 @@ class DeviceCheckView(QtWidgets.QWidget):
         nvs_valid = bool(getattr(state, "manual_reference_nvs_valid", False))
         save_status = int(getattr(state, "manual_reference_save_status", 0) or 0)
         sequence = int(getattr(state, "manual_reference_nvs_sequence", 0) or 0)
-        flash_text = "saved" if nvs_valid and save_status == 1 else ("failed" if save_status == 2 else "not ready")
+        flash_text = "committed" if nvs_valid and save_status == 1 else ("failed" if save_status == 2 else "not ready")
         self.summary_label.setText(
             f"Manual {valid_mask.bit_count()}/{ENCODER_COUNT} | "
             f"Auto {auto_mask.bit_count()}/{ENCODER_COUNT} | "
-            f"Flash {flash_text}, sequence={sequence}"
+            f"P4 RAM {flash_text}, sequence={sequence}"
         )
 
         min_raw_values = list(getattr(state, "manual_reference_min_raw", []) or [])
@@ -380,6 +470,14 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         for joint in range(ENCODER_COUNT):
             bit = 1 << joint
+            direction = (
+                int(directions[joint])
+                if has_directions and joint < len(directions)
+                else 0
+            )
+            direction_text, direction_tip = self._encoder_direction_display(direction)
+            self._direction_items[joint].setText(direction_text)
+            self._direction_items[joint].setToolTip(direction_tip)
             raw: Optional[int] = None
             if bool(getattr(state, "has_encoder_raw_data", False)) and joint < len(encoders):
                 encoder = encoders[joint]
@@ -406,7 +504,6 @@ class DeviceCheckView(QtWidgets.QWidget):
                         spin.blockSignals(True)
                         spin.setValue(value)
                         spin.blockSignals(False)
-                direction = int(directions[joint]) if has_directions and joint < len(directions) else 0
                 span = directed_encoder_delta(min_raw, max_raw, direction)
                 manual_span_ready = span is not None and span > 0
                 self._span_items[joint].setText("-" if span is None else str(span))

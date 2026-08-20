@@ -5,6 +5,7 @@
 #include "HostSerialPort.h"
 
 #include <Arduino.h>
+#include "../../config/BoardConfig.h"
 
 namespace {
 
@@ -12,6 +13,7 @@ namespace {
 // 保证 HostCommTask 仍是协议缓冲区和解析状态的唯一所有者。
 HostSerialPort::RxWakeHandler s_rxWakeHandler = nullptr;
 void* s_rxWakeContext = nullptr;
+volatile uint32_t s_rxErrorFlags = 0;
 
 void notifyHostRx()
 {
@@ -20,9 +22,23 @@ void notifyHostRx()
     }
 }
 
+/** Arduino UART 事件线程只锁存错误，具体告警由 HostCommTask 统一上报。 */
+void notifyHostRxError(hardwareSerial_error_t error)
+{
+    const uint8_t bit = static_cast<uint8_t>(error);
+    if (bit < 32U) {
+        __atomic_fetch_or(&s_rxErrorFlags, 1UL << bit, __ATOMIC_RELAXED);
+    }
+}
+
 } // namespace
 
-void HostSerialPort::begin(uint32_t baudRate) { Serial.begin(baudRate); }
+void HostSerialPort::begin(uint32_t baudRate)
+{
+    // Arduino 要求在 begin() 前设置 RX ring；TX ring 继续保持默认 0 byte。
+    Serial.setRxBufferSize(kHostUartRxBufferBytes);
+    Serial.begin(baudRate);
+}
 void HostSerialPort::setRxWakeHandler(RxWakeHandler handler, void* context)
 {
     s_rxWakeHandler = handler;
@@ -31,7 +47,12 @@ void HostSerialPort::setRxWakeHandler(RxWakeHandler handler, void* context)
         // 仅在一帧字节流空闲后回调，避免逐字节唤醒造成额外 CPU 抖动。
         Serial.setRxTimeout(2);
         Serial.onReceive(notifyHostRx, true);
+        Serial.onReceiveError(notifyHostRxError);
     }
+}
+uint32_t HostSerialPort::takeRxErrorFlags()
+{
+    return __atomic_exchange_n(&s_rxErrorFlags, 0U, __ATOMIC_ACQ_REL);
 }
 int HostSerialPort::available() { return Serial.available(); }
 int HostSerialPort::readByte() { return Serial.read(); }

@@ -62,8 +62,8 @@ class ControlCommandController:
                     + ")"
                 )
                 return
-        # 两种控制模式都依赖可信的舵机多圈坐标。未知时保持禁用，
-        # 并引导用户先执行 New Device Reset，再重新取得控制权。
+        # 两种控制模式都依赖可信的舵机多圈坐标。未知时保持禁用；
+        # 上位机先尝试 JSON 最近圈恢复，仍失败则引导用户勾选关节重新标定。
         unknown_mask = self._active_scope_multiturn_unknown_mask()
         if unknown_mask != 0:
             self._show_turn_recovery_guide(unknown_mask, "ENABLE")
@@ -88,7 +88,6 @@ class ControlCommandController:
             # ABS 命令会让 P4 立即进入 RUN_DIRECT，紧接着的负反馈
             # START/RUN 会因模式门禁被拒绝，表现为 Send 成功但舵机不转。
             self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-            self.backend.set_pid_control(True)
             self._estop_latched = False
             self.backend.start()
             self.context.emit_action("Start joint feedback controller")
@@ -100,7 +99,6 @@ class ControlCommandController:
             return
         targets = self._build_motor_abs_command_list()
         self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.backend.set_pid_control(False)
         # 直控也先申请基础 IDLE。E-STOP 后该 START 排在 RESET 之后，
         # 随后的 ABS 包再申请 RUN_DIRECT，三者保持单一串口 FIFO 顺序。
         self.backend.start()
@@ -111,20 +109,22 @@ class ControlCommandController:
         self.context.emit_action("Start direct motor hold from current feedback")
         self._set_status("Direct motor hold requested")
 
-    def toggle_raw_ik_output(self, enabled: bool) -> None:
-        """只切换遥操授权，不改变普通负反馈 Enable 或当前控制目标。"""
-        ok, message = self.backend.set_raw_ik_output_enabled(bool(enabled))
-        actual = bool(self.backend.raw_ik_output_enabled())
-        self.raw_ik_enable_btn.blockSignals(True)
-        self.raw_ik_enable_btn.setChecked(actual)
-        self.raw_ik_enable_btn.setText("RAW IK ON" if actual else "RAW IK ENABLE")
-        self.raw_ik_enable_btn.blockSignals(False)
+    def toggle_ros2_output(self, enabled: bool) -> None:
+        """只切换外部 ROS2 输出授权，不改变普通负反馈或当前控制目标。"""
+        ok, message = self.backend.set_ros2_output_enabled(bool(enabled))
+        actual = bool(self.backend.ros2_output_enabled())
+        self.ros2_output_btn.blockSignals(True)
+        self.ros2_output_btn.setChecked(actual)
+        self.ros2_output_btn.setText(
+            "ROS2 INPUT ON" if actual else "ROS2 INPUT"
+        )
+        self.ros2_output_btn.blockSignals(False)
         if not actual:
             self.clear_ros2_joint_targets()
         self.context.emit_action(
-            "RAW IK output enabled" if actual else "RAW IK output disabled"
+            "ROS2 input enabled" if actual else "ROS2 input disabled"
         )
-        self._set_status(message if ok else f"RAW IK enable blocked: {message}")
+        self._set_status(message if ok else f"ROS2 input enable blocked: {message}")
 
     def stop_controller(self) -> None:
         """Stop the controller workflow."""
@@ -134,7 +134,7 @@ class ControlCommandController:
         try:
             self._update_connection_lights()
             self._estop_latched = True
-            # STOP is safety-critical. Enqueue it before recorder/HDF5 cleanup
+            # STOP is safety-critical. Enqueue it before CSV recorder cleanup
             # or any other UI-side cancellation work.
             try:
                 self.backend.stop()
@@ -259,7 +259,7 @@ class ControlCommandController:
 
     def feedback_command_allowed(self, source: str = "", show_status: bool = True) -> bool:
         """Return whether feedback command allowed passes."""
-        if self._app_mode not in ("manual", "teleop"):
+        if self._app_mode != "manual":
             return True
         if bool(getattr(self, "_encoder_common_bus_fault", False)):
             if show_status:
@@ -299,7 +299,7 @@ class ControlCommandController:
             if show_status:
                 self._set_status(
                     "Feedback blocked: joint calibration not loaded "
-                    f"({self._format_joint_indices(missing_joints)}); press Calib Load or recalibrate"
+                    f"({self._format_joint_indices(missing_joints)}); load a calibration file or recalibrate"
                 )
             return False
         mismatch = self._active_scope_status_mismatch()

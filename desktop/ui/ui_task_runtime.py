@@ -21,6 +21,9 @@ from .ui_qt_compat import QtCore, QtGui, QtWidgets
 TASK_RUNTIME_LOG_DIR = os.path.join(str(LOG_DIR), "task_runtime")
 TASK_RUNTIME_LOG_KEEP = 20
 UNKNOWN_PERMILLE = 0xFFFF
+TASK_RUNTIME_RX_WARN_MS = 2500.0
+TASK_RUNTIME_RX_TIMEOUT_MS = 5000.0
+TASK_RUNTIME_ASSEMBLY_GRACE_MS = 250.0
 
 
 class TaskRuntimeWindow(QtWidgets.QDialog):
@@ -131,19 +134,18 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
     def update_state(self, state) -> None:
         task_runtime = dict(getattr(state, "task_runtime", {}) or {})
         if not task_runtime:
-            self.rx_label.setText("RX no task diag")
-            self._style_label(self.rx_label, "neutral")
+            self._update_rx_health(state, 0.0)
             return
 
         latest = max(task_runtime.values(), key=lambda item: float(item.get("host_rx_ts", 0.0) or 0.0))
-        self._update_summary(latest, getattr(state, "task_runtime_last_rx_ts", 0.0))
+        self._update_summary(latest, state)
         rows = sorted(task_runtime.items(), key=lambda item: int(item[0]))
         self.table.setRowCount(len(rows))
         for row, (task_id, diag) in enumerate(rows):
             self._populate_row(row, int(task_id), diag)
             self._log_diag(int(task_id), diag)
 
-    def _update_summary(self, latest: dict, last_rx_ts: float) -> None:
+    def _update_summary(self, latest: dict, state) -> None:
         core0 = int(latest.get("core0_idle_permille", UNKNOWN_PERMILLE) or UNKNOWN_PERMILLE)
         core1 = int(latest.get("core1_idle_permille", UNKNOWN_PERMILLE) or UNKNOWN_PERMILLE)
         sys_gap = int(latest.get("system_status_max_gap_ms", 0) or 0)
@@ -155,15 +157,57 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         self.sys_gap_label.setText(f"SYS gap {sys_gap} ms")
         self.stop_label.setText(f"STOP {stop_last / 1000.0:.1f}/{stop_max / 1000.0:.1f} ms")
 
-        now = time.time()
-        age_ms = max(0.0, (now - float(last_rx_ts or 0.0)) * 1000.0) if last_rx_ts else 0.0
-        self.rx_label.setText(f"RX {age_ms:.0f} ms ago")
-
         self._style_label(self.core0_label, self._idle_state(core0))
         self._style_label(self.core1_label, self._idle_state(core1))
         self._style_label(self.sys_gap_label, "bad" if sys_gap > 300 else "ok")
         self._style_label(self.stop_label, "bad" if stop_max > 30000 else "ok")
-        self._style_label(self.rx_label, "bad" if age_ms > 1000.0 else "ok")
+        self._update_rx_health(state, getattr(state, "task_runtime_last_rx_ts", 0.0))
+
+    def _update_rx_health(self, state, last_complete_rx_ts: float) -> None:
+        """区分完整窗口超时和七包接收不完整，避免把一秒正常周期误报为掉线。"""
+        expected_mask = int(getattr(state, "task_runtime_expected_mask", 0) or 0)
+        received_mask = int(getattr(state, "task_runtime_received_mask", 0) or 0)
+        dropped = int(getattr(state, "task_runtime_dropped_windows", 0) or 0)
+        if expected_mask and received_mask != expected_mask:
+            last_packet_rx_ts = float(
+                getattr(state, "task_runtime_last_packet_rx_ts", 0.0) or 0.0
+            )
+            partial_age_ms = (
+                max(0.0, (time.time() - last_packet_rx_ts) * 1000.0)
+                if last_packet_rx_ts
+                else 0.0
+            )
+            missing = [
+                TASK_RUNTIME_NAMES.get(task_id, str(task_id))
+                for task_id in TASK_RUNTIME_NAMES
+                if (received_mask & (1 << task_id)) == 0
+            ]
+            assembling = partial_age_ms <= TASK_RUNTIME_ASSEMBLY_GRACE_MS
+            prefix = "RX assembling" if assembling else "RX partial"
+            self.rx_label.setText(
+                f"{prefix} {received_mask.bit_count()}/{expected_mask.bit_count()}"
+            )
+            self.rx_label.setToolTip(f"Missing: {', '.join(missing)}; dropped windows: {dropped}")
+            self._style_label(self.rx_label, "neutral" if assembling else "warn")
+            return
+
+        now = time.time()
+        age_ms = (
+            max(0.0, (now - float(last_complete_rx_ts)) * 1000.0)
+            if last_complete_rx_ts
+            else 0.0
+        )
+        if not last_complete_rx_ts:
+            self.rx_label.setText("RX no task diag")
+            self.rx_label.setToolTip(f"Dropped windows: {dropped}")
+            self._style_label(self.rx_label, "neutral")
+            return
+        self.rx_label.setText(f"RX {age_ms:.0f} ms ago")
+        self.rx_label.setToolTip(f"Dropped windows: {dropped}")
+        state_name = "bad" if age_ms > TASK_RUNTIME_RX_TIMEOUT_MS else (
+            "warn" if age_ms > TASK_RUNTIME_RX_WARN_MS else "ok"
+        )
+        self._style_label(self.rx_label, state_name)
 
     @staticmethod
     def _format_permille(value: int) -> str:

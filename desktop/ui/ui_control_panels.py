@@ -18,7 +18,6 @@ from .ui_control_common import (
     Optional,
     QtCore,
     QtWidgets,
-    ReplayView,
     Signal,
     TEST_DEFAULT_HOLD_S,
     TEST_TICK_MS,
@@ -55,8 +54,6 @@ class ControlPanel(
         self.context = context
         self.backend = context.backend
         self._updating = False
-        self._interaction_enabled = False
-        self._control_widgets: List[QtWidgets.QWidget] = []
         self._state: Optional[HandModel] = None
         self._estop_latched = False
         self._estop_in_progress = False
@@ -71,7 +68,6 @@ class ControlPanel(
         self.startup_device_check_finished.connect(
             self._on_startup_device_check_finished
         )
-        self._apply_interaction_enabled(False)
         self._apply_control_mode_policy()
 
     def _init_joint_panel_state(self) -> None:
@@ -123,8 +119,6 @@ class ControlPanel(
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
         self._selected_joint_mask = int(default_joint_mask)
         self._selected_motor_mask = int(default_motor_mask)
-        self._teleop_selected_joint_mask = int(default_joint_mask)
-        self._teleop_selected_motor_mask = int(default_motor_mask)
         self._scope_update_guard = False
         self._joint_target_model = JointTargetModel(
             WORKSPACE_MAPPING_VERSION,
@@ -132,9 +126,6 @@ class ControlPanel(
         )
         self.joint_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * ENCODER_COUNT
         self.joint_group_use_checks: List[QtWidgets.QCheckBox] = []
-        self.teleop_joint_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * ENCODER_COUNT
-        self.teleop_group_use_checks: List[QtWidgets.QCheckBox] = []
-        self.teleop_hand_use_check: Optional[QtWidgets.QCheckBox] = None
 
     def _init_motor_panel_state(self) -> None:
         """Initialize motor table state and direct-control caches."""
@@ -142,7 +133,7 @@ class ControlPanel(
         self.motor_bus_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_route_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_raw_items: List[QtWidgets.QTableWidgetItem] = []
-        # FlashRaw 用于比较当前单圈位置和最近一次可信 NVS 锚点。
+        # SavedRaw 用于比较当前单圈位置和上位机 JSON 中的可信锚点。
         self.motor_flash_raw_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_abs_items: List[QtWidgets.QTableWidgetItem] = []
         self.motor_load_items: List[QtWidgets.QTableWidgetItem] = []
@@ -150,6 +141,7 @@ class ControlPanel(
         self.motor_target_spins: List[QtWidgets.QSpinBox] = []
         self.motor_sliders: List[QtWidgets.QSlider] = []
         self.motor_send_buttons: List[QtWidgets.QPushButton] = []
+        self.motor_step_buttons = []
         self._motor_target_user_set: List[bool] = []
         self._motor_target_initialized = False
         self.motor_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * MOTOR_COUNT
@@ -221,7 +213,7 @@ class ControlPanel(
     def _init_body_state(self) -> None:
         """Initialize active body/view bookkeeping."""
         self._body_widget: Optional[QtWidgets.QWidget] = None
-        self._replay_view: Optional[ReplayView] = None
+        self._replay_view = None
         self._app_mode = "manual"
         self.scope_combo: Optional[QtWidgets.QComboBox] = None
         self._scope_selection_index = 0

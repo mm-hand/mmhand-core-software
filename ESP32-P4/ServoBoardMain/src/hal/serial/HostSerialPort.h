@@ -16,6 +16,8 @@ public:
     static void begin(uint32_t baudRate);
     /** 注册接收事件回调；回调只允许唤醒任务，禁止在 Serial 事件线程解析协议。 */
     static void setRxWakeHandler(RxWakeHandler handler, void* context);
+    /** 原子取走自上次读取以来累计的 UART 接收错误位；0 表示没有硬件层错误。 */
+    static uint32_t takeRxErrorFlags();
     static int available();
     static int readByte();
     static size_t write(const uint8_t* data, size_t length);

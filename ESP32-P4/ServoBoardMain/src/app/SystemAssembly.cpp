@@ -13,6 +13,7 @@
 #include "../tasks/motion_control/MotionControlTask.h"
 #include "../tasks/servo_bus/ServoBusTask.h"
 #include "../config/topology/HardwareMap.h"
+#include "../config/ServoConfig.h"
 #include "../data/ServoRouteTypes.h"
 #include "../tasks/nvs_persistence/NvsPersistenceTask.h"
 #include "../modules/persistence/ManualCalibrationNvsStore.h"
@@ -137,8 +138,10 @@ bool assembleAndStartSystem() {
     // 舵机连续上线两帧后，ServoBusTask 会建立 pending 并完成恢复。
     sharedData.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_IDLE;
 
-    // 多圈 NVS 保存由独立低优先级任务执行，控制任务只递增请求 token。
-    sharedData.multiturn_nvs_enabled = 1;
+    // Flash 关闭时由上位机 JSON 负责恢复；协议字段保留为 0，明确告知 UI
+    // 当前 P4 不会把运行数据写入 NVS。
+    sharedData.multiturn_nvs_enabled =
+        P4_FLASH_PERSISTENCE_ENABLE ? 1 : 0;
     sharedData.host_rx_heartbeat_ms = millis();
 
     // Manual 磁编参考必须从 P4 NVS 恢复；缺失时仅禁止反馈/标定，不禁止直控。
@@ -148,7 +151,9 @@ bool assembleAndStartSystem() {
     // Auto 标定结果先初始化 RAM；Calib Load 或本次标定会再写入有效结果。
     initializeCalibrationRuntimeState();
 
-    // Manual Min/Max 只以 P4 NVS 为可信源，上电恢复后同步有效位、CRC 和序号。
+    // Manual RAM 每次上电先清空；Flash 分支仅为本轮回退验证保留。
+#if P4_FLASH_PERSISTENCE_ENABLE
+    // Flash 开启时从 A/B 槽恢复 Manual，并同步有效位、CRC 和序号。
     ManualEncoderReference bootManualReferences[ENCODER_TOTAL_NUM];
     uint32_t bootManualSequence = 0;
     uint32_t bootManualCrc = 0;
@@ -177,6 +182,12 @@ bool assembleAndStartSystem() {
         FW_LOG_INFO_PRINTLN(
             "[NVS MANUAL] no valid snapshot; active scopes without Manual data are gated");
     }
+#else
+    manualEncoderReferencesClearRam();
+    sharedData.manual_reference_nvs_valid = 0;
+    FW_LOG_INFO_PRINTLN(
+        "[MANUAL RAM] P4 Flash disabled; waiting for desktop JSON restore");
+#endif
 
     // 任务按“通信与采样 -> 状态仲裁 -> 控制 -> 持久化/监控”职责拆分。
     bool tasksCreated = p4::platform::rtos::createTask(
@@ -223,6 +234,7 @@ bool assembleAndStartSystem() {
                        &motionControlTaskHandle) &&
                    tasksCreated;
 
+#if P4_FLASH_PERSISTENCE_ENABLE
     tasksCreated = p4::platform::rtos::createTask(
                        {nvsNvsPersistenceTask,
                         "multiTurnNvsPersist",
@@ -231,6 +243,7 @@ bool assembleAndStartSystem() {
                         TASK_NVS_PERSISTENCE_PRIORITY},
                        &nvsPersistTaskHandle) &&
                    tasksCreated;
+#endif
     const SafetyRuleId tasksRule = p4::safety::runtimeResourceCreationRule(
         p4::safety::RuntimeResourceKind::Task,
         tasksCreated);

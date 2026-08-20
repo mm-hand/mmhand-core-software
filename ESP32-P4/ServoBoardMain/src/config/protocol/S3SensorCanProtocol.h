@@ -30,15 +30,19 @@ constexpr uint8_t CAN_ERROR_DETAIL_DLC = 8;
 constexpr uint32_t CAN_ERROR_REASSEMBLY_TIMEOUT_MS = 100;
 constexpr uint32_t CAN_ERROR_TABLE_CLEAR_TIMEOUT_MS = 300;
 
-// 触觉摘要：45 字节摘要和 CRC16 按 [seq][7 字节数据] 拆成七帧。
+// 触觉摘要：45字节三维力、15位模块有效位图和CRC16按[seq][7字节]拆成七帧。
 constexpr uint16_t CAN_ID_TAC_SUMMARY_BASE = 0x240;
 constexpr uint16_t CAN_ID_TAC_SUMMARY_LAST = 0x246;
 constexpr uint8_t CAN_TAC_SUMMARY_FRAME_COUNT = 7;
 constexpr uint8_t CAN_TAC_SUMMARY_PAYLOAD_PER_FRAME = 7;
 constexpr uint8_t CAN_TAC_SUMMARY_DLC = 8;
 constexpr uint32_t CAN_TAC_REASSEMBLY_TIMEOUT_MS = 80;
+constexpr uint8_t CAN_TAC_SUMMARY_VALID_MASK_BYTES = 2;
 constexpr uint8_t CAN_TAC_SUMMARY_CRC_BYTES = 2;
-constexpr uint16_t CAN_TAC_SUMMARY_PACKET_BYTES = TACTILE_SUMMARY_BYTES + CAN_TAC_SUMMARY_CRC_BYTES;
+constexpr uint16_t CAN_TAC_SUMMARY_CRC_INPUT_BYTES =
+    TACTILE_SUMMARY_BYTES + CAN_TAC_SUMMARY_VALID_MASK_BYTES;
+constexpr uint16_t CAN_TAC_SUMMARY_PACKET_BYTES =
+    CAN_TAC_SUMMARY_CRC_INPUT_BYTES + CAN_TAC_SUMMARY_CRC_BYTES;
 constexpr uint16_t CAN_ID_TAC_RAW_DIAG = 0x3F0;
 
 // 触觉全量：不完整批次超时后整批丢弃，禁止将不同 seq 的数据拼成一帧快照。

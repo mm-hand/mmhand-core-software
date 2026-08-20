@@ -39,9 +39,9 @@ def test_discrete_ui_command_is_written_immediately():
     assert emitted[0]["replayable"] == 1
 
 
-def test_visual_retargeting_is_a_replayable_continuous_source():
-    assert classify_motion_source("Visual Retargeting", True) == (
-        "visual_retargeting",
+def test_external_ros2_is_a_replayable_continuous_source():
+    assert classify_motion_source("ROS2:/raw_ik_target", True) == (
+        "ros2_external",
         "continuous",
         True,
     )

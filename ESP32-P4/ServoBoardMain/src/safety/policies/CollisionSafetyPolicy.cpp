@@ -346,11 +346,11 @@ FeedbackCollisionResult FeedbackCollisionGuard::update(
     }
 
     // 200 ms 速度窗用于确认关节曾正常运动；武装后再用
-    // 当前模式的进展窗判断是否停滞。只有 PID 仍在推进，并且执行器实际 ABS
-    // 尚未抵达推进方向的 LUT 边界时，方可进入碰撞保持。
+    // 当前模式的进展窗判断是否停滞。LUT 不再充当电机运动边界，
+    // 因此只要 PID 仍沿目标方向推进即可进入碰撞保持。
     if (state.armed && progressWindowReady &&
         directionProgress < state.minProgressDeg &&
-        input.pidPushActive && !input.workspaceBoundaryReached) {
+        input.pidPushActive) {
         state.holdActive = true;
         state.holdAngleDeg = input.feedbackDeg;
         state.holdTargetDeg = input.targetDeg;

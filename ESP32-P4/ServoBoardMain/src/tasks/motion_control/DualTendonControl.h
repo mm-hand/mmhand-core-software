@@ -13,9 +13,9 @@
 struct DualTendonMotorTargets {
     // 该关节使用的物理电机通道，顺序与标定 LUT 一致。
     uint8_t motorChannel[2];
-    // 经过模型 PID 修正和限幅后的最终绝对电机命令。
+    // 经过双腱 LUT 扩展边界钳位后的最终绝对电机命令。
     int32_t targetAbs[2];
-    // 尚未经过 LUT 工作空间钳位的 PID 原始目标，用于诊断和判断实际是否抵达边界。
+    // PID 原始目标，用于区分模型输出与实际应用的边界目标。
     int32_t rawTargetAbs[2];
     // 由标定 LUT 预测的目标和反馈电机位置。
     float motorRef[2];     ///< qRef 经 LUT 插值得到的模型舵机 ABS。
@@ -30,11 +30,10 @@ struct DualTendonMotorTargets {
     float iTerm[2];        ///< Ki*误差时间积分。
     float dTerm[2];        ///< Kd*filteredVelocityError。
     float pidCorrection[2]; ///< 最终叠加到实际舵机 ABS 的 PID 修正量。
-    // PID 原始目标是否被自动标定 LUT 边界截断。该标志只用于诊断，
-    // 不能直接作为碰撞检测的否决条件。
-    uint8_t lutTargetClamped[2];
-    int32_t lutMinAbs[2]; ///< 本次标定 LUT 的舵机下边界。
-    int32_t lutMaxAbs[2]; ///< 本次标定 LUT 的舵机上边界。
+    // 每台电机独立使用自己的 LUT 最小/最大值并向两端扩展 500 counts。
+    uint8_t lutTargetClamped[2]; ///< 原始 PID 目标是否被双腱 LUT 边界截断。
+    int32_t lutMinAbs[2];        ///< 加入裕量后的运行下边界。
+    int32_t lutMaxAbs[2];        ///< 加入裕量后的运行上边界。
     // 上述数组中有效的电机条目数量。
     uint8_t count;
 };

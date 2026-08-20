@@ -160,7 +160,6 @@ class JointChannelTable(QtWidgets.QTableWidget):
             apply_group_widget_background(slider, row)
             panel.joint_sliders[i] = slider
             table.setCellWidget(row, 12, slider)
-            panel._control_widgets.extend([spin, send, slider])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(0, 152)
@@ -208,7 +207,7 @@ class MotorChannelTable(QtWidgets.QTableWidget):
                 antagonist_by_row[row] = group
         table = MotorChannelTable(len(motor_rows), 16)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Motor", "BUS", "Route", "Turn", "RawNow", "FlashRaw", "AbsNow", "Load",
+            "Group", "Use", "Motor", "BUS", "Route", "Turn", "RawNow", "SavedRaw", "AbsNow", "Load",
             "Target(rel)", "Action", "-", "Raw Slider", "+", "Joint Angle",
         ])
         table.verticalHeader().setVisible(False)
@@ -224,6 +223,7 @@ class MotorChannelTable(QtWidgets.QTableWidget):
         panel.motor_target_spins = [None] * MOTOR_COUNT
         panel.motor_sliders = [None] * MOTOR_COUNT
         panel.motor_send_buttons = [None] * MOTOR_COUNT
+        panel.motor_step_buttons = [None] * MOTOR_COUNT
         panel._motor_target_user_set = [False] * MOTOR_COUNT
         group_colors = [QtGui.QColor("#ffffff"), QtGui.QColor("#eeeeee")]
         row_to_group_label = {}
@@ -394,8 +394,8 @@ class MotorChannelTable(QtWidgets.QTableWidget):
             plus.clicked.connect(lambda _=False, idx=i: panel._step_motor_target(idx, 1))
             apply_group_widget_background(plus, row)
             table.setCellWidget(row, 14, plus)
+            panel.motor_step_buttons[i] = (minus, plus)
             table.setItem(row, 15, joint)
-            panel._control_widgets.extend([spin, send, minus, slider, plus])
             if not _motor_channel_valid(i):
                 table.setRowHidden(row, True)
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)

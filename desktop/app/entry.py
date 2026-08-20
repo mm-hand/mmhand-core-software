@@ -25,12 +25,26 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional S3 tactile serial port. Other data/control stay on --port.",
     )
-    parser.add_argument("--ros2", action="store_true", help="Enable ROS2 21-angle subscriber.")
+    ros2_group = parser.add_mutually_exclusive_group()
+    ros2_group.add_argument(
+        "--ros2",
+        dest="ros2",
+        action="store_true",
+        help="Enable the ROS2 21-angle input bridge (default).",
+    )
+    ros2_group.add_argument(
+        "--no-ros2",
+        dest="ros2",
+        action="store_false",
+        help="Launch without the ROS2 21-angle input bridge.",
+    )
+    # 上位机默认装配 ROS2 输入桥；无 ROS2 环境可显式使用 --no-ros2。
+    parser.set_defaults(ros2=True)
     parser.add_argument(
         "--ros2-input",
         choices=["joint_target", "raw_ik"],
         default="joint_target",
-        help="Select ROS2 input path: final joint targets or external MANUS/IK raw targets.",
+        help="Select ROS2 input path: final joint targets or external raw IK targets.",
     )
     parser.add_argument(
         "--ros2-joint-target-topic",
@@ -40,7 +54,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ros2-raw-ik-topic",
         default=DEFAULT_RAW_IK_TARGET_TOPIC,
-        help=f"ROS2 Float32MultiArray topic for external MANUS/IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
+        help=f"ROS2 Float32MultiArray topic for external raw IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
     )
     parser.add_argument(
         "--ros2-raw-ik-space",
@@ -72,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--mode",
         "-m",
-        choices=["monitor", "teleop", "replay"],
+        choices=["monitor", "replay"],
         default="monitor",
         help="UI mode to launch.",
     )

@@ -24,7 +24,7 @@ from desktop.core.protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
-from desktop.teleop.joint_target_adapter import active_mapping_identity
+from desktop.core.joint_target_adapter import active_mapping_identity
 
 from .replay_models import ALL_JOINTS_MASK, ReplayFrame, ReplayPreparation, ReplayTrace
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-P0 只建立可读性和静态边界基线，不改变串口、控制、标定、遥操、Replay 或 UI 行为。
+P0 只建立可读性和静态边界基线，不改变串口、控制、标定、ROS2、Replay 或 UI 行为。
 正式运行模块的文件头必须回答六个问题：
 
 1. `职责`：本文件解决什么问题。
@@ -22,21 +22,20 @@ flowchart TD
     ROS --> BACKEND
     UI --> ALG["algorithm Replay用例"]
     BACKEND --> CORE["core 协议、设备模型与通信"]
-    ALG --> ADAPTER["teleop 统一21角目标适配"]
+    ALG --> ADAPTER["core 统一21角目标适配"]
     ROS --> ADAPTER
     CORE --> REC["core/data_recording 会话记录"]
-    REC --> BAG["recording 可选ROS bag后端"]
+    REC --> CSV["recording CSV 会话文件"]
 ```
 
 ## 强制边界
 
-- `core`、`algorithm`、`recording`、`ros2` 和正式 `teleop` 模块不得导入 Qt、PySide、
+- `core`、`replay`、`recording`、`ros2` 模块不得导入 Qt、PySide、
   PyQt 或 pyqtgraph。
 - `core` 不得反向依赖 `ui`、`app`、`ros2` 或 `algorithm`。
 - `ui` 不得直接导入 `comm_layer` 和 `core_logic`；设备操作必须经过 `HandBackend`
   或控制面板服务。
 - `recording` 只负责持久化，不参与控制决策。
-- `example_teleop.py` 是人工示例装配入口，允许连接 UI；该例外不扩散到正式 teleop 模块。
 
 ## 检查命令
 

@@ -928,15 +928,18 @@ def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Option
     return fault_bitmap, trigger_loads
 
 
-def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[int]]]]]:
-    if len(payload) == (1 + TACTILE_SUMMARY_BYTES):
-        seq = payload[0]
-        data = payload[1:]
-    elif len(payload) == TACTILE_SUMMARY_BYTES:
-        seq = 0
-        data = payload
-    else:
+def parse_tactile_packet(
+    payload: bytes,
+) -> Optional[Tuple[int, List[List[List[int]]], int]]:
+    """解析统一触觉摘要：序号、45字节三维力和15位模块有效位图。"""
+    expected_len = 1 + TACTILE_SUMMARY_BYTES + 2
+    if len(payload) != expected_len:
         return None
+
+    seq = payload[0]
+    data = payload[1:1 + TACTILE_SUMMARY_BYTES]
+    mask_offset = 1 + TACTILE_SUMMARY_BYTES
+    module_valid_mask = struct.unpack(">H", payload[mask_offset:mask_offset + 2])[0]
 
     out: List[List[List[int]]] = []
     cursor = 0
@@ -949,7 +952,7 @@ def parse_tactile_packet(payload: bytes) -> Optional[Tuple[int, List[List[List[i
             group_data.append([fx, fy, fz])
             cursor += TACTILE_AXIS_COUNT
         out.append(group_data)
-    return seq, out
+    return seq, out, int(module_valid_mask)
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -998,37 +1001,6 @@ def parse_tactile_full_fragment(
     if len(payload) != 4 + chunk_len:
         return None
     return seq, frag_idx, frag_count, bytes(payload[4:4 + chunk_len]), None, None
-
-
-def parse_frame(data: bytes) -> Tuple[List[Tuple[int, bytes]], bytearray]:
-    result: List[Tuple[int, bytes]] = []
-    buffer = bytearray(data)
-    while len(buffer) >= 4:
-        try:
-            head_idx = buffer.index(PROTOCOL_HEADER)
-        except ValueError:
-            break
-
-        buffer = buffer[head_idx:]
-        if len(buffer) < 4:
-            break
-
-        payload_len = buffer[1]
-        frame_len = 2 + payload_len
-        if len(buffer) < frame_len:
-            break
-
-        frame = buffer[:frame_len]
-        if frame[-1] != PROTOCOL_TAIL:
-            buffer = buffer[1:]
-            continue
-
-        pkt_type = frame[2]
-        payload = bytes(frame[3:-1])
-        result.append((pkt_type, payload))
-        buffer = buffer[frame_len:]
-
-    return result, buffer
 
 
 def build_calibrate_cmd() -> bytes:
@@ -1109,15 +1081,6 @@ def build_motor_abs_limit_lock_cmd(active_motor_mask: int, lock_enabled: bool) -
 
 def _pack_float_be(value: float) -> bytes:
     return struct.pack(">f", float(value))
-
-
-def _clamp_i16(value: int) -> int:
-    v = int(value)
-    if v < -32768:
-        return -32768
-    if v > 32767:
-        return 32767
-    return v
 
 
 def build_calib_load_limits_cmd(
@@ -1258,10 +1221,10 @@ def build_clear_calibration_scope_cmd(motor_mask: int) -> bytes:
 
 
 def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
-    """请求 P4 仅复位 hardware ABS 已越过 ±30715 的舵机。"""
+    """标定前请求 P4 归零所选舵机的硬件圈计数。"""
     motor_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
     if motor_mask == 0:
-        raise ValueError("Reset Zero requires a non-zero motor mask")
+        raise ValueError("calibration turn reset requires a non-zero motor mask")
     return _build_command_frame(
         CMD_SERVO_RESET_ZERO,
         struct.pack(">I", motor_mask),
@@ -1381,28 +1344,6 @@ def manual_encoder_reference_entry_crc(
         for _ in range(8):
             value = (value >> 1) ^ (0xEDB88320 if value & 1 else 0)
     return (~value) & 0xFFFFFFFF
-
-
-def build_motor_pos_cmd(motor_pos_raw: List[int]) -> bytes:
-    if len(motor_pos_raw) != MOTOR_COUNT:
-        raise ValueError(f"need exactly {MOTOR_COUNT} motor raw values")
-    payload = bytearray()
-    for value in motor_pos_raw:
-        raw = int(value) & 0xFFFF
-        payload.append((raw >> 8) & 0xFF)
-        payload.append(raw & 0xFF)
-    return _build_command_frame(CMD_MOTOR_POS, bytes(payload))
-
-
-def build_motor_pos_sweep_cmd(motor_pos_raw: List[int]) -> bytes:
-    if len(motor_pos_raw) != MOTOR_COUNT:
-        raise ValueError(f"need exactly {MOTOR_COUNT} motor raw values")
-    payload = bytearray()
-    for value in motor_pos_raw:
-        raw = int(value) & 0xFFFF
-        payload.append((raw >> 8) & 0xFF)
-        payload.append(raw & 0xFF)
-    return _build_command_frame(CMD_MOTOR_POS_SWEEP, bytes(payload))
 
 
 # P4 逻辑多圈坐标使用 int32；实际可达范围由下位机按每台舵机的

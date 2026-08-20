@@ -70,7 +70,7 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
     bar.start_requested.connect(lambda: events.append("start"))
     bar.stop_requested.connect(lambda: events.append("stop"))
     bar.pause_requested.connect(lambda: events.append("pause"))
-    bar.raw_ik_toggled.connect(lambda enabled: events.append(("raw", enabled)))
+    bar.ros2_output_toggled.connect(lambda enabled: events.append(("ros2", enabled)))
     bar.clear_fault_requested.connect(lambda: events.append("clear"))
     bar.calibrate_requested.connect(lambda: events.append("calibrate"))
     bar.rope_init_requested.connect(lambda: events.append("rope"))
@@ -78,12 +78,12 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
 
     assert bar.enable_btn.text() == "ENABLE"
     assert bar.stop_btn.text() == "E-STOP"
-    assert bar.raw_ik_enable_btn.isCheckable()
+    assert bar.ros2_output_btn.isCheckable()
     assert bar.nvs_control_btn.text() == "Flash ON"
     bar.enable_btn.click()
     bar.stop_btn.click()
     bar.pause_btn.click()
-    bar.raw_ik_enable_btn.click()
+    bar.ros2_output_btn.click()
     bar.reset_btn.click()
     bar.calib_btn.click()
     bar.rope_init_btn.click()
@@ -92,7 +92,7 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
         "start",
         "stop",
         "pause",
-        ("raw", True),
+        ("ros2", True),
         "clear",
         "calibrate",
         "rope",
@@ -105,14 +105,11 @@ def test_joint_table_displays_ros2_targets_next_to_current() -> None:
     from desktop.ui.ui_control_panels import ControlPanel
 
     class _Backend:
-        def raw_ik_output_enabled(self):
+        def ros2_output_enabled(self):
             return False
 
         def get_current_state(self):
             return HandModel()
-
-        def set_pid_control(self, _enabled):
-            return None
 
         def set_control_mode(self, _mode):
             return None

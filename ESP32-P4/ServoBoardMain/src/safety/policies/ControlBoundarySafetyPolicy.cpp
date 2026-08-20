@@ -30,41 +30,23 @@ BoundaryClampDecision clampFloatToBoundary(float requested,
     return decision;
 }
 
-int32_t clampAbsToBoundary(int32_t requested,
-                           int32_t minimum,
-                           int32_t maximum,
-                           bool* valid,
-                           bool* clamped)
+AbsBoundaryClampDecision clampAbsToBoundary(int32_t requested,
+                                            int32_t minimum,
+                                            int32_t maximum)
 {
-    if (valid) *valid = minimum <= maximum;
-    if (clamped) *clamped = false;
-    if (minimum > maximum) return requested;
-
+    AbsBoundaryClampDecision decision = {
+        minimum <= maximum, false, requested, requested};
+    if (!decision.valid) {
+        return decision;
+    }
     if (requested < minimum) {
-        if (clamped) *clamped = true;
-        return minimum;
+        decision.applied = minimum;
+        decision.clamped = true;
+    } else if (requested > maximum) {
+        decision.applied = maximum;
+        decision.clamped = true;
     }
-    if (requested > maximum) {
-        if (clamped) *clamped = true;
-        return maximum;
-    }
-    return requested;
-}
-
-bool actualAbsReachedDirectionalBoundary(int32_t actualAbs,
-                                         int32_t pushDeltaAbs,
-                                         int32_t minimum,
-                                         int32_t maximum,
-                                         int32_t toleranceCounts)
-{
-    if (minimum > maximum || toleranceCounts < 0) return true;
-    if (pushDeltaAbs > 0) {
-        return actualAbs >= maximum - toleranceCounts;
-    }
-    if (pushDeltaAbs < 0) {
-        return actualAbs <= minimum + toleranceCounts;
-    }
-    return false;
+    return decision;
 }
 
 WorkspaceWarningDecision evaluateUpperWorkspaceWarning(

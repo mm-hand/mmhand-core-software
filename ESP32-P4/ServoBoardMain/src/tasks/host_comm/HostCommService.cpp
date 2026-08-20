@@ -26,13 +26,13 @@
 #include "../../runtime/ports/SystemEventPort.h"
 #include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
+#include "../../runtime/metrics/RuntimeMonitorConfig.h"
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
 #include "../../modules/persistence/MultiTurnNvsStore.h"
 #endif
 #include "HostCommandRouter.h"
 #include "HostFrameReader.h"
 #include "../../safety/SafetyEventReporter.h"
-#include "../../safety/policies/HostLeaseSafetyPolicy.h"
 #include "../../safety/policies/CommunicationSafetyPolicy.h"
 #include "../../safety/SafetyEventStore.h"
 #include <math.h>
@@ -71,10 +71,12 @@ struct HostCommRuntimeContext {
     uint32_t sendingTaskDiagWindowSequence;
     uint8_t nextTaskDiagId;
     bool taskDiagSubscribed;
+    uint32_t lastTaskDiagRenewMs; ///< 最近一次独立诊断订阅/续订时间，不参与运动控制租约。
     uint32_t pendingStateSyncMask;
     uint32_t lastServoResetZeroResultToken;
     uint32_t lastSafetyEventSequenceSent;
     uint32_t lastUpperFrameRejectEventMs; ///< COM-6005 限频时间戳。
+    uint32_t pendingUartRxErrorFlags; ///< 尚未成功上报的 UART overflow/frame/parity 错误位。
 };
 static HostCommRuntimeContext g_hostCommRuntime;
 /** 计算静态 int32 数组的轻量摘要，用于发现“有效位不变但边界值改变”。 */
@@ -114,9 +116,19 @@ void requestHostStateSync(uint32_t syncMask)
     g_hostCommRuntime.pendingStateSyncMask |=
         syncMask & (uint32_t)STATE_SYNC_ALL;
 }
-void setHostTaskDiagSubscribed(bool subscribed)
+void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs)
 {
-    g_hostCommRuntime.taskDiagSubscribed = subscribed;
+    if (subscribed) {
+        g_hostCommRuntime.lastTaskDiagRenewMs = nowMs;
+        if (g_hostCommRuntime.taskDiagSubscribed) {
+            // 周期续订不得清空发送进度，否则可能永远收不齐同一秒的七个任务包。
+            return;
+        }
+        g_hostCommRuntime.taskDiagSubscribed = true;
+    } else {
+        g_hostCommRuntime.taskDiagSubscribed = false;
+        g_hostCommRuntime.lastTaskDiagRenewMs = 0;
+    }
     g_hostCommRuntime.lastTaskDiagWindowSequence = 0;
     g_hostCommRuntime.sendingTaskDiagWindowSequence = 0;
     g_hostCommRuntime.nextTaskDiagId = 0;
@@ -185,6 +197,20 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     auto& pendingStateSyncMask = runtime.pendingStateSyncMask;
     auto& lastServoResetZeroResultToken = runtime.lastServoResetZeroResultToken;
     auto& lastSafetyEventSequenceSent = runtime.lastSafetyEventSequenceSent;
+        runtime.pendingUartRxErrorFlags |= HostSerialPort::takeRxErrorFlags();
+        if (runtime.pendingUartRxErrorFlags != 0U &&
+            p4::safety::communicationEventMayReport(
+                nowMs,
+                runtime.lastUpperFrameRejectEventMs,
+                1000U)) {
+            runtime.lastUpperFrameRejectEventMs = nowMs;
+            p4::safety::reportSafetyRuleEvent(
+                sharedData,
+                SafetyRuleId::CommunicationUpperFrameRejected,
+                0,
+                (int32_t)(0x10000UL | runtime.pendingUartRxErrorFlags));
+            runtime.pendingUartRxErrorFlags = 0U;
+        }
         // 旧 ACK 未写出时不再消费下一条命令，保证命令执行与 ACK 顺序一致。
         if (!retryPendingProtoAckPacket()) {
             return true;
@@ -362,11 +388,11 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
             }
         }
 
-        // Task Runtime 是纯诊断流：窗口未订阅或上位机租约失效时不得占用串口。
+        // 诊断窗口使用独立租约；控制心跳偶发抖动不能永久关闭 Task Runtime。
         if (taskDiagSubscribed &&
-            !p4::system::isHostControlLeaseFresh(
-                nowMs, sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms))) {
-            setHostTaskDiagSubscribed(false);
+            (uint32_t)(nowMs - runtime.lastTaskDiagRenewMs) >
+                kTaskRuntimeSubscriptionLeaseMs) {
+            setHostTaskDiagSubscribed(false, nowMs);
         }
         // 仅在 RuntimeMonitor 冻结出新的一秒窗口后发送一组诊断；每次只发一个任务包，
         // 避免诊断窗口抢占正常状态、传感器和舵机协议带宽。

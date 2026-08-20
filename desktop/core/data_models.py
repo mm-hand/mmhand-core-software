@@ -26,6 +26,12 @@ RAW_TO_DEG = 360.0 / 16384.0
 
 # 触觉：每指 3 组传感数据（指尖 5×5=25，两指腹各 4×13=52），contact_forces 形状见下；热力图条带几何仍为 5 段
 TACTILE_SENSORS_PER_FINGER = 3
+TACTILE_SOURCE_NONE = "NONE"
+TACTILE_SOURCE_P4_CAN_RELAY = "P4_CAN_RELAY"
+TACTILE_SOURCE_S3_SERIAL = "S3_SERIAL"
+TACTILE_DATA_LEVEL_NONE = "NONE"
+TACTILE_DATA_LEVEL_SUMMARY = "SUMMARY"
+TACTILE_DATA_LEVEL_FULL = "FULL"
 TACTILE_TIP_ROWS, TACTILE_TIP_COLS = 5, 5
 TACTILE_PAD_ROWS, TACTILE_PAD_COLS = 4, 13
 TACTILE_TIP_TAXEL_COUNT = TACTILE_TIP_ROWS * TACTILE_TIP_COLS  # 25
@@ -449,19 +455,6 @@ class JointWorkspaceRange:
             target = self.current_min_deg
         return max(self.current_min_deg, min(self.current_max_deg, target))
 
-    def open_pose_target(self, offset_deg: float = 5.0) -> float:
-        """返回位于当前 URDF 工作区内的 Open Pose 目标。"""
-        if not self.ready or self.current_min_deg is None:
-            raise ValueError(self.reason or f"J{self.joint_index:02d} workspace is not ready")
-        try:
-            offset = float(offset_deg)
-        except (TypeError, ValueError):
-            offset = 0.0
-        if not math.isfinite(offset):
-            offset = 0.0
-        return self.clamp(self.current_min_deg + max(0.0, offset))
-
-
 def resolve_joint_workspace_range(
     model: Optional["HandModel"],
     joint_index: int,
@@ -583,6 +576,9 @@ class HandModel:
     tactile_full_crc_errors: int = 0
     tactile_full_seq_mismatches: int = 0
     tactile_full_dropped: int = 0
+    tactile_source: str = TACTILE_SOURCE_NONE
+    tactile_data_level: str = TACTILE_DATA_LEVEL_NONE
+    tactile_module_valid_mask: int = 0
     tactile_online: bool = False
     tactile_last_rx_ts: float = 0.0
     tactile_module_online: List[bool] = field(default_factory=lambda: [False] * (5 * TACTILE_SENSORS_PER_FINGER))
@@ -628,10 +624,13 @@ class HandModel:
     multiturn_restore_restored_mask: int = 0
     multiturn_restore_rejected_mask: int = 0
     multiturn_restore_result_last_rx_ts: float = 0.0
-    # Flash Raw 从 100 Hz 数据流移出后，由保存结果事件更新。
-    multiturn_snapshot_result_token: int = 0
-    multiturn_snapshot_valid_mask: int = 0
-    multiturn_snapshot_last_rx_ts: float = 0.0
+    # 上位机 JSON 中的可信多圈锚点。该状态不来自 P4 协议，只用于 UI 展示
+    # 和掉电恢复，避免继续把旧 NVS 字段误称为 Flash 快照。
+    host_multiturn_valid_mask: int = 0
+    host_multiturn_saved_raw_positions: List[int] = field(
+        default_factory=lambda: [0] * MOTOR_COUNT
+    )
+    host_multiturn_status: str = "not loaded"
     manual_reference_valid_bitmap: int = 0
     manual_reference_crc: int = 0
     manual_reference_nvs_sequence: int = 0
@@ -661,8 +660,6 @@ class HandModel:
     servo_online_bitmap: int = 0
     # P4 动态扫描得到的唯一可信路由。未收到该包时，上位机不得按旧固定 BUS 继续控制。
     has_servo_route_status: bool = False
-    servo_route_generation: int = 0
-    servo_route_valid_bitmap: int = 0
     servo_route_controllable_bitmap: int = 0
     servo_route_conflict_bitmap: int = 0
     servo_bus_overload_mask: int = 0
@@ -671,7 +668,6 @@ class HandModel:
     servo_bus_device_count: List[int] = field(default_factory=lambda: [0] * 4)
     servo_route_bus: List[int] = field(default_factory=lambda: [0xFF] * MOTOR_COUNT)
     servo_route_state: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    servo_route_last_rx_ts: float = 0.0
     encoder_online_bitmap: int = 0
     encoder_warn_bitmap: int = 0
     encoder_fault_bitmap: int = 0
@@ -708,7 +704,6 @@ class HandModel:
     servo_logical_range_valid_bitmap: int = 0
     servo_logical_range_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_logical_range_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    has_servo_logical_range_status: bool = False
     joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
     calib_diag_valid: bool = False
     calib_diag_reason: int = 0
@@ -725,9 +720,14 @@ class HandModel:
     calib_diag_failed_joint_mask: int = 0
     task_runtime: dict = field(default_factory=dict)
     task_runtime_last_rx_ts: float = 0.0
+    # Task Runtime 七包窗口完整性诊断；完整快照和正在接收的分包必须分开记录。
+    task_runtime_window_sequence: int = 0
+    task_runtime_received_mask: int = 0
+    task_runtime_expected_mask: int = 0
+    task_runtime_dropped_windows: int = 0
+    task_runtime_last_packet_rx_ts: float = 0.0
     # P4 周期上报的产品指纹，用于把运行日志绑定到确切的固件、参数和机器人模型。
     product_fingerprint: dict = field(default_factory=dict)
-    product_fingerprint_last_rx_ts: float = 0.0
     has_product_fingerprint: bool = False
     # P4 安全规则事件只保留最近 64 条；sequence 用于去重和日志关联。
     latest_safety_event: dict = field(default_factory=dict)
@@ -852,14 +852,18 @@ class HandModel:
         self.multiturn_restore_result_last_rx_ts = float(
             getattr(other, "multiturn_restore_result_last_rx_ts", 0.0) or 0.0
         )
-        self.multiturn_snapshot_result_token = int(
-            getattr(other, "multiturn_snapshot_result_token", 0) or 0
+        self.host_multiturn_valid_mask = int(
+            getattr(other, "host_multiturn_valid_mask", 0) or 0
         )
-        self.multiturn_snapshot_valid_mask = int(
-            getattr(other, "multiturn_snapshot_valid_mask", 0) or 0
+        self.host_multiturn_saved_raw_positions = list(
+            getattr(
+                other,
+                "host_multiturn_saved_raw_positions",
+                [0] * MOTOR_COUNT,
+            )
         )
-        self.multiturn_snapshot_last_rx_ts = float(
-            getattr(other, "multiturn_snapshot_last_rx_ts", 0.0) or 0.0
+        self.host_multiturn_status = str(
+            getattr(other, "host_multiturn_status", "not loaded")
         )
         self.manual_reference_valid_bitmap = int(getattr(other, "manual_reference_valid_bitmap", 0) or 0)
         self.manual_reference_crc = int(getattr(other, "manual_reference_crc", 0) or 0)
@@ -949,12 +953,6 @@ class HandModel:
         self.has_servo_route_status = bool(
             getattr(other, "has_servo_route_status", False)
         )
-        self.servo_route_generation = int(
-            getattr(other, "servo_route_generation", 0) or 0
-        )
-        self.servo_route_valid_bitmap = int(
-            getattr(other, "servo_route_valid_bitmap", 0) or 0
-        )
         self.servo_route_controllable_bitmap = int(
             getattr(other, "servo_route_controllable_bitmap", 0) or 0
         )
@@ -978,9 +976,6 @@ class HandModel:
         )
         self.servo_route_state = list(
             getattr(other, "servo_route_state", [0] * MOTOR_COUNT)
-        )
-        self.servo_route_last_rx_ts = float(
-            getattr(other, "servo_route_last_rx_ts", 0.0) or 0.0
         )
         self.encoder_online_bitmap = int(getattr(other, "encoder_online_bitmap", 0) or 0)
         self.encoder_warn_bitmap = int(getattr(other, "encoder_warn_bitmap", 0) or 0)
@@ -1023,9 +1018,6 @@ class HandModel:
         self.servo_logical_range_max = list(
             getattr(other, "servo_logical_range_max", [0] * MOTOR_COUNT)
         )
-        self.has_servo_logical_range_status = bool(
-            getattr(other, "has_servo_logical_range_status", False)
-        )
         self.joint_calib_results = [
             dict(item) if isinstance(item, dict) else None
             for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
@@ -1053,11 +1045,23 @@ class HandModel:
             if isinstance(item, dict)
         }
         self.task_runtime_last_rx_ts = float(getattr(other, "task_runtime_last_rx_ts", 0.0) or 0.0)
+        self.task_runtime_window_sequence = int(
+            getattr(other, "task_runtime_window_sequence", 0) or 0
+        )
+        self.task_runtime_received_mask = int(
+            getattr(other, "task_runtime_received_mask", 0) or 0
+        )
+        self.task_runtime_expected_mask = int(
+            getattr(other, "task_runtime_expected_mask", 0) or 0
+        )
+        self.task_runtime_dropped_windows = int(
+            getattr(other, "task_runtime_dropped_windows", 0) or 0
+        )
+        self.task_runtime_last_packet_rx_ts = float(
+            getattr(other, "task_runtime_last_packet_rx_ts", 0.0) or 0.0
+        )
         self.product_fingerprint = dict(
             getattr(other, "product_fingerprint", {}) or {}
-        )
-        self.product_fingerprint_last_rx_ts = float(
-            getattr(other, "product_fingerprint_last_rx_ts", 0.0) or 0.0
         )
         self.has_product_fingerprint = bool(
             getattr(other, "has_product_fingerprint", False)
@@ -1087,6 +1091,9 @@ class HandModel:
         self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
         self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
         self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))
+        self.tactile_source = str(getattr(other, "tactile_source", TACTILE_SOURCE_NONE))
+        self.tactile_data_level = str(getattr(other, "tactile_data_level", TACTILE_DATA_LEVEL_NONE))
+        self.tactile_module_valid_mask = int(getattr(other, "tactile_module_valid_mask", 0) or 0)
         self.tactile_online = bool(getattr(other, "tactile_online", False))
         self.tactile_last_rx_ts = float(getattr(other, "tactile_last_rx_ts", 0.0) or 0.0)
         self.tactile_module_online = list(

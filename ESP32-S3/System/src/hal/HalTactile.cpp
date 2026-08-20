@@ -373,6 +373,8 @@ void HalTactile::update() {
     nextDiag.enabledMask = 0;
     nextDiag.okReads = 0;
     nextDiag.failedReads = 0;
+    nextDiag.summaryOkMask = 0;
+    nextDiag.fullOkMask = 0;
     nextDiag.okMask = 0;
 
     if (_spiReady) {
@@ -406,10 +408,20 @@ void HalTactile::update() {
                 // [待确认是否优化] 摘要与全量分开读取；若确认deriveGlobalFromForces等价，可减少一半事务数。
                 const bool summaryOk = readSensorSummary(g, s, globals[s], rawSummaries[s]);
                 const bool forcesOk = readSensorForces(g, s, forces[s], forceLen);
+                const uint16_t moduleBit = (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
+
+                // 摘要与全量有效性必须独立记录：摘要为零可能是正常无受力，
+                // 只有SPI事务及CRC8失败时才清除summaryOkMask对应位。
+                if (summaryOk) {
+                    nextDiag.summaryOkMask |= moduleBit;
+                }
+                if (forcesOk) {
+                    nextDiag.fullOkMask |= moduleBit;
+                }
 
                 if (summaryOk && forcesOk) {
                     nextDiag.okReads++;
-                    nextDiag.okMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
+                    nextDiag.okMask |= moduleBit;
                 } else {
                     nextDiag.failedReads++;
                 }
@@ -426,6 +438,8 @@ void HalTactile::update() {
         _diag.enabledMask = nextDiag.enabledMask;
         _diag.okReads = nextDiag.okReads;
         _diag.failedReads = nextDiag.failedReads;
+        _diag.summaryOkMask = nextDiag.summaryOkMask;
+        _diag.fullOkMask = nextDiag.fullOkMask;
         _diag.okMask = nextDiag.okMask;
         xSemaphoreGive(_mutex);
     }

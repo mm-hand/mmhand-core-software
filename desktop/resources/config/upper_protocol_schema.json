@@ -62,7 +62,7 @@
     {"name": "CMD_ROPE_INIT", "value": 233, "payload_bytes": 4, "description": "按 21 位关节掩码启动 P4 Rope Init"},
     {"name": "CMD_ANGLE_CTRL_MASKED", "value": 234, "payload_bytes": 88, "description": "按关节掩码下发稀疏关节目标角"},
     {"name": "CMD_CLEAR_CALIBRATION_SCOPE", "value": 235, "payload_bytes": 4, "description": "按电机位图清除关联关节 Auto/LUT"},
-    {"name": "CMD_SERVO_RESET_ZERO", "value": 236, "payload_bytes": 4, "description": "复位越过硬圈数阈值舵机并清除对应多圈快照"},
+    {"name": "CMD_SERVO_RESET_ZERO", "value": 236, "payload_bytes": 4, "description": "标定前归零所选舵机硬件圈数并清除对应多圈锚点"},
     {"name": "CMD_STATE_SYNC_REQUEST", "value": 237, "payload_bytes": 4, "description": "按位请求静态状态、标定快照、路由和产品指纹"},
     {"name": "CMD_TASK_DIAG_SUBSCRIBE", "value": 238, "payload_bytes": 1, "description": "打开或关闭 RTOS 任务诊断按需上报"}
   ],
@@ -117,7 +117,7 @@
     "STATE_SYNC_ALL": "同步全部静态运行契约"
   },
   "p4_runtime": {
-    "serial_rx_buffer_size": 512,
+    "serial_rx_buffer_size": 1024,
     "heartbeats_ms": {
       "kFaultStatusHeartbeatMs": 200,
       "kSystemStatusHeartbeatMs": 100

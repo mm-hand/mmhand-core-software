@@ -70,13 +70,11 @@ python -m desktop ui --mode monitor --port COMx --tactile-port COMy
 可选 UI mode：
 
 - `monitor`：常规监视和控制界面。
-- `teleop`：遥操作入口，调用 `desktop.teleop.example_teleop.run()`。
-- `replay`：读取 Save Data 遥操作 CSV，并按原时间轴整段回放。
+- `replay`：读取 Save Data 中已实际下发的关节命令 CSV，并按原时间轴整段回放。
 
 示例：
 
 ```bash
-python -m desktop ui --mode teleop --port COMx
 python -m desktop ui --mode replay --port COMx
 ```
 
@@ -90,7 +88,7 @@ Replay 不再保存单帧手势 JSON，而是直接读取 `Save Data` 生成的
 
 1. 连接P4，选择需要控制的关节并按`ENABLE`。
 2. 完成标定和`Rope Init`，确认系统状态为`READY`。
-3. 使用普通负反馈 UI、视觉遥操或手套遥操时勾选`Save Data`。
+3. `Save Data` 默认开启，连接 P4 后会自动开始保存基础 CSV；如不需要记录可手动取消勾选。
 4. 打开`Replay`页面，点击`导入 CSV`选择轨迹文件。
 5. 核对轨迹时长、帧数、active scope及21关节实时角后点击`Send`。
 
@@ -103,6 +101,9 @@ E-STOP、Pause、断线、FAULT或active scope变化，Replay会立即终止。�
 
 ## Save Data 文件
 
+`Save Data` 默认记录基础 CSV，触觉全量表默认不保存；需要触觉原始全量数据时，
+可先取消勾选再重新勾选，并在弹出的选项中启用。
+
 默认保存目录只生成以下 6 张便于人工查看的 CSV：
 
 1. `01_基础状态.csv`：系统状态、故障、active scope、多圈状态和碰撞检测位图。
@@ -110,11 +111,11 @@ E-STOP、Pause、断线、FAULT或active scope变化，Replay会立即终止。�
 3. `03_舵机总表.csv`：27 路目标、raw/ABS、负载、速度、原始电流、电压、温度和在线状态。
 4. `04_触觉总表.csv`：五指触觉汇总。
 5. `06_操作事件总表.csv`：按钮操作、状态切换和碰撞检测进入/解除事件。
-6. `07_遥操作总表.csv`：普通UI、视觉遥操和手套/ROS2的实际下发目标及时间轴。
+6. `07_遥操作总表.csv`：普通 UI、Test 与外部 ROS2 实际下发目标及时间轴，可作为 Replay 输入。
 
 勾选“触觉全量”后额外生成 `05_触觉全量.csv`。原来的关节长表、舵机长表、
-Joint Debug 原始包和五指触觉宽表不再重复生成 CSV，但仍可写入 HDF5/ROS2 bag
-供算法训练和底层诊断。
+Joint Debug 原始包和五指触觉宽表不再保存；需要触觉阵列明细时，勾选“触觉全量”
+生成 `05_触觉全量.csv`。
 
 运行中发生碰撞时可以从三处确认：
 
@@ -150,18 +151,19 @@ CLI 只通过 `HandBackend` 操作硬件，不直接持有或调用 `HandControl
 
 ## ROS2 Joint Target Input
 
-ROS2 默认关闭，需要显式加 `--ros2`。
+ROS2 输入桥默认启用；没有 ROS2 环境或只使用普通 UI 时，可显式加
+`--no-ros2` 关闭。
 
 UI + ROS2：
 
 ```bash
-python -m desktop ui --mode monitor --port COMx --ros2
+python -m desktop ui --mode monitor --port COMx
 ```
 
 CLI + ROS2：
 
 ```bash
-python -m desktop cli --port COMx --ros2
+python -m desktop cli --port COMx
 ```
 
 自定义 topic：
@@ -177,7 +179,7 @@ python -m desktop cli --port COMx --ros2 --auto-start
 ```
 
 `--auto-start` 只启动普通控制器，不会自动放行遥操。GUI 中还需点击
-`RAW IK ENABLE`；CLI 中按 `i` 开启、按 `o` 关闭。ROS2 节点在未授权时
+`ROS2 INPUT`；CLI 中按 `i` 开启、按 `o` 关闭。ROS2 节点在未授权时
 仍持续接收最新角度，但不会向 P4 下发运动命令。
 
 ROS2 消息约定：
@@ -223,7 +225,6 @@ desktop/
     motor_mapping.py          # 电机/关节映射与直控辅助函数
     angle_mapping.py          # 关节/电机映射
     auto_calib_logger.py      # 自动标定日志
-    run_data_logger.py        # 运行数据日志
     session_log.py            # session 日志
 
   ui/
@@ -232,7 +233,6 @@ desktop/
     ui_control_panels.py      # 控制面板
     ui_pose_view.py           # 手姿态视图
     ui_tactile_view.py        # 触觉视图
-    ui_camera_view.py         # 摄像头视图
     ui_joint_plot_view.py     # 实时曲线视图
     ui_windows.py             # 弹窗/子窗口管理
     ui_services.py            # UI 后台服务与 state buffer
@@ -250,20 +250,10 @@ desktop/
   examples/
     ros2_joint_target_sender.py
 
-  teleop/
-    example_teleop.py         # teleop mode 示例入口
-    manus_*.py                # Manus/retargeting 相关模块
-    Posture/                  # 姿态/重定向依赖和模型
-
-  algorithm/
-    replay_models.py          # 手势与序列数据模型
-    replay_store.py           # JSON原子存储、备份和导入导出
-    replay_capture.py         # 遥操目标/P4反馈捕获
+  replay/
+    replay_models.py          # 轨迹数据模型
     replay_controller.py      # READY门禁与平滑回放线程
     replay_service.py         # UI无关Replay服务
-
-  tools/
-    raw_ik_urdf_viewer.py
 
   visualize/
     plot_*.py                 # 离线绘图和调试可视化脚本

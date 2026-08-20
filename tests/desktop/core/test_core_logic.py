@@ -7,14 +7,14 @@ import desktop.core.core_logic as core_logic
 from desktop.core.angle_mapping import get_spec
 from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.core_logic import HandController
+from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
-    CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MULTITURN_NVS_CONTROL,
     CMD_RESET,
-    CMD_RESTORE_MULTITURN,
+    CMD_SERVO_RESET_ZERO,
     ControlMode,
     ENCODER_COUNT,
     MOTOR_COUNT,
@@ -22,6 +22,7 @@ from desktop.core.protocol import (
     MOTOR_ABS_CMD_MIN,
     MOTOR_ABS_CMD_MAX,
     PROTO_ACK_STATUS_QUEUED,
+    PROTO_ACK_STATUS_OK,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
@@ -298,7 +299,9 @@ class TestRequestRunFeedback:
 class TestAsyncPersistenceAck:
     """异步 Flash 命令必须在 QUEUED 后等待最终状态，不能误报完成。"""
 
-    def test_manual_reference_accepts_queued_then_verifies_readback(self):
+    def test_manual_reference_accepts_queued_then_verifies_readback(
+        self, monkeypatch
+    ):
         controller = HandController()
         controller.comm = MagicMock()
         controller.comm.wait_for_ack.return_value = (
@@ -311,12 +314,17 @@ class TestAsyncPersistenceAck:
             return_value=True
         )
         controller._verify_manual_encoder_readback = MagicMock(return_value=True)
+        save_json = MagicMock()
+        monkeypatch.setattr(
+            "desktop.core.core_logic.update_manual_snapshot", save_json
+        )
 
         mins = [100] * ENCODER_COUNT
         maxs = [200] * ENCODER_COUNT
         assert controller.set_manual_encoder_references(mins, maxs) is True
         controller._wait_for_manual_reference_save_result.assert_called_once()
         controller._verify_manual_encoder_readback.assert_called_once()
+        save_json.assert_called_once()
 
     def test_multiturn_control_accepts_queued_only_after_state_confirmation(self):
         controller = HandController()
@@ -350,79 +358,138 @@ class TestAsyncPersistenceAck:
         assert controller.set_multiturn_nvs_enabled(False) is False
         assert "not confirmed" in controller.last_multiturn_nvs_error
 
-class TestResetMultiturnBaselineForNewDevice:
-    def test_rejects_when_all_motor_turns_are_trusted_before_any_command(self):
+
+def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
+    """固定 400-count 门禁已删除，正反向跨圈都应按最近圈独立恢复。"""
+    controller = HandController()
+    controller.comm = MagicMock()
+    identity = {
+        "product_fingerprint": {"schema_version": 1},
+        "calibration_snapshot_sha256": "abc",
+    }
+    controller._multiturn_identity = MagicMock(return_value=identity)
+    controller._multiturn_store = MultiTurnRuntimeStore(
+        tmp_path / "multiturn_runtime.json"
+    )
+    controller._multiturn_store.save(
+        identity=identity,
+        valid_motor_mask=(1 << 0) | (1 << 1),
+        logical_abs=[8182, 4106] + [0] * (MOTOR_COUNT - 2),
+        raw=[4090, 10] + [0] * (MOTOR_COUNT - 2),
+        p4_time_ms=10,
+    )
+
+    state = controller.current_state
+    state.multi_turn_unknown_bitmap = (1 << 0) | (1 << 1)
+    state.servo_online_bitmap = (1 << 0) | (1 << 1)
+    state.has_servo_route_status = True
+    state.servo_route_controllable_bitmap = (1 << 0) | (1 << 1)
+    state.has_servo_raw_data = True
+    state.servo_raw_online[0] = True
+    state.servo_raw_online[1] = True
+    state.servo_raw_positions[0] = 6
+    state.servo_raw_positions[1] = 4090
+
+    controller._service_multiturn_restore(state)
+
+    command = controller.comm.send_command.call_args.args[0]
+    assert command[0] == "restore_multiturn"
+    assert command[1] == (1 << 0) | (1 << 1)
+    assert command[2][0] == 8194
+    assert command[2][1] == 4090
+    assert controller._multiturn_pending_restore_mask == command[1]
+
+
+class TestPrepareCalibrationTurnZero:
+    def test_invalidates_only_successful_selected_motor_anchors(self, tmp_path, monkeypatch):
+        """Calibrate 私有归零事务只清理成功电机，不能破坏其余 JSON 锚点。"""
         controller = HandController()
         controller.comm = MagicMock()
-        controller.current_state.multi_turn_unknown_bitmap = 0
-        controller.current_state.has_servo_raw_data = True
-        controller.current_state.servo_raw_positions = [1000] * MOTOR_COUNT
-        controller.current_state.servo_raw_online = [True] * MOTOR_COUNT
-
-        ok, message, motor_mask, joint_mask = (
-            controller.reset_multiturn_baseline_for_new_device()
+        controller._multiturn_store = MultiTurnRuntimeStore(
+            tmp_path / "multiturn_runtime.json"
         )
-
-        assert ok is False
-        assert "already trusted" in message
-        assert motor_mask == 0
-        assert joint_mask == 0
-        controller.comm.send_command.assert_not_called()
-
-    def test_repairs_only_unknown_motor_and_returns_its_joint(self, monkeypatch):
-        controller = HandController()
-        controller.comm = MagicMock()
+        identity = {
+            "product_fingerprint": {"schema_version": 1},
+            "calibration_snapshot_sha256": "abc",
+        }
+        controller._multiturn_store_payload = controller._multiturn_store.save(
+            identity=identity,
+            valid_motor_mask=(1 << 2) | (1 << 3),
+            logical_abs=[0, 0, 5000, 6000] + [0] * (MOTOR_COUNT - 4),
+            raw=[0, 0, 904, 1904] + [0] * (MOTOR_COUNT - 4),
+            p4_time_ms=10,
+        )
         state = controller.current_state
-        state.multi_turn_unknown_bitmap = 1 << 3
-        state.has_servo_raw_data = True
-        state.servo_raw_positions = [1000] * MOTOR_COUNT
-        state.servo_raw_positions[3] = 1234
-        state.servo_raw_online = [True] * MOTOR_COUNT
-        state.multiturn_nvs_enabled = False
-        state.has_servo_angle_data = False
-        state.servo_angles = [0] * MOTOR_COUNT
-        state.servo_online = [True] * MOTOR_COUNT
-
+        state.has_servo_reset_zero_status = True
+        state.servo_online_bitmap = (1 << 2) | (1 << 3)
+        state.servo_reset_zero_status = 0
+        state.servo_reset_zero_result_token = 5
         monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
 
         def wait_for_ack(cmd, _timeout, received_after=None):
             del received_after
             if cmd == CMD_RESET:
-                return (cmd, 0, 2, 0.5)
-            if cmd == CMD_RESTORE_MULTITURN:
-                state.multi_turn_unknown_bitmap = 0
-                state.has_servo_angle_data = True
-                state.servo_angles[3] = 1234
-                return (cmd, 1, 0, 1.0)
-            if cmd == CMD_CLEAR_CALIBRATION_SCOPE:
-                return (cmd, 1, 0, 2.0)
+                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, 0.5)
+            if cmd == CMD_SERVO_RESET_ZERO:
+                state.servo_reset_zero_result_token = 6
+                state.servo_reset_zero_status = 2
+                state.servo_reset_zero_success_mask = 1 << 2
+                state.servo_reset_zero_failed_mask = 0
+                return (cmd, 1, PROTO_ACK_STATUS_OK, 1.0)
             return None
 
         controller.comm.wait_for_ack.side_effect = wait_for_ack
-
-        ok, message, motor_mask, joint_mask = (
-            controller.reset_multiturn_baseline_for_new_device()
+        ok, _message, success_mask, failed_mask = (
+            controller.prepare_calibration_turn_zero(1 << 2)
         )
 
         assert ok is True
-        assert motor_mask == (1 << 3)
-        assert joint_mask == (1 << 2)
-        assert "affected joint" in message
+        assert success_mask == 1 << 2
+        assert failed_mask == 0
+        payload = controller._multiturn_store.load(identity=identity)
+        assert int(payload["valid_motor_mask"], 0) == 1 << 3
         assert call("reset") in controller.comm.send_command.call_args_list
-        assert call("stop") not in controller.comm.send_command.call_args_list
-        assert call(
-            ("restore_multiturn", 1 << 3, [0, 0, 0, 1234] + [0] * (MOTOR_COUNT - 4))
-        ) in controller.comm.send_command.call_args_list
-        assert call(
-            ("clear_calibration_scope", 1 << 3)
-        ) in controller.comm.send_command.call_args_list
-        assert not any(
-            args and args[0] == "clear_calibration"
-            for args, _kwargs in controller.comm.send_command.call_args_list
-        )
+        assert call(("servo_reset_zero", 1 << 2)) in controller.comm.send_command.call_args_list
+
+    def test_manual_prepare_requires_all_27_motors_before_reset(self):
+        """缺任意一路时必须在硬件 Reset Zero 前失败，禁止制造部分新坐标。"""
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.prepare_calibration_turn_zero = MagicMock()
+        state = controller.current_state
+        state.system_state = 0
+        state.has_servo_angle_data = True
+        state.has_servo_route_status = True
+        all_motors = (1 << MOTOR_COUNT) - 1
+        state.servo_online_bitmap = all_motors & ~(1 << 24)
+        state.servo_route_controllable_bitmap = all_motors
+
+        result = controller.manual_prepare_all_motors()
+
+        assert result.ok is False
+        assert "offline=0x01000000" in result.message
+        controller.prepare_calibration_turn_zero.assert_not_called()
+
+
+
 
 
 class TestLoadCalibrationSnapshot:
+    def test_manual_restore_entry_is_independent_from_auto_load(self, monkeypatch):
+        """P4 重启后应能先恢复 Manual，不能被 Auto/LUT 的后续校验阻断。"""
+        controller = HandController()
+        snapshot = {"format": "mmhand_calibration_bundle"}
+        validate = MagicMock()
+        restore = MagicMock(return_value=(True, "restored 4 Manual joint(s)"))
+        monkeypatch.setattr(core_logic, "validate_snapshot", validate)
+        monkeypatch.setattr(controller, "_restore_snapshot_manual_references", restore)
+
+        result = controller.restore_manual_references_from_snapshot(snapshot)
+
+        assert result == (True, "restored 4 Manual joint(s)")
+        validate.assert_called_once_with(snapshot)
+        restore.assert_called_once_with(snapshot)
+
     def test_each_joint_waits_for_an_ack_newer_than_its_own_send(self, monkeypatch):
         controller = HandController()
         controller.comm = MagicMock()

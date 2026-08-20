@@ -1,10 +1,10 @@
-# ROS2 与遥操链路
+# 外部 ROS2 输入与 Replay 链路
 
 最后核对：2026-08-01
 
 ## 1. ROS2 在本项目中的职责
 
-ROS2 不是直接驱动 P4 的另一套协议，而是手套/IK 算法与 desktop 之间的数据总线。它提供节点解耦、topic、QoS、参数、状态和可替换发布者；最终安全授权、工作空间保护、串口编码、状态准入和舵机执行仍走现有 desktop→P4 链路。
+ROS2 不是直接驱动 P4 的另一套协议，而是外部手套、视觉或 IK 算法与 desktop 之间的数据总线。desktop 发布版不再内置 MediaPipe 或 MANUS 接收器；最终安全授权、工作空间保护、串口编码、状态准入和舵机执行仍走现有 desktop→P4 链路。
 
 ```text
 Wuji 设备 → retarget/四姿态标定 → ROS2 publisher
@@ -52,7 +52,7 @@ desktop 提供两条 ROS2 输入：
 | 输入 | 默认 topic | 默认坐标空间 | 用途 |
 | --- | --- | --- | --- |
 | final joint target | `/mmhand/joint_targets` | `urdf_deg` | 已经是当前 URDF 21 关节目标 |
-| raw IK | `/raw_ik_target` | 兼容默认 `legacy_calibrated_deg` | 外部 MANUS/IK 或 Wuji 输出 |
+| raw IK | `/raw_ik_target` | 兼容默认 `legacy_calibrated_deg` | 外部 IK 或 Wuji 输出 |
 
 Wuji 当前发布 `urdf_deg`，启动 desktop raw-IK bridge 时必须选择 `--ros2-raw-ik-space urdf_deg`；保留 legacy 默认只是为了旧发布者兼容。坐标空间设错可能出现数值长度正常但方向/零点错误，这是比 ROS2 是否连通更关键的检查。
 
@@ -60,7 +60,7 @@ Wuji 当前发布 `urdf_deg`，启动 desktop raw-IK bridge 时必须选择 `--r
 
 ## 5. 输出授权门
 
-用户打开 RAW IK/ROS2 输出前，普通 controller 必须已经 ENABLE。授权时记录当前 active scope；每一帧发送前在同一把 `_ros2_output_lock` 内检查：
+用户打开 `ROS2 OUTPUT` 前，普通 controller 必须已经 ENABLE。授权时记录当前 active scope；每一帧发送前在同一把 `_ros2_output_lock` 内检查：
 
 1. 输出仍 armed；
 2. P4 串口在线；
@@ -69,14 +69,13 @@ Wuji 当前发布 `urdf_deg`，启动 desktop raw-IK bridge 时必须选择 `--r
 
 通过后才设置 `JOINT_ANGLE` 模式，并把授权时 joint mask 写入本帧命令。pause、E-STOP、reset、active scope change、ROS2 bridge stop 和 replay start 都会撤销授权。E-STOP 使用同一把锁完成“撤权→STOP”，因此高频 ROS2 回调不能插到两步之间重新发送 RUN_FEEDBACK。
 
-未授权时帧仍可进入 preview cache，用于观察/保存手势，但不会下发；preview 超过 0.3 s 被视为过期。相同丢帧原因的日志每秒最多一次，防止 100 Hz 输入刷屏。
+未授权帧只记录拒绝原因，不再维护上位机内置遥操预览缓存。相同丢帧原因的日志每秒最多一次，防止 100 Hz 输入刷屏。
 
-## 6. MANUS 与 Wuji 的区别
+## 6. 外部发布者与 Replay
 
-- Wuji 当前提供完整原生 ROS2 publisher、URDF contract 和四姿态标定链路。
-- MANUS 可通过 desktop 本地 SDK/TCP/IK 兼容路径产生 21 路目标；是否经过 ROS2 取决于启动方式，不能笼统写成“MANUS 使用 ROS2”。
-- 两者最终都应转换为明确的输入坐标空间，并汇合到 desktop backend 的授权门。
-- MANUS 逻辑保留 `MANUS_JOINT_SEND_GATED`，默认强调 preview 与“Enable Joint Send”显式授权；不得把手套连接成功等同于舵机输出已启用。
+- 外部发布者可以是 Wuji、MANUS、视觉或任意 IK 程序，但都只能通过 ROS2 topic 提供 21 路目标。
+- desktop 只负责坐标适配、授权、活动范围绑定和下位机通信，不保存任何厂商 SDK、摄像头或手势重定向实现。
+- `Save Data` 会保存实际发送成功的 ROS2 关节目标；Replay 读取该 CSV 后仍会经过 READY、活动范围和动态工作空间检查。
 
 ## 7. ROS2 能力验证
 
@@ -85,7 +84,7 @@ Wuji 当前发布 `urdf_deg`，启动 desktop raw-IK bridge 时必须选择 `--r
 1. `ros2 topic hz /raw_ik_target`：确认接近 100 Hz；
 2. `ros2 topic echo --once /raw_ik_target`：确认 21 路、finite、layout label/model id；
 3. 只开 desktop preview，验证 URDF 姿态方向和范围，不授权舵机；
-4. 选择单关节 active scope，ENABLE 后再单独打开 RAW IK 输出；
+4. 选择单关节 active scope，ENABLE 后再单独打开 `ROS2 OUTPUT`；
 5. 测试 pause/E-STOP/scope change 后持续发布仍不能恢复下发；
 6. 断开串口、停止 bridge、切换 URDF contract，确认均产生明确拒绝；
 7. 最后记录 publisher timestamp、desktop receive/send 和 P4 apply，统计端到端延时及抖动。

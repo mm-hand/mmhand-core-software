@@ -65,7 +65,7 @@ CMD_MANUAL_ENCODER_SINGLE = 0xE8  # 写入单个 Jxx 的 Manual Min/Max
 CMD_ROPE_INIT = 0xE9  # 按 21 位关节掩码启动 P4 Rope Init
 CMD_ANGLE_CTRL_MASKED = 0xEA  # 按关节掩码下发稀疏关节目标角
 CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
-CMD_SERVO_RESET_ZERO = 0xEC  # 复位越过硬圈数阈值舵机并清除对应多圈快照
+CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
 CMD_TASK_DIAG_SUBSCRIBE = 0xEE  # 打开或关闭 RTOS 任务诊断按需上报
 

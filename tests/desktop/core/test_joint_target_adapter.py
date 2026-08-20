@@ -3,8 +3,7 @@ import math
 import pytest
 
 from desktop.core import angle_mapping
-from desktop.core.protocol import ENCODER_COUNT
-from desktop.teleop.joint_target_adapter import (
+from desktop.core.joint_target_adapter import (
     LEGACY_CALIBRATED_DEG,
     URDF_DEG,
     URDF_RAD,
@@ -12,6 +11,7 @@ from desktop.teleop.joint_target_adapter import (
     joint_index_for_urdf_name,
     named_urdf_radians_to_joint_targets,
 )
+from desktop.core.protocol import ENCODER_COUNT
 
 
 def test_active_urdf_degrees_are_identity() -> None:

@@ -3,7 +3,7 @@
 职责：定义各运行数据 Topic 的字段、类型和 CSV 文件契约。
 线程：采样入口可被通信线程调用，磁盘写入由记录器串行化；不得阻塞设备控制。
 输入：带双时间戳的类型化 Topic 样本、事件和会话配置。
-输出：CSV/HDF5/ROS bag 文件以及结构化写入状态。
+输出：CSV 文件以及结构化写入状态。
 状态所有权：记录会话拥有文件句柄、采样序号和降采样缓存，不拥有设备真值。
 禁止依赖：禁止依赖 UI 或改变控制状态，禁止在 writer 内重新解释协议业务语义。
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 
-# CSV/HDF5/ROS bag 统一只暴露两条时间轴：
+# CSV 统一只暴露两条时间轴：
 # host_time 为带毫秒的本地日期时间，p4_time_ms 为固件开机后的 millis()。
 TIME_FIELDS = ["sample_index", "host_time", "p4_time_ms"]
 
@@ -44,53 +44,6 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
         "has_servo_raw_data",
         "has_system_status_data",
         "has_fault_status_data",
-    ],
-    "joint_state": [
-        *TIME_FIELDS,
-        "joint_index",
-        "is_active_joint",
-        "joint_deg",
-        "joint_target_deg",
-        "joint_encoder_raw",
-    ],
-    "servo_state": [
-        *TIME_FIELDS,
-        "motor_index",
-        "joint_index",
-        "is_active_motor",
-        "is_active_joint",
-        "motor_target_abs",
-        "servo_raw",
-        "servo_abs",
-        "servo_flash_raw",
-        "servo_flash_raw_diff",
-        "online",
-        "raw_online",
-        "telem_online",
-        "speed",
-        "load",
-        "load_mag",
-        "load_dir",
-        "current_raw",
-        "voltage",
-        "temperature",
-        "overload_fault",
-    ],
-    "tactile_summary": [
-        *TIME_FIELDS,
-        "finger_index",
-        "finger_name",
-        "sensor_count",
-        "max_force",
-        "mean_force",
-        "contact_count",
-        "tactile_online",
-        "tactile_summary_seq",
-        "tactile_full_seq",
-        "tactile_full_crc",
-        "tactile_full_crc_errors",
-        "tactile_full_seq_mismatches",
-        "tactile_full_dropped",
     ],
     "tactile_full": [
         *TIME_FIELDS,
@@ -171,8 +124,8 @@ def _wide_servo_fields() -> List[str]:
             f"{label}_target_abs",
             f"{label}_raw",
             f"{label}_abs",
-            f"{label}_flash_raw",
-            f"{label}_flash_raw_diff",
+            f"{label}_saved_raw",
+            f"{label}_saved_raw_diff",
             f"{label}_load",
             f"{label}_load_mag",
             f"{label}_load_dir",
@@ -213,30 +166,11 @@ def _wide_tactile_summary_fields() -> List[str]:
     return fields
 
 
-def _wide_tactile_full_fields() -> List[str]:
-    fields = [
-        *TIME_FIELDS,
-        "finger_index",
-        "finger_name",
-    ]
-    for sensor_idx in range(3):
-        for row_idx in range(4):
-            for col_idx in range(4):
-                prefix = f"S{sensor_idx}_R{row_idx}_C{col_idx}"
-                fields.extend([f"{prefix}_fx", f"{prefix}_fy", f"{prefix}_fz", f"{prefix}_mag"])
-    return fields
-
-
 TOPIC_FIELDNAMES.update(
     {
         "joint_wide": _wide_joint_fields(),
         "servo_wide": _wide_servo_fields(),
         "tactile_summary_wide": _wide_tactile_summary_fields(),
-        "tactile_full_thumb_wide": _wide_tactile_full_fields(),
-        "tactile_full_index_wide": _wide_tactile_full_fields(),
-        "tactile_full_middle_wide": _wide_tactile_full_fields(),
-        "tactile_full_ring_wide": _wide_tactile_full_fields(),
-        "tactile_full_pinky_wide": _wide_tactile_full_fields(),
     }
 )
 
@@ -254,17 +188,14 @@ CSV_TOPIC_FILENAMES: Dict[str, str] = {
 
 DEFAULT_TOPICS = [
     "core_state",
-    "joint_state",
     "joint_wide",
-    "servo_state",
     "servo_wide",
-    "tactile_summary",
     "tactile_summary_wide",
     "teleop_input",
     "event_log",
 ]
 
-# CSV 面向人工查看，只输出合并后的总表；算法数据仍由 HDF5/ROS bag 保存。
+# Save Data 仅维护这些 CSV 总表。
 DEFAULT_CSV_TOPICS = [
     "core_state",
     "joint_wide",
@@ -274,22 +205,7 @@ DEFAULT_CSV_TOPICS = [
     "teleop_input",
 ]
 
-# 勾选触觉全量时，CSV只增加一张长表；HDF5同时保留五指宽表便于算法读取。
+# 勾选触觉全量时，CSV 仅增加一张长表。
 TACTILE_FULL_TOPICS = [
     "tactile_full",
-    "tactile_full_thumb_wide",
-    "tactile_full_index_wide",
-    "tactile_full_middle_wide",
-    "tactile_full_ring_wide",
-    "tactile_full_pinky_wide",
 ]
-
-
-ROSBAG_TOPIC_NAMES = {
-    "core_state": "/mmhand/core_state",
-    "joint_state": "/mmhand/joint_state",
-    "servo_state": "/mmhand/motor_state",
-    "tactile_summary": "/mmhand/tactile_summary",
-    "teleop_input": "/mmhand/teleop",
-    "event_log": "/mmhand/events",
-}

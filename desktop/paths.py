@@ -14,6 +14,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 RESOURCE_DIR = PACKAGE_DIR / "resources"
 CONFIG_DIR = RESOURCE_DIR / "config"
+DEVICE_STATE_DIR = CONFIG_DIR / "device_state"
 URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
 RUN_DATA_DIR = PROJECT_ROOT / "run_data"
 LOG_DIR = RUN_DATA_DIR / "运行日志"
@@ -26,10 +27,9 @@ CALIB_DEG_PATH = CONFIG_DIR / "calib_deg.json"
 # 唯一受支持的便携式 Calib Load V6 快照。旧 calib_load_snapshot.json
 # 不再作为活动配置读取，避免旧格式被误加载或覆盖新格式。
 CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calibration_bundle.mmcal.json"
-MANUS_CALIBRATION_PATH = CONFIG_DIR / "manus_calibration.json"
+# 运行期多圈锚点独立于体积较大的标定快照，以便运动时低开销原子更新。
+MULTITURN_RUNTIME_PATH = DEVICE_STATE_DIR / "multiturn_runtime.json"
 MOTOR_MID_CALIB_PATH = CONFIG_DIR / "motor_mid_calib.json"
-RAW_IK_Q_TARGET_PATH = CONFIG_DIR / "raw_ik_q_target.json"
-RAW_IK_Q_URDF_PATH = CONFIG_DIR / "raw_ik_q_urdf.json"
 URDF_JOINT_MAPPING_PATH = CONFIG_DIR / "urdf_joint_mapping.json"
 ROBOT_MODEL_MANIFEST_PATH = CONFIG_DIR / "robot_model_manifest.json"
 PRODUCT_FINGERPRINT_PATH = CONFIG_DIR / "product_fingerprint.json"

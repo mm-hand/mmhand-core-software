@@ -12,8 +12,6 @@ from desktop.core import angle_mapping
 from desktop.core.calibration_snapshot import seal_snapshot
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 from desktop.paths import DEFAULT_URDF_PATH, URDF_JOINT_MAPPING_PATH
-from desktop.teleop import manus_calibration
-from desktop.teleop import manus_raw_skeleton_retarget
 
 
 def _active_urdf_limits_deg() -> dict[str, tuple[float, float]]:
@@ -143,13 +141,3 @@ def test_bad_direction_negative_v4_endpoints_are_not_loaded(tmp_path):
     assert angle_mapping.load_calibrated_ranges(snapshot)[14] == pytest.approx(
         angle_mapping.get_spec(14).urdf_range_deg
     )
-
-
-def test_manus_modules_use_central_command_ranges():
-    for idx in range(21):
-        expected = angle_mapping.default_calibrated_range_deg(idx)
-        assert manus_calibration.ROBOT_JOINT_LIMITS_DEG[idx] == expected
-        assert manus_raw_skeleton_retarget._raw_encoder_limit_deg(idx) == (
-            min(angle_mapping.effective_calibrated_range_deg(idx)),
-            max(angle_mapping.effective_calibrated_range_deg(idx)),
-        )

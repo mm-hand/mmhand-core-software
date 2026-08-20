@@ -1,6 +1,6 @@
 from desktop.core.protocol import ENCODER_COUNT
 from desktop.ros2.raw_ik_target import DEFAULT_RAW_IK_TARGET_TOPIC, RawIkTargetBridge
-from desktop.teleop.joint_target_adapter import LEGACY_CALIBRATED_DEG, URDF_DEG, adapt_joint_targets
+from desktop.core.joint_target_adapter import LEGACY_CALIBRATED_DEG, URDF_DEG, adapt_joint_targets
 
 
 class FakeBackend:

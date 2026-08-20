@@ -12,6 +12,8 @@
 
 class SCS{
 public:
+	/** 当前产品单 BUS 最大同步回包为 12 * (15 + 6) = 252 byte。 */
+	static constexpr u16 kSyncReadRxBufferCapacity = 256;
 	SCS();
 	SCS(u8 End);
 	SCS(u8 End, u8 Level);
@@ -40,13 +42,14 @@ public:
 	u8 End;//处理器大小端结构
 	u8 u8Status;//舵机状态
 	u8 u8Error;//通信状态
-	u8 syncReadRxPacketIndex;
-	u8 syncReadRxPacketLen;
-	u8 *syncReadRxPacket;
-	u8 *syncReadRxBuff;
-	u16 syncReadRxBuffLen;
-	u16 syncReadRxBuffMax;
-	u32 syncTimeOut;
+	u8 syncReadRxPacketIndex = 0;
+	u8 syncReadRxPacketLen = 0;
+	u8 *syncReadRxPacket = NULL;
+	/** 固定缓冲替代每次同步读的 new/delete，避免高频堆碎片和分配抖动。 */
+	u8 syncReadRxBuff[kSyncReadRxBufferCapacity] = {0};
+	u16 syncReadRxBuffLen = 0;
+	u16 syncReadRxBuffMax = 0;
+	u32 syncTimeOut = 0;
 protected:
 	virtual int writeSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen) = 0;
