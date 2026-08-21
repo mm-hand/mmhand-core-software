@@ -7,8 +7,8 @@
   "control_model_crc": "CD1E5D06",
   "visual_model_crc": "A28E43D3",
   "hardware_map_crc": "9B40D3A6",
-  "parameter_crc": "FED3A499",
-  "firmware_source_crc": "967954DD",
+  "parameter_crc": "EE8848C2",
+  "firmware_source_crc": "77407C90",
   "structure_commit_crc": "34467BF8",
   "source_commit": "a3a4400dfc3fa0702b2dfc60afaf3ba12317cc58"
 }

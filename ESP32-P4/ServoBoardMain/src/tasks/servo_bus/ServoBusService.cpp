@@ -8,7 +8,6 @@
 #include "ServoBusService.h"
 
 #include <string.h>
-#include <stdlib.h>
 
 #include "../../safety/policies/MultiTurnSafetyPolicy.h"
 #include "../../safety/policies/PersistenceSafetyPolicy.h"
@@ -48,99 +47,6 @@ using namespace mmhand::config::servo;
 using p4::recovery::completedMotionSaveReason;
 using p4::recovery::isMultiTurnMotionState;
 using p4::recovery::isRawNearTurnEdge;
-
-/** JSON 最近圈恢复的首次运动方向核对；ServoBusTask 是唯一读写者。 */
-struct RestoreDirectionMonitor {
-    uint32_t provisionalMask;
-    uint32_t activeMask;
-    int32_t startAbs[SERVO_TOTAL_NUM];
-    int32_t targetAbs[SERVO_TOTAL_NUM];
-    uint32_t startedAtMs[SERVO_TOTAL_NUM];
-};
-
-static RestoreDirectionMonitor g_restoreDirectionMonitor;
-
-static void clearRestoreDirectionMonitor(uint32_t motorMask)
-{
-    g_restoreDirectionMonitor.provisionalMask &= ~motorMask;
-    g_restoreDirectionMonitor.activeMask &= ~motorMask;
-}
-
-/** 只在目标与当前 ABS 差异明显时武装，不把静止抖动当成方向证据。 */
-static void armRestoreDirectionMonitor(uint8_t motor,
-                                       int32_t currentAbs,
-                                       int32_t targetAbs,
-                                       uint32_t nowMs)
-{
-    if (motor >= SERVO_TOTAL_NUM) return;
-    const uint32_t bit = 1UL << motor;
-    if ((g_restoreDirectionMonitor.provisionalMask & bit) == 0 ||
-        g_restoreDirectionMonitor.activeMask & bit ||
-        labs(targetAbs - currentAbs) < kRestoreDirectionCommandCounts) {
-        return;
-    }
-    g_restoreDirectionMonitor.startAbs[motor] = currentAbs;
-    g_restoreDirectionMonitor.targetAbs[motor] = targetAbs;
-    g_restoreDirectionMonitor.startedAtMs[motor] = nowMs;
-    g_restoreDirectionMonitor.activeMask |= bit;
-}
-
-/**
- * 恢复后若实际 logical ABS 首次明显向目标反向移动，立即撤销信任。
- * 同向达到确认量即结束监测；观察超时不作判决，等下一个明显目标。
- */
-static void verifyRestoredDirection(SystemRuntimeContext* sharedData,
-                                    uint32_t nowMs)
-{
-    uint32_t active = g_restoreDirectionMonitor.activeMask;
-    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM && active; ++motor) {
-        const uint32_t bit = 1UL << motor;
-        if ((active & bit) == 0) continue;
-        ServoRoute route;
-        FeetechServoDriver* driver = resolveMotorDriver(motor, &route, true);
-        if (!driver) {
-            g_restoreDirectionMonitor.activeMask &= ~bit;
-            continue;
-        }
-        const int32_t targetDelta =
-            g_restoreDirectionMonitor.targetAbs[motor] -
-            g_restoreDirectionMonitor.startAbs[motor];
-        const int32_t actualDelta = driver->getAbsolutePosition(route.servoId) -
-            g_restoreDirectionMonitor.startAbs[motor];
-        const int8_t expectedSign = targetDelta >= 0 ? 1 : -1;
-        const int32_t directedProgress = expectedSign * actualDelta;
-        if (directedProgress >= kRestoreDirectionConfirmCounts) {
-            clearRestoreDirectionMonitor(bit);
-            p4::safety::clearSafetyRuleEvent(
-                SafetyRuleId::ActuatorMultiTurnUnknown, 0xFF, motor);
-            continue;
-        }
-        if (directedProgress <= -kRestoreDirectionRejectCounts) {
-            sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
-            clearRestoreDirectionMonitor(bit);
-            p4::actuator::clearPending(sharedData);
-            driver->setTorqueEnabled(route.servoId, false);
-            p4::safety::reportSafetyRuleEvent(
-                sharedData,
-                SafetyRuleId::ActuatorMultiTurnUnknown,
-                g_restoreDirectionMonitor.targetAbs[motor],
-                driver->getAbsolutePosition(route.servoId),
-                0xFF,
-                motor);
-            FW_LOG_PRINTF(
-                FW_LOG_LEVEL_ERROR,
-                "[SERVO RESTORE DIRECTION] M%02u targetDelta=%ld actualDelta=%ld -> Turn UNKNOWN; recalibrate\r\n",
-                (unsigned)motor,
-                (long)targetDelta,
-                (long)actualDelta);
-            continue;
-        }
-        if ((uint32_t)(nowMs - g_restoreDirectionMonitor.startedAtMs[motor]) >=
-            kRestoreDirectionObserveMs) {
-            g_restoreDirectionMonitor.activeMask &= ~bit;
-        }
-    }
-}
 
 /** 仅在统一事件缓存接受新事件时输出一次现场详情，避免重复维护日志节流状态。 */
 static void logServoSafetyReject(SystemRuntimeContext* sharedData,
@@ -294,11 +200,6 @@ static uint8_t applyServoTargetBatch(SystemRuntimeContext* sharedData,
                            decision.appliedAbs,
                            cmd.speed,
                            cmd.acc)) {
-            armRestoreDirectionMonitor(
-                cmd.motorChannel,
-                bus->getAbsolutePosition(route.servoId),
-                decision.appliedAbs,
-                nowMs);
             busWritePending[route.busIndex] = true;
             appliedCount++;
         } else {
@@ -430,9 +331,6 @@ static void processHostMultiTurnRestore(SystemRuntimeContext* sharedData, uint32
                                   &rejectedMask);
     sharedData->restore_multi_turn_restored_mask = restoredMask;
     sharedData->restore_multi_turn_rejected_mask = rejectedMask;
-    // Host JSON 最近圈只是暂定恢复；首次明显运动后再用方向证据确认。
-    g_restoreDirectionMonitor.provisionalMask |= restoredMask;
-    g_restoreDirectionMonitor.activeMask &= ~restoredMask;
     sharedAtomicStore(&sharedData->restore_multi_turn_result_token, token);
 #if MULTITURN_NVS_PERSISTENCE_ENABLE
     if (restoredMask != 0) {
@@ -475,8 +373,6 @@ static void processCalibrationTrustCommit(SystemRuntimeContext* sharedData,
     if (acceptedMask != 0) {
         sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
                              ~acceptedMask);
-        // 自动标定已重建绝对坐标，不再需要 JSON 恢复的方向观察。
-        clearRestoreDirectionMonitor(acceptedMask);
     }
     sharedAtomicStore(&sharedData->calibration_trust_accepted_mask,
                       acceptedMask);
@@ -1160,8 +1056,6 @@ static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
         &sharedData->multi_turn_unknown_bitmap, ~hardwareResetMask);
     sharedAtomicFetchAnd(
         &sharedData->servo_turn_overflow_bitmap, ~hardwareResetMask);
-    clearRestoreDirectionMonitor(hardwareResetMask);
-
     if (!queueLatestMultiTurnNvsJob(
             sharedData->multiturnNvsSaveQueue, &job)) {
         sharedAtomicFetchOr(
@@ -1628,7 +1522,6 @@ static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
                              ~successMask);
         sharedAtomicFetchAnd(&sharedData->servo_turn_overflow_bitmap,
                              ~successMask);
-        clearRestoreDirectionMonitor(successMask);
     }
     sharedAtomicStore(&sharedData->servo_reset_zero_success_mask,
                       successMask);
@@ -1681,7 +1574,6 @@ bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     }
 
     memset(&g_servoRuntime, 0, sizeof(g_servoRuntime));
-    memset(&g_restoreDirectionMonitor, 0, sizeof(g_restoreDirectionMonitor));
     beginServoBuses();
     servoDiscoveryManager().begin();
     publishServoRouteSnapshot(sharedData);
@@ -1875,8 +1767,13 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
             }
         }
 
-        const uint8_t readStartBus = (readBusPhase == 0) ? 0 : 2;
-        for (uint8_t offset = 0; offset < 2; offset++) {
+        // 每个 10 ms 服务周期读取一组 BUS。当前四条 BUS 分成两组，每组
+        // 两条，因此同一 BUS 每 20 ms 获得一次完整同步反馈。
+        const uint8_t readStartBus = (uint8_t)(
+            readBusPhase * kServoFeedbackBusesPerCycle);
+        for (uint8_t offset = 0;
+             offset < kServoFeedbackBusesPerCycle;
+             ++offset) {
             const uint8_t busIndex = (uint8_t)(readStartBus + offset);
             if (busIndex >= NUM_BUSES || readCounts[busIndex] == 0) {
                 continue;
@@ -1898,7 +1795,8 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                                    (unsigned long)calibrationReadMask);
             }
         }
-        readBusPhase ^= 1;
+        readBusPhase = (uint8_t)(
+            (readBusPhase + 1U) % kServoFeedbackReadGroupCount);
 
         // 正常反馈读取拥有最高优先级。即使后台路由扫描持续进行，只要某个
         // 已映射舵机超过新鲜度上限未更新，也必须冻结锚点并撤销在线信任。
@@ -1933,7 +1831,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                     (unsigned long)mmhand::config::servo::kFeedbackStaleTimeoutMs);
             }
         }
-        verifyRestoredDirection(sharedData, nowMs);
         // 必须在撤销动态路由之前消费驱动冻结的最后可信反馈；否则路由失效后
         // 无法再定位原 BUS。Flash OFF 时只更新 RAM 锚点，不会排队 NVS 写入。
         cacheServoPowerLossSnapshots(

@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "ServoBusService.h"
+#include "../../config/ServoConfig.h"
 #include "../../platform/time/Clock.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/adapters/ServiceContextAdapter.h"
@@ -24,7 +25,10 @@ void servoBusTask(void* parameter)
     }
 
     sharedData->servoBusWake.bind(xTaskGetCurrentTaskHandle());
-    const TickType_t periodTicks = pdMS_TO_TICKS(10);
+    // 服务任务保持 10 ms 兜底唤醒；总线服务每轮读取两条 BUS，因此每条
+    // BUS 的完整位置/速度/负载反馈周期为 ServoConfig 定义的 20 ms。
+    const TickType_t periodTicks = pdMS_TO_TICKS(
+        mmhand::config::servo::kServoBusServicePeriodMs);
     for (;;) {
         const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_SERVO_BUS);

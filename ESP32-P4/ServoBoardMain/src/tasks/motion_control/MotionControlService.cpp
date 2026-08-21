@@ -69,7 +69,7 @@ struct ControlServiceRuntime {
     uint32_t upperWorkspaceWarningBitmap;
     // 目标钳位按关节锁存；目标回到动态范围后清除，下一次越界才重新上报。
     uint32_t targetClampEventLatchedBitmap;
-    // 双腱 LUT 钳位同样按关节做边沿锁存，避免贴边时每 10 ms 重复上报。
+    // 单腱和双腱 LUT 钳位按关节做边沿锁存，避免贴边时每 10 ms 重复上报。
     uint32_t lutClampEventLatchedBitmap;
     uint32_t lutClampObservedBitmap;
     uint32_t lastOverloadFaultResetToken;
@@ -132,12 +132,12 @@ static void clearRecoveredControlRule(SafetyRuleId ruleId,
     }
 }
 
-/** 记录双腱 LUT 钳位；持续贴边只记录一次，离开边界后允许再次触发。 */
-static void noteDualTendonLutClamp(SystemRuntimeContext* sharedData,
-                                  uint8_t jointIndex,
-                                  uint8_t motorChannel,
-                                  int32_t requestedAbs,
-                                  int32_t appliedAbs)
+/** 记录腱绳 LUT 钳位；持续贴边只记录一次，离开边界后允许再次触发。 */
+static void noteTendonLutClamp(SystemRuntimeContext* sharedData,
+                              uint8_t jointIndex,
+                              uint8_t motorChannel,
+                              int32_t requestedAbs,
+                              int32_t appliedAbs)
 {
     if (!sharedData || jointIndex >= ENCODER_TOTAL_NUM) {
         return;
@@ -414,11 +414,11 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                                         tendonTargets.targetAbs[i]);
         if (tendonTargets.lutTargetClamped[i] != 0) {
             anyLutTargetClamped = true;
-            noteDualTendonLutClamp(sharedData,
-                                   jointIndex,
-                                   motorChannel,
-                                   tendonTargets.rawTargetAbs[i],
-                                   tendonTargets.targetAbs[i]);
+            noteTendonLutClamp(sharedData,
+                               jointIndex,
+                               motorChannel,
+                               tendonTargets.rawTargetAbs[i],
+                               tendonTargets.targetAbs[i]);
         }
         if (outPidPushActive &&
             tendonTargets.lutTargetClamped[i] == 0 &&
@@ -1369,17 +1369,53 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
                 if (jointActive) {
                     // 普通单电机关节：把腱绳空间 PID 结果转回电机 raw ABS。
-                    // LUT 不再钳位紧绳端或松绳端，只保留用户主动开启的 LOCK。
+                    // 先限制在标定 LUT 两端各放宽 500 counts 的工作区，再执行用户 LOCK。
                     int32_t actualMotorAbs = targetPos;
                     int32_t rawPidTargetAbs = targetPos;
+                    // LUT 无效或目标被钳位时，禁止把“目标无法继续推进”误判成碰撞。
+                    bool singleLutBlocksPidPush = true;
                     if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                         const uint8_t motorCh = (uint8_t)jointMotorCh;
                         actualMotorAbs = servoData.servoAngles[motorCh];
                         rawPidTargetAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
+                        const JointCalibrationResult& calibration =
+                            g_jointCalibResult[jointIndex];
+                        int32_t lutMinAbs = 0;
+                        int32_t lutMaxAbs = 0;
+                        const bool lutMatchesMotor =
+                            calibration.tendonLutMotor[0] == motorCh &&
+                            tendonCalibrationMotorAbsRange(calibration,
+                                                          0,
+                                                          &lutMinAbs,
+                                                          &lutMaxAbs);
+                        if (!lutMatchesMotor) {
+                            // LUT 缺失或属于其他电机时保持当前位置，禁止无边界闭环。
+                            targetPos = actualMotorAbs;
+                        } else {
+                            lutMinAbs -= kTendonLutMarginCounts;
+                            lutMaxAbs += kTendonLutMarginCounts;
+                            const p4::safety::AbsBoundaryClampDecision lutDecision =
+                                p4::safety::clampAbsToBoundary(rawPidTargetAbs,
+                                                               lutMinAbs,
+                                                               lutMaxAbs);
+                            if (!lutDecision.valid) {
+                                targetPos = actualMotorAbs;
+                            } else {
+                                targetPos = lutDecision.applied;
+                                singleLutBlocksPidPush = lutDecision.clamped;
+                                if (lutDecision.clamped) {
+                                    noteTendonLutClamp(sharedData,
+                                                       jointIndex,
+                                                       motorCh,
+                                                       rawPidTargetAbs,
+                                                       targetPos);
+                                }
+                            }
+                        }
                         targetPos = clampServoPosByMotorAbsLimit(sharedData,
                                                                  motorCh,
-                                                                 rawPidTargetAbs);
+                                                                 targetPos);
                     } else {
                         targetPos = outPulsesTendon[jointIndex];
                     }
@@ -1389,7 +1425,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         localTargets[jointIndex] - magAngles[jointIndex];
                     feedbackCollisionPidPushActive[jointIndex] =
                         fabsf(pidOutput) >= 1.0f &&
-                        pidOutput * angleError > 0.0f;
+                        pidOutput * angleError > 0.0f &&
+                        !singleLutBlocksPidPush;
                     // 单电机直接使用本周期原始 PID 目标与实际 ABS 的差值。
                     // ABS 增加统一代表收绳；相等时保留本轮默认放绳，且不会触发
                     // HOLD（pidPushActive 通常同时为 false）。

@@ -288,10 +288,9 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
             return false;
         }
 
-        // 双腱两台电机分别按自己的标定 LUT 建立边界，并向两端放宽 500 counts。
-        // 单电机控制不经过本分支，因此仍可越过单腱 LUT 端点。
-        lutMinAbs -= kDualTendonLutMarginCounts;
-        lutMaxAbs += kDualTendonLutMarginCounts;
+        // 双腱两台电机分别按自己的标定 LUT 建立边界，并向两端放宽统一裕量。
+        lutMinAbs -= kTendonLutMarginCounts;
+        lutMaxAbs += kTendonLutMarginCounts;
         const p4::safety::AbsBoundaryClampDecision clampDecision =
             p4::safety::clampAbsToBoundary(rawTarget, lutMinAbs, lutMaxAbs);
         if (!clampDecision.valid) {

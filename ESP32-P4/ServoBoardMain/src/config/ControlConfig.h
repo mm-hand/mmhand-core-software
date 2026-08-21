@@ -63,12 +63,12 @@ inline constexpr float kDualTendonIntegralLimit = 0.0f;
 inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
 inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
 /**
- * 双腱闭环允许越过 LUT 最小/最大样本的运行裕量，单位为 logical ABS counts。
- * 仅双电机关节使用；单电机关节不做 LUT 端点钳位。
+ * 单腱和双腱闭环允许越过 LUT 最小/最大样本的运行裕量，单位为 logical ABS counts。
+ * 控制目标最终限制在 [LUT 最小值 - 500, LUT 最大值 + 500] 内。
  */
-inline constexpr int32_t kDualTendonLutMarginCounts = 500;
-static_assert(kDualTendonLutMarginCounts >= 0,
-              "dual-tendon LUT margin must be non-negative");
+inline constexpr int32_t kTendonLutMarginCounts = 500;
+static_assert(kTendonLutMarginCounts >= 0,
+              "tendon LUT margin must be non-negative");
 
 /** 碰撞检测状态机参数。 */
 inline constexpr float kCollisionMinErrorDeg = 4.0f;

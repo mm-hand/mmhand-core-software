@@ -32,23 +32,10 @@ flowchart LR
     B --> C[最短环形差 delta]
     C --> D[最终 restoredLogicalAbs]
     D --> E[P4 建立 logical offset]
-    E --> F[标记为待方向验证]
+    E --> F[恢复 logical ABS]
 ```
 
-## 3. 运行方向验证
-
-最近圈算法解决的是单圈跨界，不能证明绳路、舵机或机械结构从未改变。因此恢复后不会
-立即永久信任，而是在第一次有意义的运动命令中验证方向：
-
-- 命令相对当前 ABS 至少前进 64 counts 才开始观察。
-- 实际 ABS 沿命令方向前进至少 32 counts，确认该电机恢复可信。
-- 实际 ABS 反向移动至少 24 counts，立即判定圈数错误。
-- 600 ms 内没有足够证据时结束本轮观察，但保留待验证状态，等待下一条有效命令。
-
-反向证据成立后，P4 清除目标批次、关闭该舵机力矩、置 `Turn Unknown` 并上报规则事件；
-上位机提示用户勾选对应关节重新执行 `Calibrate`。
-
-## 4. Calibrate 统一重建
+## 3. Calibrate 统一重建
 
 界面不再提供独立的 `New Device Reset` 或 `Reset Zero` 按钮。`Calibrate` 是唯一人工重建入口：
 
@@ -66,7 +53,7 @@ flowchart LR
 辅助工作空间舵机由自动标定规划器按在线状态动态使用，但不属于标定前归零 mask，避免
 只标一个关节时清掉其它手指的多圈基准。
 
-## 5. 身份与完整性门禁
+## 4. 身份与完整性门禁
 
 JSON 恢复还要求：
 
@@ -77,7 +64,7 @@ JSON 恢复还要求：
 
 任一条件不满足时保持 `Turn Unknown`，不能把其它设备或旧机械配置的圈数回灌到当前手。
 
-## 6. P4 RAM/NVS 锚点与上位机锚点的区别
+## 5. P4 RAM/NVS 锚点与上位机锚点的区别
 
 - 上位机下发的是已经计算完成的最终 logical ABS，P4 直接绑定。
 - P4 热插拔恢复若使用同一运行周期内的 RAM/NVS 锚点，锚点同时包含 logical ABS 和 raw，
@@ -85,7 +72,7 @@ JSON 恢复还要求：
 
 两条接口不可混用，否则 logical offset 非零时可能重复叠加 raw 差值。
 
-## 7. 实机验收
+## 6. 实机验收
 
 1. `SavedRaw=4090`、重新上电 `currentRaw=6`，应按 `+12 counts` 连续恢复。
 2. `SavedRaw=6`、重新上电 `currentRaw=4090`，应按 `-12 counts` 连续恢复。

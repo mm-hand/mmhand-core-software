@@ -27,12 +27,23 @@ inline constexpr int16_t kMultiTurnEdgeRawMarginCounts = 256;
 
 namespace mmhand::config::servo {
 
-// JSON 最近圈恢复后的首次明显运动用于核对方向。阈值故意低于
-// 正常控制步长，但高于舵机 raw 抖动，避免静止时误判。
-inline constexpr int32_t kRestoreDirectionCommandCounts = 64;
-inline constexpr int32_t kRestoreDirectionConfirmCounts = 32;
-inline constexpr int32_t kRestoreDirectionRejectCounts = 24;
-inline constexpr uint32_t kRestoreDirectionObserveMs = 600;
+/** ServoBus 服务任务的兜底周期；新目标通知仍可提前唤醒任务。 */
+inline constexpr uint32_t kServoBusServicePeriodMs = 10;
+/** 每个服务周期执行同步读的 BUS 数量，避免四条 UART 的阻塞事务集中爆发。 */
+inline constexpr uint8_t kServoFeedbackBusesPerCycle = 2;
+/** 四条 BUS 完成一轮全量同步读所需的服务周期数。 */
+inline constexpr uint8_t kServoFeedbackReadGroupCount =
+    (uint8_t)((NUM_BUSES + kServoFeedbackBusesPerCycle - 1U) /
+              kServoFeedbackBusesPerCycle);
+/** 同一条 BUS 两次全量同步反馈之间的设计间隔：当前为 20 ms，即 50 Hz。 */
+inline constexpr uint32_t kServoFeedbackPollPeriodMs =
+    kServoBusServicePeriodMs * kServoFeedbackReadGroupCount;
+
+static_assert(kServoFeedbackBusesPerCycle > 0 &&
+                  kServoFeedbackBusesPerCycle <= NUM_BUSES,
+              "servo feedback BUS group size is invalid");
+static_assert(kServoFeedbackPollPeriodMs == 20,
+              "servo full-feedback period must remain 20 ms");
 
 /** 多圈恢复与异步 NVS 协调参数；不改变现有快照布局和键名。 */
 inline constexpr uint32_t kNvsRestoreWaitWindowMs = 3000;
@@ -43,10 +54,12 @@ inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Res
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
 /**
  * 即使扫描或恢复流程没有累计同步读失败，反馈超过该时间未刷新也必须判离线。
- * 正常情况下每条 BUS 约 20 ms 更新一次，200 ms 为十个反馈周期的安全余量。
+ * 正常情况下每条 BUS 每 20 ms 更新一次；80 ms 覆盖四个反馈周期，既允许
+ * 短暂调度抖动，又能避免快速掉电重启长期沿用旧 hardware ABS 会话。
  */
-inline constexpr uint32_t kFeedbackStaleTimeoutMs = 200;
-inline constexpr uint8_t kOnlineConfirmReads = 2; ///< 连续成功读取达到此值才判上线。
+inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
+/** 重新发现舵机后必须连续成功三帧，约 40~60 ms，才重新发布 online。 */
+inline constexpr uint8_t kOnlineConfirmReads = 3;
 inline constexpr uint16_t kDiscoveryProbeTimeoutMs = 2; ///< 动态 BUS 探测单次最长阻塞时间。
 /** 单 BUS 控制容量只有一个事实来源，避免扫描策略与同步收发缓存的上限发生漂移。 */
 inline constexpr uint8_t kMaxControllableServosPerBus = MAX_SERVOS_PER_BUS;
