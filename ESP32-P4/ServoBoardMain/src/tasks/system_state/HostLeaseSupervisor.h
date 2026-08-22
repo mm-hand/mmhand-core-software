@@ -3,9 +3,9 @@
  * @brief 声明上位机控制租约、失联 ABS Hold 和安全收尾服务。
  * @details
  * - 输入：上位机心跳、当前状态、目标 owner 和舵机反馈快照。
- * - 输出：Hold 批次、租约诊断，以及通过端口请求状态迁移和持久化。
+ * - 输出：Hold 批次、租约诊断，以及通过端口请求状态迁移。
  * - 状态所有权：本模块拥有 host_control_hold_* 事务字段，不拥有总状态机。
- * - 禁止依赖：不得解析串口协议、创建 RTOS 任务或直接写 NVS。
+ * - 禁止依赖：不得解析串口协议、创建 RTOS 任务或直接访问持久化介质。
  */
 #ifndef P4_MODULES_STATE_HOST_LEASE_SUPERVISOR_H
 #define P4_MODULES_STATE_HOST_LEASE_SUPERVISOR_H
@@ -23,7 +23,6 @@ namespace p4::state {
 struct HostLeaseSupervisorPort {
     uint8_t (*resolveIdleOrReady)(SystemRuntimeContext* sharedData);
     void (*transitionTo)(SystemRuntimeContext* sharedData, uint8_t nextState);
-    void (*requestMultiTurnSave)(SystemRuntimeContext* sharedData, uint8_t reason);
     void (*setCalibrationStatus)(uint8_t status);
 };
 

@@ -13,8 +13,6 @@
 #include "../../data/ActuatorTypes.h"
 #include "../../data/CalibrationTypes.h"
 #include "../../data/JointTypes.h"
-#include "../../data/PersistenceTypes.h"
-#include "../../data/RecoveryTypes.h"
 #include "../../data/ServoTypes.h"
 #include "../../data/SystemTypes.h"
 #include "../../data/TelemetryTypes.h"
@@ -33,12 +31,6 @@ struct InterTaskChannels {
     MessageChannel<ServoTelemetryData_t> servoTelemetryQueue; ///< 控制、标定和上行共读的最新遥测。
     MessageChannel<MappedAngleData_t> mappedAngleQueue; ///< 21 关节角快照。
     MessageChannel<RemoteTactileData_t> tactileQueue; ///< 顺序触觉数据。
-    MessageChannel<MultiTurnNvsSaveJob_t> multiturnNvsSaveQueue; ///< NVS 保存请求。
-    MessageChannel<MultiTurnNvsSaveResult_t> multiturnNvsResultQueue; ///< NVS 保存结果。
-    MessageChannel<ManualNvsSaveJob> manualNvsSaveQueue; ///< Manual 端点保存请求邮箱。
-    MessageChannel<ManualNvsSaveResult> manualNvsResultQueue; ///< Manual 保存读回结果邮箱。
-    MessageChannel<NvsControlJob> nvsControlQueue; ///< 多圈 NVS 开关/清空请求邮箱。
-    MessageChannel<NvsControlResult> nvsControlResultQueue; ///< 多圈 NVS 控制结果邮箱。
     SemaphoreHandle_t commandStateMutex; ///< 保护目标角和直控命令的成组读写。
 };
 

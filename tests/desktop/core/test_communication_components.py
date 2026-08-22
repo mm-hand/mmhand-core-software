@@ -15,6 +15,7 @@ import struct
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.communication import (
     AckTracker,
+    EventChannel,
     FrameDecoder,
     P4PacketRouter,
     SerialTransport,
@@ -133,10 +134,37 @@ def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
     assert ack == (0x10, 3, 0, 12.0)
     assert tracker.last_p4_time_ms == 120
     assert tracker.sequence == 2
+    assert tracker.drain_events() == [
+        {
+            "sequence": 1,
+            "command": 0x10,
+            "mode": 2,
+            "status": 0,
+            "received_at": 10.0,
+            "p4_time_ms": 100,
+        },
+        {
+            "sequence": 2,
+            "command": 0x10,
+            "mode": 3,
+            "status": 0,
+            "received_at": 12.0,
+            "p4_time_ms": 120,
+        },
+    ]
 
     tracker.reset()
     assert tracker.sequence == 2
     assert tracker.last_ack is None
+
+
+def test_event_channel_preserves_order_until_explicit_drain() -> None:
+    channel: EventChannel[dict] = EventChannel()
+    channel.publish({"sequence": 1})
+    channel.publish({"sequence": 2})
+
+    assert channel.drain() == [{"sequence": 1}, {"sequence": 2}]
+    assert channel.drain() == []
 
 
 def test_state_reducer_carries_previous_snapshot_and_commits_once() -> None:
@@ -174,3 +202,17 @@ def test_lower_computer_comm_remains_a_compatible_facade() -> None:
     assert comm._last_model is model
     assert comm._state_reducer.last_model is model
     assert comm._ack_lock is comm._ack_tracker.condition
+
+
+def test_lower_computer_comm_rx_queue_is_latest_value_mailbox() -> None:
+    comm = LowerComputerComm("")
+    older = HandModel()
+    older.host_rx_time = 1.0
+    latest = HandModel()
+    latest.host_rx_time = 2.0
+
+    comm._push_rx_model(older)
+    comm._push_rx_model(latest)
+
+    assert comm.rx_queue.qsize() == 1
+    assert comm.rx_queue.get_nowait() is latest

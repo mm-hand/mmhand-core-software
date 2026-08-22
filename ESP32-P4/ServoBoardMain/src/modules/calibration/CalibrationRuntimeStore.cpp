@@ -197,8 +197,7 @@ bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
     return true;
 }
 
-// 初始化标定 RAM。这里只清空内存；Manual NVS 和 Calib Load 会在启动流程中
-// 按各自校验结果恢复数据。
+// 初始化标定 RAM。P4 重启后由桌面端 JSON 通过 Manual/Calib Load 协议重新同步数据。
 void initializeCalibrationRuntimeState(void) {
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));

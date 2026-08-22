@@ -353,7 +353,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        bool* outPidPushActive)
 {
     // 将逻辑关节目标转换成两个拮抗电机目标，并返回下一周期碰撞检测需要的
-    // PID 推进证据；双腱 LUT 先按扩展边界钳位，用户 LOCK 再独立执行。
+    // PID 推进证据；双腱 LUT 先按扩展边界钳位，再应用会话 logical range。
     if (outPidPushActive) *outPidPushActive = false;
     if (!batch || !sharedData) {
         return 0;
@@ -396,10 +396,7 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             SharedSafetyGuard guard;
             validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
         }
-        // A valid calibrated range remains the feedback eligibility gate. LOCK
-        // independently decides whether that range also clamps motor ABS output.
-        // LOCK only enables the ABS min/max output clamp; it must not disable
-        // feedback control for an otherwise calibrated dual-tendon joint.
+        // 有效标定范围仍是负反馈准入条件；运行边界统一由 LUT 与会话 logical range 负责。
         if ((validBitmap & bit) == 0) {
             resetDualTendonController(jointIndex);
             return 0;
@@ -407,11 +404,9 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         JointActuatorRuntimeTarget& target = runtimeTargets[targetCount++];
         target.motorChannel = motorChannel;
         target.sign = 1;
-        // 与单电机反馈使用相同的 LOCK 语义：锁定通道限制在标定 ABS 范围内，
-        // 未锁定通道继续保持反馈控制，并允许运动到该范围之外。
-        target.targetAbs = clampServoPosByMotorAbsLimit(sharedData,
-                                                        motorChannel,
-                                                        tendonTargets.targetAbs[i]);
+        target.targetAbs = clampServoPosToSessionRange(sharedData,
+                                                       motorChannel,
+                                                       tendonTargets.targetAbs[i]);
         if (tendonTargets.lutTargetClamped[i] != 0) {
             anyLutTargetClamped = true;
             noteTendonLutClamp(sharedData,
@@ -441,12 +436,10 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         const int16_t load1 = telemetryFresh ? mmhand::servo::loadMagnitude(telemetryData.load[m1]) : 0;
         const int16_t speed0 = telemetryFresh ? telemetryData.speed[m0] : 0;
         const int16_t speed1 = telemetryFresh ? telemetryData.speed[m1] : 0;
-        const uint32_t lockedBitmap =
-            sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         FW_LOG_INFO_PRINTF(
             "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d k=%u "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d k=%u "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d "
+            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d "
             "tel=%u\r\n",
             (unsigned long)diagNowMs,
             (unsigned)jointIndex,
@@ -465,7 +458,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (unsigned)tendonTargets.lutTargetClamped[0],
             (int)load0,
             (int)speed0,
-            (unsigned)((lockedBitmap & (1UL << m0)) != 0),
             (unsigned)m1,
             (long)abs1,
             (long)tendonTargets.rawTargetAbs[1],
@@ -478,7 +470,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             (unsigned)tendonTargets.lutTargetClamped[1],
             (int)load1,
             (int)speed1,
-            (unsigned)((lockedBitmap & (1UL << m1)) != 0),
             (unsigned)telemetryFresh);
     }
 
@@ -1369,7 +1360,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
                 if (jointActive) {
                     // 普通单电机关节：把腱绳空间 PID 结果转回电机 raw ABS。
-                    // 先限制在标定 LUT 两端各放宽 500 counts 的工作区，再执行用户 LOCK。
+                    // 先限制在标定 LUT 两端各放宽 500 counts 的工作区，再应用会话硬边界。
                     int32_t actualMotorAbs = targetPos;
                     int32_t rawPidTargetAbs = targetPos;
                     // LUT 无效或目标被钳位时，禁止把“目标无法继续推进”误判成碰撞。
@@ -1413,9 +1404,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                 }
                             }
                         }
-                        targetPos = clampServoPosByMotorAbsLimit(sharedData,
-                                                                 motorCh,
-                                                                 targetPos);
+                        targetPos = clampServoPosToSessionRange(sharedData,
+                                                                motorCh,
+                                                                targetPos);
                     } else {
                         targetPos = outPulsesTendon[jointIndex];
                     }
@@ -1457,12 +1448,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (telemetryFresh && jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
                                 ? telemetryData.speed[jointMotorCh]
                                 : 0;
-                        const uint32_t motorBit =
-                            (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM)
-                                ? (1UL << jointMotorCh)
-                                : 0;
-                        const uint32_t lockedBitmap =
-                            sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
                         float lutRefAbs = 0.0f;
                         float lutFbAbs = 0.0f;
                         bool lutValid = false;
@@ -1486,7 +1471,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         FW_LOG_INFO_PRINTF(
                             "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
                             "out=%.2f abs=%ld cmd=%d lead=%ld load=%d mag=%d speed=%d "
-                            "lock=%u telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
+                            "telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
                             "lutDelta=%.2f rawTarget=%ld\r\n",
                             (unsigned long)nowMs,
                             (unsigned)jointIndex,
@@ -1501,7 +1486,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (int)rawLoad,
                             (int)loadMag,
                             (int)servoSpeed,
-                            (unsigned)((lockedBitmap & motorBit) != 0),
                             (unsigned)telemetryFresh,
                             lutValid ? 1U : 0U,
                             (double)lutRefAbs,

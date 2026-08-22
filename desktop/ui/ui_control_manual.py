@@ -281,13 +281,6 @@ class ControlPanelManualMixin:
             )
         if getattr(self, "mid_calib_btn", None) is not None:
             self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
-        has_active_motor = (self._active_motor_mask_from_ui() & VALID_MOTOR_MASK) != 0
-        abs_limit_mode = mode in ("joint", "test")
-        if getattr(self, "abs_limit_lock_toggle_btn", None) is not None:
-            self._refresh_abs_limit_lock_toggle_button()
-            self.abs_limit_lock_toggle_btn.setEnabled(
-                abs_limit_mode and bool(self.context.is_comm_connected()) and has_active_motor
-            )
         if getattr(self, "pause_btn", None) is not None:
             self.pause_btn.setEnabled(system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK))
         self._set_test_button_states()

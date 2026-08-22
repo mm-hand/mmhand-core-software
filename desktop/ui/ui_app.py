@@ -63,6 +63,7 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
     CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+    CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
     CALIB_DIAG_REASON_TASK_START_FAILED,
     CALIB_DIAG_REASON_WRAP_TOO_LARGE,
     CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
@@ -667,7 +668,10 @@ class HandGUI(QtWidgets.QMainWindow):
         self.turn_label.setText(turn_text)
         self.turn_label.setToolTip(turn_tip)
         self.delay_label.setText(delay_text)
-        self.delay_label.setToolTip(f"Delay: {delay_ms:.0f} ms" if delay_ms else "Delay: -")
+        self.delay_label.setToolTip(
+            f"Latest P4 state age: {delay_ms:.0f} ms"
+            if delay_ms else "Latest P4 state age: -"
+        )
         system_style = "neutral" if not connected else (
             "warn" if (not system_status_fresh or system_uncontrollable or sys_faults) else "ok"
         )
@@ -984,6 +988,7 @@ class HandGUI(QtWidgets.QMainWindow):
             CALIB_DIAG_REASON_RESULT_BUILD_FAILED: "标定结果或 LUT 构建失败",
             CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: "标定结果提交失败",
             CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: "舵机多圈可信状态提交失败",
+            CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT: "标定目标等待下位机执行确认超时",
         }
         phase_names = {
             CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
@@ -1110,6 +1115,12 @@ class HandGUI(QtWidgets.QMainWindow):
                     f"motor_mask=0x{bitmap:08X}"
                 )
                 suggestions.append("标定结果已计算，但对应舵机仍不能登记为 Turn Known。检查舵机在线、多圈模式配置和热插拔恢复状态。")
+            elif reason == CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT:
+                lines.append(
+                    f"数据：target_a={value_a}, target_b={value_b}, "
+                    f"timeout_or_status={value_c}, motor_mask=0x{bitmap:08X}"
+                )
+                suggestions.append("目标已发布但 ServoBus 未在 100 ms 内确认整批执行。检查舵机任务是否阻塞、总线扫描是否占用 UART，以及目标 owner 是否仍为 Calibration。")
             elif reason == CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED:
                 workspace_stage_names = {
                     101: "动作前反馈预检查",
@@ -1892,10 +1903,10 @@ class HandGUI(QtWidgets.QMainWindow):
             "multi_turn_unknown_mask": f"0x{int(getattr(state, 'multi_turn_unknown_bitmap', 0) or 0):08X}",
             "manual_reference_valid_mask": f"0x{int(getattr(state, 'manual_reference_valid_bitmap', 0) or 0):08X}",
             "manual_reference_crc": f"0x{int(getattr(state, 'manual_reference_crc', 0) or 0):08X}",
-            "manual_reference_nvs_sequence": int(getattr(state, "manual_reference_nvs_sequence", 0) or 0),
-            "manual_reference_nvs_valid": 1 if getattr(state, "manual_reference_nvs_valid", False) else 0,
-            "manual_reference_save_status": int(
-                getattr(state, "manual_reference_save_status", 0) or 0
+            "manual_reference_revision": int(getattr(state, "manual_reference_revision", 0) or 0),
+            "manual_reference_committed": 1 if getattr(state, "manual_reference_committed", False) else 0,
+            "manual_reference_commit_status": int(
+                getattr(state, "manual_reference_commit_status", 0) or 0
             ),
             "auto_calibration_valid_mask": (
                 f"0x{int(getattr(state, 'auto_calibration_valid_bitmap', 0) or 0):08X}"
@@ -1907,23 +1918,45 @@ class HandGUI(QtWidgets.QMainWindow):
             "has_fault_status_data": 1 if getattr(state, "has_fault_status_data", False) else 0,
         }
         self._data_logger.write("core_state", core_row)
+        ack_history = [
+            dict(item)
+            for item in getattr(state, "proto_ack_history", [])
+            if isinstance(item, dict)
+        ]
         ack_sequence = int(getattr(state, "proto_ack_sequence", 0) or 0)
-        if ack_sequence > 0 and ack_sequence != self._last_recorded_proto_ack_sequence:
-            self._last_recorded_proto_ack_sequence = ack_sequence
+        if ack_sequence < self._last_recorded_proto_ack_sequence:
+            self._last_recorded_proto_ack_sequence = 0
+        pending_acks = [
+            item for item in ack_history
+            if int(item.get("sequence", 0) or 0) > self._last_recorded_proto_ack_sequence
+        ]
+        if not pending_acks and ack_sequence > self._last_recorded_proto_ack_sequence:
+            pending_acks = [{
+                "sequence": ack_sequence,
+                "command": int(getattr(state, "proto_ack_cmd", 0) or 0),
+                "mode": int(getattr(state, "proto_ack_mode", 0) or 0),
+                "status": int(getattr(state, "proto_ack_status", 0) or 0),
+                "p4_time_ms": int(getattr(state, "proto_ack_p4_time_ms", 0) or 0),
+            }]
+        for ack_event in sorted(pending_acks, key=lambda item: int(item.get("sequence", 0) or 0)):
+            sequence = int(ack_event.get("sequence", 0) or 0)
+            if sequence <= self._last_recorded_proto_ack_sequence:
+                continue
             self._data_logger.event(
                 "command_ack",
                 source="p4",
                 detail=(
-                    f"cmd=0x{int(getattr(state, 'proto_ack_cmd', 0) or 0):02X} "
-                    f"mode={int(getattr(state, 'proto_ack_mode', 0) or 0)} "
-                    f"status={int(getattr(state, 'proto_ack_status', 0) or 0)}"
+                    f"cmd=0x{int(ack_event.get('command', 0) or 0):02X} "
+                    f"mode={int(ack_event.get('mode', 0) or 0)} "
+                    f"status={int(ack_event.get('status', 0) or 0)}"
                 ),
-                p4_time_ms=int(getattr(state, "proto_ack_p4_time_ms", 0) or 0),
+                p4_time_ms=int(ack_event.get("p4_time_ms", 0) or 0),
                 active_scope_label=scope_label,
                 active_motor_mask=active_motor_mask,
                 active_joint_mask=active_joint_mask,
-                host_time=host_time,
+                host_time=float(ack_event.get("received_at", host_time) or host_time),
             )
+            self._last_recorded_proto_ack_sequence = sequence
 
         self._record_new_safety_events(
             state,
@@ -2000,13 +2033,13 @@ class HandGUI(QtWidgets.QMainWindow):
             label = f"M{i:02d}"
             joint_idx = MOTOR_TO_JOINT_INDEX[i] if i < len(MOTOR_TO_JOINT_INDEX) else -1
             load_value = self._seq_value(getattr(state, "servo_load", []), i)
-            saved_raw = self._servo_flash_raw_value(state, i)
+            saved_raw = self._servo_json_saved_raw_value(state, i)
             row[f"{label}_joint_index"] = joint_idx
             row[f"{label}_target_abs"] = motor_targets[i] if i < len(motor_targets) else ""
             row[f"{label}_raw"] = self._seq_value(getattr(state, "servo_raw_positions", []), i)
             row[f"{label}_abs"] = self._seq_value(getattr(state, "servo_angles", []), i)
             row[f"{label}_saved_raw"] = saved_raw
-            row[f"{label}_saved_raw_diff"] = self._servo_flash_raw_diff(
+            row[f"{label}_saved_raw_diff"] = self._servo_json_saved_raw_diff(
                 state, i, saved_raw
             )
             row[f"{label}_load"] = load_value
@@ -2062,7 +2095,7 @@ class HandGUI(QtWidgets.QMainWindow):
         return 0
 
     @staticmethod
-    def _servo_flash_raw_value(state: HandModel, motor_index: int) -> object:
+    def _servo_json_saved_raw_value(state: HandModel, motor_index: int) -> object:
         """返回有效上位机 JSON 锚点 raw；无效通道在 CSV 中保持空白。"""
         valid_mask = int(
             getattr(state, "host_multiturn_valid_mask", 0) or 0
@@ -2075,11 +2108,11 @@ class HandGUI(QtWidgets.QMainWindow):
         return int(values[motor_index]) % 4096
 
     @staticmethod
-    def _servo_flash_raw_diff(
-        state: HandModel, motor_index: int, flash_raw: object
+    def _servo_json_saved_raw_diff(
+        state: HandModel, motor_index: int, saved_raw: object
     ) -> object:
         """按 4096-count 环形坐标计算 RawNow 与 SavedRaw 的最短距离。"""
-        if flash_raw == "" or not bool(getattr(state, "has_servo_raw_data", False)):
+        if saved_raw == "" or not bool(getattr(state, "has_servo_raw_data", False)):
             return ""
         online = getattr(state, "servo_raw_online", []) or []
         raw_values = getattr(state, "servo_raw_positions", []) or []
@@ -2091,7 +2124,7 @@ class HandGUI(QtWidgets.QMainWindow):
         ):
             return ""
         raw_now = int(raw_values[motor_index]) % 4096
-        direct_diff = abs(raw_now - int(flash_raw))
+        direct_diff = abs(raw_now - int(saved_raw))
         return min(direct_diff, 4096 - direct_diff)
 
     def _run_data_root_dir(self) -> str:

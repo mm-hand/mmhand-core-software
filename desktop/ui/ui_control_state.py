@@ -135,8 +135,6 @@ class ControlPanelStateMixin:
             self._pending_calib_result_baselines = {}
         self._last_calib_status = calib_status
         self._update_connection_lights()
-        self._refresh_nvs_control_button()
-        self._check_feedback_abs_limit_violation()
         self._maybe_show_calibration_assembly_warning(state)
         self._maybe_save_calibration_snapshot(state)
         if self._app_mode != "manual":
@@ -457,7 +455,6 @@ class ControlPanelStateMixin:
         if self.device_check_view is not None:
             self.device_check_view.clear_state()
         self._update_connection_lights()
-        self._refresh_nvs_control_button()
         self._joint_target_initialized = False
         self._motor_target_initialized = False
         self._last_calib_status = None
@@ -1030,59 +1027,6 @@ class ControlPanelStateMixin:
         self._motor_target_user_set[idx] = False
         self._set_motor_target_widget(idx, 0)
 
-    def _check_feedback_abs_limit_violation(self) -> None:
-        """Handle check feedback abs limit violation behavior for the control panel."""
-        state = self._state
-        if state is None or getattr(state, "system_state", None) != SYSTEM_STATE_RUN_FEEDBACK:
-            self._feedback_abs_limit_popup_episode_active = False
-            return
-        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", 0))
-        self._abs_limit_warning_unlocked_mask &= valid_bitmap
-        monitor_mask = self._active_motor_mask_from_ui()
-        if monitor_mask == 0:
-            monitor_mask = valid_bitmap
-        monitor_mask &= valid_bitmap & locked_bitmap
-        monitor_mask &= ~int(getattr(self, "_abs_limit_warning_unlocked_mask", 0) or 0)
-        if monitor_mask == 0:
-            self._feedback_abs_limit_popup_episode_active = False
-            return
-        mins = getattr(state, "motor_abs_limit_min", [])
-        maxs = getattr(state, "motor_abs_limit_max", [])
-        hits: List[Tuple[int, int, int, int]] = []
-        for idx in range(min(MOTOR_COUNT, len(mins), len(maxs))):
-            if ((monitor_mask >> idx) & 0x01) == 0:
-                continue
-            feedback_abs = self._motor_feedback_abs(idx)
-            if feedback_abs is None:
-                continue
-            lo = int(mins[idx])
-            hi = int(maxs[idx])
-            if lo > hi:
-                lo, hi = hi, lo
-            if feedback_abs < lo or feedback_abs > hi:
-                hits.append((idx, int(feedback_abs), lo, hi))
-        if hits and not self._feedback_abs_limit_popup_episode_active:
-            self._feedback_abs_limit_popup_episode_active = True
-            self._show_feedback_abs_limit_violation(hits)
-        elif not hits:
-            self._feedback_abs_limit_popup_episode_active = False
-
-    def _show_feedback_abs_limit_violation(self, hits: List[Tuple[int, int, int, int]]) -> None:
-        """Show the feedback abs limit violation UI message."""
-        preview = ", ".join(
-            f"M{idx:02d}: abs={feedback_abs} [{lo},{hi}]"
-            for idx, feedback_abs, lo, hi in hits[:4]
-        )
-        suffix = "" if len(hits) <= 4 else f" ... +{len(hits) - 4}"
-        self._set_status(f"Feedback ABS out of limit: {preview}{suffix}")
-        self._warn(
-            "Feedback ABS Limit (default unlocked)",
-            "RUN_FEEDBACK servo feedback ABS is outside the calibrated 5-turn locked window.\n"
-            "Feedback limits are unlocked by default; use LOCK only when you intentionally need this guard.\n"
-            f"{preview}{suffix}",
-        )
-
     def _sync_motor_abs_from_slider_before_send(self, idx: int) -> None:
         """Synchronize the motor abs from slider before send state."""
         if idx < 0 or idx >= MOTOR_COUNT:
@@ -1398,7 +1342,6 @@ class ControlPanelStateMixin:
             return
 
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
-        locked_bitmap = int(getattr(state, "motor_abs_limit_locked_bitmap", 0) or 0)
         mins = getattr(state, "motor_abs_limit_min", []) or []
         maxs = getattr(state, "motor_abs_limit_max", []) or []
         summaries: List[str] = []
@@ -1413,9 +1356,8 @@ class ControlPanelStateMixin:
             hi = int(maxs[motor_idx])
             if lo > hi:
                 lo, hi = hi, lo
-            state_text = "LOCK" if ((locked_bitmap >> motor_idx) & 0x01) != 0 else "UNLOCK"
-            summaries.append(f"M{motor_idx:02d} {state_text[0]} [{lo},{hi}]")
-            details.append(f"M{motor_idx:02d}: {state_text}, 5-turn ABS range [{lo}, {hi}]")
+            summaries.append(f"M{motor_idx:02d} [{lo},{hi}]")
+            details.append(f"M{motor_idx:02d}: calibrated ABS range [{lo}, {hi}] (diagnostic)")
 
         item.setText(" / ".join(summaries) if summaries else "-")
         item.setToolTip("\n".join(details))

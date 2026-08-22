@@ -17,6 +17,13 @@ inline constexpr uint8_t SERVO_TARGET_BATCH_MAX = SERVO_TOTAL_NUM; ///< 单批�
 /** 批次用途用于执行层确认安全事务；普通控制/标定批次保持为 NORMAL。 */
 inline constexpr uint8_t SERVO_TARGET_PURPOSE_NORMAL = 0;
 inline constexpr uint8_t SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD = 1;
+inline constexpr uint8_t SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED = 2;
+
+/** 标定目标从邮箱发布到舵机总线后的执行确认状态。 */
+inline constexpr uint8_t CALIBRATION_TARGET_APPLY_IDLE = 0;
+inline constexpr uint8_t CALIBRATION_TARGET_APPLY_PENDING = 1;
+inline constexpr uint8_t CALIBRATION_TARGET_APPLY_APPLIED = 2;
+inline constexpr uint8_t CALIBRATION_TARGET_APPLY_REJECTED = 3;
 
 /** 上位机租约丢失后的“保持当前 ABS”事务状态，覆盖控制、标定和 Rope Init。 */
 inline constexpr uint8_t HOST_CONTROL_HOLD_IDLE = 0;

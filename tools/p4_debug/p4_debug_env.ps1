@@ -14,7 +14,7 @@ $script:OpenOcdExe = "D:\esp32\Espressif\tools\openocd-esp32\v0.12.0-esp32-20250
 $script:OpenOcdScripts = "D:\esp32\Espressif\tools\openocd-esp32\v0.12.0-esp32-20250707\openocd-esp32\share\openocd\scripts"
 $script:RiscvGdbExe = "D:\esp32\Espressif\tools\riscv32-esp-elf-gdb\16.3_20250913\riscv32-esp-elf-gdb\bin\riscv32-esp-elf-gdb.exe"
 
-# Match the working Arduino Release layout and preserve NVS.
+# Match the working Arduino Release layout and preserve the existing partition layout.
 $script:P4Fqbn = (
     "esp32:esp32:esp32p4:" +
     "UploadSpeed=921600," +

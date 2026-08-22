@@ -12,7 +12,6 @@
 #include "state/CalibrationRuntimeState.h"
 #include "state/CommandRuntimeState.h"
 #include "state/ControlRuntimeState.h"
-#include "state/PersistenceRuntimeState.h"
 #include "channels/InterTaskChannels.h"
 #include "state/ServoRuntimeState.h"
 
@@ -21,7 +20,6 @@ struct SystemRuntimeContext :
     CommandRuntimeState,
     ControlRuntimeState,
     ServoRuntimeState,
-    PersistenceRuntimeState,
     CalibrationRuntimeState {
 };
 

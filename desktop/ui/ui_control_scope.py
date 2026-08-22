@@ -28,6 +28,10 @@ FINGER_WORKFLOW_JOINT_ORDER = {
     "Thumb J16-J20": [20, 16, 17, 18, 19],
 }
 
+# 四指侧摆双电机关节在自动标定时会互相让出机械工作空间。该集合必须与
+# P4 的 kWorkspaceDualJoints 保持一致；拇指 J16/J20 不参与四指让位序列。
+CALIBRATION_WORKSPACE_DUAL_JOINT_INDICES = (0, 4, 8, 12)
+
 
 # 设备 active scope 是实际标定范围；该列表仅供尚未取得设备状态时的 UI 展示。
 AUTO_CALIBRATION_JOINT_INDICES = [
@@ -206,3 +210,71 @@ class ControlScopeModel:
             ):
                 mask |= 1 << motor_idx
         return mask
+
+    @staticmethod
+    def joint_mask_for_motor_mask(motor_mask: int) -> int:
+        """根据正式 J/M 映射返回一组舵机影响的关节位图。"""
+        mask = 0
+        for motor_idx, joint_idx in enumerate(MOTOR_TO_JOINT_INDEX[:MOTOR_COUNT]):
+            joint_idx = int(joint_idx)
+            if (
+                _motor_channel_valid(motor_idx)
+                and (int(motor_mask) & (1 << motor_idx)) != 0
+                and 0 <= joint_idx < ENCODER_COUNT
+            ):
+                mask |= 1 << joint_idx
+        return mask
+
+    @staticmethod
+    def calibration_workspace_helper_reset_scope(
+        selected_joint_mask: int,
+        servo_online_bitmap: int,
+        multiturn_unknown_bitmap: int,
+    ) -> Tuple[int, int, int, int]:
+        """规划标定前必须一并 Reset Zero 的四指工作空间辅助关节。
+
+        返回 ``(helper_joint_mask, helper_motor_mask,
+        partial_joint_mask, partial_motor_mask)``：
+        - 辅助双电机全部离线时，P4 会跳过该手指，不加入复位范围；
+        - 两台均在线且 Turn Known 时复用现有姿态，不额外复位；
+        - 两台均在线但任一 Turn Unknown 时，两台一起复位，避免双腱坐标分裂；
+        - 仅一台在线时拒绝整次标定，防止先复位部分电机后才发现无法让位。
+        """
+        selected_joint_mask = int(selected_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+        workspace_mask = sum(
+            1 << joint_idx
+            for joint_idx in CALIBRATION_WORKSPACE_DUAL_JOINT_INDICES
+        )
+        if (selected_joint_mask & workspace_mask) == 0:
+            return 0, 0, 0, 0
+
+        online_mask = int(servo_online_bitmap) & VALID_MOTOR_MASK
+        unknown_mask = int(multiturn_unknown_bitmap) & VALID_MOTOR_MASK
+        helper_joint_mask = 0
+        helper_motor_mask = 0
+        partial_joint_mask = 0
+        partial_motor_mask = 0
+
+        for joint_idx in CALIBRATION_WORKSPACE_DUAL_JOINT_INDICES:
+            # 用户选中的目标关节已包含在 selected motor scope 中，这里只规划
+            # 其他手指的让位电机，防止同一双电机对被重复分类。
+            if selected_joint_mask & (1 << joint_idx):
+                continue
+            pair_mask = ControlScopeModel.motor_mask_for_joint_mask(1 << joint_idx)
+            pair_online = online_mask & pair_mask
+            if pair_mask == 0 or pair_online == 0:
+                continue
+            if pair_online != pair_mask:
+                partial_joint_mask |= 1 << joint_idx
+                partial_motor_mask |= pair_mask
+                continue
+            if unknown_mask & pair_mask:
+                helper_joint_mask |= 1 << joint_idx
+                helper_motor_mask |= pair_mask
+
+        return (
+            helper_joint_mask,
+            helper_motor_mask,
+            partial_joint_mask,
+            partial_motor_mask,
+        )

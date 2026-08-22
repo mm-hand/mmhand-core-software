@@ -9,6 +9,8 @@
 
 #include "ServoBusService.h"
 #include "../../config/ServoConfig.h"
+#include "../../platform/rtos/PeriodicDeadline.h"
+#include "../../platform/rtos/TaskSignal.h"
 #include "../../platform/time/Clock.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/adapters/ServiceContextAdapter.h"
@@ -29,25 +31,43 @@ void servoBusTask(void* parameter)
     // BUS 的完整位置/速度/负载反馈周期为 ServoConfig 定义的 20 ms。
     const TickType_t periodTicks = pdMS_TO_TICKS(
         mmhand::config::servo::kServoBusServicePeriodMs);
+    p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
+    uint32_t wakeReasons = 0;
     for (;;) {
+        const TickType_t dispatchTicks = xTaskGetTickCount();
+        const bool periodicDue = deadline.due(dispatchTicks);
+        if (!periodicDue && wakeReasons == 0U) {
+            wakeReasons = sharedData->servoBusWake.wait(
+                deadline.remaining(dispatchTicks));
+            continue;
+        }
+        if (periodicDue) deadline.advancePast(dispatchTicks);
+
         const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_SERVO_BUS);
+        taskRuntimeMarkCycle(TASK_RUNTIME_SERVO_BUS,
+                             periodicDue,
+                             wakeReasons != 0U);
         const uint32_t nowMs = p4::platform::time::monotonicMillis();
         const ServoServiceInputSnapshot input =
             captureServoServiceInput(sharedData, nowMs);
         const ServiceOutputPort output =
             makeSystemServiceOutputPort(sharedData);
-        stepServoBusService(sharedData, input, output);
+        const ServoBusStepRequest request = {wakeReasons, periodicDue};
+        wakeReasons = 0;
+        stepServoBusService(sharedData, input, output, request);
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_BUS);
 
-        const bool periodOverrun =
-            (xTaskGetTickCount() - loopBegin) >= periodTicks;
-        taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_BUS, periodOverrun);
-        if (periodOverrun) {
-            // 离线 BUS 探测可能超过周期，至少让出一个 tick 给状态和通信任务。
-            vTaskDelay(1);
-        } else {
-            (void)sharedData->servoBusWake.wait(periodTicks);
+        if (periodicDue) {
+            const TickType_t loopEnd = xTaskGetTickCount();
+            const bool periodOverrun =
+                (loopEnd - loopBegin) >= periodTicks || deadline.due(loopEnd);
+            taskRuntimeMarkPeriodResult(TASK_RUNTIME_SERVO_BUS, periodOverrun);
+            if (periodOverrun) {
+                // 丢弃已经错过的截止点，不连续补做旧反馈周期。
+                if (deadline.due(loopEnd)) deadline.advancePast(loopEnd);
+                vTaskDelay(1);
+            }
         }
     }
     vTaskDelete(NULL);

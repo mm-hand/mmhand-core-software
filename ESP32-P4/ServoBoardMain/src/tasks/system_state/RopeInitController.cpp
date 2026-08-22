@@ -9,7 +9,7 @@
 
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../modules/calibration/CalibrationMath.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../safety/SafetyEventReporter.h"

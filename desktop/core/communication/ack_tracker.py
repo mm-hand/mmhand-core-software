@@ -14,6 +14,8 @@ import threading
 import time
 from typing import Optional
 
+from .event_channel import EventChannel
+
 
 class AckTracker:
     """ACK 的发布/等待协调器。"""
@@ -23,6 +25,8 @@ class AckTracker:
         self._last_ack: Optional[tuple] = None
         self._last_p4_time_ms: Optional[int] = None
         self._sequence = 0
+        # ACK 等待使用 latest 值；事件记录使用独立通道，不能被 HandModel 邮箱覆盖。
+        self._events: EventChannel[dict] = EventChannel()
 
     @property
     def condition(self) -> threading.Condition:
@@ -61,6 +65,7 @@ class AckTracker:
             self._last_p4_time_ms = None
             if reset_sequence:
                 self._sequence = 0
+            self._events.reset()
             if notify_waiters:
                 self._condition.notify_all()
 
@@ -79,8 +84,20 @@ class AckTracker:
             self._last_p4_time_ms = None if p4_time_ms is None else int(p4_time_ms)
             self._sequence += 1
             sequence = int(self._sequence)
+            self._events.publish({
+                "sequence": sequence,
+                "command": int(command),
+                "mode": int(mode),
+                "status": int(status),
+                "received_at": float(received_at),
+                "p4_time_ms": 0 if p4_time_ms is None else int(p4_time_ms),
+            })
             self._condition.notify_all()
             return sequence
+
+    def drain_events(self) -> list[dict]:
+        """返回尚未交给核心状态线程的 ACK，等待事务不受该操作影响。"""
+        return self._events.drain()
 
     def wait_for(
         self,

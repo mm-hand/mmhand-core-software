@@ -9,12 +9,11 @@ from desktop.core.safety_rules import (
 
 def test_safety_rule_ids_are_unique_and_stable() -> None:
     table = safety_rule_table()
-    assert len(table) == 101
+    assert len(table) == 102
     assert table[1009]["code"] == "ACT-1009"
     assert table[3001]["code"] == "SYS-3001"
     assert table[8001]["code"] == "RUN-8001"
     assert table[6005]["code"] == "COM-6005"
-    assert table[7004]["code"] == "PST-7004"
     assert table[8006]["code"] == "RUN-8006"
 
 

@@ -20,7 +20,7 @@
 #include "../../../modules/calibration/CalibrationMath.h"
 #include "../../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../../modules/calibration/TendonCalibrationLut.h"
-#include "../../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../../platform/log/FirmwareLog.h"
 #include "../../../platform/rtos/AtomicValue.h"
 #include "../../../platform/rtos/SharedSafetyState.h"
@@ -811,7 +811,11 @@ static bool waitDualWorkspaceTargets(SystemRuntimeContext* sharedData,
                                                 secondaryTargetAbs,
                                                 params)) {
             setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                               sharedAtomicLoad(
+                                   &sharedData->calibration_target_apply_status) ==
+                                       CALIBRATION_TARGET_APPLY_PENDING
+                                   ? CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+                                   : CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                jointIndex,
                                primaryMotor,
@@ -1043,7 +1047,11 @@ static bool tightenWorkspaceMotor(SystemRuntimeContext* sharedData,
                                                     holdAbs,
                                                     params)) {
                 setCalibrationDiag(sharedData,
-                                   CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                   sharedAtomicLoad(
+                                       &sharedData->calibration_target_apply_status) ==
+                                           CALIBRATION_TARGET_APPLY_PENDING
+                                       ? CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+                                       : CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                                    CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                    jointIndex,
                                    motor,
@@ -1083,7 +1091,11 @@ static bool tightenWorkspaceMotor(SystemRuntimeContext* sharedData,
                                                         holdAbs,
                                                         params)) {
                     setCalibrationDiag(sharedData,
-                                       CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                                       sharedAtomicLoad(
+                                           &sharedData->calibration_target_apply_status) ==
+                                               CALIBRATION_TARGET_APPLY_PENDING
+                                           ? CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+                                           : CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
                                        CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                        jointIndex,
                                        motor,

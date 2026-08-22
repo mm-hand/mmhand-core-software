@@ -150,7 +150,6 @@ $taskPackages = @{
     "s3_can_rx" = @("S3CanRxTask.cpp", "S3CanRxService.cpp")
     "servo_bus" = @("ServoBusTask.cpp", "ServoBusService.cpp")
     "motion_control" = @("MotionControlTask.cpp", "MotionControlService.cpp")
-    "nvs_persistence" = @("NvsPersistenceTask.cpp", "NvsPersistenceService.cpp")
     "runtime_monitor" = @("RuntimeMonitorTask.cpp", "RuntimeMonitorService.cpp")
     "auto_calibration" = @("AutoCalibrationTask.cpp", "AutoCalibrationCoordinator.cpp")
 }
@@ -252,7 +251,7 @@ foreach ($match in $removedArchitectureSymbols) {
 $systemContextText = Get-Content -LiteralPath $systemContextPath -Encoding UTF8 -Raw
 foreach ($base in @("InterTaskChannels", "CommandRuntimeState",
                      "ControlRuntimeState", "ServoRuntimeState",
-                     "PersistenceRuntimeState", "CalibrationRuntimeState")) {
+                     "CalibrationRuntimeState")) {
     if ($systemContextText -notmatch [regex]::Escape($base)) {
         Add-Failure "SystemContext lost required state aggregate: $base"
     }
@@ -267,7 +266,7 @@ if (-not $contextBody.Success) {
     Add-Failure "SystemRuntimeContext contains business fields instead of aggregates."
 }
 
-# R8：飞特、NVS、Host 串口和 TWAI 只能通过各自 HAL 唯一入口。
+# R8：飞特、Host 串口和 TWAI 只能通过各自 HAL 唯一入口。
 $sdkViolations = & rg -n `
     "SMS_STS|SyncWritePosEx|WritePosEx|EnableTorque|\bFeedBack\s*\(|\bReadPos\s*\(" `
     $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
@@ -277,32 +276,6 @@ if ($LASTEXITCODE -gt 1) {
 } elseif ($sdkViolations) {
     Add-Failure ("Feetech SDK access outside driver:`n" +
                  ($sdkViolations -join "`n"))
-}
-
-# 运行期 Flash 事务只允许 NvsPersistenceTask 调用领域存储写 API。
-$nvsWriterViolations = & rg -n `
-    "\b(manualCalibrationNvsSave|multiTurnNvsSaveSnapshot|multiTurnNvsReplaceChannelsWithTurnZero|multiTurnNvsSetEnabled|multiTurnNvsClearSnapshots)\s*\(" `
-    $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
-    -g "!**/ManualCalibrationNvsStore.h" `
-    -g "!**/ManualCalibrationNvsStore.cpp" `
-    -g "!**/MultiTurnNvsStore.h" `
-    -g "!**/MultiTurnNvsStore.cpp" `
-    -g "!**/NvsPersistenceService.cpp"
-if ($LASTEXITCODE -gt 1) {
-    Add-Failure "Failed to scan NVS single-writer contract."
-} elseif ($nvsWriterViolations) {
-    Add-Failure ("Runtime NVS write outside NvsPersistenceTask:`n" +
-                 ($nvsWriterViolations -join "`n"))
-}
-
-$nvsViolations = & rg -n "\bPreferences\b|nvs_(open|set|get|commit|erase)" `
-    $sourceRoot -g "*.h" -g "*.cpp" -g "*.c" `
-    -g "!**/NvsBlobStore.h" -g "!**/NvsBlobStore.cpp"
-if ($LASTEXITCODE -gt 1) {
-    Add-Failure "Failed to scan NVS access."
-} elseif ($nvsViolations) {
-    Add-Failure ("NVS access outside storage HAL:`n" +
-                 ($nvsViolations -join "`n"))
 }
 
 $canViolations = & rg -n "\btwai_[a-zA-Z0-9_]+\s*\(" `

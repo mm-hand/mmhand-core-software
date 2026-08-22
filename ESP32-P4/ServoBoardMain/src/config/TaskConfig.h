@@ -15,7 +15,8 @@ inline constexpr uint8_t TASK_SERVO_BUS_PRIORITY = 3;    ///< 舵机总线反馈
 inline constexpr uint8_t TASK_MOTION_CONTROL_PRIORITY = 4;       ///< 10 ms 闭环控制优先级。
 inline constexpr uint8_t TASK_AUTO_CALIB_PRIORITY = 2;    ///< 自动标定状态机优先级。
 inline constexpr uint8_t TASK_MONITOR_PRIORITY = 1;       ///< 运行时统计任务优先级。
-inline constexpr uint8_t TASK_NVS_PERSISTENCE_PRIORITY = 1;   ///< 异步 Flash 写入优先级。
+
+inline constexpr uint32_t HOST_COMM_SERVICE_PERIOD_MS = 5; ///< 上位机收发周期兜底；RX 事件可提前唤醒。
 
 inline constexpr uint32_t HOST_COMM_TASK_STACK_SIZE = 8192;    ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t S3_CAN_RX_TASK_STACK_SIZE = 4096;      ///< FreeRTOS 栈深度，单位 word。
@@ -24,6 +25,5 @@ inline constexpr uint32_t SERVO_BUS_TASK_STACK_SIZE = 6144;    ///< FreeRTOS 栈
 inline constexpr uint32_t MOTION_CONTROL_TASK_STACK_SIZE = 8192;       ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t AUTO_CALIB_TASK_STACK_SIZE = 8192;    ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t TASK_MONITOR_STACK_SIZE = 4096;       ///< FreeRTOS 栈深度，单位 word。
-inline constexpr uint32_t NVS_PERSISTENCE_TASK_STACK_SIZE = 4096;   ///< FreeRTOS 栈深度，单位 word。
 
 #endif // MMHAND_TASK_CONFIG_H

@@ -86,7 +86,8 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
                       SERVO_TARGET_BATCH_MAX);
     }
     if (batch.purpose != SERVO_TARGET_PURPOSE_NORMAL &&
-        batch.purpose != SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD) {
+        batch.purpose != SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD &&
+        batch.purpose != SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED) {
         return reject(ServoRejectReason::InvalidCommand,
                       0,
                       0,
@@ -98,6 +99,15 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
           batch.source != SERVO_TARGET_OWNER_CALIBRATION) ||
          batch.transactionToken == 0 ||
          batch.count == 0)) {
+        return reject(ServoRejectReason::InvalidCommand,
+                      0,
+                      0,
+                      0xFF,
+                      0xFF);
+    }
+    if (batch.purpose == SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED &&
+        (batch.source != SERVO_TARGET_OWNER_CALIBRATION ||
+         batch.transactionToken == 0 || batch.count == 0)) {
         return reject(ServoRejectReason::InvalidCommand,
                       0,
                       0,

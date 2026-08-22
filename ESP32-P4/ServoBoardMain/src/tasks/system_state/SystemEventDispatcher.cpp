@@ -17,7 +17,7 @@
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../safety/policies/HostLeaseSafetyPolicy.h"
 #include "../../safety/policies/StateAdmissionPolicy.h"
 #include "../../safety/SafetyEventReporter.h"
@@ -64,12 +64,12 @@ static void logManualReferenceReject(SystemRuntimeContext* sharedData,
         : 0;
     FW_LOG_INFO_PRINTF(
         "[STATE] reject %s: Manual encoder reference incomplete "
-        "required=0x%08lX valid=0x%08lX missing=0x%08lX nvs=%u\r\n",
+        "required=0x%08lX valid=0x%08lX missing=0x%08lX committed=%u\r\n",
         eventName ? eventName : "MOTION",
         (unsigned long)requiredMask,
         (unsigned long)validMask,
         (unsigned long)(requiredMask & ~validMask),
-        sharedData && sharedData->manual_reference_nvs_valid ? 1U : 0U);
+        sharedData && sharedData->manual_reference_committed ? 1U : 0U);
 }
 
 void setCalibrationStatus(uint8_t status)
@@ -122,30 +122,6 @@ bool postSystemEventForToken(SystemRuntimeContext* sharedData, uint8_t event, ui
     return queued;
 }
 
-void requestMultiTurnNvsSave(SystemRuntimeContext* sharedData, uint8_t reason)
-{
-    if (!sharedData) {
-        return;
-    }
-#if !MULTITURN_NVS_PERSISTENCE_ENABLE
-    (void)reason;
-    return;
-#else
-    // 状态机只发布保存请求，真正的 Flash 写入由低优先级持久化任务完成。
-    sharedData->multiturn_nvs_save_reason = reason;
-    sharedAtomicAddFetch(&sharedData->multiturn_nvs_save_request_token, (uint32_t)1);
-#endif
-}
-
-static bool shouldSaveMultiTurnOnInterrupt(uint8_t state)
-{
-    // 只有可能改变舵机多圈位置的运行态在 STOP/RESET 前需要保存。
-    return state == SYSTEM_STATE_RUN_DIRECT ||
-           state == SYSTEM_STATE_RUN_FEEDBACK ||
-           state == SYSTEM_STATE_CALIBRATION_RUNNING ||
-           state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
-           state == SYSTEM_STATE_PAUSED;
-}
 
 void setSystemState(SystemRuntimeContext* sharedData, uint8_t state)
 {
@@ -429,7 +405,6 @@ static void releaseFeedbackRun(SystemRuntimeContext* sharedData)
     sharedData->control_enabled = 0;
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     setSystemState(sharedData, idleOrReadyState(sharedData));
-    requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
 }
 
 /**
@@ -508,9 +483,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
         case SYSTEM_EVENT_STOP:
             // 丢弃 STOP 之前已排队的运动事件。上位机必须在看到
             // UNCONTROLLABLE 后重新发送命令，旧事件不能让设备自行复动。
-            if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
-                requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
-            }
             sharedData->stateEventQueue.reset();
             clearPendingDirectCommand(sharedData, DIRECT_REJECT_STATE);
             sharedAtomicStore(&sharedData->feedback_recovery_pending,
@@ -534,9 +506,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
 
         case SYSTEM_EVENT_RESET:
             // RESET 清命令、清可复位保护并断扭矩，但不伪造多圈或标定数据。
-            if (shouldSaveMultiTurnOnInterrupt(sharedData->system_state)) {
-                requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
-            }
             resetCommandState(sharedData);
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
@@ -813,7 +782,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             setSystemState(sharedData, idleOrReadyState(sharedData));
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
         case SYSTEM_EVENT_RUN_FEEDBACK_DONE:
@@ -859,7 +827,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedData->paused_resume_state = sharedData->system_state;
             sharedData->control_enabled = 0;
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;
@@ -1045,8 +1012,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                             "[STATE] automatic feedback recovery completed without resume");
                     }
                 }
-                requestMultiTurnNvsSave(sharedData,
-                                        MULTITURN_NVS_SAVE_REASON_RUN_DONE);
                 break;
             }
 
@@ -1086,12 +1051,10 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                               (uint32_t)0);
             requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
-            requestMultiTurnNvsSave(sharedData,
-                                    MULTITURN_NVS_SAVE_REASON_RUN_DONE);
             break;
 
         case SYSTEM_EVENT_CALIBRATION_DONE:
-            // 标定任务已将结果写入 RAM；此处只更新状态、清对应多圈未知并请求 NVS。
+            // 标定任务已将结果写入 RAM；此处只更新状态并清除对应多圈未知。
             if (sharedAtomicLoad(&sharedData->host_control_hold_status) ==
                 HOST_CONTROL_HOLD_PENDING) {
                 FW_LOG_INFO_PRINTLN(
@@ -1113,7 +1076,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                     ? CALIB_STATUS_WARN
                     : CALIB_STATUS_SUCCESS);
             setSystemState(sharedData, idleOrReadyState(sharedData));
-            requestMultiTurnNvsSave(sharedData, MULTITURN_NVS_SAVE_REASON_CALIB_DONE);
             break;
 
         case SYSTEM_EVENT_REEVALUATE_READY:

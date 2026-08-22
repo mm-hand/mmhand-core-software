@@ -20,7 +20,7 @@
 #include "../../../modules/calibration/CalibrationMath.h"
 #include "../../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../../modules/calibration/TendonCalibrationLut.h"
-#include "../../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../../platform/log/FirmwareLog.h"
 #include "../../../platform/rtos/AtomicValue.h"
 #include "../../../platform/rtos/SharedSafetyState.h"

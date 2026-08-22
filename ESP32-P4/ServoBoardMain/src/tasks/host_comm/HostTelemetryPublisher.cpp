@@ -13,7 +13,7 @@
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../modules/integrity/Crc16Ccitt.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../generated/ProductFingerprint.generated.h"
@@ -24,9 +24,6 @@
 #include "../../runtime/ports/SystemEventPort.h"
 #include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
-#if MULTITURN_NVS_PERSISTENCE_ENABLE
-#include "../../modules/persistence/MultiTurnNvsStore.h"
-#endif
 #include "HostCommandRouter.h"
 
 #include <math.h>
@@ -89,10 +86,10 @@ static int16_t clampI16Local(int32_t value)
     if (value < -32768) return -32768;
     return (int16_t)value;
 }
-/** 检查当前 active scope 是否已有 NVS Manual 且每路跨度非零。 */
+/** 检查当前 active scope 是否已有已提交的 RAM Manual 且每路跨度非零。 */
 bool activeManualReferencesReady(SystemRuntimeContext* sharedData)
 {
-    if (!sharedData || !sharedData->manual_reference_nvs_valid) return false;
+    if (!sharedData || !sharedData->manual_reference_committed) return false;
     const uint32_t activeMask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         kManualEncoderReferenceFullMask;
@@ -167,8 +164,6 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = (uint8_t)((unknownBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((unknownBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(unknownBitmap & 0xFF);
-    buffer[idx++] = sharedData->multiturn_nvs_enabled ? 1 : 0;
-    buffer[idx++] = sharedData->multiturn_nvs_snapshot_valid ? 1 : 0;
     buffer[idx++] = (uint8_t)((activeMotorMask >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((activeMotorMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((activeMotorMask >> 8) & 0xFF);
@@ -195,16 +190,12 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((encoderFaultMask >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(encoderFaultMask & 0xFF);
-    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_request_token));
-    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_result_token));
-    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_valid_mask));
-    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->multiturn_nvs_save_fail_count));
     appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap));
     appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_crc));
-    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_nvs_sequence));
-    buffer[idx++] = sharedData->manual_reference_nvs_valid ? 1 : 0;
+    appendU32BigEndian(buffer, &idx, sharedAtomicLoad(&sharedData->manual_reference_revision));
+    buffer[idx++] = sharedData->manual_reference_committed ? 1 : 0;
     appendU32BigEndian(buffer, &idx, autoCalibrationValidMask(sharedData));
-    buffer[idx++] = sharedData->manual_reference_save_status;
+    buffer[idx++] = sharedData->manual_reference_commit_status;
     buffer[idx++] = sharedData->rope_init_status;
     buffer[idx++] = sharedData->rope_init_reason;
     appendU32BigEndian(buffer, &idx, sharedData->rope_init_sequence);
@@ -235,11 +226,11 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->feedback_collision_transition_count));
-    // 保留原 hold/transition 的字节位置，在包尾追加 armed 位图。
+    // hold/transition 后紧跟 armed 位图，三个字段构成完整碰撞状态快照。
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->feedback_collision_armed_bitmap));
-    // Reset Zero 状态固定追加在旧状态字段之后，旧上位机仍可按原长度解析。
+    // Reset Zero 状态位于碰撞状态快照之后，桌面端按同一 schema 解析。
     appendU32BigEndian(
         buffer, &idx,
         sharedAtomicLoad(&sharedData->servo_turn_overflow_bitmap));
@@ -268,7 +259,7 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 上报 21 路 Manual 端点、有效位、CRC 和 NVS 保存状态。 */
+/** 上报 21 路 Manual 端点、有效位、CRC 和 RAM 提交状态。 */
 bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
 {
     if (!sharedData) {
@@ -280,8 +271,8 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
     ManualEncoderReference references[ENCODER_TOTAL_NUM];
     uint32_t validMask = 0;
     uint32_t referenceCrc = 0;
-    uint32_t nvsSequence = 0;
-    uint8_t nvsValid = 0;
+    uint32_t revision = 0;
+    uint8_t committed = 0;
     {
         SharedSafetyGuard guard;
         memcpy(references,
@@ -291,9 +282,9 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
             &sharedData->manual_reference_valid_bitmap);
         referenceCrc = sharedAtomicLoad(
             &sharedData->manual_reference_crc);
-        nvsSequence = sharedAtomicLoad(
-            &sharedData->manual_reference_nvs_sequence);
-        nvsValid = sharedData->manual_reference_nvs_valid ? 1 : 0;
+        revision = sharedAtomicLoad(
+            &sharedData->manual_reference_revision);
+        committed = sharedData->manual_reference_committed ? 1 : 0;
     }
 
     buffer[idx++] = PROTOCOL_HEADER;
@@ -302,10 +293,10 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = 3; // Payload version: v3 appends P4 encoder directions.
     appendU32BigEndian(buffer, &idx, validMask);
     appendU32BigEndian(buffer, &idx, referenceCrc);
-    appendU32BigEndian(buffer, &idx, nvsSequence);
-    buffer[idx++] = nvsValid;
+    appendU32BigEndian(buffer, &idx, revision);
+    buffer[idx++] = committed;
     appendU32BigEndian(buffer, &idx, autoCalibrationValidMask(sharedData));
-    buffer[idx++] = sharedData->manual_reference_save_status;
+    buffer[idx++] = sharedData->manual_reference_commit_status;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
         appendU16BigEndian(buffer, &idx, references[joint].minRaw);
         appendU16BigEndian(buffer, &idx, references[joint].maxRaw);
@@ -321,13 +312,13 @@ bool sendManualEncoderReferencePacket(SystemRuntimeContext* sharedData)
 /** 上报一个 TaskRuntimeSnapshot，字段单位由 TaskRuntimeMonitor.h 约定。 */
 bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
 {
-    // v3 新增一秒窗口统计，96 byte 足以容纳固定字段且不使用堆内存。
-    uint8_t buffer[96];
+    // v4 追加四条 BUS 的同步读统计；224 byte 足以容纳固定字段且不使用堆内存。
+    uint8_t buffer[224];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
     buffer[idx++] = PACKET_TYPE_TASK_DIAG;
-    buffer[idx++] = 3; // Payload version.
+    buffer[idx++] = 4; // Payload version.
     buffer[idx++] = diag.taskId;
     buffer[idx++] = diag.active;
     buffer[idx++] = diag.priority;
@@ -341,6 +332,8 @@ bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
     appendU32BigEndian(buffer, &idx, diag.windowSequence);
     appendU32BigEndian(buffer, &idx, diag.windowDurationUs);
     appendU32BigEndian(buffer, &idx, diag.windowLoopCount);
+    appendU32BigEndian(buffer, &idx, diag.windowPeriodicCount);
+    appendU32BigEndian(buffer, &idx, diag.windowEventCount);
     appendU32BigEndian(buffer, &idx, diag.avgExecUs);
     appendU32BigEndian(buffer, &idx, diag.p95ExecUs);
     appendU32BigEndian(buffer, &idx, diag.p99ExecUs);
@@ -355,6 +348,18 @@ bool sendTaskRuntimePacket(const TaskRuntimeSnapshot& diag)
     appendU32BigEndian(buffer, &idx, diag.stopLastLatencyUs);
     appendU32BigEndian(buffer, &idx, diag.stopMaxLatencyUs);
     appendU32BigEndian(buffer, &idx, diag.timestampMs);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioSampleCount[channel]);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioRequestedCount[channel]);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioSucceededCount[channel]);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioAvgUs[channel]);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioP95Us[channel]);
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel)
+        appendU32BigEndian(buffer, &idx, diag.ioP99Us[channel]);
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
@@ -391,7 +396,7 @@ bool sendFaultStatusPacket(SystemRuntimeContext* sharedData, uint32_t overloadFa
     buffer[1] = (uint8_t)(idx - 2);
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
-/** 上报 27 路标定 ABS 边界、有效位和 LOCK 位。 */
+/** 上报 27 路标定 ABS 范围及有效位；该范围仅用于诊断与快照恢复。 */
 bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData)
 {
     if (!sharedData) {
@@ -401,13 +406,11 @@ bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData)
     uint8_t buffer[240];
     size_t idx = 0;
     uint32_t validBitmap = 0;
-    uint32_t lockedBitmap = 0;
     int32_t limitMin[SERVO_TOTAL_NUM] = {0};
     int32_t limitMax[SERVO_TOTAL_NUM] = {0};
     {
         SharedSafetyGuard guard;
         validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-        lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         memcpy(limitMin, sharedData->motor_abs_limit_min, sizeof(limitMin));
         memcpy(limitMax, sharedData->motor_abs_limit_max, sizeof(limitMax));
     }
@@ -419,10 +422,6 @@ bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = (uint8_t)((validBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((validBitmap >> 8) & 0xFF);
     buffer[idx++] = (uint8_t)(validBitmap & 0xFF);
-    buffer[idx++] = (uint8_t)((lockedBitmap >> 24) & 0xFF);
-    buffer[idx++] = (uint8_t)((lockedBitmap >> 16) & 0xFF);
-    buffer[idx++] = (uint8_t)((lockedBitmap >> 8) & 0xFF);
-    buffer[idx++] = (uint8_t)(lockedBitmap & 0xFF);
     for (int i = 0; i < SERVO_TOTAL_NUM; i++) {
         appendI32BigEndian(buffer, &idx, limitMin[i]);
         appendI32BigEndian(buffer, &idx, limitMax[i]);
@@ -783,29 +782,6 @@ bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
     appendU32BigEndian(buffer, &idx, resultToken);
     appendU32BigEndian(buffer, &idx, restoredMask);
     appendU32BigEndian(buffer, &idx, rejectedMask);
-    appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = static_cast<uint8_t>(idx - 2U);
-    return FW_SERIAL_WRITE(buffer, idx) == idx;
-}
-
-bool sendMultiTurnSnapshotRawPacket(uint32_t resultToken,
-                                    uint32_t validMask,
-                                    const int16_t* snapshotRaw)
-{
-    if (!snapshotRaw) {
-        return false;
-    }
-    uint8_t buffer[80];
-    size_t idx = 0;
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0;
-    buffer[idx++] = PACKET_TYPE_MULTITURN_SNAPSHOT_RAW;
-    appendU32BigEndian(buffer, &idx, resultToken);
-    appendU32BigEndian(buffer, &idx, validMask);
-    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
-        appendI16BigEndian(buffer, &idx, snapshotRaw[motor]);
-    }
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = static_cast<uint8_t>(idx - 2U);

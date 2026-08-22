@@ -9,6 +9,7 @@
 #define P4_PLATFORM_TIME_CLOCK_H
 
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <stdint.h>
 
 namespace p4::platform::time {
@@ -17,6 +18,12 @@ namespace p4::platform::time {
 inline uint32_t monotonicMillis()
 {
     return millis();
+}
+
+/** 返回单调微秒计数；只用于短区间耗时统计。 */
+inline uint64_t monotonicMicros()
+{
+    return (uint64_t)esp_timer_get_time();
 }
 
 } // namespace p4::platform::time

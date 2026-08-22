@@ -9,37 +9,13 @@
 static const int32_t kServoSingleTurnModulo = 4096;
 static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
 
-int32_t clampServoPosByMotorAbsLimit(SystemRuntimeContext* sharedData,
+int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
                                     uint8_t motorChannel,
                                     int32_t value)
 {
-    // 限位数组由标定和状态机代码共享，先在安全保护下拷贝，
-    // 再在本地执行限制。
     int32_t clamped = value;
-    if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
-        const uint32_t bit = (1UL << motorChannel);
-        uint32_t validBitmap = 0;
-        uint32_t lockedBitmap = 0;
-        int32_t lo = 0;
-        int32_t hi = 0;
-        {
-            SharedSafetyGuard guard;
-            validBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-            lockedBitmap = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
-            lo = sharedData->motor_abs_limit_min[motorChannel];
-            hi = sharedData->motor_abs_limit_max[motorChannel];
-        }
-        if (((validBitmap & bit) != 0) && ((lockedBitmap & bit) != 0)) {
-            if (lo > hi) {
-                const int32_t tmp = lo;
-                lo = hi;
-                hi = tmp;
-            }
-            if (clamped < lo) clamped = lo;
-            if (clamped > hi) clamped = hi;
-        }
-    }
-    // LOCK/LUT 限位之后，再限制到该台舵机当前上电会话的动态逻辑行程。
+    // LUT 是负反馈工作区的唯一业务边界；这里仅保留掉电恢复后重建的
+    // 会话级 logical ABS 硬边界，防止向舵机发送当前会话不可达的圈数。
     if (sharedData && motorChannel < SERVO_TOTAL_NUM) {
         const uint32_t bit = (1UL << motorChannel);
         uint32_t rangeValidBitmap = 0;

@@ -10,11 +10,19 @@
 
 struct SystemRuntimeContext;
 
+/** 区分 RX 事件快速路径和 5 ms 遥测维护周期。 */
+struct HostCommStepRequest {
+    uint32_t wakeReasons; ///< TaskSignal 合并后的 kHost* 原因位。
+    bool periodicDue;     ///< true 时发送遥测并推进持久化结果等周期事务。
+};
+
 /** 初始化上位机通信服务的协议状态；不进入任务循环。 */
 bool initHostCommService(SystemRuntimeContext* sharedData);
 
 /** 处理一轮收包、命令分发和遥测发布。 */
-bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs);
+bool stepHostCommService(SystemRuntimeContext* sharedData,
+                         uint32_t nowMs,
+                         const HostCommStepRequest& request);
 
 /**
  * 请求上行服务补发指定静态状态。

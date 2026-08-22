@@ -33,8 +33,7 @@
     {"name": "PACKET_TYPE_PRODUCT_FINGERPRINT", "value": 20, "timestamp": true, "description": "产品配置指纹"},
     {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"},
     {"name": "PACKET_TYPE_SAFETY_EVENT", "value": 22, "timestamp": true, "description": "去重后的结构化安全规则事件"},
-    {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "多圈恢复异步最终结果"},
-    {"name": "PACKET_TYPE_MULTITURN_SNAPSHOT_RAW", "value": 24, "timestamp": true, "description": "保存结果触发的 27 路 Flash Raw 快照"}
+    {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"}
   ],
   "commands": [
     {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},
@@ -49,12 +48,10 @@
     {"name": "CMD_RUN_FEEDBACK", "value": 216, "payload_bytes": 0, "description": "申请状态机进入负反馈运行"},
     {"name": "CMD_PAUSE", "value": 217, "payload_bytes": 0, "description": "暂停当前负反馈或直控运行"},
     {"name": "CMD_RESTORE_MULTITURN", "value": 218, "payload_bytes": 112, "description": "按位图恢复 27 路 logical ABS 多圈快照"},
-    {"name": "CMD_MOTOR_ABS_LIMIT_LOCK", "value": 219, "payload_bytes": 5, "description": "设置指定电机位图的 ABS Limit 锁定状态"},
     {"name": "CMD_HOST_HEARTBEAT", "value": 220, "payload_bytes": 0, "description": "刷新上位机在线计时器，不携带业务数据"},
-    {"name": "CMD_MULTITURN_NVS_CONTROL", "value": 221, "payload_bytes": 1, "description": "启停多圈 NVS 保存；关闭时清除旧快照"},
     {"name": "CMD_MOTOR_POS_ABS_ONE", "value": 222, "payload_bytes": 5, "description": "单台 Mxx logical ABS 直控，Mxx 加 int32 counts"},
     {"name": "CMD_CALIB_LOAD_JOINT", "value": 223, "payload_bytes": 189, "description": "恢复单关节唯一 Auto/LUT v4 标定快照"},
-    {"name": "CMD_CALIB_LOAD_LIMITS", "value": 224, "payload_bytes": 228, "description": "批量恢复 27 路 ABS Limit 与有效位图"},
+    {"name": "CMD_CALIB_LOAD_LIMITS", "value": 224, "payload_bytes": 224, "description": "批量恢复 27 路 ABS 标定范围与有效位图"},
     {"name": "CMD_CLEAR_CALIBRATION", "value": 229, "payload_bytes": 0, "description": "清除全部 Auto/LUT 标定结果，保留 Manual"},
     {"name": "CMD_MANUAL_ENCODER_REFERENCE", "value": 230, "payload_bytes": 85, "description": "写入或清除 21 组 Manual Min/Max 原始磁编值"},
     {"name": "CMD_MANUAL_ENCODER_QUERY", "value": 231, "payload_bytes": 0, "description": "请求 P4 立即回传 Manual 标定表"},
@@ -72,7 +69,6 @@
     "PROTO_ACK_STATUS_QUEUED": 2,
     "PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED": 3,
     "PROTO_ACK_STATUS_INVALID_DATA": 4,
-    "PROTO_ACK_STATUS_NVS_FAILURE": 5,
     "PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH": 6,
     "PROTO_ACK_STATUS_CALIBRATION_REQUIRED": 7
   },
@@ -82,7 +78,6 @@
     "PROTO_ACK_STATUS_QUEUED": "异步请求已入队，最终结果看状态包",
     "PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED": "缺少目标关节 Manual Min/Max",
     "PROTO_ACK_STATUS_INVALID_DATA": "字段、长度、索引或数值范围非法",
-    "PROTO_ACK_STATUS_NVS_FAILURE": "Flash/NVS 写入或校验失败",
     "PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH": "Auto 快照绑定的 Manual CRC 不一致",
     "PROTO_ACK_STATUS_CALIBRATION_REQUIRED": "缺少目标关节有效 Auto/LUT"
   },
@@ -92,9 +87,9 @@
     "MANUAL_SAVE_STATUS_FAILED": 2
   },
   "manual_save_status_descriptions": {
-    "MANUAL_SAVE_STATUS_NONE": "本次上电尚未发生 Manual 保存事务",
-    "MANUAL_SAVE_STATUS_OK": "最近一次 Manual NVS 保存并读回校验成功",
-    "MANUAL_SAVE_STATUS_FAILED": "最近一次 Manual NVS 保存或校验失败"
+    "MANUAL_SAVE_STATUS_NONE": "本次上电尚未收到桌面端 Manual 数据",
+    "MANUAL_SAVE_STATUS_OK": "最近一次 Manual 已提交到 P4 RAM 并完成校验",
+    "MANUAL_SAVE_STATUS_FAILED": "最近一次 Manual RAM 提交或校验失败"
   },
   "state_sync_masks": {
     "STATE_SYNC_MANUAL_REFERENCE": 1,
@@ -113,7 +108,7 @@
     "STATE_SYNC_JOINT_CALIBRATION": "同步全部有效 Auto/LUT 标定快照",
     "STATE_SYNC_SERVO_ROUTE": "同步动态舵机 BUS 路由",
     "STATE_SYNC_PRODUCT_FINGERPRINT": "同步产品配置指纹",
-    "STATE_SYNC_MULTITURN_STATE": "同步最新多圈恢复结果与 Flash Raw 快照",
+    "STATE_SYNC_MULTITURN_STATE": "同步桌面 JSON 多圈恢复结果",
     "STATE_SYNC_ALL": "同步全部静态运行契约"
   },
   "p4_runtime": {

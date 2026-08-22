@@ -46,6 +46,7 @@ inline constexpr uint8_t CALIB_DIAG_REASON_RESULT_SPAN_INVALID = 29;
 inline constexpr uint8_t CALIB_DIAG_REASON_RESULT_BUILD_FAILED = 30;
 inline constexpr uint8_t CALIB_DIAG_REASON_RESULT_COMMIT_FAILED = 31;
 inline constexpr uint8_t CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED = 32;
+inline constexpr uint8_t CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT = 33;
 
 /** 标定阶段用于把同一原因定位到具体动作区间。 */
 inline constexpr uint8_t CALIB_DIAG_PHASE_INIT = 1;

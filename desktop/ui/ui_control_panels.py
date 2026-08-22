@@ -146,7 +146,6 @@ class ControlPanel(
         self._motor_target_initialized = False
         self.motor_use_checks: List[Optional[QtWidgets.QCheckBox]] = [None] * MOTOR_COUNT
         self.motor_group_use_checks: List[QtWidgets.QCheckBox] = []
-        self.abs_limit_lock_toggle_btn: Optional[QtWidgets.QPushButton] = None
         # UI relative multi-turn targets. Device command = origin feedback + this value.
         self._motor_abs_pos: List[Optional[int]] = [None] * MOTOR_COUNT
         # Servo absolute feedback captured when direct control is synced or held.
@@ -173,8 +172,6 @@ class ControlPanel(
         self._last_encoder_online_bitmap: Optional[int] = None
         self._last_encoder_warn_bitmap: Optional[int] = None
         self._last_encoder_fault_bitmap: Optional[int] = None
-        self._feedback_abs_limit_popup_episode_active = False
-        self._abs_limit_warning_unlocked_mask = 0
 
     def _init_test_panel_state(self) -> None:
         """Initialize manual test timers and cached test parameters."""

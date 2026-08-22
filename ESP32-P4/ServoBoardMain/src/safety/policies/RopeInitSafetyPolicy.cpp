@@ -7,7 +7,7 @@
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 
 namespace p4::safety {
@@ -30,7 +30,7 @@ bool ropeInitCalibrationMatchesManual(uint8_t jointIndex)
 
 uint8_t evaluateRopeInitActiveScope(SystemRuntimeContext* runtime)
 {
-    if (!runtime || !runtime->manual_reference_nvs_valid) {
+    if (!runtime || !runtime->manual_reference_committed) {
         return ROPE_INIT_REASON_MANUAL_REQUIRED;
     }
     const uint32_t activeMask =

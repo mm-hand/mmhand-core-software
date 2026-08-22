@@ -9,6 +9,7 @@
 """
 
 from .ack_tracker import AckTracker
+from .event_channel import EventChannel
 from .frame_decoder import FrameDecoder
 from .packet_router import P4PacketRouter, RoutedPacket
 from .serial_transport import SerialTransport
@@ -16,6 +17,7 @@ from .state_reducer import StateReducer
 
 __all__ = [
     "AckTracker",
+    "EventChannel",
     "FrameDecoder",
     "P4PacketRouter",
     "RoutedPacket",

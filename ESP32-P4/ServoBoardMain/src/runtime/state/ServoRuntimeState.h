@@ -38,7 +38,7 @@ struct ServoRuntimeState {
     volatile uint32_t servo_reset_zero_request_mask; ///< 请求清圈数 Mxx。
     volatile uint32_t servo_reset_zero_request_token; ///< Reset Zero 请求代际。
     volatile uint32_t servo_reset_zero_result_token; ///< Reset Zero 完成代际。
-    volatile uint32_t servo_reset_zero_success_mask; ///< 舵机 ACK 且 NVS 更新 Mxx。
+    volatile uint32_t servo_reset_zero_success_mask; ///< 舵机 ACK 且 RAM 状态已更新的 Mxx。
     volatile uint32_t servo_reset_zero_failed_mask; ///< Reset Zero 失败 Mxx。
     volatile uint32_t servo_reset_zero_invalidated_joint_mask; ///< 必须重标 Jxx。
     volatile uint8_t servo_reset_zero_status; ///< RESET_ZERO_STATUS_*。

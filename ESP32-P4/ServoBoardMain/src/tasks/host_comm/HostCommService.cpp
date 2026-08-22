@@ -9,27 +9,24 @@
 #include "HostAckPublisher.h"
 #include "HostMultiTurnPublisher.h"
 #include "HostCalibrationCommandHandler.h"
-#include "HostPersistenceCommandHandler.h"
 #include "../../data/SafetyTypes.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/AtomicValue.h"
+#include "../../platform/rtos/TaskSignal.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/ports/SystemEventPort.h"
 #include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 #include "../../runtime/metrics/RuntimeMonitorConfig.h"
-#if MULTITURN_NVS_PERSISTENCE_ENABLE
-#include "../../modules/persistence/MultiTurnNvsStore.h"
-#endif
 #include "HostCommandRouter.h"
 #include "HostFrameReader.h"
 #include "../../safety/SafetyEventReporter.h"
@@ -60,7 +57,7 @@ struct HostCommRuntimeContext {
     uint32_t lastServoRouteGenerationSent;
     uint32_t lastManualReferenceSequenceSent;
     uint32_t lastManualReferenceValidMaskSent;
-    uint8_t lastManualReferenceNvsValidSent;
+    uint8_t lastManualReferenceCommittedSent;
     uint32_t lastMotorAbsLimitHashSent;
     bool motorAbsLimitSentInitialized;
     uint32_t lastServoLogicalRangeHashSent;
@@ -92,12 +89,10 @@ static uint32_t appendFnv1a(uint32_t hash, const void* data, size_t size)
 /** 根据已完成一致性拷贝的 ABS 限位快照计算摘要；本函数不得直接读取共享上下文。 */
 static uint32_t motorAbsLimitStateHash(const int32_t* mins,
                                        const int32_t* maxs,
-                                       uint32_t validMask,
-                                       uint32_t lockedMask)
+                                       uint32_t validMask)
 {
     uint32_t hash = 2166136261UL;
     hash = appendFnv1a(hash, &validMask, sizeof(validMask));
-    hash = appendFnv1a(hash, &lockedMask, sizeof(lockedMask));
     hash = appendFnv1a(hash, mins, sizeof(int32_t) * SERVO_TOTAL_NUM);
     return appendFnv1a(hash, maxs, sizeof(int32_t) * SERVO_TOTAL_NUM);
 }
@@ -142,7 +137,7 @@ bool initHostCommService(SystemRuntimeContext* sharedData)
     g_hostCommRuntime.lastServoRouteGenerationSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
-    g_hostCommRuntime.lastManualReferenceNvsValidSent = 0xFF;
+    g_hostCommRuntime.lastManualReferenceCommittedSent = 0xFF;
     g_hostCommRuntime.lastCalibrationCompletedMask =
         sharedAtomicLoad(&sharedData->calibration_completed_joint_bitmap);
     g_hostCommRuntime.lastServoResetZeroResultToken =
@@ -152,7 +147,9 @@ bool initHostCommService(SystemRuntimeContext* sharedData)
     g_hostCommRuntime.initialized = true;
     return true;
 }
-bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
+bool stepHostCommService(SystemRuntimeContext* sharedData,
+                         uint32_t nowMs,
+                         const HostCommStepRequest& request)
 {
     if (!sharedData || !g_hostCommRuntime.initialized) {
         return false;
@@ -172,18 +169,12 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     auto& faultStatusSentInitialized = runtime.faultStatusSentInitialized;
     auto& lastSystemStatusTransitionSent = runtime.lastSystemStatusTransitionSent;
     auto& lastFeedbackCollisionTransitionSent = runtime.lastFeedbackCollisionTransitionSent;
-    if (processManualNvsSaveResult(sharedData)) {
-        sendManualEncoderReferencePacket(sharedData);
-    }
-    if (processMultiTurnNvsControlResult(sharedData)) {
-        requestHostStateSync(STATE_SYNC_MULTITURN_STATE);
-    }
     auto& lastSystemStatusSentMs = runtime.lastSystemStatusSentMs;
     auto& systemStatusSentInitialized = runtime.systemStatusSentInitialized;
     auto& lastServoRouteGenerationSent = runtime.lastServoRouteGenerationSent;
     auto& lastManualReferenceSequenceSent = runtime.lastManualReferenceSequenceSent;
     auto& lastManualReferenceValidMaskSent = runtime.lastManualReferenceValidMaskSent;
-    auto& lastManualReferenceNvsValidSent = runtime.lastManualReferenceNvsValidSent;
+    auto& lastManualReferenceCommittedSent = runtime.lastManualReferenceCommittedSent;
     auto& lastMotorAbsLimitHashSent = runtime.lastMotorAbsLimitHashSent;
     auto& motorAbsLimitSentInitialized = runtime.motorAbsLimitSentInitialized;
     auto& lastServoLogicalRangeHashSent = runtime.lastServoLogicalRangeHashSent;
@@ -197,6 +188,9 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
     auto& pendingStateSyncMask = runtime.pendingStateSyncMask;
     auto& lastServoResetZeroResultToken = runtime.lastServoResetZeroResultToken;
     auto& lastSafetyEventSequenceSent = runtime.lastSafetyEventSequenceSent;
+    const bool processRx = request.periodicDue ||
+        (request.wakeReasons & p4::runtime::wake::kHostRx) != 0U;
+    if (processRx) {
         runtime.pendingUartRxErrorFlags |= HostSerialPort::takeRxErrorFlags();
         if (runtime.pendingUartRxErrorFlags != 0U &&
             p4::safety::communicationEventMayReport(
@@ -246,8 +240,15 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                 0,
                 (int32_t)frameRejectReason);
         }
-        processServoResetZeroResult(
-            sharedData, &lastServoResetZeroResultToken);
+    }
+
+    // RX 通知只负责尽快完成解帧、命令分发和 ACK。遥测与静态状态同步
+    // 固定在 5 ms 周期，避免每个输入事件都触发一轮完整上行广播。
+    if (!request.periodicDue) {
+        return true;
+    }
+    processServoResetZeroResult(
+        sharedData, &lastServoResetZeroResultToken);
 
         if (sharedData->mappedAngleQueue.peek(&mappedAngleData) &&
             mappedAngleData.timestamp != lastSensorTimestampSent)
@@ -368,22 +369,22 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         }
 
         const uint32_t manualReferenceSequence =
-            sharedAtomicLoad(&sharedData->manual_reference_nvs_sequence);
+            sharedAtomicLoad(&sharedData->manual_reference_revision);
         const uint32_t manualReferenceValidMask =
             sharedAtomicLoad(&sharedData->manual_reference_valid_bitmap);
-        const uint8_t manualReferenceNvsValid =
-            sharedData->manual_reference_nvs_valid ? 1 : 0;
+        const uint8_t manualReferenceCommitted =
+            sharedData->manual_reference_committed ? 1 : 0;
         const bool manualReferenceChanged =
             manualReferenceSequence != lastManualReferenceSequenceSent ||
             manualReferenceValidMask != lastManualReferenceValidMaskSent ||
-            manualReferenceNvsValid != lastManualReferenceNvsValidSent;
+            manualReferenceCommitted != lastManualReferenceCommittedSent;
         const bool manualReferenceSyncRequested =
             (pendingStateSyncMask & STATE_SYNC_MANUAL_REFERENCE) != 0;
         if (manualReferenceChanged || manualReferenceSyncRequested) {
             if (sendManualEncoderReferencePacket(sharedData)) {
                 lastManualReferenceSequenceSent = manualReferenceSequence;
                 lastManualReferenceValidMaskSent = manualReferenceValidMask;
-                lastManualReferenceNvsValidSent = manualReferenceNvsValid;
+                lastManualReferenceCommittedSent = manualReferenceCommitted;
                 pendingStateSyncMask &= ~((uint32_t)STATE_SYNC_MANUAL_REFERENCE);
             }
         }
@@ -427,7 +428,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         int32_t rangeHashMins[SERVO_TOTAL_NUM];
         int32_t rangeHashMaxs[SERVO_TOTAL_NUM];
         uint32_t rangeHashValidMask = 0;
-        uint32_t rangeHashLockedMask = 0;
         {
             SharedSafetyGuard guard;
             memcpy(rangeHashMins,
@@ -438,14 +438,11 @@ bool stepHostCommService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                    sizeof(rangeHashMaxs));
             rangeHashValidMask =
                 sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-            rangeHashLockedMask =
-                sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
         }
         const uint32_t motorAbsLimitHash = motorAbsLimitStateHash(
             rangeHashMins,
             rangeHashMaxs,
-            rangeHashValidMask,
-            rangeHashLockedMask);
+            rangeHashValidMask);
         const bool motorAbsLimitSyncRequested =
             (pendingStateSyncMask & STATE_SYNC_MOTOR_ABS_LIMIT) != 0;
         if (!motorAbsLimitSentInitialized ||

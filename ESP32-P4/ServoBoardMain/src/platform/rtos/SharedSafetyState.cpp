@@ -4,7 +4,7 @@
  */
 #include "SharedSafetyState.h"
 
-/** 仅保护内存快照；持锁期间严禁串口、队列、延时或 NVS 操作。 */
+/** 仅保护内存快照；持锁期间严禁串口、队列或延时操作。 */
 static portMUX_TYPE g_sharedSafetyLock = portMUX_INITIALIZER_UNLOCKED;
 
 void sharedSafetyLock(void)

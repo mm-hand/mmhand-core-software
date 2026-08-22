@@ -25,6 +25,8 @@ enum TaskRuntimeId : uint8_t {
     TASK_RUNTIME_COUNT = 7,
 };
 
+inline constexpr uint8_t TASK_RUNTIME_IO_CHANNEL_COUNT = 4;
+
 /**
  * @brief 单个任务的冻结诊断快照。
  * @details ``window*`` 字段描述最近一秒，``max*`` 字段保留固件启动后的历史最坏值。
@@ -43,6 +45,8 @@ struct TaskRuntimeSnapshot {
     uint32_t windowSequence;
     uint32_t windowDurationUs;
     uint32_t windowLoopCount;
+    uint32_t windowPeriodicCount;
+    uint32_t windowEventCount;
     uint32_t avgExecUs;
     uint32_t p95ExecUs;
     uint32_t p99ExecUs;
@@ -57,12 +61,25 @@ struct TaskRuntimeSnapshot {
     uint32_t stopLastLatencyUs;
     uint32_t stopMaxLatencyUs;
     uint32_t timestampMs;
+    uint32_t ioSampleCount[TASK_RUNTIME_IO_CHANNEL_COUNT];
+    uint32_t ioRequestedCount[TASK_RUNTIME_IO_CHANNEL_COUNT];
+    uint32_t ioSucceededCount[TASK_RUNTIME_IO_CHANNEL_COUNT];
+    uint32_t ioAvgUs[TASK_RUNTIME_IO_CHANNEL_COUNT];
+    uint32_t ioP95Us[TASK_RUNTIME_IO_CHANNEL_COUNT];
+    uint32_t ioP99Us[TASK_RUNTIME_IO_CHANNEL_COUNT];
 };
 
 void taskRuntimeRegister(uint8_t taskId, TaskHandle_t handle, uint32_t stackAllocatedBytes);
 void taskRuntimeUnregister(uint8_t taskId);
 void taskRuntimeMarkLoopStart(uint8_t taskId);
 void taskRuntimeMarkLoopEnd(uint8_t taskId);
+/** 记录一次调度来源；同一轮可同时属于周期和事件，用于识别事件/周期合并。 */
+void taskRuntimeMarkCycle(uint8_t taskId, bool periodicDue, bool eventWake);
+/** 记录 ServoBus 单条 BUS 的同步读耗时与反馈数量；固定数组、无日志、无堆分配。 */
+void taskRuntimeMarkIoSample(uint8_t channel,
+                             uint32_t elapsedUs,
+                             uint32_t requestedCount,
+                             uint32_t succeededCount);
 void taskRuntimeMarkPeriodResult(uint8_t taskId, bool overrun);
 bool taskRuntimeGetSnapshot(uint8_t taskId, TaskRuntimeSnapshot* out);
 uint32_t taskRuntimeGetWindowSequence();

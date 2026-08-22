@@ -11,7 +11,7 @@ Assert-PathExists -Path $P4ElfPath -Description "Debug ELF"
 Assert-PathExists -Path $P4BinPath -Description "Debug application binary"
 
 Write-Host "Uploading the matching Arduino debug firmware to $Port..." -ForegroundColor Cyan
-Write-Host "EraseFlash remains disabled; calibration and multi-turn NVS are preserved."
+Write-Host "EraseFlash remains disabled; calibration and multi-turn recovery are restored from desktop JSON."
 
 & $ArduinoCli upload `
     --port $Port `

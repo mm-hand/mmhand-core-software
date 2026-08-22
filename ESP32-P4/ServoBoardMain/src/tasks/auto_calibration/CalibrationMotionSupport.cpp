@@ -104,8 +104,7 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
     }
 
     // 单腱工作区以 LUT 的实测包络为基础，并沿收绳方向保留原有的 500
-    // counts 紧端余量。这里只登记有效范围，不自动 LOCK，保持当前 UI
-    // 的“默认解锁、用户按 LOCK 后才硬钳位”语义。
+    // counts 紧端余量。这里只登记标定诊断范围；负反馈边界由 LUT 统一负责。
     lutMinAbs = clampCalibrationServoAbs(lutMinAbs);
     lutMaxAbs = clampCalibrationServoAbs(lutMaxAbs);
     if (lutMinAbs > lutMaxAbs) {
@@ -128,11 +127,10 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
         sharedData->motor_abs_limit_min[motorChannel] = limitMin;
         sharedData->motor_abs_limit_max[motorChannel] = limitMax;
         sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, bit);
-        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap, ~bit);
     }
     FW_LOG_INFO_PRINTF(
         "[AUTO CALIB] SINGLE_LUT_ABS_LIMIT M%02u lut=[%ld,%ld] "
-        "limit=[%ld,%ld] tight=%ld margin=%ld locked=0\r\n",
+        "limit=[%ld,%ld] tight=%ld margin=%ld\r\n",
         (unsigned)motorChannel,
         (long)lutMinAbs,
         (long)lutMaxAbs,
@@ -173,7 +171,6 @@ void clearCalibratedMotorAbsLimitsForJoint(SystemRuntimeContext* sharedData,
     {
         SharedSafetyGuard guard;
         sharedAtomicFetchAnd(&sharedData->motor_abs_limit_valid_bitmap, ~clearedMask);
-        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap, ~clearedMask);
         for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
             if ((clearedMask & (1UL << ch)) != 0) {
                 sharedData->motor_abs_limit_min[ch] = 0;
@@ -663,7 +660,7 @@ bool appendJointCalibrationTarget(ServoTargetBatch_t* batch,
                                   acc);
 }
 
-// 发布 CALIBRATION owner 的目标批次；发布前再次执行负载硬保护。
+// 发布 CALIBRATION owner 的目标批次，并等待 ServoBus 确认整批已进入同步写。
 bool publishCalibrationBatch(SystemRuntimeContext* sharedData, ServoTargetBatch_t* batch)
 {
     if (!sharedData || !batch) {
@@ -682,8 +679,72 @@ bool publishCalibrationBatch(SystemRuntimeContext* sharedData, ServoTargetBatch_
         return false;
     }
     batch->source = SERVO_TARGET_OWNER_CALIBRATION;
+    batch->purpose = SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED;
     batch->timestamp = calibrationNowMs();
-    return p4::actuator::publishLatest(sharedData, *batch);
+    uint32_t token = sharedAtomicAddFetch(
+        &sharedData->calibration_target_request_token, (uint32_t)1);
+    if (token == 0) {
+        token = sharedAtomicAddFetch(
+            &sharedData->calibration_target_request_token, (uint32_t)1);
+    }
+    uint32_t requestedMask = 0;
+    for (uint8_t i = 0; i < batch->count; ++i) {
+        requestedMask |= 1UL << batch->commands[i].motorChannel;
+    }
+    batch->transactionToken = token;
+    sharedAtomicStore(&sharedData->calibration_target_requested_mask,
+                      requestedMask);
+    sharedAtomicStore(&sharedData->calibration_target_applied_mask,
+                      (uint32_t)0);
+    sharedAtomicStore(&sharedData->calibration_target_rejected_mask,
+                      (uint32_t)0);
+    sharedAtomicStore(&sharedData->calibration_target_apply_status,
+                      (uint8_t)CALIBRATION_TARGET_APPLY_PENDING);
+    if (!p4::actuator::publishLatest(sharedData, *batch)) {
+        sharedAtomicStore(&sharedData->calibration_target_rejected_mask,
+                          requestedMask);
+        sharedAtomicStore(&sharedData->calibration_target_apply_status,
+                          (uint8_t)CALIBRATION_TARGET_APPLY_REJECTED);
+        return false;
+    }
+
+    const uint32_t beginMs = calibrationNowMs();
+    while (autoCalibrationStillOwnsControl(sharedData) &&
+           (uint32_t)(calibrationNowMs() - beginMs) <
+               kTargetApplyAckTimeoutMs) {
+        if (sharedAtomicLoad(&sharedData->calibration_target_result_token) ==
+            token) {
+            const uint8_t status = sharedAtomicLoad(
+                &sharedData->calibration_target_apply_status);
+            const uint32_t appliedMask = sharedAtomicLoad(
+                &sharedData->calibration_target_applied_mask);
+            const uint32_t rejectedMask = sharedAtomicLoad(
+                &sharedData->calibration_target_rejected_mask);
+            if (status == CALIBRATION_TARGET_APPLY_APPLIED &&
+                appliedMask == requestedMask && rejectedMask == 0) {
+                return true;
+            }
+            FW_LOG_WARN_PRINTF(
+                "[AUTO CALIB] TARGET_APPLY_REJECT token=%lu request=0x%08lX "
+                "applied=0x%08lX rejected=0x%08lX status=%u\r\n",
+                (unsigned long)token,
+                (unsigned long)requestedMask,
+                (unsigned long)appliedMask,
+                (unsigned long)rejectedMask,
+                (unsigned)status);
+            return false;
+        }
+        calibrationWaitMs(1);
+    }
+    FW_LOG_WARN_PRINTF(
+        "[AUTO CALIB] TARGET_APPLY_TIMEOUT token=%lu request=0x%08lX "
+        "resultToken=%lu timeoutMs=%lu\r\n",
+        (unsigned long)token,
+        (unsigned long)requestedMask,
+        (unsigned long)sharedAtomicLoad(
+            &sharedData->calibration_target_result_token),
+        (unsigned long)kTargetApplyAckTimeoutMs);
+    return false;
 }
 
 // 串行标定时给非活动关节追加“保持当前 ABS”，防止共享绳路被当前动作带动。

@@ -45,7 +45,6 @@ def _current_payload(joint: int, result: dict) -> dict:
         "active_joint_mask": 1 << joint,
         "active_motor_mask": valid_motor_mask,
         "motor_abs_limit_valid_bitmap": valid_motor_mask,
-        "motor_abs_limit_locked_bitmap": 0,
         "motor_abs_limit_min": [1000 + idx for idx in range(MOTOR_COUNT)],
         "motor_abs_limit_max": [2000 + idx for idx in range(MOTOR_COUNT)],
         "manual_reference_valid_bitmap": (1 << ENCODER_COUNT) - 1,

@@ -43,6 +43,7 @@ inline constexpr int16_t kWorkspaceTightLoadThreshold = 190; ///< 辅助手指�
 inline constexpr int32_t kWorkspaceReleaseCounts = 3200; ///< 工作空间姿态切换释放量。
 inline constexpr int32_t kWorkspaceTargetToleranceCounts = 60; ///< 姿态缓存复用的 ABS 容差。
 inline constexpr float kReverseMinFollowDeg = 12.0f; ///< 松绳阶段确认磁编已跟随的最小角进展。
+inline constexpr uint32_t kTargetApplyAckTimeoutMs = 100; ///< 标定批次等待 ServoBus 原子执行确认的时限。
 
 inline constexpr float kTendonFitSampleStepDeg = 5.0f; ///< 标定 LUT 的等角度采样间隔。
 inline constexpr int32_t kSingleTendonMaxReleaseCounts = 4096 * 2; ///< 单腱松绳最多两圈保护。

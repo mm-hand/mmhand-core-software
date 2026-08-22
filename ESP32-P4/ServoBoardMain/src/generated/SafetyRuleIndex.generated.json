@@ -25,7 +25,6 @@
       "CAL": "自动标定流程及标定结果规则。",
       "RCV": "Rope Init、多圈、热插拔和恢复规则。",
       "COM": "CAN、串口、协议和数据完整性规则。",
-      "PST": "NVS、快照、CRC、版本和持久化规则。",
       "RUN": "任务、队列、周期、栈和运行时资源规则。",
       "WRN": "不阻断控制的诊断警告。"
     }
@@ -2140,94 +2139,6 @@
       "recovery": {
         "file": "tasks/host_comm/HostFrameReader.cpp",
         "symbol": "return true"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "PersistenceManualSaveFailed",
-      "rule_id": 7001,
-      "code": "PST-7001",
-      "policy": {
-        "file": "safety/policies/PersistenceSafetyPolicy.cpp",
-        "symbol": "persistenceManualWriteFailureRule"
-      },
-      "caller": {
-        "file": "tasks/host_comm/HostCommandDispatcher.cpp",
-        "symbol": "persistenceManualWriteFailureRule"
-      },
-      "event": {
-        "file": "tasks/host_comm/HostCommandDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/host_comm/HostCommandDispatcher.cpp",
-        "symbol": "manualCleared"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "PersistenceMultiTurnSaveFailed",
-      "rule_id": 7002,
-      "code": "PST-7002",
-      "policy": {
-        "file": "safety/policies/PersistenceSafetyPolicy.cpp",
-        "symbol": "persistenceMultiTurnWriteFailureRule"
-      },
-      "caller": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "persistenceMultiTurnWriteFailureRule"
-      },
-      "event": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "result.success"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "PersistenceResetZeroSaveFailed",
-      "rule_id": 7003,
-      "code": "PST-7003",
-      "policy": {
-        "file": "safety/policies/PersistenceSafetyPolicy.cpp",
-        "symbol": "persistenceMultiTurnWriteFailureRule"
-      },
-      "caller": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "persistenceMultiTurnWriteFailureRule"
-      },
-      "event": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/nvs_persistence/NvsPersistenceService.cpp",
-        "symbol": "result.success"
-      },
-      "registry_function": ""
-    },
-    {
-      "name": "PersistenceSnapshotInvalid",
-      "rule_id": 7004,
-      "code": "PST-7004",
-      "policy": {
-        "file": "safety/policies/PersistenceSafetyPolicy.cpp",
-        "symbol": "persistenceSnapshotValidityRule"
-      },
-      "caller": {
-        "file": "app/SystemAssembly.cpp",
-        "symbol": "persistenceSnapshotValidityRule"
-      },
-      "event": {
-        "file": "app/SystemAssembly.cpp",
-        "symbol": "recordAssemblyFailure"
-      },
-      "recovery": {
-        "file": "tasks/servo_bus/ServoBusService.cpp",
-        "symbol": "snapshotRule"
       },
       "registry_function": ""
     },

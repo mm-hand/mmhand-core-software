@@ -121,7 +121,6 @@ def test_bad_direction_negative_v4_endpoints_are_not_loaded(tmp_path):
             "active_joint_mask": 1 << 14,
             "active_motor_mask": 1 << 18,
             "motor_abs_limit_valid_bitmap": 1 << 18,
-            "motor_abs_limit_locked_bitmap": 0,
             "motor_abs_limit_min": [0] * MOTOR_COUNT,
             "motor_abs_limit_max": [0] * MOTOR_COUNT,
             "manual_reference_valid_bitmap": (1 << ENCODER_COUNT) - 1,

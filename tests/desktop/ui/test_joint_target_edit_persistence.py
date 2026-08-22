@@ -213,7 +213,7 @@ def test_startup_restores_json_manual_before_auto_when_p4_ram_is_empty(
     panel._startup_device_check_running = True
     panel._startup_device_check_epoch = 7
     state = HandModel()
-    state.manual_reference_nvs_valid = False
+    state.manual_reference_committed = False
     state.manual_reference_valid_bitmap = 0
     panel._state = state
     panel.backend.get_state_snapshot = lambda: state
@@ -269,8 +269,8 @@ def test_calibration_stays_available_without_auto_snapshot():
     assert not panel.enable_btn.isEnabled()
 
 
-def test_calibrate_resets_only_selected_joint_motors_before_starting():
-    """标定必须先归零所选关节舵机，再重放 scope；辅助工作空间舵机不能被提前清零。"""
+def test_calibrate_skips_offline_workspace_helpers_before_starting():
+    """全部离线的工作空间辅助关节由 P4 跳过，不能扩大复位范围。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
     panel._manual_submode = lambda: "joint"
@@ -306,6 +306,74 @@ def test_calibrate_resets_only_selected_joint_motors_before_starting():
     assert calls[0] == ("reset", selected_motor_mask)
     assert ("invalidate-local", selected_motor_mask, 1 << 4) in calls
     assert calls[-2:] == [("apply-scope",), ("start",)]
+
+
+def test_calibrate_resets_online_unknown_workspace_helpers_before_starting():
+    """在线但圈数未知的辅助双电机必须与目标电机一起 Reset Zero。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    panel._manual_submode = lambda: "joint"
+    panel._active_scope_manual_missing_indices = lambda: []
+    helper_motor_mask = (1 << 0) | (1 << 1) | (1 << 5) | (1 << 6) | (1 << 10) | (1 << 11)
+    selected_motor_mask = sum(1 << motor_idx for motor_idx in range(15, 20))
+    panel._state = SimpleNamespace(
+        system_state=SYSTEM_STATE_UNCONTROLLABLE,
+        servo_online_bitmap=helper_motor_mask | selected_motor_mask,
+        multi_turn_unknown_bitmap=helper_motor_mask | selected_motor_mask,
+    )
+    panel._active_joint_mask_from_ui = lambda: sum(1 << joint_idx for joint_idx in range(12, 16))
+    panel._active_motor_mask_from_ui = lambda: selected_motor_mask
+    calls = []
+    panel.context.emit_action = lambda message: calls.append(("event", message))
+    panel.backend.prepare_calibration_turn_zero = lambda motor_mask: (
+        calls.append(("reset", motor_mask)) or (True, "ok", motor_mask, 0)
+    )
+    panel._reset_motor_target_cache_for_device_epoch = lambda _reason: None
+    panel._invalidate_local_calibration_scope = (
+        lambda motor_mask, joint_mask: calls.append(
+            ("invalidate-local", motor_mask, joint_mask)
+        )
+    )
+    panel._backup_and_invalidate_calib_snapshot_scope = lambda *_args, **_kwargs: ""
+    panel._apply_active_scope_for_current_mode = lambda: True
+    panel._start_calibration_now = lambda: calls.append(("start",))
+
+    panel.calibrate()
+
+    final_motor_mask = selected_motor_mask | helper_motor_mask
+    invalidated_joint_mask = sum(
+        1 << joint_idx for joint_idx in (0, 4, 8, 12, 13, 14, 15)
+    )
+    assert ("reset", final_motor_mask) in calls
+    assert (
+        "invalidate-local",
+        final_motor_mask,
+        invalidated_joint_mask,
+    ) in calls
+    assert calls[-1] == ("start",)
+
+
+def test_calibrate_rejects_partial_online_workspace_helper_before_reset():
+    """辅助双电机关节仅一台在线时，必须在任何硬件复位前拒绝。"""
+    panel = _panel()
+    panel.context.is_comm_connected = lambda: True
+    panel._manual_submode = lambda: "joint"
+    panel._active_scope_manual_missing_indices = lambda: []
+    panel._state = SimpleNamespace(
+        system_state=SYSTEM_STATE_UNCONTROLLABLE,
+        servo_online_bitmap=(1 << 0) | (1 << 15) | (1 << 16),
+        multi_turn_unknown_bitmap=(1 << 0),
+    )
+    panel._active_joint_mask_from_ui = lambda: 1 << 12
+    panel._active_motor_mask_from_ui = lambda: (1 << 15) | (1 << 16)
+    calls = []
+    panel.backend.prepare_calibration_turn_zero = lambda motor_mask: calls.append(motor_mask)
+    panel._warn = lambda title, message: calls.append(("warn", title, message))
+
+    panel.calibrate()
+
+    assert not any(isinstance(item, int) for item in calls)
+    assert calls and calls[0][0] == "warn"
 
 
 

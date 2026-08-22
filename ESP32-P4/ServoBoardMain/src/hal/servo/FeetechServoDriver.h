@@ -65,12 +65,12 @@ struct ServoFeedbackInternal {
     bool recoveryFailed; ///< 达到最大重试次数后的锁存状态。
     uint32_t nextRecoveryAttemptMs; ///< 下一次允许重试的绝对毫秒时间。
     // 舵机离线前最后一次可信的逻辑多圈位置。掉线时先冻结到这里，
-    // 后台 NVS 任务随后写 Flash，避免离线通道从在线快照中消失。
+    // 供本次 P4 会话内的热插拔恢复使用；跨重启恢复由桌面端 JSON 负责。
     int32_t offlineLastTrustedAbs; ///< 离线前最后可信 logical ABS。
     int16_t offlineLastTrustedRaw; ///< 离线前最后可信 hardware raw。
     int16_t offlineLastTrustedTurn; ///< 离线前最后可信诊断圈数。
     uint32_t offlineLastTrustedTimestampMs; ///< 上述快照的采样时间。
-    bool offlineTrustedSnapshotPending; ///< 后台 NVS 尚未消费冻结快照。
+    bool offlineTrustedSnapshotPending; ///< ServoBus 尚未消费的本次会话冻结快照。
     uint32_t lastUpdate; ///< 最近一次有效反馈时间。
 };
 
@@ -293,15 +293,14 @@ public:
         if (!logicalToHardwareTarget(id, logicalPosition, &hardwarePosition)) {
             return false;
         }
-        queueTarget(id, hardwarePosition, speed, acc);
-        return true;
+        return queueTarget(id, hardwarePosition, speed, acc);
     }
 
     /** 追加一台舵机到本总线同步写缓存；必要时自动重新使能力矩。 */
-    void queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
+    bool queueTarget(uint8_t id, int16_t position, uint16_t speed, uint8_t acc)
     {
         if (id > MAX_SERVO_ID || _writeCount >= MAX_SERVOS_PER_BUS) {
-            return;
+            return false;
         }
         if (_torqueDisabled[id]) {
             _sms.EnableTorque(id, 1);
@@ -313,7 +312,11 @@ public:
         _writeSpd[_writeCount] = speed;
         _writeAcc[_writeCount] = acc;
         _writeCount++;
+        return true;
     }
+
+    /** 放弃尚未同步写出的目标；用于整批事务异常时保证不会只发送半批。 */
+    void clearQueuedTargets() { _writeCount = 0; }
 
     /** 一次性发送当前缓存并清空批次；空批次不访问 UART。 */
     void syncWriteAll()
@@ -444,7 +447,7 @@ public:
         return id <= MAX_SERVO_ID && _feedback[id].online;
     }
 
-    /** 表示 logical ABS 已由 NVS、New Device 或标定重新建立可信基准。 */
+    /** 表示 logical ABS 已由桌面 JSON、Reset Zero 或标定重新建立可信基准。 */
     bool isAbsoluteReliable(uint8_t id) const
     {
         return id <= MAX_SERVO_ID && _feedback[id].absoluteReliable;
@@ -486,7 +489,7 @@ public:
         return true;
     }
 
-    /** 舵机刚恢复通信但尚未完成扭矩关闭/多圈配置/NVS 对齐。 */
+    /** 舵机刚恢复通信但尚未完成扭矩关闭、多圈配置和 JSON/RAM 锚点对齐。 */
     bool hasOnlineTransitionPending(uint8_t id) const
     {
         return id <= MAX_SERVO_ID &&
@@ -656,7 +659,7 @@ public:
         return true;
     }
 
-    /** P4 RAM/NVS 锚点同时保存 raw 时，在驱动层完成跨 0/4095 的最近圈展开。 */
+    /** P4 RAM 或桌面 JSON 锚点同时保存 raw 时，在驱动层完成跨 0/4095 的最近圈展开。 */
     bool restoreAbsolutePositionNearAnchor(uint8_t id,
                                            int32_t anchorLogicalAbs,
                                            int16_t anchorRaw)
@@ -691,8 +694,8 @@ public:
         return true;
     }
 
-    // 通信任务消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
-    // 只产生一条 NVS 保存请求。
+    // ServoBus 消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
+    // 仅建立一份会话内热插拔恢复锚点。
     bool consumeOfflineTrustedSnapshot(uint8_t id,
                                        int32_t* logicalAbs,
                                        int16_t* raw,

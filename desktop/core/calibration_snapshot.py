@@ -180,7 +180,6 @@ def _empty_v6_snapshot() -> dict:
         "motor_abs_limit_min": [0] * MOTOR_COUNT,
         "motor_abs_limit_max": [0] * MOTOR_COUNT,
         "motor_abs_limit_valid_bitmap": format_mask(0),
-        "motor_abs_limit_locked_bitmap": format_mask(0),
         "manual_reference_min_raw": [0] * ENCODER_COUNT,
         "manual_reference_max_raw": [0] * ENCODER_COUNT,
         "manual_reference_valid_bitmap": format_mask(0),
@@ -254,7 +253,6 @@ def update_manual_snapshot(
         payload.get("joint_calib_results"), ENCODER_COUNT, None
     )
     limit_valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
-    limit_locked = parse_mask(payload.get("motor_abs_limit_locked_bitmap"))
     invalid_motor_mask = motor_mask_for_joint_mask(changed_mask)
     for joint_idx in range(ENCODER_COUNT):
         if changed_mask & (1 << joint_idx):
@@ -262,9 +260,6 @@ def update_manual_snapshot(
     payload["joint_calib_results"] = results
     payload["motor_abs_limit_valid_bitmap"] = format_mask(
         limit_valid & ~invalid_motor_mask
-    )
-    payload["motor_abs_limit_locked_bitmap"] = format_mask(
-        limit_locked & ~invalid_motor_mask
     )
 
     active_joint_mask = 0
@@ -315,7 +310,6 @@ def invalidate_calibration_snapshot_scope(
     mins = _normalized_list(payload.get("motor_abs_limit_min"), MOTOR_COUNT, 0)
     maxs = _normalized_list(payload.get("motor_abs_limit_max"), MOTOR_COUNT, 0)
     valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
-    locked = parse_mask(payload.get("motor_abs_limit_locked_bitmap"))
 
     for joint_idx in range(ENCODER_COUNT):
         if joint_mask & (1 << joint_idx):
@@ -329,7 +323,6 @@ def invalidate_calibration_snapshot_scope(
     payload["motor_abs_limit_min"] = mins
     payload["motor_abs_limit_max"] = maxs
     payload["motor_abs_limit_valid_bitmap"] = format_mask(valid & ~motor_mask)
-    payload["motor_abs_limit_locked_bitmap"] = format_mask(locked & ~motor_mask)
 
     remaining_joint_mask = 0
     remaining_limit_mask = valid & ~motor_mask
@@ -396,9 +389,7 @@ def merge_snapshot(
     merged_mins = _normalized_list(merged.get("motor_abs_limit_min"), MOTOR_COUNT, 0)
     merged_maxs = _normalized_list(merged.get("motor_abs_limit_max"), MOTOR_COUNT, 0)
     current_valid = parse_mask(current.get("motor_abs_limit_valid_bitmap"))
-    current_locked = parse_mask(current.get("motor_abs_limit_locked_bitmap"))
     merged_valid = parse_mask(merged.get("motor_abs_limit_valid_bitmap"))
-    merged_locked = parse_mask(merged.get("motor_abs_limit_locked_bitmap"))
     for motor_idx in range(MOTOR_COUNT):
         bit = 1 << motor_idx
         if (updated_motor_mask & bit) == 0:
@@ -410,14 +401,12 @@ def merge_snapshot(
         merged_mins[motor_idx] = int(current_mins[motor_idx])
         merged_maxs[motor_idx] = int(current_maxs[motor_idx])
         merged_valid |= bit
-        if current_locked & bit:
-            merged_locked |= bit
-        else:
-            merged_locked &= ~bit
     merged["motor_abs_limit_min"] = merged_mins
     merged["motor_abs_limit_max"] = merged_maxs
     merged["motor_abs_limit_valid_bitmap"] = format_mask(merged_valid)
-    merged["motor_abs_limit_locked_bitmap"] = format_mask(merged_locked)
+    # 旧 V6 文件中的 motor_abs_limit_locked_bitmap 作为多余字段被忽略；
+    # 新快照不再写出该字段，运行边界统一由 LUT 和 logical range 决定。
+    merged.pop("motor_abs_limit_locked_bitmap", None)
 
     # Manual 端点来自 P4 RAM 的实时读回。只覆盖 P4 明确报告有效的条目，
     # 避免未连接关节的默认 0 污染已有便携快照。

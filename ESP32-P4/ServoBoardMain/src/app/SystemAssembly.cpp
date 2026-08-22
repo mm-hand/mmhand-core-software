@@ -1,6 +1,6 @@
 /**
  * @file SystemAssembly.cpp
- * @brief 创建系统共享对象、队列、互斥锁，恢复 NVS 并装配各 FreeRTOS 任务。
+ * @brief 创建系统共享对象、队列、互斥锁，并装配各 FreeRTOS 任务。
  */
 #include "SystemAssembly.h"
 #include "AppBootstrap.h"
@@ -14,14 +14,13 @@
 #include "../tasks/servo_bus/ServoBusTask.h"
 #include "../config/topology/HardwareMap.h"
 #include "../config/ServoConfig.h"
+#include "../data/RecoveryTypes.h"
 #include "../data/ServoRouteTypes.h"
-#include "../tasks/nvs_persistence/NvsPersistenceTask.h"
-#include "../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../modules/protocol/HostProtocol.h"
 #include "../platform/rtos/TaskFactory.h"
 #include "../runtime/SystemRuntimeContext.h"
 #include "../safety/SafetyEventReporter.h"
-#include "../safety/policies/PersistenceSafetyPolicy.h"
 #include "../safety/policies/RuntimeSafetyPolicy.h"
 #include "../runtime/metrics/TaskRuntimeMetrics.h"
 
@@ -39,7 +38,6 @@ TaskHandle_t canCommTaskHandle = NULL;
 TaskHandle_t servoCommTaskHandle = NULL;
 TaskHandle_t motionControlTaskHandle = NULL;
 TaskHandle_t taskMonitorTaskHandle = NULL;
-TaskHandle_t nvsPersistTaskHandle = NULL;
 
 /** 启动阶段尚无业务 ServiceOutputPort，资源失败直接写入同一安全事件缓存。 */
 void recordAssemblyFailure(SafetyRuleId ruleId,
@@ -65,12 +63,6 @@ bool assembleAndStartSystem() {
     sharedData.servoTelemetryQueue.create(1);
     sharedData.mappedAngleQueue.create(1);
     sharedData.tactileQueue.create(3);
-    sharedData.multiturnNvsSaveQueue.create(1);
-    sharedData.multiturnNvsResultQueue.create(1);
-    sharedData.manualNvsSaveQueue.create(1);
-    sharedData.manualNvsResultQueue.create(1);
-    sharedData.nvsControlQueue.create(1);
-    sharedData.nvsControlResultQueue.create(1);
 
     const bool queuesCreated =
         sharedData.stateEventQueue.valid() &&
@@ -80,19 +72,13 @@ bool assembleAndStartSystem() {
         sharedData.servoRawQueue.valid() &&
         sharedData.servoTelemetryQueue.valid() &&
         sharedData.mappedAngleQueue.valid() &&
-        sharedData.tactileQueue.valid() &&
-        sharedData.multiturnNvsSaveQueue.valid() &&
-        sharedData.multiturnNvsResultQueue.valid() &&
-        sharedData.manualNvsSaveQueue.valid() &&
-        sharedData.manualNvsResultQueue.valid() &&
-        sharedData.nvsControlQueue.valid() &&
-        sharedData.nvsControlResultQueue.valid();
+        sharedData.tactileQueue.valid();
     const SafetyRuleId queueRule = p4::safety::runtimeResourceCreationRule(
         p4::safety::RuntimeResourceKind::Queue,
         queuesCreated);
     if (queueRule != SafetyRuleId::None) {
         FW_LOG_ERROR_PRINTLN("[SYSTEM] shared queue creation failed");
-        recordAssemblyFailure(queueRule, 14, 0);
+        recordAssemblyFailure(queueRule, 8, 0);
         return false;
     }
 
@@ -130,7 +116,7 @@ bool assembleAndStartSystem() {
     const uint32_t validMotorMask = validMotorChannelMask();
     sharedData.active_motor_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11)) & validMotorMask;
     sharedData.active_joint_mask = ((1UL << 8) | (1UL << 9) | (1UL << 10) | (1UL << 11));
-    // 所有有效舵机上电先视为多圈未知，只有 NVS 恢复或重新标定后才能清位。
+    // 所有有效舵机上电先视为多圈未知，只有桌面 JSON 恢复或重新标定后才能清位。
     sharedData.multi_turn_unknown_bitmap = validMotorMask;
     memset((void*)sharedData.servo_route_bus, SERVO_ROUTE_BUS_UNKNOWN,
            sizeof(sharedData.servo_route_bus));
@@ -138,58 +124,22 @@ bool assembleAndStartSystem() {
     // 舵机连续上线两帧后，ServoBusTask 会建立 pending 并完成恢复。
     sharedData.servo_reset_zero_status = SERVO_RESET_ZERO_STATUS_IDLE;
 
-    // Flash 关闭时由上位机 JSON 负责恢复；协议字段保留为 0，明确告知 UI
-    // 当前 P4 不会把运行数据写入 NVS。
-    sharedData.multiturn_nvs_enabled =
-        P4_FLASH_PERSISTENCE_ENABLE ? 1 : 0;
     sharedData.host_rx_heartbeat_ms = millis();
 
-    // Manual 磁编参考必须从 P4 NVS 恢复；缺失时仅禁止反馈/标定，不禁止直控。
-    sharedData.manual_reference_save_status = MANUAL_SAVE_STATUS_NONE;
+    // Manual 磁编参考由桌面 JSON 连接后显式下发；缺失时仅禁止反馈/标定，不禁止直控。
+    sharedData.manual_reference_commit_status = MANUAL_SAVE_STATUS_NONE;
     sharedData.require_can_feedback = 1;
 
     // Auto 标定结果先初始化 RAM；Calib Load 或本次标定会再写入有效结果。
     initializeCalibrationRuntimeState();
 
-    // Manual RAM 每次上电先清空；Flash 分支仅为本轮回退验证保留。
-#if P4_FLASH_PERSISTENCE_ENABLE
-    // Flash 开启时从 A/B 槽恢复 Manual，并同步有效位、CRC 和序号。
-    ManualEncoderReference bootManualReferences[ENCODER_TOTAL_NUM];
-    uint32_t bootManualSequence = 0;
-    uint32_t bootManualCrc = 0;
-    if (manualCalibrationNvsLoadLatest(bootManualReferences,
-                                      &bootManualSequence,
-                                      &bootManualCrc)) {
-        manualEncoderReferencesApplyRam(bootManualReferences);
-        sharedData.manual_reference_valid_bitmap =
-            manualEncoderReferencesValidMask();
-        sharedData.manual_reference_crc = bootManualCrc;
-        sharedData.manual_reference_nvs_sequence = bootManualSequence;
-        sharedData.manual_reference_nvs_valid = 1;
-        sharedData.manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
-        FW_LOG_INFO_PRINTF(
-            "[NVS MANUAL] restored seq=%lu crc=0x%08lX mask=0x%08lX\r\n",
-            (unsigned long)bootManualSequence,
-            (unsigned long)bootManualCrc,
-            (unsigned long)sharedData.manual_reference_valid_bitmap);
-    } else {
-        manualEncoderReferencesClearRam();
-        const SafetyRuleId snapshotRule =
-            p4::safety::persistenceSnapshotValidityRule(true, false);
-        if (snapshotRule != SafetyRuleId::None) {
-            recordAssemblyFailure(snapshotRule, 1, 0);
-        }
-        FW_LOG_INFO_PRINTLN(
-            "[NVS MANUAL] no valid snapshot; active scopes without Manual data are gated");
-    }
-#else
+    // 每次上电清空 P4 RAM，避免跨设备保留陈旧 Manual；桌面端会从 JSON 重放。
     manualEncoderReferencesClearRam();
-    sharedData.manual_reference_nvs_valid = 0;
+    sharedData.manual_reference_committed = 0;
     FW_LOG_INFO_PRINTLN(
-        "[MANUAL RAM] P4 Flash disabled; waiting for desktop JSON restore");
-#endif
+        "[MANUAL RAM] waiting for desktop JSON restore");
 
-    // 任务按“通信与采样 -> 状态仲裁 -> 控制 -> 持久化/监控”职责拆分。
+    // 任务按“通信与采样 -> 状态仲裁 -> 控制 -> 监控”职责拆分。
     bool tasksCreated = p4::platform::rtos::createTask(
         {hostCommTask,
          "hostCommTask",
@@ -234,16 +184,6 @@ bool assembleAndStartSystem() {
                        &motionControlTaskHandle) &&
                    tasksCreated;
 
-#if P4_FLASH_PERSISTENCE_ENABLE
-    tasksCreated = p4::platform::rtos::createTask(
-                       {nvsNvsPersistenceTask,
-                        "multiTurnNvsPersist",
-                        NVS_PERSISTENCE_TASK_STACK_SIZE,
-                        &sharedData,
-                        TASK_NVS_PERSISTENCE_PRIORITY},
-                       &nvsPersistTaskHandle) &&
-                   tasksCreated;
-#endif
     const SafetyRuleId tasksRule = p4::safety::runtimeResourceCreationRule(
         p4::safety::RuntimeResourceKind::Task,
         tasksCreated);

@@ -19,9 +19,9 @@
 
 // 操作员在 Device Check 页面录入的磁编码器机械端点。
 // minRaw 为人工松端，maxRaw 为人工紧端；两者都是 0..16383 原始值，允许跨零。
-// 正方向由 g_encoderDirection 单独定义，避免在 NVS 中重复保存方向。
+// 正方向由 g_encoderDirection 单独定义，避免在运行期 Manual 表中重复保存方向。
 struct ManualEncoderReference {
-    uint8_t valid;   // 1 表示该关节的人工端点已写入并通过 NVS 校验。
+    uint8_t valid;   // 1 表示该关节的人工端点已写入 P4 RAM 并通过 CRC 校验。
     uint16_t minRaw; // 人工松端原始磁编值。
     uint16_t maxRaw; // 人工紧端原始磁编值。
 };
@@ -89,7 +89,7 @@ extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM];
 extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
 bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction);
 
-// 清空 RAM 中的 Auto/Manual 运行期结果；NVS 恢复由持久化模块随后执行。
+// 清空 RAM 中的 Auto/Manual 运行期结果；桌面端连接后会重新同步 JSON 副本。
 void initializeCalibrationRuntimeState(void);
 
 bool evaluateCalibrationAssemblyWarning(

@@ -18,7 +18,7 @@ void recordSafetyEvent(const SafetyEventRecord& event);
 
 /**
  * @brief 由基础设施模块直接记录一条规则事件。
- * @details 统一补齐无关对象的 0xFF 哨兵，避免 CAN/NVS/RTOS 各自拼装不同格式。
+ * @details 统一补齐无关对象的 0xFF 哨兵，避免 CAN、主机通信和 RTOS 各自拼装不同格式。
  */
 void recordSafetyRuleEvent(SafetyRuleId ruleId,
                            uint8_t systemState,

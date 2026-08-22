@@ -867,42 +867,6 @@
       "recovery_zh": "检查协议版本、命令长度、帧尾和串口噪声。"
     },
     {
-      "rule_id": 7001,
-      "code": "PST-7001",
-      "title_zh": "Manual 标定写入 NVS 失败",
-      "severity": "Blocking",
-      "layer": "Persistence",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "停止运动后重试写入，并检查 NVS 分区和 Flash 寿命。"
-    },
-    {
-      "rule_id": 7002,
-      "code": "PST-7002",
-      "title_zh": "多圈快照写入 NVS 失败",
-      "severity": "Blocking",
-      "layer": "Persistence",
-      "action_zh": "转为不可控",
-      "recovery_zh": "停止运动后重试保存；断电前不得依赖未提交快照。"
-    },
-    {
-      "rule_id": 7003,
-      "code": "PST-7003",
-      "title_zh": "标定前圈数复位写入 NVS 失败",
-      "severity": "Emergency",
-      "layer": "Persistence",
-      "action_zh": "转为不可控",
-      "recovery_zh": "不要继续控制受影响舵机，重新 Calibrate。"
-    },
-    {
-      "rule_id": 7004,
-      "code": "PST-7004",
-      "title_zh": "NVS 快照缺失、版本或 CRC 无效",
-      "severity": "Warning",
-      "layer": "Persistence",
-      "action_zh": "转为不可控",
-      "recovery_zh": "重新写入 Manual，并对受影响关节重新 Calibrate。"
-    },
-    {
       "rule_id": 8001,
       "code": "RUN-8001",
       "title_zh": "安全事件缓存发生覆盖",

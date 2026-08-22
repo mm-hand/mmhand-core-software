@@ -20,8 +20,8 @@ struct JointActuatorRuntimeTarget {
 // ServoTargetBuilder 负责把控制器输出转换成舵机总线目标：
 // - 单圈 raw 目标可围绕当前绝对位置锚点展开；
 // - 关节执行器辅助函数向 PID 隐藏单腱/双腱硬件拓扑差异。
-// 只有电机限位处于锁定状态时，才应用标定得到的 ABS 最小/最大值。
-int32_t clampServoPosByMotorAbsLimit(SystemRuntimeContext* sharedData,
+// 将目标限制到本次上电会话确认过的 logical ABS 行程；LUT 边界由控制器先行处理。
+int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
                                     uint8_t motorChannel,
                                     int32_t value);
 // 在展开为多圈 ABS 前，先把单圈 raw 命令限制到合法范围。

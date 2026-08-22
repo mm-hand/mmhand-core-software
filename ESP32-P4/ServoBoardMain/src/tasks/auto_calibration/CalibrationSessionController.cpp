@@ -4,7 +4,7 @@
  *
  * 输入：SystemRuntimeContext 中的 active joint/motor scope 和实时反馈。
  * 输出：calibration_motion_started、诊断快照及 CALIBRATION_DONE/FAILED 事件。
- * 禁止依赖：飞特 SDK、串口协议组包、NVS 原始 API 和 FreeRTOS 任务创建。
+ * 禁止依赖：飞特 SDK、串口协议组包、持久化原始 API 和 FreeRTOS 任务创建。
  */
 #include "CalibrationSessionController.h"
 

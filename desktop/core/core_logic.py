@@ -40,8 +40,6 @@ from .protocol import (
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
-    CMD_MOTOR_ABS_LIMIT_LOCK,
-    CMD_MULTITURN_NVS_CONTROL,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_QUERY,
     CMD_MANUAL_ENCODER_SINGLE,
@@ -77,11 +75,6 @@ from .session_log import log_session
 LOWER_SYNC_TIMEOUT_S = 2.5
 LOWER_STATUS_STALE_AFTER_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
-MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S = 1.0
-MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S = 1.0
-MULTITURN_NVS_CONTROL_RESULT_TIMEOUT_S = 2.0
-MULTITURN_NVS_CONTROL_MAX_ATTEMPTS = 3
-MULTITURN_NVS_CONTROL_RETRY_DELAY_S = 0.15
 CALIBRATION_TURN_RESET_SETTLE_S = 0.30
 CALIBRATION_TURN_RESET_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
@@ -89,7 +82,6 @@ MULTITURN_RESTORE_RESULT_TIMEOUT_S = 2.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
-MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S = 2.0
 SERVO_RESET_ZERO_ACK_TIMEOUT_S = 1.5
 SERVO_RESET_ZERO_RESULT_TIMEOUT_S = 4.0
 HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
@@ -180,7 +172,6 @@ class HandController:
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
         self.last_sync_status = "Not connected"
-        self.last_multiturn_nvs_error = ""
         self._multiturn_store = MultiTurnRuntimeStore(MULTITURN_RUNTIME_PATH)
         self._multiturn_store_payload: Optional[dict] = None
         self._multiturn_store_identity: Optional[dict] = None
@@ -667,10 +658,38 @@ class HandController:
                 if not self.comm:
                     break
                 new_model = self.comm.rx_queue.get(timeout=0.1)
+                # 状态使用 latest-value 邮箱；ACK/安全规则走独立事件通道，逐条合并。
+                ack_events = self.comm.drain_ack_events()
+                safety_events = self.comm.drain_safety_events()
                 self._persist_multiturn_state(new_model)
                 self._service_multiturn_restore(new_model)
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
+                    if ack_events:
+                        ack_history = list(self.current_state.proto_ack_history)
+                        ack_history.extend(dict(event) for event in ack_events)
+                        self.current_state.proto_ack_history = ack_history[-64:]
+                        latest_ack = ack_events[-1]
+                        self.current_state.proto_ack_sequence = int(latest_ack["sequence"])
+                        self.current_state.proto_ack_cmd = int(latest_ack["command"])
+                        self.current_state.proto_ack_mode = int(latest_ack["mode"])
+                        self.current_state.proto_ack_status = int(latest_ack["status"])
+                        self.current_state.proto_ack_p4_time_ms = int(latest_ack["p4_time_ms"])
+                    if safety_events:
+                        history_by_sequence = {
+                            int(item.get("sequence", 0)): dict(item)
+                            for item in self.current_state.safety_event_history
+                            if isinstance(item, dict)
+                        }
+                        for event in safety_events:
+                            history_by_sequence[int(event.get("sequence", 0))] = dict(event)
+                        self.current_state.safety_event_history = [
+                            history_by_sequence[key]
+                            for key in sorted(history_by_sequence)
+                            if key > 0
+                        ][-64:]
+                        self.current_state.latest_safety_event = dict(safety_events[-1])
+                        self.current_state.has_safety_event = True
                     self.current_state.calib_status = new_model.calib_status
                     self.current_state.tactile_data = new_model.tactile_data
                     self.current_state.host_rx_time = new_model.host_rx_time
@@ -831,7 +850,7 @@ class HandController:
             return False
         if (
             int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-            and not self._wait_for_manual_reference_save_result(sent_at)
+            and not self._wait_for_manual_reference_commit_result(sent_at)
         ):
             return False
         expected_mask = (1 << ENCODER_COUNT) - 1
@@ -885,12 +904,12 @@ class HandController:
             time.sleep(0.01)
         return False
 
-    def _wait_for_manual_reference_save_result(
+    def _wait_for_manual_reference_commit_result(
         self,
         received_after: float,
         timeout_s: float = MANUAL_REFERENCE_ACK_TIMEOUT_S,
     ) -> bool:
-        """等待异步 Manual NVS 事务的结果包，避免把 QUEUED 当成写入完成。"""
+        """等待 Manual 写入 P4 RAM 的结果包，避免把 QUEUED 当成提交完成。"""
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             with self.state_lock:
@@ -898,11 +917,11 @@ class HandController:
                 received_at = float(
                     getattr(state, "manual_reference_last_rx_time", 0.0) or 0.0
                 )
-                save_status = int(
-                    getattr(state, "manual_reference_save_status", 0) or 0
+                commit_status = int(
+                    getattr(state, "manual_reference_commit_status", 0) or 0
                 )
-            if received_at >= received_after and save_status != 0:
-                return save_status == 1
+            if received_at >= received_after and commit_status != 0:
+                return commit_status == 1
             time.sleep(0.01)
         return False
 
@@ -931,17 +950,17 @@ class HandController:
             actual_max = list(
                 getattr(state, "manual_reference_max_raw", []) or []
             )
-            nvs_valid = bool(
-                getattr(state, "manual_reference_nvs_valid", False)
+            committed = bool(
+                getattr(state, "manual_reference_committed", False)
             )
-            save_status = int(
-                getattr(state, "manual_reference_save_status", 0) or 0
+            commit_status = int(
+                getattr(state, "manual_reference_commit_status", 0) or 0
             )
         if actual_mask != (int(expected_mask) & ((1 << ENCODER_COUNT) - 1)):
             return False
         if actual_crc != (int(expected_crc) & 0xFFFFFFFF):
             return False
-        if not nvs_valid or save_status != 1:
+        if not committed or commit_status != 1:
             return False
         if len(actual_min) != ENCODER_COUNT or len(actual_max) != ENCODER_COUNT:
             return False
@@ -999,7 +1018,7 @@ class HandController:
             return False
         if (
             int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-            and not self._wait_for_manual_reference_save_result(sent_at)
+            and not self._wait_for_manual_reference_commit_result(sent_at)
         ):
             return False
         expected_crc = manual_encoder_reference_crc(expected_min, expected_max)
@@ -1035,7 +1054,7 @@ class HandController:
         return bool(ack is not None and int(ack[2]) in (0, 2))
 
     def clear_manual_encoder_references(self) -> bool:
-        """Clear both Manual NVS slots and close the firmware motion gate."""
+        """清除 P4 RAM 中的 Manual 表，并同步清除桌面标定 JSON 的对应内容。"""
         if not self.comm:
             return False
         sent_at = time.time()
@@ -1052,7 +1071,7 @@ class HandController:
             return False
         if (
             int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-            and not self._wait_for_manual_reference_save_result(sent_at)
+            and not self._wait_for_manual_reference_commit_result(sent_at)
         ):
             return False
         if not self.query_manual_encoder_references(
@@ -1065,7 +1084,7 @@ class HandController:
                 int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
                 == 0
                 and not bool(
-                    getattr(state, "manual_reference_nvs_valid", False)
+                    getattr(state, "manual_reference_committed", False)
                 )
             )
         if not cleared:
@@ -1093,132 +1112,6 @@ class HandController:
         ))
         ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S)
         return bool(ack is not None and int(ack[2]) == 0)
-
-    def set_motor_abs_limit_lock(self, active_motor_mask: int, locked: bool) -> bool:
-        if not self.comm:
-            return False
-        self.comm.send_command((
-            "motor_abs_limit_lock",
-            int(active_motor_mask) & 0xFFFFFFFF,
-            bool(locked),
-        ))
-        ack = self.comm.wait_for_ack(CMD_MOTOR_ABS_LIMIT_LOCK, MOTOR_ABS_LIMIT_LOCK_ACK_TIMEOUT_S)
-        return bool(ack is not None and int(ack[2]) == 0)
-
-    def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
-        if not self.comm:
-            self.last_multiturn_nvs_error = "serial not connected"
-            return False
-        self.last_multiturn_nvs_error = ""
-        target = bool(enabled)
-        for attempt in range(1, MULTITURN_NVS_CONTROL_MAX_ATTEMPTS + 1):
-            sent_at = time.time()
-            self.comm.send_command(("multiturn_nvs_control", target))
-            ack = self.comm.wait_for_ack(
-                CMD_MULTITURN_NVS_CONTROL,
-                MULTITURN_NVS_CONTROL_ACK_TIMEOUT_S,
-                received_after=sent_at,
-            )
-            if ack is not None:
-                status = int(ack[2])
-                if status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
-                    if (
-                        status == PROTO_ACK_STATUS_QUEUED
-                        and not self._wait_for_multiturn_nvs_control_result(
-                            target,
-                            sent_at,
-                        )
-                    ):
-                        self.last_multiturn_nvs_error = (
-                            "firmware queued command but final Flash state was not confirmed"
-                        )
-                        log_session(
-                            "MULTITURN",
-                            f"NVS control enabled={int(target)} result timeout attempt={attempt}",
-                        )
-                        return False
-                    log_session(
-                        "MULTITURN",
-                        f"NVS control enabled={int(target)} confirmed attempt={attempt}",
-                    )
-                    return True
-                self.last_multiturn_nvs_error = f"firmware rejected command (status={status})"
-                log_session(
-                    "MULTITURN",
-                    f"NVS control enabled={int(target)} rejected status={status} attempt={attempt}",
-                )
-                return False
-            log_session(
-                "MULTITURN",
-                f"NVS control enabled={int(target)} ACK timeout attempt={attempt}",
-            )
-            if attempt < MULTITURN_NVS_CONTROL_MAX_ATTEMPTS:
-                time.sleep(MULTITURN_NVS_CONTROL_RETRY_DELAY_S)
-
-        self.last_multiturn_nvs_error = (
-            f"no ACK after {MULTITURN_NVS_CONTROL_MAX_ATTEMPTS} attempts; "
-            "wait for servo hotplug recovery or update P4 firmware"
-        )
-        return False
-
-    def _wait_for_multiturn_nvs_control_result(
-        self,
-        target: bool,
-        received_after: float,
-        timeout_s: float = MULTITURN_NVS_CONTROL_RESULT_TIMEOUT_S,
-    ) -> bool:
-        """等待 P4 在 Flash 事务完成后回传与请求一致的系统状态。"""
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            with self.state_lock:
-                state = self.current_state
-                has_status = bool(
-                    getattr(state, "has_system_status_data", False)
-                )
-                received_at = float(
-                    getattr(state, "system_status_last_rx_ts", 0.0) or 0.0
-                )
-                actual = bool(
-                    getattr(state, "multiturn_nvs_enabled", True)
-                )
-            if has_status and received_at >= received_after and actual == bool(target):
-                return True
-            time.sleep(0.01)
-        return False
-
-    def _wait_for_multiturn_nvs_save(
-        self,
-        baseline_request_token: int,
-        baseline_fail_count: int,
-        required_mask: int,
-        timeout_s: float = MULTITURN_NVS_SAVE_CONFIRM_TIMEOUT_S,
-    ) -> Tuple[bool, str]:
-        deadline = time.time() + timeout_s
-        required_mask = int(required_mask)
-        while time.time() < deadline:
-            with self.state_lock:
-                state = self.current_state
-                has_status = bool(getattr(state, "has_multiturn_nvs_status", False))
-                request_token = int(getattr(state, "multiturn_nvs_save_request_token", 0) or 0)
-                result_token = int(getattr(state, "multiturn_nvs_save_result_token", 0) or 0)
-                valid_mask = int(getattr(state, "multiturn_nvs_save_valid_mask", 0) or 0)
-                fail_count = int(getattr(state, "multiturn_nvs_save_fail_count", 0) or 0)
-                snapshot_valid = bool(getattr(state, "multiturn_nvs_snapshot_valid", False))
-
-            if not has_status:
-                return False, "firmware does not report NVS save status; update P4 firmware"
-            if fail_count > baseline_fail_count:
-                return False, f"NVS save failed; fail_count {baseline_fail_count}->{fail_count}"
-            if request_token > baseline_request_token and result_token >= request_token:
-                if snapshot_valid and (valid_mask & required_mask) == required_mask:
-                    return True, f"NVS snapshot saved token={result_token} mask=0x{valid_mask:08X}"
-                return False, (
-                    f"NVS save completed but mask invalid: "
-                    f"valid=0x{valid_mask:08X} required=0x{required_mask:08X}"
-                )
-            time.sleep(0.02)
-
-        return False, "NVS save confirmation timeout"
 
     def _wait_for_multiturn_restore_result(
         self,
@@ -1672,7 +1565,7 @@ class HandController:
                 return False, f"J{joint_idx:02d} Manual RAM restore rejected"
             if (
                 int(ack[2]) == PROTO_ACK_STATUS_QUEUED
-                and not self._wait_for_manual_reference_save_result(sent_at)
+                and not self._wait_for_manual_reference_commit_result(sent_at)
             ):
                 return False, f"J{joint_idx:02d} Manual commit timed out"
             wrote_any = True
@@ -1733,9 +1626,6 @@ class HandController:
             mins = [int(v) for v in snapshot.get("motor_abs_limit_min", [])]
             maxs = [int(v) for v in snapshot.get("motor_abs_limit_max", [])]
             schema_version = int(snapshot.get("schema_version", 0) or 0)
-            locked_bitmap = int(
-                str(snapshot.get("motor_abs_limit_locked_bitmap", "0")), 0
-            )
         except (TypeError, ValueError) as exc:
             return False, f"invalid motor ABS limits: {exc}"
         if schema_version != CALIBRATION_SNAPSHOT_SCHEMA_VERSION:
@@ -1832,10 +1722,10 @@ class HandController:
             local_manual_max = list(
                 getattr(self.current_state, "manual_reference_max_raw", []) or []
             )
-            local_manual_nvs_valid = bool(
-                getattr(self.current_state, "manual_reference_nvs_valid", False)
+            local_manual_committed = bool(
+                getattr(self.current_state, "manual_reference_committed", False)
             )
-        if not local_manual_nvs_valid:
+        if not local_manual_committed:
             return False, "P4 Manual RAM image was not committed"
         if (local_manual_mask & active_joint_mask) != active_joint_mask:
             missing_mask = active_joint_mask & ~local_manual_mask
@@ -1879,7 +1769,6 @@ class HandController:
             missing_text = ",".join(f"J{idx:02d}" for idx in missing_tendon_lut)
             return False, f"snapshot missing tendon LUT: {missing_text}"
 
-        locked_bitmap &= valid_bitmap
         limits_sent_at = time.time()
         # 标定加载只覆盖快照实际包含的电机，P4 上其他已生效关节保持不变。
         self.comm.send_command(
@@ -1889,7 +1778,6 @@ class HandController:
                 if isinstance(snapshot.get("active_motor_mask"), str)
                 else int(snapshot.get("active_motor_mask", 0) or 0),
                 valid_bitmap,
-                locked_bitmap,
                 mins,
                 maxs,
             )

@@ -2,8 +2,8 @@
 
 > 当前专项文档，最后核对：2026-08-20。Load Calibration 从便携 V6 JSON
 > 恢复 Manual、Auto/LUT 与 ABS Limit 到 P4 RAM；飞特舵机 logical ABS 由独立的
-> `multiturn_runtime.json` 恢复，详见[多圈与标定 JSON 持久化](multiturn_nvs_persistence.md)。
-> P4 Flash 业务持久化当前已暂停启用。
+> `multiturn_runtime.json` 恢复，详见[多圈与标定 JSON 恢复](多圈与标定_JSON_恢复.md)。
+> P4 仅保存会话内 RAM；跨重启数据由上位机 JSON 恢复。
 
 本文说明上位机 `Load Calibration…` 按钮的使用场景、用户操作方法，以及后续开发者维护该功能时需要理解的数据流和协议。
 

@@ -3,8 +3,8 @@
  * @brief 声明上位机维护命令涉及的 Manual、Auto 和 Reset Zero 联动事务。
  * @details
  * - 输入：协议命令、Manual 参考表或 Reset Zero 结果 token。
- * - 输出：更新 NVS/RAM 标定状态，并按 HardwareMap 精确失效受影响关节。
- * - 状态所有权：Manual NVS 事务由本服务串行提交；舵机硬件复位由 Servo 服务执行。
+ * - 输出：更新 P4 RAM 标定状态，并按 HardwareMap 精确失效受影响关节。
+ * - 状态所有权：Manual RAM 提交由本服务串行处理；舵机硬件复位由 Servo 服务执行。
  * - 禁止依赖：本模块不读取串口帧、不组装上行包、不直接操作飞特 SDK。
  */
 #ifndef P4_MODULES_COMMUNICATION_CALIBRATION_MAINTENANCE_SERVICE_H
@@ -29,13 +29,12 @@ uint32_t jointMaskForMotorMask(uint32_t motorMask);
 void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
                                     uint32_t jointMask);
 
-/** 提交 Manual；默认写 RAM，Flash 回退分支启用时才写 A/B NVS。 */
+/** 提交 Manual 到 P4 RAM；跨重启副本由桌面 JSON 负责。 */
 uint8_t commitManualReferences(
     SystemRuntimeContext* sharedData,
     const ManualEncoderReference references[ENCODER_TOTAL_NUM]);
 
 /** 消费 Flash 回退分支的 Manual 结果；默认关闭时固定返回 false。 */
-bool processManualNvsSaveResult(SystemRuntimeContext* sharedData);
 
 /** 消费一次 Reset Zero 完成结果，并联动失效对应关节标定。 */
 void processServoResetZeroResult(SystemRuntimeContext* sharedData,

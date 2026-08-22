@@ -2,7 +2,7 @@
  * @file ServoRouteTypes.h
  * @brief 定义逻辑电机 Mxx 到物理飞特 BUS/ID 的运行时路由数据。
  *
- * 路由只描述本次上电发现结果，不属于机械拓扑，也不写入多圈 NVS。
+ * 路由只描述本次上电发现结果，不属于机械拓扑；多圈锚点由桌面端 JSON 管理。
  * 同一 ID 出现在多条 BUS 或单 BUS 超过十台时，设备可以被看见但不得运动。
  */
 #ifndef MMHAND_SERVO_ROUTE_TYPES_H

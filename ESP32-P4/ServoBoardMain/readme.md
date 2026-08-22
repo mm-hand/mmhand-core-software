@@ -6,7 +6,7 @@
 - 27 台 ST3215 舵机的四总线通信。
 - 单腱/双腱反馈控制、碰撞保持和动态工作区约束。
 - Manual/Auto 自动标定、Tendon LUT 和 Rope Init。
-- 舵机热插拔、多圈恢复、Reset Zero 与 NVS 持久化。
+- 舵机热插拔、多圈恢复与 Reset Zero；跨重启锚点由桌面端 JSON 保存。
 - 上位机串口协议、状态、故障和遥测。
 
 ## 入口
@@ -26,10 +26,9 @@
   `src/modules/actuator/ActuatorCommandGateway.*`。
 - 状态和控制 owner 由
   `src/tasks/system_state/SystemStateCoordinator.*` 统一仲裁；`SystemStateTask` 仅为薄入口。
-- 运行期 Flash 写入只允许由
-  `src/tasks/nvs_persistence/NvsPersistenceService.*` 执行。
+- P4 不保存运行期标定/多圈 Flash；桌面端连接后负责将 JSON 快照同步到 P4 RAM。
 - 固定参数集中在 `src/config/`。
-- 协议编号和 NVS 格式保持向当前桌面端兼容。
+- 协议编号由 `desktop/resources/config/upper_protocol_schema.json` 单一生成。
 
 当前分层目录、命令/反馈链路、状态机、安全规则和双格式框图统一见：
 

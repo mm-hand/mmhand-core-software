@@ -27,8 +27,6 @@ from ..protocol import (
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
-    CMD_MOTOR_ABS_LIMIT_LOCK,
-    CMD_MULTITURN_NVS_CONTROL,
     CMD_PAUSE,
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
@@ -52,6 +50,7 @@ from ..protocol import (
 )
 from ..session_log import log_session
 from .ack_tracker import AckTracker
+from .event_channel import EventChannel
 from .packet_router import P4PacketRouter, RoutedPacket
 
 
@@ -66,11 +65,13 @@ class StateReducer:
         self,
         packet_router: Optional[P4PacketRouter] = None,
         ack_tracker: Optional[AckTracker] = None,
+        safety_event_channel: Optional[EventChannel[dict]] = None,
     ) -> None:
         self._last_model: Optional[HandModel] = None
         self._packet_router = packet_router
         self._ack_tracker = ack_tracker
-        # TASK_DIAG v3 由 P4 在约 35 ms 内分七包发出；先按窗口暂存，
+        self._safety_event_channel = safety_event_channel
+        # TASK_DIAG v4 由 P4 在约 35 ms 内分七包发出；先按窗口暂存，
         # 避免 UI 把不同一秒统计窗口的任务行混合展示。
         self._task_runtime_window_sequence: Optional[int] = None
         self._task_runtime_window_packets: dict[int, dict] = {}
@@ -196,7 +197,7 @@ class StateReducer:
                     model.has_servo_angle_data = True
                     emitted = True
 
-            # 100 Hz 舵机单圈 raw；Flash raw 已改为保存结果触发的独立包。
+            # 100 Hz 舵机单圈 raw；跨重启多圈锚点只由桌面 JSON 持有。
             elif packet_kind == "servo_raw":
                 parsed = owner._parse_protocol_payload("parse_servo_raw_packet", payload)
                 if parsed is not None:
@@ -215,17 +216,6 @@ class StateReducer:
                     model.multiturn_restore_restored_mask = int(restored_mask)
                     model.multiturn_restore_rejected_mask = int(rejected_mask)
                     model.multiturn_restore_result_last_rx_ts = time.time()
-                    emitted = True
-
-            elif packet_kind == "multiturn_snapshot_raw":
-                parsed = owner._parse_protocol_payload(
-                    "parse_multiturn_snapshot_raw_packet", payload
-                )
-                if parsed is not None:
-                    _token, valid_mask, raw_values = parsed
-                    for i in range(min(MOTOR_COUNT, len(raw_values))):
-                        model.servo_flash_raw_positions[i] = int(raw_values[i])
-                    model.has_servo_flash_raw_data = int(valid_mask) != 0
                     emitted = True
 
             # 舵机遥测：速度、负载、电流、电压和温度保持同一帧原子更新。
@@ -268,8 +258,6 @@ class StateReducer:
                         system_fault_bitmap,
                         state_transition_count,
                         multi_turn_unknown_bitmap,
-                        multiturn_nvs_enabled,
-                        multiturn_nvs_snapshot_valid,
                         active_motor_mask,
                         active_joint_mask,
                         require_can_feedback,
@@ -281,19 +269,14 @@ class StateReducer:
                         encoder_warn_bitmap,
                         encoder_fault_bitmap,
                         has_encoder_health_status,
-                        multiturn_nvs_save_request_token,
-                        multiturn_nvs_save_result_token,
-                        multiturn_nvs_save_valid_mask,
-                        multiturn_nvs_save_fail_count,
-                        has_multiturn_nvs_status,
                         manual_reference_valid_bitmap,
                         manual_reference_crc,
-                        manual_reference_nvs_sequence,
-                        manual_reference_nvs_valid,
+                        manual_reference_revision,
+                        manual_reference_committed,
                         has_manual_reference_status,
                         auto_calibration_valid_bitmap,
-                        manual_reference_save_status,
-                        has_manual_v2_status,
+                        manual_reference_commit_status,
+                        has_manual_commit_status,
                         rope_init_status,
                         rope_init_reason,
                         rope_init_sequence,
@@ -330,24 +313,17 @@ class StateReducer:
                     model.system_fault_bitmap = int(system_fault_bitmap)
                     model.state_transition_count = int(state_transition_count)
                     model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
-                    model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
-                    model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
-                    model.multiturn_nvs_save_request_token = int(multiturn_nvs_save_request_token)
-                    model.multiturn_nvs_save_result_token = int(multiturn_nvs_save_result_token)
-                    model.multiturn_nvs_save_valid_mask = int(multiturn_nvs_save_valid_mask)
-                    model.multiturn_nvs_save_fail_count = int(multiturn_nvs_save_fail_count)
-                    model.has_multiturn_nvs_status = bool(has_multiturn_nvs_status)
                     model.manual_reference_valid_bitmap = int(manual_reference_valid_bitmap)
                     model.manual_reference_crc = int(manual_reference_crc)
-                    model.manual_reference_nvs_sequence = int(manual_reference_nvs_sequence)
-                    model.manual_reference_nvs_valid = bool(manual_reference_nvs_valid)
+                    model.manual_reference_revision = int(manual_reference_revision)
+                    model.manual_reference_committed = bool(manual_reference_committed)
                     model.has_manual_reference_status = bool(has_manual_reference_status)
-                    if has_manual_v2_status:
+                    if has_manual_commit_status:
                         model.auto_calibration_valid_bitmap = int(
                             auto_calibration_valid_bitmap
                         )
-                        model.manual_reference_save_status = int(
-                            manual_reference_save_status
+                        model.manual_reference_commit_status = int(
+                            manual_reference_commit_status
                         )
                     if has_motion_result_status:
                         model.rope_init_status = int(rope_init_status)
@@ -507,15 +483,16 @@ class StateReducer:
                     )
                     model.safety_event_last_rx_ts = time.time()
                     model.has_safety_event = True
+                    if self._safety_event_channel is not None:
+                        self._safety_event_channel.publish(dict(event))
                     emitted = True
 
-            # 标定得到的电机 ABS 边界与锁定位图必须整包替换，不能逐项混用旧值。
+            # 标定得到的电机 ABS 诊断范围必须整包替换，不能逐项混用旧值。
             elif packet_kind == "motor_abs_limit":
                 parsed = owner._parse_protocol_payload("parse_motor_abs_limit_packet", payload)
                 if parsed is not None:
-                    valid_bitmap, locked_bitmap, mins, maxs = parsed
+                    valid_bitmap, mins, maxs = parsed
                     model.motor_abs_limit_valid_bitmap = int(valid_bitmap)
-                    model.motor_abs_limit_locked_bitmap = int(locked_bitmap)
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.motor_abs_limit_min[i] = int(mins[i])
                         model.motor_abs_limit_max[i] = int(maxs[i])
@@ -538,13 +515,13 @@ class StateReducer:
                 if parsed is not None:
                     model.manual_reference_valid_bitmap = int(parsed["valid_bitmap"])
                     model.manual_reference_crc = int(parsed["reference_crc"])
-                    model.manual_reference_nvs_sequence = int(parsed["nvs_sequence"])
-                    model.manual_reference_nvs_valid = bool(parsed["nvs_valid"])
+                    model.manual_reference_revision = int(parsed["revision"])
+                    model.manual_reference_committed = bool(parsed["committed"])
                     model.auto_calibration_valid_bitmap = int(
                         parsed.get("auto_valid_bitmap", 0)
                     )
-                    model.manual_reference_save_status = int(
-                        parsed.get("save_status", 0)
+                    model.manual_reference_commit_status = int(
+                        parsed.get("commit_status", 0)
                     )
                     model.manual_reference_last_rx_time = time.time()
                     model.has_manual_reference_status = True
@@ -747,17 +724,28 @@ class StateReducer:
                         f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
                     )
                     # ACK 跟踪器是唯一同步边界，避免状态归并器自己操作 Condition。
+                    ack_received_at = time.time()
                     model.proto_ack_sequence = self._ack_tracker.publish(
                         ack_cmd,
                         applied_mode,
                         status,
-                        time.time(),
+                        ack_received_at,
                         packet_p4_time_ms,
                     )
                     model.proto_ack_cmd = int(ack_cmd)
                     model.proto_ack_mode = int(applied_mode)
                     model.proto_ack_status = int(status)
                     model.proto_ack_p4_time_ms = int(packet_p4_time_ms or 0)
+                    # 模型保留最近历史供 UI 展示；可靠逐条消费仍由 AckTracker 事件通道负责。
+                    model.proto_ack_history.append({
+                        "sequence": int(model.proto_ack_sequence),
+                        "command": int(ack_cmd),
+                        "mode": int(applied_mode),
+                        "status": int(status),
+                        "received_at": float(ack_received_at),
+                        "p4_time_ms": int(packet_p4_time_ms or 0),
+                    })
+                    model.proto_ack_history = model.proto_ack_history[-64:]
                     if (
                         ack_cmd in (CMD_STOP, CMD_RESET) and
                         status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
@@ -775,8 +763,6 @@ class StateReducer:
                         CMD_RUN_FEEDBACK,
                         CMD_PAUSE,
                         CMD_RESTORE_MULTITURN,
-                        CMD_MOTOR_ABS_LIMIT_LOCK,
-                        CMD_MULTITURN_NVS_CONTROL,
                         CMD_MANUAL_ENCODER_REFERENCE,
                         CMD_MANUAL_ENCODER_SINGLE,
                         CMD_CLEAR_CALIBRATION,
@@ -807,22 +793,16 @@ class StateReducer:
                             model.system_state = SYSTEM_STATE_PAUSED
                         elif ack_cmd == CMD_RESTORE_MULTITURN:
                             pass
-                        elif ack_cmd == CMD_MOTOR_ABS_LIMIT_LOCK:
-                            pass
-                        elif ack_cmd == CMD_MULTITURN_NVS_CONTROL:
-                            pass
                         elif ack_cmd in (
                             CMD_MANUAL_ENCODER_REFERENCE,
                             CMD_MANUAL_ENCODER_SINGLE,
                         ):
                             model.calib_status = "IDLE"
                             model.motor_abs_limit_valid_bitmap = 0
-                            model.motor_abs_limit_locked_bitmap = 0
                             model.joint_calib_results = [None] * ENCODER_COUNT
                         elif ack_cmd == CMD_CLEAR_CALIBRATION:
                             model.calib_status = "IDLE"
                             model.motor_abs_limit_valid_bitmap = 0
-                            model.motor_abs_limit_locked_bitmap = 0
                             model.joint_calib_results = [None] * ENCODER_COUNT
                             for encoder in model.encoders:
                                 encoder.raw = 0

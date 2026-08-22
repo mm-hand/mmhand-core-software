@@ -451,14 +451,14 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         valid_mask = int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
         auto_mask = int(getattr(state, "auto_calibration_valid_bitmap", 0) or 0)
-        nvs_valid = bool(getattr(state, "manual_reference_nvs_valid", False))
-        save_status = int(getattr(state, "manual_reference_save_status", 0) or 0)
-        sequence = int(getattr(state, "manual_reference_nvs_sequence", 0) or 0)
-        flash_text = "committed" if nvs_valid and save_status == 1 else ("failed" if save_status == 2 else "not ready")
+        committed = bool(getattr(state, "manual_reference_committed", False))
+        commit_status = int(getattr(state, "manual_reference_commit_status", 0) or 0)
+        revision = int(getattr(state, "manual_reference_revision", 0) or 0)
+        ram_text = "committed" if committed and commit_status == 1 else ("failed" if commit_status == 2 else "not ready")
         self.summary_label.setText(
             f"Manual {valid_mask.bit_count()}/{ENCODER_COUNT} | "
             f"Auto {auto_mask.bit_count()}/{ENCODER_COUNT} | "
-            f"P4 RAM {flash_text}, sequence={sequence}"
+            f"P4 RAM {ram_text}, revision={revision}"
         )
 
         min_raw_values = list(getattr(state, "manual_reference_min_raw", []) or [])
@@ -490,7 +490,7 @@ class DeviceCheckView(QtWidgets.QWidget):
             self._current_raw[joint] = raw
             self._raw_items[joint].setText("-" if raw is None else str(raw))
 
-            manual_valid = nvs_valid and bool(valid_mask & bit)
+            manual_valid = committed and bool(valid_mask & bit)
             manual_span_ready = False
             span = None
             if manual_valid and joint < len(min_raw_values) and joint < len(max_raw_values):
@@ -553,9 +553,9 @@ class DeviceCheckView(QtWidgets.QWidget):
 
             if not (valid_mask & bit):
                 row_flash = "Empty"
-            elif nvs_valid and save_status == 1:
+            elif committed and commit_status == 1:
                 row_flash = "Saved"
-            elif save_status == 2:
+            elif commit_status == 2:
                 row_flash = "Failed"
             else:
                 row_flash = "Pending"

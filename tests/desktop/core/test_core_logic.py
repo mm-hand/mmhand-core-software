@@ -12,7 +12,6 @@ from desktop.core.protocol import (
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
     CMD_MANUAL_ENCODER_REFERENCE,
-    CMD_MULTITURN_NVS_CONTROL,
     CMD_RESET,
     CMD_SERVO_RESET_ZERO,
     ControlMode,
@@ -310,7 +309,7 @@ class TestAsyncPersistenceAck:
             PROTO_ACK_STATUS_QUEUED,
             1.0,
         )
-        controller._wait_for_manual_reference_save_result = MagicMock(
+        controller._wait_for_manual_reference_commit_result = MagicMock(
             return_value=True
         )
         controller._verify_manual_encoder_readback = MagicMock(return_value=True)
@@ -322,42 +321,9 @@ class TestAsyncPersistenceAck:
         mins = [100] * ENCODER_COUNT
         maxs = [200] * ENCODER_COUNT
         assert controller.set_manual_encoder_references(mins, maxs) is True
-        controller._wait_for_manual_reference_save_result.assert_called_once()
+        controller._wait_for_manual_reference_commit_result.assert_called_once()
         controller._verify_manual_encoder_readback.assert_called_once()
         save_json.assert_called_once()
-
-    def test_multiturn_control_accepts_queued_only_after_state_confirmation(self):
-        controller = HandController()
-        controller.comm = MagicMock()
-        controller.comm.wait_for_ack.return_value = (
-            CMD_MULTITURN_NVS_CONTROL,
-            0,
-            PROTO_ACK_STATUS_QUEUED,
-            1.0,
-        )
-        controller._wait_for_multiturn_nvs_control_result = MagicMock(
-            return_value=True
-        )
-
-        assert controller.set_multiturn_nvs_enabled(True) is True
-        controller._wait_for_multiturn_nvs_control_result.assert_called_once()
-
-    def test_multiturn_control_reports_failure_when_final_state_is_missing(self):
-        controller = HandController()
-        controller.comm = MagicMock()
-        controller.comm.wait_for_ack.return_value = (
-            CMD_MULTITURN_NVS_CONTROL,
-            0,
-            PROTO_ACK_STATUS_QUEUED,
-            1.0,
-        )
-        controller._wait_for_multiturn_nvs_control_result = MagicMock(
-            return_value=False
-        )
-
-        assert controller.set_multiturn_nvs_enabled(False) is False
-        assert "not confirmed" in controller.last_multiturn_nvs_error
-
 
 def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     """固定 400-count 门禁已删除，正反向跨圈都应按最近圈独立恢复。"""
@@ -494,7 +460,7 @@ class TestLoadCalibrationSnapshot:
         controller = HandController()
         controller.comm = MagicMock()
         controller.query_manual_encoder_references = MagicMock(return_value=True)
-        controller.current_state.manual_reference_nvs_valid = True
+        controller.current_state.manual_reference_committed = True
         controller.current_state.manual_reference_valid_bitmap = (1 << 9) | (1 << 10)
         controller.current_state.manual_reference_min_raw = [1000] * ENCODER_COUNT
         controller.current_state.manual_reference_max_raw = [5000] * ENCODER_COUNT
@@ -552,7 +518,6 @@ class TestLoadCalibrationSnapshot:
             "active_joint_mask": (1 << 9) | (1 << 10),
             "active_motor_mask": (1 << 12) | (1 << 13),
             "motor_abs_limit_valid_bitmap": (1 << 12) | (1 << 13),
-            "motor_abs_limit_locked_bitmap": 0,
             "motor_abs_limit_min": [0] * MOTOR_COUNT,
             "motor_abs_limit_max": [0] * MOTOR_COUNT,
             "manual_reference_valid_bitmap": (1 << 9) | (1 << 10),

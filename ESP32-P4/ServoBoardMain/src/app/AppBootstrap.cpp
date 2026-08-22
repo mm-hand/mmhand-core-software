@@ -1,7 +1,7 @@
 /**
  * @file AppBootstrap.cpp
  * @brief 提供 Arduino setup/loop 与 P4 系统装配之间的最薄入口。
- * @details 串口初始化留在平台入口；队列、状态、NVS 和任务创建统一委托给 SystemAssembly。
+ * @details 串口初始化留在平台入口；队列、状态和任务创建统一委托给 SystemAssembly。
  */
 #include "AppBootstrap.h"
 

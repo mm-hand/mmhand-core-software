@@ -123,8 +123,6 @@ def _render_cpp(schema: dict) -> str:
         "kMotorPosAbsOnePayloadBytes": "CMD_MOTOR_POS_ABS_ONE",
         "kActiveScopePayloadBytes": "CMD_ACTIVE_SCOPE",
         "kRestoreMultiTurnPayloadBytes": "CMD_RESTORE_MULTITURN",
-        "kMotorAbsLimitLockPayloadBytes": "CMD_MOTOR_ABS_LIMIT_LOCK",
-        "kMultiTurnNvsControlPayloadBytes": "CMD_MULTITURN_NVS_CONTROL",
         "kCalibLoadJointPayloadBytes": "CMD_CALIB_LOAD_JOINT",
         "kCalibLoadLimitsPayloadBytes": "CMD_CALIB_LOAD_LIMITS",
         "kManualEncoderReferencePayloadBytes": "CMD_MANUAL_ENCODER_REFERENCE",

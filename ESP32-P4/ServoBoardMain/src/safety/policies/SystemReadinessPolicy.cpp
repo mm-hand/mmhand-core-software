@@ -11,7 +11,7 @@
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../platform/time/Clock.h"
 
@@ -157,7 +157,7 @@ bool manualReferenceGateReady(SystemRuntimeContext* runtime)
     const uint32_t validMask =
         sharedAtomicLoad(&runtime->manual_reference_valid_bitmap) &
         kManualEncoderReferenceFullMask;
-    return activeMask != 0 && runtime->manual_reference_nvs_valid != 0 &&
+    return activeMask != 0 && runtime->manual_reference_committed != 0 &&
            (validMask & activeMask) == activeMask &&
            manualEncoderReferencesCoverActiveMask(activeMask);
 }

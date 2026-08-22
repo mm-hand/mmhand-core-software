@@ -1,6 +1,6 @@
 /**
  * @file Crc32Ieee.h
- * @brief 声明 NVS 快照和配置签名复用的 CRC-32/ISO-HDLC 增量接口。
+ * @brief 声明校准 JSON 协议和配置签名复用的 CRC-32/ISO-HDLC 增量接口。
  * @details 固定反射多项式 0xEDB88320，支持把上一次返回值继续传入分段计算。
  */
 #ifndef P4_MODULES_INTEGRITY_CRC32_IEEE_H

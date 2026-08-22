@@ -172,11 +172,6 @@ GROUP_BINDINGS: dict[str, RuleBinding] = {
         "tasks/s3_can_rx/S3CanRxService.cpp", "communicationLengthValid",
         "tasks/s3_can_rx/S3CanRxService.cpp", "reportSafetyRuleEvent",
         "tasks/s3_can_rx/EncoderHealthMonitor.cpp", "updateEncoderHealthFromSnapshot"),
-    "PST": binding(
-        "safety/policies/PersistenceSafetyPolicy.cpp", "persistenceMultiTurnWriteFailureRule",
-        "tasks/nvs_persistence/NvsPersistenceService.cpp", "persistenceMultiTurnWriteFailureRule",
-        "tasks/nvs_persistence/NvsPersistenceService.cpp", "reportSafetyRuleEvent",
-        "tasks/nvs_persistence/NvsPersistenceService.cpp", "result.success"),
     "RUN": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "evaluateRuntimeOverrun",
         "tasks/runtime_monitor/RuntimeMonitorService.cpp", "evaluateRuntimeOverrun",
@@ -227,16 +222,6 @@ RULE_BINDING_OVERRIDES: dict[str, RuleBinding] = {
         "tasks/host_comm/HostCommService.cpp", "communicationEventMayReport",
         "tasks/host_comm/HostCommService.cpp", "reportSafetyRuleEvent",
         "tasks/host_comm/HostFrameReader.cpp", "return true"),
-    "PersistenceManualSaveFailed": binding(
-        "safety/policies/PersistenceSafetyPolicy.cpp", "persistenceManualWriteFailureRule",
-        "tasks/host_comm/HostCommandDispatcher.cpp", "persistenceManualWriteFailureRule",
-        "tasks/host_comm/HostCommandDispatcher.cpp", "reportSafetyRuleEvent",
-        "tasks/host_comm/HostCommandDispatcher.cpp", "manualCleared"),
-    "PersistenceSnapshotInvalid": binding(
-        "safety/policies/PersistenceSafetyPolicy.cpp", "persistenceSnapshotValidityRule",
-        "app/SystemAssembly.cpp", "persistenceSnapshotValidityRule",
-        "app/SystemAssembly.cpp", "recordAssemblyFailure",
-        "tasks/servo_bus/ServoBusService.cpp", "snapshotRule"),
     "RuntimeSafetyEventCacheOverflow": binding(
         "safety/policies/RuntimeSafetyPolicy.cpp", "runtimeEventCacheWillOverflow",
         "safety/SafetyEventStore.cpp", "runtimeEventCacheWillOverflow",
@@ -422,7 +407,6 @@ def render_firmware_index_json() -> str:
                 "CAL": "自动标定流程及标定结果规则。",
                 "RCV": "Rope Init、多圈、热插拔和恢复规则。",
                 "COM": "CAN、串口、协议和数据完整性规则。",
-                "PST": "NVS、快照、CRC、版本和持久化规则。",
                 "RUN": "任务、队列、周期、栈和运行时资源规则。",
                 "WRN": "不阻断控制的诊断警告。"
             }

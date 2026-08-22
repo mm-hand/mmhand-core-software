@@ -25,12 +25,9 @@ def test_motor_limit_load_is_scoped_to_update_bitmap():
     maxs = [2000 + i for i in range(MOTOR_COUNT)]
     update_mask = (1 << 5) | (1 << 6)
     valid_mask = update_mask | (1 << 1)
-    locked_mask = 1 << 6
-
     frame = build_calib_load_limits_cmd(
         update_mask,
         valid_mask,
-        locked_mask,
         mins,
         maxs,
     )
@@ -39,12 +36,11 @@ def test_motor_limit_load_is_scoped_to_update_bitmap():
     assert frame[2] == CMD_CALIB_LOAD_LIMITS
     assert frame[-1] == PROTOCOL_TAIL
     payload = frame[3:-1]
-    assert struct.unpack(">III", payload[:12]) == (
+    assert struct.unpack(">II", payload[:8]) == (
         update_mask,
         valid_mask,
-        locked_mask,
     )
-    assert len(payload) == 12 + MOTOR_COUNT * 8
+    assert len(payload) == 8 + MOTOR_COUNT * 8
 
 
 def test_joint_calibration_current_protocol_round_trip():

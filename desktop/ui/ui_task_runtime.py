@@ -13,7 +13,12 @@ import time
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
-from desktop.core.protocol import TASK_RUNTIME_NAMES, TASK_RUNTIME_STATE_MACHINE, TASK_RUNTIME_CONTROL
+from desktop.core.protocol import (
+    TASK_RUNTIME_NAMES,
+    TASK_RUNTIME_STATE_MACHINE,
+    TASK_RUNTIME_CONTROL,
+    TASK_RUNTIME_SERVO_COMM,
+)
 from desktop.paths import LOG_DIR
 from .ui_qt_compat import QtCore, QtGui, QtWidgets
 
@@ -62,7 +67,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         summary.addStretch(1)
         layout.addLayout(summary)
 
-        self.table = QtWidgets.QTableWidget(0, 17, self)
+        self.table = QtWidgets.QTableWidget(0, 19, self)
         self.table.setHorizontalHeaderLabels([
             "Task",
             "Active",
@@ -81,6 +86,8 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "Stack Min",
             "Min %",
             "Loops/s",
+            "Periodic/s",
+            "Events/s",
         ])
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -238,7 +245,11 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         max_exec_ms = int(diag.get("max_exec_us", 0) or 0) / 1000.0
         window_duration_us = int(diag.get("window_duration_us", 0) or 0)
         window_loop_count = int(diag.get("window_loop_count", 0) or 0)
+        window_periodic_count = int(diag.get("window_periodic_count", 0) or 0)
+        window_event_count = int(diag.get("window_event_count", 0) or 0)
         loops_per_s = window_loop_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
+        periodic_per_s = window_periodic_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
+        events_per_s = window_event_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
         values = [
             str(diag.get("task_name") or TASK_RUNTIME_NAMES.get(task_id, f"Task{task_id}")),
             "Y" if bool(diag.get("active", False)) else "N",
@@ -257,10 +268,15 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             f"{min_free}/{alloc}",
             f"{stack_pct:.1f}%",
             f"{loops_per_s:.1f}",
+            f"{periodic_per_s:.1f}",
+            f"{events_per_s:.1f}",
         ]
         row_state = self._row_state(task_id, diag, stack_pct, max_gap_ms)
+        bus_tooltip = self._servo_bus_timing_tooltip(diag) if task_id == TASK_RUNTIME_SERVO_COMM else ""
         for col, text in enumerate(values):
             item = QtWidgets.QTableWidgetItem(text)
+            if bus_tooltip:
+                item.setToolTip(bus_tooltip)
             item.setTextAlignment(QtCore.Qt.AlignCenter if col > 0 else QtCore.Qt.AlignVCenter)
             if row_state == "bad":
                 item.setBackground(QtGui.QColor("#ffebee"))
@@ -269,6 +285,27 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
                 item.setBackground(QtGui.QColor("#fff8e1"))
                 item.setForeground(QtGui.QColor("#8a5a00"))
             self.table.setItem(row, col, item)
+
+    @staticmethod
+    def _servo_bus_timing_tooltip(diag: dict) -> str:
+        """展示四条 BUS 的一秒同步读统计，不再为表格增加二十四个常驻列。"""
+        samples = list(diag.get("io_sample_count", []) or [])
+        requested = list(diag.get("io_requested_count", []) or [])
+        succeeded = list(diag.get("io_succeeded_count", []) or [])
+        avg_us = list(diag.get("io_avg_us", []) or [])
+        p95_us = list(diag.get("io_p95_us", []) or [])
+        p99_us = list(diag.get("io_p99_us", []) or [])
+        lines = []
+        for bus in range(4):
+            def value(items):
+                return int(items[bus]) if bus < len(items) else 0
+            lines.append(
+                f"BUS{bus}: calls={value(samples)}, feedback={value(succeeded)}/{value(requested)}, "
+                f"avg={value(avg_us) / 1000.0:.2f} ms, "
+                f"P95={value(p95_us) / 1000.0:.2f} ms, "
+                f"P99={value(p99_us) / 1000.0:.2f} ms"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def _row_state(task_id: int, diag: dict, stack_pct: float, max_gap_ms: float) -> str:
@@ -307,6 +344,10 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "window_duration_us",
             "window_loop_count",
             "loops_per_s",
+            "window_periodic_count",
+            "periodic_per_s",
+            "window_event_count",
+            "events_per_s",
             "cpu_permille",
             "avg_exec_us",
             "p95_exec_us",
@@ -325,6 +366,15 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "stop_max_latency_us",
             "device_timestamp_ms",
         ]
+        for bus in range(4):
+            fields.extend([
+                f"bus{bus}_read_count",
+                f"bus{bus}_requested",
+                f"bus{bus}_succeeded",
+                f"bus{bus}_avg_us",
+                f"bus{bus}_p95_us",
+                f"bus{bus}_p99_us",
+            ])
         self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=fields)
         self._csv_writer.writeheader()
 
@@ -360,7 +410,11 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         stack_pct = (min_free * 100.0 / alloc) if alloc > 0 else 0.0
         window_duration_us = int(diag.get("window_duration_us", 0) or 0)
         window_loop_count = int(diag.get("window_loop_count", 0) or 0)
+        window_periodic_count = int(diag.get("window_periodic_count", 0) or 0)
+        window_event_count = int(diag.get("window_event_count", 0) or 0)
         loops_per_s = window_loop_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
+        periodic_per_s = window_periodic_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
+        events_per_s = window_event_count * 1000000.0 / window_duration_us if window_duration_us > 0 else 0.0
         row = {
             "host_ts": f"{time.time():.3f}",
             "task_id": task_id,
@@ -376,6 +430,10 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "window_duration_us": window_duration_us,
             "window_loop_count": window_loop_count,
             "loops_per_s": f"{loops_per_s:.3f}",
+            "window_periodic_count": window_periodic_count,
+            "periodic_per_s": f"{periodic_per_s:.3f}",
+            "window_event_count": window_event_count,
+            "events_per_s": f"{events_per_s:.3f}",
             "cpu_permille": int(diag.get("cpu_permille", UNKNOWN_PERMILLE) or UNKNOWN_PERMILLE),
             "avg_exec_us": int(diag.get("avg_exec_us", 0) or 0),
             "p95_exec_us": int(diag.get("p95_exec_us", 0) or 0),
@@ -394,6 +452,18 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
             "stop_max_latency_us": int(diag.get("stop_max_latency_us", 0) or 0),
             "device_timestamp_ms": int(diag.get("device_timestamp_ms", 0) or 0),
         }
+        io_fields = (
+            ("read_count", "io_sample_count"),
+            ("requested", "io_requested_count"),
+            ("succeeded", "io_succeeded_count"),
+            ("avg_us", "io_avg_us"),
+            ("p95_us", "io_p95_us"),
+            ("p99_us", "io_p99_us"),
+        )
+        for bus in range(4):
+            for csv_name, diag_name in io_fields:
+                values = list(diag.get(diag_name, []) or [])
+                row[f"bus{bus}_{csv_name}"] = int(values[bus]) if bus < len(values) else 0
         self._csv_writer.writerow(row)
         self._csv_file.flush()
 

@@ -43,7 +43,6 @@ class ControlPanelViewMixin:
         self.reset_btn = device.reset_btn
         self.calib_btn = device.calib_btn
         self.rope_init_btn = device.rope_init_btn
-        self.nvs_control_btn = device.nvs_control_btn
         layout.addWidget(device)
         self._update_connection_lights()
         device.connect_panel(self)
@@ -258,7 +257,6 @@ class ControlPanelViewMixin:
         self.motor_sliders = []
         self.motor_send_buttons = []
         self.motor_step_buttons = []
-        self.abs_limit_lock_toggle_btn = None
         self.motor_use_checks = [None] * MOTOR_COUNT
         self.motor_group_use_checks = []
         self._motor_target_user_set = []

@@ -10,7 +10,7 @@
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../config/CalibrationConfig.h"
 #include "../../config/topology/HardwareMap.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 
 namespace mmhand::calibration {
@@ -116,7 +116,7 @@ static float tendonFitSampleAngleDeg(uint8_t jointIndex,
 }
 
 // 在原始样本中按角度线性插值。目标落在 Auto 实测区外但仍位于 URDF
-// 工作区时，沿首末两点斜率外推；运行期只保留硬件范围和显式 LOCK 保护。
+// 工作区时，沿首末两点斜率外推；运行期由 LUT 裕量和会话 logical range 保护。
 static bool interpolateTendonFitAbs(float targetDeg,
                                   const float* sampleDeg,
                                   const int32_t* sampleAbs,
@@ -336,7 +336,7 @@ static bool buildAutoZeroTightCalibrationResultWithRange(uint8_t jointIndex,
     out->scaled = true;
 
     // 上面的历史标定字段使用按关节方向统一后的磁编坐标；V4 的
-    // autoMinRaw/autoMaxRaw 属于通信与 NVS 契约，必须保存物理 14-bit raw。
+    // autoMinRaw/autoMaxRaw 属于通信与桌面 JSON 契约，必须保存物理 14-bit raw。
     // calibrationOrientEncoderRaw() 在 direction=-1 时是自逆变换，因此这里
     // 再调用一次即可还原物理 raw，同时不会改变 direction=+1 的关节。
     const int8_t encoderDirection = g_encoderDirection[jointIndex];

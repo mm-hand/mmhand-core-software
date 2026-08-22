@@ -6,7 +6,7 @@
 #ifndef P4_SYSTEM_SYSTEM_ASSEMBLY_H
 #define P4_SYSTEM_SYSTEM_ASSEMBLY_H
 
-/** 创建共享资源、初始化状态、恢复 NVS 并启动全部业务任务。 */
+/** 创建共享资源、初始化状态并启动全部业务任务。 */
 bool assembleAndStartSystem();
 
 #endif // P4_SYSTEM_SYSTEM_ASSEMBLY_H

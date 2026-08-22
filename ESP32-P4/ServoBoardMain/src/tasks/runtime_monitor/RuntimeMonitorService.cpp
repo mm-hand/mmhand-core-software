@@ -48,6 +48,12 @@ TaskRuntimeSnapshot g_frozenSnapshots[TASK_RUNTIME_COUNT] = {};
 // 仅 RuntimeMonitor 使用的静态暂存区，避免在 4 KiB 任务栈上创建大数组。
 TaskRuntimeSlot g_windowSlots[TASK_RUNTIME_COUNT] = {};
 TaskRuntimeSnapshot g_windowSnapshots[TASK_RUNTIME_COUNT] = {};
+TaskRuntimeWindowAccumulator g_servoIoWindows[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
+TaskRuntimeWindowAccumulator g_windowServoIo[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
+uint32_t g_servoIoRequested[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
+uint32_t g_servoIoSucceeded[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
+uint32_t g_windowServoIoRequested[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
+uint32_t g_windowServoIoSucceeded[TASK_RUNTIME_IO_CHANNEL_COUNT] = {};
 portMUX_TYPE g_runtimeLock = portMUX_INITIALIZER_UNLOCKED;
 uint16_t g_coreIdlePermille[2] = {
     kTaskRuntimeUnknownPermille, kTaskRuntimeUnknownPermille,
@@ -277,6 +283,18 @@ void freezeRuntimeWindow(int64_t nowUs)
     for (uint8_t id = 0; id < TASK_RUNTIME_COUNT; id++) {
         taskRuntimeWindowReset(&g_slots[id].window);
     }
+    memcpy(g_windowServoIo, g_servoIoWindows, sizeof(g_windowServoIo));
+    memcpy(g_windowServoIoRequested,
+           g_servoIoRequested,
+           sizeof(g_windowServoIoRequested));
+    memcpy(g_windowServoIoSucceeded,
+           g_servoIoSucceeded,
+           sizeof(g_windowServoIoSucceeded));
+    for (uint8_t channel = 0; channel < TASK_RUNTIME_IO_CHANNEL_COUNT; ++channel) {
+        taskRuntimeWindowReset(&g_servoIoWindows[channel]);
+        g_servoIoRequested[channel] = 0;
+        g_servoIoSucceeded[channel] = 0;
+    }
     portEXIT_CRITICAL(&g_runtimeLock);
 
     for (uint8_t id = 0; id < TASK_RUNTIME_COUNT; id++) {
@@ -295,6 +313,8 @@ void freezeRuntimeWindow(int64_t nowUs)
         snapshot.windowSequence = sequence;
         snapshot.windowDurationUs = durationUs;
         snapshot.windowLoopCount = slot.window.loopCount;
+        snapshot.windowPeriodicCount = slot.window.periodicCount;
+        snapshot.windowEventCount = slot.window.eventCount;
         snapshot.avgExecUs = slot.window.loopCount
             ? (uint32_t)(slot.window.execTotalUs / slot.window.loopCount) : 0U;
         snapshot.p95ExecUs = taskRuntimeWindowQuantileUs(slot.window, 950U);
@@ -310,6 +330,31 @@ void freezeRuntimeWindow(int64_t nowUs)
         snapshot.stopLastLatencyUs = stopLastLatencyUs;
         snapshot.stopMaxLatencyUs = stopMaxLatencyUs;
         snapshot.timestampMs = timestampMs;
+        memset(snapshot.ioSampleCount, 0, sizeof(snapshot.ioSampleCount));
+        memset(snapshot.ioRequestedCount, 0, sizeof(snapshot.ioRequestedCount));
+        memset(snapshot.ioSucceededCount, 0, sizeof(snapshot.ioSucceededCount));
+        memset(snapshot.ioAvgUs, 0, sizeof(snapshot.ioAvgUs));
+        memset(snapshot.ioP95Us, 0, sizeof(snapshot.ioP95Us));
+        memset(snapshot.ioP99Us, 0, sizeof(snapshot.ioP99Us));
+        if (id == TASK_RUNTIME_SERVO_BUS) {
+            for (uint8_t channel = 0;
+                 channel < TASK_RUNTIME_IO_CHANNEL_COUNT;
+                 ++channel) {
+                const TaskRuntimeWindowAccumulator& io =
+                    g_windowServoIo[channel];
+                snapshot.ioSampleCount[channel] = io.loopCount;
+                snapshot.ioRequestedCount[channel] =
+                    g_windowServoIoRequested[channel];
+                snapshot.ioSucceededCount[channel] =
+                    g_windowServoIoSucceeded[channel];
+                snapshot.ioAvgUs[channel] = io.loopCount
+                    ? (uint32_t)(io.execTotalUs / io.loopCount) : 0U;
+                snapshot.ioP95Us[channel] =
+                    taskRuntimeWindowQuantileUs(io, 950U);
+                snapshot.ioP99Us[channel] =
+                    taskRuntimeWindowQuantileUs(io, 990U);
+            }
+        }
     }
 
     portENTER_CRITICAL(&g_runtimeLock);
@@ -378,6 +423,28 @@ void taskRuntimeMarkLoopEnd(uint8_t taskId)
         taskRuntimeWindowAddExec(&slot.window, execUs);
     }
     if (currentStackFreeBytes > 0U) slot.stackCurrentFreeBytes = currentStackFreeBytes;
+    portEXIT_CRITICAL(&g_runtimeLock);
+}
+
+void taskRuntimeMarkCycle(uint8_t taskId, bool periodicDue, bool eventWake)
+{
+    if (taskId >= TASK_RUNTIME_COUNT) return;
+    portENTER_CRITICAL(&g_runtimeLock);
+    if (periodicDue) g_slots[taskId].window.periodicCount++;
+    if (eventWake) g_slots[taskId].window.eventCount++;
+    portEXIT_CRITICAL(&g_runtimeLock);
+}
+
+void taskRuntimeMarkIoSample(uint8_t channel,
+                             uint32_t elapsedUs,
+                             uint32_t requestedCount,
+                             uint32_t succeededCount)
+{
+    if (channel >= TASK_RUNTIME_IO_CHANNEL_COUNT) return;
+    portENTER_CRITICAL(&g_runtimeLock);
+    taskRuntimeWindowAddExec(&g_servoIoWindows[channel], elapsedUs);
+    g_servoIoRequested[channel] += requestedCount;
+    g_servoIoSucceeded[channel] += succeededCount;
     portEXIT_CRITICAL(&g_runtimeLock);
 }
 

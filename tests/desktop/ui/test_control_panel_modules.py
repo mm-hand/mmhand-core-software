@@ -40,7 +40,7 @@ def test_joint_target_model_uses_calibrated_min_and_clamps_invalid_values() -> N
     state = HandModel()
     min_raw = 100
     max_raw = 2000
-    state.manual_reference_nvs_valid = True
+    state.manual_reference_committed = True
     state.manual_reference_valid_bitmap = 1
     state.auto_calibration_valid_bitmap = 1
     state.manual_reference_min_raw[0] = min_raw

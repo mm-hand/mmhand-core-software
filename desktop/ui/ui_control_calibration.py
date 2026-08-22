@@ -299,29 +299,89 @@ class CalibrationWorkflowController:
                 f"Calibrate blocked: P4 system_state={system_state}"
             )
             return
-        # 每次标定都先把目标关节对应舵机的硬件圈数归零。这样 Auto/LUT、
-        # P4 logical ABS 与桌面 JSON 从同一个 turn0 起步。该维护事务不依赖
-        # 当前 active scope，因此 Turn Unknown 时仍能先修复再启动标定。
-        # 辅助工作空间关节不在该 mask 中。
+        # 每次标定都先把目标关节对应舵机的硬件圈数归零。四指侧摆关节还
+        # 依赖其他双电机关节让出机械空间，因此在线但 Turn Unknown 的辅助
+        # 双电机也必须成对归零；否则 P4 会在工作空间预检阶段安全拒绝。
         active_joint_mask = int(self._active_joint_mask_from_ui()) & (
             (1 << ENCODER_COUNT) - 1
         )
         active_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
-        self._set_status("Calibrate: resetting selected motor turn counters...")
+        servo_online_mask = int(
+            getattr(self._state, "servo_online_bitmap", 0) or 0
+        ) & VALID_MOTOR_MASK
+        unknown_mask = int(
+            getattr(self._state, "multi_turn_unknown_bitmap", 0) or 0
+        ) & VALID_MOTOR_MASK
+        (
+            helper_joint_mask,
+            helper_motor_mask,
+            partial_helper_joint_mask,
+            partial_helper_motor_mask,
+        ) = ControlScopeModel.calibration_workspace_helper_reset_scope(
+            active_joint_mask,
+            servo_online_mask,
+            unknown_mask,
+        )
+        if partial_helper_motor_mask:
+            helper_text = self._format_joint_indices(
+                ControlScopeModel.ordered_joint_indices_from_mask(
+                    partial_helper_joint_mask
+                )
+            )
+            motor_text = self._format_motor_mask(partial_helper_motor_mask)
+            self._warn(
+                "Calibration workspace unavailable",
+                "Workspace helper dual-motor joint is only partially online: "
+                f"{helper_text}; motors={motor_text}.\n"
+                "Reconnect both motors of the helper joint before calibration.",
+            )
+            self._set_status(
+                "Calibrate blocked: workspace helper dual-motor pair is partially online"
+            )
+            return
+
+        reset_motor_mask = (active_motor_mask | helper_motor_mask) & VALID_MOTOR_MASK
+        self.context.emit_action(
+            "CALIB_RESET_SCOPE "
+            f"selected_joints=0x{active_joint_mask:08X} "
+            f"selected_motors=0x{active_motor_mask:08X}"
+        )
+        self.context.emit_action(
+            "CALIB_RESET_HELPERS "
+            f"joints=0x{helper_joint_mask:08X} "
+            f"motors=0x{helper_motor_mask:08X}"
+        )
+        self.context.emit_action(
+            f"CALIB_RESET_FINAL motors=0x{reset_motor_mask:08X}"
+        )
+        helper_count = int(helper_motor_mask).bit_count()
+        self._set_status(
+            "Calibrate: resetting selected motors"
+            + (
+                f" and {helper_count} workspace helper motor(s)..."
+                if helper_count
+                else "..."
+            )
+        )
         ok, message, reset_mask, failed_mask = (
-            self.backend.prepare_calibration_turn_zero(active_motor_mask)
+            self.backend.prepare_calibration_turn_zero(reset_motor_mask)
         )
         if reset_mask:
+            # 事务可能出现部分成功；只失效真正改变过硬件 turn0 的舵机及其
+            # 关节，既不能漏掉辅助电机，也不能误删未执行复位的标定结果。
+            invalidated_joint_mask = ControlScopeModel.joint_mask_for_motor_mask(
+                reset_mask
+            )
             self._joint_target_initialized = False
             self._reset_motor_target_cache_for_device_epoch(
-                "Calibrate: selected motor turn counters reset"
+                "Calibrate: motor turn counters reset"
             )
             self._invalidate_local_calibration_scope(
-                active_motor_mask, active_joint_mask
+                reset_mask, invalidated_joint_mask
             )
             self._backup_and_invalidate_calib_snapshot_scope(
-                active_motor_mask,
-                active_joint_mask,
+                reset_mask,
+                invalidated_joint_mask,
                 reason="calibration_turn_zero",
             )
         if not ok:
@@ -339,8 +399,6 @@ class CalibrationWorkflowController:
 
     def _start_calibration_now(self) -> None:
         """Handle start calibration now behavior for the control panel."""
-        self._abs_limit_warning_unlocked_mask = 0
-        self._feedback_abs_limit_popup_episode_active = False
         active_joint_mask = int(self._active_joint_mask_from_ui()) & ((1 << ENCODER_COUNT) - 1)
         active_motor_mask = int(self._active_motor_mask_from_ui()) & VALID_MOTOR_MASK
         self._pending_calib_joint_mask = active_joint_mask
@@ -363,43 +421,6 @@ class CalibrationWorkflowController:
                 self._joint_target_user_set[joint_idx] = False
         self._joint_target_initialized = False
         self.context.start_calibration()
-
-    def _active_scope_abs_limit_valid_mask(self) -> int:
-        """Return the active scope abs limit valid mask state."""
-        state = self._state
-        if state is None:
-            return 0
-        return self._active_motor_mask_from_ui() & int(getattr(state, "motor_abs_limit_valid_bitmap", 0))
-
-    def _abs_limit_toggle_target_locked(self) -> bool:
-        """Handle abs limit toggle target locked behavior for the control panel."""
-        mask = self._active_scope_abs_limit_valid_mask()
-        if mask == 0 or self._state is None:
-            return True
-        locked_bitmap = int(getattr(self._state, "motor_abs_limit_locked_bitmap", 0) or 0)
-        locked_bitmap &= ~int(getattr(self, "_abs_limit_warning_unlocked_mask", 0) or 0)
-        all_locked = (locked_bitmap & mask) == mask
-        return not all_locked
-
-    def _refresh_abs_limit_lock_toggle_button(self) -> None:
-        """Refresh the abs limit lock toggle button display or controls."""
-        button = getattr(self, "abs_limit_lock_toggle_btn", None)
-        if button is None:
-            return
-        target_locked = self._abs_limit_toggle_target_locked()
-        button.setText("LOCK" if target_locked else "UNLOCK")
-        if target_locked:
-            button.setToolTip(
-                "Lock the calibrated 5-turn ABS travel limits for the selected feedback joints"
-            )
-        else:
-            button.setToolTip(
-                "Unlock the calibrated 5-turn ABS travel limits for the selected feedback joints"
-            )
-
-    def toggle_abs_limit_lock(self) -> None:
-        """Toggle the abs limit lock setting."""
-        self.set_abs_limit_lock(self._abs_limit_toggle_target_locked())
 
     def _active_scope_abs_limit_missing_mask(self) -> int:
         """Return the active scope abs limit missing mask state."""
@@ -555,7 +576,7 @@ class CalibrationWorkflowController:
         """Return the active scope manual missing indices state."""
         active_joints = self._active_scope_joint_indices()
         state = self._state
-        if state is None or not bool(getattr(state, "manual_reference_nvs_valid", False)):
+        if state is None or not bool(getattr(state, "manual_reference_committed", False)):
             return active_joints
         valid_mask = int(getattr(state, "manual_reference_valid_bitmap", 0) or 0)
         min_values = list(getattr(state, "manual_reference_min_raw", []) or [])
@@ -1163,9 +1184,6 @@ class CalibrationWorkflowController:
             "active_joint_mask": f"0x{active_joint_mask:08X}",
             "active_motor_mask": f"0x{active_motor_mask:08X}",
             "motor_abs_limit_valid_bitmap": f"0x{valid_bitmap:08X}",
-            "motor_abs_limit_locked_bitmap": (
-                f"0x{int(getattr(state, 'motor_abs_limit_locked_bitmap', 0) or 0):08X}"
-            ),
             "motor_abs_limit_min": mins,
             "motor_abs_limit_max": maxs,
             "manual_reference_valid_bitmap": f"0x{manual_valid_mask:08X}",
@@ -1237,7 +1255,6 @@ class CalibrationWorkflowController:
                 "active_joint_mask": payload["active_joint_mask"],
                 "active_motor_mask": payload["active_motor_mask"],
                 "valid": payload["motor_abs_limit_valid_bitmap"],
-                "locked": payload["motor_abs_limit_locked_bitmap"],
                 "mins": payload["motor_abs_limit_min"],
                 "maxs": payload["motor_abs_limit_max"],
                 "joints": payload["joint_calib_results"],
@@ -1573,12 +1590,12 @@ class CalibrationWorkflowController:
             manual_mask = int(
                 getattr(state, "manual_reference_valid_bitmap", 0) or 0
             ) if state is not None else 0
-            nvs_valid = bool(
-                getattr(state, "manual_reference_nvs_valid", False)
+            committed = bool(
+                getattr(state, "manual_reference_committed", False)
             ) if state is not None else False
             missing_mask = (
                 active_joint_mask
-                if not nvs_valid
+                if not committed
                 else active_joint_mask & ~manual_mask
             )
             if missing_mask:
@@ -1792,10 +1809,6 @@ class CalibrationWorkflowController:
                     int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
                     & ~motor_mask
                 )
-                state.motor_abs_limit_locked_bitmap = (
-                    int(getattr(state, "motor_abs_limit_locked_bitmap", 0) or 0)
-                    & ~motor_mask
-                )
                 mins = list(getattr(state, "motor_abs_limit_min", []) or [])
                 maxs = list(getattr(state, "motor_abs_limit_max", []) or [])
                 while len(mins) < MOTOR_COUNT:
@@ -1824,7 +1837,6 @@ class CalibrationWorkflowController:
             except Exception:
                 pass
         self._last_calib_snapshot_signature = None
-        self._abs_limit_warning_unlocked_mask &= ~motor_mask
         for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(
             joint_mask
         ):

@@ -39,10 +39,6 @@ bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
 bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
                                       uint32_t restoredMask,
                                       uint32_t rejectedMask);
-/** 上报最近一次成功 Flash 快照；从 100 Hz Servo Raw 包中独立出来。 */
-bool sendMultiTurnSnapshotRawPacket(uint32_t resultToken,
-                                    uint32_t validMask,
-                                    const int16_t* snapshotRaw);
 bool sendServoRouteStatusPacket(SystemRuntimeContext* sharedData);
 /** 发送一条已去重的安全规则事件；时间戳使用事件实际触发时刻。 */
 bool sendSafetyEventPacket(const SafetyEventRecord& event,

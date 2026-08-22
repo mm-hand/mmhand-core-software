@@ -7,7 +7,9 @@
 #include <Arduino.h>
 
 #include "HostCommService.h"
+#include "../../config/TaskConfig.h"
 #include "../../hal/serial/HostSerialPort.h"
+#include "../../platform/rtos/PeriodicDeadline.h"
 #include "../../platform/rtos/TaskSignal.h"
 #include "../../platform/time/Clock.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
@@ -36,20 +38,39 @@ void hostCommTask(void* parameter)
 
     sharedData->hostCommWake.bind(xTaskGetCurrentTaskHandle());
     HostSerialPort::setRxWakeHandler(wakeHostComm, sharedData);
-    const TickType_t periodTicks = pdMS_TO_TICKS(5);
+    const TickType_t periodTicks = pdMS_TO_TICKS(HOST_COMM_SERVICE_PERIOD_MS);
+    p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
+    uint32_t wakeReasons = 0;
     for (;;) {
+        const TickType_t dispatchTicks = xTaskGetTickCount();
+        const bool periodicDue = deadline.due(dispatchTicks);
+        if (!periodicDue && wakeReasons == 0U) {
+            wakeReasons = sharedData->hostCommWake.wait(
+                deadline.remaining(dispatchTicks));
+            continue;
+        }
+        if (periodicDue) deadline.advancePast(dispatchTicks);
+
         const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_HOST_COMM);
+        taskRuntimeMarkCycle(TASK_RUNTIME_HOST_COMM,
+                             periodicDue,
+                             wakeReasons != 0U);
+        const HostCommStepRequest request = {wakeReasons, periodicDue};
+        wakeReasons = 0;
         stepHostCommService(sharedData,
-                             p4::platform::time::monotonicMillis());
+                            p4::platform::time::monotonicMillis(),
+                            request);
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_HOST_COMM);
-        const bool periodOverrun =
-            (xTaskGetTickCount() - loopBegin) >= periodTicks;
-        taskRuntimeMarkPeriodResult(TASK_RUNTIME_HOST_COMM, periodOverrun);
-        if (periodOverrun) {
-            vTaskDelay(1);
-        } else {
-            (void)sharedData->hostCommWake.wait(periodTicks);
+        if (periodicDue) {
+            const TickType_t loopEnd = xTaskGetTickCount();
+            const bool periodOverrun =
+                (loopEnd - loopBegin) >= periodTicks || deadline.due(loopEnd);
+            taskRuntimeMarkPeriodResult(TASK_RUNTIME_HOST_COMM, periodOverrun);
+            if (periodOverrun) {
+                if (deadline.due(loopEnd)) deadline.advancePast(loopEnd);
+                vTaskDelay(1);
+            }
         }
     }
     vTaskDelete(NULL);

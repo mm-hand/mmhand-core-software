@@ -232,7 +232,7 @@ void updateHostControlLease(SystemRuntimeContext* sharedData,
                             const HostLeaseSupervisorPort& port)
 {
     if (!sharedData || !port.resolveIdleOrReady || !port.transitionTo ||
-        !port.requestMultiTurnSave || !port.setCalibrationStatus ||
+        !port.setCalibrationStatus ||
         sharedAtomicLoad(&sharedData->emergency_stop_latched) != 0) {
         return;
     }
@@ -264,8 +264,6 @@ void updateHostControlLease(SystemRuntimeContext* sharedData,
                           (uint8_t)SERVO_TARGET_OWNER_NONE);
         sharedAtomicStore(&sharedData->control_enabled, (uint8_t)0);
         port.transitionTo(sharedData, port.resolveIdleOrReady(sharedData));
-        port.requestMultiTurnSave(sharedData,
-                                  MULTITURN_NVS_SAVE_REASON_RUN_DONE);
         FW_LOG_WARN_PRINTF(
             "[HOST LEASE HOLD] completed token=%lu interruptedState=%u nextState=%u\r\n",
             (unsigned long)requestToken,

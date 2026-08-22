@@ -39,7 +39,7 @@ def _ready_state(active_mask=1, calibrated_mask=None):
     state.system_state = SYSTEM_STATE_READY
     state.active_joint_mask = active_mask
     state.feedback_collision_hold_bitmap = 0
-    state.manual_reference_nvs_valid = True
+    state.manual_reference_committed = True
     state.manual_reference_valid_bitmap = calibrated_mask
     state.auto_calibration_valid_bitmap = calibrated_mask
     for joint in range(ENCODER_COUNT):

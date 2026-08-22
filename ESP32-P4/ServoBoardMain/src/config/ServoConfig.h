@@ -9,21 +9,9 @@
 #include <stdint.h>
 #include "DimensionsConfig.h"
 
-/**
- * P4 Flash 业务持久化总开关。
- *
- * 当前阶段由上位机 JSON 保存 Manual/Auto/LUT/ABS Limit 与运行多圈锚点，
- * 因此默认关闭 P4 NVS 读写。旧实现继续保留在 ENABLE=1 分支中，实机验证
- * 完成后再统一删除，禁止局部重新打开其中某一种 Flash 数据源。
- */
-#define P4_FLASH_PERSISTENCE_ENABLE 0
-#define MULTITURN_NVS_PERSISTENCE_ENABLE P4_FLASH_PERSISTENCE_ENABLE
-
 inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3; ///< 同步读单批等待时限。
 inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400; ///< 标定/直控默认速度。
 inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200; ///< 标定/直控默认加速度。
-/** NVS 快照在单圈零点两侧该距离内时，额外触发一次边界保存。 */
-inline constexpr int16_t kMultiTurnEdgeRawMarginCounts = 256;
 
 namespace mmhand::config::servo {
 
@@ -45,11 +33,6 @@ static_assert(kServoFeedbackBusesPerCycle > 0 &&
 static_assert(kServoFeedbackPollPeriodMs == 20,
               "servo full-feedback period must remain 20 ms");
 
-/** 多圈恢复与异步 NVS 协调参数；不改变现有快照布局和键名。 */
-inline constexpr uint32_t kNvsRestoreWaitWindowMs = 3000;
-inline constexpr uint32_t kNvsSaveMinIntervalMs = 500;
-inline constexpr uint32_t kNvsOfflinePeriodicSaveMs = 2000;   //离线期间每隔该时间保存一次快照。
-inline constexpr int32_t kNvsMoveAbsThreshold = 64;             ///< 运动期间逻辑 ABS 变化超过该值才触发离线保存。
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
 /**
@@ -58,6 +41,11 @@ inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达�
  * 短暂调度抖动，又能避免快速掉电重启长期沿用旧 hardware ABS 会话。
  */
 inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
+// Reset Zero 会在 ServoBusTask 内同步执行 RESET、EEPROM 配置和反馈确认。
+// 事务结束后预留一个 stale 周期，使四条 BUS 先各完成一次正常同步读，避免
+// 把维护操作自身造成的轮询间隔误判为舵机掉电。
+inline constexpr uint32_t kFeedbackMaintenanceGraceMs =
+    kFeedbackStaleTimeoutMs;
 /** 重新发现舵机后必须连续成功三帧，约 40~60 ms，才重新发布 online。 */
 inline constexpr uint8_t kOnlineConfirmReads = 3;
 inline constexpr uint16_t kDiscoveryProbeTimeoutMs = 2; ///< 动态 BUS 探测单次最长阻塞时间。

@@ -18,9 +18,6 @@ void setSystemState(SystemRuntimeContext* sharedData, uint8_t state);
 /** 写入持续标定状态；上位机通过 SYSTEM_STATUS 读取，不再插队发送瞬时 ACK。 */
 void setCalibrationStatus(uint8_t status);
 
-/** 请求多圈快照异步保存；状态机不得直接访问 NVS。 */
-void requestMultiTurnNvsSave(SystemRuntimeContext* sharedData, uint8_t reason);
-
 /** 撤销运动 owner、保持安全输出并切入不可控状态。 */
 void enterFaultHold(SystemRuntimeContext* sharedData, uint32_t faultBits);
 

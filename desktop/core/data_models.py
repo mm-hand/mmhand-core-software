@@ -487,7 +487,7 @@ def resolve_joint_workspace_range(
 
     bit = 1 << idx
     manual_valid = bool(
-        getattr(model, "manual_reference_nvs_valid", False)
+        getattr(model, "manual_reference_committed", False)
         and (int(getattr(model, "manual_reference_valid_bitmap", 0) or 0) & bit)
     )
     auto_valid = bool(int(getattr(model, "auto_calibration_valid_bitmap", 0) or 0) & bit)
@@ -595,6 +595,8 @@ class HandModel:
     proto_ack_mode: int = 0
     proto_ack_status: int = 0
     proto_ack_p4_time_ms: int = 0
+    # ACK 是离散事件；历史独立于 latest-state 邮箱，供事件日志逐条补记。
+    proto_ack_history: List[dict] = field(default_factory=list)
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
     # 原始磁编包（PACKET_TYPE_ENCODER_RAW）与映射角包独立：未标定时 raw 仍应可见。
@@ -602,7 +604,6 @@ class HandModel:
     encoder_raw_last_rx_ts: float = 0.0
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
-    has_servo_flash_raw_data: bool = False
     has_system_status_data: bool = False
     system_status_last_rx_ts: float = 0.0
     system_state: int = 0
@@ -612,20 +613,12 @@ class HandModel:
     system_fault_bitmap: int = 0
     state_transition_count: int = 0
     multi_turn_unknown_bitmap: int = 0
-    multiturn_nvs_enabled: bool = True
-    multiturn_nvs_snapshot_valid: bool = False
-    multiturn_nvs_save_request_token: int = 0
-    multiturn_nvs_save_result_token: int = 0
-    multiturn_nvs_save_valid_mask: int = 0
-    multiturn_nvs_save_fail_count: int = 0
-    has_multiturn_nvs_status: bool = False
     # CMD_RESTORE_MULTITURN 的异步最终结果，不与“已入队”协议 ACK 混淆。
     multiturn_restore_result_token: int = 0
     multiturn_restore_restored_mask: int = 0
     multiturn_restore_rejected_mask: int = 0
     multiturn_restore_result_last_rx_ts: float = 0.0
-    # 上位机 JSON 中的可信多圈锚点。该状态不来自 P4 协议，只用于 UI 展示
-    # 和掉电恢复，避免继续把旧 NVS 字段误称为 Flash 快照。
+    # 上位机 JSON 中的可信多圈锚点。该状态不来自 P4 协议，只用于 UI 展示和掉电恢复。
     host_multiturn_valid_mask: int = 0
     host_multiturn_saved_raw_positions: List[int] = field(
         default_factory=lambda: [0] * MOTOR_COUNT
@@ -633,9 +626,10 @@ class HandModel:
     host_multiturn_status: str = "not loaded"
     manual_reference_valid_bitmap: int = 0
     manual_reference_crc: int = 0
-    manual_reference_nvs_sequence: int = 0
-    manual_reference_nvs_valid: bool = False
-    manual_reference_save_status: int = 0
+    # P4 的 Manual 表仅驻留 RAM；桌面端 calibration_bundle JSON 才负责跨重启保存。
+    manual_reference_revision: int = 0
+    manual_reference_committed: bool = False
+    manual_reference_commit_status: int = 0
     auto_calibration_valid_bitmap: int = 0
     rope_init_status: int = 0
     rope_init_reason: int = 0
@@ -696,7 +690,6 @@ class HandModel:
     has_servo_reset_zero_status: bool = False
     can_link_online: bool = False
     motor_abs_limit_valid_bitmap: int = 0
-    motor_abs_limit_locked_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     # 每台舵机当前上电会话的 logical ABS 可达范围。该范围由
@@ -741,7 +734,6 @@ class HandModel:
     servo_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
     # 当前单圈 raw 来自 100 Hz 流；Flash raw 来自保存结果触发的独立快照。
     servo_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    servo_flash_raw_positions: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_raw_online: List[bool] = field(default_factory=lambda: [False] * MOTOR_COUNT)
 
     # 伺服遥测数据（来自 PACKET_TYPE_SERVO_TELEM）
@@ -789,6 +781,11 @@ class HandModel:
         self.proto_ack_mode = int(getattr(other, "proto_ack_mode", 0) or 0)
         self.proto_ack_status = int(getattr(other, "proto_ack_status", 0) or 0)
         self.proto_ack_p4_time_ms = int(getattr(other, "proto_ack_p4_time_ms", 0) or 0)
+        self.proto_ack_history = [
+            dict(item)
+            for item in getattr(other, "proto_ack_history", [])
+            if isinstance(item, dict)
+        ][-64:]
         for i, e in enumerate(self.encoders):
             if i < len(other.encoders):
                 e.raw = other.encoders[i].raw
@@ -807,7 +804,6 @@ class HandModel:
         self.servo_angles = list(other.servo_angles)
         self.servo_online = list(other.servo_online)
         self.servo_raw_positions = list(other.servo_raw_positions)
-        self.servo_flash_raw_positions = list(other.servo_flash_raw_positions)
         self.servo_raw_online = list(other.servo_raw_online)
         self.servo_speed = list(other.servo_speed)
         self.servo_load = list(other.servo_load)
@@ -823,7 +819,6 @@ class HandModel:
         self.encoder_raw_last_rx_ts = float(getattr(other, "encoder_raw_last_rx_ts", 0.0) or 0.0)
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
-        self.has_servo_flash_raw_data = bool(other.has_servo_flash_raw_data)
         self.has_system_status_data = bool(other.has_system_status_data)
         self.system_status_last_rx_ts = float(getattr(other, "system_status_last_rx_ts", 0.0) or 0.0)
         self.system_state = int(other.system_state)
@@ -833,13 +828,6 @@ class HandModel:
         self.system_fault_bitmap = int(other.system_fault_bitmap)
         self.state_transition_count = int(other.state_transition_count)
         self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
-        self.multiturn_nvs_enabled = bool(getattr(other, "multiturn_nvs_enabled", True))
-        self.multiturn_nvs_snapshot_valid = bool(getattr(other, "multiturn_nvs_snapshot_valid", False))
-        self.multiturn_nvs_save_request_token = int(getattr(other, "multiturn_nvs_save_request_token", 0) or 0)
-        self.multiturn_nvs_save_result_token = int(getattr(other, "multiturn_nvs_save_result_token", 0) or 0)
-        self.multiturn_nvs_save_valid_mask = int(getattr(other, "multiturn_nvs_save_valid_mask", 0) or 0)
-        self.multiturn_nvs_save_fail_count = int(getattr(other, "multiturn_nvs_save_fail_count", 0) or 0)
-        self.has_multiturn_nvs_status = bool(getattr(other, "has_multiturn_nvs_status", False))
         self.multiturn_restore_result_token = int(
             getattr(other, "multiturn_restore_result_token", 0) or 0
         )
@@ -867,10 +855,10 @@ class HandModel:
         )
         self.manual_reference_valid_bitmap = int(getattr(other, "manual_reference_valid_bitmap", 0) or 0)
         self.manual_reference_crc = int(getattr(other, "manual_reference_crc", 0) or 0)
-        self.manual_reference_nvs_sequence = int(getattr(other, "manual_reference_nvs_sequence", 0) or 0)
-        self.manual_reference_nvs_valid = bool(getattr(other, "manual_reference_nvs_valid", False))
-        self.manual_reference_save_status = int(
-            getattr(other, "manual_reference_save_status", 0) or 0
+        self.manual_reference_revision = int(getattr(other, "manual_reference_revision", 0) or 0)
+        self.manual_reference_committed = bool(getattr(other, "manual_reference_committed", False))
+        self.manual_reference_commit_status = int(
+            getattr(other, "manual_reference_commit_status", 0) or 0
         )
         self.auto_calibration_valid_bitmap = int(
             getattr(other, "auto_calibration_valid_bitmap", 0) or 0
@@ -1006,7 +994,6 @@ class HandModel:
         self.has_fault_status_data = bool(getattr(other, "has_fault_status_data", False))
         self.fault_status_last_rx_ts = float(getattr(other, "fault_status_last_rx_ts", 0.0) or 0.0)
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
-        self.motor_abs_limit_locked_bitmap = int(getattr(other, "motor_abs_limit_locked_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
         self.servo_logical_range_valid_bitmap = int(

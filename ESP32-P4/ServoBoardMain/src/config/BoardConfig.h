@@ -28,7 +28,7 @@ inline constexpr uint32_t kServoBusBaud = 1000000;
  */
 inline constexpr size_t kHostUartRxBufferBytes = 1024;
 inline constexpr size_t kServoBusUartRxBufferBytes = 512;
-/** 当前 21 关节/27 舵机拓扑版本；写入多圈 NVS 映射签名，数值不得随意修改。 */
+/** 当前 21 关节/27 舵机拓扑版本；参与桌面 JSON 映射签名，数值不得随意修改。 */
 inline constexpr uint8_t kHardwareMappingVersion = 3;
 
 #endif // MMHAND_BOARD_CONFIG_H

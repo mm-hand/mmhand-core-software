@@ -10,13 +10,13 @@
 #include "HostAckPublisher.h"
 #include "HostProtocolCodec.h"
 #include "HostCalibrationCommandHandler.h"
-#include "HostPersistenceCommandHandler.h"
+#include "../../data/RecoveryTypes.h"
 #include "../../data/SafetyTypes.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../generated/ProductFingerprint.generated.h"
@@ -29,7 +29,6 @@
 #include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 #include "../../safety/SafetyEventReporter.h"
-#include "../../safety/policies/PersistenceSafetyPolicy.h"
 #include "HostCommandRouter.h"
 
 #include <math.h>
@@ -398,38 +397,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_MOTOR_ABS_LIMIT_LOCK)
-    {
-        uint8_t status = PROTO_ACK_STATUS_OK;
-        if (frameLen < 1 + kMotorAbsLimitLockPayloadBytes) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            const bool lockEnable = frame[1] != 0;
-            const uint32_t requestedMask = readU32BigEndian(frame + 2) & validMotorChannelMask();
-            uint32_t validMask = 0;
-            uint32_t lockedMask = 0;
-            {
-                SharedSafetyGuard guard;
-                validMask = sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-                if (lockEnable) {
-                    sharedAtomicFetchOr(&sharedData->motor_abs_limit_locked_bitmap,
-                                        requestedMask & validMask);
-                } else {
-                    sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap,
-                                         ~requestedMask);
-                }
-                lockedMask = sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
-            }
-            FW_LOG_INFO_PRINTF("[UPPER] ABS_LIMIT_%s mask=0x%08lX locked=0x%08lX valid=0x%08lX\r\n",
-                          lockEnable ? "LOCK" : "UNLOCK",
-                          (unsigned long)requestedMask,
-                          (unsigned long)lockedMask,
-                          (unsigned long)validMask);
-        }
-        sendProtoAckPacket(CMD_MOTOR_ABS_LIMIT_LOCK, sharedData->system_state, status);
-        return;
-    }
-
     if (cmd == CMD_CALIB_LOAD_LIMITS)
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
@@ -445,11 +412,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 readU32BigEndian(frame + 1) & validMotorChannelMask();
             const uint32_t validMask =
                 readU32BigEndian(frame + 5) & validMotorChannelMask();
-            const uint32_t lockedMask =
-                readU32BigEndian(frame + 9) & validMotorChannelMask();
             int32_t loadedMin[SERVO_TOTAL_NUM] = {0};
             int32_t loadedMax[SERVO_TOTAL_NUM] = {0};
-            const uint8_t* p = frame + 13;
+            const uint8_t* p = frame + 9;
             for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
                 loadedMin[ch] = readI32BigEndian(p);
                 p += 4;
@@ -463,8 +428,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 SharedSafetyGuard guard;
                 const uint32_t previousValid =
                     sharedAtomicLoad(&sharedData->motor_abs_limit_valid_bitmap);
-                const uint32_t previousLocked =
-                    sharedAtomicLoad(&sharedData->motor_abs_limit_locked_bitmap);
                 for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
                     if ((updateMask & (1UL << ch)) == 0) {
                         continue;
@@ -474,18 +437,12 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 }
                 const uint32_t appliedValidMask =
                     (previousValid & ~updateMask) | (validMask & updateMask);
-                const uint32_t appliedLockedMask =
-                    (previousLocked & ~updateMask) |
-                    (lockedMask & validMask & updateMask);
                 sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
                                   appliedValidMask);
-                sharedAtomicStore(&sharedData->motor_abs_limit_locked_bitmap,
-                                  appliedLockedMask);
                 FW_LOG_INFO_PRINTF(
-                    "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX locked=0x%08lX\r\n",
+                    "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX\r\n",
                     (unsigned long)updateMask,
-                    (unsigned long)appliedValidMask,
-                    (unsigned long)appliedLockedMask);
+                    (unsigned long)appliedValidMask);
             }
         }
         sendProtoAckPacket(CMD_CALIB_LOAD_LIMITS, sharedData->system_state, status);
@@ -692,20 +649,20 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sendManualEncoderReferencePacket(sharedData);
         }
         FW_LOG_INFO_PRINTF(
-            "[NVS MANUAL] single J%02u min=%u max=%u status=%u "
-            "nvs=%u save=%u valid=0x%08lX crc=0x%08lX seq=%lu\r\n",
+            "[MANUAL RAM] single J%02u min=%u max=%u status=%u "
+            "committed=%u result=%u valid=0x%08lX crc=0x%08lX revision=%lu\r\n",
             (unsigned)joint,
             (unsigned)minRaw,
             (unsigned)maxRaw,
             (unsigned)status,
-            (unsigned)sharedData->manual_reference_nvs_valid,
-            (unsigned)sharedData->manual_reference_save_status,
+            (unsigned)sharedData->manual_reference_committed,
+            (unsigned)sharedData->manual_reference_commit_status,
             (unsigned long)sharedAtomicLoad(
                 &sharedData->manual_reference_valid_bitmap),
             (unsigned long)sharedAtomicLoad(
                 &sharedData->manual_reference_crc),
             (unsigned long)sharedAtomicLoad(
-                &sharedData->manual_reference_nvs_sequence));
+                &sharedData->manual_reference_revision));
         return;
     }
     if (cmd == CMD_MANUAL_ENCODER_REFERENCE)
@@ -724,39 +681,20 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         if (motionActive) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (action == 0) {
-#if P4_FLASH_PERSISTENCE_ENABLE
-            const bool manualCleared = manualCalibrationNvsClear();
-#else
-            // Flash 关闭时只清当前会话 RAM；上位机负责同步删除 JSON 条目。
-            const bool manualCleared = true;
-#endif
-            const SafetyRuleId manualClearRule =
-                p4::safety::persistenceManualWriteFailureRule(manualCleared);
-            if (manualClearRule != SafetyRuleId::None) {
-                status = PROTO_ACK_STATUS_NVS_FAILURE;
-                sharedData->manual_reference_save_status =
-                    MANUAL_SAVE_STATUS_FAILED;
-                // Manual 清除失败同样会导致 RAM 与 Flash 认知不一致，必须进入统一规则事件链路。
-                p4::safety::reportSafetyRuleEvent(
-                    sharedData,
-                    manualClearRule,
-                    0,
-                    MANUAL_SAVE_STATUS_FAILED);
-            } else {
-                sharedData->manual_reference_nvs_valid = 0;
-                manualEncoderReferencesClearRam();
-                sharedAtomicStore(&sharedData->manual_reference_valid_bitmap,
-                                  (uint32_t)0);
-                sharedAtomicStore(&sharedData->manual_reference_crc,
-                                  (uint32_t)0);
-                sharedAtomicStore(&sharedData->manual_reference_nvs_sequence,
-                                  (uint32_t)0);
-                sharedData->manual_reference_save_status =
-                    MANUAL_SAVE_STATUS_NONE;
-                invalidateAutomaticCalibration(
-                    sharedData, kManualEncoderReferenceFullMask);
-                postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
-            }
+            // P4 只清会话 RAM；桌面端收到 ACK 后同步删除自身 JSON 条目。
+            sharedData->manual_reference_committed = 0;
+            manualEncoderReferencesClearRam();
+            sharedAtomicStore(&sharedData->manual_reference_valid_bitmap,
+                              (uint32_t)0);
+            sharedAtomicStore(&sharedData->manual_reference_crc,
+                              (uint32_t)0);
+            sharedAtomicStore(&sharedData->manual_reference_revision,
+                              (uint32_t)0);
+            sharedData->manual_reference_commit_status =
+                MANUAL_SAVE_STATUS_NONE;
+            invalidateAutomaticCalibration(
+                sharedData, kManualEncoderReferenceFullMask);
+            postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
         } else if (action == 1) {
             ManualEncoderReference references[ENCODER_TOTAL_NUM];
             const uint8_t* p = frame + 2;
@@ -778,8 +716,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_INVALID_DATA;
         }
         FW_LOG_INFO_PRINTF(
-            "[NVS MANUAL] action=%u status=%u valid=0x%08lX "
-            "crc=0x%08lX seq=%lu nvs=%u save=%u\r\n",
+            "[MANUAL RAM] action=%u status=%u valid=0x%08lX "
+            "crc=0x%08lX revision=%lu committed=%u result=%u\r\n",
             (unsigned)action,
             (unsigned)status,
             (unsigned long)sharedAtomicLoad(
@@ -787,9 +725,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             (unsigned long)sharedAtomicLoad(
                 &sharedData->manual_reference_crc),
             (unsigned long)sharedAtomicLoad(
-                &sharedData->manual_reference_nvs_sequence),
-            (unsigned)sharedData->manual_reference_nvs_valid,
-            (unsigned)sharedData->manual_reference_save_status);
+                &sharedData->manual_reference_revision),
+            (unsigned)sharedData->manual_reference_committed,
+            (unsigned)sharedData->manual_reference_commit_status);
         sendProtoAckPacket(CMD_MANUAL_ENCODER_REFERENCE,
                            sharedData->system_state,
                            status);
@@ -807,7 +745,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             {
                 SharedSafetyGuard guard;
                 sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap, (uint32_t)0);
-                sharedAtomicStore(&sharedData->motor_abs_limit_locked_bitmap, (uint32_t)0);
                 memset(sharedData->motor_abs_limit_min, 0, sizeof(sharedData->motor_abs_limit_min));
                 memset(sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
             }
@@ -885,11 +822,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                    sharedData->servo_target_owner !=
                        SERVO_TARGET_OWNER_NONE) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-#if P4_FLASH_PERSISTENCE_ENABLE
-        } else if (!sharedData->multiturn_nvs_enabled ||
-                   !sharedData->multiturnNvsSaveQueue.valid()) {
-            status = PROTO_ACK_STATUS_NVS_FAILURE;
-#endif
         } else if (sharedAtomicLoad(
                        &sharedData->servo_reset_zero_status) ==
                    SERVO_RESET_ZERO_STATUS_RUNNING) {
@@ -916,23 +848,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         }
         sendProtoAckPacket(
             CMD_SERVO_RESET_ZERO, sharedData->system_state, status);
-        return;
-    }
-
-    if (cmd == CMD_MULTITURN_NVS_CONTROL)
-    {
-        uint8_t status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        if (frameLen < 1 + kMultiTurnNvsControlPayloadBytes) {
-            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
-        } else {
-            status = enqueueMultiTurnNvsControl(
-                sharedData,
-                frame[1],
-                p4::platform::time::monotonicMillis());
-        }
-        sendProtoAckPacket(CMD_MULTITURN_NVS_CONTROL,
-                           sharedData->system_state,
-                           status);
         return;
     }
 

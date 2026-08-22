@@ -87,7 +87,6 @@ bool stepSystemStateCoordinator(SystemStateCoordinatorContext* context,
         const p4::state::HostLeaseSupervisorPort hostLeasePort = {
             idleOrReadyState,
             setSystemState,
-            requestMultiTurnNvsSave,
             setCalibrationStatus,
         };
         p4::state::updateHostControlLease(sharedData, hostLeasePort);

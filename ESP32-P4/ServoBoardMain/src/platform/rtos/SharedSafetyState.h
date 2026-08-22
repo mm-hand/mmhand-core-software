@@ -12,7 +12,7 @@
 
 #include "AtomicValue.h"
 
-// 串行化跨核的短小多字段安全快照；持锁期间禁止 I/O、队列、delay 和 NVS 操作。
+// 串行化跨核的短小多字段安全快照；持锁期间禁止 I/O、队列和 delay 操作。
 void sharedSafetyLock(void);
 void sharedSafetyUnlock(void);
 

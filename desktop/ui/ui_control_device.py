@@ -21,7 +21,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
     clear_fault_requested = Signal()
     calibrate_requested = Signal()
     rope_init_requested = Signal()
-    nvs_toggle_requested = Signal()
 
     def __init__(self, parent=None):
         """Initialize this component."""
@@ -44,12 +43,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.rope_init_btn.setToolTip(
             "Ask the P4 Rope Init task to move selected IDLE joints into their calibrated workspace"
         )
-        self.nvs_control_btn = QtWidgets.QPushButton("Flash ON")
-        self.nvs_control_btn.setToolTip(
-            "P4 Flash 持久化当前已关闭；Manual/Auto/LUT/多圈锚点由上位机 JSON 保存。"
-        )
-        # 实机确认 JSON 恢复闭环前保留对象和信号接口，UI 暂不向用户开放旧 Flash 开关。
-        self.nvs_control_btn.setVisible(False)
         self._build()
 
     def _build(self) -> None:
@@ -68,7 +61,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
             self.calib_btn,
             self.reset_btn,
             self.rope_init_btn,
-            self.nvs_control_btn,
         ):
             button.setMinimumHeight(34)
 
@@ -76,7 +68,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.stop_btn.setStyleSheet("font-weight:700;background:#c62828;color:white;")
         self.pause_btn.setStyleSheet("font-weight:700;background:#f9a825;color:black;")
         self.ros2_output_btn.setStyleSheet("font-weight:700;background:#455a64;color:white;")
-        self.nvs_control_btn.setStyleSheet("font-weight:700;background:#e8f5e9;color:#1b5e20;")
 
         layout.addWidget(self._centered_action_cell(self.enable_btn), 0, 0, 2, 1)
         layout.addWidget(self._centered_action_cell(self.stop_btn), 0, 1, 2, 1)
@@ -85,7 +76,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         layout.addWidget(self.calib_btn, 0, 4)
         layout.addWidget(self.reset_btn, 0, 5)
         layout.addWidget(self.rope_init_btn, 1, 4)
-        # 旧 Flash 控件暂留作回退接口，但不加入布局；实机确认后再删除相关代码。
         layout.setRowStretch(0, 1)
         layout.setRowStretch(1, 1)
         for col in range(6):
@@ -97,7 +87,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_requested.emit())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate_requested.emit())
         self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_requested.emit())
-        self.nvs_control_btn.clicked.connect(lambda _checked=False: self.nvs_toggle_requested.emit())
 
     @staticmethod
     def _centered_action_cell(button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
@@ -119,4 +108,3 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.clear_fault_requested.connect(panel.clear_fault_with_confirm)
         self.calibrate_requested.connect(panel.calibrate)
         self.rope_init_requested.connect(panel.rope_init_controller)
-        self.nvs_toggle_requested.connect(panel.toggle_multiturn_nvs)

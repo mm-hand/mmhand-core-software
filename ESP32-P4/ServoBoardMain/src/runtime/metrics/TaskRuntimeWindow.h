@@ -16,6 +16,8 @@
 
 struct TaskRuntimeWindowAccumulator {
     uint32_t loopCount;
+    uint32_t periodicCount; ///< 由绝对截止时间触发的固定周期轮次。
+    uint32_t eventCount;    ///< 由任务通知提前触发的事件轮次。
     uint64_t execTotalUs;
     uint32_t maxExecUs;
     uint32_t execBuckets[kTaskRuntimeExecBucketCount];

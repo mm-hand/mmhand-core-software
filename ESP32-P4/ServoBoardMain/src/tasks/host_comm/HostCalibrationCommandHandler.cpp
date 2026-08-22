@@ -7,7 +7,7 @@
 #include <string.h>
 
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
-#include "../../modules/persistence/ManualCalibrationNvsStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../platform/time/Clock.h"
 #include "../../config/topology/HardwareMap.h"
@@ -138,8 +138,6 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
         SharedSafetyGuard guard;
         sharedAtomicFetchAnd(&sharedData->motor_abs_limit_valid_bitmap,
                              ~motorMask);
-        sharedAtomicFetchAnd(&sharedData->motor_abs_limit_locked_bitmap,
-                             ~motorMask);
         for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; motor++) {
             if ((motorMask & (1UL << motor)) == 0) {
                 continue;
@@ -159,7 +157,7 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
     sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
                          (uint32_t)~SYSTEM_FAULT_CALIBRATION);
     FW_LOG_INFO_PRINTF(
-        "[NVS MANUAL] AUTO_INVALIDATE joints=0x%08lX motors=0x%08lX remaining=0x%08lX\r\n",
+        "[MANUAL RAM] AUTO_INVALIDATE joints=0x%08lX motors=0x%08lX remaining=0x%08lX\r\n",
         (unsigned long)jointMask,
         (unsigned long)motorMask,
         (unsigned long)autoCalibrationValidMask(sharedData));
@@ -175,31 +173,6 @@ uint8_t commitManualReferences(
         return PROTO_ACK_STATUS_INVALID_DATA;
     }
 
-#if P4_FLASH_PERSISTENCE_ENABLE
-    if (!sharedData->manualNvsSaveQueue.valid()) {
-        sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_FAILED;
-        return PROTO_ACK_STATUS_NVS_FAILURE;
-    }
-
-    ManualNvsSaveJob job = {};
-    job.requestToken = p4::platform::rtos::atomicAddFetch(
-        &sharedData->manual_reference_save_request_token,
-        static_cast<uint32_t>(1));
-    job.validMask = validMask;
-    job.queuedAtMs = p4::platform::time::monotonicMillis();
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        job.minRaw[joint] = references[joint].minRaw;
-        job.maxRaw[joint] = references[joint].maxRaw;
-    }
-    // 维护命令必须逐项完成，禁止 overwrite 覆盖已经返回 QUEUED 的前一事务。
-    if (!sharedData->manualNvsSaveQueue.send(job)) {
-        sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_FAILED;
-        return PROTO_ACK_STATUS_NVS_FAILURE;
-    }
-    // NONE 表示事务已受理但尚未收到 NVS 任务的读回校验结果。
-    sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_NONE;
-    return PROTO_ACK_STATUS_QUEUED;
-#else
     ManualEncoderReference previous[ENCODER_TOTAL_NUM] = {};
     {
         SharedSafetyGuard guard;
@@ -208,22 +181,20 @@ uint8_t commitManualReferences(
     const uint32_t changedMask =
         changedManualReferenceMask(previous, references);
 
-    // P4 先提交本次会话 RAM 镜像并供上位机读回校验；上位机确认内容一致后，
-    // 再把同一组 Manual 数据原子写入便携 V6 JSON。
-    // legacy nvs_valid 字段在协议删除前临时表示“当前 RAM 镜像已完整提交”，
-    // 使现有 ACK/读回闭环无需再维护第二套状态包。
-    sharedData->manual_reference_nvs_valid = 0;
+    // P4 只维护本次会话 RAM 镜像；上位机读回校验成功后负责写入便携 JSON。
+    // committed 最后置位，是其他任务读取整组 Manual 数据的提交点。
+    sharedData->manual_reference_committed = 0;
     manualEncoderReferencesApplyRam(references);
     sharedAtomicStore(&sharedData->manual_reference_valid_bitmap, validMask);
     sharedAtomicStore(
         &sharedData->manual_reference_crc,
         manualEncoderReferencesCrc(references));
     sharedAtomicAddFetch(
-        &sharedData->manual_reference_nvs_sequence,
+        &sharedData->manual_reference_revision,
         static_cast<uint32_t>(1));
     invalidateAutomaticCalibration(sharedData, changedMask);
-    sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
-    sharedData->manual_reference_nvs_valid = 1;
+    sharedData->manual_reference_commit_status = MANUAL_SAVE_STATUS_OK;
+    sharedData->manual_reference_committed = 1;
     postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
     FW_LOG_INFO_PRINTF(
         "[MANUAL RAM] committed mask=0x%08lX changed=0x%08lX crc=0x%08lX\r\n",
@@ -231,64 +202,6 @@ uint8_t commitManualReferences(
         (unsigned long)changedMask,
         (unsigned long)sharedAtomicLoad(&sharedData->manual_reference_crc));
     return PROTO_ACK_STATUS_OK;
-#endif
-}
-
-bool processManualNvsSaveResult(SystemRuntimeContext* sharedData)
-{
-#if !P4_FLASH_PERSISTENCE_ENABLE
-    (void)sharedData;
-    return false;
-#else
-    if (!sharedData || !sharedData->manualNvsResultQueue.valid()) {
-        return false;
-    }
-    ManualNvsSaveResult result = {};
-    bool received = false;
-    while (sharedData->manualNvsResultQueue.receive(&result)) {
-        received = true;
-    }
-    if (!received ||
-        result.requestToken != sharedAtomicLoad(
-            &sharedData->manual_reference_save_request_token)) {
-        return false;
-    }
-    if (!result.success) {
-        // 写失败时保留上一份已验证 RAM/NVS 镜像，只更新本次事务状态。
-        sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_FAILED;
-        return true;
-    }
-
-    ManualEncoderReference references[ENCODER_TOTAL_NUM] = {};
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        references[joint].valid =
-            (result.validMask & (1UL << joint)) != 0U ? 1U : 0U;
-        references[joint].minRaw = result.minRaw[joint];
-        references[joint].maxRaw = result.maxRaw[joint];
-    }
-    ManualEncoderReference previous[ENCODER_TOTAL_NUM] = {};
-    {
-        SharedSafetyGuard guard;
-        memcpy(previous, g_manualEncoderReference, sizeof(previous));
-    }
-    const uint32_t changedMask =
-        changedManualReferenceMask(previous, references);
-
-    // valid 最后置位，作为其他任务读取整组 Manual RAM 镜像的提交点。
-    sharedData->manual_reference_nvs_valid = 0;
-    manualEncoderReferencesApplyRam(references);
-    sharedAtomicStore(&sharedData->manual_reference_valid_bitmap,
-                      result.validMask);
-    sharedAtomicStore(&sharedData->manual_reference_crc,
-                      result.referenceCrc);
-    sharedAtomicStore(&sharedData->manual_reference_nvs_sequence,
-                      result.sequence);
-    invalidateAutomaticCalibration(sharedData, changedMask);
-    sharedData->manual_reference_save_status = MANUAL_SAVE_STATUS_OK;
-    sharedData->manual_reference_nvs_valid = 1;
-    postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
-    return true;
-#endif
 }
 
 void processServoResetZeroResult(SystemRuntimeContext* sharedData,
@@ -304,7 +217,7 @@ void processServoResetZeroResult(SystemRuntimeContext* sharedData,
     }
     *lastResultToken = resultToken;
 
-    // success mask 表示硬件 turn0 已改变，旧 LUT 即使 NVS 清除失败也必须失效。
+    // success mask 表示硬件 turn0 已改变，旧 LUT 必须立即失效并由桌面 JSON 重建。
     const uint32_t resetMotorMask =
         sharedAtomicLoad(&sharedData->servo_reset_zero_success_mask) &
         validMotorChannelMask();

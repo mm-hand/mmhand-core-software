@@ -26,6 +26,7 @@ from .auto_calib_logger import AutoCalibLogger
 from . import protocol as protocol_codec
 from .communication import (
     AckTracker,
+    EventChannel,
     FrameDecoder,
     P4PacketRouter,
     SerialTransport,
@@ -54,7 +55,6 @@ from .protocol import (
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_MULTITURN_RESTORE_RESULT,
-    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
     PACKET_TYPE_PRODUCT_FINGERPRINT,
     PACKET_TYPE_SERVO_ROUTE_STATUS,
     PACKET_TYPE_SAFETY_EVENT,
@@ -84,10 +84,8 @@ from .protocol import (
     build_clear_calibration_scope_cmd,
     build_servo_reset_zero_cmd,
     build_host_heartbeat_cmd,
-    build_motor_abs_limit_lock_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_abs_one_cmd,
-    build_multiturn_nvs_control_cmd,
     build_manual_encoder_reference_cmd,
     build_clear_manual_encoder_reference_cmd,
     build_manual_encoder_query_cmd,
@@ -114,7 +112,7 @@ from .session_log import log_session
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
-# 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
+# 固件连续丢失心跳后会撤销上位机控制租约；桌面 JSON 仍独立保存多圈锚点。
 HOST_HEARTBEAT_INTERVAL_S = 0.5
 TACTILE_ZERO_NOISE_FLOOR = 3
 TACTILE_ZERO_HOLD_FRAMES = 6
@@ -186,7 +184,6 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_SERVO_ROUTE_STATUS: "servo_route_status",
     PACKET_TYPE_SAFETY_EVENT: "safety_event",
     PACKET_TYPE_MULTITURN_RESTORE_RESULT: "multiturn_restore_result",
-    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW: "multiturn_snapshot_raw",
     PACKET_TYPE_MOTOR_ABS_LIMIT: "motor_abs_limit",
     PACKET_TYPE_SERVO_LOGICAL_RANGE: "servo_logical_range",
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE: "manual_reference",
@@ -898,8 +895,13 @@ class LowerComputerComm:
             flush_log_callback=self._flush_firmware_log_text,
         )
         self._ack_tracker = AckTracker()
+        self._safety_event_channel: EventChannel[dict] = EventChannel()
         self._packet_router = P4PacketRouter(P4_PACKET_KINDS, split_p4_timestamp)
-        self._state_reducer = StateReducer(self._packet_router, self._ack_tracker)
+        self._state_reducer = StateReducer(
+            self._packet_router,
+            self._ack_tracker,
+            self._safety_event_channel,
+        )
         self.rx_queue: queue.Queue = queue.Queue(maxsize=RX_QUEUE_MAXSIZE)
         self.tx_queue: queue.Queue = queue.Queue(maxsize=TX_QUEUE_MAXSIZE)
         self.running = False
@@ -959,6 +961,7 @@ class LowerComputerComm:
             self._firmware_text_buffer = bytearray()
             self._state_reducer.reset()
             self._ack_tracker.reset()
+            self._safety_event_channel.reset()
             self._clear_queue(self.rx_queue)
             self._clear_queue(self.tx_queue)
             self._reset_rx_diag()
@@ -1029,7 +1032,6 @@ class LowerComputerComm:
         model.has_encoder_health_status = False
         model.has_servo_angle_data = False
         model.has_servo_raw_data = False
-        model.has_servo_flash_raw_data = False
         model.has_fault_status_data = False
         model.servo_online_bitmap = 0
         model.has_servo_route_status = False
@@ -1057,6 +1059,7 @@ class LowerComputerComm:
         return model
 
     def _push_rx_model(self, model: HandModel) -> None:
+        """发布最新状态；邮箱已有旧状态时先丢旧再写新，禁止形成状态积压。"""
         try:
             self.rx_queue.put_nowait(model)
         except queue.Full:
@@ -1069,6 +1072,14 @@ class LowerComputerComm:
                 self.rx_queue.put_nowait(model)
             except queue.Full:
                 pass
+
+    def drain_ack_events(self) -> list[dict]:
+        """排空 ACK 事件通道；命令等待仍由 AckTracker 的 Condition 独立完成。"""
+        return self._ack_tracker.drain_events()
+
+    def drain_safety_events(self) -> list[dict]:
+        """排空安全事件通道，避免状态邮箱覆盖时遗漏规则证据。"""
+        return self._safety_event_channel.drain()
 
     def _mark_comm_offline(self, reason: str, exc: Optional[BaseException] = None) -> None:
         with self._offline_lock:
@@ -1222,10 +1233,7 @@ class LowerComputerComm:
                     self._update_rx_diag(packets, len(chunk))
                     model = self._process_packets(packets)
                     if model:
-                        try:
-                            self.rx_queue.put_nowait(model)
-                        except queue.Full:
-                            pass
+                        self._push_rx_model(model)
                 else:
                     time.sleep(RX_POLL_SLEEP)
                 self._maybe_print_rx_diag()
@@ -1574,11 +1582,9 @@ class LowerComputerComm:
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
-        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
-            return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
-        if isinstance(cmd, tuple) and len(cmd) == 6 and cmd[0] == "calib_load_limits":
+        if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
             return build_calib_load_limits_cmd(
-                cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]
+                cmd[1], cmd[2], cmd[3], cmd[4]
             )
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
             return build_calib_load_joint_cmd(cmd[1])
@@ -1594,8 +1600,6 @@ class LowerComputerComm:
             and cmd[0] == "servo_reset_zero"
         ):
             return build_servo_reset_zero_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
-            return build_multiturn_nvs_control_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":
             return build_manual_encoder_reference_cmd(cmd[1], cmd[2])
         if cmd == "clear_manual_encoder_reference":

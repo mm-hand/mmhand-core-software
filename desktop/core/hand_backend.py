@@ -800,12 +800,6 @@ class HandBackend:
     def rope_init(self, active_joint_mask: int) -> bool:
         return self._controller.rope_init(active_joint_mask)
 
-    def set_motor_abs_limit_lock(self, active_motor_mask: int, locked: bool) -> bool:
-        return self._controller.set_motor_abs_limit_lock(active_motor_mask, locked)
-
-    def set_multiturn_nvs_enabled(self, enabled: bool) -> bool:
-        return self._controller.set_multiturn_nvs_enabled(enabled)
-
     def prepare_calibration_turn_zero(
         self, motor_mask: int
     ) -> Tuple[bool, str, int, int]:
