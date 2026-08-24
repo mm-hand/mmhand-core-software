@@ -153,7 +153,8 @@ void publishTurnOverflowState(SystemRuntimeContext* sharedData)
 }
 
 // 每周期生成同一时刻的逻辑位置、物理位置和负载视图。
-void publishFeedback(SystemRuntimeContext* sharedData)
+void publishFeedback(SystemRuntimeContext* sharedData,
+                     const ServoFeedbackCycleMeta_t& cycleMeta)
 {
     if (!sharedData) {
         return;
@@ -165,6 +166,9 @@ void publishFeedback(SystemRuntimeContext* sharedData)
     servoData.timestamp = p4::platform::time::monotonicMillis();
     servoRawData.timestamp = servoData.timestamp;
     telemetryData.timestamp = servoData.timestamp;
+    servoData.cycle = cycleMeta;
+    servoRawData.cycle = cycleMeta;
+    telemetryData.cycle = cycleMeta;
 
     uint32_t onlineMask = 0;
     uint32_t rangeValidMask = 0;

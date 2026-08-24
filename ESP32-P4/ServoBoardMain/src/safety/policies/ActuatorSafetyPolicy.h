@@ -42,6 +42,14 @@ struct ServoSafetyContext {
 ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch);
 
 /**
+ * 计算目标批次在消费端的有效年龄。
+ *
+ * 32 位单调时钟正常回绕仍按无符号差值工作；若生产者时间戳比消费端快照更新，
+ * 说明批次产生于该快照之后，此时年龄按 0 处理，不能下溢成约 49 天的旧命令。
+ */
+uint32_t computeTargetAgeMs(uint32_t nowMs, uint32_t targetTimestampMs);
+
+/**
  * 对一条 logical ABS 命令执行最终裁决。
  *
  * 顺序固定为：映射/owner -> online -> Turn -> overflow -> logical range ->

@@ -497,10 +497,16 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             : newlyCompleted;
         bool calibrationSyncSucceeded = true;
         for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
+            JointCalibrationRuntimeSnapshot snapshot;
+            const bool snapshotValid =
+                readJointCalibrationRuntimeSnapshot(jointIndex, &snapshot);
             if ((snapshotMask & (1UL << jointIndex)) != 0 &&
-                g_jointCalibResult[jointIndex].success) {
+                snapshotValid && snapshot.result.success) {
                 if (sendJointCalibSnapshotPacket(jointIndex)) {
                     lastCalibrationCompletedMask |= 1UL << jointIndex;
+                    // 本周期的映射角可能早于快照发送。强制下一周期再发一帧，
+                    // 保证上位机在应用新快照后立即获得同一标定代次的 Current。
+                    lastSensorTimestampSent = 0xFFFFFFFFUL;
                 } else {
                     calibrationSyncSucceeded = false;
                 }

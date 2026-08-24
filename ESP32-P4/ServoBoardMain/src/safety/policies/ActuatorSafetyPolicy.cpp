@@ -143,6 +143,13 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
                         0xFF);
 }
 
+uint32_t computeTargetAgeMs(uint32_t nowMs, uint32_t targetTimestampMs)
+{
+    // 半量程内的差值属于正常年龄（也覆盖 millis 回绕）；高半区说明目标比旧快照更新。
+    const uint32_t deltaMs = nowMs - targetTimestampMs;
+    return deltaMs <= (uint32_t)INT32_MAX ? deltaMs : 0U;
+}
+
 ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     uint8_t commandIndex,
                                     int32_t logicalOffset,
@@ -202,9 +209,10 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                       motorChannel,
                       commandIndex);
     }
-    // 单调毫秒时钟使用无符号差值支持回绕；陈旧批次不得因队列延迟重新驱动舵机。
+    // 陈旧批次不得因队列延迟重新驱动舵机；同步读期间产生的新批次年龄按 0 处理。
     if (context.maxTargetAgeMs != 0 &&
-        (uint32_t)(context.nowMs - batch.timestamp) > context.maxTargetAgeMs) {
+        computeTargetAgeMs(context.nowMs, batch.timestamp) >
+            context.maxTargetAgeMs) {
         return reject(ServoRejectReason::StaleTarget,
                       requestedAbs,
                       hardwareAbs,

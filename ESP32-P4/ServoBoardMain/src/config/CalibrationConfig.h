@@ -32,7 +32,8 @@ inline constexpr int32_t kServoZeroPullCounts = 500; ///< ABS Limit Max 相对�
 
 inline constexpr int32_t kDualInitialSlackCounts = 3200; ///< 双腱准备阶段先释放的空程。
 inline constexpr int32_t kMotorAbsWindowCounts = 4096 * 5; ///< 自动标定允许的 logical ABS 搜索窗。
-inline constexpr int32_t kMotorAbsMaxMarginCounts = 500; ///< 标定紧端之外的 ABS Limit 余量。
+inline constexpr int32_t kMotorAbsReleaseMarginCounts = 500; ///< LUT 松端之外的 ABS Limit 余量。
+inline constexpr int32_t kMotorAbsTightMarginCounts = 1200; ///< LUT 紧端之外的 ABS Limit 余量。
 inline constexpr int16_t kOverloadLoadThreshold = 800; ///< 标定期间的硬过载阈值。
 inline constexpr int16_t kDualPrimaryTightLoadThreshold = 190; ///< 主腱首次紧绳阈值。
 inline constexpr int16_t kDualSecondaryPreloadLoadThreshold = 190; ///< 副腱预紧阈值。

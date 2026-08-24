@@ -267,13 +267,18 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
         if ((activeMask & bit) == 0) {
             continue;
         }
-        const JointCalibrationResult& calib = g_jointCalibResult[joint];
+        JointCalibrationRuntimeSnapshot snapshot;
+        if (!readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
+            return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISSING,
+                          joint, activeMask);
+        }
+        const JointCalibrationResult& calib = snapshot.result;
         if (!calib.success) {
             return reject(FEEDBACK_READY_REJECT_CALIBRATION_MISSING,
                           joint, activeMask);
         }
         const uint32_t manualCrc = manualEncoderReferenceEntryCrc(
-            joint, g_manualEncoderReference[joint]);
+            joint, snapshot.manual);
         if (calib.mappingVersion != kManualScaledUrdfFeedbackMappingVersion ||
             calib.urdfConfigCrc != kManualScaledUrdfConfigCrc ||
             calib.manualReferenceCrc != manualCrc) {
@@ -381,7 +386,12 @@ void markActiveJointsWorkspaceReady(SystemRuntimeContext* runtime)
         if ((activeMask & bit) == 0) {
             continue;
         }
-        const JointCalibrationResult& calib = g_jointCalibResult[joint];
+        JointCalibrationRuntimeSnapshot snapshot;
+        if (!readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
+            s_workspaceReadyLatchMask &= ~bit;
+            continue;
+        }
+        const JointCalibrationResult& calib = snapshot.result;
         s_workspaceAutoMinRaw[joint] = calib.autoMinRaw;
         s_workspaceAutoMaxRaw[joint] = calib.autoMaxRaw;
         s_workspaceManualCrc[joint] = calib.manualReferenceCrc;

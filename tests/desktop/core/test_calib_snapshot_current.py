@@ -203,6 +203,53 @@ def test_joint_calibration_snapshot_parses_optional_warning_details():
     assert parsed["hasAssemblySpanComparisonFields"] is True
 
 
+def test_joint_calibration_snapshot_parses_p4_timestamped_uplink():
+    """P4 当前上行体为 202-byte V4 数据加 4-byte 单调时间戳。"""
+    mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
+    result = {
+        "joint": 14,
+        "success": True,
+        "mappingVersion": mapping_version,
+        "angleMax": 89.0,
+        "angleMin": -9.0,
+        "startEncoder": 14651,
+        "tightEncoder": 2620,
+        "zeroEncoder": 14879,
+        "encoderSpan": 4353,
+        "startServoAbs": 151,
+        "tightServoAbs": 4807,
+        "zeroServoAbs": 651,
+        "startDeg": -5.0,
+        "tightDeg": 90.647,
+        "totalDeg": 95.647,
+        "scaled": True,
+        "encoderDirection": -1,
+        "tendonLutValid": True,
+        "tendonLutCount": 1,
+        "tendonLutMotor": [18, 0xFF],
+        "tendonLutAngleStartDeg": -9.0,
+        "tendonLutAngleStepDeg": 5.0,
+        "tendonLutMotorAbs": [[151], []],
+        "urdfConfigCrc": mapping_crc,
+        "autoMinRaw": 1733,
+        "autoMaxRaw": 13764,
+        "manualReferenceCrc": 0x12345678,
+        "currentMinDeg": -9.0,
+        "currentMaxDeg": 89.0,
+    }
+    payload = bytearray(build_calib_load_joint_cmd(result)[3:-1])
+    payload.extend(struct.pack(">BhhHHHH", 0, 0, 0, 4353, 4500, 4459, 147))
+    payload.extend(struct.pack(">I", 0x1234ABCD))
+
+    parsed = parse_joint_calib_snapshot_packet(bytes(payload))
+
+    assert len(payload) == 206
+    assert parsed is not None
+    assert parsed["joint"] == 14
+    assert parsed["hasAssemblyWarningFields"] is True
+    assert parsed["deviceTimestampMs"] == 0x1234ABCD
+
+
 def test_direction_negative_snapshot_requires_physical_raw_endpoints():
     mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
     result = {

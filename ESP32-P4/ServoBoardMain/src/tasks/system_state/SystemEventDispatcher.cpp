@@ -303,7 +303,12 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
         if ((activeMask & (1UL << joint)) == 0) {
             continue;
         }
-        const JointCalibrationResult& calib = g_jointCalibResult[joint];
+        JointCalibrationRuntimeSnapshot snapshot;
+        if (!readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
+            safe = false;
+            break;
+        }
+        const JointCalibrationResult& calib = snapshot.result;
         const float targetDeg = sharedData->targetAngles[joint];
         if (!calib.success || !isfinite(targetDeg) ||
             !isfinite(calib.currentMinDeg) ||
@@ -801,18 +806,14 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
 
         case SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT:
             if (sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore RUN_FEEDBACK_TIMEOUT in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
                 break;
             }
             if (!feedbackCompletionMatchesCurrentCommand(sharedData, event)) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore stale RUN_FEEDBACK_TIMEOUT token=%lu current=%lu\r\n",
-                              (unsigned long)event.token,
-                              (unsigned long)sharedData->joint_command_token);
                 break;
             }
-            FW_LOG_INFO_PRINTF("[STATE] RUN_FEEDBACK timeout token=%lu; releasing control ownership\r\n",
-                          (unsigned long)event.token);
+            FW_LOG_INFO_PRINTF(
+                "[STATE] RUN_FEEDBACK timeout token=%lu; releasing owner\r\n",
+                (unsigned long)event.token);
             releaseFeedbackRun(sharedData);
             break;
 

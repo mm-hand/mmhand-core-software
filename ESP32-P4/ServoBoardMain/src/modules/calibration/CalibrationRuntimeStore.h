@@ -80,6 +80,14 @@ struct JointCalibrationResult {
     int32_t tendonLutMotorAbs[TENDON_LUT_ACTUATOR_COUNT][TENDON_LUT_MAX_SAMPLES];
 };
 
+// 控制、状态机和上行任务读取的单关节一致快照。
+// Auto 结果、Manual 端点和方向必须来自同一次发布，不能跨核直接拼读全局数组。
+struct JointCalibrationRuntimeSnapshot {
+    JointCalibrationResult result;
+    ManualEncoderReference manual;
+    int8_t encoderDirection;
+};
+
 // 21 路运行期 Auto 结果和 Manual 端点表。
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
@@ -88,6 +96,20 @@ extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM];
 extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
 bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction);
+
+// 使用统一短临界区发布和读取标定运行数据；整组读取只加锁一次。
+bool readJointCalibrationRuntimeSnapshot(
+    uint8_t jointIndex,
+    JointCalibrationRuntimeSnapshot* out);
+bool readAllJointCalibrationRuntimeSnapshots(
+    JointCalibrationRuntimeSnapshot out[ENCODER_TOTAL_NUM]);
+bool publishJointCalibrationResult(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result);
+void clearJointCalibrationResult(uint8_t jointIndex);
+void clearAllJointCalibrationResults(void);
+void replaceManualEncoderReferences(
+    const ManualEncoderReference references[ENCODER_TOTAL_NUM]);
 
 // 清空 RAM 中的 Auto/Manual 运行期结果；桌面端连接后会重新同步 JSON 副本。
 void initializeCalibrationRuntimeState(void);

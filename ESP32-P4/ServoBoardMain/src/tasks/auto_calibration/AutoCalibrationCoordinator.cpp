@@ -147,7 +147,9 @@ bool runAutoCalibrationSequence(SystemRuntimeContext* sharedData,
             if (result == DUAL_MOTOR_CALIBRATION_FAILED) {
                 failedJointMask |= jointBit;
                 if (firstFailedJoint == 0xFF) firstFailedJoint = jointIndex;
-                continue;
+                // 双腱标定失败可能意味着绳路卡死，立即结束本轮标定；由失败事件
+                // 撤销控制权并执行紧急断扭矩，不能继续运动后续关节。
+                break;
             }
             completedJointMask |= jointBit;
             continue;

@@ -19,9 +19,13 @@ constexpr uint32_t kRopeInitFeedbackMaxAgeMs = 500;
 bool ropeInitCalibrationMatchesManual(uint8_t jointIndex)
 {
     if (jointIndex >= ENCODER_TOTAL_NUM) return false;
-    const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
+    JointCalibrationRuntimeSnapshot snapshot;
+    if (!readJointCalibrationRuntimeSnapshot(jointIndex, &snapshot)) {
+        return false;
+    }
+    const JointCalibrationResult& result = snapshot.result;
     const uint32_t manualCrc = manualEncoderReferenceEntryCrc(
-        jointIndex, g_manualEncoderReference[jointIndex]);
+        jointIndex, snapshot.manual);
     return result.success &&
            result.mappingVersion == kManualScaledUrdfFeedbackMappingVersion &&
            result.urdfConfigCrc == kManualScaledUrdfConfigCrc &&

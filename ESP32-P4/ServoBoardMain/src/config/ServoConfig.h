@@ -17,27 +17,27 @@ namespace mmhand::config::servo {
 
 /** ServoBus 服务任务的兜底周期；新目标通知仍可提前唤醒任务。 */
 inline constexpr uint32_t kServoBusServicePeriodMs = 10;
-/** 每个服务周期执行同步读的 BUS 数量，避免四条 UART 的阻塞事务集中爆发。 */
-inline constexpr uint8_t kServoFeedbackBusesPerCycle = 2;
-/** 四条 BUS 完成一轮全量同步读所需的服务周期数。 */
-inline constexpr uint8_t kServoFeedbackReadGroupCount =
-    (uint8_t)((NUM_BUSES + kServoFeedbackBusesPerCycle - 1U) /
-              kServoFeedbackBusesPerCycle);
-/** 同一条 BUS 两次全量同步反馈之间的设计间隔：当前为 20 ms，即 50 Hz。 */
-inline constexpr uint32_t kServoFeedbackPollPeriodMs =
-    kServoBusServicePeriodMs * kServoFeedbackReadGroupCount;
+/** 四路同步读发出后首次执行非阻塞收集的时间；普通8字节反馈通常已经完整。 */
+inline constexpr uint32_t kServoFeedbackCollectDelayMs = 3;
+/** 12台舵机、15字节反馈的硬截止时间；超时后解析已收到帧并登记缺失ID。 */
+inline constexpr uint32_t kServoFeedbackDeadlineUs = 4000;
+/** 100 Hz位置反馈下每10轮读取一次电流，保持电流约10 Hz。 */
+inline constexpr uint8_t kServoCurrentReadDivider = 10;
 
-static_assert(kServoFeedbackBusesPerCycle > 0 &&
-                  kServoFeedbackBusesPerCycle <= NUM_BUSES,
-              "servo feedback BUS group size is invalid");
-static_assert(kServoFeedbackPollPeriodMs == 20,
-              "servo full-feedback period must remain 20 ms");
+static_assert(kServoCurrentReadDivider > 0,
+              "servo current read divider must not be zero");
+static_assert(kServoFeedbackCollectDelayMs < kServoBusServicePeriodMs,
+              "servo feedback collect point must fit inside one control period");
+static_assert(kServoFeedbackDeadlineUs <= kServoBusServicePeriodMs * 1000U,
+              "servo feedback deadline must fit inside one control period");
+static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <= 256U,
+              "12-servo sync-read response exceeds protocol buffer");
 
 inline constexpr uint32_t kMultiTurnConfigDelayMs = 5; ///< EEPROM 写入和 Reset 后等待时间。
 inline constexpr uint8_t kOfflineInvalidateMisses = 3; ///< 连续读失败达到此值才判离线。
 /**
  * 即使扫描或恢复流程没有累计同步读失败，反馈超过该时间未刷新也必须判离线。
- * 正常情况下每条 BUS 每 20 ms 更新一次；80 ms 覆盖四个反馈周期，既允许
+ * 正常情况下四条 BUS 都在每个10 ms轮次更新；80 ms覆盖八个反馈周期，既允许
  * 短暂调度抖动，又能避免快速掉电重启长期沿用旧 hardware ABS 会话。
  */
 inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
@@ -46,7 +46,7 @@ inline constexpr uint32_t kFeedbackStaleTimeoutMs = 80;
 // 把维护操作自身造成的轮询间隔误判为舵机掉电。
 inline constexpr uint32_t kFeedbackMaintenanceGraceMs =
     kFeedbackStaleTimeoutMs;
-/** 重新发现舵机后必须连续成功三帧，约 40~60 ms，才重新发布 online。 */
+/** 重新发现舵机后必须连续成功三帧，正常约30 ms，才重新发布online。 */
 inline constexpr uint8_t kOnlineConfirmReads = 3;
 inline constexpr uint16_t kDiscoveryProbeTimeoutMs = 2; ///< 动态 BUS 探测单次最长阻塞时间。
 /** 单 BUS 控制容量只有一个事实来源，避免扫描策略与同步收发缓存的上限发生漂移。 */

@@ -38,7 +38,7 @@ inline constexpr uint16_t kFeedbackServoSpeed = 0;
 inline constexpr int32_t kDirectDoneAbsToleranceCounts = 40;
 inline constexpr uint8_t kDirectDoneStableCycles = 5;
 inline constexpr float kFeedbackDoneToleranceDeg = 0.5f;
-inline constexpr uint8_t kFeedbackDoneStableCycles = 10;
+inline constexpr uint32_t kFeedbackDoneStableMs = 500;
 inline constexpr uint32_t kFeedbackRunTimeoutMs = 8000;
 
 inline constexpr int32_t kUpperWorkspaceWarningCounts = 48;
@@ -63,12 +63,14 @@ inline constexpr float kDualTendonIntegralLimit = 0.0f;
 inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
 inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
 /**
- * 单腱和双腱闭环允许越过 LUT 最小/最大样本的运行裕量，单位为 logical ABS counts。
- * 控制目标最终限制在 [LUT 最小值 - 500, LUT 最大值 + 500] 内。
+ * 单腱和双腱闭环允许越过 LUT 端点的运行裕量，单位为 logical ABS counts。
+ * 裕量按腱绳方向而非 ABS 数值正负计算，兼容不同电机方向映射。
  */
-inline constexpr int32_t kTendonLutMarginCounts = 500;
-static_assert(kTendonLutMarginCounts >= 0,
-              "tendon LUT margin must be non-negative");
+inline constexpr int32_t kTendonLutReleaseMarginCounts = 500;
+inline constexpr int32_t kTendonLutTightMarginCounts = 1200;
+static_assert(kTendonLutReleaseMarginCounts >= 0 &&
+                  kTendonLutTightMarginCounts >= 0,
+              "tendon LUT margins must be non-negative");
 
 /** 碰撞检测状态机参数。 */
 inline constexpr float kCollisionMinErrorDeg = 4.0f;

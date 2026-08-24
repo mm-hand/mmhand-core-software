@@ -5,6 +5,7 @@
 #include "TendonCalibrationLut.h"
 
 #include "../../generated/UrdfJointLimits.generated.h"
+#include "../../config/topology/HardwareMap.h"
 
 #include <math.h>
 
@@ -61,6 +62,45 @@ bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,
     }
     *outMinAbs = minAbs;
     *outMaxAbs = maxAbs;
+    return true;
+}
+
+bool tendonCalibrationMotorAbsRangeWithMargins(
+    const JointCalibrationResult& calibration,
+    uint8_t actuatorIndex,
+    uint8_t motorChannel,
+    int32_t releaseMarginCounts,
+    int32_t tightMarginCounts,
+    int32_t* outMinAbs,
+    int32_t* outMaxAbs)
+{
+    int32_t lutMinAbs = 0;
+    int32_t lutMaxAbs = 0;
+    if (!outMinAbs || !outMaxAbs || releaseMarginCounts < 0 ||
+        tightMarginCounts < 0 ||
+        !tendonCalibrationMotorAbsRange(calibration,
+                                        actuatorIndex,
+                                        &lutMinAbs,
+                                        &lutMaxAbs)) {
+        return false;
+    }
+
+    // shortenSign 决定数值较大的一端是否为紧端，不能默认 ABS 增大必然收绳。
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
+    if (shortenSign == 0) {
+        return false;
+    }
+    const int32_t releaseAbs = shortenSign > 0 ? lutMinAbs : lutMaxAbs;
+    const int32_t tightAbs = shortenSign > 0 ? lutMaxAbs : lutMinAbs;
+    const int32_t releaseWithMargin =
+        motorApplyTendonDelta(motorChannel, releaseAbs, -releaseMarginCounts);
+    const int32_t tightWithMargin =
+        motorApplyTendonDelta(motorChannel, tightAbs, tightMarginCounts);
+
+    *outMinAbs = releaseWithMargin < tightWithMargin
+        ? releaseWithMargin : tightWithMargin;
+    *outMaxAbs = releaseWithMargin > tightWithMargin
+        ? releaseWithMargin : tightWithMargin;
     return true;
 }
 

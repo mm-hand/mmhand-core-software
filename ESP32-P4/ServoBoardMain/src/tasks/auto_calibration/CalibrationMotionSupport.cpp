@@ -54,7 +54,7 @@ int32_t clampCalibrationServoAbs(int32_t value)
     return value;
 }
 
-// 根据紧端 ABS 登记一个保守的五圈电机工作区，并增加 500 counts 紧端余量。
+// 根据紧端 ABS 登记一个保守的五圈电机工作区，并增加紧端余量。
 void setCalibratedMotorAbsLimit(SystemRuntimeContext* sharedData,
                                        uint8_t motorChannel,
                                        int32_t tightAbs)
@@ -68,10 +68,14 @@ void setCalibratedMotorAbsLimit(SystemRuntimeContext* sharedData,
     const int32_t tightClamped = clampCalibrationServoAbs(tightAbs);
     const int32_t slackClamped = clampCalibrationServoAbs(
         motorApplyTendonDelta(motorChannel, tightClamped, -kMotorAbsWindowCounts));
-    const int32_t minAbs = (slackClamped < tightClamped) ? slackClamped : tightClamped;
-    const int32_t baseMaxAbs = (slackClamped > tightClamped) ? slackClamped : tightClamped;
-    const int32_t maxAbs = clampCalibrationServoAbs(
-        baseMaxAbs + kMotorAbsMaxMarginCounts);
+    const int32_t tightWithMargin = clampCalibrationServoAbs(
+        motorApplyTendonDelta(motorChannel,
+                              tightClamped,
+                              kMotorAbsTightMarginCounts));
+    const int32_t minAbs = (slackClamped < tightWithMargin)
+        ? slackClamped : tightWithMargin;
+    const int32_t maxAbs = (slackClamped > tightWithMargin)
+        ? slackClamped : tightWithMargin;
     {
         SharedSafetyGuard guard;
         sharedData->motor_abs_limit_min[motorChannel] = minAbs;
@@ -79,16 +83,16 @@ void setCalibratedMotorAbsLimit(SystemRuntimeContext* sharedData,
         sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap,
                             (uint32_t)(1UL << motorChannel));
     }
-    FW_LOG_INFO_PRINTF("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld baseMax=%ld tight=%ld slack=%ld shortenSign=%d window=%ld maxMargin=%ld\r\n",
+    FW_LOG_INFO_PRINTF("[AUTO CALIB] ABS_LIMIT M%02u min=%ld max=%ld tight=%ld tightMarginAbs=%ld slack=%ld shortenSign=%d window=%ld tightMargin=%ld\r\n",
                    (unsigned)motorChannel,
                    (long)minAbs,
                    (long)maxAbs,
-                   (long)baseMaxAbs,
                    (long)tightClamped,
+                   (long)tightWithMargin,
                    (long)slackClamped,
                    (int)getMotorTendonShortenAbsSign(motorChannel),
                    (long)kMotorAbsWindowCounts,
-                   (long)kMotorAbsMaxMarginCounts);
+                   (long)kMotorAbsTightMarginCounts);
 }
 
 // 单腱标定完成后，以 LUT 实测包络登记电机 ABS 工作区。
@@ -103,8 +107,8 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
         return;
     }
 
-    // 单腱工作区以 LUT 的实测包络为基础，并沿收绳方向保留原有的 500
-    // counts 紧端余量。这里只登记标定诊断范围；负反馈边界由 LUT 统一负责。
+    // 单腱工作区以 LUT 实测包络为基础：松端保留 500 counts，紧端保留
+    // 1200 counts。扩展方向由电机腱绳映射决定，不能直接对数值 min/max 加减。
     lutMinAbs = clampCalibrationServoAbs(lutMinAbs);
     lutMaxAbs = clampCalibrationServoAbs(lutMaxAbs);
     if (lutMinAbs > lutMaxAbs) {
@@ -112,12 +116,20 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
         lutMinAbs = lutMaxAbs;
         lutMaxAbs = tmp;
     }
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
+    const int32_t releaseAbs = shortenSign > 0 ? lutMinAbs : lutMaxAbs;
+    const int32_t releaseWithMargin = clampCalibrationServoAbs(
+        motorApplyTendonDelta(motorChannel,
+                              releaseAbs,
+                              -kMotorAbsReleaseMarginCounts));
     const int32_t tightWithMargin = clampCalibrationServoAbs(
         motorApplyTendonDelta(motorChannel,
                               lutTightAbs,
-                              kMotorAbsMaxMarginCounts));
+                              kMotorAbsTightMarginCounts));
     int32_t limitMin = lutMinAbs;
     int32_t limitMax = lutMaxAbs;
+    if (releaseWithMargin < limitMin) limitMin = releaseWithMargin;
+    if (releaseWithMargin > limitMax) limitMax = releaseWithMargin;
     if (tightWithMargin < limitMin) limitMin = tightWithMargin;
     if (tightWithMargin > limitMax) limitMax = tightWithMargin;
 
@@ -130,14 +142,16 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
     }
     FW_LOG_INFO_PRINTF(
         "[AUTO CALIB] SINGLE_LUT_ABS_LIMIT M%02u lut=[%ld,%ld] "
-        "limit=[%ld,%ld] tight=%ld margin=%ld\r\n",
+        "limit=[%ld,%ld] release=%ld tight=%ld margins=[%ld,%ld]\r\n",
         (unsigned)motorChannel,
         (long)lutMinAbs,
         (long)lutMaxAbs,
         (long)limitMin,
         (long)limitMax,
+        (long)releaseAbs,
         (long)lutTightAbs,
-        (long)kMotorAbsMaxMarginCounts);
+        (long)kMotorAbsReleaseMarginCounts,
+        (long)kMotorAbsTightMarginCounts);
 }
 
 // 清除指定关节所有执行器的旧 ABS 限位，避免新标定被旧范围拦截。

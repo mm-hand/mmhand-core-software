@@ -27,18 +27,29 @@ void servoBusTask(void* parameter)
     }
 
     sharedData->servoBusWake.bind(xTaskGetCurrentTaskHandle());
-    // 服务任务保持 10 ms 兜底唤醒；总线服务每轮读取两条 BUS，因此每条
-    // BUS 的完整位置/速度/负载反馈周期为 ServoConfig 定义的 20 ms。
+    // 服务任务保持10 ms兜底周期；周期点向四条BUS依次发出同步读请求，
+    // 再在约3 ms后的收集点统一解析，等待期间四路UART由硬件并行接收。
     const TickType_t periodTicks = pdMS_TO_TICKS(
         mmhand::config::servo::kServoBusServicePeriodMs);
     p4::platform::rtos::PeriodicDeadline deadline(periodTicks);
     uint32_t wakeReasons = 0;
     for (;;) {
         const TickType_t dispatchTicks = xTaskGetTickCount();
+        const uint64_t dispatchUs = p4::platform::time::monotonicMicros();
         const bool periodicDue = deadline.due(dispatchTicks);
-        if (!periodicDue && wakeReasons == 0U) {
-            wakeReasons = sharedData->servoBusWake.wait(
-                deadline.remaining(dispatchTicks));
+        const bool feedbackCollectDue =
+            servoBusFeedbackCollectDue(dispatchUs);
+        if (!periodicDue && !feedbackCollectDue && wakeReasons == 0U) {
+            TickType_t waitTicks = deadline.remaining(dispatchTicks);
+            const uint32_t feedbackWaitMs = servoBusFeedbackWaitMs(dispatchUs);
+            if (feedbackWaitMs != 0U) {
+                const TickType_t feedbackWaitTicks =
+                    pdMS_TO_TICKS(feedbackWaitMs);
+                if (feedbackWaitTicks < waitTicks) {
+                    waitTicks = feedbackWaitTicks;
+                }
+            }
+            wakeReasons = sharedData->servoBusWake.wait(waitTicks);
             continue;
         }
         if (periodicDue) deadline.advancePast(dispatchTicks);
@@ -53,7 +64,8 @@ void servoBusTask(void* parameter)
             captureServoServiceInput(sharedData, nowMs);
         const ServiceOutputPort output =
             makeSystemServiceOutputPort(sharedData);
-        const ServoBusStepRequest request = {wakeReasons, periodicDue};
+        const ServoBusStepRequest request = {
+            wakeReasons, periodicDue, feedbackCollectDue};
         wakeReasons = 0;
         stepServoBusService(sharedData, input, output, request);
         taskRuntimeMarkLoopEnd(TASK_RUNTIME_SERVO_BUS);

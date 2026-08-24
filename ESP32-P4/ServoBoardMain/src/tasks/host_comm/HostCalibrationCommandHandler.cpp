@@ -28,10 +28,14 @@ uint32_t autoCalibrationValidMask(SystemRuntimeContext* sharedData)
     }
     uint32_t mask = 0;
     for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
-        const JointCalibrationResult& result = g_jointCalibResult[joint];
+        JointCalibrationRuntimeSnapshot snapshot;
+        if (!readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
+            continue;
+        }
+        const JointCalibrationResult& result = snapshot.result;
         const uint32_t manualEntryCrc = manualEncoderReferenceEntryCrc(
-            joint, g_manualEncoderReference[joint]);
-        if (g_manualEncoderReference[joint].valid &&
+            joint, snapshot.manual);
+        if (snapshot.manual.valid &&
             result.success &&
             result.mappingVersion == kManualScaledUrdfFeedbackMappingVersion &&
             result.urdfConfigCrc == kManualScaledUrdfConfigCrc &&
@@ -129,8 +133,7 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
         if ((jointMask & (1UL << joint)) == 0) {
             continue;
         }
-        memset(&g_jointCalibResult[joint], 0,
-               sizeof(g_jointCalibResult[joint]));
+        clearJointCalibrationResult(joint);
         motorMask |= motorMaskForJoint(joint);
     }
 

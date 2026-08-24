@@ -102,6 +102,7 @@ static bool getDualTendonActuators(uint8_t jointIndex, JointActuatorItem outActu
 }
 
 static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
+                                                     const JointCalibrationResult& calib,
                                                      const JointActuatorItem actuators[2],
                                                      float qRefDeg,
                                                      float qFbDeg,
@@ -112,7 +113,6 @@ static bool computeDualTendonModelAbsFromCalibration(uint8_t jointIndex,
         return false;
     }
 
-    const JointCalibrationResult& calib = g_jointCalibResult[jointIndex];
     if (!calib.success || !calib.scaled ||
         calib.tendonLutValid == 0 ||
         calib.tendonLutCount < 3) {
@@ -184,9 +184,17 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         return false;
     }
 
+    JointCalibrationRuntimeSnapshot calibrationSnapshot;
+    if (!readJointCalibrationRuntimeSnapshot(
+            jointIndex, &calibrationSnapshot)) {
+        return false;
+    }
+    const JointCalibrationResult& calibration = calibrationSnapshot.result;
+
     float motorRefModel[2] = {0.0f, 0.0f};
     float motorFbModel[2] = {0.0f, 0.0f};
     if (!computeDualTendonModelAbsFromCalibration(jointIndex,
+                                                  calibration,
                                                   actuators,
                                                   qRefDeg,
                                                   qFbDeg,
@@ -281,16 +289,18 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->rawTargetAbs[i] = rawTarget;
         int32_t lutMinAbs = 0;
         int32_t lutMaxAbs = 0;
-        if (!tendonCalibrationMotorAbsRange(g_jointCalibResult[jointIndex],
-                                             i,
-                                             &lutMinAbs,
-                                             &lutMaxAbs)) {
+        if (!tendonCalibrationMotorAbsRangeWithMargins(
+                calibration,
+                i,
+                motorChannel,
+                kTendonLutReleaseMarginCounts,
+                kTendonLutTightMarginCounts,
+                &lutMinAbs,
+                &lutMaxAbs)) {
             return false;
         }
 
-        // 双腱两台电机分别按自己的标定 LUT 建立边界，并向两端放宽统一裕量。
-        lutMinAbs -= kTendonLutMarginCounts;
-        lutMaxAbs += kTendonLutMarginCounts;
+        // 双腱两台电机分别按腱绳方向扩展：松端 500、紧端 1200 counts。
         const p4::safety::AbsBoundaryClampDecision clampDecision =
             p4::safety::clampAbsToBoundary(rawTarget, lutMinAbs, lutMaxAbs);
         if (!clampDecision.valid) {

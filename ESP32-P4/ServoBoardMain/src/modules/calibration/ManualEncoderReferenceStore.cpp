@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "CalibrationMath.h"
+#include "../integrity/Crc32Ieee.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 
 bool manualEncoderReferencesValidate(
@@ -58,9 +59,9 @@ uint32_t manualEncoderReferencesCrc(const ManualEncoderReference* references)
             static_cast<uint8_t>(references[joint].maxRaw >> 8),
             static_cast<uint8_t>(references[joint].maxRaw & 0xFF),
         };
-        for (uint8_t value : values) {
-            crc = (crc << 5) - crc + value;
-        }
+        // 此 CRC 属于 P4/desktop/标定 JSON 的跨语言协议契约，必须使用
+        // CRC-32/ISO-HDLC；不能替换成普通哈希，否则标定结果会被判为 Manual 不匹配。
+        crc = p4::integrity::crc32IeeeUpdate(crc, values, sizeof(values));
     }
     return crc;
 }
@@ -69,25 +70,19 @@ uint32_t manualEncoderReferenceEntryCrc(
     uint8_t jointIndex,
     const ManualEncoderReference& reference)
 {
-    const ManualEncoderReference entries[1] = {reference};
     const uint8_t values[5] = {
         jointIndex,
-        static_cast<uint8_t>(entries[0].minRaw >> 8),
-        static_cast<uint8_t>(entries[0].minRaw & 0xFF),
-        static_cast<uint8_t>(entries[0].maxRaw >> 8),
-        static_cast<uint8_t>(entries[0].maxRaw & 0xFF),
+        static_cast<uint8_t>(reference.minRaw >> 8),
+        static_cast<uint8_t>(reference.minRaw & 0xFF),
+        static_cast<uint8_t>(reference.maxRaw >> 8),
+        static_cast<uint8_t>(reference.maxRaw & 0xFF),
     };
-    uint32_t crc = 0;
-    for (uint8_t value : values) {
-        crc = (crc << 5) - crc + value;
-    }
-    return crc;
+    return p4::integrity::crc32IeeeUpdate(0, values, sizeof(values));
 }
 
 void manualEncoderReferencesClearRam()
 {
-    SharedSafetyGuard guard;
-    memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));
+    replaceManualEncoderReferences(nullptr);
 }
 
 void manualEncoderReferencesApplyRam(const ManualEncoderReference* references)
@@ -95,8 +90,7 @@ void manualEncoderReferencesApplyRam(const ManualEncoderReference* references)
     if (!references) {
         return;
     }
-    SharedSafetyGuard guard;
-    memcpy(g_manualEncoderReference, references, sizeof(g_manualEncoderReference));
+    replaceManualEncoderReferences(references);
 }
 
 uint32_t manualEncoderReferencesValidMask()

@@ -11,6 +11,7 @@
 
 #include "ServoDiscoveryManager.h"
 #include "ServoFeedbackPublisher.h"
+#include "ParallelServoFeedbackCycle.h"
 #include "ServoRouteTable.h"
 #include "ServoBusRouting.h"
 #include "../../data/RecoveryTypes.h"
@@ -757,7 +758,9 @@ static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
  */
 struct ServoRuntimeContext {
     bool initialized;
-    uint8_t readBusPhase;
+    ParallelServoFeedbackCycle feedbackCycle; ///< 四条UART共享轮次的两阶段协调器。
+    ServoFeedbackCycleMeta_t completedFeedback; ///< 最近完成轮次，发布时复制到三类快照。
+    bool deferredTargetWake; ///< 读事务期间到达的新目标，收集完成后再发送。
     uint32_t lastEmergencyStopToken;
     uint32_t lastRestoreToken;
     uint32_t lastCalibrationTrustToken;
@@ -767,12 +770,74 @@ struct ServoRuntimeContext {
     uint32_t lastLoopStartMs;
     uint32_t queueDropTotal;
     uint32_t lastQueueDropLogMs;
+    uint32_t lastM19GoalReadbackMs; ///< 最近一次 M19 目标寄存器诊断回读时间。
+    uint32_t lastM19GoalReadbackFailureLogMs; ///< 回读失败日志节流时间。
     // 上线恢复不是持久化功能；核验多圈模式后才能让上位机 JSON 提交 logical ABS。
     ServoHotplugRecoveryAnchors hotplugRecoveryAnchors;
     ServoOnlineRecoveryContext onlineRecovery;
 };
 
 static ServoRuntimeContext g_servoRuntime;
+
+/**
+ * 低频核对 M19 的舵机目标寄存器与实时反馈。
+ *
+ * 同步写没有单舵机 ACK，因此仅看 PID/command 日志不能证明目标已经进入
+ * ST3215 SRAM。本诊断只能在四 BUS 同步读完成后的空档执行；goalLogical
+ * 与 actualLogical 可直接比较，goalHw 则用于确认舵机内部真实目标。
+ */
+static void logM19GoalReadback(SystemRuntimeContext* sharedData,
+                               ServoRuntimeContext* runtime,
+                               uint32_t nowMs)
+{
+    constexpr uint8_t kMotorChannel = 19;
+    if (!kM19GoalReadbackEnabled || !sharedData || !runtime ||
+        sharedAtomicLoad(&sharedData->system_state) !=
+            SYSTEM_STATE_RUN_FEEDBACK ||
+        (sharedAtomicLoad(&sharedData->active_motor_mask) &
+         (1UL << kMotorChannel)) == 0 ||
+        (uint32_t)(nowMs - runtime->lastM19GoalReadbackMs) <
+            kM19GoalReadbackPeriodMs) {
+        return;
+    }
+    runtime->lastM19GoalReadbackMs = nowMs;
+
+    ServoRoute route;
+    FeetechServoDriver* driver =
+        resolveMotorDriver(kMotorChannel, &route, true);
+    ServoGoalRegisterState goal{};
+    if (!driver || !driver->readGoalRegisters(route.servoId, &goal)) {
+        if ((uint32_t)(nowMs - runtime->lastM19GoalReadbackFailureLogMs) >=
+            kM19GoalReadbackFailureLogPeriodMs) {
+            runtime->lastM19GoalReadbackFailureLogMs = nowMs;
+            FW_LOG_PRINTLN(FW_LOG_LEVEL_WARN,
+                           "[SERVO GOAL M19] read_failed");
+        }
+        return;
+    }
+
+    const ServoFeedbackInternal& feedback =
+        driver->getFeedback(route.servoId);
+    const int32_t logicalOffset = driver->getLogicalOffset(route.servoId);
+    const int32_t goalLogical =
+        (int32_t)goal.hardwarePosition + logicalOffset;
+    FW_LOG_INFO_PRINTF(
+        "[SERVO GOAL M19] bus=%u id=%u goalHw=%d goalLogical=%ld "
+        "actualHw=%ld actualLogical=%ld raw=%d presentSpeed=%d load=%d "
+        "accReg=%u speedReg=%u ageMs=%lu\r\n",
+        (unsigned)route.busIndex,
+        (unsigned)route.servoId,
+        (int)goal.hardwarePosition,
+        (long)goalLogical,
+        (long)feedback.absolutePosition,
+        (long)(feedback.absolutePosition + logicalOffset),
+        (int)feedback.rawPosition,
+        (int)feedback.speed,
+        (int)feedback.load,
+        (unsigned)goal.acceleration,
+        (unsigned)goal.speed,
+        (unsigned long)(nowMs - feedback.lastUpdate));
+}
 
 /** 初始化舵机总线与恢复上下文；本函数不创建任务、不进入循环。 */
 bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
@@ -781,7 +846,7 @@ bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
         return false;
     }
 
-    memset(&g_servoRuntime, 0, sizeof(g_servoRuntime));
+    g_servoRuntime = ServoRuntimeContext{};
     beginServoBuses();
     servoDiscoveryManager().begin();
     publishServoRouteSnapshot(sharedData);
@@ -815,7 +880,6 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     const uint32_t nowMs = input.nowMs;
     ServoRuntimeContext& runtime = g_servoRuntime;
     const uint32_t loopStartMs = nowMs;
-    auto& readBusPhase = runtime.readBusPhase;
     auto& lastEmergencyStopToken = runtime.lastEmergencyStopToken;
     auto& lastRestoreToken = runtime.lastRestoreToken;
     auto& lastCalibrationTrustToken = runtime.lastCalibrationTrustToken;
@@ -851,6 +915,7 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
             sharedAtomicLoad(&sharedData->servo_emergency_stop_token);
         if (emergencyStopToken != lastEmergencyStopToken) {
             lastEmergencyStopToken = emergencyStopToken;
+            runtime.feedbackCycle.abort();
             emergencyTorqueOffMappedServos(sharedData);
             taskRuntimeMarkStopTorqueOffComplete();
         }
@@ -872,24 +937,40 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         runtime.calibrationMotionWasActive = calibrationMotionActive;
         const bool targetWake =
             (request.wakeReasons & p4::runtime::wake::kServoTarget) != 0U;
+        if (targetWake) runtime.deferredTargetWake = true;
+
+        bool feedbackCycleCompleted = false;
+        if (request.feedbackCollectDue) {
+            feedbackCycleCompleted = runtime.feedbackCycle.collect(
+                p4::platform::time::monotonicMicros(),
+                &runtime.completedFeedback);
+        }
+
         ServoTargetBatch_t batch;
-        while ((request.periodicDue || targetWake) &&
+        while (!runtime.feedbackCycle.active() &&
+               (request.periodicDue || runtime.deferredTargetWake) &&
                p4::actuator::receiveLatest(sharedData, &batch)) {
             const uint8_t owner = sharedData->servo_target_owner;
+            // 同步读可能让本次 step 跨越数毫秒；必须在真正消费批次时重新取时钟。
+            // 使用 step 入口旧 nowMs 会把期间新生成的目标误判为 stale-target。
             const uint32_t applyBeginMs =
                 p4::platform::time::monotonicMillis();
             const ServoBatchApplyResult applyResult =
-                applyServoTargetBatch(sharedData, batch, nowMs);
+                applyServoTargetBatch(sharedData, batch, applyBeginMs);
             reportHostControlHoldResult(sharedData, batch, applyResult);
             reportCalibrationTargetResult(sharedData, batch, applyResult);
             const uint32_t applyElapsedMs =
                 p4::platform::time::monotonicMillis() - applyBeginMs;
             if (applyElapsedMs > kServoApplyStallLogThresholdMs) {
+                const uint32_t targetAgeMs =
+                    p4::actuator::computeTargetAgeMs(
+                        p4::platform::time::monotonicMillis(),
+                        batch.timestamp);
                 FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=apply_target elapsedMs=%lu source=%u owner=%u ageMs=%lu count=%u applied=%u\r\n",
                                    (unsigned long)applyElapsedMs,
                                    (unsigned)batch.source,
                                    (unsigned)owner,
-                                   (unsigned long)(p4::platform::time::monotonicMillis() - batch.timestamp),
+                                   (unsigned long)targetAgeMs,
                                    (unsigned)batch.count,
                                    (unsigned)applyResult.appliedCount);
             }
@@ -897,83 +978,55 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                 queueDropTotal++;
                 const uint32_t sampleNowMs =
                     p4::platform::time::monotonicMillis();
+                const uint32_t targetAgeMs =
+                    p4::actuator::computeTargetAgeMs(sampleNowMs,
+                                                      batch.timestamp);
                 if ((uint32_t)(sampleNowMs - lastQueueDropLogMs) >=
                     kServoQueueDropLogIntervalMs) {
                     lastQueueDropLogMs = sampleNowMs;
                     FW_LOG_WARN_PRINTF("[SERVO QUEUE DROP] source=%u owner=%u ageMs=%lu count=%u droppedTotal=%lu state=%u\r\n",
                                        (unsigned)batch.source,
                                        (unsigned)owner,
-                                       (unsigned long)(sampleNowMs - batch.timestamp),
+                                       (unsigned long)targetAgeMs,
                                        (unsigned)batch.count,
                                        (unsigned long)queueDropTotal,
                                        (unsigned)sharedData->system_state);
                 }
             }
         }
-
-        // 新目标和 E-STOP 可以提前唤醒；同步读、失效判定、扫描和恢复必须
-        // 保持绝对 10 ms 周期，不能因目标事件增多而额外占用四条 BUS。
-        if (!request.periodicDue) {
-            return true;
+        if (!runtime.feedbackCycle.active() && runtime.deferredTargetWake) {
+            // receiveLatest() 已取尽“最新值邮箱”；即使队列为空也消费本次通知，
+            // 后续新目标会重新发送 kServoTarget，避免旧唤醒永久锁存。
+            runtime.deferredTargetWake = false;
         }
 
-        uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
-        uint8_t readCounts[NUM_BUSES] = {0};
         const uint32_t calibrationReadMask = calibrationMotionActive
             ? (sharedAtomicLoad(&sharedData->active_motor_mask) |
                sharedAtomicLoad(&sharedData->calibration_aux_motor_mask)) &
                   validMotorChannelMask()
             : 0;
-        for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
-            if (calibrationMotionActive &&
-                calibrationReadMask != 0 &&
-                (calibrationReadMask & (1UL << ch)) == 0) {
-                continue;
+        if (!feedbackCycleCompleted) {
+            if (request.periodicDue && !runtime.feedbackCycle.active()) {
+                uint8_t readIds[NUM_BUSES][MAX_SERVOS_PER_BUS] = {0};
+                uint8_t readCounts[NUM_BUSES] = {0};
+                for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
+                    if (calibrationMotionActive && calibrationReadMask != 0 &&
+                        (calibrationReadMask & (1UL << ch)) == 0) {
+                        continue;
+                    }
+                    ServoRoute route;
+                    if (servoRouteTable().resolveControllable(ch, &route)) {
+                        addServoReadTarget(readIds, readCounts,
+                                           route.busIndex, route.servoId);
+                    }
+                }
+                runtime.feedbackCycle.begin(
+                    readIds, readCounts,
+                    p4::platform::time::monotonicMicros());
             }
-            ServoRoute route;
-            if (servoRouteTable().resolveControllable(ch, &route)) {
-                addServoReadTarget(readIds,
-                              readCounts,
-                              route.busIndex,
-                              route.servoId);
-            }
+            // Begin之后UART硬件自行接收；本任务等待约3 ms收集时点，不忙等。
+            return true;
         }
-
-        // 每个 10 ms 服务周期读取一组 BUS。当前四条 BUS 分成两组，每组
-        // 两条，因此同一 BUS 每 20 ms 获得一次完整同步反馈。
-        const uint8_t readStartBus = (uint8_t)(
-            readBusPhase * kServoFeedbackBusesPerCycle);
-        for (uint8_t offset = 0;
-             offset < kServoFeedbackBusesPerCycle;
-             ++offset) {
-            const uint8_t busIndex = (uint8_t)(readStartBus + offset);
-            if (busIndex >= NUM_BUSES || readCounts[busIndex] == 0) {
-                continue;
-            }
-            const uint64_t readBeginUs =
-                p4::platform::time::monotonicMicros();
-            FeetechServoDriver* bus = servoBusRegistry().driver(busIndex);
-            const int readSuccess =
-                bus ? bus->syncReadPositions(readIds[busIndex], readCounts[busIndex]) : 0;
-            const uint32_t readElapsedUs = (uint32_t)(
-                p4::platform::time::monotonicMicros() - readBeginUs);
-            taskRuntimeMarkIoSample(busIndex,
-                                    readElapsedUs,
-                                    readCounts[busIndex],
-                                    readSuccess > 0 ? (uint32_t)readSuccess : 0U);
-            const uint32_t readElapsedMs = readElapsedUs / 1000U;
-            if (readElapsedMs > 50) {
-                FW_LOG_WARN_PRINTF("[SERVO LOOP STALL] stage=sync_read bus=%u elapsedMs=%lu requested=%u success=%d calibration=%u activeMask=0x%08lX\r\n",
-                                   (unsigned)busIndex,
-                                   (unsigned long)readElapsedMs,
-                                   (unsigned)readCounts[busIndex],
-                                   readSuccess,
-                                   calibrationMotionActive ? 1U : 0U,
-                                   (unsigned long)calibrationReadMask);
-            }
-        }
-        readBusPhase = (uint8_t)(
-            (readBusPhase + 1U) % kServoFeedbackReadGroupCount);
 
         // 正常反馈读取拥有最高优先级。即使后台路由扫描持续进行，只要某个
         // 已映射舵机超过新鲜度上限未更新，也必须冻结锚点并撤销在线信任。
@@ -1051,10 +1104,28 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                 mmhand::config::servo::kFeedbackMaintenanceGraceMs;
         }
         p4::servo::publishRecoveryState(sharedData);
-        p4::servo::publishFeedback(sharedData);
+        p4::servo::publishFeedback(sharedData, runtime.completedFeedback);
+        // 此处四 BUS 同步读已经结束，插入一次 M19 单播回读不会破坏并行事务。
+        logM19GoalReadback(sharedData,
+                           &runtime,
+                           p4::platform::time::monotonicMillis());
         // 路由扫描放在正常同步反馈、掉线失效和恢复事务之后。每轮 step()
         // 仍只探测一个 BUS/ID，但不再因扫描提前 return 而饿死在线反馈。
         servoDiscoveryManager().step(loopStartMs, motionActive);
         publishServoRouteSnapshot(sharedData);
     return true;
+}
+
+bool servoBusFeedbackCollectDue(uint64_t nowUs)
+{
+    return g_servoRuntime.initialized &&
+           g_servoRuntime.feedbackCycle.collectDue(nowUs);
+}
+
+uint32_t servoBusFeedbackWaitMs(uint64_t nowUs)
+{
+    if (!g_servoRuntime.initialized) {
+        return 0;
+    }
+    return g_servoRuntime.feedbackCycle.waitMs(nowUs);
 }

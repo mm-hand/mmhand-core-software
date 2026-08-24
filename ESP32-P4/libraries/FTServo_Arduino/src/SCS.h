@@ -28,11 +28,15 @@ public:
 	int readWord(u8 ID, u8 MemAddr);//读2个字节
 	int Ping(u8 ID);//Ping指令
 	int syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen);//同步读指令包发送
+	int syncReadPacketTxOnly(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen);//仅发送同步读请求，不等待回包
+	int syncReadCollectAvailable();//非阻塞搬运当前UART已收到的同步读字节
 	int syncReadPacketRx(u8 ID, u8 *nDat);//同步读返回包解码，成功返回内存字节数，失败返回0
 	int syncReadRxPacketToByte();//解码一个字节
 	int syncReadRxPacketToWrod(u8 negBit=0);//解码两个字节，negBit为方向为，negBit=0表示无方向
 	void syncReadBegin(u8 IDN, u8 rxLen, u32 TimeOut);//同步读开始
 	void syncReadEnd();//同步读结束
+	u16 syncReadBufferedBytes() const { return syncReadRxBuffLen; }
+	u16 syncReadExpectedBytes() const { return syncReadRxBuffMax; }
 	int Reset(u8 ID);//重置舵机状态
 	int Recal(u8 ID);//重置舵机中位
 	u8 getState() { return u8Status; }
@@ -54,6 +58,7 @@ protected:
 	virtual int writeSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen) = 0;
 	virtual int readSCS(unsigned char *nDat, int nLen, unsigned long TimeOut) = 0;
+	virtual int readSCSAvailable(unsigned char *nDat, int nLen) = 0;
 	virtual int writeSCS(unsigned char bDat) = 0;
 	virtual void rFlushSCS() = 0;
 	virtual void wFlushSCS() = 0;

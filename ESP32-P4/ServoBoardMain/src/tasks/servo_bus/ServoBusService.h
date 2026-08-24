@@ -15,6 +15,7 @@ struct SystemRuntimeContext;
 struct ServoBusStepRequest {
     uint32_t wakeReasons; ///< TaskSignal 合并后的 kServo* 原因位。
     bool periodicDue;     ///< true 时才允许同步读、失效检查、恢复和反馈发布。
+    bool feedbackCollectDue; ///< 四路UART到达本轮非阻塞收集时点。
 };
 
 /** 初始化舵机服务和四条总线；任务启动后只调用一次。 */
@@ -25,5 +26,11 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
                          const ServoServiceInputSnapshot& input,
                          const ServiceOutputPort& output,
                          const ServoBusStepRequest& request);
+
+/** 返回当前是否存在已到收集时点的四 BUS 反馈事务。 */
+bool servoBusFeedbackCollectDue(uint64_t nowUs);
+
+/** 返回到下一次反馈收集的向上取整毫秒数；0表示当前无事务或已经到期。 */
+uint32_t servoBusFeedbackWaitMs(uint64_t nowUs);
 
 #endif // P4_TASKS_SERVO_BUS_SERVO_BUS_SERVICE_H

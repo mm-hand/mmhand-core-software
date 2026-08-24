@@ -259,6 +259,41 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
     assert "sync_motor" not in events
 
 
+def test_joint_enable_resets_uncontrollable_p4_after_desktop_restart():
+    """UI 本地未记住 E-STOP 时，仍应依据 P4 真值完成 RESET 后再 START。"""
+    events = []
+    backend = SimpleNamespace(
+        set_control_mode=lambda mode: events.append(("mode", mode)),
+        reset=lambda: events.append("reset"),
+        start=lambda: events.append("start"),
+    )
+    panel = SimpleNamespace(
+        _app_mode="manual",
+        _manual_submode=lambda: "joint",
+        _active_scope_offline_motor_indices=lambda _state: [],
+        _active_scope_unroutable_motor_indices=lambda _state: [],
+        _active_scope_offline_encoder_indices=lambda _state: [],
+        _apply_active_scope_for_current_mode=lambda: events.append("scope") or True,
+        _state=SimpleNamespace(system_state=0),
+        _active_scope_multiturn_unknown_mask=lambda: 0,
+        _show_turn_recovery_guide=lambda *_args: None,
+        _estop_latched=False,
+        backend=backend,
+        context=SimpleNamespace(
+            is_comm_connected=lambda: True,
+            connect_selected_port=lambda: True,
+            emit_action=lambda text: events.append(("action", text)),
+        ),
+        _set_status=lambda text: events.append(("status", text)),
+        _update_connection_lights=lambda: None,
+    )
+
+    ControlCommandController.start_controller(panel)
+
+    assert events.index("reset") < events.index("scope") < events.index("start")
+    assert ("mode", ControlMode.JOINT_ANGLE) in events
+
+
 def test_joint_enable_does_not_arm_ros2_output():
     events = []
     backend = SimpleNamespace(

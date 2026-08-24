@@ -23,6 +23,7 @@ bool manualEncoderReferencesCoverMask(
     uint32_t* outValidMask = NULL);
 uint32_t manualEncoderReferencesCrc(
     const ManualEncoderReference* references);
+/** 计算单关节 Manual 端点的 CRC-32/ISO-HDLC；其字节布局属于上下位机协议契约。 */
 uint32_t manualEncoderReferenceEntryCrc(
     uint8_t jointIndex,
     const ManualEncoderReference& reference);

@@ -58,6 +58,9 @@ struct ControlServiceRuntime {
     int32_t outPulsesTendon[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
+    // 标定结果由 AutoCalibration/HostComm 跨核更新；控制周期只使用同代一致快照。
+    JointCalibrationRuntimeSnapshot calibrationSnapshot[ENCODER_TOTAL_NUM];
+    uint32_t calibrationSnapshotValidMask;
     uint32_t overloadFaultLatched;
     uint8_t overloadHighCount[SERVO_TOTAL_NUM];
     int32_t feedbackCollisionHoldAbs[ENCODER_TOTAL_NUM][MAX_JOINT_ACTUATORS];
@@ -86,12 +89,13 @@ struct ControlServiceRuntime {
     int32_t sweepExpandedTarget[SERVO_TOTAL_NUM];
     bool sweepAnchorValid[SERVO_TOTAL_NUM];
     uint8_t directRunDoneStableCount;
-    uint8_t feedbackRunDoneStableCount;
     uint32_t feedbackRunToken;
     uint32_t feedbackRunStartMs;
+    uint32_t feedbackRunInsideToleranceSinceMs;
     uint32_t feedbackRunJointMask;
     float feedbackRunTargetDeg[ENCODER_TOTAL_NUM];
     bool feedbackRunTracking;
+    bool feedbackRunInsideTolerance;
     bool feedbackRunDoneEventQueued;
     bool feedbackRunTimeoutEventQueued;
 };
@@ -533,6 +537,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& outPulsesTendon = runtime.outPulsesTendon;
     auto& sensorData = runtime.sensorData;
     auto& mappedData = runtime.mappedData;
+    auto& calibrationSnapshot = runtime.calibrationSnapshot;
+    auto& calibrationSnapshotValidMask = runtime.calibrationSnapshotValidMask;
     auto& overloadFaultLatched = runtime.overloadFaultLatched;
     auto& overloadHighCount = runtime.overloadHighCount;
     auto& feedbackCollisionHoldAbs = runtime.feedbackCollisionHoldAbs;
@@ -555,12 +561,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& sweepExpandedTarget = runtime.sweepExpandedTarget;
     auto& sweepAnchorValid = runtime.sweepAnchorValid;
     auto& directRunDoneStableCount = runtime.directRunDoneStableCount;
-    auto& feedbackRunDoneStableCount = runtime.feedbackRunDoneStableCount;
     auto& feedbackRunToken = runtime.feedbackRunToken;
     auto& feedbackRunStartMs = runtime.feedbackRunStartMs;
+    auto& feedbackRunInsideToleranceSinceMs =
+        runtime.feedbackRunInsideToleranceSinceMs;
     auto& feedbackRunJointMask = runtime.feedbackRunJointMask;
     auto& feedbackRunTargetDeg = runtime.feedbackRunTargetDeg;
     auto& feedbackRunTracking = runtime.feedbackRunTracking;
+    auto& feedbackRunInsideTolerance = runtime.feedbackRunInsideTolerance;
     auto& feedbackRunDoneEventQueued = runtime.feedbackRunDoneEventQueued;
     auto& feedbackRunTimeoutEventQueued = runtime.feedbackRunTimeoutEventQueued;
 
@@ -592,7 +600,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         {
             // 新关节目标会开启新的单次反馈完成判定窗口。
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
-            feedbackRunDoneStableCount = 0;
+            feedbackRunInsideTolerance = false;
             lastJointCommandToken = jointCommandToken;
         }
 
@@ -705,6 +713,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         mappedData.timestamp = nowMs;
         mappedData.isValid = canBusOnline;
 
+        calibrationSnapshotValidMask =
+            readAllJointCalibrationRuntimeSnapshots(calibrationSnapshot)
+                ? ((1UL << ENCODER_TOTAL_NUM) - 1UL)
+                : 0;
+
         if (canBusOnline)
         {
             // 将 raw 磁编码器读数转换为已标定 URDF 角度，
@@ -729,7 +742,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     continue;
                 }
 
-                if (!g_jointCalibResult[i].success) {
+                if ((calibrationSnapshotValidMask & bit) == 0 ||
+                    !calibrationSnapshot[i].result.success) {
                     // 未标定关节故意标记为无效，禁止进入反馈 PID。
                     mappedData.angleValues[i] = 0;
                     mappedData.validFlags[i] = 0;
@@ -739,7 +753,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     continue;
                 }
 
-                const JointCalibrationResult& calib = g_jointCalibResult[i];
+                const JointCalibrationRuntimeSnapshot& calibration =
+                    calibrationSnapshot[i];
+                const JointCalibrationResult& calib = calibration.result;
                 float mappedDeg = 0.0f;
                 if (calib.mappingVersion == kManualScaledUrdfFeedbackMappingVersion) {
                     // 控制环只接受当前 Manual-scaled 映射；旧 Auto 映射不得回退运行。
@@ -748,9 +764,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         mapManualScaledEncoderToUrdf(
                             (uint8_t)i,
                             calib,
-                            g_manualEncoderReference[i],
+                            calibration.manual,
                             sensorData.encoderValues[i],
-                            g_encoderDirection[i],
+                            calibration.encoderDirection,
                             &mapping);
                     if (!mapped) {
                         mappedData.angleValues[i] = 0;
@@ -1118,14 +1134,15 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 feedbackRunJointMask = feedbackCommandJointMask;
                 feedbackRunToken = jointCommandToken;
                 feedbackRunStartMs = nowMs;
-                feedbackRunDoneStableCount = 0;
+                feedbackRunInsideToleranceSinceMs = 0;
+                feedbackRunInsideTolerance = false;
                 feedbackRunTracking = true;
                 feedbackRunDoneEventQueued = false;
                 feedbackRunTimeoutEventQueued = false;
             }
         } else {
             feedbackRunTracking = false;
-            feedbackRunDoneStableCount = 0;
+            feedbackRunInsideTolerance = false;
             feedbackRunDoneEventQueued = false;
             feedbackRunTimeoutEventQueued = false;
         }
@@ -1360,7 +1377,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
                 if (jointActive) {
                     // 普通单电机关节：把腱绳空间 PID 结果转回电机 raw ABS。
-                    // 先限制在标定 LUT 两端各放宽 500 counts 的工作区，再应用会话硬边界。
+                    // 先限制在标定 LUT 的松端 +500、紧端 +1200 工作区，再应用会话硬边界。
                     int32_t actualMotorAbs = targetPos;
                     int32_t rawPidTargetAbs = targetPos;
                     // LUT 无效或目标被钳位时，禁止把“目标无法继续推进”误判成碰撞。
@@ -1371,21 +1388,23 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         rawPidTargetAbs =
                             motorTendonAbsToRawAbs(motorCh, outPulsesTendon[jointIndex]);
                         const JointCalibrationResult& calibration =
-                            g_jointCalibResult[jointIndex];
+                            calibrationSnapshot[jointIndex].result;
                         int32_t lutMinAbs = 0;
                         int32_t lutMaxAbs = 0;
                         const bool lutMatchesMotor =
                             calibration.tendonLutMotor[0] == motorCh &&
-                            tendonCalibrationMotorAbsRange(calibration,
-                                                          0,
-                                                          &lutMinAbs,
-                                                          &lutMaxAbs);
+                            tendonCalibrationMotorAbsRangeWithMargins(
+                                calibration,
+                                0,
+                                motorCh,
+                                kTendonLutReleaseMarginCounts,
+                                kTendonLutTightMarginCounts,
+                                &lutMinAbs,
+                                &lutMaxAbs);
                         if (!lutMatchesMotor) {
                             // LUT 缺失或属于其他电机时保持当前位置，禁止无边界闭环。
                             targetPos = actualMotorAbs;
                         } else {
-                            lutMinAbs -= kTendonLutMarginCounts;
-                            lutMaxAbs += kTendonLutMarginCounts;
                             const p4::safety::AbsBoundaryClampDecision lutDecision =
                                 p4::safety::clampAbsToBoundary(rawPidTargetAbs,
                                                                lutMinAbs,
@@ -1453,7 +1472,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         bool lutValid = false;
                         if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                             const JointCalibrationResult& calibration =
-                                g_jointCalibResult[jointIndex];
+                                calibrationSnapshot[jointIndex].result;
                             // 单环 PID 仍使用角度误差；这里插值得到的模型位置只用于诊断。
                             lutValid = calibration.tendonLutMotor[0] ==
                                            (uint8_t)jointMotorCh &&
@@ -1572,10 +1591,12 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 feedbackRunJointMask
             );
             if (targetsReached) {
-                if (feedbackRunDoneStableCount < 255) {
-                    feedbackRunDoneStableCount++;
+                if (!feedbackRunInsideTolerance) {
+                    feedbackRunInsideTolerance = true;
+                    feedbackRunInsideToleranceSinceMs = nowMs;
                 }
-                if (feedbackRunDoneStableCount >= kFeedbackDoneStableCycles &&
+                if ((uint32_t)(nowMs - feedbackRunInsideToleranceSinceMs) >=
+                        kFeedbackDoneStableMs &&
                     !feedbackRunDoneEventQueued) {
                     // 队列满是暂态问题；保留完成事件并重试，
                     // 避免丢弃事件导致 RUN_FEEDBACK 一直锁定。
@@ -1587,16 +1608,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     );
                 }
             } else {
-                feedbackRunDoneStableCount = 0;
+                feedbackRunInsideTolerance = false;
             }
 
             const uint32_t elapsedMs = (uint32_t)(nowMs - feedbackRunStartMs);
             const bool collisionHoldActive =
                 sharedAtomicLoad(&sharedData->feedback_collision_hold_bitmap) != 0;
-            // 碰撞保持必须持续锁住触发时的舵机 ABS，直到反向目标或模式退出；
-            // 此时不能让旧的单次负反馈超时提前结束 RUN_FEEDBACK。
-            if (!targetsReached &&
-                !collisionHoldActive &&
+            // 碰撞保持需要等待反向目标主动解除，不能被普通 8 s 超时抢先释放。
+            if (!targetsReached && !collisionHoldActive &&
                 !feedbackRunDoneEventQueued &&
                 elapsedMs >= kFeedbackRunTimeoutMs &&
                 !feedbackRunTimeoutEventQueued) {
@@ -1604,8 +1623,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     output,
                     SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT,
                     feedbackRunToken,
-                    true
-                );
+                    true);
             }
         }
 

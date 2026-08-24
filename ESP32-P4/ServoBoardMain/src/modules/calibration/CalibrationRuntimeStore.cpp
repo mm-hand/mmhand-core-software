@@ -29,6 +29,84 @@
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
+bool readJointCalibrationRuntimeSnapshot(
+    uint8_t jointIndex,
+    JointCalibrationRuntimeSnapshot* out)
+{
+    if (!out || jointIndex >= ENCODER_TOTAL_NUM) {
+        return false;
+    }
+
+    // 标定结果包含整张 LUT，普通字段复制与写任务并发在 C++ 中不是合法数据竞争。
+    // 统一在短临界区内复制，保证 Result、Manual 和方向属于同一提交代次。
+    SharedSafetyGuard guard;
+    out->result = g_jointCalibResult[jointIndex];
+    out->manual = g_manualEncoderReference[jointIndex];
+    out->encoderDirection = g_encoderDirection[jointIndex];
+    return true;
+}
+
+bool readAllJointCalibrationRuntimeSnapshots(
+    JointCalibrationRuntimeSnapshot out[ENCODER_TOTAL_NUM])
+{
+    if (!out) {
+        return false;
+    }
+    // MotionControl 每周期只加锁一次，避免 21 次重复进入跨核临界区。
+    SharedSafetyGuard guard;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        out[joint].result = g_jointCalibResult[joint];
+        out[joint].manual = g_manualEncoderReference[joint];
+        out[joint].encoderDirection = g_encoderDirection[joint];
+    }
+    return true;
+}
+
+bool publishJointCalibrationResult(
+    uint8_t jointIndex,
+    const JointCalibrationResult& result)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM) {
+        return false;
+    }
+    SharedSafetyGuard guard;
+    g_jointCalibResult[jointIndex] = result;
+    return true;
+}
+
+void clearJointCalibrationResult(uint8_t jointIndex)
+{
+    if (jointIndex >= ENCODER_TOTAL_NUM) {
+        return;
+    }
+    SharedSafetyGuard guard;
+    memset(&g_jointCalibResult[jointIndex], 0,
+           sizeof(g_jointCalibResult[jointIndex]));
+}
+
+void clearAllJointCalibrationResults(void)
+{
+    SharedSafetyGuard guard;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        memset(&g_jointCalibResult[joint], 0,
+               sizeof(g_jointCalibResult[joint]));
+    }
+}
+
+void replaceManualEncoderReferences(
+    const ManualEncoderReference references[ENCODER_TOTAL_NUM])
+{
+    SharedSafetyGuard guard;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        if (references) {
+            g_manualEncoderReference[joint] = references[joint];
+        } else {
+            memset(&g_manualEncoderReference[joint], 0,
+                   sizeof(g_manualEncoderReference[joint]));
+        }
+    }
+}
+
 // 汇总单关节的三项装配偏差；这里只计算告警，不改变标定成功状态。
 bool evaluateCalibrationAssemblyWarning(
     uint8_t jointIndex,
@@ -193,6 +271,7 @@ bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction)
     if (jointIndex >= ENCODER_TOTAL_NUM || direction == 0) {
         return false;
     }
+    SharedSafetyGuard guard;
     g_encoderDirection[jointIndex] = (direction < 0) ? -1 : 1;
     return true;
 }

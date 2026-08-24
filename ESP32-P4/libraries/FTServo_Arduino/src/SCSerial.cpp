@@ -76,6 +76,22 @@ int SCSerial::readSCS(unsigned char *nDat, int nLen)
 	return Size;
 }
 
+int SCSerial::readSCSAvailable(unsigned char *nDat, int nLen)
+{
+	if(!pSerial || !nDat || nLen <= 0){
+		return 0;
+	}
+	int size = 0;
+	while(size < nLen && pSerial->available() > 0){
+		const int value = pSerial->read();
+		if(value < 0){
+			break;
+		}
+		nDat[size++] = (unsigned char)value;
+	}
+	return size;
+}
+
 int SCSerial::writeSCS(unsigned char *nDat, int nLen)
 {
 	if(nDat==NULL){

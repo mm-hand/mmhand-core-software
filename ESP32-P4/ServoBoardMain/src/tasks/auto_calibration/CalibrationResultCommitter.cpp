@@ -42,8 +42,21 @@ bool commitCalibrationResult(SystemRuntimeContext* sharedData,
         return false;
     }
 
-    // 先写完整 POD 结果，再生成告警，最后推进目标 token；读者不会看到未完成的 LUT。
-    g_jointCalibResult[jointIndex] = result;
+    // 先在统一临界区发布完整结果，再生成告警和推进目标 token；跨核读者不会看到半份 LUT。
+    if (!publishJointCalibrationResult(jointIndex, result)) {
+        return false;
+    }
     updateCalibrationAssemblyWarning(sharedData, jointIndex, result);
-    return syncJointTarget(sharedData, jointIndex, finalTargetDeg);
+    const bool targetSynced = syncJointTarget(
+        sharedData, jointIndex, finalTargetDeg);
+    if (targetSynced) {
+        // 结果一旦完整提交就立即登记完成位。HostComm 依靠该位发送单关节快照，
+        // 不能等整个选中序列退出后才登记，否则 UI 会长期保留灰色旧角度。
+        p4::platform::rtos::atomicFetchOr(
+            &sharedData->calibration_completed_joint_bitmap,
+            (uint32_t)(1UL << jointIndex));
+    }
+    // 标定完成属于新反馈映射事件，即使最终目标未变化也立即刷新 mappedAngleQueue。
+    sharedData->motionControlWake.notify(p4::runtime::wake::kMotionTarget);
+    return targetSynced;
 }

@@ -477,7 +477,11 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
         return false;
     }
 
-    const JointCalibrationResult& result = g_jointCalibResult[jointIndex];
+    JointCalibrationRuntimeSnapshot snapshot;
+    if (!readJointCalibrationRuntimeSnapshot(jointIndex, &snapshot)) {
+        return false;
+    }
+    const JointCalibrationResult& result = snapshot.result;
     // 当前唯一 V4 基础快照 189 bytes，附加 13 bytes 装配告警、4 bytes
     // 时间戳和帧头尾后共 210 bytes；预留到 224，避免局部数组越界。
     uint8_t buffer[224];
@@ -499,7 +503,7 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     appendFloatBigEndian(buffer, &idx, result.tightDeg);
     appendFloatBigEndian(buffer, &idx, result.totalDeg);
     buffer[idx++] = result.scaled ? 1 : 0;
-    buffer[idx++] = (g_encoderDirection[jointIndex] < 0) ? 0xFF : 0x01;
+    buffer[idx++] = (snapshot.encoderDirection < 0) ? 0xFF : 0x01;
     buffer[idx++] = result.tendonLutValid ? 1 : 0;
     buffer[idx++] = result.tendonLutCount;
     buffer[idx++] = result.tendonLutMotor[0];

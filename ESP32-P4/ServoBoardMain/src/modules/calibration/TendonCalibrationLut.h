@@ -22,4 +22,16 @@ bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,
                                     int32_t* outMinAbs,
                                     int32_t* outMaxAbs);
 
+/**
+ * 按实际腱绳收放方向扩展 LUT 工作区。release/tight 裕量不会被 ABS 正负方向混淆。
+ */
+bool tendonCalibrationMotorAbsRangeWithMargins(
+    const JointCalibrationResult& calibration,
+    uint8_t actuatorIndex,
+    uint8_t motorChannel,
+    int32_t releaseMarginCounts,
+    int32_t tightMarginCounts,
+    int32_t* outMinAbs,
+    int32_t* outMaxAbs);
+
 #endif // TENDON_CALIBRATION_LUT_H

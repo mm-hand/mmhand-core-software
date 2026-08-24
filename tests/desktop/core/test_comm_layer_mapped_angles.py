@@ -11,10 +11,8 @@ from desktop.core.protocol import (
     MOTOR_COUNT,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
     PACKET_TYPE_MULTITURN_RESTORE_RESULT,
-    PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
     PACKET_TYPE_SENSOR,
     parse_multiturn_restore_result_packet,
-    parse_multiturn_snapshot_raw_packet,
     parse_servo_angle_packet,
     parse_servo_raw_packet,
     parse_servo_telem_packet,
@@ -84,36 +82,19 @@ def test_servo_angle_packet_no_longer_contains_online_array() -> None:
     assert parse_servo_angle_packet(payload + bytes(MOTOR_COUNT)) is None
 
 
-def test_multiturn_result_and_flash_snapshot_packets() -> None:
+def test_multiturn_restore_result_packet() -> None:
     assert parse_multiturn_restore_result_packet(
         struct.pack(">III", 7, 0x15, 0x20)
     ) == (7, 0x15, 0x20)
 
-    raw_values = [index - 13 for index in range(MOTOR_COUNT)]
-    snapshot = struct.pack(">II", 9, 0x07) + b"".join(
-        struct.pack(">h", value) for value in raw_values
-    )
-    assert parse_multiturn_snapshot_raw_packet(snapshot) == (
-        9,
-        0x07,
-        raw_values,
-    )
 
-
-def test_multiturn_packets_update_hand_model_end_to_end() -> None:
+def test_multiturn_restore_result_updates_hand_model_end_to_end() -> None:
     comm = LowerComputerComm("")
     comm._last_model = HandModel()
-    flash_values = [100 + index for index in range(MOTOR_COUNT)]
     packets = [
         (
             PACKET_TYPE_MULTITURN_RESTORE_RESULT,
             struct.pack(">IIII", 11, 0x03, 0x04, 1200),
-        ),
-        (
-            PACKET_TYPE_MULTITURN_SNAPSHOT_RAW,
-            struct.pack(">II", 12, 0x07)
-            + b"".join(struct.pack(">h", value) for value in flash_values)
-            + struct.pack(">I", 1210),
         ),
     ]
 
@@ -123,8 +104,6 @@ def test_multiturn_packets_update_hand_model_end_to_end() -> None:
     assert updated.multiturn_restore_result_token == 11
     assert updated.multiturn_restore_restored_mask == 0x03
     assert updated.multiturn_restore_rejected_mask == 0x04
-    assert updated.servo_flash_raw_positions == flash_values
-    assert updated.has_servo_flash_raw_data is True
 
 
 def test_valid_angle_outside_workspace_updates_instead_of_freezing():
@@ -162,7 +141,7 @@ def test_next_in_workspace_angle_clears_workspace_warning():
     assert updated.encoders[joint_idx].angle_out_of_workspace is False
 
 
-def test_changed_calibration_snapshot_invalidates_only_old_mapped_cache(monkeypatch):
+def test_changed_calibration_snapshot_keeps_last_angle_until_p4_refresh(monkeypatch):
     joint_idx = 6
     comm = LowerComputerComm("")
     model = _calibrated_model(joint_idx, angle_max=60.0)
@@ -184,9 +163,11 @@ def test_changed_calibration_snapshot_invalidates_only_old_mapped_cache(monkeypa
 
     assert updated is not None
     assert updated.joint_calib_results[joint_idx] == new_result
-    assert updated.encoders[joint_idx].raw == 0
-    assert updated.encoders[joint_idx].angle_error is True
-    assert updated.encoders[joint_idx].angle_out_of_workspace is False
+    # 快照与映射角属于两条独立上行流。不能先把 Current 人为清零；P4 会在
+    # 快照后主动补发同一标定代次的新映射角。
+    assert updated.encoders[joint_idx].raw == 777
+    assert updated.encoders[joint_idx].angle_error is False
+    assert updated.encoders[joint_idx].angle_out_of_workspace is True
 
 
 def test_repeated_identical_snapshot_does_not_invalidate_fresh_angle(monkeypatch):

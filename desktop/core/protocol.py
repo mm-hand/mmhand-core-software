@@ -538,8 +538,8 @@ def _unpack_float_be(data: bytes) -> float:
 
 
 def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
-    """解析当前唯一 V4 快照；189 为下发体，202 为带装配告警的上行体。"""
-    if len(payload) not in (189, 202):
+    """解析当前 V4 快照；P4 上行体在装配告警后附带设备时间戳。"""
+    if len(payload) not in (189, 202, 206):
         return None
     idx = 0
     joint = payload[idx]
@@ -616,7 +616,7 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
     result["assemblySpanDifferenceCounts"] = 0
     result["hasAssemblyWarningFields"] = False
     result["hasAssemblySpanComparisonFields"] = False
-    if len(payload) == 202:
+    if len(payload) >= 202:
         result["assemblyWarningReason"] = int(payload[idx])
         idx += 1
         result["autoMinOffsetCounts"] = struct.unpack(
@@ -645,6 +645,11 @@ def parse_joint_calib_snapshot_packet(payload: bytes) -> Optional[dict]:
         idx += 2
         result["hasAssemblyWarningFields"] = True
         result["hasAssemblySpanComparisonFields"] = True
+    # 固件上行包在 202-byte V4 数据体后追加 P4 单调时钟；下发体没有该字段。
+    result["deviceTimestampMs"] = None
+    if len(payload) == 206:
+        result["deviceTimestampMs"] = struct.unpack(">I", payload[idx:idx + 4])[0]
+        idx += 4
     return result
 
 

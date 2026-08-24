@@ -13,6 +13,7 @@ from .ui_control_common import (
     ENCODER_COUNT,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
     SYSTEM_STATE_PAUSED,
+    SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
 )
 from .ui_dialogs import show_scrollable_message
@@ -68,9 +69,13 @@ class ControlCommandController:
         if unknown_mask != 0:
             self._show_turn_recovery_guide(unknown_mask, "ENABLE")
             return
-        # ENABLE 是用户解除 E-STOP 的明确动作。必须先清除 P4 锁存状态，
-        # 再重发 active scope；否则 RESET 可能清掉刚刚下发的 scope。
-        if self._estop_latched:
+        # ENABLE 是用户解除 E-STOP 的明确动作。上位机重启会丢失本地
+        # _estop_latched，但 P4 仍可能保留 UNCONTROLLABLE/E-STOP；因此
+        # 必须同时信任下位机状态，并在重发 active scope 前完成 RESET。
+        system_state = (
+            getattr(state, "system_state", None) if state is not None else None
+        )
+        if self._estop_latched or system_state == SYSTEM_STATE_UNCONTROLLABLE:
             self.backend.reset()
             self._estop_latched = False
         if not self._apply_active_scope_for_current_mode():

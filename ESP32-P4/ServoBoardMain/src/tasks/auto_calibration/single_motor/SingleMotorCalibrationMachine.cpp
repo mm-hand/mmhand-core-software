@@ -784,11 +784,32 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                               tightServoAbs,
                                               kServoZeroPullCounts);
 
-                    // 强制记录松端，确保 LUT 同时包含两个机械端点。
-                    appendTendonRawFitSample(&ctx->fitSamples,
-                                             tightEncoder,
-                                             tightServoAbs,
-                                             0);
+                    // PRE_RELEASE_SYNC 的首样本早于真正拉紧阶段，不能代表最终紧端。
+                    // 建表前用最终实测值补齐紧端和松端，保证末段插值不会只靠外推。
+                    const bool tightEndpointStored =
+                        appendTendonRawFitSample(&ctx->fitSamples,
+                                                 maxEncoder,
+                                                 maxServoAbs,
+                                                 0);
+                    const bool releaseEndpointStored =
+                        appendTendonRawFitSample(&ctx->fitSamples,
+                                                 tightEncoder,
+                                                 tightServoAbs,
+                                                 0);
+                    if (!tightEndpointStored || !releaseEndpointStored) {
+                        failAutoCalibContextWithDiag(
+                            ctx,
+                            sharedData,
+                            "single tendon LUT endpoint buffer full",
+                            CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                            CALIB_DIAG_PHASE_RELEASE,
+                            ctx->motorChannel,
+                            ctx->fitSamples.count,
+                            maxServoAbs,
+                            tightServoAbs,
+                            0);
+                        return;
+                    }
 
                     JointCalibrationResult result;
                     if (!buildAutoZeroTightCalibrationResult(ctx->jointIndex,
@@ -850,6 +871,16 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                      lutMaxAbs);
                         return;
                     }
+                    FW_LOG_INFO_PRINTF(
+                        "[AUTO CALIB] SINGLE_LUT_ENDPOINT J%02u M%02u "
+                        "releaseAbs=%ld tightAbs=%ld lut=[%ld,%ld] samples=%u\r\n",
+                        (unsigned)ctx->jointIndex,
+                        (unsigned)ctx->motorChannel,
+                        (long)tightServoAbs,
+                        (long)maxServoAbs,
+                        (long)result.tendonLutMotorAbs[0][0],
+                        (long)result.tendonLutMotorAbs[0][result.tendonLutCount - 1U],
+                        (unsigned)ctx->fitSamples.count);
                     if (result.encoderSpan >= kRejectNearFullWrapSpanCounts) {
                         FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL J%02u rejected wrap-like span=%ld start=%ld tight=%ld; endpoint span is invalid\r\n",
                                       ctx->jointIndex,
@@ -1200,8 +1231,6 @@ SingleMotorCalibrationRunResult runSingleMotorCalibrationMachine(
         return SINGLE_MOTOR_CALIBRATION_FAILED;
     }
 
-    sharedAtomicFetchOr(&sharedData->calibration_completed_joint_bitmap,
-                        (1UL << jointIndex));
     FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL done J%02u\r\n", jointIndex);
     return SINGLE_MOTOR_CALIBRATION_COMPLETED;
 }

@@ -542,13 +542,6 @@ class StateReducer:
                     joint_idx = int(parsed.get("joint", -1))
                     if 0 <= joint_idx < ENCODER_COUNT:
                         new_result = dict(parsed)
-                        old_result = model.joint_calib_results[joint_idx]
-                        if old_result != new_result:
-                            # 缓存角可能由上一份标定生成。先置为无效，等待 P4 下一帧
-                            # 新映射角，防止 Current 暂时显示旧标定坐标。
-                            model.encoders[joint_idx].raw = 0
-                            model.encoders[joint_idx].angle_error = True
-                            model.encoders[joint_idx].angle_out_of_workspace = False
                         model.joint_calib_results[joint_idx] = new_result
                         emitted = True
 

@@ -568,7 +568,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                                                              result))) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
                 } else {
-                    g_jointCalibResult[jointIndex] = result;
+                    publishJointCalibrationResult(jointIndex, result);
                     setRuntimeEncoderDirection(jointIndex, direction);
                     if (result.success) {
                         updateCalibrationAssemblyWarning(
@@ -748,7 +748,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                 memset(sharedData->motor_abs_limit_min, 0, sizeof(sharedData->motor_abs_limit_min));
                 memset(sharedData->motor_abs_limit_max, 0, sizeof(sharedData->motor_abs_limit_max));
             }
-            memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
+            clearAllJointCalibrationResults();
             clearCalibrationAssemblyWarnings(
                 sharedData, kManualEncoderReferenceFullMask);
             g_calibrationStatus = CALIB_STATUS_IDLE;

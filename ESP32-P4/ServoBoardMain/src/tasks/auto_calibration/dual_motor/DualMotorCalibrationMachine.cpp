@@ -1889,7 +1889,9 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                 windowSecondaryAbsDelta >= params.windowServoDeltaCounts;
             const bool primaryStillPaying =
                 windowPrimaryAbsDelta >= params.windowServoDeltaCounts;
-            if (angleStalled) {
+            // 副腱已经达到终点负载，但关节累计行程仍不足时，连续两个窗口
+            // 没有角度变化说明绳路可能卡死或磁编码器没有跟随，不能继续收绳。
+            if (secondaryLoadHigh && !enoughEncoderTravel && angleStalled) {
                 if (angleStallStable < 255) {
                     angleStallStable++;
                 }
@@ -1923,6 +1925,29 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                           (unsigned)angleStallStable,
                           (unsigned)kAngleStallStableSamples,
                           enoughEncoderTravel ? 1 : 0);
+
+            if (angleStallStable >= kAngleStallStableSamples) {
+                FW_LOG_INFO_PRINTF("[AUTO CALIB] FAIL DUAL_EXCHANGE_STALLED J%02u secondary=M%02u totalDeg=%.3f/%.3f load=%d/%d stable=%u/%u\r\n",
+                              jointIndex,
+                              secondaryMotor,
+                              totalAngleDeltaDeg,
+                              kReverseMinFollowDeg,
+                              loadMag,
+                              finalLoadThreshold,
+                              (unsigned)angleStallStable,
+                              (unsigned)kAngleStallStableSamples);
+                setCalibrationDiag(sharedData,
+                                   CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                   CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                                   jointIndex,
+                                   secondaryMotor,
+                                   loadMag,
+                                   finalLoadThreshold,
+                                   totalEncoderDelta,
+                                   (1UL << primaryMotor) |
+                                       (1UL << secondaryMotor));
+                return false;
+            }
 
             limitFound =
                 secondaryLoadHigh &&
@@ -2627,8 +2652,6 @@ DualMotorCalibrationRunResult runDualMotorCalibrationMachine(
         return DUAL_MOTOR_CALIBRATION_FAILED;
     }
 
-    sharedAtomicFetchOr(&sharedData->calibration_completed_joint_bitmap,
-                        (1UL << jointIndex));
     FW_LOG_INFO_PRINTF("[AUTO CALIB] SEQUENCE_SERIAL done J%02u dual\r\n", jointIndex);
     return DUAL_MOTOR_CALIBRATION_COMPLETED;
 }

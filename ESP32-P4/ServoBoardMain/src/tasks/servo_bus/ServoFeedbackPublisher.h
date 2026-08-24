@@ -30,7 +30,8 @@ void publishTurnOverflowState(SystemRuntimeContext* sharedData);
  * 构造逻辑 ABS、raw、Flash raw 和遥测快照，并覆盖各反馈队列。
  * 同时维护 online、logical range 和 Turn Unknown 位图。
  */
-void publishFeedback(SystemRuntimeContext* sharedData);
+void publishFeedback(SystemRuntimeContext* sharedData,
+                     const ServoFeedbackCycleMeta_t& cycleMeta);
 
 } // namespace p4::servo
 

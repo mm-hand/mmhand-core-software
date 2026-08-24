@@ -91,6 +91,35 @@ enum class ServoMultiTurnConfigPhase : uint8_t {
     Finalize,
 };
 
+/** 单条 BUS 非阻塞同步读事务状态。 */
+enum class ServoSyncReadState : uint8_t {
+    Idle = 0,
+    Pending,
+    Complete,
+    TimedOut,
+    ProtocolError,
+    Aborted,
+};
+
+/** 一次 BUS 同步读的终态或当前进度，供四路反馈协调器统一汇总。 */
+struct ServoSyncReadResult {
+    ServoSyncReadState state;
+    uint8_t requestedCount;
+    uint8_t successCount;
+    uint16_t bufferedBytes;
+    uint16_t expectedBytes;
+    uint32_t sequence;
+    uint64_t startedUs;
+    uint64_t completedUs;
+};
+
+/** ST3215 位置模式目标寄存器快照；位置值仍处于舵机 hardware 坐标。 */
+struct ServoGoalRegisterState {
+    uint8_t acceleration; ///< 地址 41：运行加/减速度，0 表示最大加速度。
+    int16_t hardwarePosition; ///< 地址 42..43：舵机实际保存的目标位置。
+    uint16_t speed; ///< 地址 46..47：运行速度，位置模式下 0 表示最大速度。
+};
+
 /** 一条飞特 UART 总线的唯一驱动实例。 */
 class FeetechServoDriver {
 public:
@@ -104,6 +133,13 @@ public:
           _writeCount(0),
           _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT),
           _currentReadDivider(0),
+          _syncReadActive(false),
+          _syncReadIncludeCurrent(false),
+          _syncReadCount(0),
+          _syncReadFeedbackLen(0),
+          _syncReadSequence(0),
+          _syncReadStartedUs(0),
+          _syncReadDeadlineUs(0),
           _multiTurnConfigId(0xFF),
           _multiTurnConfigPhase(ServoMultiTurnConfigPhase::Idle),
           _multiTurnConfigNotBeforeMs(0),
@@ -112,6 +148,7 @@ public:
         memset(_feedback, 0, sizeof(_feedback));
         memset(_torqueDisabled, 0, sizeof(_torqueDisabled));
         memset(_multiTurnConfigured, 0, sizeof(_multiTurnConfigured));
+        memset(_syncReadIds, 0, sizeof(_syncReadIds));
     }
 
     /** 绑定总线索引和串口引脚，不扫描舵机，也不改变舵机 EEPROM。 */
@@ -148,7 +185,8 @@ public:
             return false;
         }
 
-        // 丢弃尚未送入 SDK 的同步写批次，禁止 UART 重启后误发旧目标。
+        // 丢弃尚未完成的读写事务，禁止 UART 重启后误用旧响应或误发旧目标。
+        abortSyncRead(false);
         _writeCount = 0;
         memset(_writeIDs, 0, sizeof(_writeIDs));
         memset(_writePos, 0, sizeof(_writePos));
@@ -328,45 +366,121 @@ public:
         _writeCount = 0;
     }
 
-    /** 同步读取指定 ID 的位置/速度/负载，返回成功反馈的舵机数量。 */
-    int syncReadPositions(const uint8_t* ids, uint8_t count)
+    /**
+     * 回读一台舵机的 ACC、目标位置和目标速度寄存器。
+     *
+     * 该接口只用于低频诊断；同步读事务进行中禁止插入单播读，避免清空
+     * 四 BUS 并行同步读尚未解析的 RX 数据。读取失败不会改变在线状态。
+     */
+    bool readGoalRegisters(uint8_t id, ServoGoalRegisterState* state)
     {
-        if (!_serial || !ids || count == 0) {
-            return 0;
+        if (!_serial || !state || id > MAX_SERVO_ID || _syncReadActive) {
+            return false;
+        }
+
+        uint8_t data[7] = {0};
+        if (_sms.Read(id, SMS_STS_ACC, data, sizeof(data)) !=
+            (int)sizeof(data)) {
+            return false;
+        }
+
+        const uint16_t encodedPosition =
+            (uint16_t)data[1] | ((uint16_t)data[2] << 8);
+        state->acceleration = data[0];
+        state->hardwarePosition =
+            (encodedPosition & 0x8000U)
+                ? -(int16_t)(encodedPosition & 0x7FFFU)
+                : (int16_t)encodedPosition;
+        state->speed = (uint16_t)data[5] | ((uint16_t)data[6] << 8);
+        return true;
+    }
+
+    /**
+     * 启动一次非阻塞同步读，只向当前 UART 发送广播请求。
+     * 四条 BUS 依次调用本函数后由硬件并行接收，调用方稍后统一 collect。
+     */
+    bool beginSyncRead(const uint8_t* ids,
+                       uint8_t count,
+                       uint32_t sequence,
+                       uint64_t nowUs)
+    {
+        if (!_serial || !ids || count == 0 ||
+            count > MAX_SERVOS_PER_BUS || _syncReadActive) {
+            return false;
         }
 
         const uint8_t addrPresentPosition = 56;
-        // 电流只用于记录和诊断，不参与当前控制。每条总线约100 ms读取一次，
-        // 其余周期维持原来的8字节反馈，避免扩大串口报文后拖慢10 ms控制链路。
-        static const uint8_t kCurrentReadEverySyncCalls = 5;
+        // 位置反馈提升到100 Hz后使用10分频，保持电流约10 Hz，避免扩大总线占用。
         const bool includeCurrent = (_currentReadDivider == 0);
         _currentReadDivider =
-            (uint8_t)((_currentReadDivider + 1U) % kCurrentReadEverySyncCalls);
+            (uint8_t)((_currentReadDivider + 1U) %
+                      mmhand::config::servo::kServoCurrentReadDivider);
         const uint8_t feedbackLen = includeCurrent ? 15 : 8;
-        const uint16_t timeoutMs = (_syncReadTimeoutMs == 0) ? 1 : _syncReadTimeoutMs;
-        int successCount = 0;
+        memcpy(_syncReadIds, ids, count);
+        _syncReadCount = count;
+        _syncReadFeedbackLen = feedbackLen;
+        _syncReadIncludeCurrent = includeCurrent;
+        _syncReadSequence = sequence;
+        _syncReadStartedUs = nowUs;
+        _syncReadDeadlineUs =
+            nowUs + mmhand::config::servo::kServoFeedbackDeadlineUs;
 
-        _sms.syncReadBegin(count, feedbackLen, timeoutMs);
-        const int txResult = _sms.syncReadPacketTx((uint8_t*)ids, count, addrPresentPosition, feedbackLen);
+        _sms.syncReadBegin(count, feedbackLen, _syncReadTimeoutMs);
+        const int txResult = _sms.syncReadPacketTxOnly(
+            _syncReadIds, count, addrPresentPosition, feedbackLen);
         if (txResult <= 0) {
             for (uint8_t i = 0; i < count; i++) {
-                if (ids[i] <= MAX_SERVO_ID) {
-                    markReadFailure(ids[i]);
+                if (_syncReadIds[i] <= MAX_SERVO_ID) {
+                    markReadFailure(_syncReadIds[i]);
                 }
             }
             _sms.syncReadEnd();
-            return 0;
+            _syncReadCount = 0;
+            return false;
+        }
+        _syncReadActive = true;
+        return true;
+    }
+
+    /** 搬运当前已到达字节；完整到包或截止后才解析并更新反馈可信状态。 */
+    ServoSyncReadResult collectSyncRead(uint64_t nowUs)
+    {
+        ServoSyncReadResult result = {
+            _syncReadActive ? ServoSyncReadState::Pending
+                            : ServoSyncReadState::Idle,
+            _syncReadCount,
+            0,
+            _sms.syncReadBufferedBytes(),
+            _sms.syncReadExpectedBytes(),
+            _syncReadSequence,
+            _syncReadStartedUs,
+            0,
+        };
+        if (!_syncReadActive) {
+            return result;
         }
 
-        for (uint8_t i = 0; i < count; i++) {
-            const uint8_t id = ids[i];
-            uint8_t rxBuf[feedbackLen];
+        _sms.syncReadCollectAvailable();
+        result.bufferedBytes = _sms.syncReadBufferedBytes();
+        result.expectedBytes = _sms.syncReadExpectedBytes();
+        const bool allBytesReceived =
+            result.expectedBytes != 0 &&
+            result.bufferedBytes >= result.expectedBytes;
+        const bool deadlineReached = nowUs >= _syncReadDeadlineUs;
+        if (!allBytesReceived && !deadlineReached) {
+            return result;
+        }
+
+        uint8_t successCount = 0;
+        for (uint8_t i = 0; i < _syncReadCount; i++) {
+            const uint8_t id = _syncReadIds[i];
+            uint8_t rxBuf[15] = {0};
             const int rxLen = _sms.syncReadPacketRx(id, rxBuf);
             if (id > MAX_SERVO_ID) {
                 continue;
             }
-            if (rxLen == feedbackLen) {
-                const int16_t current = includeCurrent
+            if (rxLen == _syncReadFeedbackLen) {
+                const int16_t current = _syncReadIncludeCurrent
                     ? decodeSigned(rxBuf[13], rxBuf[14])
                     : _feedback[id].current;
                 recordFeedbackSuccess(id,
@@ -383,8 +497,38 @@ public:
         }
 
         _sms.syncReadEnd();
-        return successCount;
+        _syncReadActive = false;
+        result.successCount = successCount;
+        result.completedUs = nowUs;
+        result.state = successCount == _syncReadCount
+            ? ServoSyncReadState::Complete
+            : (deadlineReached ? ServoSyncReadState::TimedOut
+                               : ServoSyncReadState::ProtocolError);
+        _syncReadCount = 0;
+        return result;
     }
+
+    /** 取消当前事务；E-STOP/UART重启不把主动取消累计为舵机读失败。 */
+    void abortSyncRead(bool markFailure)
+    {
+        if (!_syncReadActive) {
+            return;
+        }
+        if (markFailure) {
+            for (uint8_t i = 0; i < _syncReadCount; ++i) {
+                if (_syncReadIds[i] <= MAX_SERVO_ID) {
+                    markReadFailure(_syncReadIds[i]);
+                }
+            }
+        }
+        _sms.syncReadCollectAvailable();
+        _sms.syncReadEnd();
+        _syncReadActive = false;
+        _syncReadCount = 0;
+    }
+
+    bool syncReadActive() const { return _syncReadActive; }
+    uint64_t syncReadDeadlineUs() const { return _syncReadDeadlineUs; }
 
     /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
     bool probeFeedback(uint8_t id,
@@ -924,6 +1068,14 @@ private:
     bool _multiTurnConfigured[MAX_SERVO_ID + 1]; ///< 本次上线是否已完成多圈配置。
     uint16_t _syncReadTimeoutMs; ///< 单次同步读响应时限。
     uint8_t _currentReadDivider; ///< 降频读取 Present Current 的分频计数器。
+    bool _syncReadActive; ///< 当前 BUS 是否正在等待同步读回包。
+    bool _syncReadIncludeCurrent; ///< 本轮是否读取扩展15字节遥测。
+    uint8_t _syncReadIds[MAX_SERVOS_PER_BUS]; ///< 本轮请求的物理ID。
+    uint8_t _syncReadCount; ///< 本轮请求ID数量。
+    uint8_t _syncReadFeedbackLen; ///< 单台舵机期望反馈数据长度。
+    uint32_t _syncReadSequence; ///< 四路统一反馈轮次。
+    uint64_t _syncReadStartedUs; ///< 请求开始时间。
+    uint64_t _syncReadDeadlineUs; ///< 最晚收集时间。
     uint8_t _multiTurnConfigId; ///< 当前 BUS 正在配置的舵机 ID，0xFF 表示空闲。
     ServoMultiTurnConfigPhase _multiTurnConfigPhase; ///< EEPROM 非阻塞配置阶段。
     uint32_t _multiTurnConfigNotBeforeMs; ///< 下一阶段允许执行的单调时钟时间。
