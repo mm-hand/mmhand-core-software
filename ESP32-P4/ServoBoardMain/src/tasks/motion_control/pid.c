@@ -43,7 +43,6 @@ PID_Status_e PID_Init(PID_Info_TypeDef *pid,
     pid->param.kd = params[2];
     pid->param.Deadband = params[3];
     pid->param.limitIntegral = params[4];
-    pid->param.limitOutput = params[5];
     pid->status = PID_ERROR_NONE;
     return PID_ERROR_NONE;
 }
@@ -105,9 +104,9 @@ float f_PID_Calculate(PID_Info_TypeDef *pid,
         pid->Dout = pid->derivativeInitialized
             ? pid->param.kd * (pid->error - pid->previousError) / dtSeconds
             : 0.0f;
-        pid->Output = limitFloat(
-            pid->Pout + pid->Iout + pid->Dout,
-            pid->param.limitOutput);
+        // 最终位置修正不再使用固定 +/-600 counts 限幅；绝对目标仍由
+        // LUT 工作区、会话逻辑范围和硬件范围在发送链路统一约束。
+        pid->Output = pid->Pout + pid->Iout + pid->Dout;
     }
 
     pid->previousError = pid->error;

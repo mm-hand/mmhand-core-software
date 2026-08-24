@@ -22,8 +22,7 @@ void ControlSolver::begin()
         kSingleTendonKi,
         kSingleTendonKd,
         kSingleTendonDeadbandDeg,
-        kSingleTendonIntegralLimit,
-        kSingleTendonOutputLimitCounts
+        kSingleTendonIntegralLimit
     };
     setPIDParams(pidConfigs);
 }
@@ -40,6 +39,7 @@ bool ControlSolver::compute(float* targetDegs,
                             float* magActualDegs,
                             const int32_t* absolutePosition,
                             int32_t* outServoPulses,
+                            const float* kpByJoint,
                             float dtSeconds)
 {
     // 本周期所有缓冲区都由 MotionControlTask 持有；求解器只读输入并写
@@ -50,6 +50,11 @@ bool ControlSolver::compute(float* targetDegs,
     }
 
     for (int i = 0; i < JOINT_COUNT; i++) {
+        // 增益调度只改变本周期比例系数，不重置积分和误差历史。
+        _pids[i].param.kp = kpByJoint && isfinite(kpByJoint[i]) &&
+                kpByJoint[i] > 0.0f
+            ? kpByJoint[i]
+            : mmhand::config::control::kSingleTendonKp;
         // 把角度误差转成舵机侧位置修正量，舵机自身完成位置闭环。
         f_PID_Calculate(&_pids[i], targetDegs[i], magActualDegs[i], dtSeconds);
         outServoPulses[i] = absolutePosition[i] + (int32_t)_pids[i].Output;

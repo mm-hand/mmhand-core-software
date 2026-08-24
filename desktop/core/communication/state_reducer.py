@@ -571,6 +571,31 @@ class StateReducer:
                     model.has_p4_time = True
                     emitted = True
 
+            # Target/Actual 来自同一 10 ms 控制周期，包尾时间由路由器单独提供。
+            elif packet_kind == "control_trace":
+                parsed = owner._parse_protocol_payload("parse_control_trace_packet", payload)
+                if parsed is not None and packet_p4_time_ms is not None:
+                    model.has_control_trace = True
+                    model.control_trace_sequence = int(parsed["sequence"])
+                    model.control_trace_target_token = int(parsed["target_token"])
+                    model.control_trace_p4_time_ms = int(packet_p4_time_ms)
+                    model.control_trace_target_accepted_ms = int(
+                        parsed["target_accepted_ms"]
+                    )
+                    model.control_trace_encoder_timestamp_ms = int(
+                        parsed["encoder_timestamp_ms"]
+                    )
+                    model.control_trace_active_joint_mask = int(
+                        parsed["active_joint_mask"]
+                    )
+                    model.control_trace_valid_joint_mask = int(
+                        parsed["valid_joint_mask"]
+                    )
+                    model.control_trace_target_deg = list(parsed["target_deg"])
+                    model.control_trace_actual_deg = list(parsed["actual_deg"])
+                    model.control_trace_last_rx_ts = time.time()
+                    emitted = True
+
             # RTOS 任务诊断按 task_id 更新，便于观察周期、执行时间和栈余量。
             elif packet_kind == "task_diagnostic":
                 parsed = owner._parse_protocol_payload("parse_task_diag_packet", payload)
@@ -790,9 +815,10 @@ class StateReducer:
                             CMD_MANUAL_ENCODER_REFERENCE,
                             CMD_MANUAL_ENCODER_SINGLE,
                         ):
+                            # Manual 写入后的 Auto 失效范围由 P4 按实际 changedMask 决定。
+                            # 单路写入绝不能在上位机把其他 20 路结果和 ABS Limit 全清空；
+                            # 后续 AUTO_STATUS/ABS_LIMIT/快照包会提交准确的逐关节状态。
                             model.calib_status = "IDLE"
-                            model.motor_abs_limit_valid_bitmap = 0
-                            model.joint_calib_results = [None] * ENCODER_COUNT
                         elif ack_cmd == CMD_CLEAR_CALIBRATION:
                             model.calib_status = "IDLE"
                             model.motor_abs_limit_valid_bitmap = 0

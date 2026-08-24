@@ -33,7 +33,8 @@
     {"name": "PACKET_TYPE_PRODUCT_FINGERPRINT", "value": 20, "timestamp": true, "description": "产品配置指纹"},
     {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"},
     {"name": "PACKET_TYPE_SAFETY_EVENT", "value": 22, "timestamp": true, "description": "去重后的结构化安全规则事件"},
-    {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"}
+    {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"},
+    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角和下位机时间"}
   ],
   "commands": [
     {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},
@@ -61,7 +62,8 @@
     {"name": "CMD_CLEAR_CALIBRATION_SCOPE", "value": 235, "payload_bytes": 4, "description": "按电机位图清除关联关节 Auto/LUT"},
     {"name": "CMD_SERVO_RESET_ZERO", "value": 236, "payload_bytes": 4, "description": "标定前归零所选舵机硬件圈数并清除对应多圈锚点"},
     {"name": "CMD_STATE_SYNC_REQUEST", "value": 237, "payload_bytes": 4, "description": "按位请求静态状态、标定快照、路由和产品指纹"},
-    {"name": "CMD_TASK_DIAG_SUBSCRIBE", "value": 238, "payload_bytes": 1, "description": "打开或关闭 RTOS 任务诊断按需上报"}
+    {"name": "CMD_TASK_DIAG_SUBSCRIBE", "value": 238, "payload_bytes": 1, "description": "打开或关闭 RTOS 任务诊断按需上报"},
+    {"name": "CMD_CONTROL_TRACE_SUBSCRIBE", "value": 239, "payload_bytes": 1, "description": "打开或关闭统一下位机时间的控制跟踪流"}
   ],
   "proto_ack_status": {
     "PROTO_ACK_STATUS_OK": 0,

@@ -151,12 +151,9 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
     }
 
     clearCalibrationAssemblyWarnings(sharedData, jointMask);
-    const bool anyAutoValid = autoCalibrationValidMask(sharedData) != 0;
-    g_calibrationStatus = anyAutoValid
-        ? (sharedAtomicLoad(&sharedData->calibration_warning_bitmap) != 0
-               ? CALIB_STATUS_WARN
-               : CALIB_STATUS_SUCCESS)
-        : CALIB_STATUS_IDLE;
+    // Manual 改写只是为下一轮标定准备数据。即使其他关节仍保留有效
+    // Auto，也不能把这次准备动作伪装成一轮 CALIB SUCCESS/WARN。
+    g_calibrationStatus = CALIB_STATUS_IDLE;
     sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
                          (uint32_t)~SYSTEM_FAULT_CALIBRATION);
     FW_LOG_INFO_PRINTF(

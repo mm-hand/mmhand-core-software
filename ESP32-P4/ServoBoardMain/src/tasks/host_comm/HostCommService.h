@@ -38,4 +38,7 @@ void requestHostStateSync(uint32_t syncMask);
  */
 void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs);
 
+/** 打开或关闭同周期目标/反馈控制跟踪流。 */
+void setHostControlTraceSubscribed(bool subscribed);
+
 #endif // P4_TASKS_HOST_COMM_HOST_COMM_SERVICE_H

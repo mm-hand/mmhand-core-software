@@ -11,8 +11,8 @@
 extern "C" {
 #endif
 
-// PID 参数数组固定为：kp、ki、kd、死区、积分限幅、输出限幅。
-#define PID_PARAMETER_NUM 6U
+// PID 参数数组固定为：kp、ki、kd、死区、积分限幅。
+#define PID_PARAMETER_NUM 5U
 
 typedef enum {
     PID_ERROR_NONE = 0U,
@@ -26,7 +26,6 @@ typedef struct {
     float kd;            ///< 微分增益，乘误差变化率。
     float Deadband;      ///< 绝对误差小于该角度时保持上一输出。
     float limitIntegral; ///< 积分状态绝对限幅。
-    float limitOutput;   ///< 最终舵机 counts 修正量绝对限幅。
 } PID_Parameter_Typedef;
 
 // 当前固件只使用位置式 PID，因此只保留位置误差所需的运行状态。

@@ -1,7 +1,7 @@
 """device_state_store.py - 上位机运行期设备状态持久化。
 
 职责：原子保存 27 台舵机的 logical ABS 与同帧单圈 raw 锚点，并在恢复前
-校验产品指纹、标定快照摘要和文件完整性。
+校验反馈坐标契约、硬件拓扑和文件完整性；其余指纹只保留作诊断。
 线程：由 HandController 更新线程调用；模块内锁保证强制保存与退出保存不竞争。
 输入：P4 已确认可信的在线舵机反馈、产品指纹、当前 V6 标定快照摘要。
 输出：可跨 P4/舵机掉电使用的运行锚点 JSON。
@@ -76,6 +76,27 @@ def canonical_product_fingerprint(value: dict) -> dict:
     return {key: int(source.get(key, 0) or 0) for key in keys}
 
 
+def multiturn_identity_compatible(saved: dict, current: dict) -> bool:
+    """判断两份身份是否可共用多圈锚点。
+
+    logical ABS 的展开只依赖舵机通道拓扑和反馈坐标语义。固件源码、控制参数、
+    URDF 或整份标定快照发生变化，不会改变同一 Mxx 的 raw/logical ABS 关系，
+    因此不能因为这些诊断指纹变化而丢弃全部 27 路运行锚点。
+    """
+    saved_fp = canonical_product_fingerprint(
+        dict(saved or {}).get("product_fingerprint", {})
+    )
+    current_fp = canonical_product_fingerprint(
+        dict(current or {}).get("product_fingerprint", {})
+    )
+    compatibility_keys = (
+        "schema_version",
+        "feedback_mapping_version",
+        "hardware_map_crc",
+    )
+    return all(saved_fp[key] == current_fp[key] for key in compatibility_keys)
+
+
 def _canonical_bytes(payload: dict) -> bytes:
     body = dict(payload)
     body.pop("integrity", None)
@@ -96,7 +117,7 @@ class MultiTurnRuntimeStore:
         self._lock = threading.Lock()
 
     def load(self, *, identity: dict | None = None) -> dict:
-        """读取并验证锚点；提供 identity 时要求产品和标定摘要完全一致。"""
+        """读取并验证锚点；提供 identity 时要求多圈坐标契约兼容。"""
         with self._lock:
             try:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -117,7 +138,9 @@ class MultiTurnRuntimeStore:
             raise DeviceStateStoreError("logical_abs must contain 27 entries")
         if not isinstance(raw, list) or len(raw) != MOTOR_COUNT:
             raise DeviceStateStoreError("raw must contain 27 entries")
-        if identity is not None and payload.get("identity") != identity:
+        if identity is not None and not multiturn_identity_compatible(
+            payload.get("identity", {}), identity
+        ):
             raise DeviceStateStoreError("runtime anchors belong to another product/calibration")
         return payload
 

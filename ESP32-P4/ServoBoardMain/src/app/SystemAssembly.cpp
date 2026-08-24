@@ -62,6 +62,7 @@ bool assembleAndStartSystem() {
     sharedData.servoRawQueue.create(1);
     sharedData.servoTelemetryQueue.create(1);
     sharedData.mappedAngleQueue.create(1);
+    sharedData.controlTraceQueue.create(1);
     sharedData.tactileQueue.create(3);
 
     const bool queuesCreated =
@@ -72,6 +73,7 @@ bool assembleAndStartSystem() {
         sharedData.servoRawQueue.valid() &&
         sharedData.servoTelemetryQueue.valid() &&
         sharedData.mappedAngleQueue.valid() &&
+        sharedData.controlTraceQueue.valid() &&
         sharedData.tactileQueue.valid();
     const SafetyRuleId queueRule = p4::safety::runtimeResourceCreationRule(
         p4::safety::RuntimeResourceKind::Queue,

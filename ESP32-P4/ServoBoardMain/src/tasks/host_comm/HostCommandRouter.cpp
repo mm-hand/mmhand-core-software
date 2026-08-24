@@ -3,6 +3,7 @@
  * @brief 把已解析的上位机控制命令写入共享命令邮箱。
  */
 #include "HostCommandRouter.h"
+#include "../../platform/time/Clock.h"
 
 #include <math.h>
 #include <string.h>
@@ -75,6 +76,8 @@ bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->feedback_command_joint_mask = appliedMask;
+        sharedData->joint_command_accepted_ms =
+            p4::platform::time::monotonicMillis();
         p4::platform::rtos::atomicAddFetch(&sharedData->joint_command_token,
                                      (uint32_t)1);
         xSemaphoreGive(lock);

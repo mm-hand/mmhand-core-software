@@ -34,4 +34,18 @@ bool tendonCalibrationMotorAbsRangeWithMargins(
     int32_t* outMinAbs,
     int32_t* outMaxAbs);
 
+/**
+ * 计算单腱运行边界：松端由 LUT 包络向外保留裕量，紧端以自动标定
+ * 实际找到的机械紧端为基准再保留裕量。单腱 LUT 采自松绳回程，不能
+ * 把 URDF Max 处的回程样本误当成机械紧端，否则会提前钳住反馈控制。
+ */
+bool singleTendonCalibrationMotorAbsRange(
+    const JointCalibrationResult& calibration,
+    uint8_t actuatorIndex,
+    uint8_t motorChannel,
+    int32_t releaseMarginCounts,
+    int32_t tightMarginCounts,
+    int32_t* outMinAbs,
+    int32_t* outMaxAbs);
+
 #endif // TENDON_CALIBRATION_LUT_H

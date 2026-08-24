@@ -957,9 +957,7 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                     setSingleTendonLutAbsLimit(
                         sharedData,
                         ctx->motorChannel,
-                        lutMinAbs,
-                        lutMaxAbs,
-                        result.tendonLutMotorAbs[0][result.tendonLutCount - 1]);
+                        result);
                     ctx->state = AUTO_CALIB_STATE_DONE;
                     ctx->stateBeginMs = nowMs;
                     ctx->lastTraceMs = nowMs;

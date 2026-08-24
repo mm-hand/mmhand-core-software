@@ -49,6 +49,7 @@ from .protocol import (
     ENCODER_COUNT,
     MOTOR_COUNT,
     PACKET_TYPE_CALIB_DIAG,
+    PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_FAULT_STATUS,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
@@ -92,6 +93,7 @@ from .protocol import (
     build_manual_encoder_single_cmd,
     build_state_sync_request_cmd,
     build_task_diag_subscribe_cmd,
+    build_control_trace_subscribe_cmd,
     build_rope_init_cmd,
     build_pause_cmd,
     build_restore_multiturn_cmd,
@@ -189,6 +191,7 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE: "manual_reference",
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT: "joint_calibration_snapshot",
     PACKET_TYPE_CALIB_DIAG: "calibration_diagnostic",
+    PACKET_TYPE_CONTROL_TRACE: "control_trace",
     PACKET_TYPE_TASK_DIAG: "task_diagnostic",
     PACKET_TYPE_TACTILE: "tactile_summary",
     PACKET_TYPE_TACTILE_FULL: "tactile_full",
@@ -1610,6 +1613,8 @@ class LowerComputerComm:
             return build_state_sync_request_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "task_diag_subscribe":
             return build_task_diag_subscribe_cmd(bool(cmd[1]))
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "control_trace_subscribe":
+            return build_control_trace_subscribe_cmd(bool(cmd[1]))
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
             return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":

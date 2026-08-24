@@ -359,6 +359,12 @@ class HandController:
             return False
         return bool(self.comm.send_command(("task_diag_subscribe", bool(enabled))))
 
+    def set_control_trace_subscription(self, enabled: bool) -> bool:
+        """数据记录期间订阅 P4 同周期目标/反馈快照。"""
+        if not self.comm:
+            return False
+        return bool(self.comm.send_command(("control_trace_subscribe", bool(enabled))))
+
     def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
         with self.state_lock:
             self.current_state = HandModel()

@@ -162,6 +162,8 @@ class HandGUI(QtWidgets.QMainWindow):
             MOTION_RECORD_PERIOD_SECONDS
         )
         self._last_state_record_signature = None
+        self._last_recorded_control_trace_sequence = 0
+        self._control_trace_recording_started_at = 0.0
         self._test_recording_stop_lock = threading.Lock()
         self._test_recording_stop_thread: Optional[threading.Thread] = None
         self.test_recording_stop_finished.connect(self._on_test_recording_stop_finished)
@@ -541,6 +543,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check.blockSignals(True)
         self.save_data_check.setChecked(False)
         self.save_data_check.blockSignals(False)
+        self._set_control_trace_recording_subscription(False)
         self._data_logger.stop()
         # close/flush 可能重复报告同一磁盘错误，当前会话统一丢弃后续副本。
         self._data_logger.consume_error()
@@ -1652,7 +1655,7 @@ class HandGUI(QtWidgets.QMainWindow):
             "ros2_enabled": self.ros2_enabled,
             "ros_topic": self.ros_topic,
             "recording_formats": options,
-            "csv_layout_version": 5,
+            "csv_layout_version": 6,
             "state_recording_hz": 20,
             "continuous_motion_recording_hz": 20,
             "replay_interpolation_hz": 100,
@@ -1676,7 +1679,13 @@ class HandGUI(QtWidgets.QMainWindow):
                 ],
                 "time_semantics": {
                     "host_time": "上位机收到并记录该状态的本地时间，精确到毫秒",
-                    "p4_time_ms": "下位机自本次上电启动后的毫秒计数；无对应P4包时留空",
+                    "p4_time_ms": (
+                        "下位机自本次上电启动后的毫秒计数；关节总表使用同一控制周期"
+                        "Trace时间，其他表无对应P4包时留空"
+                    ),
+                    "command_age_ms": "控制周期时间减去P4完整接收当前目标的时间",
+                    "feedback_age_ms": "控制周期时间减去本周期所用磁编快照时间",
+                    "trace_sequence_gap": "20 Hz落盘相邻行之间跳过的10 ms控制快照数，不等同于串口丢包",
                 },
             },
             "calibration_snapshot": self._read_json_config(CALIB_LOAD_SNAPSHOT_PATH),
@@ -1695,6 +1704,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._recording_error_popup_seen = False
         self._motion_record_sampler.reset()
         self._last_state_record_signature = None
+        self._last_recorded_control_trace_sequence = 0
+        self._control_trace_recording_started_at = time.time()
+        self._set_control_trace_recording_subscription(True)
         path = self._data_logger.path
         self._last_recorded_proto_ack_sequence = int(
             getattr(self._state, "proto_ack_sequence", 0) or 0
@@ -1717,6 +1729,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self._set_status("Recording files are still finalizing in the background")
             return
         if self._data_logger.is_running():
+            self._set_control_trace_recording_subscription(False)
             path = self._data_logger.path
             self._flush_motion_recording_due(force=True)
             if self._state is not None:
@@ -1746,6 +1759,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 return
             if not self._data_logger.is_running():
                 return
+            self._set_control_trace_recording_subscription(False)
             path = self._data_logger.path
             flush_motion = getattr(self, "_flush_motion_recording_due", None)
             if callable(flush_motion):
@@ -1771,6 +1785,14 @@ class HandGUI(QtWidgets.QMainWindow):
         with self._test_recording_stop_lock:
             thread = self._test_recording_stop_thread
             return bool(thread is not None and thread.is_alive())
+
+    def _set_control_trace_recording_subscription(self, enabled: bool) -> None:
+        """控制跟踪只服务数据记录；订阅失败不阻断其余 CSV 表。"""
+        try:
+            if not self.backend.set_control_trace_subscription(bool(enabled)):
+                log_session("RECORDER", f"control trace subscribe failed enabled={int(enabled)}")
+        except Exception as exc:
+            log_session("RECORDER", f"control trace subscribe error: {exc}")
 
     def finish_test_recording_stop(self, path: str, reason: str) -> None:
         error = ""
@@ -1861,6 +1883,7 @@ class HandGUI(QtWidgets.QMainWindow):
         signature = (
             float(getattr(state, "host_rx_time", 0.0) or 0.0),
             int(getattr(state, "p4_time_ms", 0) or 0),
+            int(getattr(state, "control_trace_sequence", 0) or 0),
             getattr(state, "tactile_summary_seq", None),
             getattr(state, "tactile_full_seq", None),
         )
@@ -1966,8 +1989,7 @@ class HandGUI(QtWidgets.QMainWindow):
             active_joint_mask=active_joint_mask,
         )
 
-        targets = self.control_panel.resolved_joint_targets()
-        self._write_joint_wide_row(state, host_time, p4_time_ms, active_joint_mask, targets)
+        self._write_joint_wide_row(state, host_time, p4_time_ms, active_joint_mask)
 
         motor_targets = self.control_panel.resolved_motor_targets()
         self._write_servo_wide_row(
@@ -1989,32 +2011,74 @@ class HandGUI(QtWidgets.QMainWindow):
         host_time: float,
         p4_time_ms,
         active_joint_mask,
-        targets: List[float],
     ) -> None:
+        trace_valid = bool(
+            getattr(state, "has_control_trace", False)
+            and float(getattr(state, "control_trace_last_rx_ts", 0.0) or 0.0)
+            >= self._control_trace_recording_started_at
+        )
+        trace_time = int(getattr(state, "control_trace_p4_time_ms", 0) or 0)
+        trace_sequence = int(getattr(state, "control_trace_sequence", 0) or 0)
+        target_accepted = int(
+            getattr(state, "control_trace_target_accepted_ms", 0) or 0
+        )
+        encoder_timestamp = int(
+            getattr(state, "control_trace_encoder_timestamp_ms", 0) or 0
+        )
+        trace_joint_mask = int(
+            getattr(state, "control_trace_active_joint_mask", 0) or 0
+        )
+        trace_valid_mask = int(
+            getattr(state, "control_trace_valid_joint_mask", 0) or 0
+        )
+        trace_targets = list(getattr(state, "control_trace_target_deg", []))
+        trace_actual = list(getattr(state, "control_trace_actual_deg", []))
+        previous_sequence = self._last_recorded_control_trace_sequence
+        sequence_delta = (trace_sequence - previous_sequence) & 0xFFFFFFFF
+        sequence_gap = (
+            max(0, sequence_delta - 1)
+            if trace_valid and previous_sequence and sequence_delta < 0x80000000
+            else 0
+        )
         row: Dict[str, object] = {
             "host_time": host_time,
-            "p4_time_ms": p4_time_ms,
+            "p4_time_ms": trace_time if trace_valid else p4_time_ms,
+            "control_trace_sequence": trace_sequence if trace_valid else "",
+            "target_token": (
+                int(getattr(state, "control_trace_target_token", 0) or 0)
+                if trace_valid else ""
+            ),
+            "command_age_ms": (
+                ((trace_time - target_accepted) & 0xFFFFFFFF)
+                if trace_valid and target_accepted else ""
+            ),
+            "feedback_age_ms": (
+                ((trace_time - encoder_timestamp) & 0xFFFFFFFF)
+                if trace_valid and encoder_timestamp else ""
+            ),
+            "trace_sequence_gap": sequence_gap if trace_valid else "",
         }
         for i in range(ENCODER_COUNT):
             label = f"J{i:02d}"
             encoder = state.encoders[i] if i < len(state.encoders) else None
-            # 关节总表可以直接作为Replay输入，必须沿用Joint Channels的完整有效性门禁。
-            current_valid = bool(
-                self.control_panel.joint_encoder_status(i, state) in ("ok", "warn")
-                and self.control_panel.joint_angle_feedback_valid(i, state)
-                and
-                self.control_panel.joint_angle_display_calibrated(i, state)
-            )
+            # Trace 有效位来自本周期 P4 映射结果，不再复用异步 UI 显示门禁。
+            current_valid = bool(trace_valid and self._mask_has_bit(trace_valid_mask, i))
             row[f"{label}_current_deg"] = (
-                state.angles[i] if current_valid and i < len(state.angles) else ""
+                trace_actual[i] if current_valid and i < len(trace_actual) else ""
             )
             row[f"{label}_current_valid"] = 1 if current_valid else 0
-            row[f"{label}_target_deg"] = targets[i] if i < len(targets) else ""
+            row[f"{label}_target_deg"] = (
+                trace_targets[i] if trace_valid and i < len(trace_targets) else ""
+            )
             row[f"{label}_encoder_raw"] = (
                 getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
             )
-            row[f"{label}_active"] = 1 if self._mask_has_bit(active_joint_mask, i) else 0
+            row[f"{label}_active"] = 1 if self._mask_has_bit(
+                trace_joint_mask if trace_valid else active_joint_mask, i
+            ) else 0
         self._data_logger.write("joint_wide", row)
+        if trace_valid:
+            self._last_recorded_control_trace_sequence = trace_sequence
 
     def _write_servo_wide_row(
         self,

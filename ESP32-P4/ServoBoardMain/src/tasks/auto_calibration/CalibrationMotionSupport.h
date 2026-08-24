@@ -8,6 +8,9 @@
 
 #include "AutoCalibrationCoordinator.h"
 
+// 本文件只通过 const 引用读取标定结果，前置声明可避免引入完整运行时存储实现。
+struct JointCalibrationResult;
+
 int32_t calibrationAbs32(int32_t value);
 int32_t singleTendonReleaseCounts(uint8_t motorChannel,
                                   int32_t tightAbs,
@@ -18,9 +21,7 @@ void setCalibratedMotorAbsLimit(SystemRuntimeContext* sharedData,
                                 int32_t tightAbs);
 void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
                                uint8_t motorChannel,
-                               int32_t lutMinAbs,
-                               int32_t lutMaxAbs,
-                               int32_t lutTightAbs);
+                               const JointCalibrationResult& calibration);
 void clearCalibratedMotorAbsLimitsForJoint(SystemRuntimeContext* sharedData,
                                            uint8_t jointIndex);
 int32_t servoTurnFromAbs(int32_t absValue);

@@ -40,9 +40,11 @@ struct HostCommRuntimeContext {
     bool initialized;
     RemoteSensorData_t sensorRawData;
     MappedAngleData_t mappedAngleData;
+    ControlTraceData_t controlTraceData;
     p4::host::HostFrameReader frameReader;
     uint8_t decodedFrame[kSerialRxBufferSize];
     uint32_t lastSensorTimestampSent;
+    uint32_t lastControlTraceSequenceSent;
     uint32_t lastEncoderRawTimestampSent;
     uint32_t lastServoAngleTimestampSent;
     uint32_t lastServoRawTimestampSent;
@@ -68,6 +70,7 @@ struct HostCommRuntimeContext {
     uint32_t sendingTaskDiagWindowSequence;
     uint8_t nextTaskDiagId;
     bool taskDiagSubscribed;
+    bool controlTraceSubscribed;
     uint32_t lastTaskDiagRenewMs; ///< 最近一次独立诊断订阅/续订时间，不参与运动控制租约。
     uint32_t pendingStateSyncMask;
     uint32_t lastServoResetZeroResultToken;
@@ -128,6 +131,15 @@ void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs)
     g_hostCommRuntime.sendingTaskDiagWindowSequence = 0;
     g_hostCommRuntime.nextTaskDiagId = 0;
 }
+
+void setHostControlTraceSubscribed(bool subscribed)
+{
+    g_hostCommRuntime.controlTraceSubscribed = subscribed;
+    if (subscribed) {
+        // 强制发送订阅后的第一份最新快照。
+        g_hostCommRuntime.lastControlTraceSequenceSent = 0;
+    }
+}
 bool initHostCommService(SystemRuntimeContext* sharedData)
 {
     if (!sharedData) {
@@ -157,9 +169,11 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     HostCommRuntimeContext& runtime = g_hostCommRuntime;
     auto& sensorRawData = runtime.sensorRawData;
     auto& mappedAngleData = runtime.mappedAngleData;
+    auto& controlTraceData = runtime.controlTraceData;
     auto& frameReader = runtime.frameReader;
     auto& decodedFrame = runtime.decodedFrame;
     auto& lastSensorTimestampSent = runtime.lastSensorTimestampSent;
+    auto& lastControlTraceSequenceSent = runtime.lastControlTraceSequenceSent;
     auto& lastEncoderRawTimestampSent = runtime.lastEncoderRawTimestampSent;
     auto& lastServoAngleTimestampSent = runtime.lastServoAngleTimestampSent;
     auto& lastServoRawTimestampSent = runtime.lastServoRawTimestampSent;
@@ -279,6 +293,14 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             if (tactileSent) {
                 // 只有整个摘要/全量事件写完，才提交队首。
                 sharedData->tactileQueue.receive(&tactileData);
+            }
+        }
+
+        if (runtime.controlTraceSubscribed &&
+            sharedData->controlTraceQueue.peek(&controlTraceData) &&
+            controlTraceData.sequence != lastControlTraceSequenceSent) {
+            if (sendControlTracePacket(controlTraceData)) {
+                lastControlTraceSequenceSent = controlTraceData.sequence;
             }
         }
 

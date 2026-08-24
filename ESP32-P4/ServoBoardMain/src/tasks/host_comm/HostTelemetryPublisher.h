@@ -12,6 +12,7 @@
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../data/SafetyRuleTypes.h"
+#include "../../data/ControlTraceTypes.h"
 
 namespace p4::host {
 
@@ -30,6 +31,7 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex);
 bool sendCalibrationDiagPacket(const CalibrationDiagData_t& diag);
 bool sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw);
 bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle);
+bool sendControlTracePacket(const ControlTraceData_t& trace);
 bool sendServoAnglePacket(const ServoAngleData_t& servoAngle);
 bool sendServoRawPacket(const ServoAngleData_t& servoRaw);
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);

@@ -19,11 +19,13 @@ public:
 
     // 使用 ControlConfig 中的 PID 参数初始化 21 个独立控制器。
     void begin();
-    // 执行一次 21 关节角度 PID 计算，输出每个关节主舵机目标位置。
+    // 执行一次 21 关节角度 PID；kpByJoint 提供本周期各关节有效 Kp，
+    // 为空或数值无效时自动回退 ControlConfig 的固定 Kp。
     bool compute(float* targetDegs,
                  float* magActualDegs,
                  const int32_t* absolutePosition,
                  int32_t* outServoPulses,
+                 const float* kpByJoint,
                  float dtSeconds);
     // 提供给调试上报使用，读取指定关节的 PID 输出。
     float getPidOutput(uint8_t jointIndex) const;
@@ -33,7 +35,7 @@ public:
     void resetAll();
 
 private:
-    // 用同一组参数初始化全部关节，但每个关节保有独立动态状态。
+    // 用同一组基础参数初始化全部关节，但每个关节保有独立动态状态。
     void setPIDParams(const float pidParams[PID_PARAMETER_NUM]);
     // 每个关节一套 PID：将角度误差映射为电机侧位置修正。
     PID_Info_TypeDef _pids[JOINT_COUNT];

@@ -17,11 +17,13 @@
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../modules/calibration/ManualEncoderReferenceStore.h"
+#include "../../modules/calibration/TendonCalibrationLut.h"
 #include "../../modules/protocol/HostProtocol.h"
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../config/topology/HardwareMap.h"
+#include "../../config/CalibrationConfig.h"
 #include "../../config/ServoConfig.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/log/FirmwareLog.h"
@@ -37,6 +39,62 @@
 using namespace p4::host;
 
 namespace p4::host {
+
+namespace {
+
+/**
+ * Calib Load 的 ABS Limit 包可能来自较早的控制策略。单腱关节加载完
+ * 完整结果后，必须以本次结果记录的机械紧端重新生成范围，避免旧快照
+ * 中的 LUT 末点提前钳住紧绳方向。双腱范围仍沿用快照中的两电机结果。
+ */
+bool refreshLoadedSingleTendonAbsLimit(SystemRuntimeContext* sharedData,
+                                       uint8_t jointIndex,
+                                       const JointCalibrationResult& result)
+{
+    JointActuatorGroup group = {};
+    if (getJointActuatorGroup(jointIndex, &group) && group.count > 1) {
+        return true;
+    }
+
+    const int primaryMotor = findPrimaryMotorChannelForJoint(jointIndex);
+    if (!sharedData || primaryMotor < 0 || primaryMotor >= SERVO_TOTAL_NUM) {
+        return false;
+    }
+
+    int32_t limitMin = 0;
+    int32_t limitMax = 0;
+    if (!singleTendonCalibrationMotorAbsRange(
+            result,
+            0,
+            (uint8_t)primaryMotor,
+            mmhand::config::calibration::kMotorAbsReleaseMarginCounts,
+            mmhand::config::calibration::kMotorAbsTightMarginCounts,
+            &limitMin,
+            &limitMax)) {
+        return false;
+    }
+
+    const uint32_t motorBit = 1UL << (uint8_t)primaryMotor;
+    {
+        SharedSafetyGuard guard;
+        sharedData->motor_abs_limit_min[primaryMotor] = limitMin;
+        sharedData->motor_abs_limit_max[primaryMotor] = limitMax;
+        sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, motorBit);
+    }
+    FW_LOG_INFO_PRINTF(
+        "[UPPER] CALIB_LOAD_SINGLE_LIMIT J%02u M%02d limit=[%ld,%ld] "
+        "measuredTight=%ld margins=[%ld,%ld]\r\n",
+        (unsigned)jointIndex,
+        primaryMotor,
+        (long)limitMin,
+        (long)limitMax,
+        (long)result.tightServoAbs,
+        (long)mmhand::config::calibration::kMotorAbsReleaseMarginCounts,
+        (long)mmhand::config::calibration::kMotorAbsTightMarginCounts);
+    return true;
+}
+
+} // namespace
 
 /**
  * 上报 Mxx 到物理 BUS 的运行时路由快照。
@@ -95,6 +153,21 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         } else {
             setHostTaskDiagSubscribed(enabled != 0, nowMs);
             sendProtoAckPacket(CMD_TASK_DIAG_SUBSCRIBE,
+                               sharedData->system_state,
+                               PROTO_ACK_STATUS_OK);
+        }
+        return;
+    }
+    if (cmd == CMD_CONTROL_TRACE_SUBSCRIBE)
+    {
+        const uint8_t enabled = frame[1];
+        if (enabled > 1) {
+            sendProtoAckPacket(CMD_CONTROL_TRACE_SUBSCRIBE,
+                               sharedData->system_state,
+                               PROTO_ACK_STATUS_INVALID_DATA);
+        } else {
+            setHostControlTraceSubscribed(enabled != 0);
+            sendProtoAckPacket(CMD_CONTROL_TRACE_SUBSCRIBE,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_OK);
         }
@@ -439,6 +512,10 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                     (previousValid & ~updateMask) | (validMask & updateMask);
                 sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
                                   appliedValidMask);
+                // Calib Load 是恢复事务，不代表刚完成一轮自动标定。
+                // 从事务第一包起清除历史 SUCCESS/WARN，避免重启上位机后
+                // 状态栏保留旧结果并让用户误以为它是控制门禁。
+                g_calibrationStatus = CALIB_STATUS_IDLE;
                 FW_LOG_INFO_PRINTF(
                     "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX\r\n",
                     (unsigned long)updateMask,
@@ -567,18 +644,24 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                             !calibrationTendonLutMatchesJoint(jointIndex,
                                                              result))) {
                     status = PROTO_ACK_STATUS_INVALID_DATA;
+                } else if (result.success &&
+                           !refreshLoadedSingleTendonAbsLimit(
+                               sharedData, jointIndex, result)) {
+                    status = PROTO_ACK_STATUS_INVALID_DATA;
+                    FW_LOG_WARN_PRINTF(
+                        "[UPPER] CALIB_LOAD reject J%02u: single tendon "
+                        "measured tight endpoint is invalid\r\n",
+                        (unsigned)jointIndex);
                 } else {
                     publishJointCalibrationResult(jointIndex, result);
                     setRuntimeEncoderDirection(jointIndex, direction);
                     if (result.success) {
                         updateCalibrationAssemblyWarning(
                             sharedData, jointIndex, result);
-                        const uint8_t loadedStatus =
-                            sharedAtomicLoad(
-                                &sharedData->calibration_warning_bitmap) != 0
-                                ? CALIB_STATUS_WARN
-                                : CALIB_STATUS_SUCCESS;
-                        g_calibrationStatus = loadedStatus;
+                        // Calib Load 是数据恢复事务，不是一轮自动标定。
+                        // SUCCESS/WARN 仅由真实标定完成事件产生，避免重启
+                        // 上位机后状态栏长期停在 CALIB SUCCESS 并干扰控制。
+                        g_calibrationStatus = CALIB_STATUS_IDLE;
                         sharedAtomicFetchAnd(
                             &sharedData->system_fault_bitmap,
                             (uint32_t)~SYSTEM_FAULT_CALIBRATION);

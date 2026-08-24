@@ -723,6 +723,10 @@ class HandBackend:
         """根据 Task Runtime 窗口生命周期控制诊断带宽。"""
         return self._controller.set_task_diag_subscription(enabled)
 
+    def set_control_trace_subscription(self, enabled: bool) -> bool:
+        """根据 Save Data 生命周期控制统一时间戳控制跟踪流。"""
+        return self._controller.set_control_trace_subscription(enabled)
+
     # Controller command proxies.  These keep UI/ROS on the backend surface while
     # HandController remains the hardware-control primitive layer.
     def hold_current_motor_positions(self, delay_s: float = 0.15) -> bool:

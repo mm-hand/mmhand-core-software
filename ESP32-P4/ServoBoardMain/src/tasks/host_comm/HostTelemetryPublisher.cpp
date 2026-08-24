@@ -646,6 +646,32 @@ bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
+/** 上报同一 10 ms 控制周期采用的目标和反馈；包尾时间即 controlTimestamp。 */
+bool sendControlTracePacket(const ControlTraceData_t& trace)
+{
+    uint8_t buffer[128];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_CONTROL_TRACE;
+    appendU32BigEndian(buffer, &idx, trace.sequence);
+    appendU32BigEndian(buffer, &idx, trace.targetToken);
+    appendU32BigEndian(buffer, &idx, trace.targetAcceptedTimestamp);
+    appendU32BigEndian(buffer, &idx, trace.encoderTimestamp);
+    appendU32BigEndian(buffer, &idx, trace.activeJointMask);
+    appendU32BigEndian(buffer, &idx, trace.validJointMask);
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; ++i) {
+        appendI16BigEndian(buffer, &idx, trace.targetDegCenti[i]);
+    }
+    for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; ++i) {
+        appendI16BigEndian(buffer, &idx, trace.actualDegCenti[i]);
+    }
+    appendU32BigEndian(buffer, &idx, trace.timestamp);
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = static_cast<uint8_t>(idx - 2U);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
 /** 100 Hz logical ABS 仅携带连续位置；在线状态由 SYSTEM_STATUS 权威上报。 */
 bool sendServoAnglePacket(const ServoAngleData_t& servoAngle)
 {

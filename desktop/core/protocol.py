@@ -761,6 +761,36 @@ def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
     return result
 
 
+def parse_control_trace_packet(payload: bytes) -> Optional[dict]:
+    """解析同一 P4 控制周期采用的目标角与磁编反馈角。"""
+    header_size = 6 * 4
+    angle_size = ENCODER_COUNT * 2
+    if len(payload) != header_size + angle_size * 2:
+        return None
+    (
+        sequence,
+        target_token,
+        target_accepted_ms,
+        encoder_timestamp_ms,
+        active_joint_mask,
+        valid_joint_mask,
+    ) = struct.unpack_from(">IIIIII", payload, 0)
+    target_raw = struct.unpack_from(f">{ENCODER_COUNT}h", payload, header_size)
+    actual_raw = struct.unpack_from(
+        f">{ENCODER_COUNT}h", payload, header_size + angle_size
+    )
+    return {
+        "sequence": int(sequence),
+        "target_token": int(target_token),
+        "target_accepted_ms": int(target_accepted_ms),
+        "encoder_timestamp_ms": int(encoder_timestamp_ms),
+        "active_joint_mask": int(active_joint_mask),
+        "valid_joint_mask": int(valid_joint_mask),
+        "target_deg": [float(value) / 100.0 for value in target_raw],
+        "actual_deg": [float(value) / 100.0 for value in actual_raw],
+    }
+
+
 def parse_product_fingerprint_packet(payload: bytes) -> Optional[dict]:
     """解析 P4 当前固件、参数、硬件映射和 URDF 的可复现实验指纹。"""
     if len(payload) != 28:
@@ -1236,6 +1266,11 @@ def build_state_sync_request_cmd(sync_mask: int = STATE_SYNC_ALL) -> bytes:
 def build_task_diag_subscribe_cmd(enabled: bool) -> bytes:
     """按窗口生命周期开启或关闭 P4 Task Runtime 诊断流。"""
     return _build_command_frame(CMD_TASK_DIAG_SUBSCRIBE, bytes([1 if enabled else 0]))
+
+
+def build_control_trace_subscribe_cmd(enabled: bool) -> bytes:
+    """仅在数据记录期间开启同一 P4 时钟的控制跟踪流。"""
+    return _build_command_frame(CMD_CONTROL_TRACE_SUBSCRIBE, bytes([1 if enabled else 0]))
 
 
 def build_manual_encoder_single_cmd(joint: int, min_raw: int, max_raw: int) -> bytes:

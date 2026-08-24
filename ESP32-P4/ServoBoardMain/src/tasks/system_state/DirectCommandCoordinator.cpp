@@ -10,6 +10,7 @@
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/SharedSafetyState.h"
+#include "../../platform/time/Clock.h"
 #include "../../safety/SafetyEventReporter.h"
 #include "../../safety/SafetyRuleRegistry.h"
 
@@ -42,6 +43,8 @@ void resetCommandState(SystemRuntimeContext* sharedData)
                                  (uint32_t)1);
     p4::platform::rtos::atomicAddFetch(&sharedData->joint_command_token,
                                  (uint32_t)1);
+    sharedData->joint_command_accepted_ms =
+        p4::platform::time::monotonicMillis();
     p4::platform::rtos::atomicAddFetch(
         &sharedData->motor_direct_command_generation,
         (uint32_t)1);

@@ -53,7 +53,23 @@ inline constexpr float kSingleTendonKi = 0.0f;
 inline constexpr float kSingleTendonKd = 0.0f;
 inline constexpr float kSingleTendonDeadbandDeg = 0.0f;
 inline constexpr float kSingleTendonIntegralLimit = 100.0f;
-inline constexpr float kSingleTendonOutputLimitCounts = 600.0f;
+
+/**
+ * 单腱双向增益调度：紧绳近端使用 1.2 倍局部斜率，松绳近端保持
+ * 0.7 倍局部斜率；大误差统一按 0.7 倍平均斜率推进。
+ */
+inline constexpr float kSingleTendonDynamicKpErrorMaxDeg = 3.0f;
+inline constexpr float kSingleTendonDynamicKpBlendStartDeg = 2.5f;
+inline constexpr float kSingleTendonDynamicLutGain = 1.2f;
+inline constexpr float kSingleTendonLargeErrorLutGain = 0.7f;
+static_assert(kSingleTendonLargeErrorLutGain > 0.0f &&
+                  kSingleTendonLargeErrorLutGain <= 1.0f,
+              "single tendon large-error LUT gain must be in (0, 1]");
+static_assert(kFeedbackDoneToleranceDeg <
+                  kSingleTendonDynamicKpBlendStartDeg &&
+                  kSingleTendonDynamicKpBlendStartDeg <
+                  kSingleTendonDynamicKpErrorMaxDeg,
+              "single tendon dynamic Kp error ranges must be ordered");
 
 /** 双腱位置环参数。误差和输出均在标定 LUT 的舵机 counts 坐标中计算。 */
 inline constexpr float kDualTendonKp = 0.60f;

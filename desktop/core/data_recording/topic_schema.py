@@ -100,6 +100,11 @@ TOPIC_FIELDNAMES: Dict[str, List[str]] = {
 def _wide_joint_fields() -> List[str]:
     fields = [
         *TIME_FIELDS,
+        "control_trace_sequence",
+        "target_token",
+        "command_age_ms",
+        "feedback_age_ms",
+        "trace_sequence_gap",
     ]
     for idx in range(21):
         label = f"J{idx:02d}"

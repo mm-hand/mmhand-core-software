@@ -55,6 +55,7 @@ struct ControlCommandSnapshot_t {
     uint32_t motorCommandToken;                          ///< 单次直控命令版本号。
     uint32_t motorSweepCommandToken;                     ///< 扫动命令版本号。
     uint32_t jointCommandToken;                          ///< 关节目标命令版本号。
+    uint32_t jointCommandAcceptedMs;                     ///< P4 接收该目标帧的时间。
     uint32_t feedbackCommandJointMask;                   ///< 本次反馈命令实际涉及的关节位图。
     uint32_t motorDirectCommandGeneration;               ///< 直控会话代次，隔离旧完成事件。
     uint8_t motorDirectCommandSource;                    ///< MOTOR_DIRECT_SOURCE_*。

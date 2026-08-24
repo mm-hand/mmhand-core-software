@@ -589,6 +589,18 @@ class HandModel:
     # 当前状态最近一次有效 P4 数据包的 millis() 时间。0 表示尚未收到 P4 时间。
     p4_time_ms: int = 0
     has_p4_time: bool = False
+    # 控制跟踪由 P4 10 ms 控制周期一次性封装，禁止与其他状态包时间拼接。
+    has_control_trace: bool = False
+    control_trace_sequence: int = 0
+    control_trace_target_token: int = 0
+    control_trace_p4_time_ms: int = 0
+    control_trace_target_accepted_ms: int = 0
+    control_trace_encoder_timestamp_ms: int = 0
+    control_trace_active_joint_mask: int = 0
+    control_trace_valid_joint_mask: int = 0
+    control_trace_target_deg: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
+    control_trace_actual_deg: List[float] = field(default_factory=lambda: [0.0] * ENCODER_COUNT)
+    control_trace_last_rx_ts: float = 0.0
     # 最近一次协议 ACK，用于把“UI 请求”和“P4 实际处理”分别写入事件日志。
     proto_ack_sequence: int = 0
     proto_ack_cmd: int = 0
@@ -776,6 +788,31 @@ class HandModel:
         self.host_rx_time = float(getattr(other, "host_rx_time", 0.0) or 0.0)
         self.p4_time_ms = int(getattr(other, "p4_time_ms", 0) or 0)
         self.has_p4_time = bool(getattr(other, "has_p4_time", False))
+        self.has_control_trace = bool(getattr(other, "has_control_trace", False))
+        self.control_trace_sequence = int(getattr(other, "control_trace_sequence", 0) or 0)
+        self.control_trace_target_token = int(getattr(other, "control_trace_target_token", 0) or 0)
+        self.control_trace_p4_time_ms = int(getattr(other, "control_trace_p4_time_ms", 0) or 0)
+        self.control_trace_target_accepted_ms = int(
+            getattr(other, "control_trace_target_accepted_ms", 0) or 0
+        )
+        self.control_trace_encoder_timestamp_ms = int(
+            getattr(other, "control_trace_encoder_timestamp_ms", 0) or 0
+        )
+        self.control_trace_active_joint_mask = int(
+            getattr(other, "control_trace_active_joint_mask", 0) or 0
+        )
+        self.control_trace_valid_joint_mask = int(
+            getattr(other, "control_trace_valid_joint_mask", 0) or 0
+        )
+        self.control_trace_target_deg = list(
+            getattr(other, "control_trace_target_deg", [0.0] * ENCODER_COUNT)
+        )
+        self.control_trace_actual_deg = list(
+            getattr(other, "control_trace_actual_deg", [0.0] * ENCODER_COUNT)
+        )
+        self.control_trace_last_rx_ts = float(
+            getattr(other, "control_trace_last_rx_ts", 0.0) or 0.0
+        )
         self.proto_ack_sequence = int(getattr(other, "proto_ack_sequence", 0) or 0)
         self.proto_ack_cmd = int(getattr(other, "proto_ack_cmd", 0) or 0)
         self.proto_ack_mode = int(getattr(other, "proto_ack_mode", 0) or 0)

@@ -12,6 +12,7 @@
 #include "../../platform/rtos/TaskSignal.h"
 #include "../../data/ActuatorTypes.h"
 #include "../../data/CalibrationTypes.h"
+#include "../../data/ControlTraceTypes.h"
 #include "../../data/JointTypes.h"
 #include "../../data/ServoTypes.h"
 #include "../../data/SystemTypes.h"
@@ -30,6 +31,7 @@ struct InterTaskChannels {
     MessageChannel<ServoAngleData_t> servoRawQueue; ///< 单圈 raw 快照。
     MessageChannel<ServoTelemetryData_t> servoTelemetryQueue; ///< 控制、标定和上行共读的最新遥测。
     MessageChannel<MappedAngleData_t> mappedAngleQueue; ///< 21 关节角快照。
+    MessageChannel<ControlTraceData_t> controlTraceQueue; ///< 同周期目标/反馈诊断快照。
     MessageChannel<RemoteTactileData_t> tactileQueue; ///< 顺序触觉数据。
     SemaphoreHandle_t commandStateMutex; ///< 保护目标角和直控命令的成组读写。
 };

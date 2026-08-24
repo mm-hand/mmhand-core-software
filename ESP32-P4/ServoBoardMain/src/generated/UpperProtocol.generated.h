@@ -39,6 +39,7 @@ inline constexpr uint8_t PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14; ///< 产品配�
 inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵机 BUS 路由、冲突、容量和扫描状态
 inline constexpr uint8_t PACKET_TYPE_SAFETY_EVENT = 0x16; ///< 去重后的结构化安全规则事件
 inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 桌面 JSON 多圈恢复异步最终结果
+inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角和下位机时间
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
@@ -67,6 +68,7 @@ inline constexpr uint8_t CMD_CLEAR_CALIBRATION_SCOPE = 0xEB; ///< 按电机位�
 inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选舵机硬件圈数并清除对应多圈锚点
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
+inline constexpr uint8_t CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF; ///< 打开或关闭统一下位机时间的控制跟踪流
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -103,6 +105,7 @@ inline constexpr size_t kClearCalibrationScopePayloadBytes = 4;
 inline constexpr size_t kServoResetZeroPayloadBytes = 4;
 inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
 inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
+inline constexpr size_t kControlTraceSubscribePayloadBytes = 1;
 inline constexpr size_t kSerialRxBufferSize = 1024;
 inline constexpr int32_t kEncoderModulo = 16384;
 
@@ -136,6 +139,7 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_SERVO_RESET_ZERO: return kServoResetZeroPayloadBytes;
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
         case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
+        case CMD_CONTROL_TRACE_SUBSCRIBE: return kControlTraceSubscribePayloadBytes;
         default: return SIZE_MAX;
     }
 }

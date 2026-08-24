@@ -6,6 +6,7 @@
 
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/AtomicValue.h"
+#include "../../platform/time/Clock.h"
 #include "../../runtime/SystemRuntimeContext.h"
 
 namespace {
@@ -23,6 +24,8 @@ bool syncJointTarget(SystemRuntimeContext* sharedData,
         return false;
     }
     sharedData->targetAngles[jointIndex] = targetDeg;
+    sharedData->joint_command_accepted_ms =
+        p4::platform::time::monotonicMillis();
     p4::platform::rtos::atomicAddFetch(&sharedData->joint_command_token,
                                        (uint32_t)1);
     if (lock) {

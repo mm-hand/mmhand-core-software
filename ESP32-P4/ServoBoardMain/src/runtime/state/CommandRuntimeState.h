@@ -19,6 +19,7 @@ struct CommandRuntimeState {
     volatile uint32_t motor_command_token; ///< 单点直控命令代际。
     volatile uint32_t motor_sweep_command_token; ///< sweep 命令代际。
     volatile uint32_t joint_command_token; ///< 关节角命令代际。
+    volatile uint32_t joint_command_accepted_ms; ///< P4 完整接收当前目标帧的单调毫秒时间。
     volatile uint32_t feedback_command_joint_mask; ///< 真正参与 PID 的 Jxx。
     volatile uint32_t motor_direct_command_generation; ///< 最近写入的直控 generation。
     volatile uint8_t motor_direct_command_source; ///< 已应用 MOTOR_DIRECT_SOURCE_*。

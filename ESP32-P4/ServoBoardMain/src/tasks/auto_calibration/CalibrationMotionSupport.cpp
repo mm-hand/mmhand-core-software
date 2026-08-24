@@ -15,6 +15,7 @@
 #include "CalibrationDiagnostics.h"
 #include "CalibrationSequencePlanner.h"
 #include "../../modules/actuator/ActuatorCommandGateway.h"
+#include "../../modules/calibration/TendonCalibrationLut.h"
 #include "../../config/CalibrationConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../hal/servo/ServoValue.h"
@@ -97,41 +98,28 @@ void setCalibratedMotorAbsLimit(SystemRuntimeContext* sharedData,
 
 // 单腱标定完成后，以 LUT 实测包络登记电机 ABS 工作区。
 void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
-                                      uint8_t motorChannel,
-                                      int32_t lutMinAbs,
-                                      int32_t lutMaxAbs,
-                                      int32_t lutTightAbs)
+                                uint8_t motorChannel,
+                                const JointCalibrationResult& calibration)
 {
     if (!sharedData || motorChannel >= SERVO_TOTAL_NUM ||
         !isMotorChannelValid(motorChannel)) {
         return;
     }
 
-    // 单腱工作区以 LUT 实测包络为基础：松端保留 500 counts，紧端保留
-    // 1200 counts。扩展方向由电机腱绳映射决定，不能直接对数值 min/max 加减。
-    lutMinAbs = clampCalibrationServoAbs(lutMinAbs);
-    lutMaxAbs = clampCalibrationServoAbs(lutMaxAbs);
-    if (lutMinAbs > lutMaxAbs) {
-        const int32_t tmp = lutMinAbs;
-        lutMinAbs = lutMaxAbs;
-        lutMaxAbs = tmp;
+    int32_t limitMin = 0;
+    int32_t limitMax = 0;
+    if (!singleTendonCalibrationMotorAbsRange(
+            calibration,
+            0,
+            motorChannel,
+            kMotorAbsReleaseMarginCounts,
+            kMotorAbsTightMarginCounts,
+            &limitMin,
+            &limitMax)) {
+        return;
     }
-    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorChannel);
-    const int32_t releaseAbs = shortenSign > 0 ? lutMinAbs : lutMaxAbs;
-    const int32_t releaseWithMargin = clampCalibrationServoAbs(
-        motorApplyTendonDelta(motorChannel,
-                              releaseAbs,
-                              -kMotorAbsReleaseMarginCounts));
-    const int32_t tightWithMargin = clampCalibrationServoAbs(
-        motorApplyTendonDelta(motorChannel,
-                              lutTightAbs,
-                              kMotorAbsTightMarginCounts));
-    int32_t limitMin = lutMinAbs;
-    int32_t limitMax = lutMaxAbs;
-    if (releaseWithMargin < limitMin) limitMin = releaseWithMargin;
-    if (releaseWithMargin > limitMax) limitMax = releaseWithMargin;
-    if (tightWithMargin < limitMin) limitMin = tightWithMargin;
-    if (tightWithMargin > limitMax) limitMax = tightWithMargin;
+    limitMin = clampCalibrationServoAbs(limitMin);
+    limitMax = clampCalibrationServoAbs(limitMax);
 
     const uint32_t bit = (uint32_t)(1UL << motorChannel);
     {
@@ -141,15 +129,12 @@ void setSingleTendonLutAbsLimit(SystemRuntimeContext* sharedData,
         sharedAtomicFetchOr(&sharedData->motor_abs_limit_valid_bitmap, bit);
     }
     FW_LOG_INFO_PRINTF(
-        "[AUTO CALIB] SINGLE_LUT_ABS_LIMIT M%02u lut=[%ld,%ld] "
-        "limit=[%ld,%ld] release=%ld tight=%ld margins=[%ld,%ld]\r\n",
+        "[AUTO CALIB] SINGLE_LUT_ABS_LIMIT M%02u limit=[%ld,%ld] "
+        "measuredTight=%ld margins=[%ld,%ld]\r\n",
         (unsigned)motorChannel,
-        (long)lutMinAbs,
-        (long)lutMaxAbs,
         (long)limitMin,
         (long)limitMax,
-        (long)releaseAbs,
-        (long)lutTightAbs,
+        (long)calibration.tightServoAbs,
         (long)kMotorAbsReleaseMarginCounts,
         (long)kMotorAbsTightMarginCounts);
 }

@@ -132,6 +132,7 @@ def _render_cpp(schema: dict) -> str:
         "kServoResetZeroPayloadBytes": "CMD_SERVO_RESET_ZERO",
         "kStateSyncRequestPayloadBytes": "CMD_STATE_SYNC_REQUEST",
         "kTaskDiagSubscribePayloadBytes": "CMD_TASK_DIAG_SUBSCRIBE",
+        "kControlTraceSubscribePayloadBytes": "CMD_CONTROL_TRACE_SUBSCRIBE",
     }
     lines.extend(["", "// 固定 payload 长度；单位 byte，不包含命令字本身。"])
     for alias, command in aliases.items():

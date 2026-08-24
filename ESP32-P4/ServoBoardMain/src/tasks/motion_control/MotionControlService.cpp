@@ -7,6 +7,7 @@
  */
 #include "MotionControlService.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -45,6 +46,16 @@ static FeedbackCollisionGuard g_feedbackCollisionGuard;
 static uint32_t g_controlPidDiagLastLogMs = 0;
 static uint8_t g_controlPidDiagNextJoint = 0;
 
+/** 将控制角度压成协议 0.01 degree；非有限值使用断开哨兵。 */
+static int16_t controlTraceAngleCenti(float angleDeg)
+{
+    if (!isfinite(angleDeg)) return INT16_MAX;
+    const long value = lroundf(angleDeg * 100.0f);
+    if (value >= INT16_MAX) return INT16_MAX - 1;
+    if (value < INT16_MIN) return INT16_MIN;
+    return (int16_t)value;
+}
+
 /**
  * 控制服务跨周期状态。所有成员只由 MotionControlTask 访问，固定放在静态区，
  * 避免 100 Hz 实时任务反复分配内存或占用大块任务栈。
@@ -56,6 +67,9 @@ struct ControlServiceRuntime {
     int32_t absolutePositionRaw[ENCODER_TOTAL_NUM];
     int32_t absolutePositionTendon[ENCODER_TOTAL_NUM];
     int32_t outPulsesTendon[ENCODER_TOTAL_NUM];
+    // 单腱每周期有效 Kp 与 LUT 局部斜率，仅供控制和低频诊断使用。
+    float singleTendonKp[ENCODER_TOTAL_NUM];
+    float singleTendonLutSlope[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
     // 标定结果由 AutoCalibration/HostComm 跨核更新；控制周期只使用同代一致快照。
@@ -84,6 +98,7 @@ struct ControlServiceRuntime {
     uint32_t lastMotorCommandToken;
     uint32_t lastMotorSweepCommandToken;
     uint32_t lastJointCommandToken;
+    uint32_t controlTraceSequence;
     uint8_t lastMotorDirectSource;
     int16_t prevSweepRawTarget[SERVO_TOTAL_NUM];
     int32_t sweepExpandedTarget[SERVO_TOTAL_NUM];
@@ -101,6 +116,85 @@ struct ControlServiceRuntime {
 };
 
 static ControlServiceRuntime g_controlRuntime;
+
+/**
+ * 根据单腱 LUT 将角度误差换算为本周期有效 Kp。
+ * 紧绳近端采用 1.2 倍局部斜率，松绳近端采用 0.7 倍局部斜率；
+ * 大误差统一采用 0.7 倍全行程平均斜率，LUT 不可信时才回退固定 Kp。
+ */
+static float computeSingleTendonEffectiveKp(
+    uint8_t motorCh,
+    float targetDeg,
+    float feedbackDeg,
+    const JointCalibrationResult& calibration,
+    float* outLutSlope)
+{
+    if (outLutSlope) {
+        *outLutSlope = 0.0f;
+    }
+    const float angleError = targetDeg - feedbackDeg;
+    const float absError = fabsf(angleError);
+    if (!isfinite(angleError) ||
+        absError <= kFeedbackDoneToleranceDeg ||
+        calibration.tendonLutMotor[0] != motorCh) {
+        return kSingleTendonKp;
+    }
+
+    float lutRefAbs = 0.0f;
+    float lutFbAbs = 0.0f;
+    if (!interpolateTendonCalibrationMotorAbs(
+            calibration, 0, targetDeg, &lutRefAbs) ||
+        !interpolateTendonCalibrationMotorAbs(
+            calibration, 0, feedbackDeg, &lutFbAbs)) {
+        return kSingleTendonKp;
+    }
+
+    const float lutDelta = lutRefAbs - lutFbAbs;
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorCh);
+    const float lutSlope = fabsf(lutDelta / angleError);
+    if (shortenSign == 0 || !isfinite(lutSlope)) {
+        return kSingleTendonKp;
+    }
+    if (outLutSlope) {
+        *outLutSlope = lutSlope;
+    }
+    const uint8_t lastIndex = calibration.tendonLutCount - 1U;
+    const float lutAngleSpan =
+        calibration.currentMaxDeg - calibration.currentMinDeg;
+    const float lutAbsSpan = fabsf((float)
+        (calibration.tendonLutMotorAbs[0][lastIndex] -
+         calibration.tendonLutMotorAbs[0][0]));
+    if (!isfinite(lutAngleSpan) || lutAngleSpan <= 0.0f ||
+        !isfinite(lutAbsSpan) || lutAbsSpan <= 0.0f) {
+        return kSingleTendonKp;
+    }
+
+    // 平均斜率负责大范围快速推进，局部斜率负责末端克服静摩擦；
+    // 两者都来自本关节标定 LUT，因此不会把某个关节的增益套给其他关节。
+    const float averageKp = kSingleTendonLargeErrorLutGain *
+        (lutAbsSpan / lutAngleSpan);
+    const bool tightening = (float)shortenSign * lutDelta > 0.0f;
+    const float localGain = tightening
+        ? kSingleTendonDynamicLutGain
+        : kSingleTendonLargeErrorLutGain;
+    const float localKp = localGain * lutSlope;
+    if (!isfinite(averageKp) || averageKp <= 0.0f ||
+        !isfinite(localKp) || localKp <= 0.0f) {
+        return kSingleTendonKp;
+    }
+    if (absError >= kSingleTendonDynamicKpErrorMaxDeg) {
+        return averageKp;
+    }
+    if (absError <= kSingleTendonDynamicKpBlendStartDeg) {
+        return localKp;
+    }
+
+    const float blend =
+        (absError - kSingleTendonDynamicKpBlendStartDeg) /
+        (kSingleTendonDynamicKpErrorMaxDeg -
+         kSingleTendonDynamicKpBlendStartDeg);
+    return localKp + blend * (averageKp - localKp);
+}
 
 /** 把控制层规则写入统一事件缓存，记录触发时的状态和输出所有者。 */
 static void recordControlRuleEvent(const ServiceOutputPort& output,
@@ -535,6 +629,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& absolutePositionRaw = runtime.absolutePositionRaw;
     auto& absolutePositionTendon = runtime.absolutePositionTendon;
     auto& outPulsesTendon = runtime.outPulsesTendon;
+    auto& singleTendonKp = runtime.singleTendonKp;
+    auto& singleTendonLutSlope = runtime.singleTendonLutSlope;
     auto& sensorData = runtime.sensorData;
     auto& mappedData = runtime.mappedData;
     auto& calibrationSnapshot = runtime.calibrationSnapshot;
@@ -1166,12 +1262,39 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             if (!isfinite(pidDtSeconds) || pidDtSeconds < 0.001f || pidDtSeconds > 0.100f) {
                 pidDtSeconds = 0.010f;
             }
+            // 默认保持固定 Kp；有效单腱关节按各自 LUT 计算双向增益，
+            // 双腱关节继续使用独立的双电机 PID，不进入该分支。
+            for (uint8_t jointIndex = 0;
+                 jointIndex < ENCODER_TOTAL_NUM;
+                 ++jointIndex) {
+                singleTendonKp[jointIndex] = kSingleTendonKp;
+                singleTendonLutSlope[jointIndex] = 0.0f;
+                const uint32_t bit = 1UL << jointIndex;
+                if ((feedbackCommandJointMask & bit) == 0 ||
+                    (calibrationSnapshotValidMask & bit) == 0 ||
+                    mappedData.validFlags[jointIndex] == 0 ||
+                    isDualTendonJoint(jointIndex)) {
+                    continue;
+                }
+                const int motorCh = findPrimaryMotorChannelForJoint(jointIndex);
+                if (motorCh < 0 || motorCh >= SERVO_TOTAL_NUM ||
+                    servoData.onlineStatus[motorCh] == 0) {
+                    continue;
+                }
+                singleTendonKp[jointIndex] = computeSingleTendonEffectiveKp(
+                    (uint8_t)motorCh,
+                    localTargets[jointIndex],
+                    magAngles[jointIndex],
+                    calibrationSnapshot[jointIndex].result,
+                    &singleTendonLutSlope[jointIndex]);
+            }
             // PID 使用腱绳空间 ABS，使正修正在 raw ABS 方向相反的电机上
             // 仍表示相同的“收紧腱绳”含义。单电机输出会把最终腱绳空间目标转回 raw。
             g_controlSolver.compute(localTargets,
                                     magAngles,
                                     absolutePositionTendon,
                                     outPulsesTendon,
+                                    singleTendonKp,
                                     pidDtSeconds);
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 if (g_feedbackCollisionGuard.isHoldActive(jointIndex)) {
@@ -1377,7 +1500,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
                 if (jointActive) {
                     // 普通单电机关节：把腱绳空间 PID 结果转回电机 raw ABS。
-                    // 先限制在标定 LUT 的松端 +500、紧端 +1200 工作区，再应用会话硬边界。
+                    // 松端沿用 LUT 裕量；紧端必须使用标定实测机械端点，不能使用
+                    // 带迟滞的松绳回程 LUT 在 URDF Max 处的样本。
                     int32_t actualMotorAbs = targetPos;
                     int32_t rawPidTargetAbs = targetPos;
                     // LUT 无效或目标被钳位时，禁止把“目标无法继续推进”误判成碰撞。
@@ -1393,7 +1517,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         int32_t lutMaxAbs = 0;
                         const bool lutMatchesMotor =
                             calibration.tendonLutMotor[0] == motorCh &&
-                            tendonCalibrationMotorAbsRangeWithMargins(
+                            singleTendonCalibrationMotorAbsRange(
                                 calibration,
                                 0,
                                 motorCh,
@@ -1473,7 +1597,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         if (jointMotorCh >= 0 && jointMotorCh < SERVO_TOTAL_NUM) {
                             const JointCalibrationResult& calibration =
                                 calibrationSnapshot[jointIndex].result;
-                            // 单环 PID 仍使用角度误差；这里插值得到的模型位置只用于诊断。
+                            // 单环 PID 仍以角度误差为输入；同一 LUT 插值同时用于
+                            // 近目标动态 Kp 和低频诊断，模型位置本身不直接作为目标。
                             lutValid = calibration.tendonLutMotor[0] ==
                                            (uint8_t)jointMotorCh &&
                                 interpolateTendonCalibrationMotorAbs(
@@ -1489,7 +1614,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         }
                         FW_LOG_INFO_PRINTF(
                             "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
-                            "out=%.2f abs=%ld cmd=%d lead=%ld load=%d mag=%d speed=%d "
+                            "kp=%.2f slope=%.2f out=%.2f abs=%ld cmd=%d lead=%ld "
+                            "load=%d mag=%d speed=%d "
                             "telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
                             "lutDelta=%.2f rawTarget=%ld\r\n",
                             (unsigned long)nowMs,
@@ -1498,6 +1624,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (double)localTargets[jointIndex],
                             (double)magAngles[jointIndex],
                             (double)(localTargets[jointIndex] - magAngles[jointIndex]),
+                            (double)singleTendonKp[jointIndex],
+                            (double)singleTendonLutSlope[jointIndex],
                             (double)g_controlSolver.getPidOutput(jointIndex),
                             (long)currentAbs,
                             (int)targetPos,
@@ -1526,6 +1654,31 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 }
             }
             }
+        }
+
+        // Target 与 Actual 在同一个控制周期内封装，并全部使用 P4 单调时钟。
+        // 上位机不得再把 UI 当前值与任意最后状态包拼接成控制响应样本。
+        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
+            ControlTraceData_t trace = {};
+            trace.sequence = ++runtime.controlTraceSequence;
+            trace.targetToken = commandSnapshot.jointCommandToken;
+            trace.targetAcceptedTimestamp = commandSnapshot.jointCommandAcceptedMs;
+            trace.encoderTimestamp = sensorData.timestamp;
+            trace.activeJointMask = feedbackCommandJointMask;
+            trace.timestamp = nowMs;
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
+                trace.targetDegCenti[jointIndex] =
+                    controlTraceAngleCenti(localTargets[jointIndex]);
+                // mappedData.angleValues 是上行协议使用的磁编计数，不是 0.01 度。
+                // Trace 必须记录 PID 本周期实际使用的 URDF 角度，否则绘图会把
+                // 16384 counts/360 deg 的计数误当成厘度。
+                trace.actualDegCenti[jointIndex] =
+                    controlTraceAngleCenti(magAngles[jointIndex]);
+                if (mappedData.isValid && mappedData.validFlags[jointIndex]) {
+                    trace.validJointMask |= 1UL << jointIndex;
+                }
+            }
+            sharedData->controlTraceQueue.overwrite(trace);
         }
 
         const uint32_t recoveredLutClampMask =
