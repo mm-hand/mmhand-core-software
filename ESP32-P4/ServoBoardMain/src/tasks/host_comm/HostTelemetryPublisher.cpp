@@ -649,7 +649,9 @@ bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle)
 /** 上报同一 10 ms 控制周期采用的目标和反馈；包尾时间即 controlTimestamp。 */
 bool sendControlTracePacket(const ControlTraceData_t& trace)
 {
-    uint8_t buffer[128];
+    // 21 路目标角/反馈角与 27 路实际舵机 CMD 共用同一个控制周期时间戳。
+    // 完整帧为 228 bytes，仍在单字节协议长度上限内。
+    uint8_t buffer[256];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0;
@@ -660,11 +662,15 @@ bool sendControlTracePacket(const ControlTraceData_t& trace)
     appendU32BigEndian(buffer, &idx, trace.encoderTimestamp);
     appendU32BigEndian(buffer, &idx, trace.activeJointMask);
     appendU32BigEndian(buffer, &idx, trace.validJointMask);
+    appendU32BigEndian(buffer, &idx, trace.motorCommandMask);
     for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; ++i) {
         appendI16BigEndian(buffer, &idx, trace.targetDegCenti[i]);
     }
     for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; ++i) {
         appendI16BigEndian(buffer, &idx, trace.actualDegCenti[i]);
+    }
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        appendI32BigEndian(buffer, &idx, trace.motorCommandAbs[i]);
     }
     appendU32BigEndian(buffer, &idx, trace.timestamp);
     buffer[idx++] = PROTOCOL_TAIL;

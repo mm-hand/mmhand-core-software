@@ -194,6 +194,10 @@ class StateReducer:
                 if parsed is not None:
                     for i in range(min(MOTOR_COUNT, len(parsed))):
                         model.servo_angles[i] = int(parsed[i])
+                    # 舵机 ABS 包与固件反馈快照共用该 P4 时间戳。单独保存后，
+                    # CSV 不会误用同批次中随后到达的 SYSTEM_STATUS 等包时间。
+                    if packet_p4_time_ms is not None:
+                        model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
                     model.has_servo_angle_data = True
                     emitted = True
 
@@ -591,8 +595,14 @@ class StateReducer:
                     model.control_trace_valid_joint_mask = int(
                         parsed["valid_joint_mask"]
                     )
+                    model.control_trace_motor_command_mask = int(
+                        parsed["motor_command_mask"]
+                    )
                     model.control_trace_target_deg = list(parsed["target_deg"])
                     model.control_trace_actual_deg = list(parsed["actual_deg"])
+                    model.control_trace_motor_command_abs = list(
+                        parsed["motor_command_abs"]
+                    )
                     model.control_trace_last_rx_ts = time.time()
                     emitted = True
 

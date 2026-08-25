@@ -16,8 +16,10 @@ struct ControlTraceData_t {
     uint32_t encoderTimestamp;         ///< 本周期角度所用磁编快照的采样时间。
     uint32_t activeJointMask;          ///< 本周期真正参与 PID 的关节位图。
     uint32_t validJointMask;           ///< actualDegCenti 中有效关节位图。
+    uint32_t motorCommandMask;         ///< 本周期成功发布到 ServoBus 邮箱的 Mxx 位图。
     int16_t targetDegCenti[ENCODER_TOTAL_NUM]; ///< PID 实际采用的目标角，0.01 degree。
     int16_t actualDegCenti[ENCODER_TOTAL_NUM]; ///< 同周期磁编反馈角，0.01 degree。
+    int32_t motorCommandAbs[SERVO_TOTAL_NUM];  ///< 最终舵机 logical ABS CMD，单位 counts。
     uint32_t timestamp;                ///< 当前控制周期的 P4 单调毫秒时间。
 };
 

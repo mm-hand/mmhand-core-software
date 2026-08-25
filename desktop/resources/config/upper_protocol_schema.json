@@ -34,7 +34,7 @@
     {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"},
     {"name": "PACKET_TYPE_SAFETY_EVENT", "value": 22, "timestamp": true, "description": "去重后的结构化安全规则事件"},
     {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"},
-    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角和下位机时间"}
+    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角、舵机CMD和下位机时间"}
   ],
   "commands": [
     {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},

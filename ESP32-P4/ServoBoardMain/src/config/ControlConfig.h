@@ -62,6 +62,14 @@ inline constexpr float kSingleTendonDynamicKpErrorMaxDeg = 3.0f;
 inline constexpr float kSingleTendonDynamicKpBlendStartDeg = 2.5f;
 inline constexpr float kSingleTendonDynamicLutGain = 1.2f;
 inline constexpr float kSingleTendonLargeErrorLutGain = 0.7f;
+/**
+ * 单腱换向启动：目标沿反方向累计 0.3 度后，给 PID 注入 80 度假定误差。
+ * 假定误差不受 URDF 范围限制；最长保持 150 ms，或实际推进 0.6 度后退出。
+ */
+inline constexpr float kSingleTendonReversalConfirmDeg = 0.3f;
+inline constexpr float kSingleTendonReversalAssumedErrorDeg = 80.0f;
+inline constexpr uint32_t kSingleTendonReversalMaxDurationMs = 190;
+inline constexpr float kSingleTendonReversalExitTravelDeg = 0.6f;
 static_assert(kSingleTendonLargeErrorLutGain > 0.0f &&
                   kSingleTendonLargeErrorLutGain <= 1.0f,
               "single tendon large-error LUT gain must be in (0, 1]");
@@ -70,6 +78,11 @@ static_assert(kFeedbackDoneToleranceDeg <
                   kSingleTendonDynamicKpBlendStartDeg <
                   kSingleTendonDynamicKpErrorMaxDeg,
               "single tendon dynamic Kp error ranges must be ordered");
+static_assert(kSingleTendonReversalConfirmDeg > 0.0f &&
+                  kSingleTendonReversalAssumedErrorDeg > 0.0f &&
+                  kSingleTendonReversalMaxDurationMs > 0 &&
+                  kSingleTendonReversalExitTravelDeg > 0.0f,
+              "single tendon reversal parameters must be positive");
 
 /** 双腱位置环参数。误差和输出均在标定 LUT 的舵机 counts 坐标中计算。 */
 inline constexpr float kDualTendonKp = 0.60f;

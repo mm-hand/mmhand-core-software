@@ -46,6 +46,19 @@ static FeedbackCollisionGuard g_feedbackCollisionGuard;
 static uint32_t g_controlPidDiagLastLogMs = 0;
 static uint8_t g_controlPidDiagNextJoint = 0;
 
+/** 单腱换向前馈的每关节锁存状态，只由 10 ms 控制服务访问。 */
+struct SingleTendonReversalState {
+    bool targetInitialized;
+    bool feedforwardActive;
+    int8_t establishedDirection;
+    int8_t candidateDirection;
+    int8_t feedforwardDirection;
+    float lastAcceptedTargetDeg;
+    float candidateAnchorDeg;
+    float feedforwardStartJointDeg;
+    uint32_t feedforwardStartMs;
+};
+
 /** 将控制角度压成协议 0.01 degree；非有限值使用断开哨兵。 */
 static int16_t controlTraceAngleCenti(float angleDeg)
 {
@@ -63,6 +76,7 @@ static int16_t controlTraceAngleCenti(float angleDeg)
 struct ControlServiceRuntime {
     bool initialized;
     float localTargets[ENCODER_TOTAL_NUM];
+    float pidTargetsDeg[ENCODER_TOTAL_NUM];
     float magAngles[ENCODER_TOTAL_NUM];
     int32_t absolutePositionRaw[ENCODER_TOTAL_NUM];
     int32_t absolutePositionTendon[ENCODER_TOTAL_NUM];
@@ -70,6 +84,8 @@ struct ControlServiceRuntime {
     // 单腱每周期有效 Kp 与 LUT 局部斜率，仅供控制和低频诊断使用。
     float singleTendonKp[ENCODER_TOTAL_NUM];
     float singleTendonLutSlope[ENCODER_TOTAL_NUM];
+    float singleTendonReversalAssumedErrorDeg[ENCODER_TOTAL_NUM];
+    SingleTendonReversalState singleTendonReversal[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
     // 标定结果由 AutoCalibration/HostComm 跨核更新；控制周期只使用同代一致快照。
@@ -116,6 +132,105 @@ struct ControlServiceRuntime {
 };
 
 static ControlServiceRuntime g_controlRuntime;
+
+/** 清除一个关节的换向历史；重新进入反馈后先建立方向，不对首帧施加前馈。 */
+static void resetSingleTendonReversal(SingleTendonReversalState* state)
+{
+    if (state) memset(state, 0, sizeof(*state));
+}
+
+/** 将角度增量转换为带迟滞的方向，极小的浮点抖动不参与换向判断。 */
+static int8_t singleTendonTargetDirection(float deltaDeg)
+{
+    if (deltaDeg > 0.0001f) return 1;
+    if (deltaDeg < -0.0001f) return -1;
+    return 0;
+}
+
+/**
+ * 只在收到新目标时累计反向行程；同一方向最多触发一次，直到确认下一次真实反向。
+ * 正在前馈时若目标先出现反向趋势，立即撤销旧方向前馈，避免继续向错误方向推进。
+ */
+static void updateSingleTendonReversalTarget(
+    SingleTendonReversalState* state,
+    bool newCommand,
+    float targetDeg)
+{
+    if (!state || !newCommand || !isfinite(targetDeg)) return;
+    if (!state->targetInitialized) {
+        state->targetInitialized = true;
+        state->lastAcceptedTargetDeg = targetDeg;
+        return;
+    }
+
+    const float previousTargetDeg = state->lastAcceptedTargetDeg;
+    const int8_t direction =
+        singleTendonTargetDirection(targetDeg - previousTargetDeg);
+    state->lastAcceptedTargetDeg = targetDeg;
+    if (direction == 0) return;
+
+    if (state->feedforwardActive &&
+        direction != state->feedforwardDirection) {
+        state->feedforwardActive = false;
+    }
+    if (state->establishedDirection == 0) {
+        state->establishedDirection = direction;
+        state->candidateDirection = 0;
+        return;
+    }
+    if (direction == state->establishedDirection) {
+        state->candidateDirection = 0;
+        return;
+    }
+
+    if (state->candidateDirection != direction) {
+        state->candidateDirection = direction;
+        state->candidateAnchorDeg = previousTargetDeg;
+    }
+    const float reverseTravelDeg =
+        (targetDeg - state->candidateAnchorDeg) * (float)direction;
+    if (reverseTravelDeg < kSingleTendonReversalConfirmDeg) return;
+
+    state->establishedDirection = direction;
+    state->candidateDirection = 0;
+    state->feedforwardDirection = direction;
+    // 等控制状态真正进入 RUN_FEEDBACK 后再记录起点，READY 阶段不消耗 250 ms 窗口。
+    state->feedforwardStartMs = 0;
+    state->feedforwardActive = true;
+}
+
+/**
+ * 生成单腱换向假定误差；该误差只进入 PID，不修改真实目标或 URDF 工作范围。
+ * 达到 250 ms 或关节沿新方向推进 1.2 度时退出。
+ */
+static float computeSingleTendonReversalAssumedError(
+    SingleTendonReversalState* state,
+    float feedbackDeg,
+    bool collisionHold,
+    uint32_t nowMs)
+{
+    if (!state || !state->feedforwardActive || collisionHold) {
+        if (state && collisionHold) state->feedforwardActive = false;
+        return 0;
+    }
+
+    if (state->feedforwardStartMs == 0) {
+        state->feedforwardStartMs = nowMs;
+        state->feedforwardStartJointDeg = feedbackDeg;
+    }
+
+    const uint32_t elapsedMs = nowMs - state->feedforwardStartMs;
+    const float jointTravel = state->feedforwardDirection *
+        (feedbackDeg - state->feedforwardStartJointDeg);
+    if (elapsedMs >= kSingleTendonReversalMaxDurationMs ||
+        jointTravel >= kSingleTendonReversalExitTravelDeg) {
+        state->feedforwardActive = false;
+        return 0;
+    }
+
+    return (float)state->feedforwardDirection *
+        kSingleTendonReversalAssumedErrorDeg;
+}
 
 /**
  * 根据单腱 LUT 将角度误差换算为本周期有效 Kp。
@@ -625,12 +740,16 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     // 使用引用保留原控制公式的可读命名，同时把所有历史量集中到运行上下文。
     ControlServiceRuntime& runtime = g_controlRuntime;
     auto& localTargets = runtime.localTargets;
+    auto& pidTargetsDeg = runtime.pidTargetsDeg;
     auto& magAngles = runtime.magAngles;
     auto& absolutePositionRaw = runtime.absolutePositionRaw;
     auto& absolutePositionTendon = runtime.absolutePositionTendon;
     auto& outPulsesTendon = runtime.outPulsesTendon;
     auto& singleTendonKp = runtime.singleTendonKp;
     auto& singleTendonLutSlope = runtime.singleTendonLutSlope;
+    auto& singleTendonReversalAssumedErrorDeg =
+        runtime.singleTendonReversalAssumedErrorDeg;
+    auto& singleTendonReversal = runtime.singleTendonReversal;
     auto& sensorData = runtime.sensorData;
     auto& mappedData = runtime.mappedData;
     auto& calibrationSnapshot = runtime.calibrationSnapshot;
@@ -692,7 +811,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         }
 
         const uint32_t jointCommandToken = commandSnapshot.jointCommandToken;
-        if (jointCommandToken != lastJointCommandToken)
+        const bool newJointCommand = jointCommandToken != lastJointCommandToken;
+        if (newJointCommand)
         {
             // 新关节目标会开启新的单次反馈完成判定窗口。
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
@@ -951,6 +1071,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                     controlOwnerActive &&
                                     (feedbackOutputState || directOutputState);
         const bool normalOutputAllowed = controlEnabled;
+        const bool feedbackTrackingContext =
+            hostControlEnabled &&
+            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            (systemState == SYSTEM_STATE_READY || feedbackRunningState);
 
         if (normalOutputAllowed && telemetryFresh)
         {
@@ -1051,6 +1175,31 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         const uint32_t feedbackCommandJointMask =
             commandSnapshot.feedbackCommandJointMask &
             activeJointMask;
+        // READY 阶段也接收最新目标方向；真正的 250 ms 启动窗口直到 RUN_FEEDBACK
+        // 首次计算时才开始。无效关节和非反馈模式立即丢弃历史，防止跨模式误触发。
+        for (uint8_t jointIndex = 0;
+             jointIndex < ENCODER_TOTAL_NUM;
+             ++jointIndex) {
+            const uint32_t bit = 1UL << jointIndex;
+            const int motorCh = findPrimaryMotorChannelForJoint(jointIndex);
+            const bool reversalEligible =
+                feedbackTrackingContext &&
+                (feedbackCommandJointMask & bit) != 0 &&
+                (calibrationSnapshotValidMask & bit) != 0 &&
+                mappedData.validFlags[jointIndex] != 0 &&
+                !isDualTendonJoint(jointIndex) &&
+                motorCh >= 0 && motorCh < SERVO_TOTAL_NUM &&
+                servoData.onlineStatus[motorCh] != 0;
+            if (!reversalEligible) {
+                resetSingleTendonReversal(
+                    &singleTendonReversal[jointIndex]);
+                continue;
+            }
+            updateSingleTendonReversalTarget(
+                &singleTendonReversal[jointIndex],
+                newJointCommand,
+                localTargets[jointIndex]);
+        }
         const bool feedbackCollisionContextValid =
             feedbackOutputState &&
             commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
@@ -1269,6 +1418,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                  ++jointIndex) {
                 singleTendonKp[jointIndex] = kSingleTendonKp;
                 singleTendonLutSlope[jointIndex] = 0.0f;
+                pidTargetsDeg[jointIndex] = localTargets[jointIndex];
+                singleTendonReversalAssumedErrorDeg[jointIndex] = 0.0f;
                 const uint32_t bit = 1UL << jointIndex;
                 if ((feedbackCommandJointMask & bit) == 0 ||
                     (calibrationSnapshotValidMask & bit) == 0 ||
@@ -1279,6 +1430,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 const int motorCh = findPrimaryMotorChannelForJoint(jointIndex);
                 if (motorCh < 0 || motorCh >= SERVO_TOTAL_NUM ||
                     servoData.onlineStatus[motorCh] == 0) {
+                    resetSingleTendonReversal(
+                        &singleTendonReversal[jointIndex]);
                     continue;
                 }
                 singleTendonKp[jointIndex] = computeSingleTendonEffectiveKp(
@@ -1287,10 +1440,22 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     magAngles[jointIndex],
                     calibrationSnapshot[jointIndex].result,
                     &singleTendonLutSlope[jointIndex]);
+                if (feedbackOutputState) {
+                    const float assumedErrorDeg =
+                        computeSingleTendonReversalAssumedError(
+                            &singleTendonReversal[jointIndex],
+                            magAngles[jointIndex],
+                            g_feedbackCollisionGuard.isHoldActive(jointIndex),
+                            nowMs);
+                    singleTendonReversalAssumedErrorDeg[jointIndex] =
+                        assumedErrorDeg;
+                    // 虚拟目标只服务本周期 PID，不回写真实目标，因此允许临时超出 URDF。
+                    pidTargetsDeg[jointIndex] += assumedErrorDeg;
+                }
             }
             // PID 使用腱绳空间 ABS，使正修正在 raw ABS 方向相反的电机上
             // 仍表示相同的“收紧腱绳”含义。单电机输出会把最终腱绳空间目标转回 raw。
-            g_controlSolver.compute(localTargets,
+            g_controlSolver.compute(pidTargetsDeg,
                                     magAngles,
                                     absolutePositionTendon,
                                     outPulsesTendon,
@@ -1617,7 +1782,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             "kp=%.2f slope=%.2f out=%.2f abs=%ld cmd=%d lead=%ld "
                             "load=%d mag=%d speed=%d "
                             "telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
-                            "lutDelta=%.2f rawTarget=%ld\r\n",
+                            "lutDelta=%.2f rawTarget=%ld rev=%u revDir=%d revErr=%.1f revAge=%lu\r\n",
                             (unsigned long)nowMs,
                             (unsigned)jointIndex,
                             jointMotorCh,
@@ -1638,7 +1803,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (double)lutRefAbs,
                             (double)lutFbAbs,
                             (double)(lutRefAbs - lutFbAbs),
-                            (long)rawPidTargetAbs);
+                            (long)rawPidTargetAbs,
+                            singleTendonReversal[jointIndex].feedforwardActive ? 1U : 0U,
+                            (int)singleTendonReversal[jointIndex].feedforwardDirection,
+                            (double)singleTendonReversalAssumedErrorDeg[jointIndex],
+                            singleTendonReversal[jointIndex].feedforwardStartMs == 0
+                                ? 0UL
+                                : (unsigned long)(nowMs -
+                                    singleTendonReversal[jointIndex].feedforwardStartMs));
                     }
                 }
 
@@ -1654,31 +1826,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 }
             }
             }
-        }
-
-        // Target 与 Actual 在同一个控制周期内封装，并全部使用 P4 单调时钟。
-        // 上位机不得再把 UI 当前值与任意最后状态包拼接成控制响应样本。
-        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
-            ControlTraceData_t trace = {};
-            trace.sequence = ++runtime.controlTraceSequence;
-            trace.targetToken = commandSnapshot.jointCommandToken;
-            trace.targetAcceptedTimestamp = commandSnapshot.jointCommandAcceptedMs;
-            trace.encoderTimestamp = sensorData.timestamp;
-            trace.activeJointMask = feedbackCommandJointMask;
-            trace.timestamp = nowMs;
-            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
-                trace.targetDegCenti[jointIndex] =
-                    controlTraceAngleCenti(localTargets[jointIndex]);
-                // mappedData.angleValues 是上行协议使用的磁编计数，不是 0.01 度。
-                // Trace 必须记录 PID 本周期实际使用的 URDF 角度，否则绘图会把
-                // 16384 counts/360 deg 的计数误当成厘度。
-                trace.actualDegCenti[jointIndex] =
-                    controlTraceAngleCenti(magAngles[jointIndex]);
-                if (mappedData.isValid && mappedData.validFlags[jointIndex]) {
-                    trace.validJointMask |= 1UL << jointIndex;
-                }
-            }
-            sharedData->controlTraceQueue.overwrite(trace);
         }
 
         const uint32_t recoveredLutClampMask =
@@ -1702,10 +1849,46 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             publishControlEnabled &&
             publishOwner == SERVO_TARGET_OWNER_CONTROL &&
             publishStateMatchesMode;
-        if (targetBatch.count > 0 &&
-            controlTargetPublishAllowed) {
+        bool targetBatchPublished = false;
+        if (targetBatch.count > 0 && controlTargetPublishAllowed) {
             // 发布前再次检查 owner/state，防止状态切换时泄漏过期的 CONTROL 目标 batch。
-            p4::actuator::publishLatest(sharedData, targetBatch);
+            targetBatchPublished =
+                p4::actuator::publishLatest(sharedData, targetBatch);
+        }
+
+        // Target、Actual 与成功发布的 Servo CMD 在同一个控制周期内封装。
+        // 只有 Gateway 接受的 batch 才记入 CMD，禁止把未执行的候选值画成指令。
+        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
+            ControlTraceData_t trace = {};
+            trace.sequence = ++runtime.controlTraceSequence;
+            trace.targetToken = commandSnapshot.jointCommandToken;
+            trace.targetAcceptedTimestamp = commandSnapshot.jointCommandAcceptedMs;
+            trace.encoderTimestamp = sensorData.timestamp;
+            trace.activeJointMask = feedbackCommandJointMask;
+            trace.timestamp = nowMs;
+            for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
+                trace.targetDegCenti[jointIndex] =
+                    controlTraceAngleCenti(localTargets[jointIndex]);
+                // mappedData.angleValues 是上行协议使用的磁编计数，不是 0.01 度。
+                trace.actualDegCenti[jointIndex] =
+                    controlTraceAngleCenti(magAngles[jointIndex]);
+                if (mappedData.isValid && mappedData.validFlags[jointIndex]) {
+                    trace.validJointMask |= 1UL << jointIndex;
+                }
+            }
+            if (targetBatchPublished) {
+                for (uint8_t commandIndex = 0;
+                     commandIndex < targetBatch.count;
+                     ++commandIndex) {
+                    const ServoTargetCommand_t& command =
+                        targetBatch.commands[commandIndex];
+                    if (command.motorChannel < SERVO_TOTAL_NUM) {
+                        trace.motorCommandMask |= 1UL << command.motorChannel;
+                        trace.motorCommandAbs[command.motorChannel] = command.position;
+                    }
+                }
+            }
+            sharedData->controlTraceQueue.overwrite(trace);
         }
 
         if (directRunningState &&

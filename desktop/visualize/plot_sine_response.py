@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""绘制 Test 页面正弦波的目标角、实际角、误差和舵机响应。
+"""使用 Plotly 绘制 Test 页面正弦波的目标角、反馈角、舵机 CMD 和实际 ABS。
 
 脚本只读取 run_data，不向 P4 发送命令。默认选择最近的正弦 Test 会话，
-也可以显式指定一个或多个数据记录目录，适用于任意 J00..J20。
+也可以显式指定一个或多个数据记录目录，适用于任意 J00..J20。输出为
+可离线打开的交互式 HTML，所有曲线共享同一 P4 单调时间轴。旧 CSV 没有
+``Mxx_cmd_abs`` 时只省略 CMD，不使用上位机缓存值伪造这条曲线。
 """
 
 from __future__ import annotations
@@ -12,15 +14,17 @@ import csv
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 JOINT_COUNT = 21
 MOTOR_COUNT = 27
+SERVO_COLORS = ("#9467bd", "#17becf", "#8c564b", "#e377c2")
 
 
 @dataclass
@@ -111,7 +115,7 @@ def find_latest_sessions(run_data: Path, joint: int, count: int) -> list[Path]:
 
 def read_joint_trace(
     session: Path, joint: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
     rows = read_rows(session / "02_关节总表.csv")
     prefix = f"J{joint:02d}_"
     samples = []
@@ -132,7 +136,7 @@ def read_joint_trace(
     origin_ms = min(data[0, 0], data[0, 2])
     target_time_s = (data[:, 0] - origin_ms) / 1000.0
     actual_time_s = (data[:, 2] - origin_ms) / 1000.0
-    return target_time_s, data[:, 1], actual_time_s, data[:, 3]
+    return target_time_s, data[:, 1], actual_time_s, data[:, 3], origin_ms
 
 
 def discover_motors(session: Path, joint: int) -> list[int]:
@@ -140,28 +144,53 @@ def discover_motors(session: Path, joint: int) -> list[int]:
     found = []
     for motor in range(MOTOR_COUNT):
         key = f"M{motor:02d}_joint_index"
-        if any(int(safe_float(row.get(key, "-1")) or -1) == joint for row in rows[:20]):
+        # J00 的索引 0 是合法值，不能用 ``value or -1`` 判断，否则会被
+        # Python 当作 False 丢掉，导致绘图脚本找不到 J00 对应的舵机。
+        if any(
+            math.isfinite(value := safe_float(row.get(key, "-1")))
+            and int(value) == joint
+            for row in rows[:20]
+        ):
             found.append(motor)
     return found
 
 
 def read_servo_trace(
-    session: Path, motor: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    session: Path, motor: int, origin_ms: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     rows = read_rows(session / "03_舵机总表.csv")
     prefix = f"M{motor:02d}_"
     samples = []
     for row in rows:
         timestamp = row_time_ms(row)
-        target = safe_float(row.get(prefix + "target_abs", ""))
         actual = safe_float(row.get(prefix + "abs", ""))
         load = safe_float(row.get(prefix + "load", ""))
-        if math.isfinite(timestamp) and math.isfinite(target) and math.isfinite(actual):
-            samples.append((timestamp, target, actual, load))
+        if math.isfinite(timestamp) and math.isfinite(actual):
+            samples.append((timestamp, actual, load))
     if not samples:
-        return tuple(np.asarray([], dtype=float) for _ in range(4))  # type: ignore[return-value]
+        return tuple(np.asarray([], dtype=float) for _ in range(3))  # type: ignore[return-value]
     data = np.asarray(samples, dtype=float)
-    return (data[:, 0] - data[0, 0]) / 1000.0, data[:, 1], data[:, 2], data[:, 3]
+    # 与关节目标/反馈共用同一个 P4 原点；禁止各曲线自行以首帧归零，
+    # 否则会把两类数据包的真实到达间隔从图上抹掉。
+    return (data[:, 0] - origin_ms) / 1000.0, data[:, 1], data[:, 2]
+
+
+def read_motor_command_trace(
+    session: Path, motor: int, origin_ms: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """读取 P4 本周期成功发布到 ServoBus 邮箱的 logical ABS CMD。"""
+    rows = read_rows(session / "02_关节总表.csv")
+    key = f"M{motor:02d}_cmd_abs"
+    samples = []
+    for row in rows:
+        timestamp = row_time_ms(row)
+        command = safe_float(row.get(key, ""))
+        if math.isfinite(timestamp) and math.isfinite(command):
+            samples.append((timestamp, command))
+    if not samples:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    data = np.asarray(samples, dtype=float)
+    return (data[:, 0] - origin_ms) / 1000.0, data[:, 1]
 
 
 def session_label(session: Path) -> str:
@@ -389,7 +418,9 @@ def plot_session(
     motors: Iterable[int],
     output_dir: Path,
 ) -> tuple[SineMetrics, Path]:
-    target_time_s, target, actual_time_s, actual = read_joint_trace(session, joint)
+    target_time_s, target, actual_time_s, actual, origin_ms = read_joint_trace(
+        session, joint
+    )
     metrics = compute_metrics(session, target_time_s, target, actual_time_s, actual)
     error_time_s = target_time_s[
         (target_time_s >= metrics.analysis_start_s)
@@ -402,52 +433,149 @@ def plot_session(
         & (target_time_s <= actual_time_s[-1])
     ] - np.interp(error_time_s, actual_time_s, actual)
     motors = list(motors)
-    figure, axes = plt.subplots(4, 1, figsize=(14, 11), sharex=True)
-    axes[0].plot(target_time_s, target, label="Target", linewidth=1.8)
-    axes[0].plot(actual_time_s, actual, label="Actual", linewidth=1.5)
-    axes[0].axvline(
-        metrics.analysis_start_s,
-        color="tab:gray",
-        linestyle=":",
-        linewidth=1.0,
-        label="Metrics start",
-    )
-    axes[0].set_ylabel("Joint angle (deg)")
-    axes[0].legend(loc="best")
-    axes[0].grid(True, alpha=0.3)
-    axes[0].set_title(
+    title = (
         f"{session_label(session)} J{joint:02d}: {metrics.frequency_hz:.3f} Hz, "
         f"fundamental lag={metrics.phase_lag_deg:.1f} deg, "
         f"midpoint={metrics.midpoint_delay_ms:.0f} ms"
         + (" [TRACE SUSPECT]" if metrics.trace_suspect else "")
     )
-    axes[1].plot(error_time_s, error, color="tab:red", linewidth=1.2)
-    axes[1].axhline(0.0, color="black", linewidth=0.8)
-    axes[1].set_ylabel("Target - actual (deg)")
-    axes[1].grid(True, alpha=0.3)
+    figure = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.055,
+        row_heights=[0.34, 0.20, 0.24, 0.22],
+        specs=[
+            [{"secondary_y": True}],
+            [{"secondary_y": False}],
+            [{"secondary_y": False}],
+            [{"secondary_y": False}],
+        ],
+    )
+    figure.add_trace(
+        go.Scatter(x=target_time_s, y=target, name="Target", mode="lines"),
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    figure.add_trace(
+        go.Scatter(x=actual_time_s, y=actual, name="Actual", mode="lines"),
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    figure.add_vline(
+        x=metrics.analysis_start_s,
+        line_dash="dot",
+        line_color="#777777",
+        annotation_text="Metrics start",
+        annotation_position="top left",
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=error_time_s,
+            y=error,
+            name="Target - actual",
+            mode="lines",
+            line={"color": "#d62728"},
+        ),
+        row=2,
+        col=1,
+    )
+    figure.add_hline(y=0.0, line_color="#333333", line_width=1, row=2, col=1)
 
-    for motor in motors:
-        servo_t, servo_target, servo_actual, servo_load = read_servo_trace(session, motor)
+    for motor_offset, motor in enumerate(motors):
+        color = SERVO_COLORS[motor_offset % len(SERVO_COLORS)]
+        servo_t, servo_actual, servo_load = read_servo_trace(
+            session, motor, origin_ms
+        )
         if len(servo_t) == 0:
             continue
-        # 现有舍机总表的 target_abs 可能是进入负反馈前的旧值。
-        # 只有它在本轮内确实变化时才画出，防止将陈旧快照误解为 PID 实时输出。
-        if float(np.ptp(servo_target)) >= 1.0:
-            axes[2].plot(servo_t, servo_target, "--", linewidth=1.0, label=f"M{motor:02d} target")
-        axes[2].plot(servo_t, servo_actual, linewidth=1.2, label=f"M{motor:02d} actual")
-        axes[3].plot(servo_t, servo_load, linewidth=1.1, label=f"M{motor:02d} load")
-    axes[2].set_ylabel("Servo ABS (counts)")
-    axes[2].grid(True, alpha=0.3)
-    axes[2].legend(loc="best")
-    axes[3].set_ylabel("Servo load")
-    axes[3].set_xlabel("P4 elapsed time (s)")
-    axes[3].grid(True, alpha=0.3)
-    axes[3].legend(loc="best")
-    figure.tight_layout(pad=1.4)
-    figure.subplots_adjust(left=0.10, right=0.98)
-    output_path = output_dir / f"{session.name}_J{joint:02d}_sine_response.png"
-    figure.savefig(output_path, dpi=170, bbox_inches="tight")
-    plt.close(figure)
+        figure.add_trace(
+            go.Scatter(
+                x=servo_t,
+                y=servo_actual,
+                name=f"M{motor:02d} ABS",
+                mode="lines",
+                line={"width": 1.2, "color": color},
+                opacity=0.8,
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+        command_t, servo_command = read_motor_command_trace(
+            session, motor, origin_ms
+        )
+        if len(command_t):
+            figure.add_trace(
+                go.Scatter(
+                    x=command_t,
+                    y=servo_command,
+                    name=f"M{motor:02d} CMD",
+                    mode="lines",
+                    line={"dash": "dash", "width": 1.4, "color": color},
+                ),
+                row=1,
+                col=1,
+                secondary_y=True,
+            )
+            figure.add_trace(
+                go.Scatter(
+                    x=command_t,
+                    y=servo_command,
+                    name=f"M{motor:02d} CMD",
+                    mode="lines",
+                    line={"dash": "dash", "width": 1.2, "color": color},
+                    showlegend=False,
+                    legendgroup=f"motor-{motor}-cmd",
+                ),
+                row=3,
+                col=1,
+            )
+        figure.add_trace(
+            go.Scatter(
+                x=servo_t,
+                y=servo_actual,
+                name=f"M{motor:02d} actual ABS",
+                mode="lines",
+                line={"color": color},
+                showlegend=False,
+                legendgroup=f"motor-{motor}-abs",
+            ),
+            row=3,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=servo_t,
+                y=servo_load,
+                name=f"M{motor:02d} load",
+                mode="lines",
+                line={"color": color},
+            ),
+            row=4,
+            col=1,
+        )
+
+    figure.update_yaxes(title_text="Joint angle (deg)", row=1, col=1, secondary_y=False)
+    figure.update_yaxes(title_text="Servo logical ABS (counts)", row=1, col=1, secondary_y=True)
+    figure.update_yaxes(title_text="Target - actual (deg)", row=2, col=1)
+    figure.update_yaxes(title_text="Servo ABS (counts)", row=3, col=1)
+    figure.update_yaxes(title_text="Servo load", row=4, col=1)
+    figure.update_xaxes(title_text="P4 elapsed time (s)", row=4, col=1)
+    figure.update_layout(
+        title=title,
+        height=980,
+        hovermode="x unified",
+        template="plotly_white",
+        legend={"orientation": "h", "y": 1.06, "x": 0.0},
+        margin={"l": 85, "r": 90, "t": 105, "b": 65},
+    )
+    output_path = output_dir / f"{session.name}_J{joint:02d}_sine_response.html"
+    figure.write_html(output_path, include_plotlyjs=True, full_html=True)
     return metrics, output_path
 
 
@@ -463,46 +591,161 @@ def write_metrics(path: Path, metrics: list[SineMetrics]) -> None:
 
 
 def plot_comparison(
-    traces: list[tuple[Path, np.ndarray, np.ndarray, np.ndarray, np.ndarray, SineMetrics]],
+    traces: list[
+        tuple[Path, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, SineMetrics]
+    ],
     joint: int,
     path: Path,
+    show: bool = False,
 ) -> None:
-    figure, axes = plt.subplots(len(traces), 1, figsize=(14, 3.6 * len(traces)), squeeze=False)
-    for axis, (session, target_time_s, target, actual_time_s, actual, metrics) in zip(axes[:, 0], traces):
-        axis.plot(target_time_s, target, label="Target", linewidth=1.6)
-        axis.plot(actual_time_s, actual, label="Actual", linewidth=1.3)
-        axis.axvline(
-            metrics.analysis_start_s,
-            color="tab:gray",
-            linestyle=":",
-            linewidth=1.0,
+    figure = make_subplots(
+        rows=len(traces),
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=min(0.08, 0.18 / max(1, len(traces))),
+        specs=[[{"secondary_y": True}] for _ in traces],
+    )
+    for row_index, (
+        session,
+        target_time_s,
+        target,
+        actual_time_s,
+        actual,
+        origin_ms,
+        metrics,
+    ) in enumerate(traces, start=1):
+        show_legend = row_index == 1
+        figure.add_trace(
+            go.Scatter(
+                x=target_time_s,
+                y=target,
+                name="Target",
+                mode="lines",
+                legendgroup="target",
+                showlegend=show_legend,
+            ),
+            row=row_index,
+            col=1,
+            secondary_y=False,
         )
-        axis.set_title(
+        figure.add_trace(
+            go.Scatter(
+                x=actual_time_s,
+                y=actual,
+                name="Actual",
+                mode="lines",
+                legendgroup="actual",
+                showlegend=show_legend,
+            ),
+            row=row_index,
+            col=1,
+            secondary_y=False,
+        )
+        for motor_offset, motor in enumerate(discover_motors(session, joint)):
+            color = SERVO_COLORS[motor_offset % len(SERVO_COLORS)]
+            servo_t, servo_abs, _servo_load = read_servo_trace(
+                session, motor, origin_ms
+            )
+            if len(servo_t):
+                figure.add_trace(
+                    go.Scatter(
+                        x=servo_t,
+                        y=servo_abs,
+                        name=f"M{motor:02d} ABS",
+                        mode="lines",
+                        legendgroup=f"motor-{motor}",
+                        showlegend=show_legend,
+                        opacity=0.75,
+                        line={"width": 1.1, "color": color},
+                    ),
+                    row=row_index,
+                    col=1,
+                    secondary_y=True,
+                )
+            command_t, servo_command = read_motor_command_trace(
+                session, motor, origin_ms
+            )
+            if len(command_t):
+                figure.add_trace(
+                    go.Scatter(
+                        x=command_t,
+                        y=servo_command,
+                        name=f"M{motor:02d} CMD",
+                        mode="lines",
+                        legendgroup=f"motor-{motor}-cmd",
+                        showlegend=show_legend,
+                        line={"width": 1.3, "dash": "dash", "color": color},
+                    ),
+                    row=row_index,
+                    col=1,
+                    secondary_y=True,
+                )
+        figure.add_vline(
+            x=metrics.analysis_start_s,
+            row=row_index,
+            col=1,
+            line_dash="dot",
+            line_color="#777777",
+        )
+        subtitle = (
             f"{session_label(session)}: f={metrics.frequency_hz:.3f} Hz, "
             f"lag={metrics.phase_lag_deg:.1f} deg/{metrics.phase_delay_ms:.0f} ms, "
             f"mid={metrics.midpoint_delay_ms:.0f} ms, "
             f"p2p gain={metrics.peak_to_peak_ratio:.3f}"
             + (" [TRACE SUSPECT]" if metrics.trace_suspect else "")
         )
-        axis.set_ylabel(f"J{joint:02d} (deg)")
-        axis.grid(True, alpha=0.3)
-        axis.legend(loc="best")
-    axes[-1, 0].set_xlabel("P4 elapsed time (s)")
-    figure.tight_layout(pad=1.4)
-    figure.subplots_adjust(left=0.10, right=0.98)
-    figure.savefig(path, dpi=170, bbox_inches="tight")
-    plt.close(figure)
+        figure.add_annotation(
+            xref="paper",
+            yref=f"y{'' if row_index == 1 else 2 * row_index - 1} domain",
+            x=0.0,
+            y=1.0,
+            text=subtitle,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"size": 13},
+        )
+        figure.update_yaxes(
+            title_text=f"J{joint:02d} (deg)",
+            row=row_index,
+            col=1,
+            secondary_y=False,
+        )
+        figure.update_yaxes(
+            title_text="Servo ABS (counts)",
+            row=row_index,
+            col=1,
+            secondary_y=True,
+        )
+    figure.update_xaxes(title_text="P4 elapsed time (s)", row=len(traces), col=1)
+    figure.update_layout(
+        title=f"J{joint:02d} sine response comparison",
+        height=max(500, 390 * len(traces)),
+        hovermode="x unified",
+        template="plotly_white",
+        legend={"orientation": "h", "y": 1.04, "x": 0.0},
+        margin={"l": 85, "r": 90, "t": 105, "b": 65},
+    )
+    figure.write_html(path, include_plotlyjs=True, full_html=True)
+    if show:
+        figure.show()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Plot sine response from Test-tab CSV sessions.")
+    parser = argparse.ArgumentParser(
+        description="Build interactive Plotly sine-response reports from Test-tab CSV sessions."
+    )
     parser.add_argument("--joint", required=True, type=parse_joint, help="joint, for example J15")
     parser.add_argument("--motor", action="append", type=parse_motor, help="optional Mxx; repeat for dual motors")
     parser.add_argument("--session", action="append", type=Path, help="session directory; may be repeated")
     parser.add_argument("--latest", type=int, default=1, help="latest matching sine sessions, default 1")
     parser.add_argument("--run-data-dir", type=Path, default=PROJECT_ROOT / "run_data")
     parser.add_argument("--out-dir", type=Path)
-    parser.add_argument("--show", action="store_true")
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="open the generated comparison HTML in the default browser",
+    )
     return parser
 
 
@@ -519,22 +762,28 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     all_metrics = []
     traces = []
-    output_paths = []
     for session in sessions:
         motors = list(args.motor or discover_motors(session, args.joint))
-        metrics, output_path = plot_session(session, args.joint, motors, output_dir)
-        target_time_s, target, actual_time_s, actual = read_joint_trace(
+        metrics, _output_path = plot_session(session, args.joint, motors, output_dir)
+        target_time_s, target, actual_time_s, actual, origin_ms = read_joint_trace(
             session, args.joint
         )
         all_metrics.append(metrics)
         traces.append(
-            (session, target_time_s, target, actual_time_s, actual, metrics)
+            (
+                session,
+                target_time_s,
+                target,
+                actual_time_s,
+                actual,
+                origin_ms,
+                metrics,
+            )
         )
-        output_paths.append(output_path)
     metrics_path = output_dir / f"J{args.joint:02d}_sine_metrics.csv"
-    comparison_path = output_dir / f"J{args.joint:02d}_sine_frequency_comparison.png"
+    comparison_path = output_dir / f"J{args.joint:02d}_sine_frequency_comparison.html"
     write_metrics(metrics_path, all_metrics)
-    plot_comparison(traces, args.joint, comparison_path)
+    plot_comparison(traces, args.joint, comparison_path, show=args.show)
     for metrics in all_metrics:
         print(
             f"{metrics.session.name}: f={metrics.frequency_hz:.4f} Hz, "
@@ -545,12 +794,6 @@ def main() -> int:
             f"p2p_gain={metrics.peak_to_peak_ratio:.4f}, RMSE={metrics.rmse_deg:.3f} deg"
         )
     print(f"output: {output_dir}")
-    if args.show:
-        image = plt.imread(comparison_path)
-        plt.figure(figsize=(14, 8))
-        plt.imshow(image)
-        plt.axis("off")
-        plt.show()
     return 0
 
 

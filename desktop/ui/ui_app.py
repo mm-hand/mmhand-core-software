@@ -2031,8 +2031,14 @@ class HandGUI(QtWidgets.QMainWindow):
         trace_valid_mask = int(
             getattr(state, "control_trace_valid_joint_mask", 0) or 0
         )
+        trace_motor_command_mask = int(
+            getattr(state, "control_trace_motor_command_mask", 0) or 0
+        )
         trace_targets = list(getattr(state, "control_trace_target_deg", []))
         trace_actual = list(getattr(state, "control_trace_actual_deg", []))
+        trace_motor_commands = list(
+            getattr(state, "control_trace_motor_command_abs", [])
+        )
         previous_sequence = self._last_recorded_control_trace_sequence
         sequence_delta = (trace_sequence - previous_sequence) & 0xFFFFFFFF
         sequence_gap = (
@@ -2057,6 +2063,9 @@ class HandGUI(QtWidgets.QMainWindow):
                 if trace_valid and encoder_timestamp else ""
             ),
             "trace_sequence_gap": sequence_gap if trace_valid else "",
+            "motor_command_mask": (
+                f"0x{trace_motor_command_mask:08X}" if trace_valid else ""
+            ),
         }
         for i in range(ENCODER_COUNT):
             label = f"J{i:02d}"
@@ -2076,6 +2085,17 @@ class HandGUI(QtWidgets.QMainWindow):
             row[f"{label}_active"] = 1 if self._mask_has_bit(
                 trace_joint_mask if trace_valid else active_joint_mask, i
             ) else 0
+        # CMD 与角度来自同一 P4 控制周期，不能从上位机直控输入缓存拼接。
+        for i in range(MOTOR_COUNT):
+            label = f"M{i:02d}"
+            command_valid = bool(
+                trace_valid and self._mask_has_bit(trace_motor_command_mask, i)
+            )
+            row[f"{label}_cmd_abs"] = (
+                trace_motor_commands[i]
+                if command_valid and i < len(trace_motor_commands)
+                else ""
+            )
         self._data_logger.write("joint_wide", row)
         if trace_valid:
             self._last_recorded_control_trace_sequence = trace_sequence
@@ -2089,9 +2109,14 @@ class HandGUI(QtWidgets.QMainWindow):
         active_joint_mask,
         motor_targets: List[int],
     ) -> None:
+        # 舵机列来自 PACKET_TYPE_SERVO_ANGLE 对应的完整反馈快照，时间戳也
+        # 必须取该包自身的 P4 millis；旧固件/旧模型才回退到通用时间戳。
+        servo_p4_time_ms = int(
+            getattr(state, "servo_feedback_p4_time_ms", 0) or 0
+        )
         row: Dict[str, object] = {
             "host_time": host_time,
-            "p4_time_ms": p4_time_ms,
+            "p4_time_ms": servo_p4_time_ms or p4_time_ms,
         }
         for i in range(MOTOR_COUNT):
             label = f"M{i:02d}"

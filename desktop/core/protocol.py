@@ -762,10 +762,11 @@ def parse_task_diag_packet(payload: bytes) -> Optional[dict]:
 
 
 def parse_control_trace_packet(payload: bytes) -> Optional[dict]:
-    """解析同一 P4 控制周期采用的目标角与磁编反馈角。"""
-    header_size = 6 * 4
+    """解析同一 P4 控制周期采用的目标角、反馈角和最终舵机 CMD。"""
+    header_size = 7 * 4
     angle_size = ENCODER_COUNT * 2
-    if len(payload) != header_size + angle_size * 2:
+    motor_command_size = MOTOR_COUNT * 4
+    if len(payload) != header_size + angle_size * 2 + motor_command_size:
         return None
     (
         sequence,
@@ -774,10 +775,14 @@ def parse_control_trace_packet(payload: bytes) -> Optional[dict]:
         encoder_timestamp_ms,
         active_joint_mask,
         valid_joint_mask,
-    ) = struct.unpack_from(">IIIIII", payload, 0)
+        motor_command_mask,
+    ) = struct.unpack_from(">IIIIIII", payload, 0)
     target_raw = struct.unpack_from(f">{ENCODER_COUNT}h", payload, header_size)
     actual_raw = struct.unpack_from(
         f">{ENCODER_COUNT}h", payload, header_size + angle_size
+    )
+    motor_command_abs = struct.unpack_from(
+        f">{MOTOR_COUNT}i", payload, header_size + angle_size * 2
     )
     return {
         "sequence": int(sequence),
@@ -786,8 +791,10 @@ def parse_control_trace_packet(payload: bytes) -> Optional[dict]:
         "encoder_timestamp_ms": int(encoder_timestamp_ms),
         "active_joint_mask": int(active_joint_mask),
         "valid_joint_mask": int(valid_joint_mask),
+        "motor_command_mask": int(motor_command_mask),
         "target_deg": [float(value) / 100.0 for value in target_raw],
         "actual_deg": [float(value) / 100.0 for value in actual_raw],
+        "motor_command_abs": [int(value) for value in motor_command_abs],
     }
 
 

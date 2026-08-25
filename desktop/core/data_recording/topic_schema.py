@@ -105,6 +105,7 @@ def _wide_joint_fields() -> List[str]:
         "command_age_ms",
         "feedback_age_ms",
         "trace_sequence_gap",
+        "motor_command_mask",
     ]
     for idx in range(21):
         label = f"J{idx:02d}"
@@ -115,6 +116,8 @@ def _wide_joint_fields() -> List[str]:
             f"{label}_encoder_raw",
             f"{label}_active",
         ])
+    for idx in range(27):
+        fields.append(f"M{idx:02d}_cmd_abs")
     return fields
 
 

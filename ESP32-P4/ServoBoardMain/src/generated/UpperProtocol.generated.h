@@ -39,7 +39,7 @@ inline constexpr uint8_t PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14; ///< 产品配�
 inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵机 BUS 路由、冲突、容量和扫描状态
 inline constexpr uint8_t PACKET_TYPE_SAFETY_EVENT = 0x16; ///< 去重后的结构化安全规则事件
 inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 桌面 JSON 多圈恢复异步最终结果
-inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角和下位机时间
+inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
