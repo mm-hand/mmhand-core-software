@@ -73,6 +73,7 @@ bool addServoReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
 bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                                    uint32_t motorMask,
                                    const int32_t* motorAbs,
+                                   uint32_t resetZeroMask,
                                    bool clearRecoveryTransaction,
                                    uint32_t* restoredMask,
                                    uint32_t* rejectedMask)
@@ -91,10 +92,26 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
         ServoRoute route;
         FeetechServoDriver* driver =
             resolveMotorDriver(channel, &route, true);
-        if (!driver || !driver->isMultiTurnConfigured(route.servoId) ||
-            !driver->restoreAbsolutePosition(route.servoId,
-                                             motorAbs[channel])) {
+        uint8_t attempts = 0;
+        int16_t resetRaw = 0;
+        const bool resetHardware = (resetZeroMask & bit) != 0;
+        const bool restoredOk = driver &&
+            (resetHardware
+                 ? driver->resetTurnCounterAndRestoreLogical(
+                       route.servoId,
+                       motorAbs[channel],
+                       &resetRaw,
+                       &attempts)
+                 : (driver->isMultiTurnConfigured(route.servoId) &&
+                    driver->restoreAbsolutePosition(route.servoId,
+                                                    motorAbs[channel])));
+        if (!restoredOk) {
             rejected |= bit;
+            FW_LOG_WARN_PRINTF(
+                "[SERVO SESSION REBASE] M%02u reset=%u attempts=%u result=failed\r\n",
+                (unsigned)channel,
+                resetHardware ? 1U : 0U,
+                (unsigned)attempts);
             continue;
         }
         if (clearRecoveryTransaction) {
@@ -103,6 +120,18 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                 p4::platform::time::monotonicMillis());
         }
         restored |= bit;
+        FW_LOG_INFO_PRINTF(
+            "[SERVO SESSION REBASE] M%02u bus=%u id=%u reset=%u attempts=%u "
+            "raw=%d hardware=%ld logical=%ld offset=%ld result=success\r\n",
+            (unsigned)channel,
+            (unsigned)route.busIndex,
+            (unsigned)route.servoId,
+            resetHardware ? 1U : 0U,
+            (unsigned)attempts,
+            (int)driver->getRawPosition(route.servoId),
+            (long)driver->getHardwareAbsolutePosition(route.servoId),
+            (long)driver->getAbsolutePosition(route.servoId),
+            (long)driver->getLogicalOffset(route.servoId));
     }
     if (restored != 0) {
         sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,

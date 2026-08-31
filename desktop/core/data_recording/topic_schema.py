@@ -105,6 +105,7 @@ def _wide_joint_fields() -> List[str]:
         "command_age_ms",
         "feedback_age_ms",
         "trace_sequence_gap",
+        "trace_period_ms",
         "motor_command_mask",
     ]
     for idx in range(21):

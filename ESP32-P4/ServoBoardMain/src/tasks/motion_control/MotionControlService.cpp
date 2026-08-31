@@ -42,21 +42,28 @@ using namespace mmhand::config::control;
 static ControlSolver g_controlSolver;
 // 碰撞检测历史放在静态区，避免挤占 10 ms 控制任务栈。
 static FeedbackCollisionGuard g_feedbackCollisionGuard;
-
 static uint32_t g_controlPidDiagLastLogMs = 0;
 static uint8_t g_controlPidDiagNextJoint = 0;
 
-/** 单腱换向前馈的每关节锁存状态，只由 10 ms 控制服务访问。 */
-struct SingleTendonReversalState {
+/** 单腱换向连续补绳状态，只由 10 ms 控制服务访问。 */
+struct SingleTendonDirectionalTakeupState {
     bool targetInitialized;
-    bool feedforwardActive;
-    int8_t establishedDirection;
-    int8_t candidateDirection;
-    int8_t feedforwardDirection;
+    bool active;
+    bool responseStartCaptured;
+    int8_t establishedTargetDirection;
+    int8_t candidateTargetDirection;
+    int8_t takeupTendonDirection;
     float lastAcceptedTargetDeg;
     float candidateAnchorDeg;
-    float feedforwardStartJointDeg;
-    uint32_t feedforwardStartMs;
+    float responseStartJointDeg;
+    float appliedCounts;
+};
+
+/** 单腱目标速度前馈状态；仅由 10 ms MotionControlService 访问。 */
+struct SingleTendonVelocityFeedforwardState {
+    bool initialized;
+    float previousTargetDeg;
+    float filteredVelocityDegPerSec;
 };
 
 /** 将控制角度压成协议 0.01 degree；非有限值使用断开哨兵。 */
@@ -84,8 +91,12 @@ struct ControlServiceRuntime {
     // 单腱每周期有效 Kp 与 LUT 局部斜率，仅供控制和低频诊断使用。
     float singleTendonKp[ENCODER_TOTAL_NUM];
     float singleTendonLutSlope[ENCODER_TOTAL_NUM];
-    float singleTendonReversalAssumedErrorDeg[ENCODER_TOTAL_NUM];
-    SingleTendonReversalState singleTendonReversal[ENCODER_TOTAL_NUM];
+    SingleTendonDirectionalTakeupState
+        singleTendonDirectionalTakeup[ENCODER_TOTAL_NUM];
+    SingleTendonVelocityFeedforwardState
+        singleTendonVelocityFf[ENCODER_TOTAL_NUM];
+    float singleTendonVelocityLeadDeg[ENCODER_TOTAL_NUM];
+    float singleTendonVelocityFfCounts[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
     // 标定结果由 AutoCalibration/HostComm 跨核更新；控制周期只使用同代一致快照。
@@ -112,13 +123,8 @@ struct ControlServiceRuntime {
     bool servoOnlineBaselineValid;
     bool hotplugHoldMotor[SERVO_TOTAL_NUM];
     uint32_t lastMotorCommandToken;
-    uint32_t lastMotorSweepCommandToken;
     uint32_t lastJointCommandToken;
     uint32_t controlTraceSequence;
-    uint8_t lastMotorDirectSource;
-    int16_t prevSweepRawTarget[SERVO_TOTAL_NUM];
-    int32_t sweepExpandedTarget[SERVO_TOTAL_NUM];
-    bool sweepAnchorValid[SERVO_TOTAL_NUM];
     uint8_t directRunDoneStableCount;
     uint32_t feedbackRunToken;
     uint32_t feedbackRunStartMs;
@@ -133,10 +139,89 @@ struct ControlServiceRuntime {
 
 static ControlServiceRuntime g_controlRuntime;
 
-/** 清除一个关节的换向历史；重新进入反馈后先建立方向，不对首帧施加前馈。 */
-static void resetSingleTendonReversal(SingleTendonReversalState* state)
+/** 清除一个关节的换向目标历史和连续补绳状态。 */
+static void resetSingleTendonDirectionalTakeup(
+    SingleTendonDirectionalTakeupState* state)
 {
     if (state) memset(state, 0, sizeof(*state));
+}
+
+static void resetSingleTendonVelocityFeedforward(
+    SingleTendonVelocityFeedforwardState* state)
+{
+    if (state) memset(state, 0, sizeof(*state));
+}
+
+/**
+ * 计算由目标角速度带来的 LUT counts 提前量。PID 始终使用真实 qRef；
+ * 预测角只用于同一 LUT 内的前馈差分，绝不将越界角度传给 LUT。
+ */
+static float computeSingleTendonVelocityFeedforward(
+    SingleTendonVelocityFeedforwardState* state,
+    uint8_t motorCh,
+    float targetDeg,
+    float pidDtSeconds,
+    const JointCalibrationResult& calibration,
+    float* outLeadDeg)
+{
+    if (outLeadDeg) *outLeadDeg = 0.0f;
+    if (!state || !kSingleTendonVelocityFeedforwardEnabled ||
+        !isfinite(targetDeg) || !isfinite(pidDtSeconds) ||
+        pidDtSeconds <= 0.0f || calibration.tendonLutValid == 0 ||
+        calibration.tendonLutCount < 3 ||
+        calibration.tendonLutMotor[0] != motorCh ||
+        !isfinite(calibration.currentMinDeg) ||
+        !isfinite(calibration.currentMaxDeg) ||
+        calibration.currentMaxDeg <= calibration.currentMinDeg) {
+        if (state) resetSingleTendonVelocityFeedforward(state);
+        return 0.0f;
+    }
+
+    if (!state->initialized) {
+        state->initialized = true;
+        state->previousTargetDeg = targetDeg;
+        return 0.0f;
+    }
+
+    const float rawVelocityDegPerSec =
+        (targetDeg - state->previousTargetDeg) / pidDtSeconds;
+    state->previousTargetDeg = targetDeg;
+    const float alpha = pidDtSeconds /
+        (kSingleTendonTargetVelocityFilterTauSec + pidDtSeconds);
+    state->filteredVelocityDegPerSec += alpha *
+        (rawVelocityDegPerSec - state->filteredVelocityDegPerSec);
+    if (!isfinite(state->filteredVelocityDegPerSec)) {
+        resetSingleTendonVelocityFeedforward(state);
+        return 0.0f;
+    }
+
+    const float referenceDeg = fmaxf(calibration.currentMinDeg,
+                                     fminf(calibration.currentMaxDeg, targetDeg));
+    const float requestedLeadDeg = fmaxf(
+        -kSingleTendonVelocityLeadMaxDeg,
+        fminf(kSingleTendonVelocityLeadMaxDeg,
+              kSingleTendonVelocityLeadTimeSec *
+                  state->filteredVelocityDegPerSec));
+    const float predictedDeg = fmaxf(
+        calibration.currentMinDeg,
+        fminf(calibration.currentMaxDeg, referenceDeg + requestedLeadDeg));
+    float referenceRawAbs = 0.0f;
+    float predictedRawAbs = 0.0f;
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorCh);
+    if (shortenSign == 0 ||
+        !interpolateTendonCalibrationMotorAbs(
+            calibration, 0, referenceDeg, &referenceRawAbs) ||
+        !interpolateTendonCalibrationMotorAbs(
+            calibration, 0, predictedDeg, &predictedRawAbs)) {
+        resetSingleTendonVelocityFeedforward(state);
+        return 0.0f;
+    }
+
+    const float counts = (float)shortenSign *
+        (predictedRawAbs - referenceRawAbs);
+    if (!isfinite(counts)) return 0.0f;
+    if (outLeadDeg) *outLeadDeg = predictedDeg - referenceDeg;
+    return counts;
 }
 
 /** 将角度增量转换为带迟滞的方向，极小的浮点抖动不参与换向判断。 */
@@ -149,12 +234,14 @@ static int8_t singleTendonTargetDirection(float deltaDeg)
 
 /**
  * 只在收到新目标时累计反向行程；同一方向最多触发一次，直到确认下一次真实反向。
- * 正在前馈时若目标先出现反向趋势，立即撤销旧方向前馈，避免继续向错误方向推进。
+ * 实际补绳方向由 LUT 和电机腱绳坐标共同推导，不能按关节索引或 raw ABS 假定。
  */
-static void updateSingleTendonReversalTarget(
-    SingleTendonReversalState* state,
+static void updateSingleTendonDirectionalTakeupTarget(
+    SingleTendonDirectionalTakeupState* state,
     bool newCommand,
-    float targetDeg)
+    float targetDeg,
+    uint8_t motorCh,
+    const JointCalibrationResult& calibration)
 {
     if (!state || !newCommand || !isfinite(targetDeg)) return;
     if (!state->targetInitialized) {
@@ -169,67 +256,87 @@ static void updateSingleTendonReversalTarget(
     state->lastAcceptedTargetDeg = targetDeg;
     if (direction == 0) return;
 
-    if (state->feedforwardActive &&
-        direction != state->feedforwardDirection) {
-        state->feedforwardActive = false;
+    if (state->active && direction != state->establishedTargetDirection) {
+        state->active = false;
     }
-    if (state->establishedDirection == 0) {
-        state->establishedDirection = direction;
-        state->candidateDirection = 0;
+    if (state->establishedTargetDirection == 0) {
+        state->establishedTargetDirection = direction;
+        state->candidateTargetDirection = 0;
         return;
     }
-    if (direction == state->establishedDirection) {
-        state->candidateDirection = 0;
+    if (direction == state->establishedTargetDirection) {
+        state->candidateTargetDirection = 0;
         return;
     }
 
-    if (state->candidateDirection != direction) {
-        state->candidateDirection = direction;
+    if (state->candidateTargetDirection != direction) {
+        state->candidateTargetDirection = direction;
         state->candidateAnchorDeg = previousTargetDeg;
     }
     const float reverseTravelDeg =
         (targetDeg - state->candidateAnchorDeg) * (float)direction;
-    if (reverseTravelDeg < kSingleTendonReversalConfirmDeg) return;
+    if (reverseTravelDeg < kSingleTendonDirectionalTakeupConfirmDeg) return;
 
-    state->establishedDirection = direction;
-    state->candidateDirection = 0;
-    state->feedforwardDirection = direction;
-    // 等控制状态真正进入 RUN_FEEDBACK 后再记录起点，READY 阶段不消耗 250 ms 窗口。
-    state->feedforwardStartMs = 0;
-    state->feedforwardActive = true;
+    float anchorRawAbs = 0.0f;
+    float targetRawAbs = 0.0f;
+    const int8_t shortenSign = getMotorTendonShortenAbsSign(motorCh);
+    const float tendonDelta =
+        (shortenSign != 0 && calibration.tendonLutMotor[0] == motorCh &&
+         interpolateTendonCalibrationMotorAbs(
+             calibration, 0, state->candidateAnchorDeg, &anchorRawAbs) &&
+         interpolateTendonCalibrationMotorAbs(
+             calibration, 0, targetDeg, &targetRawAbs))
+            ? (float)shortenSign * (targetRawAbs - anchorRawAbs)
+            : 0.0f;
+    const int8_t tendonDirection = singleTendonTargetDirection(tendonDelta);
+    state->establishedTargetDirection = direction;
+    state->candidateTargetDirection = 0;
+    if (tendonDirection == 0) {
+        state->active = false;
+        return;
+    }
+
+    state->takeupTendonDirection = tendonDirection;
+    state->responseStartCaptured = false;
+    state->appliedCounts =
+        (float)kSingleTendonDirectionalTakeupInitialCounts;
+    state->active = true;
 }
 
 /**
- * 生成单腱换向假定误差；该误差只进入 PID，不修改真实目标或 URDF 工作范围。
- * 达到 250 ms 或关节沿新方向推进 1.2 度时退出。
+ * 输出连续补绳 counts。首帧立即输出初始 counts，之后每控制周期按真实 dt 增加；
+ * 只有关节沿新目标方向推进到退出距离才停止，不等待舵机分段到位。
  */
-static float computeSingleTendonReversalAssumedError(
-    SingleTendonReversalState* state,
+static float computeSingleTendonDirectionalTakeup(
+    SingleTendonDirectionalTakeupState* state,
     float feedbackDeg,
-    bool collisionHold,
-    uint32_t nowMs)
+    float pidDtSeconds)
 {
-    if (!state || !state->feedforwardActive || collisionHold) {
-        if (state && collisionHold) state->feedforwardActive = false;
-        return 0;
+    if (!state || !state->active ||
+        state->takeupTendonDirection == 0 || !isfinite(feedbackDeg)) {
+        return 0.0f;
     }
 
-    if (state->feedforwardStartMs == 0) {
-        state->feedforwardStartMs = nowMs;
-        state->feedforwardStartJointDeg = feedbackDeg;
+    if (!state->responseStartCaptured) {
+        state->responseStartCaptured = true;
+        state->responseStartJointDeg = feedbackDeg;
+        return (float)state->takeupTendonDirection * state->appliedCounts;
     }
 
-    const uint32_t elapsedMs = nowMs - state->feedforwardStartMs;
-    const float jointTravel = state->feedforwardDirection *
-        (feedbackDeg - state->feedforwardStartJointDeg);
-    if (elapsedMs >= kSingleTendonReversalMaxDurationMs ||
-        jointTravel >= kSingleTendonReversalExitTravelDeg) {
-        state->feedforwardActive = false;
-        return 0;
+    const float jointTravel = (float)state->establishedTargetDirection *
+        (feedbackDeg - state->responseStartJointDeg);
+    if (jointTravel >= kSingleTendonDirectionalTakeupExitJointTravelDeg) {
+        state->active = false;
+        return 0.0f;
     }
 
-    return (float)state->feedforwardDirection *
-        kSingleTendonReversalAssumedErrorDeg;
+    if (isfinite(pidDtSeconds) && pidDtSeconds > 0.0f) {
+        state->appliedCounts = fminf(
+            (float)kSingleTendonDirectionalTakeupMaxCounts,
+            state->appliedCounts +
+                kSingleTendonDirectionalTakeupRateCountsPerSec * pidDtSeconds);
+    }
+    return (float)state->takeupTendonDirection * state->appliedCounts;
 }
 
 /**
@@ -249,10 +356,13 @@ static float computeSingleTendonEffectiveKp(
     }
     const float angleError = targetDeg - feedbackDeg;
     const float absError = fabsf(angleError);
-    if (!isfinite(angleError) ||
-        absError <= kFeedbackDoneToleranceDeg ||
-        calibration.tendonLutMotor[0] != motorCh) {
+    if (!isfinite(angleError) || calibration.tendonLutMotor[0] != motorCh) {
         return kSingleTendonKp;
+    }
+    // 连续目标跟随不能把完成阈值当作低增益死区；有效单腱 LUT 在
+    // 0.8 度内仍使用固定 Kp，保证换向初段具备可观察的推进量。
+    if (absError <= kFeedbackDoneToleranceDeg) {
+        return kSingleTendonNearTargetKp;
     }
 
     float lutRefAbs = 0.0f;
@@ -370,23 +480,19 @@ static void noteTendonLutClamp(SystemRuntimeContext* sharedData,
                                             appliedAbs));
 }
 
+/** 仅为单腱 PID 调参日志在 active scope 内轮询选择关节。 */
 static bool shouldLogControlPidDiag(uint8_t jointIndex,
                                     uint32_t nowMs,
                                     uint32_t activeJointMask)
 {
     if constexpr (kPidDiagLogEnabled) {
-        if (jointIndex >= ENCODER_TOTAL_NUM) {
+        if (jointIndex >= ENCODER_TOTAL_NUM ||
+            (uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
+                kPidDiagLogPeriodMs) {
             return false;
         }
-        // 全手控制仍只允许每 50 ms 输出一条 PID 日志，但在 active joint 之间
-        // 轮询。旧实现总由循环首位 J00 抢占全局时间槽，导致日志长期只有 M00/M01。
-        if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
-            kPidDiagLogPeriodMs) {
-            return false;
-        }
-
-        const uint32_t validMask = activeJointMask &
-            ((1UL << ENCODER_TOTAL_NUM) - 1UL);
+        const uint32_t validMask =
+            activeJointMask & ((1UL << ENCODER_TOTAL_NUM) - 1UL);
         if (validMask == 0) {
             return false;
         }
@@ -402,8 +508,7 @@ static bool shouldLogControlPidDiag(uint8_t jointIndex,
         const uint8_t nextJointAfterLog =
             (uint8_t)((selectedJoint + 1U) % ENCODER_TOTAL_NUM);
         if (jointIndex != selectedJoint) {
-            // 被选中的关节可能因离线或保护分支没有进入 PID。超过两个日志周期
-            // 后允许下一个实际运行到这里的关节接管，避免诊断轮询永久卡死。
+            // 选中的关节可能在保护分支中跳过 PID；两周期后允许实际运行的关节接管。
             if ((uint32_t)(nowMs - g_controlPidDiagLastLogMs) <
                 (kPidDiagLogPeriodMs * 2U)) {
                 return false;
@@ -553,14 +658,11 @@ static void publishFeedbackCollisionState(SystemRuntimeContext* sharedData,
 
 static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        SystemRuntimeContext* sharedData,
-                                       uint32_t nowMs,
                                        uint8_t jointIndex,
                                        float qRefDeg,
                                        float qFbDeg,
                                        float pidDtSeconds,
                                        const ServoAngleData_t& servoData,
-                                       const ServoTelemetryData_t& telemetryData,
-                                       bool telemetryFresh,
                                        uint16_t speed,
                                        uint8_t acc,
                                        bool* outPidPushActive)
@@ -589,14 +691,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
     uint8_t targetCount = 0;
     // 双腱两台电机始终反向运动，不能用其中一台的物理方向代表整个关节。
     // 双电机关节统一锁定为 RELEASE 档，即固定使用 400 ms / 0.4 度阈值。
-    const uint32_t diagNowMs = nowMs;
-    const bool logPidDiag =
-        sharedAtomicLoad(&sharedData->system_state) == SYSTEM_STATE_RUN_FEEDBACK &&
-        sharedAtomicLoad(&sharedData->control_enabled) != 0 &&
-        shouldLogControlPidDiag(
-            jointIndex,
-            diagNowMs,
-            sharedAtomicLoad(&sharedData->active_joint_mask));
     for (uint8_t i = 0; i < tendonTargets.count && targetCount < MAX_JOINT_ACTUATORS; i++) {
         const uint8_t motorChannel = tendonTargets.motorChannel[i];
         if (motorChannel >= SERVO_TOTAL_NUM || !isMotorChannelValid(motorChannel)) {
@@ -640,52 +734,6 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
         *outPidPushActive = false;
     }
 
-    if (logPidDiag && targetCount == 2) {
-        const uint8_t m0 = runtimeTargets[0].motorChannel;
-        const uint8_t m1 = runtimeTargets[1].motorChannel;
-        const int32_t abs0 = servoData.servoAngles[m0];
-        const int32_t abs1 = servoData.servoAngles[m1];
-        const int16_t load0 = telemetryFresh ? mmhand::servo::loadMagnitude(telemetryData.load[m0]) : 0;
-        const int16_t load1 = telemetryFresh ? mmhand::servo::loadMagnitude(telemetryData.load[m1]) : 0;
-        const int16_t speed0 = telemetryFresh ? telemetryData.speed[m0] : 0;
-        const int16_t speed1 = telemetryFresh ? telemetryData.speed[m1] : 0;
-        FW_LOG_INFO_PRINTF(
-            "[PID_DUAL] t=%lu J=%02u qr=%.2f qf=%.2f qe=%.2f "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d "
-            "M%02u a=%ld rt=%ld c=%d l=%ld e=%.1f o=%.1f lr=%ld..%ld tc=%u ld=%d s=%d "
-            "tel=%u\r\n",
-            (unsigned long)diagNowMs,
-            (unsigned)jointIndex,
-            (double)qRefDeg,
-            (double)qFbDeg,
-            (double)(qRefDeg - qFbDeg),
-            (unsigned)m0,
-            (long)abs0,
-            (long)tendonTargets.rawTargetAbs[0],
-            (int)runtimeTargets[0].targetAbs,
-            (long)((int32_t)runtimeTargets[0].targetAbs - abs0),
-            (double)tendonTargets.motorErr[0],
-            (double)tendonTargets.pidCorrection[0],
-            (long)tendonTargets.lutMinAbs[0],
-            (long)tendonTargets.lutMaxAbs[0],
-            (unsigned)tendonTargets.lutTargetClamped[0],
-            (int)load0,
-            (int)speed0,
-            (unsigned)m1,
-            (long)abs1,
-            (long)tendonTargets.rawTargetAbs[1],
-            (int)runtimeTargets[1].targetAbs,
-            (long)((int32_t)runtimeTargets[1].targetAbs - abs1),
-            (double)tendonTargets.motorErr[1],
-            (double)tendonTargets.pidCorrection[1],
-            (long)tendonTargets.lutMinAbs[1],
-            (long)tendonTargets.lutMaxAbs[1],
-            (unsigned)tendonTargets.lutTargetClamped[1],
-            (int)load1,
-            (int)speed1,
-            (unsigned)telemetryFresh);
-    }
-
     return appendJointActuatorRuntimeTargets(batch, runtimeTargets, targetCount, speed, acc);
 }
 
@@ -710,12 +758,8 @@ bool initMotionControlService(SystemRuntimeContext* sharedData, uint32_t nowMs)
                                      &g_controlRuntime.commandSnapshot);
     g_controlRuntime.lastMotorCommandToken =
         g_controlRuntime.commandSnapshot.motorCommandToken;
-    g_controlRuntime.lastMotorSweepCommandToken =
-        g_controlRuntime.commandSnapshot.motorSweepCommandToken;
     g_controlRuntime.lastJointCommandToken =
         g_controlRuntime.commandSnapshot.jointCommandToken;
-    g_controlRuntime.lastMotorDirectSource =
-        g_controlRuntime.commandSnapshot.motorDirectCommandSource;
     g_controlRuntime.lastPidComputeMs = nowMs;
     g_controlRuntime.initialized = true;
     return true;
@@ -747,9 +791,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& outPulsesTendon = runtime.outPulsesTendon;
     auto& singleTendonKp = runtime.singleTendonKp;
     auto& singleTendonLutSlope = runtime.singleTendonLutSlope;
-    auto& singleTendonReversalAssumedErrorDeg =
-        runtime.singleTendonReversalAssumedErrorDeg;
-    auto& singleTendonReversal = runtime.singleTendonReversal;
+    auto& singleTendonDirectionalTakeup =
+        runtime.singleTendonDirectionalTakeup;
+    auto& singleTendonVelocityFf = runtime.singleTendonVelocityFf;
+    auto& singleTendonVelocityLeadDeg = runtime.singleTendonVelocityLeadDeg;
+    auto& singleTendonVelocityFfCounts = runtime.singleTendonVelocityFfCounts;
     auto& sensorData = runtime.sensorData;
     auto& mappedData = runtime.mappedData;
     auto& calibrationSnapshot = runtime.calibrationSnapshot;
@@ -769,12 +815,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
     auto& prevMotorOnline = runtime.prevMotorOnline;
     auto& hotplugHoldMotor = runtime.hotplugHoldMotor;
     auto& lastMotorCommandToken = runtime.lastMotorCommandToken;
-    auto& lastMotorSweepCommandToken = runtime.lastMotorSweepCommandToken;
     auto& lastJointCommandToken = runtime.lastJointCommandToken;
-    auto& lastMotorDirectSource = runtime.lastMotorDirectSource;
-    auto& prevSweepRawTarget = runtime.prevSweepRawTarget;
-    auto& sweepExpandedTarget = runtime.sweepExpandedTarget;
-    auto& sweepAnchorValid = runtime.sweepAnchorValid;
     auto& directRunDoneStableCount = runtime.directRunDoneStableCount;
     auto& feedbackRunToken = runtime.feedbackRunToken;
     auto& feedbackRunStartMs = runtime.feedbackRunStartMs;
@@ -802,14 +843,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             lastMotorCommandToken = motorCommandToken;
         }
 
-        const uint32_t motorSweepCommandToken = commandSnapshot.motorSweepCommandToken;
-        if (motorSweepCommandToken != lastMotorSweepCommandToken)
-        {
-            // sweep 命令变化可能有意跨过 raw 回绕点。
-            memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
-            lastMotorSweepCommandToken = motorSweepCommandToken;
-        }
-
         const uint32_t jointCommandToken = commandSnapshot.jointCommandToken;
         const bool newJointCommand = jointCommandToken != lastJointCommandToken;
         if (newJointCommand)
@@ -818,14 +851,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             memset(hotplugHoldMotor, 0, sizeof(hotplugHoldMotor));
             feedbackRunInsideTolerance = false;
             lastJointCommandToken = jointCommandToken;
-        }
-
-        const uint8_t motorDirectSource = commandSnapshot.motorDirectCommandSource;
-        if (motorDirectSource != lastMotorDirectSource)
-        {
-            // 单圈命令和 sweep 命令使用不同的锚定语义。
-            memset(sweepAnchorValid, 0, sizeof(sweepAnchorValid));
-            lastMotorDirectSource = motorDirectSource;
         }
 
         const uint32_t overloadFaultResetToken =
@@ -874,7 +899,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             const bool wasOnline = prevMotorOnline[ch];
             if (p4::safety::shouldEnterHotplugHold(wasOnline, onlineNow)) {
                 hotplugHoldMotor[ch] = true;
-                sweepAnchorValid[ch] = false;
                 // 启动时首次建立在线基线不属于热插拔；只有经历过有效反馈后的重新上线才上报。
                 if (p4::safety::shouldReportHotplugHold(
                         runtime.servoOnlineBaselineValid,
@@ -890,9 +914,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         0,
                         servoData.servoAngles[ch]);
                 }
-            }
-            if (!onlineNow) {
-                sweepAnchorValid[ch] = false;
             }
             prevMotorOnline[ch] = onlineNow;
         }
@@ -1071,10 +1092,6 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                     controlOwnerActive &&
                                     (feedbackOutputState || directOutputState);
         const bool normalOutputAllowed = controlEnabled;
-        const bool feedbackTrackingContext =
-            hostControlEnabled &&
-            commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
-            (systemState == SYSTEM_STATE_READY || feedbackRunningState);
 
         if (normalOutputAllowed && telemetryFresh)
         {
@@ -1175,30 +1192,38 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         const uint32_t feedbackCommandJointMask =
             commandSnapshot.feedbackCommandJointMask &
             activeJointMask;
-        // READY 阶段也接收最新目标方向；真正的 250 ms 启动窗口直到 RUN_FEEDBACK
-        // 首次计算时才开始。无效关节和非反馈模式立即丢弃历史，防止跨模式误触发。
+        // 只在实际反馈输出期间累计换向目标；无效关节和非反馈模式立即丢弃历史，
+        // 防止暂停、标定或直控后的旧方向重新触发补绳。
         for (uint8_t jointIndex = 0;
              jointIndex < ENCODER_TOTAL_NUM;
              ++jointIndex) {
             const uint32_t bit = 1UL << jointIndex;
             const int motorCh = findPrimaryMotorChannelForJoint(jointIndex);
-            const bool reversalEligible =
-                feedbackTrackingContext &&
+            const JointCalibrationResult& calibration =
+                calibrationSnapshot[jointIndex].result;
+            const bool takeupEligible =
+                kSingleTendonDirectionalTakeupEnabled &&
+                feedbackOutputState &&
                 (feedbackCommandJointMask & bit) != 0 &&
                 (calibrationSnapshotValidMask & bit) != 0 &&
                 mappedData.validFlags[jointIndex] != 0 &&
                 !isDualTendonJoint(jointIndex) &&
                 motorCh >= 0 && motorCh < SERVO_TOTAL_NUM &&
-                servoData.onlineStatus[motorCh] != 0;
-            if (!reversalEligible) {
-                resetSingleTendonReversal(
-                    &singleTendonReversal[jointIndex]);
+                servoData.onlineStatus[motorCh] != 0 &&
+                calibration.tendonLutValid != 0 &&
+                calibration.tendonLutCount >= 3 &&
+                calibration.tendonLutMotor[0] == (uint8_t)motorCh;
+            if (!takeupEligible) {
+                resetSingleTendonDirectionalTakeup(
+                    &singleTendonDirectionalTakeup[jointIndex]);
                 continue;
             }
-            updateSingleTendonReversalTarget(
-                &singleTendonReversal[jointIndex],
+            updateSingleTendonDirectionalTakeupTarget(
+                &singleTendonDirectionalTakeup[jointIndex],
                 newJointCommand,
-                localTargets[jointIndex]);
+                localTargets[jointIndex],
+                (uint8_t)motorCh,
+                calibration);
         }
         const bool feedbackCollisionContextValid =
             feedbackOutputState &&
@@ -1398,6 +1423,12 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         if (!controlTargetBuildAllowed || !feedbackOutputState) {
             // 双腱 PID 含历史项；只要反馈输出没有实际驱动关节，就清空这些状态。
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
+                resetSingleTendonVelocityFeedforward(
+                    &singleTendonVelocityFf[jointIndex]);
+                resetSingleTendonDirectionalTakeup(
+                    &singleTendonDirectionalTakeup[jointIndex]);
+                singleTendonVelocityLeadDeg[jointIndex] = 0.0f;
+                singleTendonVelocityFfCounts[jointIndex] = 0.0f;
                 if (isDualTendonJoint(jointIndex)) {
                     resetDualTendonController(jointIndex);
                 }
@@ -1419,19 +1450,27 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 singleTendonKp[jointIndex] = kSingleTendonKp;
                 singleTendonLutSlope[jointIndex] = 0.0f;
                 pidTargetsDeg[jointIndex] = localTargets[jointIndex];
-                singleTendonReversalAssumedErrorDeg[jointIndex] = 0.0f;
+                singleTendonVelocityLeadDeg[jointIndex] = 0.0f;
+                singleTendonVelocityFfCounts[jointIndex] = 0.0f;
                 const uint32_t bit = 1UL << jointIndex;
                 if ((feedbackCommandJointMask & bit) == 0 ||
                     (calibrationSnapshotValidMask & bit) == 0 ||
                     mappedData.validFlags[jointIndex] == 0 ||
-                    isDualTendonJoint(jointIndex)) {
+                    isDualTendonJoint(jointIndex) ||
+                    g_feedbackCollisionGuard.isHoldActive(jointIndex)) {
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     continue;
                 }
                 const int motorCh = findPrimaryMotorChannelForJoint(jointIndex);
                 if (motorCh < 0 || motorCh >= SERVO_TOTAL_NUM ||
                     servoData.onlineStatus[motorCh] == 0) {
-                    resetSingleTendonReversal(
-                        &singleTendonReversal[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
                     continue;
                 }
                 singleTendonKp[jointIndex] = computeSingleTendonEffectiveKp(
@@ -1440,18 +1479,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     magAngles[jointIndex],
                     calibrationSnapshot[jointIndex].result,
                     &singleTendonLutSlope[jointIndex]);
-                if (feedbackOutputState) {
-                    const float assumedErrorDeg =
-                        computeSingleTendonReversalAssumedError(
-                            &singleTendonReversal[jointIndex],
-                            magAngles[jointIndex],
-                            g_feedbackCollisionGuard.isHoldActive(jointIndex),
-                            nowMs);
-                    singleTendonReversalAssumedErrorDeg[jointIndex] =
-                        assumedErrorDeg;
-                    // 虚拟目标只服务本周期 PID，不回写真实目标，因此允许临时超出 URDF。
-                    pidTargetsDeg[jointIndex] += assumedErrorDeg;
-                }
+                singleTendonVelocityFfCounts[jointIndex] =
+                    computeSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex],
+                        (uint8_t)motorCh,
+                        localTargets[jointIndex],
+                        pidDtSeconds,
+                        calibrationSnapshot[jointIndex].result,
+                        &singleTendonVelocityLeadDeg[jointIndex]);
             }
             // PID 使用腱绳空间 ABS，使正修正在 raw ABS 方向相反的电机上
             // 仍表示相同的“收紧腱绳”含义。单电机输出会把最终腱绳空间目标转回 raw。
@@ -1464,6 +1499,23 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; jointIndex++) {
                 if (g_feedbackCollisionGuard.isHoldActive(jointIndex)) {
                     g_controlSolver.resetJoint(jointIndex);
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
+                    singleTendonVelocityLeadDeg[jointIndex] = 0.0f;
+                    singleTendonVelocityFfCounts[jointIndex] = 0.0f;
+                } else if (!isDualTendonJoint(jointIndex) &&
+                           singleTendonVelocityFfCounts[jointIndex] != 0.0f) {
+                    outPulsesTendon[jointIndex] += static_cast<int32_t>(
+                        lroundf(singleTendonVelocityFfCounts[jointIndex]));
+                }
+                if (!isDualTendonJoint(jointIndex)) {
+                    outPulsesTendon[jointIndex] += static_cast<int32_t>(
+                        lroundf(computeSingleTendonDirectionalTakeup(
+                            &singleTendonDirectionalTakeup[jointIndex],
+                            magAngles[jointIndex],
+                            pidDtSeconds)));
                 }
             }
             if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR)
@@ -1479,36 +1531,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     }
                     int32_t targetPos = servoData.servoAngles[ch];
                     if (!hotplugHoldMotor[ch]) {
-                        if (motorDirectSource == MOTOR_DIRECT_SOURCE_SWEEP) {
-                            // sweep 目标是单圈 raw 值，通过增量展开实现连续旋转。
-                            const int16_t rawTarget =
-                                clampServoSingleTurnRaw(commandSnapshot.motorSweepTargetRaw[ch]);
-                            if (!sweepAnchorValid[ch]) {
-                                sweepExpandedTarget[ch] =
-                                    expandSingleTurnTargetNearCurrent(servoData.servoAngles[ch], rawTarget);
-                                prevSweepRawTarget[ch] = rawTarget;
-                                sweepAnchorValid[ch] = true;
-                            } else if (rawTarget != prevSweepRawTarget[ch]) {
-                                const int32_t d = (int32_t)rawTarget - (int32_t)prevSweepRawTarget[ch];
-                                sweepExpandedTarget[ch] += wrapServoRawDelta(d);
-                                prevSweepRawTarget[ch] = rawTarget;
-                            }
-                            targetPos = sweepExpandedTarget[ch];
-                            sweepExpandedTarget[ch] = targetPos;
-                        } else if (motorDirectSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
-                            // absolute 来源本身已经使用多圈舵机计数。
-                            sweepAnchorValid[ch] = false;
-                            targetPos = commandSnapshot.motorTargetRaw[ch];
-                        } else {
-                            // 旧单圈来源会选择当前反馈附近最近的等价绝对目标。
-                            sweepAnchorValid[ch] = false;
-                            targetPos = expandSingleTurnTargetNearCurrent(
-                                servoData.servoAngles[ch],
-                                clampServoSingleTurnRaw(commandSnapshot.motorTargetRaw[ch])
-                            );
-                        }
-                    } else {
-                        sweepAnchorValid[ch] = false;
+                        targetPos = commandSnapshot.motorTargetRaw[ch];
                     }
                     appendServoTarget(&targetBatch, ch, targetPos,
                                       SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1574,6 +1597,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 if (!jointInScope)
                 {
                     // 未激活关节不发布主动命令，并丢弃双腱状态，便于重新启用时干净启动。
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1583,6 +1610,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 if (emergency)
                 {
                     // 反馈故障、总线丢失、输出关闭和过载都会统一进入保持当前位置行为。
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1594,6 +1625,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                 if (hotplugHoldActive)
                 {
                     // 刚上线的电机会保持在反馈位置，直到操作端命令它有意移动。
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1608,6 +1643,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     // 持续跟随本周期实际 ABS，避免同一手指受力时因磁编联动而
                     // 追踪旧角度目标，进而误带动 J01/J02 等相邻关节。
                     g_controlSolver.resetJoint(jointIndex);
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1621,6 +1660,10 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
                 if (g_feedbackCollisionGuard.isHoldActive(jointIndex))
                 {
+                    resetSingleTendonVelocityFeedforward(
+                        &singleTendonVelocityFf[jointIndex]);
+                    resetSingleTendonDirectionalTakeup(
+                        &singleTendonDirectionalTakeup[jointIndex]);
                     if (isDualTendonJoint(jointIndex)) {
                         resetDualTendonController(jointIndex);
                     }
@@ -1645,14 +1688,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     const uint8_t appended =
                         appendDualTendonTargets(&targetBatch,
                                                 sharedData,
-                                                nowMs,
                                                 jointIndex,
                                                 localTargets[jointIndex],
                                                 magAngles[jointIndex],
                                                 pidDtSeconds,
                                                 servoData,
-                                                telemetryData,
-                                                telemetryFresh,
                                                 kFeedbackServoSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT,
                                                 &feedbackCollisionPidPushActive[jointIndex]);
@@ -1720,12 +1760,22 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     }
                     const float pidOutput =
                         g_controlSolver.getPidOutput(jointIndex);
+                    const float velocityFfCounts =
+                        singleTendonVelocityFfCounts[jointIndex];
+                    const SingleTendonDirectionalTakeupState& takeup =
+                        singleTendonDirectionalTakeup[jointIndex];
+                    const float takeupCounts = takeup.active
+                        ? (float)takeup.takeupTendonDirection * takeup.appliedCounts
+                        : 0.0f;
+                    const float finalOutput =
+                        pidOutput + velocityFfCounts + takeupCounts;
                     const float angleError =
                         localTargets[jointIndex] - magAngles[jointIndex];
                     feedbackCollisionPidPushActive[jointIndex] =
-                        fabsf(pidOutput) >= 1.0f &&
-                        pidOutput * angleError > 0.0f &&
-                        !singleLutBlocksPidPush;
+                        !singleLutBlocksPidPush &&
+                        ((fabsf(pidOutput + velocityFfCounts) >= 1.0f &&
+                          (pidOutput + velocityFfCounts) * angleError > 0.0f) ||
+                         takeupCounts != 0.0f);
                     // 单电机直接使用本周期原始 PID 目标与实际 ABS 的差值。
                     // ABS 增加统一代表收绳；相等时保留本轮默认放绳，且不会触发
                     // HOLD（pidPushActive 通常同时为 false）。
@@ -1779,10 +1829,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         }
                         FW_LOG_INFO_PRINTF(
                             "[PID_SINGLE] t=%lu J=%02u M=%02d qRef=%.3f qFb=%.3f qErr=%.3f "
-                            "kp=%.2f slope=%.2f out=%.2f abs=%ld cmd=%d lead=%ld "
+                            "kp=%.2f slope=%.2f qDot=%.2f qLead=%.3f ff=%.2f "
+                            "outPid=%.2f outFinal=%.2f abs=%ld cmd=%d lead=%ld "
                             "load=%d mag=%d speed=%d "
                             "telem=%u lutValid=%u lutRef=%.2f lutFb=%.2f "
-                            "lutDelta=%.2f rawTarget=%ld rev=%u revDir=%d revErr=%.1f revAge=%lu\r\n",
+                            "lutDelta=%.2f rawTarget=%ld tu=%u tuDir=%d tuTravel=%.3f tuCounts=%.1f\r\n",
                             (unsigned long)nowMs,
                             (unsigned)jointIndex,
                             jointMotorCh,
@@ -1791,7 +1842,12 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (double)(localTargets[jointIndex] - magAngles[jointIndex]),
                             (double)singleTendonKp[jointIndex],
                             (double)singleTendonLutSlope[jointIndex],
-                            (double)g_controlSolver.getPidOutput(jointIndex),
+                            (double)singleTendonVelocityFf[jointIndex]
+                                .filteredVelocityDegPerSec,
+                            (double)singleTendonVelocityLeadDeg[jointIndex],
+                            (double)velocityFfCounts,
+                            (double)pidOutput,
+                            (double)finalOutput,
                             (long)currentAbs,
                             (int)targetPos,
                             (long)targetLead,
@@ -1804,13 +1860,14 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                             (double)lutFbAbs,
                             (double)(lutRefAbs - lutFbAbs),
                             (long)rawPidTargetAbs,
-                            singleTendonReversal[jointIndex].feedforwardActive ? 1U : 0U,
-                            (int)singleTendonReversal[jointIndex].feedforwardDirection,
-                            (double)singleTendonReversalAssumedErrorDeg[jointIndex],
-                            singleTendonReversal[jointIndex].feedforwardStartMs == 0
-                                ? 0UL
-                                : (unsigned long)(nowMs -
-                                    singleTendonReversal[jointIndex].feedforwardStartMs));
+                            takeup.active ? 1U : 0U,
+                            (int)takeup.takeupTendonDirection,
+                            takeup.responseStartCaptured
+                                ? (double)takeup.establishedTargetDirection *
+                                    (double)(magAngles[jointIndex] -
+                                        takeup.responseStartJointDeg)
+                                : 0.0,
+                            (double)takeupCounts);
                     }
                 }
 

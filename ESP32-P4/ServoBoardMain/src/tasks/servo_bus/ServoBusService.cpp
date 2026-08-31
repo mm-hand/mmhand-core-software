@@ -374,10 +374,51 @@ static void emergencyTorqueOffMappedServos(SystemRuntimeContext* sharedData)
                   (unsigned long)torqueDisableFailedMask);
 }
 
-/** 消费上位机 JSON 多圈恢复请求，并用 token 发布结果。 */
-static void processHostMultiTurnRestore(SystemRuntimeContext* sharedData, uint32_t* lastToken)
+/** 上位机 JSON 恢复的逐台事务；只由 ServoBusTask 读写。 */
+struct ServoHostRestoreContext {
+    bool active; ///< 已冻结一个 token，尚有 Mxx 未处理。
+    uint32_t token;
+    uint32_t requestMask;
+    uint32_t pendingMask;
+    uint32_t restoredMask;
+    uint32_t rejectedMask;
+    int32_t logicalAbs[SERVO_TOTAL_NUM];
+};
+
+/** RESET/坐标重建只能在没有运动 owner、控制关闭时执行。 */
+static bool servoCoordinateMaintenanceSafe(SystemRuntimeContext* sharedData)
 {
-    if (!sharedData || !lastToken) {
+    if (!sharedData || sharedAtomicLoad(&sharedData->control_enabled) != 0 ||
+        sharedAtomicLoad(&sharedData->servo_target_owner) !=
+            SERVO_TARGET_OWNER_NONE) {
+        return false;
+    }
+    const uint8_t state = sharedAtomicLoad(&sharedData->system_state);
+    return state == SYSTEM_STATE_UNCONTROLLABLE ||
+           state == SYSTEM_STATE_IDLE ||
+           state == SYSTEM_STATE_READY ||
+           state == SYSTEM_STATE_RECOVERY_REQUIRED;
+}
+
+/** 完成整批事务后一次性发布结果，不能让上位机看到中间态。 */
+static void finishHostMultiTurnRestore(
+    SystemRuntimeContext* sharedData,
+    ServoHostRestoreContext* restore)
+{
+    sharedData->restore_multi_turn_restored_mask = restore->restoredMask;
+    sharedData->restore_multi_turn_rejected_mask = restore->rejectedMask;
+    sharedAtomicStore(&sharedData->restore_multi_turn_result_token,
+                      restore->token);
+    restore->active = false;
+}
+
+/** 冻结一笔上位机 JSON 请求；这里只复制数据，不访问舵机 UART。 */
+static void captureHostMultiTurnRestore(
+    SystemRuntimeContext* sharedData,
+    uint32_t* lastToken,
+    ServoHostRestoreContext* restore)
+{
+    if (!sharedData || !lastToken || !restore || restore->active) {
         return;
     }
     const uint32_t token =
@@ -385,8 +426,6 @@ static void processHostMultiTurnRestore(SystemRuntimeContext* sharedData, uint32
     if (token == *lastToken) {
         return;
     }
-    *lastToken = token;
-
     uint32_t motorMask = 0;
     int32_t motorAbs[SERVO_TOTAL_NUM] = {0};
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
@@ -398,18 +437,75 @@ static void processHostMultiTurnRestore(SystemRuntimeContext* sharedData, uint32
     if (lock) {
         xSemaphoreGive(lock);
     }
+    *lastToken = token;
+    *restore = ServoHostRestoreContext{};
+    restore->token = token;
+    restore->requestMask = motorMask & validMotorChannelMask();
+    restore->pendingMask = restore->requestMask;
+    memcpy(restore->logicalAbs, motorAbs, sizeof(restore->logicalAbs));
+    restore->active = true;
 
-    uint32_t restoredMask = 0;
-    uint32_t rejectedMask = 0;
+    if (!servoCoordinateMaintenanceSafe(sharedData)) {
+        restore->rejectedMask = restore->requestMask;
+        restore->pendingMask = 0;
+        finishHostMultiTurnRestore(sharedData, restore);
+    } else if (restore->requestMask == 0) {
+        finishHostMultiTurnRestore(sharedData, restore);
+    }
+}
+
+/**
+ * 每个完整反馈轮次最多恢复一台舵机，避免27路 RESET 连续阻塞实时反馈。
+ * sessionRebasedMask 保证同一 P4 会话内重复 JSON 同步不会再次清硬件圈数。
+ */
+static bool stepHostMultiTurnRestore(
+    SystemRuntimeContext* sharedData,
+    ServoHostRestoreContext* restore,
+    uint32_t* sessionRebasedMask)
+{
+    if (!sharedData || !restore || !sessionRebasedMask || !restore->active) {
+        return false;
+    }
+    if (!servoCoordinateMaintenanceSafe(sharedData)) {
+        restore->rejectedMask |= restore->pendingMask;
+        restore->pendingMask = 0;
+        finishHostMultiTurnRestore(sharedData, restore);
+        return false;
+    }
+
+    uint8_t channel = SERVO_TOTAL_NUM;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        if ((restore->pendingMask & (1UL << i)) != 0) {
+            channel = i;
+            break;
+        }
+    }
+    if (channel >= SERVO_TOTAL_NUM) {
+        finishHostMultiTurnRestore(sharedData, restore);
+        return false;
+    }
+
+    const uint32_t bit = 1UL << channel;
+    uint32_t restoredBit = 0;
+    uint32_t rejectedBit = 0;
+    const uint32_t resetMask = (*sessionRebasedMask & bit) == 0 ? bit : 0;
     restoreServoMultiTurnFromHost(sharedData,
-                                  motorMask,
-                                  motorAbs,
+                                  bit,
+                                  restore->logicalAbs,
+                                  resetMask,
                                   true,
-                                  &restoredMask,
-                                  &rejectedMask);
-    sharedData->restore_multi_turn_restored_mask = restoredMask;
-    sharedData->restore_multi_turn_rejected_mask = rejectedMask;
-    sharedAtomicStore(&sharedData->restore_multi_turn_result_token, token);
+                                  &restoredBit,
+                                  &rejectedBit);
+    restore->pendingMask &= ~bit;
+    restore->restoredMask |= restoredBit;
+    restore->rejectedMask |= rejectedBit;
+    if (restoredBit != 0) {
+        *sessionRebasedMask |= bit;
+    }
+    if (restore->pendingMask == 0) {
+        finishHostMultiTurnRestore(sharedData, restore);
+    }
+    return true;
 }
 
 // 标定成功后由唯一拥有舵机驱动的通信任务提交可信状态。只有在线、
@@ -511,11 +607,15 @@ static bool resolveServoRecoveryAnchor(
 static void processServoOnlineTransitions(
     SystemRuntimeContext* sharedData,
     ServoHotplugRecoveryAnchors* hotplugAnchors,
-    ServoOnlineRecoveryContext* recovery)
+    ServoOnlineRecoveryContext* recovery,
+    uint32_t* sessionRebasedMask,
+    bool* hardwareResetAttempted)
 {
-    if (!sharedData || !hotplugAnchors || !recovery) {
+    if (!sharedData || !hotplugAnchors || !recovery ||
+        !sessionRebasedMask || !hardwareResetAttempted) {
         return;
     }
+    *hardwareResetAttempted = false;
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
 
     if (recovery->activeChannel >= SERVO_TOTAL_NUM) {
@@ -593,9 +693,17 @@ static void processServoOnlineTransitions(
                                                        &recoveryLogicalAbs,
                                                        &recoveryRaw,
                                                        &anchorSource);
+    uint8_t resetAttempts = 0;
     if (!trusted && configured && hasAnchor) {
-        trusted = bus->restoreAbsolutePositionNearAnchor(
-            id, recoveryLogicalAbs, recoveryRaw);
+        *hardwareResetAttempted = true;
+        int32_t restoredLogicalAbs = 0;
+        trusted = bus->resetTurnCounterAndRestoreNearAnchor(
+            id,
+            recoveryLogicalAbs,
+            recoveryRaw,
+            &restoredLogicalAbs,
+            &resetAttempts);
+        configured = trusted && bus->isMultiTurnConfigured(id);
     }
 
     const uint8_t attemptNumber =
@@ -607,12 +715,13 @@ static void processServoOnlineTransitions(
         if (trusted) {
             sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
             hotplugAnchors->validMask &= ~bit;
+            *sessionRebasedMask |= bit;
         } else {
             // 没有可信锚点时保持 Turn Unknown，禁止把“多圈模式正确”误当作“圈数可信”。
             sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
         }
     }
-    FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u "
+    FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u reset_attempts=%u "
                   "configured=%u anchor=%u anchor_src=%u trusted=%u ready=%u "
                   "failed=%u raw=%d unknown=0x%08lX\r\n",
                   (unsigned)ch,
@@ -620,6 +729,7 @@ static void processServoOnlineTransitions(
                   (unsigned)id,
                   (unsigned)attemptNumber,
                   (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
+                  (unsigned)resetAttempts,
                   configured ? 1U : 0U,
                   hasAnchor ? 1U : 0U,
                   (unsigned)anchorSource,
@@ -635,13 +745,14 @@ static void processServoOnlineTransitions(
 
 // 收集各总线刚刚冻结的掉电前可信位置。RAM 锚点仅覆盖本次 P4 上电会话；
 // P4 与舵机同时掉电后由上位机 JSON 锚点恢复。
-static void cacheServoPowerLossSnapshots(
+static uint32_t cacheServoPowerLossSnapshots(
     SystemRuntimeContext* sharedData,
     ServoHotplugRecoveryAnchors* hotplugAnchors)
 {
     if (!sharedData || !hotplugAnchors) {
-        return;
+        return 0;
     }
+    uint32_t capturedMask = 0;
 
     for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++) {
         ServoRoute route;
@@ -663,6 +774,7 @@ static void cacheServoPowerLossSnapshots(
         hotplugAnchors->logicalAbs[ch] = logicalAbs;
         hotplugAnchors->raw[ch] = raw;
         hotplugAnchors->validMask |= bit;
+        capturedMask |= bit;
         FW_LOG_WARN_PRINTF(
             "[SERVO HOTPLUG ANCHOR] M%02u logical=%ld raw=%d turn=%d ageMs=%lu\r\n",
             (unsigned)ch,
@@ -672,6 +784,7 @@ static void cacheServoPowerLossSnapshots(
             (unsigned long)(p4::platform::time::monotonicMillis() - sampleTimestampMs));
 
     }
+    return capturedMask;
 }
 
 /**
@@ -720,15 +833,27 @@ static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
             FeetechServoDriver* driver =
                 resolveMotorDriver(channel, &route, true);
             int16_t raw = 0;
-            if (!driver || !driver->resetTurnCounter(route.servoId, &raw)) {
+            uint8_t attempts = 0;
+            bool resetOk = false;
+            while (driver &&
+                   attempts <
+                       mmhand::config::servo::kResetZeroTransactionAttempts) {
+                ++attempts;
+                if (driver->resetTurnCounter(route.servoId, &raw)) {
+                    resetOk = true;
+                    break;
+                }
+            }
+            if (!resetOk) {
                 failedMask |= bit;
                 continue;
             }
             successMask |= bit;
             FW_LOG_WARN_PRINTF(
-                "[SERVO RESET ZERO] RAM-only M%02u raw=%d token=%lu\r\n",
+                "[SERVO RESET ZERO] RAM-only M%02u raw=%d attempts=%u token=%lu\r\n",
                 (unsigned)channel,
                 (int)raw,
+                (unsigned)attempts,
                 (unsigned long)token);
         }
     } else {
@@ -770,74 +895,14 @@ struct ServoRuntimeContext {
     uint32_t lastLoopStartMs;
     uint32_t queueDropTotal;
     uint32_t lastQueueDropLogMs;
-    uint32_t lastM19GoalReadbackMs; ///< 最近一次 M19 目标寄存器诊断回读时间。
-    uint32_t lastM19GoalReadbackFailureLogMs; ///< 回读失败日志节流时间。
     // 上线恢复不是持久化功能；核验多圈模式后才能让上位机 JSON 提交 logical ABS。
     ServoHotplugRecoveryAnchors hotplugRecoveryAnchors;
     ServoOnlineRecoveryContext onlineRecovery;
+    ServoHostRestoreContext hostRestore; ///< 当前上位机 JSON 逐台恢复事务。
+    uint32_t sessionRebasedMask; ///< 本次 P4 会话已完成硬件归零和 offset 重建的 Mxx。
 };
 
 static ServoRuntimeContext g_servoRuntime;
-
-/**
- * 低频核对 M19 的舵机目标寄存器与实时反馈。
- *
- * 同步写没有单舵机 ACK，因此仅看 PID/command 日志不能证明目标已经进入
- * ST3215 SRAM。本诊断只能在四 BUS 同步读完成后的空档执行；goalLogical
- * 与 actualLogical 可直接比较，goalHw 则用于确认舵机内部真实目标。
- */
-static void logM19GoalReadback(SystemRuntimeContext* sharedData,
-                               ServoRuntimeContext* runtime,
-                               uint32_t nowMs)
-{
-    constexpr uint8_t kMotorChannel = 19;
-    if (!kM19GoalReadbackEnabled || !sharedData || !runtime ||
-        sharedAtomicLoad(&sharedData->system_state) !=
-            SYSTEM_STATE_RUN_FEEDBACK ||
-        (sharedAtomicLoad(&sharedData->active_motor_mask) &
-         (1UL << kMotorChannel)) == 0 ||
-        (uint32_t)(nowMs - runtime->lastM19GoalReadbackMs) <
-            kM19GoalReadbackPeriodMs) {
-        return;
-    }
-    runtime->lastM19GoalReadbackMs = nowMs;
-
-    ServoRoute route;
-    FeetechServoDriver* driver =
-        resolveMotorDriver(kMotorChannel, &route, true);
-    ServoGoalRegisterState goal{};
-    if (!driver || !driver->readGoalRegisters(route.servoId, &goal)) {
-        if ((uint32_t)(nowMs - runtime->lastM19GoalReadbackFailureLogMs) >=
-            kM19GoalReadbackFailureLogPeriodMs) {
-            runtime->lastM19GoalReadbackFailureLogMs = nowMs;
-            FW_LOG_PRINTLN(FW_LOG_LEVEL_WARN,
-                           "[SERVO GOAL M19] read_failed");
-        }
-        return;
-    }
-
-    const ServoFeedbackInternal& feedback =
-        driver->getFeedback(route.servoId);
-    const int32_t logicalOffset = driver->getLogicalOffset(route.servoId);
-    const int32_t goalLogical =
-        (int32_t)goal.hardwarePosition + logicalOffset;
-    FW_LOG_INFO_PRINTF(
-        "[SERVO GOAL M19] bus=%u id=%u goalHw=%d goalLogical=%ld "
-        "actualHw=%ld actualLogical=%ld raw=%d presentSpeed=%d load=%d "
-        "accReg=%u speedReg=%u ageMs=%lu\r\n",
-        (unsigned)route.busIndex,
-        (unsigned)route.servoId,
-        (int)goal.hardwarePosition,
-        (long)goalLogical,
-        (long)feedback.absolutePosition,
-        (long)(feedback.absolutePosition + logicalOffset),
-        (int)feedback.rawPosition,
-        (int)feedback.speed,
-        (int)feedback.load,
-        (unsigned)goal.acceleration,
-        (unsigned)goal.speed,
-        (unsigned long)(nowMs - feedback.lastUpdate));
-}
 
 /** 初始化舵机总线与恢复上下文；本函数不创建任务、不进入循环。 */
 bool initServoBusService(SystemRuntimeContext* sharedData, uint32_t nowMs)
@@ -889,6 +954,8 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
     auto& lastQueueDropLogMs = runtime.lastQueueDropLogMs;
     auto& hotplugRecoveryAnchors = runtime.hotplugRecoveryAnchors;
     auto& onlineRecovery = runtime.onlineRecovery;
+    auto& hostRestore = runtime.hostRestore;
+    auto& sessionRebasedMask = runtime.sessionRebasedMask;
         // 事件快速路径不能改变固定反馈周期的 gap 统计口径。
         if (request.periodicDue && lastLoopStartMs != 0) {
             const uint32_t loopGapMs = loopStartMs - lastLoopStartMs;
@@ -921,7 +988,9 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         }
 
         if (request.periodicDue) {
-            processHostMultiTurnRestore(sharedData, &lastRestoreToken);
+            captureHostMultiTurnRestore(sharedData,
+                                        &lastRestoreToken,
+                                        &hostRestore);
             processCalibrationTrustCommit(sharedData, &lastCalibrationTrustToken);
         }
         const bool calibrationMotionActive =
@@ -1068,7 +1137,11 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         }
         // 必须在撤销动态路由之前消费驱动冻结的最后可信反馈；否则路由失效后
         // 无法再定位原 BUS。这里只保留本次 P4 会话的 RAM 锚点。
-        cacheServoPowerLossSnapshots(sharedData, &hotplugRecoveryAnchors);
+        const uint32_t newlyOfflineMask =
+            cacheServoPowerLossSnapshots(sharedData,
+                                         &hotplugRecoveryAnchors);
+        // 同一舵机发生新的掉线边沿后，下一次 RAM/JSON 恢复必须重新执行 RESET。
+        sessionRebasedMask &= ~newlyOfflineMask;
         // 掉线只清除该 Mxx 的运行时路由；定向重扫将在退出运动状态后逐 BUS 执行。
         const ServoRouteSnapshot routeSnapshot = servoRouteTable().snapshot();
         for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
@@ -1087,15 +1160,33 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         }
         publishServoRouteSnapshot(sharedData);
 
-        if (!calibrationMotionActive) {
+        const bool hostRestoreStepped = !calibrationMotionActive &&
+            stepHostMultiTurnRestore(sharedData,
+                                     &hostRestore,
+                                     &sessionRebasedMask);
+        if (hostRestoreStepped) {
+            runtime.feedbackFreshnessGraceUntilMs =
+                p4::platform::time::monotonicMillis() +
+                mmhand::config::servo::kFeedbackMaintenanceGraceMs;
+        } else if (!calibrationMotionActive) {
+            bool hotplugResetAttempted = false;
             processServoOnlineTransitions(
                 sharedData,
                 &hotplugRecoveryAnchors,
-                &onlineRecovery);
+                &onlineRecovery,
+                &sessionRebasedMask,
+                &hotplugResetAttempted);
+            if (hotplugResetAttempted) {
+                runtime.feedbackFreshnessGraceUntilMs =
+                    p4::platform::time::monotonicMillis() +
+                    mmhand::config::servo::kFeedbackMaintenanceGraceMs;
+            }
         }
         p4::servo::publishTurnOverflowState(sharedData);
         const uint32_t resetZeroTokenBefore = lastServoResetZeroToken;
-        processServoResetZeroRequest(sharedData, &lastServoResetZeroToken);
+        if (!hostRestoreStepped) {
+            processServoResetZeroRequest(sharedData, &lastServoResetZeroToken);
+        }
         if (lastServoResetZeroToken != resetZeroTokenBefore) {
             // Reset Zero 会暂时阻塞本任务；从事务真正结束的时刻重新计算宽限期。
             // 宽限期只跳过反馈陈旧判定，online/RESET 结果和真实读失败仍照常处理。
@@ -1105,13 +1196,11 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         }
         p4::servo::publishRecoveryState(sharedData);
         p4::servo::publishFeedback(sharedData, runtime.completedFeedback);
-        // 此处四 BUS 同步读已经结束，插入一次 M19 单播回读不会破坏并行事务。
-        logM19GoalReadback(sharedData,
-                           &runtime,
-                           p4::platform::time::monotonicMillis());
         // 路由扫描放在正常同步反馈、掉线失效和恢复事务之后。每轮 step()
         // 仍只探测一个 BUS/ID，但不再因扫描提前 return 而饿死在线反馈。
-        servoDiscoveryManager().step(loopStartMs, motionActive);
+        if (!hostRestoreStepped) {
+            servoDiscoveryManager().step(loopStartMs, motionActive);
+        }
         publishServoRouteSnapshot(sharedData);
     return true;
 }

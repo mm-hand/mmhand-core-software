@@ -1,7 +1,7 @@
 /**
  * @file ServoTypes.h
  * @brief 定义舵机位置、在线状态及遥测反馈快照。
- * @details 区分 logical ABS 与单圈 raw；Flash raw 由持久化状态单独上报。
+ * @details 区分 logical ABS 与单圈 raw；跨重启恢复由桌面 JSON 完成。
  */
 #ifndef MMHAND_SERVO_TYPES_H
 #define MMHAND_SERVO_TYPES_H

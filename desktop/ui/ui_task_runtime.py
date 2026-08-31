@@ -53,7 +53,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         summary.setSpacing(8)
         self.core0_label = self._make_summary_label("Core0 idle -")
         self.core1_label = self._make_summary_label("Core1 idle -")
-        self.sys_gap_label = self._make_summary_label("SYS gap -")
+        self.sys_gap_label = self._make_summary_label("System status gap -")
         self.stop_label = self._make_summary_label("STOP -")
         self.rx_label = self._make_summary_label("RX -")
         for label in [
@@ -161,7 +161,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
 
         self.core0_label.setText(f"Core0 idle {self._format_permille(core0)}")
         self.core1_label.setText(f"Core1 idle {self._format_permille(core1)}")
-        self.sys_gap_label.setText(f"SYS gap {sys_gap} ms")
+        self.sys_gap_label.setText(f"System status gap {sys_gap} ms")
         self.stop_label.setText(f"STOP {stop_last / 1000.0:.1f}/{stop_max / 1000.0:.1f} ms")
 
         self._style_label(self.core0_label, self._idle_state(core0))

@@ -66,6 +66,30 @@ def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:
     state.tactile_module_valid_mask = int(
         getattr(tactile_state, "tactile_module_valid_mask", 0) or 0
     )
+    for name in (
+        "tactile_diag_version",
+        "tactile_diag_frame_count",
+        "tactile_diag_enabled_mask",
+        "tactile_diag_summary_ok_mask",
+        "tactile_diag_full_ok_mask",
+        "tactile_diag_command_fail_mask",
+        "tactile_diag_response_fail_mask",
+        "tactile_diag_crc_fail_mask",
+        "tactile_diag_status_nonzero_mask",
+        "tactile_diag_summary_retry_recovered_mask",
+        "tactile_diag_last_rx_ts",
+    ):
+        setattr(state, name, getattr(tactile_state, name, getattr(state, name, 0)))
+    for name in (
+        "tactile_diag_summary_success_count",
+        "tactile_diag_summary_failure_count",
+        "tactile_diag_full_success_count",
+        "tactile_diag_full_failure_count",
+        "tactile_diag_summary_last_fail_reason",
+        "tactile_diag_full_last_fail_reason",
+        "tactile_diag_module_last_status",
+    ):
+        setattr(state, name, list(getattr(tactile_state, name, []) or []))
     state.tactile_online = bool(getattr(tactile_state, "tactile_online", False))
     state.tactile_last_rx_ts = float(getattr(tactile_state, "tactile_last_rx_ts", 0.0) or 0.0)
     state.tactile_module_online = list(getattr(tactile_state, "tactile_module_online", []) or [])
@@ -219,8 +243,8 @@ class HandBackend:
 
     def is_comm_connected(self) -> bool:
         comm = self.comm
-        serial_obj = getattr(comm, "serial", None) if comm is not None else None
-        return bool(comm and serial_obj and getattr(serial_obj, "is_open", False))
+        checker = getattr(comm, "is_connected", None) if comm is not None else None
+        return bool(callable(checker) and checker())
 
     def connect_tactile_serial(self, port: str) -> bool:
         self.disconnect_tactile_serial()
@@ -701,20 +725,6 @@ class HandBackend:
                 self._replay_motion_active = False
                 log_session("REPLAY_OWNER", f"RELEASE token={token}")
 
-    def protocol_diag_items(self) -> List[Tuple[str, object]]:
-        comm = self.comm
-        if comm is None:
-            return []
-        fields = [
-            "_rx_diag_total_packets",
-            "_rx_diag_sensor_packets",
-            "_rx_diag_bytes",
-            "_tx_diag_total_cmds",
-            "_tx_diag_angle_live_cmds",
-            "_tx_diag_bytes",
-        ]
-        return [(name, getattr(comm, name, "-")) for name in fields]
-
     def request_state_sync(self, sync_mask: int) -> bool:
         """透传静态状态显式同步请求，避免 UI 依赖固件周期广播。"""
         return self._controller.request_state_sync(sync_mask)
@@ -809,6 +819,21 @@ class HandBackend:
     ) -> Tuple[bool, str, int, int]:
         """标定前归零所选舵机，并返回成功与失败电机掩码。"""
         return self._controller.prepare_calibration_turn_zero(motor_mask)
+
+    def request_multiturn_anchor_capture(self, motor_mask: int) -> bool:
+        """登记已落盘标定结果对应的多圈锚点保存请求。"""
+        return self._controller.request_multiturn_anchor_capture(motor_mask)
+
+    def multiturn_anchor_capture_status(
+        self, motor_mask: int
+    ) -> Tuple[bool, str]:
+        return self._controller.multiturn_anchor_capture_status(motor_mask)
+
+    def wait_for_multiturn_recovery(
+        self, motor_mask: int, timeout_s: float = 20.0
+    ) -> Tuple[bool, str]:
+        """供启动 worker 等待相关 Mxx 路由就绪并完成多圈恢复。"""
+        return self._controller.wait_for_multiturn_recovery(motor_mask, timeout_s)
 
     def manual_prepare_all_motors(self) -> ManualPrepareResult:
         """停止外部连续输入后执行全手 turn0 与 1500-count 预松事务。"""

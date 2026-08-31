@@ -19,17 +19,11 @@ URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
 RUN_DATA_DIR = PROJECT_ROOT / "run_data"
 LOG_DIR = RUN_DATA_DIR / "运行日志"
 
-POSE_FIST_PATH = RESOURCE_DIR / "pose_fist_21deg.txt"
-JOINT_SEQUENCE_EXAMPLE_PATH = RESOURCE_DIR / "joint_sequence_example.txt"
-HAND_GEO_PATH = CONFIG_DIR / "hand_geo.json"
-LEGACY_CALIB_DEG_PATH = CONFIG_DIR / "legacy_calib_deg.json"
-CALIB_DEG_PATH = CONFIG_DIR / "calib_deg.json"
 # 唯一受支持的便携式 Calib Load V6 快照。旧 calib_load_snapshot.json
 # 不再作为活动配置读取，避免旧格式被误加载或覆盖新格式。
 CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calibration_bundle.mmcal.json"
 # 运行期多圈锚点独立于体积较大的标定快照，以便运动时低开销原子更新。
 MULTITURN_RUNTIME_PATH = DEVICE_STATE_DIR / "multiturn_runtime.json"
-MOTOR_MID_CALIB_PATH = CONFIG_DIR / "motor_mid_calib.json"
 URDF_JOINT_MAPPING_PATH = CONFIG_DIR / "urdf_joint_mapping.json"
 ROBOT_MODEL_MANIFEST_PATH = CONFIG_DIR / "robot_model_manifest.json"
 PRODUCT_FINGERPRINT_PATH = CONFIG_DIR / "product_fingerprint.json"

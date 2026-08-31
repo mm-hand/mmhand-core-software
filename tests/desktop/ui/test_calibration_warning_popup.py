@@ -52,8 +52,8 @@ def test_calibration_warning_popup_explains_all_reasons_once():
     panel = _WarningHarness()
     mask = 1 << 12
 
-    panel.show_calibration_assembly_warning_if_needed(_state(mask))
-    panel.show_calibration_assembly_warning_if_needed(_state(mask))
+    panel._maybe_show_calibration_assembly_warning(_state(mask))
+    panel._maybe_show_calibration_assembly_warning(_state(mask))
 
     assert len(panel.warnings) == 1
     title, body = panel.warnings[0]
@@ -72,8 +72,8 @@ def test_calibration_warning_popup_episode_resets_after_warning_clears():
     panel = _WarningHarness()
     mask = 1 << 12
 
-    panel.show_calibration_assembly_warning_if_needed(_state(mask))
-    panel.show_calibration_assembly_warning_if_needed(_state(0))
-    panel.show_calibration_assembly_warning_if_needed(_state(mask))
+    panel._maybe_show_calibration_assembly_warning(_state(mask))
+    panel._maybe_show_calibration_assembly_warning(_state(0))
+    panel._maybe_show_calibration_assembly_warning(_state(mask))
 
     assert len(panel.warnings) == 2

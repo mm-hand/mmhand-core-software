@@ -21,7 +21,9 @@ from .calibration_snapshot import (
     CalibrationSnapshotError,
     invalidate_calibration_snapshot_scope,
     joint_mask_for_motor_mask,
+    multiturn_anchor_fields,
     read_snapshot,
+    update_snapshot_multiturn_anchors,
     update_manual_snapshot,
     validate_snapshot,
 )
@@ -78,7 +80,8 @@ ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 CALIBRATION_TURN_RESET_SETTLE_S = 0.30
 CALIBRATION_TURN_RESET_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
-MULTITURN_RESTORE_RESULT_TIMEOUT_S = 2.0
+# P4 每个完整反馈轮次只归零并恢复一台舵机；27路最坏重试需要更长结果窗口。
+MULTITURN_RESTORE_RESULT_TIMEOUT_S = 8.0
 CLEAR_CALIBRATION_ACK_TIMEOUT_S = 1.0
 CALIB_LOAD_ACK_TIMEOUT_S = 1.0
 MANUAL_REFERENCE_ACK_TIMEOUT_S = 2.0
@@ -87,6 +90,7 @@ SERVO_RESET_ZERO_RESULT_TIMEOUT_S = 4.0
 HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
 HOST_MULTITURN_IDLE_SAVE_PERIOD_S = 0.50
 HOST_MULTITURN_RESTORE_RETRY_S = 1.0
+STARTUP_MULTITURN_RECOVERY_TIMEOUT_S = 20.0
 MANUAL_PREPARE_RELEASE_COUNTS = 1500
 MANUAL_PREPARE_FEEDBACK_TIMEOUT_S = 2.0
 MANUAL_PREPARE_MOTION_TIMEOUT_S = 12.0
@@ -180,9 +184,18 @@ class HandController:
         self._multiturn_pending_restore_token = 0
         self._multiturn_pending_restore_at = 0.0
         self._multiturn_last_restore_attempt_at = 0.0
+        # Reset Zero 后 P4 会短暂把 logical ABS 标成可用，但在新的 Auto/LUT
+        # 结果落盘前，该坐标不能成为下一次重启的恢复锚点。
+        self._multiturn_anchor_capture_pending_mask = 0
+        self._multiturn_anchor_capture_blocked_mask = 0
+        self._multiturn_anchor_capture_last_error = ""
+        self._multiturn_anchor_capture_lock = threading.Lock()
         self._calibration_digest_cache = ""
         self._calibration_digest_mtime_ns = -1
         self._calibration_digest_checked_at = 0.0
+        self._calibration_snapshot_anchor_valid_mask = 0
+        self._calibration_snapshot_anchor_abs = [0] * MOTOR_COUNT
+        self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
 
     @staticmethod
     def _clamp_motor_abs(value: int) -> int:
@@ -376,9 +389,16 @@ class HandController:
         self._multiturn_pending_restore_token = 0
         self._multiturn_pending_restore_at = 0.0
         self._multiturn_last_restore_attempt_at = 0.0
+        with self._multiturn_anchor_capture_lock:
+            self._multiturn_anchor_capture_pending_mask = 0
+            self._multiturn_anchor_capture_blocked_mask = 0
+            self._multiturn_anchor_capture_last_error = ""
         self._calibration_digest_cache = ""
         self._calibration_digest_mtime_ns = -1
         self._calibration_digest_checked_at = 0.0
+        self._calibration_snapshot_anchor_valid_mask = 0
+        self._calibration_snapshot_anchor_abs = [0] * MOTOR_COUNT
+        self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
         self._started = False
         self._paused = False
         self._control_mode = ControlMode.JOINT_ANGLE
@@ -474,12 +494,20 @@ class HandController:
             if mtime_ns != self._calibration_digest_mtime_ns:
                 self._calibration_digest_mtime_ns = mtime_ns
                 self._calibration_digest_cache = ""
+                self._calibration_snapshot_anchor_valid_mask = 0
+                self._calibration_snapshot_anchor_abs = [0] * MOTOR_COUNT
+                self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
                 if mtime_ns >= 0:
                     try:
                         snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
                         self._calibration_digest_cache = str(
                             snapshot.get("integrity", {}).get("digest", "")
                         ).lower()
+                        (
+                            self._calibration_snapshot_anchor_valid_mask,
+                            self._calibration_snapshot_anchor_abs,
+                            self._calibration_snapshot_anchor_raw,
+                        ) = multiturn_anchor_fields(snapshot)
                     except CalibrationSnapshotError:
                         pass
         return {
@@ -499,6 +527,46 @@ class HandController:
             self._multiturn_store_payload = None
             log_session("MULTITURN", f"host anchor unavailable: {exc}")
         return self._multiturn_store_payload
+
+    @staticmethod
+    def _format_motor_mask(motor_mask: int) -> str:
+        return ",".join(
+            f"M{motor_idx:02d}"
+            for motor_idx in range(MOTOR_COUNT)
+            if int(motor_mask) & (1 << motor_idx)
+        ) or "none"
+
+    def _multiturn_recovery_anchors(
+        self, state: HandModel
+    ) -> Tuple[int, List[int], List[int], bool]:
+        """合并高频运行锚点和标定快照后备锚点，运行锚点优先。"""
+        identity = self._multiturn_identity(state)
+        if identity is None:
+            return 0, [0] * MOTOR_COUNT, [0] * MOTOR_COUNT, False
+        payload = self._load_multiturn_store(identity)
+        valid_mask = 0
+        logical_abs = [0] * MOTOR_COUNT
+        raw = [0] * MOTOR_COUNT
+        if payload:
+            valid_mask = int(str(payload.get("valid_motor_mask", "0")), 0) & (
+                (1 << MOTOR_COUNT) - 1
+            )
+            logical_abs = (list(payload.get("logical_abs", [])) + [0] * MOTOR_COUNT)[
+                :MOTOR_COUNT
+            ]
+            raw = (list(payload.get("raw", [])) + [0] * MOTOR_COUNT)[:MOTOR_COUNT]
+        fallback_mask = self._calibration_snapshot_anchor_valid_mask & ~valid_mask
+        for motor_idx in range(MOTOR_COUNT):
+            bit = 1 << motor_idx
+            if fallback_mask & bit:
+                logical_abs[motor_idx] = self._calibration_snapshot_anchor_abs[motor_idx]
+                raw[motor_idx] = self._calibration_snapshot_anchor_raw[motor_idx]
+        return (
+            valid_mask | fallback_mask,
+            [int(value) for value in logical_abs],
+            [int(value) % 4096 for value in raw],
+            True,
+        )
 
     def _persist_multiturn_state(
         self, state: HandModel, *, force: bool = False
@@ -547,6 +615,8 @@ class HandController:
         servo_abs = list(getattr(state, "servo_angles", []) or [])
         servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
         raw_online = list(getattr(state, "servo_raw_online", []) or [])
+        with self._multiturn_anchor_capture_lock:
+            blocked_mask = self._multiturn_anchor_capture_blocked_mask
         fresh_mask = 0
         if bool(getattr(state, "has_servo_angle_data", False)) and bool(
             getattr(state, "has_servo_raw_data", False)
@@ -556,6 +626,7 @@ class HandController:
                 if (
                     (online_mask & bit)
                     and not (unknown_mask & bit)
+                    and not (blocked_mask & bit)
                     and motor_idx < len(raw_online)
                     and bool(raw_online[motor_idx])
                     and motor_idx < len(servo_abs)
@@ -585,6 +656,156 @@ class HandController:
         state.host_multiturn_saved_raw_positions = list(payload["raw"])
         state.host_multiturn_status = "saved"
 
+    def _block_multiturn_anchor_capture(self, motor_mask: int) -> None:
+        """防止 Reset Zero 后的临时坐标覆盖已失效的运行锚点。"""
+        mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        if mask == 0:
+            return
+        with self._multiturn_anchor_capture_lock:
+            self._multiturn_anchor_capture_blocked_mask |= mask
+            self._multiturn_anchor_capture_pending_mask &= ~mask
+
+    def _invalidate_multiturn_anchor_mask(self, motor_mask: int, reason: str) -> None:
+        """硬件 Turn0 可能已改变时，宁可要求重标也不能保留旧恢复锚点。"""
+        mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        if mask == 0:
+            return
+        payload = self._multiturn_store.invalidate_motor_mask(mask, reason=reason)
+        self._multiturn_store_payload = payload
+
+    def request_multiturn_anchor_capture(self, motor_mask: int) -> bool:
+        """登记已完成标定的 Mxx，后台在拿到同帧可信反馈后再落盘。"""
+        mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        if mask == 0:
+            return False
+        with self._multiturn_anchor_capture_lock:
+            self._multiturn_anchor_capture_blocked_mask &= ~mask
+            self._multiturn_anchor_capture_pending_mask |= mask
+        log_session("MULTITURN", f"calibrated anchor capture queued mask=0x{mask:08X}")
+        return True
+
+    def multiturn_anchor_capture_status(self, motor_mask: int) -> Tuple[bool, str]:
+        """返回本轮标定锚点是否同时落盘到运行文件和标定快照。"""
+        requested_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        if requested_mask == 0:
+            return True, "no calibration motors require anchors"
+        with self._multiturn_anchor_capture_lock:
+            pending_mask = self._multiturn_anchor_capture_pending_mask
+            last_error = self._multiturn_anchor_capture_last_error
+        if pending_mask & requested_mask:
+            return False, last_error or "waiting for trusted Mxx feedback"
+        with self.state_lock:
+            state = HandModel()
+            state.copy_state_from(self.current_state)
+        identity = self._multiturn_identity(state)
+        runtime_mask = 0
+        if identity is not None:
+            payload = self._load_multiturn_store(identity) or {}
+            runtime_mask = int(
+                str(payload.get("valid_motor_mask", "0")), 0
+            ) & ((1 << MOTOR_COUNT) - 1)
+        snapshot_mask = self._calibration_snapshot_anchor_valid_mask
+        if (
+            identity is not None
+            and (runtime_mask & requested_mask) == requested_mask
+            and (snapshot_mask & requested_mask) == requested_mask
+        ):
+            return True, "runtime and calibration snapshot anchors saved"
+        return False, last_error or "runtime or calibration snapshot anchor missing"
+
+    def _service_multiturn_anchor_capture(self, state: HandModel) -> None:
+        """确认已标定电机的 ABS/raw 同帧锚点真正写入运行 JSON。"""
+        with self._multiturn_anchor_capture_lock:
+            pending_mask = self._multiturn_anchor_capture_pending_mask
+        if pending_mask == 0:
+            return
+
+        online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
+        if bool(getattr(state, "has_servo_route_status", False)):
+            online_mask &= int(
+                getattr(state, "servo_route_controllable_bitmap", 0) or 0
+            )
+        unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
+        raw_online = list(getattr(state, "servo_raw_online", []) or [])
+        servo_abs = list(getattr(state, "servo_angles", []) or [])
+        servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
+        feedback_ready = bool(getattr(state, "has_servo_angle_data", False)) and bool(
+            getattr(state, "has_servo_raw_data", False)
+        )
+        eligible_mask = 0
+        if feedback_ready:
+            for motor_idx in range(MOTOR_COUNT):
+                bit = 1 << motor_idx
+                if (
+                    (pending_mask & bit)
+                    and (online_mask & bit)
+                    and not (unknown_mask & bit)
+                    and motor_idx < len(raw_online)
+                    and bool(raw_online[motor_idx])
+                    and motor_idx < len(servo_abs)
+                    and motor_idx < len(servo_raw)
+                ):
+                    eligible_mask |= bit
+        if eligible_mask != pending_mask:
+            waiting_mask = pending_mask & ~eligible_mask
+            detail = (
+                "calibrated anchor waiting "
+                f"motors={self._format_motor_mask(waiting_mask)} "
+                f"online=0x{online_mask:08X} unknown=0x{unknown_mask:08X} "
+                f"feedback={int(feedback_ready)}"
+            )
+            with self._multiturn_anchor_capture_lock:
+                if detail != self._multiturn_anchor_capture_last_error:
+                    self._multiturn_anchor_capture_last_error = detail
+                    log_session("MULTITURN", detail)
+            state.host_multiturn_status = detail
+            return
+
+        self._persist_multiturn_state(state, force=True)
+        payload = self._multiturn_store_payload or {}
+        saved_mask = int(str(payload.get("valid_motor_mask", "0")), 0)
+        confirmed_mask = pending_mask & saved_mask
+        if confirmed_mask != pending_mask:
+            state.host_multiturn_status = "calibrated anchor runtime save pending"
+            return
+        try:
+            snapshot = update_snapshot_multiturn_anchors(
+                CALIB_LOAD_SNAPSHOT_PATH,
+                motor_mask=confirmed_mask,
+                logical_abs=(
+                    [int(value) for value in servo_abs] + [0] * MOTOR_COUNT
+                )[:MOTOR_COUNT],
+                raw=([int(value) for value in servo_raw] + [0] * MOTOR_COUNT)[
+                    :MOTOR_COUNT
+                ],
+            )
+            snapshot_mask, _snapshot_abs, _snapshot_raw = (
+                multiturn_anchor_fields(snapshot)
+            )
+            if (snapshot_mask & confirmed_mask) != confirmed_mask:
+                raise CalibrationSnapshotError(
+                    "calibrated anchor snapshot readback is incomplete"
+                )
+        except (OSError, CalibrationSnapshotError) as exc:
+            detail = f"calibrated anchor snapshot save failed: {exc}"
+            with self._multiturn_anchor_capture_lock:
+                if detail != self._multiturn_anchor_capture_last_error:
+                    self._multiturn_anchor_capture_last_error = detail
+                    log_session("MULTITURN", detail)
+            state.host_multiturn_status = detail
+            return
+        # 快照已替换，下一轮 identity 需要重新读取其中的后备锚点和摘要。
+        self._calibration_digest_checked_at = 0.0
+        self._calibration_digest_mtime_ns = -1
+        with self._multiturn_anchor_capture_lock:
+            self._multiturn_anchor_capture_pending_mask &= ~confirmed_mask
+            self._multiturn_anchor_capture_last_error = ""
+        state.host_multiturn_status = "calibrated anchor saved"
+        log_session(
+            "MULTITURN",
+            f"calibrated anchor saved runtime+snapshot mask=0x{confirmed_mask:08X}",
+        )
+
     def _service_multiturn_restore(self, state: HandModel) -> None:
         """按最近邻圈恢复单台舵机，不再用固定 raw 距离拒绝正常跨圈。"""
         if not self.comm:
@@ -605,17 +826,24 @@ class HandController:
                     f"host restore result restored=0x{restored:08X} rejected=0x{rejected:08X}",
                 )
                 self._multiturn_pending_restore_mask = 0
-            elif time.monotonic() - self._multiturn_pending_restore_at < 2.5:
+            elif (
+                time.monotonic() - self._multiturn_pending_restore_at
+                < MULTITURN_RESTORE_RESULT_TIMEOUT_S
+            ):
                 return
             else:
                 log_session("MULTITURN", "host restore result timeout")
                 self._multiturn_pending_restore_mask = 0
 
-        identity = self._multiturn_identity(state)
-        if identity is None:
+        if (
+            time.monotonic() - self._multiturn_last_restore_attempt_at
+            < HOST_MULTITURN_RESTORE_RETRY_S
+        ):
             return
-        payload = self._load_multiturn_store(identity)
-        if not payload or time.monotonic() - self._multiturn_last_restore_attempt_at < HOST_MULTITURN_RESTORE_RETRY_S:
+        saved_mask, saved_abs, saved_raw, identity_ready = (
+            self._multiturn_recovery_anchors(state)
+        )
+        if not identity_ready or saved_mask == 0:
             return
         unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
         online = int(getattr(state, "servo_online_bitmap", 0) or 0)
@@ -623,12 +851,9 @@ class HandController:
             online &= int(
                 getattr(state, "servo_route_controllable_bitmap", 0) or 0
             )
-        saved_mask = int(str(payload.get("valid_motor_mask", "0")), 0)
         candidate = unknown & online & saved_mask & ((1 << MOTOR_COUNT) - 1)
         current_raw = list(getattr(state, "servo_raw_positions", []) or [])
         raw_online = list(getattr(state, "servo_raw_online", []) or [])
-        saved_raw = list(payload.get("raw", []))
-        saved_abs = list(payload.get("logical_abs", []))
         restore_abs = [0] * MOTOR_COUNT
         restore_mask = 0
         for motor_idx in range(MOTOR_COUNT):
@@ -658,6 +883,60 @@ class HandController:
         self._multiturn_pending_restore_at = time.monotonic()
         log_session("MULTITURN", f"host restore requested mask=0x{restore_mask:08X}")
 
+    def wait_for_multiturn_recovery(
+        self,
+        motor_mask: int,
+        timeout_s: float = STARTUP_MULTITURN_RECOVERY_TIMEOUT_S,
+    ) -> Tuple[bool, str]:
+        """等待已在线标定电机完成路由就绪和多圈恢复，供启动 worker 使用。"""
+        requested_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        if requested_mask == 0:
+            return True, "no calibrated motors require multi-turn recovery"
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        last_message = "waiting for P4 servo feedback"
+        while time.monotonic() < deadline:
+            with self.state_lock:
+                state = HandModel()
+                state.copy_state_from(self.current_state)
+            online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
+            target_mask = requested_mask & online_mask
+            if target_mask == 0:
+                return True, "calibration motors are currently offline; deferred recovery"
+            if bool(getattr(state, "has_servo_route_status", False)):
+                route_mask = int(
+                    getattr(state, "servo_route_controllable_bitmap", 0) or 0
+                )
+                waiting_route = target_mask & ~route_mask
+                if waiting_route:
+                    last_message = (
+                        "waiting for P4 servo route: "
+                        f"{self._format_motor_mask(waiting_route)}"
+                    )
+                    time.sleep(0.05)
+                    continue
+            unknown_mask = int(
+                getattr(state, "multi_turn_unknown_bitmap", 0) or 0
+            ) & target_mask
+            if unknown_mask == 0:
+                return True, "multi-turn recovery confirmed"
+            saved_mask, _saved_abs, _saved_raw, identity_ready = (
+                self._multiturn_recovery_anchors(state)
+            )
+            if identity_ready:
+                missing_anchor = unknown_mask & ~saved_mask
+                if missing_anchor:
+                    return (
+                        False,
+                        "no persistent multi-turn anchor: "
+                        f"{self._format_motor_mask(missing_anchor)}",
+                    )
+            last_message = (
+                "waiting for multi-turn restore: "
+                f"{self._format_motor_mask(unknown_mask)}"
+            )
+            time.sleep(0.05)
+        return False, last_message
+
     def _update_loop(self):
         while self.running:
             try:
@@ -668,6 +947,7 @@ class HandController:
                 ack_events = self.comm.drain_ack_events()
                 safety_events = self.comm.drain_safety_events()
                 self._persist_multiturn_state(new_model)
+                self._service_multiturn_anchor_capture(new_model)
                 self._service_multiturn_restore(new_model)
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
@@ -1119,46 +1399,6 @@ class HandController:
         ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S)
         return bool(ack is not None and int(ack[2]) == 0)
 
-    def _wait_for_multiturn_restore_result(
-        self,
-        baseline_result_token: int,
-        required_mask: int,
-        timeout_s: float = MULTITURN_RESTORE_RESULT_TIMEOUT_S,
-    ) -> Tuple[bool, str]:
-        """等待 P4 多圈恢复事务的最终结果，ACK 只表示命令已受理。"""
-        required = int(required_mask) & ((1 << MOTOR_COUNT) - 1)
-        deadline = time.time() + max(0.0, float(timeout_s))
-        while time.time() < deadline:
-            with self.state_lock:
-                state = self.current_state
-                result_token = int(
-                    getattr(state, "multiturn_restore_result_token", 0) or 0
-                )
-                restored_mask = int(
-                    getattr(state, "multiturn_restore_restored_mask", 0) or 0
-                ) & required
-                rejected_mask = int(
-                    getattr(state, "multiturn_restore_rejected_mask", 0) or 0
-                ) & required
-
-            if result_token == int(baseline_result_token):
-                time.sleep(0.02)
-                continue
-
-            missing_mask = required & ~(restored_mask | rejected_mask)
-            if rejected_mask or missing_mask:
-                return False, (
-                    "P4 restore result rejected/incomplete: "
-                    f"token={result_token} restored=0x{restored_mask:08X} "
-                    f"rejected=0x{rejected_mask:08X} missing=0x{missing_mask:08X}"
-                )
-            return True, (
-                f"P4 restore result confirmed: token={result_token} "
-                f"restored=0x{restored_mask:08X}"
-            )
-
-        return False, "P4 restore result timeout after ACK"
-
     def prepare_calibration_turn_zero(
         self,
         motor_mask: int,
@@ -1216,6 +1456,9 @@ class HandController:
         ):
             return False, "maintenance RESET timeout/reject", 0, requested_mask
         time.sleep(CALIBRATION_TURN_RESET_SETTLE_S)
+        # 在下发硬件 Reset Zero 前先屏蔽后台锚点保存，避免 P4 暂时清掉
+        # Turn Unknown 后、桌面失效旧锚点前产生竞争窗口。
+        self._block_multiturn_anchor_capture(requested_mask)
         sent_at = time.time()
         self.comm.send_command(("servo_reset_zero", requested_mask))
         ack = self.comm.wait_for_ack(
@@ -1225,6 +1468,12 @@ class HandController:
         )
         if ack is None or int(ack[2]) not in (0, 2):
             status = "timeout" if ack is None else str(int(ack[2]))
+            try:
+                self._invalidate_multiturn_anchor_mask(
+                    requested_mask, invalidation_reason
+                )
+            except (OSError, DeviceStateStoreError) as exc:
+                log_session("MULTITURN", f"calibration anchor invalidation failed: {exc}")
             return (
                 False,
                 f"calibration turn-reset rejected (status={status})",
@@ -1255,24 +1504,21 @@ class HandController:
                 missing = requested_mask & ~completed
                 # 只要某台舵机硬件归零成功，旧 JSON 圈数就绝不能再次恢复。
                 # 即使同一关节另一台舵机失败，也保持该条目失效并要求重标。
-                if completed:
-                    try:
-                        payload = self._multiturn_store.invalidate_motor_mask(
-                            completed,
-                            reason=invalidation_reason,
-                        )
-                        self._multiturn_store_payload = payload
-                    except (OSError, DeviceStateStoreError) as exc:
-                        log_session(
-                            "MULTITURN",
-                            f"calibration anchor invalidation failed: {exc}",
-                        )
-                        return (
-                            False,
-                            f"hardware reset completed but JSON invalidation failed: {exc}",
-                            completed,
-                            requested_mask & ~completed,
-                        )
+                try:
+                    self._invalidate_multiturn_anchor_mask(
+                        requested_mask, invalidation_reason
+                    )
+                except (OSError, DeviceStateStoreError) as exc:
+                    log_session(
+                        "MULTITURN",
+                        f"calibration anchor invalidation failed: {exc}",
+                    )
+                    return (
+                        False,
+                        f"hardware reset completed but JSON invalidation failed: {exc}",
+                        completed,
+                        requested_mask & ~completed,
+                    )
                 if status == 2 and failed_mask == 0 and missing == 0:
                     return (
                         True,
@@ -1289,6 +1535,12 @@ class HandController:
                 )
             time.sleep(0.02)
 
+        try:
+            self._invalidate_multiturn_anchor_mask(
+                requested_mask, invalidation_reason
+            )
+        except (OSError, DeviceStateStoreError) as exc:
+            log_session("MULTITURN", f"calibration anchor invalidation failed: {exc}")
         return (
             False,
             "calibration turn-reset ACK received, but result timed out",

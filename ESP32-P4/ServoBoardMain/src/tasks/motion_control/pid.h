@@ -11,8 +11,8 @@
 extern "C" {
 #endif
 
-// PID 参数数组固定为：kp、ki、kd、死区、积分限幅。
-#define PID_PARAMETER_NUM 5U
+// PID 参数数组固定为：kp、ki、kd、死区、积分限幅、D低通时间常数、D项限幅。
+#define PID_PARAMETER_NUM 7U
 
 typedef enum {
     PID_ERROR_NONE = 0U,
@@ -23,21 +23,24 @@ typedef enum {
 typedef struct {
     float kp;            ///< 比例增益，乘当前角度误差。
     float ki;            ///< 积分增益，乘误差时间积分。
-    float kd;            ///< 微分增益，乘误差变化率。
+    float kd;            ///< 微分增益，乘低通后的负反馈角速度。
     float Deadband;      ///< 绝对误差小于该角度时保持上一输出。
     float limitIntegral; ///< 积分状态绝对限幅。
+    float derivativeFilterTau; ///< 磁编反馈速度低通时间常数，单位秒。
+    float limitDerivative;     ///< D 项绝对限幅，单位舵机 counts。
 } PID_Parameter_Typedef;
 
 // 当前固件只使用位置式 PID，因此只保留位置误差所需的运行状态。
 typedef struct {
     float error;         ///< 当前误差 target-measure。
-    float previousError; ///< 上个有效周期误差。
+    float previousMeasure; ///< 上个有效周期磁编反馈角。
+    float filteredMeasureVelocity; ///< 低通后的磁编反馈角速度，单位 deg/s。
     float Integral;      ///< 已乘 dt、尚未乘 Ki 的误差积分。
     float Pout;          ///< 本周期比例项。
     float Iout;          ///< 本周期积分项。
-    float Dout;          ///< 本周期误差微分项。
+    float Dout;          ///< 本周期磁编反馈速度阻尼项。
     float Output;        ///< 限幅后的总输出，单位舵机 counts。
-    uint8_t derivativeInitialized; ///< 是否已有 previousError 可用于微分。
+    uint8_t derivativeInitialized; ///< 是否已有 previousMeasure 可用于微分。
     PID_Parameter_Typedef param;   ///< 固定控制参数。
     PID_Status_e status;           ///< 最近一次初始化/计算状态。
 } PID_Info_TypeDef;

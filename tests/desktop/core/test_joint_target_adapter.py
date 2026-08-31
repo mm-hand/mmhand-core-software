@@ -4,7 +4,6 @@ import pytest
 
 from desktop.core import angle_mapping
 from desktop.core.joint_target_adapter import (
-    LEGACY_CALIBRATED_DEG,
     URDF_DEG,
     URDF_RAD,
     adapt_joint_targets,
@@ -28,32 +27,18 @@ def test_active_urdf_radians_convert_to_degrees() -> None:
     )
 
 
-def test_legacy_calibrated_endpoints_map_to_active_urdf_endpoints() -> None:
-    legacy_min = []
-    legacy_max = []
-    expected_min = []
-    expected_max = []
-    for idx in range(ENCODER_COUNT):
-        old_low, old_high = angle_mapping.default_calibrated_range_deg(idx)
-        spec = angle_mapping.get_spec(idx)
-        new_low, new_high = spec.calibrated_urdf_endpoints_deg
-        legacy_min.append(old_low)
-        legacy_max.append(old_high)
-        expected_min.append(new_low)
-        expected_max.append(new_high)
-
-    mapped_min = adapt_joint_targets(legacy_min, source_space=LEGACY_CALIBRATED_DEG)
-    mapped_max = adapt_joint_targets(legacy_max, source_space=LEGACY_CALIBRATED_DEG)
-    assert list(mapped_min.urdf_targets_deg) == pytest.approx(expected_min)
-    assert list(mapped_max.urdf_targets_deg) == pytest.approx(expected_max)
+def test_legacy_target_space_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported joint target space"):
+        adapt_joint_targets(
+            [0.0] * ENCODER_COUNT,
+            source_space="legacy_calibrated_deg",
+        )
 
 
-def test_semantic_and_legacy_thumb_names_use_canonical_j16_to_j20_order() -> None:
+def test_semantic_thumb_names_use_canonical_j16_to_j20_order() -> None:
     assert joint_index_for_urdf_name("thumb_aa_joint") == 16
     assert joint_index_for_urdf_name("thumb_cmc1_joint") == 20
-    assert joint_index_for_urdf_name("5-1") == 20
-    assert joint_index_for_urdf_name("5-2") == 16
-    assert joint_index_for_urdf_name("5-5") == 19
+    assert joint_index_for_urdf_name("5-1") is None
 
 
 def test_named_urdf_radians_map_all_21_semantic_names() -> None:

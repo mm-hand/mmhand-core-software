@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ from .protocol import ENCODER_COUNT, MOTOR_COUNT, VALID_MOTOR_MASK
 CALIBRATION_SNAPSHOT_FORMAT = "mmhand_calibration_bundle"
 CALIBRATION_SNAPSHOT_SCHEMA_VERSION = 6
 _JOINT_MASK = (1 << ENCODER_COUNT) - 1
+_SNAPSHOT_WRITE_LOCK = threading.RLock()
 
 
 class CalibrationSnapshotError(ValueError):
@@ -121,6 +123,7 @@ def validate_snapshot(payload: dict, *, verify_integrity: bool = True) -> dict:
         raise CalibrationSnapshotError("manual_reference_min_raw must contain 21 entries")
     if not isinstance(manual_max, list) or len(manual_max) != ENCODER_COUNT:
         raise CalibrationSnapshotError("manual_reference_max_raw must contain 21 entries")
+    multiturn_anchor_fields(payload)
 
     if verify_integrity:
         integrity = payload.get("integrity")
@@ -166,6 +169,11 @@ def atomic_write_snapshot(path: Path | str, payload: dict, *, backup: bool = Tru
     return sealed
 
 
+def snapshot_write_transaction():
+    """返回覆盖快照 read-modify-write 全过程的同进程可重入锁。"""
+    return _SNAPSHOT_WRITE_LOCK
+
+
 def _normalized_list(values, count: int, default):
     normalized = list(values or [])[:count]
     while len(normalized) < count:
@@ -173,8 +181,42 @@ def _normalized_list(values, count: int, default):
     return normalized
 
 
+def multiturn_anchor_fields(payload: dict) -> tuple[int, list[int], list[int]]:
+    """读取快照内的多圈后备锚点；旧 V6 快照没有该字段时视为全空。"""
+    has_any = any(
+        key in payload
+        for key in (
+            "multiturn_anchor_valid_bitmap",
+            "multiturn_anchor_logical_abs",
+            "multiturn_anchor_raw",
+        )
+    )
+    if not has_any:
+        return 0, [0] * MOTOR_COUNT, [0] * MOTOR_COUNT
+    try:
+        valid_mask = parse_mask(payload.get("multiturn_anchor_valid_bitmap", 0))
+    except (TypeError, ValueError) as exc:
+        raise CalibrationSnapshotError("invalid multiturn anchor valid bitmap") from exc
+    logical_abs = payload.get("multiturn_anchor_logical_abs")
+    raw = payload.get("multiturn_anchor_raw")
+    if not isinstance(logical_abs, list) or len(logical_abs) != MOTOR_COUNT:
+        raise CalibrationSnapshotError(
+            "multiturn_anchor_logical_abs must contain 27 entries"
+        )
+    if not isinstance(raw, list) or len(raw) != MOTOR_COUNT:
+        raise CalibrationSnapshotError("multiturn_anchor_raw must contain 27 entries")
+    try:
+        return (
+            valid_mask & VALID_MOTOR_MASK,
+            [int(value) for value in logical_abs],
+            [int(value) % 4096 for value in raw],
+        )
+    except (TypeError, ValueError) as exc:
+        raise CalibrationSnapshotError("invalid multiturn anchor values") from exc
+
+
 def _empty_v6_snapshot() -> dict:
-    """建立新的 V6 空快照；旧 V5 只归档，不把旧映射语义带入当前控制。"""
+    """建立新的 V6 空快照。"""
     return {
         "joint_calib_results": [None] * ENCODER_COUNT,
         "motor_abs_limit_min": [0] * MOTOR_COUNT,
@@ -185,29 +227,44 @@ def _empty_v6_snapshot() -> dict:
         "manual_reference_valid_bitmap": format_mask(0),
         "active_joint_mask": format_mask(0),
         "active_motor_mask": format_mask(0),
+        "multiturn_anchor_valid_bitmap": format_mask(0),
+        "multiturn_anchor_logical_abs": [0] * MOTOR_COUNT,
+        "multiturn_anchor_raw": [0] * MOTOR_COUNT,
     }
 
 
-def _read_v6_or_archive_v5(target: Path) -> dict:
-    """读取 V6；遇到 V5 时先留档，再允许本次 Manual 写入创建干净 V6。"""
-    try:
-        return read_snapshot(target)
-    except CalibrationSnapshotError:
-        try:
-            legacy = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raise
-        if (
-            legacy.get("format") != CALIBRATION_SNAPSHOT_FORMAT
-            or int(legacy.get("schema_version", 0) or 0) != 5
-        ):
-            raise
-        archive = target.with_name(
-            f"{target.stem}.legacy_v5_{time.strftime('%Y%m%d_%H%M%S')}"
-            f"{target.suffix}"
+def update_snapshot_multiturn_anchors(
+    path: Path | str,
+    *,
+    motor_mask: int,
+    logical_abs: list[int],
+    raw: list[int],
+) -> dict:
+    """将已确认写入运行锚点的 Mxx ABS/raw 同步写回标定快照。"""
+    if len(logical_abs) != MOTOR_COUNT or len(raw) != MOTOR_COUNT:
+        raise CalibrationSnapshotError("multiturn anchors must contain 27 entries")
+    with snapshot_write_transaction():
+        payload = read_snapshot(path)
+        active_mask = parse_mask(payload.get("active_motor_mask")) & VALID_MOTOR_MASK
+        requested_mask = int(motor_mask) & VALID_MOTOR_MASK
+        if requested_mask == 0 or (requested_mask & active_mask) != requested_mask:
+            raise CalibrationSnapshotError(
+                "multiturn anchor motors are not active in calibration snapshot"
+            )
+        valid_mask, saved_abs, saved_raw = multiturn_anchor_fields(payload)
+        for motor_idx in range(MOTOR_COUNT):
+            bit = 1 << motor_idx
+            if requested_mask & bit:
+                saved_abs[motor_idx] = int(logical_abs[motor_idx])
+                saved_raw[motor_idx] = int(raw[motor_idx]) % 4096
+        payload["multiturn_anchor_valid_bitmap"] = format_mask(
+            (valid_mask | requested_mask) & active_mask
         )
-        shutil.copy2(target, archive)
-        return _empty_v6_snapshot()
+        payload["multiturn_anchor_logical_abs"] = saved_abs
+        payload["multiturn_anchor_raw"] = saved_raw
+        payload["multiturn_anchor_updated_motor_mask"] = format_mask(requested_mask)
+        payload["multiturn_anchor_saved_at_host_time"] = time.time()
+        return atomic_write_snapshot(path, payload, backup=False)
 
 
 def update_manual_snapshot(
@@ -218,9 +275,26 @@ def update_manual_snapshot(
     max_raw: list[int],
 ) -> dict:
     """更新 V6 Manual 数据，并只失效端点真正变化关节的 Auto/LUT 与限位。"""
+    with snapshot_write_transaction():
+        return _update_manual_snapshot_locked(
+            path,
+            valid_mask=valid_mask,
+            min_raw=min_raw,
+            max_raw=max_raw,
+        )
+
+
+def _update_manual_snapshot_locked(
+    path: Path | str,
+    *,
+    valid_mask: int,
+    min_raw: list[int],
+    max_raw: list[int],
+) -> dict:
+    """在快照写事务内更新 Manual 数据。"""
     target = Path(path)
     if target.exists():
-        payload = _read_v6_or_archive_v5(target)
+        payload = read_snapshot(target)
     else:
         payload = _empty_v6_snapshot()
     if len(min_raw) != ENCODER_COUNT or len(max_raw) != ENCODER_COUNT:
@@ -254,13 +328,23 @@ def update_manual_snapshot(
     )
     limit_valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
     invalid_motor_mask = motor_mask_for_joint_mask(changed_mask)
+    anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(payload)
     for joint_idx in range(ENCODER_COUNT):
         if changed_mask & (1 << joint_idx):
             results[joint_idx] = None
+    for motor_idx in range(MOTOR_COUNT):
+        if invalid_motor_mask & (1 << motor_idx):
+            anchor_abs[motor_idx] = 0
+            anchor_raw[motor_idx] = 0
     payload["joint_calib_results"] = results
     payload["motor_abs_limit_valid_bitmap"] = format_mask(
         limit_valid & ~invalid_motor_mask
     )
+    payload["multiturn_anchor_valid_bitmap"] = format_mask(
+        anchor_valid & ~invalid_motor_mask
+    )
+    payload["multiturn_anchor_logical_abs"] = anchor_abs
+    payload["multiturn_anchor_raw"] = anchor_raw
 
     active_joint_mask = 0
     for joint_idx, result in enumerate(results):
@@ -290,6 +374,23 @@ def invalidate_calibration_snapshot_scope(
     Reset Zero 会改变舵机 logical ABS 坐标系，旧 Auto/LUT 不能继续加载；
     Manual Min/Max 属于磁编码器原始端点，不依赖舵机圈数，必须继续保留。
     """
+    with snapshot_write_transaction():
+        return _invalidate_calibration_snapshot_scope_locked(
+            path,
+            motor_mask=motor_mask,
+            joint_mask=joint_mask,
+            reason=reason,
+        )
+
+
+def _invalidate_calibration_snapshot_scope_locked(
+    path: Path | str,
+    *,
+    motor_mask: int,
+    joint_mask: int,
+    reason: str,
+) -> str:
+    """在快照写事务内失效指定范围。"""
     target = Path(path)
     if not target.exists():
         return "no Calib Load snapshot"
@@ -310,6 +411,7 @@ def invalidate_calibration_snapshot_scope(
     mins = _normalized_list(payload.get("motor_abs_limit_min"), MOTOR_COUNT, 0)
     maxs = _normalized_list(payload.get("motor_abs_limit_max"), MOTOR_COUNT, 0)
     valid = parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
+    anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(payload)
 
     for joint_idx in range(ENCODER_COUNT):
         if joint_mask & (1 << joint_idx):
@@ -318,11 +420,16 @@ def invalidate_calibration_snapshot_scope(
         if motor_mask & (1 << motor_idx):
             mins[motor_idx] = 0
             maxs[motor_idx] = 0
+            anchor_abs[motor_idx] = 0
+            anchor_raw[motor_idx] = 0
 
     payload["joint_calib_results"] = results
     payload["motor_abs_limit_min"] = mins
     payload["motor_abs_limit_max"] = maxs
     payload["motor_abs_limit_valid_bitmap"] = format_mask(valid & ~motor_mask)
+    payload["multiturn_anchor_valid_bitmap"] = format_mask(anchor_valid & ~motor_mask)
+    payload["multiturn_anchor_logical_abs"] = anchor_abs
+    payload["multiturn_anchor_raw"] = anchor_raw
 
     remaining_joint_mask = 0
     remaining_limit_mask = valid & ~motor_mask
@@ -366,6 +473,11 @@ def merge_snapshot(
         merged = json.loads(json.dumps(previous, ensure_ascii=False))
     else:
         merged = _empty_v6_snapshot()
+
+    anchor_valid, anchor_abs, anchor_raw = multiturn_anchor_fields(merged)
+    merged["multiturn_anchor_valid_bitmap"] = format_mask(anchor_valid)
+    merged["multiturn_anchor_logical_abs"] = anchor_abs
+    merged["multiturn_anchor_raw"] = anchor_raw
 
     current_results = _normalized_list(
         current.get("joint_calib_results"), ENCODER_COUNT, None

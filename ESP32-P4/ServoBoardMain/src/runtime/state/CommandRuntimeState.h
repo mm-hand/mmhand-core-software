@@ -13,11 +13,8 @@ struct CommandRuntimeState {
     volatile uint32_t host_rx_heartbeat_ms; ///< 最近收到有效上位机帧的单调时间，用于控制租约。
     float targetAngles[ENCODER_TOTAL_NUM]; ///< 最新关节目标，单位 deg。
     int32_t motorTargetRaw[SERVO_TOTAL_NUM]; ///< 已应用单点直控 logical ABS。
-    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM]; ///< 已应用 sweep logical ABS。
     int32_t pendingMotorTargetRaw[SERVO_TOTAL_NUM]; ///< 等待门禁的单点目标。
-    int32_t pendingMotorSweepTargetRaw[SERVO_TOTAL_NUM]; ///< 等待门禁的 sweep 目标。
     volatile uint32_t motor_command_token; ///< 单点直控命令代际。
-    volatile uint32_t motor_sweep_command_token; ///< sweep 命令代际。
     volatile uint32_t joint_command_token; ///< 关节角命令代际。
     volatile uint32_t joint_command_accepted_ms; ///< P4 完整接收当前目标帧的单调毫秒时间。
     volatile uint32_t feedback_command_joint_mask; ///< 真正参与 PID 的 Jxx。

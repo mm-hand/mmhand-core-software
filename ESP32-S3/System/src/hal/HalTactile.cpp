@@ -15,12 +15,12 @@ constexpr uint16_t kForceSummaryLen = 3;
 constexpr uint16_t kForceDistributionAddr = 1038;
 constexpr uint16_t kForceDistributionMaxLen = TACTILE_PAD_TAXELS * TACTILE_AXIS_COUNT;
 // 板级片选建立、模块准备响应及释放片选所需延时。
-constexpr uint16_t kDelayCsHoldUs = 10;
+constexpr uint16_t kDelayCsHoldUs = 30;
 constexpr uint16_t kDelayResponseUs = 100;
 constexpr uint16_t kDelaySelectSettleUs = 80;
-// [待确认是否简化] 当前重试次数为1，失败后仍会delay 2ms，但不会进行第二次尝试。
-constexpr uint8_t kReadRetryCount = 1;
-constexpr uint8_t kRetryDelayMs = 2;
+constexpr uint8_t kSummaryReadAttempts = 2;
+constexpr uint8_t kFullReadAttempts = 1;
+constexpr uint16_t kRetryDelayUs = 200;
 
 struct SensorPattern {
     bool enabled;  ///< 是否扫描该物理模块。
@@ -141,7 +141,14 @@ HalTactile tactile;
  * @brief 创建快照互斥量和数据存储。
  * @note [待确认是否简化] _data只在全局对象生命周期使用，可改为类内直接成员以避免new。
  */
-HalTactile::HalTactile() : _mutex(xSemaphoreCreateMutex()), _data(new TactileData()), _spi(nullptr), _spiReady(false), _diag{} {
+HalTactile::HalTactile()
+    : _mutex(xSemaphoreCreateMutex()),
+      _data(new TactileData()),
+      _spi(nullptr),
+      _spiReady(false),
+      _diag{},
+      _lastReadResult{TactileReadFailReason::None, 0, 0, 0},
+      _lastReadAttempts(0) {
     memset(_data, 0, sizeof(TactileData));
 }
 
@@ -219,7 +226,13 @@ void HalTactile::setSelectorPattern(uint8_t pattern) {
  * @note 命令和响应拆成两次SPI事务，但在此期间保持同一物理路由被选中。
  */
 bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen) {
-    if (!_spiReady || _spi == nullptr || !payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
+    _lastReadResult = {TactileReadFailReason::None, 0, 0, 0};
+    if (!payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
+        _lastReadResult.reason = TactileReadFailReason::InvalidArgument;
+        return false;
+    }
+    if (!_spiReady || _spi == nullptr) {
+        _lastReadResult.reason = TactileReadFailReason::SpiNotReady;
         return false;
     }
 
@@ -260,6 +273,9 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     setAllSelectPinsHigh();
 
     if (!commandOk || !responseOk) {
+        _lastReadResult.reason = commandOk
+            ? TactileReadFailReason::ResponseTransport
+            : TactileReadFailReason::CommandTransport;
         memset(payload, 0, payloadLen);
         return false;
     }
@@ -268,15 +284,12 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     // CRC覆盖命令头、状态和负载，不包含末尾CRC本身。
     const uint8_t recvCrc = raw[totalLen - 1];
     const uint8_t calcCrc = crc8(raw, totalLen - 1);
-    _diag.lastStatus = raw[kLenCmdHead];
-    _diag.lastRecvCrc = recvCrc;
-    _diag.lastCalcCrc = calcCrc;
+    _lastReadResult.status = raw[kLenCmdHead];
+    _lastReadResult.recvCrc = recvCrc;
+    _lastReadResult.calcCrc = calcCrc;
 
     if (recvCrc != calcCrc) {
-        _diag.lastFailedPattern = selectorPattern;
-        _diag.lastFailStatus = raw[kLenCmdHead];
-        _diag.lastFailRecvCrc = recvCrc;
-        _diag.lastFailCalcCrc = calcCrc;
+        _lastReadResult.reason = TactileReadFailReason::CrcMismatch;
         memset(payload, 0, payloadLen);
         return false;
     }
@@ -304,12 +317,16 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
     const uint8_t selectorPattern = cfg.pattern;
 
     bool ok = false;
-    for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
+    _lastReadAttempts = 0;
+    for (uint8_t attempt = 0; attempt < kSummaryReadAttempts; attempt++) {
+        _lastReadAttempts++;
         ok = readRegisters(selectorPattern, kForceSummaryAddr, payload, kForceSummaryLen);
         if (ok) {
             break;
         }
-        delay(kRetryDelayMs);
+        if (attempt + 1 < kSummaryReadAttempts) {
+            delayMicroseconds(kRetryDelayUs);
+        }
     }
     if (ok) {
         globalOut[0] = payload[0];
@@ -349,12 +366,16 @@ bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8
 
     const uint8_t selectorPattern = cfg.pattern;
     bool ok = false;
-    for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
+    _lastReadAttempts = 0;
+    for (uint8_t attempt = 0; attempt < kFullReadAttempts; attempt++) {
+        _lastReadAttempts++;
         ok = readRegisters(selectorPattern, kForceDistributionAddr, forcesOut, forcesLen);
         if (ok) {
             break;
         }
-        delay(kRetryDelayMs);
+        if (attempt + 1 < kFullReadAttempts) {
+            delayMicroseconds(kRetryDelayUs);
+        }
     }
     if (!ok) {
         memset(forcesOut, 0, forcesLen);
@@ -376,6 +397,54 @@ void HalTactile::update() {
     nextDiag.summaryOkMask = 0;
     nextDiag.fullOkMask = 0;
     nextDiag.okMask = 0;
+    nextDiag.commandFailMask = 0;
+    nextDiag.responseFailMask = 0;
+    nextDiag.crcFailMask = 0;
+    nextDiag.statusNonzeroMask = 0;
+    nextDiag.summaryRetryRecoveredMask = 0;
+
+    auto incrementSaturated = [](uint16_t& value) {
+        if (value != UINT16_MAX) value++;
+    };
+    auto recordRead = [&](uint8_t moduleIndex, bool summary, bool ok) {
+        const uint16_t moduleBit = (uint16_t)(1U << moduleIndex);
+        nextDiag.lastStatus = _lastReadResult.status;
+        nextDiag.lastRecvCrc = _lastReadResult.recvCrc;
+        nextDiag.lastCalcCrc = _lastReadResult.calcCrc;
+        nextDiag.moduleLastStatus[moduleIndex] = _lastReadResult.status;
+        if (_lastReadResult.status != 0) nextDiag.statusNonzeroMask |= moduleBit;
+        if (summary) {
+            incrementSaturated(ok
+                ? nextDiag.summarySuccessCount[moduleIndex]
+                : nextDiag.summaryFailureCount[moduleIndex]);
+            if (ok && _lastReadAttempts > 1) nextDiag.summaryRetryRecoveredMask |= moduleBit;
+            if (!ok) nextDiag.summaryLastFailReason[moduleIndex] = (uint8_t)_lastReadResult.reason;
+        } else {
+            incrementSaturated(ok
+                ? nextDiag.fullSuccessCount[moduleIndex]
+                : nextDiag.fullFailureCount[moduleIndex]);
+            if (!ok) nextDiag.fullLastFailReason[moduleIndex] = (uint8_t)_lastReadResult.reason;
+        }
+        if (ok) return;
+        switch (_lastReadResult.reason) {
+            case TactileReadFailReason::CommandTransport:
+                nextDiag.commandFailMask |= moduleBit;
+                break;
+            case TactileReadFailReason::ResponseTransport:
+                nextDiag.responseFailMask |= moduleBit;
+                break;
+            case TactileReadFailReason::CrcMismatch:
+                nextDiag.crcFailMask |= moduleBit;
+                break;
+            default:
+                break;
+        }
+        nextDiag.lastFailedPattern = kSensorPatterns[moduleIndex / TACTILE_SENSOR_PER_GROUP]
+            [moduleIndex % TACTILE_SENSOR_PER_GROUP].pattern;
+        nextDiag.lastFailStatus = _lastReadResult.status;
+        nextDiag.lastFailRecvCrc = _lastReadResult.recvCrc;
+        nextDiag.lastFailCalcCrc = _lastReadResult.calcCrc;
+    };
 
     if (_spiReady) {
         for (uint8_t g = 0; g < TACTILE_GROUP_NUM; g++) {
@@ -407,8 +476,11 @@ void HalTactile::update() {
 
                 // [待确认是否优化] 摘要与全量分开读取；若确认deriveGlobalFromForces等价，可减少一半事务数。
                 const bool summaryOk = readSensorSummary(g, s, globals[s], rawSummaries[s]);
+                const uint8_t moduleIndex = g * TACTILE_SENSOR_PER_GROUP + s;
+                recordRead(moduleIndex, true, summaryOk);
                 const bool forcesOk = readSensorForces(g, s, forces[s], forceLen);
-                const uint16_t moduleBit = (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
+                recordRead(moduleIndex, false, forcesOk);
+                const uint16_t moduleBit = (uint16_t)(1U << moduleIndex);
 
                 // 摘要与全量有效性必须独立记录：摘要为零可能是正常无受力，
                 // 只有SPI事务及CRC8失败时才清除summaryOkMask对应位。
@@ -434,13 +506,7 @@ void HalTactile::update() {
     // 先在局部next中构建完整帧，再在短临界区内一次替换，避免消费者读到半帧。
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(10))) {
         *_data = next;
-        _diag.frameCount = nextDiag.frameCount;
-        _diag.enabledMask = nextDiag.enabledMask;
-        _diag.okReads = nextDiag.okReads;
-        _diag.failedReads = nextDiag.failedReads;
-        _diag.summaryOkMask = nextDiag.summaryOkMask;
-        _diag.fullOkMask = nextDiag.fullOkMask;
-        _diag.okMask = nextDiag.okMask;
+        _diag = nextDiag;
         xSemaphoreGive(_mutex);
     }
 }

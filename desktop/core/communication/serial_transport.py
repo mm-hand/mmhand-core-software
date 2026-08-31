@@ -30,14 +30,11 @@ class SerialTransport:
         baudrate: int,
         timeout_s: float,
         serial_factory: Optional[SerialFactory],
-        *,
-        suppress_control_lines: bool = False,
     ) -> None:
         self.port = str(port or "").strip()
         self.baudrate = int(baudrate)
         self.timeout_s = float(timeout_s)
         self._serial_factory = serial_factory
-        self._suppress_control_lines = bool(suppress_control_lines)
         self._serial: Optional[Any] = None
         # P4 心跳与普通命令可能来自同一 TX 线程的不同调用路径，必须共用此锁。
         self._write_lock = threading.Lock()
@@ -58,28 +55,12 @@ class SerialTransport:
         if not self.port or self._serial_factory is None:
             return False
 
-        if self._suppress_control_lines:
-            # 独立触觉串口不能让 DTR/RTS 变化触发设备复位，保留旧链路行为。
-            handle = self._serial_factory()
-            # 先登记句柄，后续配置/open 任一步失败时，调用方仍可通过 close 回收资源。
-            self._serial = handle
-            handle.port = self.port
-            handle.baudrate = self.baudrate
-            handle.timeout = self.timeout_s
-            handle.dtr = False
-            handle.rts = False
-            handle.open()
-            if hasattr(handle, "setDTR"):
-                handle.setDTR(False)
-            if hasattr(handle, "setRTS"):
-                handle.setRTS(False)
-        else:
-            handle = self._serial_factory(
-                self.port,
-                self.baudrate,
-                timeout=self.timeout_s,
-            )
-            self._serial = handle
+        handle = self._serial_factory(
+            self.port,
+            self.baudrate,
+            timeout=self.timeout_s,
+        )
+        self._serial = handle
         return self.is_open
 
     @property

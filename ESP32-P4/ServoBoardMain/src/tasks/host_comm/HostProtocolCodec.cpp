@@ -82,24 +82,6 @@ bool parseFloatArrayLittleEndian(const uint8_t* payload, size_t payloadLen, floa
     return true;
 }
 
-// 解析固定数量的大端 int16，并符号扩展为内部 int32。
-bool parseInt16ArrayBigEndian(const uint8_t* payload, size_t payloadLen, int32_t* outValues, uint8_t count)
-{
-    if (!payload || !outValues) {
-        return false;
-    }
-    const size_t required = (size_t)count * sizeof(uint16_t);
-    if (payloadLen < required) {
-        return false;
-    }
-    for (uint8_t i = 0; i < count; i++)
-    {
-        const uint16_t raw = ((uint16_t)payload[(size_t)i * 2] << 8) | payload[(size_t)i * 2 + 1];
-        outValues[i] = (int16_t)raw;
-    }
-    return true;
-}
-
 uint32_t readU32BigEndian(const uint8_t* p)
 {
     return ((uint32_t)p[0] << 24) |

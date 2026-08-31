@@ -162,6 +162,7 @@ class ControlPanel(
         self._motor_run_states = [False] * MOTOR_COUNT
         self._last_state_transition_count: Optional[int] = None
         self._last_multi_turn_unknown_bitmap: Optional[int] = None
+        self._last_p4_time_ms: Optional[int] = None
         self._turn_recovery_popup_episode_active = False
         self._turn_recovery_popup_episode_mask = 0
         self._servo_turn_overflow_popup_episode_active = False
@@ -187,11 +188,6 @@ class ControlPanel(
         self._tri_test_timer = QtCore.QTimer(self)
         self._tri_test_timer.setInterval(TEST_TICK_MS)
         self._tri_test_timer.timeout.connect(self._tri_test_tick)
-        self._p4_rope_init_phase = "idle"
-        self._p4_rope_init_joint_mask = 0
-        self._p4_rope_init_requested_at = 0.0
-        self._p4_rope_init_transition_base = 0
-        self._p4_rope_init_sequence_base = 0
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
         self._test_t0 = 0.0
         self._test_hold_s = float(TEST_DEFAULT_HOLD_S)

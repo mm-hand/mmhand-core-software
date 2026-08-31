@@ -59,6 +59,7 @@ from .ui_control_common import (
     motor_tendon_shorten_abs_sign,
 )
 from .ui_dialogs import show_scrollable_message
+from desktop.core.generated_upper_protocol import STATE_SYNC_ALL
 from desktop.core.safety_rules import explain_direct_reject
 
 
@@ -67,6 +68,7 @@ class ControlPanelStateMixin:
     _ENCODER_COMMON_ZERO_CONFIRM_S = 0.20
     _ENCODER_COMMON_ZERO_RECOVERY_FRAMES = 3
     _ROS2_TARGET_STALE_AFTER_S = 0.50
+    _P4_REBOOT_BACKWARD_JUMP_MS = 100
     _ENCODER_COMMON_BUS_MESSAGE = (
         "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
         "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
@@ -100,7 +102,6 @@ class ControlPanelStateMixin:
         self._handle_servo_route_status(state)
         self._handle_connectivity_transitions(state)
         self._handle_direct_command_result(state)
-        self._update_p4_rope_init_progress(state)
         calib_status = str(getattr(state, "calib_status", "IDLE"))
         active_calib_statuses = {"PENDING", "RUNNING"}
         partial_completed_mask = (
@@ -134,9 +135,8 @@ class ControlPanelStateMixin:
             self._pending_calib_motor_mask = 0
             self._pending_calib_result_baselines = {}
         self._last_calib_status = calib_status
-        self._update_connection_lights()
         self._maybe_show_calibration_assembly_warning(state)
-        self._maybe_save_calibration_snapshot(state)
+        self._save_calibration_snapshot_without_blocking_ui(state)
         if self._app_mode != "manual":
             updater = getattr(self._body_widget, "update_state", None)
             if callable(updater):
@@ -149,6 +149,20 @@ class ControlPanelStateMixin:
         )
         self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
         self._update_manual_action_buttons()
+
+    def _save_calibration_snapshot_without_blocking_ui(self, state) -> None:
+        """Keep display refresh alive if optional calibration persistence fails."""
+        try:
+            self._maybe_save_calibration_snapshot(state)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            if detail != getattr(self, "_last_calibration_snapshot_error", ""):
+                self._last_calibration_snapshot_error = detail
+                message = f"Calib snapshot save failed: {detail}"
+                self.context.emit_action(message)
+                self._set_status(message)
+        else:
+            self._last_calibration_snapshot_error = ""
 
     @classmethod
     def _encoder_common_zero_snapshot(cls, state) -> bool:
@@ -308,11 +322,43 @@ class ControlPanelStateMixin:
             unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
         except (TypeError, ValueError):
             unknown_bitmap = 0
-
-        if self._last_state_transition_count is not None and transition_count < self._last_state_transition_count:
-            self._reset_motor_target_cache_for_device_epoch(
-                "Firmware reboot detected: motor targets re-synced to feedback"
+        p4_time_ms = int(getattr(state, "p4_time_ms", 0) or 0)
+        has_p4_time = bool(getattr(state, "has_p4_time", False))
+        transition_restarted = (
+            self._last_state_transition_count is not None
+            and transition_count < self._last_state_transition_count
+        )
+        p4_time_restarted = False
+        previous_p4_time_ms = getattr(self, "_last_p4_time_ms", None)
+        if has_p4_time and previous_p4_time_ms is not None:
+            backward_ms = (previous_p4_time_ms - p4_time_ms) & 0xFFFFFFFF
+            p4_time_restarted = (
+                p4_time_ms < previous_p4_time_ms
+                and self._P4_REBOOT_BACKWARD_JUMP_MS <= backward_ms < 0x80000000
             )
+
+        if transition_restarted or p4_time_restarted:
+            self._reset_motor_target_cache_for_device_epoch(
+                "Firmware reboot detected: restoring P4 calibration state"
+            )
+            # 失效仍在运行的旧 worker；新 worker 先同步 P4 状态，再恢复
+            # Manual 与 Auto/LUT。串口不断开时同样走这条路径。
+            self._startup_device_check_epoch = int(
+                getattr(self, "_startup_device_check_epoch", 0)
+            ) + 1
+            self._startup_device_check_running = False
+            request_state_sync = getattr(self.backend, "request_state_sync", None)
+            if callable(request_state_sync):
+                try:
+                    request_state_sync(STATE_SYNC_ALL)
+                except Exception:
+                    pass
+            begin_startup_check = getattr(self, "begin_startup_device_check", None)
+            if callable(begin_startup_check):
+                try:
+                    begin_startup_check()
+                except Exception:
+                    pass
         elif self._last_multi_turn_unknown_bitmap is not None and unknown_bitmap != self._last_multi_turn_unknown_bitmap:
             self._reset_motor_target_cache_for_device_epoch(
                 "Turn status changed: motor targets re-synced to feedback"
@@ -320,6 +366,8 @@ class ControlPanelStateMixin:
 
         self._last_state_transition_count = transition_count
         self._last_multi_turn_unknown_bitmap = unknown_bitmap
+        if has_p4_time:
+            self._last_p4_time_ms = p4_time_ms
 
     def _handle_connectivity_transitions(self, state) -> None:
         """Handle handle connectivity transitions behavior for the control panel."""
@@ -358,7 +406,7 @@ class ControlPanelStateMixin:
                 if trusted:
                     parts.append(f"trusted {self._format_motor_mask(trusted)}")
                 if untrusted:
-                    parts.append(f"TURN UNKNOWN {self._format_motor_mask(untrusted)}")
+                    parts.append(f"Multi-turn Unknown {self._format_motor_mask(untrusted)}")
                 message = "Servo online: " + "; ".join(parts)
                 self.context.emit_action(message)
                 self._set_status(message)
@@ -447,14 +495,12 @@ class ControlPanelStateMixin:
 
     def clear_live_state(self) -> None:
         self.stop_all_tests("stopped on disconnect", update_status=False)
-        self._reset_p4_rope_init_progress()
         self._state = None
         self._startup_device_check_epoch += 1
         self._startup_device_check_running = False
         self._startup_missing_warning_shown = False
         if self.device_check_view is not None:
             self.device_check_view.clear_state()
-        self._update_connection_lights()
         self._joint_target_initialized = False
         self._motor_target_initialized = False
         self._last_calib_status = None
@@ -470,6 +516,7 @@ class ControlPanelStateMixin:
         self._last_reported_direct_generation = None
         self._last_state_transition_count = None
         self._last_multi_turn_unknown_bitmap = None
+        self._last_p4_time_ms = None
         self.reset_turn_unknown_popup_episode()
         self._last_servo_online_bitmap = None
         self._last_servo_route_warning_signature = None
@@ -941,36 +988,6 @@ class ControlPanelStateMixin:
         for i in range(MOTOR_COUNT):
             self._motor_last_sent_abs[i] = self._motor_abs_for_command_packet(i, state, ignore_last_sent=True)
 
-    def _motor_command_debug_summary(self, trigger: str, targets: List[int]) -> str:
-        """Compute or update motor command debug summary data."""
-        idx = self._motor_index_from_trigger(trigger)
-        if idx is None:
-            idx = 0
-        relative = self._motor_abs_pos[idx] if 0 <= idx < len(self._motor_abs_pos) else None
-        origin = self._motor_session_origin_abs[idx] if 0 <= idx < len(self._motor_session_origin_abs) else None
-        sent = targets[idx] if 0 <= idx < len(targets) else None
-        sign = motor_tendon_shorten_abs_sign(idx)
-        return (
-            f"M{idx:02d} rel={relative if relative is not None else '-'} "
-            f"sign={sign:+d} origin={origin if origin is not None else '-'} "
-            f"sent={sent if sent is not None else '-'}"
-        )
-
-    def _motor_index_from_trigger(self, trigger: str) -> Optional[int]:
-        """Compute or update motor index from trigger data."""
-        marker = "M"
-        pos = str(trigger).rfind(marker)
-        if pos >= 0:
-            digits = []
-            for ch in str(trigger)[pos + 1:]:
-                if ch.isdigit():
-                    digits.append(ch)
-                else:
-                    break
-            if digits:
-                return max(0, min(MOTOR_COUNT - 1, int("".join(digits))))
-        return None
-
     def _send_single_motor_abs_from_ui(self, idx: int, trigger: str) -> Optional[int]:
         """Handle send single motor abs from ui behavior for the control panel."""
         if idx < 0 or idx >= MOTOR_COUNT:
@@ -1061,10 +1078,6 @@ class ControlPanelStateMixin:
         if 0 <= idx < len(self._motor_target_user_set):
             self._motor_target_user_set[idx] = True
 
-    def _joint_default_target_max_deg(self, idx: int) -> float:
-        """Compute or update joint default target max deg data."""
-        return self._joint_target_model.default_max(idx)
-
     def _joint_default_target_min_deg(self, idx: int) -> float:
         """Compute or update joint default target min deg data."""
         return self._joint_target_model.default_min(idx)
@@ -1077,11 +1090,6 @@ class ControlPanelStateMixin:
         """Compute or update joint workspace range data."""
         state = self._state if state is None else state
         return self._joint_target_model.workspace(idx, state)
-
-    def _joint_calibrated_target_min_deg(self, idx: int, state: Optional[HandModel] = None) -> Optional[float]:
-        """Compute or update joint calibrated target min deg data."""
-        state = self._state if state is None else state
-        return self._joint_target_model.calibrated_min(idx, state)
 
     def _joint_target_max_deg(self, idx: int) -> float:
         # The upper target boundary is always the static URDF Max.
@@ -1359,8 +1367,14 @@ class ControlPanelStateMixin:
             summaries.append(f"M{motor_idx:02d} [{lo},{hi}]")
             details.append(f"M{motor_idx:02d}: calibrated ABS range [{lo}, {hi}] (diagnostic)")
 
-        item.setText(" / ".join(summaries) if summaries else "-")
+        # 双腱范围按舵机分行，避免一行内容被表格列宽截断。
+        item.setText("\n".join(summaries) if summaries else "-")
         item.setToolTip("\n".join(details))
+        table = getattr(self, "joint_table", None)
+        row_by_joint = getattr(self, "_joint_table_row_by_index", {})
+        row = row_by_joint.get(joint_idx) if isinstance(row_by_joint, dict) else None
+        if table is not None and row is not None:
+            table.setRowHeight(row, 42 if len(summaries) > 1 else 30)
 
     def _refresh_motor_joint_feedback_item(self, motor_idx: int, state: Optional[HandModel]) -> None:
         """Refresh the motor joint feedback item display or controls."""
@@ -1539,7 +1553,7 @@ class ControlPanelStateMixin:
                                 trigger_load = str(int(overload_loads[i]))
                             except Exception:
                                 trigger_load = str(overload_loads[i])
-                        load_text = f"OL {trigger_load}"
+                        load_text = f"Overload {trigger_load}"
                         item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
                         item.setToolTip(f"M{i:02d} overload trigger load={trigger_load}")
                     else:

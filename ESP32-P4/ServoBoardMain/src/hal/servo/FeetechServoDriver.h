@@ -23,6 +23,8 @@ using mmhand::config::servo::kOfflineInvalidateMisses;
 using mmhand::config::servo::kOnlineConfirmReads;
 using mmhand::config::servo::kRecoveryMaxAttempts;
 using mmhand::config::servo::kRecoveryRetryIntervalMs;
+using mmhand::config::servo::kResetZeroFeedbackAttempts;
+using mmhand::config::servo::kResetZeroTransactionAttempts;
 
 static_assert(MAX_SERVOS_PER_BUS * (15U + 6U) <=
                   SCS::kSyncReadRxBufferCapacity,
@@ -111,13 +113,6 @@ struct ServoSyncReadResult {
     uint32_t sequence;
     uint64_t startedUs;
     uint64_t completedUs;
-};
-
-/** ST3215 位置模式目标寄存器快照；位置值仍处于舵机 hardware 坐标。 */
-struct ServoGoalRegisterState {
-    uint8_t acceleration; ///< 地址 41：运行加/减速度，0 表示最大加速度。
-    int16_t hardwarePosition; ///< 地址 42..43：舵机实际保存的目标位置。
-    uint16_t speed; ///< 地址 46..47：运行速度，位置模式下 0 表示最大速度。
 };
 
 /** 一条飞特 UART 总线的唯一驱动实例。 */
@@ -364,35 +359,6 @@ public:
         }
         _sms.SyncWritePosEx(_writeIDs, _writeCount, _writePos, _writeSpd, _writeAcc);
         _writeCount = 0;
-    }
-
-    /**
-     * 回读一台舵机的 ACC、目标位置和目标速度寄存器。
-     *
-     * 该接口只用于低频诊断；同步读事务进行中禁止插入单播读，避免清空
-     * 四 BUS 并行同步读尚未解析的 RX 数据。读取失败不会改变在线状态。
-     */
-    bool readGoalRegisters(uint8_t id, ServoGoalRegisterState* state)
-    {
-        if (!_serial || !state || id > MAX_SERVO_ID || _syncReadActive) {
-            return false;
-        }
-
-        uint8_t data[7] = {0};
-        if (_sms.Read(id, SMS_STS_ACC, data, sizeof(data)) !=
-            (int)sizeof(data)) {
-            return false;
-        }
-
-        const uint16_t encodedPosition =
-            (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-        state->acceleration = data[0];
-        state->hardwarePosition =
-            (encodedPosition & 0x8000U)
-                ? -(int16_t)(encodedPosition & 0x7FFFU)
-                : (int16_t)encodedPosition;
-        state->speed = (uint16_t)data[5] | ((uint16_t)data[6] << 8);
-        return true;
     }
 
     /**
@@ -743,7 +709,9 @@ public:
 
         // 必须用 RESET 后重新读取的反馈作为新 turn0，不能沿用命令前缓存。
         bool feedbackOk = false;
-        for (uint8_t attempt = 0; attempt < 3; attempt++) {
+        for (uint8_t attempt = 0;
+             attempt < kResetZeroFeedbackAttempts;
+             attempt++) {
             if (probeFeedback(id)) {
                 feedbackOk = true;
                 break;
@@ -768,6 +736,77 @@ public:
         fb.nextRecoveryAttemptMs = 0;
         fb.lastUpdate = millis();
         *outRaw = raw;
+        return true;
+    }
+
+    /**
+     * 单播重置舵机硬件圈数，并立即恢复上层稳定的 logical ABS。
+     *
+     * 每次完整尝试都要求 RESET 有响应、重新配置多圈模式且读回一帧新反馈；
+     * 只有 hardware turn0 和 logicalOffset 同时校验成功才返回 true。这样 P4
+     * 重启后可以统一硬件坐标，又不会平移已经保存的 LUT 和 ABS Limit。
+     */
+    bool resetTurnCounterAndRestoreLogical(uint8_t id,
+                                           int32_t restoredLogicalAbs,
+                                           int16_t* outRaw,
+                                           uint8_t* outAttempts = nullptr)
+    {
+        if (outAttempts) *outAttempts = 0;
+        if (!_serial || id > MAX_SERVO_ID || !outRaw ||
+            !_feedback[id].online) {
+            return false;
+        }
+
+        for (uint8_t attempt = 1;
+             attempt <= kResetZeroTransactionAttempts;
+             ++attempt) {
+            if (outAttempts) *outAttempts = attempt;
+            int16_t resetRaw = 0;
+            if (resetTurnCounter(id, &resetRaw) &&
+                restoreAbsolutePosition(id, restoredLogicalAbs) &&
+                getHardwareAbsolutePosition(id) == (int32_t)resetRaw &&
+                getAbsolutePosition(id) == restoredLogicalAbs &&
+                getFeedback(id).lastUpdate != 0) {
+                *outRaw = resetRaw;
+                return true;
+            }
+            delay(kMultiTurnConfigDelayMs);
+        }
+
+        // 半成功事务不能进入运动控制；保留 online 供下一次单播恢复重试。
+        ServoFeedbackInternal& fb = _feedback[id];
+        fb.initialized = false;
+        fb.absoluteReliable = false;
+        fb.logicalOffset = 0;
+        fb.turnCount = 0;
+        return false;
+    }
+
+    /** 使用掉线前同帧 raw/ABS 锚点计算最近圈，再执行硬件归零与逻辑坐标恢复。 */
+    bool resetTurnCounterAndRestoreNearAnchor(uint8_t id,
+                                              int32_t anchorLogicalAbs,
+                                              int16_t anchorRaw,
+                                              int32_t* outLogicalAbs,
+                                              uint8_t* outAttempts = nullptr)
+    {
+        if (id > MAX_SERVO_ID || !outLogicalAbs) {
+            return false;
+        }
+        const int16_t currentRaw =
+            normalizeServoRawSingleTurn(_feedback[id].rawPosition);
+        int32_t rawDelta = (int32_t)currentRaw -
+            (int32_t)normalizeServoRawSingleTurn(anchorRaw);
+        if (rawDelta > 2047) rawDelta -= 4096;
+        if (rawDelta < -2048) rawDelta += 4096;
+        const int32_t restoredLogicalAbs = anchorLogicalAbs + rawDelta;
+        int16_t resetRaw = 0;
+        if (!resetTurnCounterAndRestoreLogical(id,
+                                               restoredLogicalAbs,
+                                               &resetRaw,
+                                               outAttempts)) {
+            return false;
+        }
+        *outLogicalAbs = restoredLogicalAbs;
         return true;
     }
 

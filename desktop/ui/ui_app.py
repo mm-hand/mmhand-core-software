@@ -14,11 +14,7 @@ import time
 from typing import Callable, Dict, List, Optional
 
 from desktop.paths import (
-    CALIB_DEG_PATH,
     CALIB_LOAD_SNAPSHOT_PATH,
-    HAND_GEO_PATH,
-    MOTOR_MID_CALIB_PATH,
-    POSE_FIST_PATH,
     PRODUCT_FINGERPRINT_PATH,
     PROJECT_ROOT,
     ROBOT_MODEL_MANIFEST_PATH,
@@ -94,7 +90,7 @@ from desktop.core.protocol import (
 from desktop.core.session_log import close_session_log, log_session
 from .ui_context import HandGuiContext
 from .ui_control_panels import ControlPanel
-from desktop.core.safety_rules import explain_feedback_reject
+from desktop.core.safety_rules import explain_feedback_reject, explain_safety_rule
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
 from .ui_dialogs import show_scrollable_message
@@ -129,8 +125,6 @@ class HandGUI(QtWidgets.QMainWindow):
         on_close_extra: Optional[Callable[[], None]] = None,
         action_callback: Optional[Callable[[str], None]] = None,
         replay_service=None,
-        pose_generate: bool = False,
-        pose_generate_path: Optional[str] = None,
         tactile_port: Optional[str] = None,
         ros2_enabled: bool = False,
         ros_topic: str = "/mmhand/joint_targets",
@@ -147,8 +141,6 @@ class HandGUI(QtWidgets.QMainWindow):
             from desktop.replay.replay_service import ReplayService
             replay_service = ReplayService(self.backend)
         self.replay_service = replay_service
-        self._pose_generate = bool(pose_generate)
-        self._pose_generate_path = pose_generate_path or str(POSE_FIST_PATH)
         self.tactile_port = tactile_port or ""
         self.ros2_enabled = bool(ros2_enabled)
         self.ros_topic = str(ros_topic)
@@ -163,6 +155,7 @@ class HandGUI(QtWidgets.QMainWindow):
         )
         self._last_state_record_signature = None
         self._last_recorded_control_trace_sequence = 0
+        self._last_recorded_control_trace_timestamp_ms: Optional[int] = None
         self._control_trace_recording_started_at = 0.0
         self._test_recording_stop_lock = threading.Lock()
         self._test_recording_stop_thread: Optional[threading.Thread] = None
@@ -180,7 +173,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._draw_interval = 0.033
         self._last_status_refresh = 0.0
         self._pending_status_text = ""
-        self._last_overload_popup_mask = 0
         self._last_feedback_collision_armed_mask: Optional[int] = None
         self._last_feedback_collision_hold_mask: Optional[int] = None
         self._fault_popup_episode_active = False
@@ -189,6 +181,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._last_fault_popup_key = ""
         self._calib_diag_wait_started_at = 0.0
         self._fault_dialog_active = False
+        # 状态栏只维护是否存在详情；完整规则文本只在用户点击 Details 时生成。
+        self._has_active_issue_details = False
         self._fault_stop_sent = False
         self._fault_previous_runtime_active = False
         self._task_runtime_window: Optional[TaskRuntimeWindow] = None
@@ -280,12 +274,20 @@ class HandGUI(QtWidgets.QMainWindow):
         layout.setContentsMargins(8, 2, 8, 2)
         layout.setSpacing(5)
 
-        self.fault_label = self._make_top_status_label("SYS -", 132)
-        self.calib_label = self._make_top_status_label("CALIB -", 82)
-        self.overload_label = self._make_top_status_label("OL -", 96)
-        self.feedback_hold_label = self._make_top_status_label("COLLISION -", 180)
-        self.turn_label = self._make_top_status_label("TURN -", 98)
-        self.delay_label = self._make_top_status_label("--", 62)
+        self.fault_label = self._make_top_status_label("System: -", 120)
+        self.calib_label = self._make_top_status_label("Calibration: -", 130)
+        self.overload_label = self._make_top_status_label("Overload: -", 140)
+        self.feedback_hold_label = self._make_top_status_label("Collision: -", 165)
+        self.turn_label = self._make_top_status_label("Multi-turn: -", 135)
+        self.delay_label = self._make_top_status_label("Status Age: -", 100)
+        self.fault_details_btn = QtWidgets.QToolButton()
+        self.fault_details_btn.setText("Details")
+        self.fault_details_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation)
+        )
+        self.fault_details_btn.setToolTip("Show all active collisions, faults and recent P4 safety events")
+        self.fault_details_btn.setEnabled(False)
+        self.fault_details_btn.clicked.connect(self._show_active_issue_details)
 
         for label in [
             self.fault_label,
@@ -294,6 +296,7 @@ class HandGUI(QtWidgets.QMainWindow):
             self.feedback_hold_label,
             self.turn_label,
             self.delay_label,
+            self.fault_details_btn,
         ]:
             layout.addWidget(label)
 
@@ -632,30 +635,30 @@ class HandGUI(QtWidgets.QMainWindow):
             sys_state = self._system_state_name(getattr(state, "system_state", None))
             sys_faults = self._system_fault_names(getattr(state, "system_fault_bitmap", 0))
             sys_text, sys_tip = self._format_system_fault_summary(state, sys_state, sys_faults)
-            calib_text = f"CALIB {calib}"
+            calib_text = f"Calibration: {self._calibration_status_name(calib)}"
             calib_tip = self._calib_tooltip(state, calib)
             calib_style = self._calib_status_style(calib)
         else:
             has_status = bool(getattr(state, "has_system_status_data", False))
             sys_faults = []
             if connected:
-                sys_text = "SYS STATUS LOST" if has_status else "SYS COMM FAULT"
+                sys_text = "System: Status Lost" if has_status else "System: Communication Fault"
                 sys_tip = (
                     "SYSTEM_STATUS heartbeat is stale; lower protocol is not healthy"
                     if has_status
                     else "No SYSTEM_STATUS received; serial open does not mean lower protocol is healthy"
                 )
             else:
-                sys_text = "SYS -"
+                sys_text = "System: Disconnected"
                 sys_tip = "Lower serial disconnected"
-            calib_text = "CALIB -"
+            calib_text = "Calibration: Unavailable"
             calib_tip = "Calibration status unavailable"
             calib_style = "warn" if connected else "neutral"
         turn_text, turn_ok, turn_tip = self._turn_known_status(state, system_status_fresh)
         if connected:
             overload_text, overload_tip, overload_active = self._format_overload_summary(state, now)
         else:
-            overload_text, overload_tip, overload_active = "OL -", "Lower serial disconnected", False
+            overload_text, overload_tip, overload_active = "Overload: Unavailable", "Lower serial disconnected", False
         hold_text, hold_tip, hold_active, hold_known = self.format_feedback_collision_summary(
             state, connected and system_status_fresh
         )
@@ -687,6 +690,11 @@ class HandGUI(QtWidgets.QMainWindow):
         )
         self._style_top_status_label(self.turn_label, "neutral" if not connected else ("ok" if turn_ok else "warn"))
         self._style_top_status_label(self.delay_label, delay_state)
+        self._has_active_issue_details = self._active_issue_present(
+            state,
+            system_status_fresh=connected and system_status_fresh,
+        )
+        self.fault_details_btn.setEnabled(self._has_active_issue_details)
         self._handle_fault_side_effects(state)
 
     def format_feedback_collision_summary(
@@ -700,7 +708,7 @@ class HandGUI(QtWidgets.QMainWindow):
         ):
             self._last_feedback_collision_armed_mask = None
             self._last_feedback_collision_hold_mask = None
-            return "COLLISION ?", "Collision status is unavailable or stale", False, False
+            return "Collision: Unknown", "Collision status is unavailable or stale", False, False
 
         valid_mask = (1 << ENCODER_COUNT) - 1
         armed_mask = int(
@@ -793,11 +801,8 @@ class HandGUI(QtWidgets.QMainWindow):
 
         if hold_mask:
             joints = [i for i in range(ENCODER_COUNT) if hold_mask & (1 << i)]
-            text = (
-                "COLLISION HOLD " + ",".join(f"J{i:02d}" for i in joints)
-                if len(joints) <= 2
-                else f"COLLISION HOLD x{len(joints)}"
-            )
+            short_joints, _full_joints = self._format_index_mask("J", hold_mask)
+            text = f"Collision: Hold {short_joints}"
             detail = "\n".join(joint_detail(i) for i in joints)
             return (
                 text,
@@ -810,23 +815,135 @@ class HandGUI(QtWidgets.QMainWindow):
             )
 
         if armed_mask:
-            joints = ",".join(
-                joint_detail(i) for i in range(ENCODER_COUNT)
-                if armed_mask & (1 << i)
-            )
+            short_joints, full_joints = self._format_index_mask("J", armed_mask)
             return (
-                "COLLISION MON",
+                f"Collision: Monitoring {short_joints}",
                 "Motion confirmed; collision progress windows are monitoring: "
-                f"{joints}\n{mask_detail}",
+                f"{full_joints}\n{mask_detail}",
                 False,
                 True,
             )
         return (
-            "COLLISION IDLE",
+            "Collision: Idle",
             f"No joint has met the motion-arm condition.\n{mask_detail}",
             False,
             True,
         )
+
+    @staticmethod
+    def _format_index_mask(prefix: str, mask: int, max_items: int = 2) -> tuple[str, str]:
+        """把位图同时格式化为状态栏摘要和可完整展示的对象清单。"""
+        indices = [index for index in range(32) if int(mask) & (1 << index)]
+        full = ",".join(f"{prefix}{index:02d}" for index in indices) or "none"
+        if len(indices) <= max_items:
+            return full, full
+        short = ",".join(f"{prefix}{index:02d}" for index in indices[:max_items])
+        return f"{short} +{len(indices) - max_items}", full
+
+    def _build_active_issue_details(
+        self,
+        state: HandModel,
+        *,
+        system_status_fresh: bool,
+    ) -> str:
+        """汇总当前问题和最近规则证据，供状态栏 Details 按钮一次性展示。"""
+        sections: List[str] = []
+        summary = self._build_fault_summary(state)
+        if summary.get("active"):
+            body = self._fault_body_text(summary)
+            if body:
+                sections.append("System faults\n" + body)
+
+        if system_status_fresh and bool(
+            getattr(state, "has_feedback_collision_status", False)
+        ):
+            armed_mask = int(
+                getattr(state, "feedback_collision_armed_bitmap", 0) or 0
+            ) & ((1 << ENCODER_COUNT) - 1)
+            hold_mask = int(
+                getattr(state, "feedback_collision_hold_bitmap", 0) or 0
+            ) & ((1 << ENCODER_COUNT) - 1)
+            if hold_mask:
+                _short, full = self._format_index_mask("J", hold_mask)
+                sections.append(
+                    "Collision Hold\n"
+                    f"Affected joints: {full}\n"
+                    "Send a target more than 1.0 deg in the reverse direction to release."
+                )
+            elif armed_mask:
+                _short, full = self._format_index_mask("J", armed_mask)
+                sections.append(
+                    "Collision Monitoring\n"
+                    f"Monitoring joints: {full}"
+                )
+
+        # 规则事件属于 P4 的历史证据，只在当前确有问题时附带显示，避免旧事件
+        # 被用户误认为仍在阻止控制。
+        if sections:
+            history = [
+                item for item in (getattr(state, "safety_event_history", []) or [])
+                if isinstance(item, dict) and self._safety_event_int(item, "sequence") > 0
+            ][-8:]
+            if history:
+                lines = []
+                for event in history:
+                    motor = self._safety_event_int(event, "motor_channel", 0xFF)
+                    joint = self._safety_event_int(event, "joint_index", 0xFF)
+                    objects = []
+                    if joint != 0xFF:
+                        objects.append(f"J{joint:02d}")
+                    if motor != 0xFF:
+                        objects.append(f"M{motor:02d}")
+                    target = ", ".join(objects) if objects else "system"
+                    rule_id = self._safety_event_int(event, "rule_id")
+                    lines.append(
+                        f"#{self._safety_event_int(event, 'sequence')} {target}: "
+                        f"{explain_safety_rule(rule_id)}"
+                    )
+                sections.append("Recent P4 safety events\n" + "\n".join(lines))
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _active_issue_present(
+        state: HandModel,
+        *,
+        system_status_fresh: bool,
+    ) -> bool:
+        """快速判断是否需要启用 Details，不能在每帧遍历安全事件历史。"""
+        if int(getattr(state, "system_fault_bitmap", 0) or 0) != 0:
+            return True
+        if any(bool(flag) for flag in (getattr(state, "servo_overload_fault", []) or [])):
+            return True
+        if not system_status_fresh:
+            return False
+        return bool(
+            int(getattr(state, "feedback_collision_armed_bitmap", 0) or 0)
+            or int(getattr(state, "feedback_collision_hold_bitmap", 0) or 0)
+        )
+
+    def _show_active_issue_details(self) -> None:
+        """显示状态栏摘要对应的完整对象、规则和恢复建议。"""
+        state = self._state
+        if state is None:
+            return
+        details = self._build_active_issue_details(
+            state,
+            system_status_fresh=self._packet_status_fresh(
+                state,
+                "has_system_status_data",
+                "system_status_last_rx_ts",
+                SYSTEM_STATUS_STALE_AFTER_S,
+            ),
+        )
+        if not details:
+            return
+        show_scrollable_message(
+            self,
+            "Fault Details",
+            details,
+            severity="warning",
+        )
+
     @staticmethod
     def _packet_status_fresh(
         state: HandModel,
@@ -846,13 +963,13 @@ class HandGUI(QtWidgets.QMainWindow):
     @staticmethod
     def _format_delay_status(delay_ms: float) -> tuple[str, str]:
         if delay_ms <= 0:
-            return "--", "neutral"
+            return "Status Age: -", "neutral"
         text = f"{delay_ms:.0f}ms" if delay_ms < 1000.0 else f"{delay_ms / 1000.0:.1f}s"
         if delay_ms < 200.0:
-            return text, "ok"
+            return f"Status Age: {text}", "ok"
         if delay_ms < 1000.0:
-            return text, "lag"
-        return text, "warn"
+            return f"Status Age: {text}", "lag"
+        return f"Status Age: {text}", "warn"
 
     @staticmethod
     def _calib_status_style(calib: str) -> str:
@@ -866,6 +983,24 @@ class HandGUI(QtWidgets.QMainWindow):
         if text in {"FAILED", "NO_CALIB", "DISCONNECTED"}:
             return "warn"
         return "neutral"
+
+    @staticmethod
+    def _calibration_status_name(calib: str) -> str:
+        """将 P4 标定枚举转换为状态栏可直接理解的英文文本。"""
+        names = {
+            "SUCCESS": "Success",
+            "DONE": "Success",
+            "WARN": "Warning",
+            "PENDING": "Pending",
+            "RUNNING": "Running",
+            "SYNCING": "Synchronizing",
+            "FAILED": "Failed",
+            "NO_CALIB": "Not Calibrated",
+            "IDLE": "Idle",
+            "DISCONNECTED": "Disconnected",
+        }
+        value = str(calib or "-").upper()
+        return names.get(value, value.replace("_", " ").title())
 
     @staticmethod
     def _overload_detail_items(state: HandModel) -> List[tuple[int, str]]:
@@ -907,40 +1042,17 @@ class HandGUI(QtWidgets.QMainWindow):
         )
         if not fault_status_fresh:
             if bool(getattr(state, "has_fault_status_data", False)):
-                return "OL STALE", "FAULT_STATUS heartbeat is stale", True
-            return "OL NO DATA", "No FAULT_STATUS received; overload state is unknown", True
+                return "Overload: Stale", "FAULT_STATUS heartbeat is stale", True
+            return "Overload: Unknown", "No FAULT_STATUS received; overload state is unknown", True
         overload_items = self._overload_detail_items(state)
         if not overload_items:
-            return "OL OK", "Overload motors: none", False
+            return "Overload: Normal", "Overload motors: none", False
         if len(overload_items) <= 2:
-            text = "OL " + " ".join(f"M{i:02d}:{load}" for i, load in overload_items)
+            text = "Overload: " + " ".join(f"M{i:02d} ({load})" for i, load in overload_items)
         else:
-            text = f"OL x{len(overload_items)}"
+            text = f"Overload: {len(overload_items)} motors"
         lines = [f"M{i:02d} load={load}" for i, load in overload_items]
         return text, "Overload motors:\n" + "\n".join(lines), True
-
-    def _maybe_show_overload_popup(self, state: HandModel) -> None:
-        mask = self._overload_mask_from_state(state)
-        if mask == 0:
-            self._last_overload_popup_mask = 0
-            return
-        new_mask = mask & ~int(getattr(self, "_last_overload_popup_mask", 0) or 0)
-        if new_mask == 0:
-            return
-        self._last_overload_popup_mask = mask
-        items = [(i, load) for i, load in self._overload_detail_items(state) if (new_mask & (1 << i)) != 0]
-        if not items:
-            return
-        detail = "\n".join(f"M{i:02d}: 触发负载 {load}" for i, load in items)
-        log_session("OVERLOAD", "; ".join(f"M{i:02d} load={load}" for i, load in items))
-        show_scrollable_message(
-            self,
-            "电机过载保护",
-            "检测到电机过载，控制已进入保护状态。\n\n"
-            f"{detail}\n\n"
-            "请检查机构受力和绳索状态，确认安全后点击 Clear Fault 恢复。",
-            severity="warning",
-        )
 
     @staticmethod
     def _fault_bitmap_value(state: HandModel) -> int:
@@ -1323,7 +1435,6 @@ class HandGUI(QtWidgets.QMainWindow):
 
         summary = self._build_fault_summary(state)
         if not summary.get("active"):
-            self._last_overload_popup_mask = 0
             self._fault_stop_sent = False
             self._fault_previous_runtime_active = bool(runtime_state)
             self._calib_diag_wait_started_at = 0.0
@@ -1391,7 +1502,6 @@ class HandGUI(QtWidgets.QMainWindow):
             self._fault_dialog_active = False
 
     def _on_clear_fault_confirmed(self) -> None:
-        self._last_overload_popup_mask = 0
         self._fault_popup_episode_active = False
         self._last_fault_popup_key = ""
         self._fault_stop_sent = False
@@ -1399,11 +1509,11 @@ class HandGUI(QtWidgets.QMainWindow):
 
     def _format_system_fault_summary(self, state: HandModel, sys_state: str, sys_faults: List[str]) -> tuple[str, str]:
         if not sys_faults:
-            text = f"SYS {sys_state}" if sys_state != "-" else "SYS -"
+            text = f"System: {sys_state}" if sys_state != "-" else "System: -"
         elif len(sys_faults) == 1:
-            text = f"SYS {sys_faults[0]}"
+            text = f"System: {sys_faults[0]}"
         else:
-            text = f"SYS FAULT x{len(sys_faults)}"
+            text = f"System: Faults ({len(sys_faults)})"
 
         lines = [f"System state: {sys_state}"]
         if sys_faults:
@@ -1415,12 +1525,12 @@ class HandGUI(QtWidgets.QMainWindow):
         if overload_lines:
             lines.append("Overload motors:")
             lines.extend(overload_lines)
-        elif "OVERLOAD" in sys_faults:
+        elif "Overload" in sys_faults:
             lines.append("Overload motors: unknown")
 
         feedback_reject = self._feedback_admission_reject_text(state)
         if feedback_reject:
-            text = f"{text} | FF REJECTED"
+            text = f"{text} | Feedback Rejected"
             lines.append(f"Feedback admission: rejected ({feedback_reject})")
 
         summary = self._build_fault_summary(state)
@@ -1455,7 +1565,7 @@ class HandGUI(QtWidgets.QMainWindow):
                 SYSTEM_STATUS_STALE_AFTER_S,
             )
         if not system_status_fresh:
-            return "TURN -", False, "Turn: unknown"
+            return "Multi-turn: Unknown", False, "Multi-turn status is unavailable"
         try:
             unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0))
         except Exception:
@@ -1469,21 +1579,26 @@ class HandGUI(QtWidgets.QMainWindow):
             active_mask = VALID_MOTOR_MASK
         active_unknown = unknown & active_mask
         if active_unknown:
-            return "TURN UNKNOWN", False, f"Unknown turn mask: 0x{active_unknown:08X}"
-        return "TURN KNOWN", True, "Turn: known"
+            short, full = self._format_index_mask("M", active_unknown)
+            return (
+                f"Multi-turn: Unknown {short}",
+                False,
+                f"Unknown multi-turn motors: {full}\nmask=0x{active_unknown:08X}",
+            )
+        return "Multi-turn: Known", True, "All active motors have known multi-turn positions"
 
     @staticmethod
     def _system_state_name(value) -> str:
         names = {
-            0: "UNCTRL",
-            1: "IDLE",
-            2: "RUN_FEEDBACK",
-            4: "CAL_RUN",
-            5: "READY",
-            6: "RUN_DIRECT",
-            7: "PAUSED",
-            SYSTEM_STATE_ROPE_INIT_RUNNING: "ROPE_INIT",
-            SYSTEM_STATE_RECOVERY_REQUIRED: "RECOVERY",
+            0: "Uncontrollable",
+            1: "Idle",
+            2: "Feedback Control",
+            4: "Calibrating",
+            5: "Ready",
+            6: "Direct Control",
+            7: "Paused",
+            SYSTEM_STATE_ROPE_INIT_RUNNING: "Rope Initialization",
+            SYSTEM_STATE_RECOVERY_REQUIRED: "Recovery Required",
         }
         try:
             return names.get(int(value), str(value))
@@ -1497,12 +1612,12 @@ class HandGUI(QtWidgets.QMainWindow):
         except Exception:
             value = 0
         names = [
-            (SYSTEM_FAULT_CAN_OFFLINE, "CAN"),
-            (SYSTEM_FAULT_SERVO_OFFLINE, "SERVO"),
-            (SYSTEM_FAULT_CALIBRATION, "CALIB"),
-            (SYSTEM_FAULT_MULTITURN_UNKNOWN, "MULTITURN"),
-            (SYSTEM_FAULT_OVERLOAD, "OVERLOAD"),
-            (SYSTEM_FAULT_JOINT16_DUAL, "J16"),
+            (SYSTEM_FAULT_CAN_OFFLINE, "CAN Offline"),
+            (SYSTEM_FAULT_SERVO_OFFLINE, "Servo Offline"),
+            (SYSTEM_FAULT_CALIBRATION, "Calibration"),
+            (SYSTEM_FAULT_MULTITURN_UNKNOWN, "Multi-turn Unknown"),
+            (SYSTEM_FAULT_OVERLOAD, "Overload"),
+            (SYSTEM_FAULT_JOINT16_DUAL, "J16 Dual Configuration"),
         ]
         return [name for bit, name in names if (value & bit) != 0]
 
@@ -1705,6 +1820,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._motion_record_sampler.reset()
         self._last_state_record_signature = None
         self._last_recorded_control_trace_sequence = 0
+        self._last_recorded_control_trace_timestamp_ms = None
         self._control_trace_recording_started_at = time.time()
         self._set_control_trace_recording_subscription(True)
         path = self._data_logger.path
@@ -2040,6 +2156,9 @@ class HandGUI(QtWidgets.QMainWindow):
             getattr(state, "control_trace_motor_command_abs", [])
         )
         previous_sequence = self._last_recorded_control_trace_sequence
+        previous_trace_time = self._last_recorded_control_trace_timestamp_ms
+        if trace_valid and trace_sequence == previous_sequence:
+            return
         sequence_delta = (trace_sequence - previous_sequence) & 0xFFFFFFFF
         sequence_gap = (
             max(0, sequence_delta - 1)
@@ -2063,6 +2182,11 @@ class HandGUI(QtWidgets.QMainWindow):
                 if trace_valid and encoder_timestamp else ""
             ),
             "trace_sequence_gap": sequence_gap if trace_valid else "",
+            "trace_period_ms": (
+                (trace_time - previous_trace_time) & 0xFFFFFFFF
+                if trace_valid and previous_trace_time is not None
+                else ""
+            ),
             "motor_command_mask": (
                 f"0x{trace_motor_command_mask:08X}" if trace_valid else ""
             ),
@@ -2099,6 +2223,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._data_logger.write("joint_wide", row)
         if trace_valid:
             self._last_recorded_control_trace_sequence = trace_sequence
+            self._last_recorded_control_trace_timestamp_ms = trace_time
 
     def _write_servo_wide_row(
         self,
@@ -2231,17 +2356,6 @@ class HandGUI(QtWidgets.QMainWindow):
         if 0 <= int(idx) < len(FINGER_NAMES):
             return FINGER_NAMES[int(idx)]
         return f"finger{idx}"
-
-    @staticmethod
-    def _tactile_max_force(tactile) -> float:
-        vals: List[float] = []
-        for finger in tactile:
-            for sensor in getattr(finger, "sensors", []) or []:
-                try:
-                    vals.append(float(getattr(sensor, "magnitude", 0.0)))
-                except Exception:
-                    pass
-        return max(vals) if vals else 0.0
 
     def _write_tactile_summary_rows(self, state: HandModel, host_time: float, p4_time_ms) -> None:
         """CSV 仅保留一张五指摘要总表，不再生成逐指长表。"""
@@ -2442,9 +2556,6 @@ class HandGUI(QtWidgets.QMainWindow):
     def _recording_config_snapshot(self) -> dict:
         paths = {
             "calib_load_snapshot": CALIB_LOAD_SNAPSHOT_PATH,
-            "calib_deg": CALIB_DEG_PATH,
-            "hand_geo": HAND_GEO_PATH,
-            "motor_mid_calib": MOTOR_MID_CALIB_PATH,
             "robot_model_manifest": ROBOT_MODEL_MANIFEST_PATH,
             "urdf_joint_mapping": URDF_JOINT_MAPPING_PATH,
             "generated_product_fingerprint": PRODUCT_FINGERPRINT_PATH,

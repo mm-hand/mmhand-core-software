@@ -1,6 +1,6 @@
 /**
  * @file ControlSolver.cpp
- * @brief 实现单腱关节的标准离散位置 PID，输出舵机 ABS 增量。
+ * @brief 实现单腱关节的位置 PID 和反馈速度阻尼，输出舵机 ABS 增量。
  */
 #include "ControlSolver.h"
 
@@ -22,7 +22,9 @@ void ControlSolver::begin()
         kSingleTendonKi,
         kSingleTendonKd,
         kSingleTendonDeadbandDeg,
-        kSingleTendonIntegralLimit
+        kSingleTendonIntegralLimit,
+        kSingleTendonVelocityFilterTauSec,
+        kSingleTendonDTermLimitCounts
     };
     setPIDParams(pidConfigs);
 }

@@ -5,8 +5,14 @@ from unittest.mock import MagicMock, call
 
 import desktop.core.core_logic as core_logic
 from desktop.core.angle_mapping import get_spec
-from desktop.core.calibration_snapshot import seal_snapshot
+from desktop.core.calibration_snapshot import (
+    atomic_write_snapshot,
+    merge_snapshot,
+    multiturn_anchor_fields,
+    seal_snapshot,
+)
 from desktop.core.core_logic import HandController
+from desktop.core.data_models import HandModel
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
     CMD_CALIB_LOAD_JOINT,
@@ -25,6 +31,92 @@ from desktop.core.protocol import (
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_RUN_FEEDBACK,
 )
+
+
+def _trusted_multiturn_state(motor_idx: int) -> HandModel:
+    state = HandModel()
+    bit = 1 << motor_idx
+    state.system_state = SYSTEM_STATE_IDLE
+    state.servo_online_bitmap = bit
+    state.has_servo_route_status = True
+    state.servo_route_controllable_bitmap = bit
+    state.multi_turn_unknown_bitmap = 0
+    state.has_servo_angle_data = True
+    state.has_servo_raw_data = True
+    state.servo_angles = [0] * MOTOR_COUNT
+    state.servo_raw_positions = [0] * MOTOR_COUNT
+    state.servo_raw_online = [False] * MOTOR_COUNT
+    state.servo_angles[motor_idx] = 8192
+    state.servo_raw_positions[motor_idx] = 0
+    state.servo_raw_online[motor_idx] = True
+    return state
+
+
+def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
+    tmp_path, monkeypatch
+):
+    controller = HandController()
+    controller._multiturn_store = MultiTurnRuntimeStore(
+        tmp_path / "multiturn_runtime.json"
+    )
+    identity = {
+        "product_fingerprint": {
+            "schema_version": 1,
+            "feedback_mapping_version": 3,
+            "hardware_map_crc": 0x1234,
+        }
+    }
+    controller._multiturn_identity = lambda _state: identity
+    motor_idx = 18
+    bit = 1 << motor_idx
+    snapshot_path = tmp_path / "calibration_bundle.mmcal.json"
+    results = [None] * ENCODER_COUNT
+    results[14] = {
+        "joint": 14,
+        "success": True,
+        "tendonLutValid": True,
+        "tendonLutCount": 3,
+        "tendonLutMotor": [motor_idx, 0xFF],
+        "tendonLutMotorAbs": [[100, 200, 300], [0, 0, 0]],
+    }
+    atomic_write_snapshot(
+        snapshot_path,
+        merge_snapshot(
+            None,
+            {
+                "active_joint_mask": 1 << 14,
+                "active_motor_mask": bit,
+                "motor_abs_limit_valid_bitmap": bit,
+                "motor_abs_limit_min": [0] * MOTOR_COUNT,
+                "motor_abs_limit_max": [0] * MOTOR_COUNT,
+                "manual_reference_min_raw": [0] * ENCODER_COUNT,
+                "manual_reference_max_raw": [0] * ENCODER_COUNT,
+                "manual_reference_valid_bitmap": 0,
+                "joint_calib_results": results,
+            },
+            updated_joint_mask=1 << 14,
+        ),
+    )
+    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    state = _trusted_multiturn_state(motor_idx)
+
+    controller._block_multiturn_anchor_capture(bit)
+    controller._persist_multiturn_state(state, force=True)
+    payload = controller._multiturn_store.load(identity=identity)
+    assert int(payload["valid_motor_mask"], 0) & bit == 0
+
+    assert controller.request_multiturn_anchor_capture(bit)
+    controller._service_multiturn_anchor_capture(state)
+
+    payload = controller._multiturn_store.load(identity=identity)
+    assert int(payload["valid_motor_mask"], 0) & bit
+    assert controller._multiturn_anchor_capture_pending_mask == 0
+    snapshot_mask, snapshot_abs, snapshot_raw = multiturn_anchor_fields(
+        core_logic.read_snapshot(snapshot_path)
+    )
+    assert snapshot_mask & bit
+    assert snapshot_abs[motor_idx] == 8192
+    assert snapshot_raw[motor_idx] == 0
 
 
 class TestSetMotorPositionsAbsolute:

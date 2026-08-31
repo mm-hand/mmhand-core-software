@@ -6,9 +6,6 @@
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 
-static const int32_t kServoSingleTurnModulo = 4096;
-static const int32_t kServoSingleTurnHalf = kServoSingleTurnModulo / 2;
-
 int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
                                     uint8_t motorChannel,
                                     int32_t value)
@@ -34,48 +31,6 @@ int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
         }
     }
     return clamped;
-}
-
-// 将单圈 raw 舵机位置限制到 0..4095。
-int16_t clampServoSingleTurnRaw(int32_t value)
-{
-    if (value > 4095) return 4095;
-    if (value < 0) return 0;
-    return (int16_t)value;
-}
-
-// 将单圈目标展开为最近的等价多圈位置。
-int32_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw)
-{
-    const int32_t baseTarget = (int32_t)clampServoSingleTurnRaw(singleTurnRaw);
-    int32_t bestTarget = baseTarget;
-    int32_t bestDistance = 0x7FFFFFFF;
-
-    // 检查当前圈以及前后一圈；在这个小窗口内，单圈目标
-    // 有且只有一个距离当前反馈最近的等价位置。
-    const int32_t currentTurn = currentAbsPos / kServoSingleTurnModulo;
-    for (int32_t turnOffset = -1; turnOffset <= 1; ++turnOffset)
-    {
-        const int32_t candidate = baseTarget + (currentTurn + turnOffset) * kServoSingleTurnModulo;
-        const int32_t distance = (candidate >= currentAbsPos)
-            ? (candidate - currentAbsPos)
-            : (currentAbsPos - candidate);
-        if (distance < bestDistance)
-        {
-            bestDistance = distance;
-            bestTarget = candidate;
-        }
-    }
-
-    return bestTarget;
-}
-
-// 将单圈 raw 差值归一化为最短路径。
-int32_t wrapServoRawDelta(int32_t delta)
-{
-    while (delta > kServoSingleTurnHalf) delta -= kServoSingleTurnModulo;
-    while (delta < -kServoSingleTurnHalf) delta += kServoSingleTurnModulo;
-    return delta;
 }
 
 // 向 batch 追加一个舵机目标。

@@ -94,7 +94,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         toolbar_layout.addWidget(self.summary_label)
         toolbar_layout.addStretch(1)
 
-        self.manual_prepare_btn = QtWidgets.QPushButton("Manual Prepare")
+        self.manual_prepare_btn = QtWidgets.QPushButton("Release Rope")
         self.manual_prepare_btn.setToolTip(
             "Reset all 27 servo turn counters, clear desktop multi-turn anchors, "
             "invalidate Auto/LUT, then release every motor by 1500 counts"
@@ -287,11 +287,11 @@ class DeviceCheckView(QtWidgets.QWidget):
         if self._busy:
             return
         if not self.context.is_comm_connected():
-            self.context.set_status("Manual Prepare blocked: serial port is not connected")
+            self.context.set_status("Release Rope blocked: serial port is not connected")
             return
         reply = QtWidgets.QMessageBox.question(
             self,
-            "Manual Prepare",
+            "Release Rope",
             (
                 "该操作要求 27 台舵机全部在线，并将：\n\n"
                 "1. 重置全部舵机硬件圈数；\n"
@@ -308,7 +308,7 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         self._busy = True
         self._refresh_buttons()
-        self.context.set_status("Manual Prepare: checking all 27 motors...")
+        self.context.set_status("Release Rope: checking all 27 motors...")
 
         def worker() -> None:
             try:
@@ -407,11 +407,11 @@ class DeviceCheckView(QtWidgets.QWidget):
         self._busy = False
         self._refresh_buttons()
         ok = bool(getattr(result, "ok", False))
-        message = str(getattr(result, "message", "Manual Prepare failed"))
+        message = str(getattr(result, "message", "Release Rope failed"))
         self.context.set_status(message)
         self.context.emit_action(message)
         if not ok:
-            QtWidgets.QMessageBox.warning(self, "Manual Prepare", message)
+            QtWidgets.QMessageBox.warning(self, "Release Rope", message)
         try:
             self.update_state(self.backend.get_state_snapshot())
         except Exception:

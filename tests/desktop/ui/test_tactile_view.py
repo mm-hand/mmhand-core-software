@@ -29,8 +29,16 @@ class _Context:
 
     current_port = ""
 
-    def __init__(self, state: HandModel):
+    def __init__(
+        self,
+        state: HandModel,
+        *,
+        tactile_connected: bool = False,
+        tactile_port: str = "",
+    ):
         self._state = state
+        self._tactile_connected = bool(tactile_connected)
+        self._tactile_port = str(tactile_port)
 
     def get_state(self) -> HandModel:
         return self._state
@@ -39,10 +47,10 @@ class _Context:
         return False
 
     def is_tactile_serial_connected(self) -> bool:
-        return False
+        return self._tactile_connected
 
     def get_tactile_serial_port(self) -> str:
-        return ""
+        return self._tactile_port
 
     def set_status(self, _text: str) -> None:
         return None
@@ -130,5 +138,22 @@ def test_tactile_view_contains_no_chinese_user_visible_text():
                 visible_text.append(str(getter()))
 
         assert not any(re.search(r"[\u4e00-\u9fff]", text) for text in visible_text)
+    finally:
+        view.close()
+
+
+def test_tactile_view_distinguishes_open_serial_port_from_fresh_data():
+    state = HandModel()
+    context = _Context(
+        state,
+        tactile_connected=True,
+        tactile_port="COM45",
+    )
+    view = TactileView(context)
+    try:
+        view._refresh_s3_status()
+
+        assert view.s3_status_label.text() == "S3 serial open: COM45"
+        assert "#475569" in view.s3_status_label.styleSheet()
     finally:
         view.close()

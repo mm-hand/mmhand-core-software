@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MOTOR_MID_CALIB_PATH, PROJECT_ROOT
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, PROJECT_ROOT
 from desktop.core.angle_mapping import (
     get_spec,
     urdf_manual_scaled_mapping_metadata,
@@ -28,6 +28,7 @@ from desktop.core.calibration_snapshot import (
     invalidate_calibration_snapshot_scope,
     merge_snapshot,
     read_snapshot,
+    snapshot_write_transaction,
     validate_snapshot,
 )
 from desktop.core.data_models import (
@@ -59,20 +60,6 @@ from desktop.core.protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
-    ROPE_INIT_STATUS_RUNNING,
-    ROPE_INIT_STATUS_SUCCESS,
-    ROPE_INIT_STATUS_FAILED,
-    ROPE_INIT_REASON_NONE,
-    ROPE_INIT_REASON_TIMEOUT,
-    ROPE_INIT_REASON_FEEDBACK_STALE,
-    ROPE_INIT_REASON_SERVO_OFFLINE,
-    ROPE_INIT_REASON_MULTITURN_UNKNOWN,
-    ROPE_INIT_REASON_MANUAL_REQUIRED,
-    ROPE_INIT_REASON_AUTO_REQUIRED,
-    ROPE_INIT_REASON_TARGET_PUBLISH_FAILED,
-    ROPE_INIT_REASON_SYSTEM_FAULT,
-    ROPE_INIT_REASON_CANCELLED,
-    ROPE_INIT_REASON_TASK_START_FAILED,
     DIRECT_REJECT_NONE,
     DIRECT_REJECT_STATE,
     DIRECT_REJECT_HARDWARE,
@@ -120,20 +107,6 @@ MOTOR_SLIDER_WRAP_MARGIN = 512
 MOTOR_SLIDER_MAX_TARGET_DELTA = MOTOR_SINGLE_TURN_STEPS
 MOTOR_DIR_HINT_CLEAR_TOL = 3
 MOTOR_DIR_HINT_CLEAR_STABLE_FRAMES = 4
-ROPE_INIT_START_TIMEOUT_S = 3.0
-ROPE_INIT_REASON_LABELS = {
-    ROPE_INIT_REASON_NONE: "no error",
-    ROPE_INIT_REASON_TIMEOUT: "timeout",
-    ROPE_INIT_REASON_FEEDBACK_STALE: "feedback stale",
-    ROPE_INIT_REASON_SERVO_OFFLINE: "servo offline",
-    ROPE_INIT_REASON_MULTITURN_UNKNOWN: "multi-turn unknown",
-    ROPE_INIT_REASON_MANUAL_REQUIRED: "Manual endpoints required",
-    ROPE_INIT_REASON_AUTO_REQUIRED: "Auto v4 calibration required",
-    ROPE_INIT_REASON_TARGET_PUBLISH_FAILED: "target publish failed",
-    ROPE_INIT_REASON_SYSTEM_FAULT: "system fault",
-    ROPE_INIT_REASON_CANCELLED: "cancelled",
-    ROPE_INIT_REASON_TASK_START_FAILED: "task start failed",
-}
 TEST_ROW_COUNT = 5
 TEST_TICK_MS = 10
 TEST_DEFAULT_FREQ_HZ = 0.20
@@ -206,7 +179,6 @@ __all__ = [
     "MOTOR_DIR_HINT_CLEAR_TOL",
     "MOTOR_JUMP_RESYNC_THRESH",
     "MOTOR_SAVED_RAW_WARN_COUNTS",
-    "MOTOR_MID_CALIB_PATH",
     "MOTOR_RELEASE_HALF_TURN_COUNTS",
     "MOTOR_SINGLE_TURN_STEPS",
     "MOTOR_SLIDER_MAX_TARGET_DELTA",
@@ -220,11 +192,6 @@ __all__ = [
     "QtCore",
     "QtGui",
     "QtWidgets",
-    "ROPE_INIT_REASON_LABELS",
-    "ROPE_INIT_START_TIMEOUT_S",
-    "ROPE_INIT_STATUS_FAILED",
-    "ROPE_INIT_STATUS_RUNNING",
-    "ROPE_INIT_STATUS_SUCCESS",
     "ReplayView",
     "SYSTEM_FAULT_MULTITURN_UNKNOWN",
     "SYSTEM_STATE_CALIBRATION_RUNNING",
@@ -262,6 +229,7 @@ __all__ = [
     "motor_tendon_shorten_abs_sign",
     "np",
     "read_snapshot",
+    "snapshot_write_transaction",
     "shutil",
     "tendon_lut_field",
     "threading",

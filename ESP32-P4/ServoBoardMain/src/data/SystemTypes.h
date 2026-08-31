@@ -12,12 +12,10 @@
 #include <stdint.h>
 
 inline constexpr uint8_t CONTROL_MODE_JOINT = 0;        ///< 磁编关节角反馈控制。
-inline constexpr uint8_t CONTROL_MODE_DIRECT_MOTOR = 1; ///< 舵机 ABS/相对位置直控。
+inline constexpr uint8_t CONTROL_MODE_DIRECT_MOTOR = 1; ///< 舵机 logical ABS 直控。
 
 inline constexpr uint8_t MOTOR_DIRECT_SOURCE_NONE = 0;     ///< 没有待执行直控来源。
-inline constexpr uint8_t MOTOR_DIRECT_SOURCE_TARGET = 1;   ///< 单次相对位置输入框。
-inline constexpr uint8_t MOTOR_DIRECT_SOURCE_SWEEP = 2;    ///< UI raw 滑条连续扫动。
-inline constexpr uint8_t MOTOR_DIRECT_SOURCE_ABSOLUTE = 3; ///< 已解析的 logical ABS 目标。
+inline constexpr uint8_t MOTOR_DIRECT_SOURCE_ABSOLUTE = 1; ///< 已解析的 logical ABS 目标。
 
 /** 顶层状态机事件编号是任务间 ABI，缺失编号为已删除但不能复用的历史事件。 */
 inline constexpr uint8_t SYSTEM_EVENT_START = 1;

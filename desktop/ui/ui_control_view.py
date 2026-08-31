@@ -42,9 +42,7 @@ class ControlPanelViewMixin:
         self.ros2_output_btn = device.ros2_output_btn
         self.reset_btn = device.reset_btn
         self.calib_btn = device.calib_btn
-        self.rope_init_btn = device.rope_init_btn
         layout.addWidget(device)
-        self._update_connection_lights()
         device.connect_panel(self)
         self.body_container = QtWidgets.QWidget()
         self.body_layout = QtWidgets.QVBoxLayout(self.body_container)
@@ -136,41 +134,6 @@ class ControlPanelViewMixin:
         combo.setCurrentIndex(selected)
         combo.currentIndexChanged.connect(lambda _idx: self._on_active_scope_changed())
         return combo
-
-    def _make_connection_light(self) -> QtWidgets.QLabel:
-        """Create the connection light widget or helper."""
-        light = QtWidgets.QLabel()
-        light.setFixedSize(14, 14)
-        light.setToolTip("Lower serial disconnected")
-        return light
-
-    def _button_with_connection_light(
-        self,
-        button: QtWidgets.QPushButton,
-        light: QtWidgets.QLabel,
-    ) -> QtWidgets.QWidget:
-        """Handle button with connection light behavior for the control panel."""
-        panel = QtWidgets.QWidget()
-        row = QtWidgets.QHBoxLayout(panel)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        row.addWidget(button, 1)
-        row.addWidget(light, 0, QtCore.Qt.AlignVCenter)
-        return panel
-
-    def _update_connection_lights(self) -> None:
-        """Handle update connection lights behavior for the control panel."""
-        connected = bool(self.context.is_comm_connected())
-        color = "#2e7d32" if connected else "#c62828"
-        border = "#1b5e20" if connected else "#8e0000"
-        tip = "Lower serial connected" if connected else "Lower serial disconnected"
-        for light in (getattr(self, "run_conn_light", None), getattr(self, "stop_conn_light", None)):
-            if light is None:
-                continue
-            light.setToolTip(tip)
-            light.setStyleSheet(
-                f"background:{color}; border:1px solid {border}; border-radius:7px;"
-            )
 
     def _clear_body(self) -> None:
         """Clear the body state."""
@@ -265,10 +228,6 @@ class ControlPanelViewMixin:
         self._joint_run_states = [False] * ENCODER_COUNT
         self._motor_run_states = [False] * MOTOR_COUNT
 
-    def _build_scope_workflow(self, title: str) -> tuple[QtWidgets.QGroupBox, QtWidgets.QHBoxLayout]:
-        """Build the scope workflow UI section."""
-        return ManualControlView.scope_workflow(self, title)
-
     def _build_manual_body(self) -> None:
         """Build the manual body UI section."""
         ManualControlView.build(self)
@@ -359,22 +318,6 @@ class ControlPanelViewMixin:
     def _build_test_panel(self) -> QtWidgets.QWidget:
         """Build the test panel UI section."""
         return ManualTestPanel.build(self)
-
-    def _joint_choices(self) -> List[str]:
-        """Compute or update joint choices data."""
-        return ManualTestPanel.joint_choices()
-
-    def _build_sine_test_box(self) -> QtWidgets.QGroupBox:
-        """Build the sine test box UI section."""
-        return ManualTestPanel.sine_test_box(self)
-
-    def _build_feedforward_test_box(self) -> QtWidgets.QGroupBox:
-        """Build the feedforward test box UI section."""
-        return ManualTestPanel.feedforward_test_box(self)
-
-    def _make_float_spin(low: float, high: float, value: float, decimals: int) -> QtWidgets.QDoubleSpinBox:
-        """Create the float spin widget or helper."""
-        return ManualTestPanel.make_float_spin(low, high, value, decimals)
 
     def _set_status(self, text: str) -> None:
         """Update the status value or state."""

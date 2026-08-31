@@ -28,27 +28,6 @@ class AckTracker:
         # ACK 等待使用 latest 值；事件记录使用独立通道，不能被 HandModel 邮箱覆盖。
         self._events: EventChannel[dict] = EventChannel()
 
-    @property
-    def condition(self) -> threading.Condition:
-        """仅供 ``LowerComputerComm._ack_lock`` 旧属性兼容。"""
-        return self._condition
-
-    @property
-    def last_ack(self) -> Optional[tuple]:
-        with self._condition:
-            return self._last_ack
-
-    @property
-    def sequence(self) -> int:
-        with self._condition:
-            return int(self._sequence)
-
-    @property
-    def last_p4_time_ms(self) -> Optional[int]:
-        """返回最近 ACK 的 P4 处理时刻，不改变历史四元素 ACK 元组契约。"""
-        with self._condition:
-            return self._last_p4_time_ms
-
     def reset(
         self,
         *,

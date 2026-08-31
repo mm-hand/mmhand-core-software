@@ -321,24 +321,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_MOTOR_POS)
-    {
-        int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
-        if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
-            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM, MOTOR_DIRECT_SOURCE_TARGET);
-        }
-        return;
-    }
-
-    if (cmd == CMD_MOTOR_POS_SWEEP)
-    {
-        int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
-        if (parseInt16ArrayBigEndian(frame + 1, frameLen - 1, motorTargets, SERVO_TOTAL_NUM)) {
-            upperApplyMotorSweepTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
-        }
-        return;
-    }
-
     if (cmd == CMD_MOTOR_POS_ABS)
     {
         int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
@@ -346,7 +328,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                                      frameLen - 1,
                                      motorTargets,
                                      SERVO_TOTAL_NUM)) {
-            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM, MOTOR_DIRECT_SOURCE_ABSOLUTE);
+            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
         }
         return;
     }
@@ -357,8 +339,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             const uint8_t motorIndex = frame[1];
             upperApplySingleMotorTarget(sharedData,
                                         motorIndex,
-                                        readI32BigEndian(frame + 2),
-                                        MOTOR_DIRECT_SOURCE_ABSOLUTE);
+                                        readI32BigEndian(frame + 2));
         }
         return;
     }

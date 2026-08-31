@@ -33,10 +33,6 @@ bool parseFloatArrayLittleEndian(const uint8_t* payload,
                                  size_t payloadLen,
                                  float* outValues,
                                  uint8_t count);
-bool parseInt16ArrayBigEndian(const uint8_t* payload,
-                              size_t payloadLen,
-                              int32_t* outValues,
-                              uint8_t count);
 bool parseInt32ArrayBigEndian(const uint8_t* payload,
                               size_t payloadLen,
                               int32_t* outValues,

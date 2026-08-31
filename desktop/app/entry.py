@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
-RAW_IK_SPACES = ["legacy_calibrated_deg", "urdf_deg", "urdf_rad"]
+RAW_IK_SPACES = ["urdf_deg", "urdf_rad"]
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -59,11 +59,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ros2-raw-ik-space",
         choices=RAW_IK_SPACES,
-        default="legacy_calibrated_deg",
-        help=(
-            "Coordinate space used by /raw_ik_target. The compatibility default is "
-            "legacy_calibrated_deg; use urdf_deg for new active-URDF publishers."
-        ),
+        default="urdf_deg",
+        help="Coordinate space used by /raw_ik_target.",
     )
     parser.add_argument(
         "--ros-topic",

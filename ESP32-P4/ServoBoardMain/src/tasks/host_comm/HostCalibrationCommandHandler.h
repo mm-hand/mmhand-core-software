@@ -34,8 +34,6 @@ uint8_t commitManualReferences(
     SystemRuntimeContext* sharedData,
     const ManualEncoderReference references[ENCODER_TOTAL_NUM]);
 
-/** 消费 Flash 回退分支的 Manual 结果；默认关闭时固定返回 false。 */
-
 /** 消费一次 Reset Zero 完成结果，并联动失效对应关节标定。 */
 void processServoResetZeroResult(SystemRuntimeContext* sharedData,
                                  uint32_t* lastResultToken);

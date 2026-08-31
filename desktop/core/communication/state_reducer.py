@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Iterable, Optional
+from typing import Callable, Optional
 
 from ..data_models import (
     HandModel,
@@ -51,10 +51,9 @@ from ..protocol import (
 from ..session_log import log_session
 from .ack_tracker import AckTracker
 from .event_channel import EventChannel
-from .packet_router import P4PacketRouter, RoutedPacket
+from .packet_router import P4PacketRouter
 
 
-PacketReducer = Callable[[HandModel, RoutedPacket, float], bool]
 ModelFinalizer = Callable[[HandModel], None]
 
 
@@ -84,7 +83,7 @@ class StateReducer:
 
     @last_model.setter
     def last_model(self, model: Optional[HandModel]) -> None:
-        # 该 setter 专门保留给旧测试和断线模型恢复；新业务不得绕过 reduce 写状态。
+        # 断线模型恢复与组件级测试通过此入口替换快照；协议包仍必须经 begin/commit 归并。
         self._last_model = model
 
     def reset(self) -> None:
@@ -850,20 +849,3 @@ class StateReducer:
             emitted,
             owner._apply_connectivity_visibility,
         )
-
-    def reduce(
-        self,
-        packets: Iterable[RoutedPacket],
-        apply_packet: PacketReducer,
-        finalize_model: ModelFinalizer,
-    ) -> Optional[HandModel]:
-        """按顺序应用一批包；同批包共享主机接收时间，P4 时间逐包覆盖。"""
-        model, host_received_at = self.begin()
-        emitted = False
-        for packet in packets:
-            if packet.p4_time_ms is not None:
-                model.p4_time_ms = int(packet.p4_time_ms)
-                model.has_p4_time = True
-            emitted = bool(apply_packet(model, packet, host_received_at)) or emitted
-
-        return self.commit(model, emitted, finalize_model)

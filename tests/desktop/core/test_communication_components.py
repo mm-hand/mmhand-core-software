@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import struct
+from types import SimpleNamespace
 
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.communication import (
@@ -22,11 +23,12 @@ from desktop.core.communication import (
     StateReducer,
 )
 from desktop.core.data_models import HandModel
+from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import PROTOCOL_HEADER, PROTOCOL_TAIL, split_p4_timestamp
 
 
 class _FakeSerial:
-    """同时模拟 P4 构造式打开和触觉先配置后 open 的 pyserial 对象。"""
+    """模拟 pyserial 构造式打开及默认启用的控制线。"""
 
     def __init__(self, port=None, baudrate=None, timeout=None) -> None:
         self.port = port
@@ -43,12 +45,6 @@ class _FakeSerial:
 
     def close(self) -> None:
         self.is_open = False
-
-    def setDTR(self, value: bool) -> None:
-        self.dtr = bool(value)
-
-    def setRTS(self, value: bool) -> None:
-        self.rts = bool(value)
 
     def write(self, data: bytes) -> int:
         self.writes.append(bytes(data))
@@ -71,18 +67,17 @@ def test_serial_transport_owns_open_write_and_close() -> None:
     assert transport.serial is None
 
 
-def test_tactile_transport_suppresses_dtr_and_rts() -> None:
+def test_tactile_transport_keeps_usb_cdc_control_lines_active() -> None:
     transport = SerialTransport(
         "COM_TOUCH",
         921_600,
         0.02,
         _FakeSerial,
-        suppress_control_lines=True,
     )
 
     assert transport.open() is True
-    assert transport.serial.dtr is False
-    assert transport.serial.rts is False
+    assert transport.serial.dtr is True
+    assert transport.serial.rts is True
 
 
 def test_frame_decoder_handles_log_bytes_fragmentation_and_sticky_frames() -> None:
@@ -126,14 +121,14 @@ def test_packet_router_strips_p4_timestamp_and_assigns_semantic_kind() -> None:
 
 def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
     tracker = AckTracker()
-    assert tracker.publish(0x10, 2, 0, received_at=10.0, p4_time_ms=100) == 1
+    first_sequence = tracker.publish(0x10, 2, 0, received_at=10.0, p4_time_ms=100)
+    assert first_sequence == 1
     assert tracker.wait_for(0x10, timeout_s=0.0, received_after=11.0) is None
 
-    assert tracker.publish(0x10, 3, 0, received_at=12.0, p4_time_ms=120) == 2
+    second_sequence = tracker.publish(0x10, 3, 0, received_at=12.0, p4_time_ms=120)
+    assert second_sequence == 2
     ack = tracker.wait_for(0x10, timeout_s=0.0, received_after=11.0)
     assert ack == (0x10, 3, 0, 12.0)
-    assert tracker.last_p4_time_ms == 120
-    assert tracker.sequence == 2
     assert tracker.drain_events() == [
         {
             "sequence": 1,
@@ -154,8 +149,7 @@ def test_ack_tracker_rejects_stale_ack_and_exposes_monotonic_sequence() -> None:
     ]
 
     tracker.reset()
-    assert tracker.sequence == 2
-    assert tracker.last_ack is None
+    assert tracker.drain_events() == []
 
 
 def test_event_channel_preserves_order_until_explicit_drain() -> None:
@@ -183,7 +177,11 @@ def test_state_reducer_carries_previous_snapshot_and_commits_once() -> None:
         return True
 
     finalized: list[HandModel] = []
-    model = reducer.reduce([routed], _apply, finalized.append)
+    model, host_received_at = reducer.begin()
+    model.p4_time_ms = int(routed.p4_time_ms or 0)
+    model.has_p4_time = routed.p4_time_ms is not None
+    emitted = _apply(model, routed, host_received_at)
+    model = reducer.commit(model, emitted, finalized.append)
 
     assert model is not None
     assert model is reducer.last_model
@@ -193,15 +191,13 @@ def test_state_reducer_carries_previous_snapshot_and_commits_once() -> None:
     assert finalized == [model]
 
 
-def test_lower_computer_comm_remains_a_compatible_facade() -> None:
+def test_lower_computer_comm_uses_split_state_reducer() -> None:
     comm = LowerComputerComm("")
     model = HandModel()
 
-    comm._last_model = model
+    comm._state_reducer.last_model = model
 
-    assert comm._last_model is model
     assert comm._state_reducer.last_model is model
-    assert comm._ack_lock is comm._ack_tracker.condition
 
 
 def test_lower_computer_comm_rx_queue_is_latest_value_mailbox() -> None:
@@ -216,3 +212,13 @@ def test_lower_computer_comm_rx_queue_is_latest_value_mailbox() -> None:
 
     assert comm.rx_queue.qsize() == 1
     assert comm.rx_queue.get_nowait() is latest
+
+
+def test_hand_backend_connection_uses_comm_health_api_without_legacy_serial_property() -> None:
+    """UI connection state must not depend on removed ``LowerComputerComm.serial``."""
+    backend = HandBackend.__new__(HandBackend)
+    backend._controller = SimpleNamespace(
+        comm=SimpleNamespace(is_connected=lambda: True)
+    )
+
+    assert backend.is_comm_connected() is True

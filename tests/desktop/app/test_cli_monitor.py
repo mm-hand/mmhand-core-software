@@ -1,4 +1,5 @@
-from desktop.app.cli_monitor import run_cli_monitor
+from desktop.app.cli_monitor import _print_console, run_cli_monitor
+from desktop.core.data_models import HandModel
 
 
 class FakeBackend:
@@ -28,6 +29,23 @@ class FakeBackend:
 
     def shutdown(self) -> None:
         self.calls.append(("shutdown",))
+
+
+class _RenderBackend(FakeBackend):
+    """为 CLI 渲染测试提供当前 HandModel 快照。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.state = HandModel()
+        self.state.host_rx_time = 1.0
+        self.state.target_angles[0] = 12.5
+        self.state.encoders[0].raw = 1024
+        self.state.encoders[0].angle_error = False
+        self.state.servo_online[26] = True
+        self.state.servo_angles[26] = 4096
+
+    def get_state_snapshot(self) -> HandModel:
+        return self.state
 
 
 class FakeKeyReader:
@@ -67,6 +85,18 @@ def test_cli_monitor_drives_backend_commands_only() -> None:
         ("calibrate",),
         ("shutdown",),
     ]
+
+
+def test_cli_monitor_renders_current_hand_model_fields(monkeypatch, capsys) -> None:
+    """CLI 不能再读取已删除的 timestamp、JOINT1_DEBUG 或 jd_* 字段。"""
+    monkeypatch.setattr("desktop.app.cli_monitor.os.system", lambda _command: 0)
+
+    _print_console(_RenderBackend(), "COM9", "DISABLED")
+
+    output = capsys.readouterr().out
+    assert "Mapped joint angles" in output
+    assert "J00" in output
+    assert "[26]" in output
 
 
 class _FakeRosBridge:

@@ -118,7 +118,6 @@ def _render_cpp(schema: dict) -> str:
     aliases = {
         "kFloatPayloadBytes": "CMD_ANGLE_CTRL",
         "kMaskedFloatPayloadBytes": "CMD_ANGLE_CTRL_MASKED",
-        "kMotorPosPayloadBytes": "CMD_MOTOR_POS",
         "kMotorPosAbsPayloadBytes": "CMD_MOTOR_POS_ABS",
         "kMotorPosAbsOnePayloadBytes": "CMD_MOTOR_POS_ABS_ONE",
         "kActiveScopePayloadBytes": "CMD_ACTIVE_SCOPE",
@@ -149,8 +148,6 @@ def _render_cpp(schema: dict) -> str:
         ]
     )
     alias_for_command = {command: alias for alias, command in aliases.items()}
-    # 连续直控与普通单圈直控使用完全相同的 27 路 uint16 payload。
-    alias_for_command["CMD_MOTOR_POS_SWEEP"] = "kMotorPosPayloadBytes"
     for item in schema["commands"]:
         name = item["name"]
         return_value = alias_for_command.get(name, str(int(item["payload_bytes"])))

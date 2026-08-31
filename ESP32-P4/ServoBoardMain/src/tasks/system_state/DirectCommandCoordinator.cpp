@@ -33,13 +33,9 @@ void resetCommandState(SystemRuntimeContext* sharedData)
     }
     for (uint8_t i = 0; i < SERVO_TOTAL_NUM; i++) {
         sharedData->motorTargetRaw[i] = 0;
-        sharedData->motorSweepTargetRaw[i] = 0;
         sharedData->pendingMotorTargetRaw[i] = 0;
-        sharedData->pendingMotorSweepTargetRaw[i] = 0;
     }
     p4::platform::rtos::atomicAddFetch(&sharedData->motor_command_token,
-                                 (uint32_t)1);
-    p4::platform::rtos::atomicAddFetch(&sharedData->motor_sweep_command_token,
                                  (uint32_t)1);
     p4::platform::rtos::atomicAddFetch(&sharedData->joint_command_token,
                                  (uint32_t)1);
@@ -61,6 +57,7 @@ void resetCommandState(SystemRuntimeContext* sharedData)
     sharedAtomicStore(&sharedData->feedback_recovery_pending, (uint8_t)0);
     sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                       (uint32_t)0);
+    sharedAtomicStore(&sharedData->calibration_rope_init_pending, (uint8_t)0);
 
     if (lock) {
         xSemaphoreGive(lock);
@@ -226,24 +223,13 @@ bool promotePendingDirectCommand(SystemRuntimeContext* sharedData,
         return false;
     }
 
-    const uint8_t source = sharedData->pending_direct_source;
-    // Sweep 与 ABS 使用不同目标邮箱/token，但共享同一代际和状态机门禁。
-    if (source == MOTOR_DIRECT_SOURCE_SWEEP) {
-        memcpy(sharedData->motorSweepTargetRaw,
-               sharedData->pendingMotorSweepTargetRaw,
-               sizeof(sharedData->motorSweepTargetRaw));
-        p4::platform::rtos::atomicAddFetch(
-            &sharedData->motor_sweep_command_token,
-            (uint32_t)1);
-    } else {
-        memcpy(sharedData->motorTargetRaw,
-               sharedData->pendingMotorTargetRaw,
-               sizeof(sharedData->motorTargetRaw));
-        p4::platform::rtos::atomicAddFetch(&sharedData->motor_command_token,
-                                     (uint32_t)1);
-    }
+    memcpy(sharedData->motorTargetRaw,
+           sharedData->pendingMotorTargetRaw,
+           sizeof(sharedData->motorTargetRaw));
+    p4::platform::rtos::atomicAddFetch(&sharedData->motor_command_token,
+                                 (uint32_t)1);
     sharedData->motor_direct_command_generation = generation;
-    sharedData->motor_direct_command_source = source;
+    sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
     sharedData->applied_direct_generation = generation;
     {
         // 目标与 active scope 在同一命令锁内生效，MotionControlTask 下一帧看到完整版本。

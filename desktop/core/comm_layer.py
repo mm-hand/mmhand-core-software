@@ -170,6 +170,10 @@ FIRMWARE_LOG_ERROR_MARKERS = (
 # The UI/model order is also thumb, index, middle, ring, pinky.
 TACTILE_UI_GROUP_FROM_RAW = (0, 1, 2, 3, 4)
 TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
+TACTILE_SERIAL_DIAG_PACKET_TYPE = 0x10
+TACTILE_SERIAL_DIAG_VERSION = 1
+TACTILE_SERIAL_DIAG_MODULE_COUNT = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP
+TACTILE_SERIAL_DIAG_PAYLOAD_BYTES = 1 + 4 + 8 * 2 + 4 * TACTILE_SERIAL_DIAG_MODULE_COUNT * 2 + 3 * TACTILE_SERIAL_DIAG_MODULE_COUNT
 MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
 
 # P4PacketRouter 只负责“包号 -> 稳定语义名”。当前状态归并仍按 packet_type
@@ -195,8 +199,62 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_TASK_DIAG: "task_diagnostic",
     PACKET_TYPE_TACTILE: "tactile_summary",
     PACKET_TYPE_TACTILE_FULL: "tactile_full",
+    TACTILE_SERIAL_DIAG_PACKET_TYPE: "tactile_diagnostic",
     0x06: "protocol_ack",
 }
+
+
+def _parse_tactile_diagnostic_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) != TACTILE_SERIAL_DIAG_PAYLOAD_BYTES:
+        return None
+    cursor = 0
+    version = int(payload[cursor])
+    cursor += 1
+    if version != TACTILE_SERIAL_DIAG_VERSION:
+        return None
+
+    def read_u16() -> int:
+        nonlocal cursor
+        value = int.from_bytes(payload[cursor:cursor + 2], "little")
+        cursor += 2
+        return value
+
+    def read_u32() -> int:
+        nonlocal cursor
+        value = int.from_bytes(payload[cursor:cursor + 4], "little")
+        cursor += 4
+        return value
+
+    def read_u16_array() -> List[int]:
+        return [read_u16() for _ in range(TACTILE_SERIAL_DIAG_MODULE_COUNT)]
+
+    result = {"version": version, "frame_count": read_u32()}
+    for name in (
+        "enabled_mask",
+        "summary_ok_mask",
+        "full_ok_mask",
+        "command_fail_mask",
+        "response_fail_mask",
+        "crc_fail_mask",
+        "status_nonzero_mask",
+        "summary_retry_recovered_mask",
+    ):
+        result[name] = read_u16()
+    for name in (
+        "summary_success_count",
+        "summary_failure_count",
+        "full_success_count",
+        "full_failure_count",
+    ):
+        result[name] = read_u16_array()
+    for name in (
+        "summary_last_fail_reason",
+        "full_last_fail_reason",
+        "module_last_status",
+    ):
+        result[name] = list(payload[cursor:cursor + TACTILE_SERIAL_DIAG_MODULE_COUNT])
+        cursor += TACTILE_SERIAL_DIAG_MODULE_COUNT
+    return result if cursor == len(payload) else None
 
 
 def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
@@ -375,7 +433,6 @@ class TactileSerialComm:
             self.baudrate,
             SERIAL_TIMEOUT,
             serial_factory,
-            suppress_control_lines=True,
         )
         self._frame_decoder = FrameDecoder(
             PROTOCOL_HEADER,
@@ -404,6 +461,8 @@ class TactileSerialComm:
         self._last_tactile_module_valid_mask = 0
         self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         self._tactile_offline_emitted = False
+        self._last_tactile_diag_log_at = 0.0
+        self._last_tactile_diag_signature = None
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
         self._rx_diag_bytes = 0
@@ -420,7 +479,15 @@ class TactileSerialComm:
             if not is_valid_port(self.port):
                 raise ValueError(f"tactile port '{self.port}' is not available")
             if not self._transport.open():
+                log_session("TACTILE", f"serial open failed port={self.port}")
                 return False
+            handle = self._transport.serial
+            log_session(
+                "TACTILE",
+                f"serial opened port={self.port} baud={self.baudrate} "
+                f"dtr={int(bool(getattr(handle, 'dtr', False)))} "
+                f"rts={int(bool(getattr(handle, 'rts', False)))}",
+            )
             self.running = True
             self._frame_decoder.reset()
             self._firmware_text_buffer = bytearray()
@@ -434,6 +501,8 @@ class TactileSerialComm:
             self._last_tactile_module_valid_mask = 0
             self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
             self._tactile_offline_emitted = False
+            self._last_tactile_diag_log_at = 0.0
+            self._last_tactile_diag_signature = None
             self._rx_diag_last_print = time.time()
             self._rx_diag_total_packets = 0
             self._rx_diag_bytes = 0
@@ -445,6 +514,7 @@ class TactileSerialComm:
                 self._transport.close()
             except Exception:
                 pass
+            log_session("TACTILE", f"serial open failed port={self.port}: {exc}")
             print(f"Tactile serial connect failed: {exc}")
             return False
 
@@ -636,6 +706,7 @@ class TactileSerialComm:
                     time.sleep(RX_POLL_SLEEP)
             except Exception as exc:
                 if self.running:
+                    log_session("TACTILE", f"RX error port={self.port}: {exc}")
                     print(f"Tactile RX error: {exc}")
                 self._mark_serial_offline()
 
@@ -649,10 +720,6 @@ class TactileSerialComm:
 
     def _flush_firmware_log_text(self) -> None:
         self._firmware_text_buffer.clear()
-
-    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
-        """兼容旧入口；S3 触觉链路与 P4 共用同一套帧边界实现。"""
-        return self._frame_decoder.extract()
 
     @staticmethod
     def _stabilize_tactile_groups(groups: List[List[List[int]]]) -> List[List[List[int]]]:
@@ -684,7 +751,14 @@ class TactileSerialComm:
                     continue
                 seq, groups, module_valid_mask = parsed
                 stable_groups = self._stabilize_tactile_groups(groups)
+                first_summary = self._last_tactile_rx_ts <= 0.0
                 self._mark_tactile_summary_received(module_valid_mask)
+                if first_summary:
+                    log_session(
+                        "TACTILE",
+                        f"first summary port={self.port} seq={int(seq)} "
+                        f"mask=0x{int(module_valid_mask) & 0x7FFF:04X}",
+                    )
                 self._last_tactile_summary_groups = stable_groups
                 self._last_tactile_summary_seq = int(seq)
                 model.tactile_summary_seq = int(seq)
@@ -749,6 +823,57 @@ class TactileSerialComm:
                 model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
                 model.tactile_full_dropped = self._tactile_full_dropped
                 self._last_tactile_full_ts = time.time()
+                emitted = True
+
+            elif pkt_type == TACTILE_SERIAL_DIAG_PACKET_TYPE:
+                diag = _parse_tactile_diagnostic_packet(payload)
+                if diag is None:
+                    continue
+                now = time.time()
+                model.tactile_diag_version = int(diag["version"])
+                model.tactile_diag_frame_count = int(diag["frame_count"])
+                for field in (
+                    "enabled_mask",
+                    "summary_ok_mask",
+                    "full_ok_mask",
+                    "command_fail_mask",
+                    "response_fail_mask",
+                    "crc_fail_mask",
+                    "status_nonzero_mask",
+                    "summary_retry_recovered_mask",
+                ):
+                    setattr(model, f"tactile_diag_{field}", int(diag[field]))
+                for field in (
+                    "summary_success_count",
+                    "summary_failure_count",
+                    "full_success_count",
+                    "full_failure_count",
+                    "summary_last_fail_reason",
+                    "full_last_fail_reason",
+                    "module_last_status",
+                ):
+                    setattr(model, f"tactile_diag_{field}", list(diag[field]))
+                model.tactile_diag_last_rx_ts = now
+                signature = (
+                    int(diag["summary_ok_mask"]),
+                    int(diag["full_ok_mask"]),
+                    int(diag["command_fail_mask"]),
+                    int(diag["response_fail_mask"]),
+                    int(diag["crc_fail_mask"]),
+                )
+                if signature != self._last_tactile_diag_signature or now - self._last_tactile_diag_log_at >= 10.0:
+                    log_session(
+                        "TACTILE_SPI",
+                        f"frame={int(diag['frame_count'])} "
+                        f"summary=0x{int(diag['summary_ok_mask']) & 0x7FFF:04X} "
+                        f"full=0x{int(diag['full_ok_mask']) & 0x7FFF:04X} "
+                        f"cmd=0x{int(diag['command_fail_mask']) & 0x7FFF:04X} "
+                        f"rsp=0x{int(diag['response_fail_mask']) & 0x7FFF:04X} "
+                        f"crc=0x{int(diag['crc_fail_mask']) & 0x7FFF:04X} "
+                        f"retry=0x{int(diag['summary_retry_recovered_mask']) & 0x7FFF:04X}",
+                    )
+                    self._last_tactile_diag_signature = signature
+                    self._last_tactile_diag_log_at = now
                 emitted = True
 
         if emitted:
@@ -842,43 +967,6 @@ class LowerComputerComm:
         if not callable(parser):
             raise RuntimeError(f"protocol parser is unavailable: {parser_name}")
         return parser(payload)
-
-    @property
-    def serial(self):
-        """兼容旧调用方读取底层串口；句柄生命周期已归 ``SerialTransport``。"""
-        return self._transport.serial
-
-    @serial.setter
-    def serial(self, value) -> None:
-        """保留测试注入假串口能力，生产代码不应直接设置该属性。"""
-        self._transport.attach(value)
-
-    @property
-    def _rx_buffer(self) -> bytearray:
-        """兼容旧诊断字段，真实半帧缓存由 ``FrameDecoder`` 独占。"""
-        return self._frame_decoder.buffer
-
-    @_rx_buffer.setter
-    def _rx_buffer(self, value: bytearray) -> None:
-        self._frame_decoder.buffer = value
-
-    @property
-    def _last_model(self) -> Optional[HandModel]:
-        """兼容旧测试字段，最新快照的唯一所有者是 ``StateReducer``。"""
-        return self._state_reducer.last_model
-
-    @_last_model.setter
-    def _last_model(self, value: Optional[HandModel]) -> None:
-        self._state_reducer.last_model = value
-
-    @property
-    def _ack_lock(self) -> threading.Condition:
-        """兼容旧代码的条件变量名称；新代码统一通过 ``AckTracker`` 操作。"""
-        return self._ack_tracker.condition
-
-    @property
-    def _proto_ack_sequence(self) -> int:
-        return self._ack_tracker.sequence
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
@@ -1023,8 +1111,9 @@ class LowerComputerComm:
 
     def _build_offline_model(self) -> HandModel:
         model = HandModel()
-        if self._last_model is not None:
-            model.copy_state_from(self._last_model)
+        previous = self._state_reducer.last_model
+        if previous is not None:
+            model.copy_state_from(previous)
         model.host_rx_time = time.time()
         model.calib_status = "DISCONNECTED"
         model.has_system_status_data = False
@@ -1058,7 +1147,7 @@ class LowerComputerComm:
             motor.state = MotorState.ERROR
         model.tactile_online = False
         model.tactile_module_online = [False] * len(model.tactile_module_online)
-        self._last_model = model
+        self._state_reducer.last_model = model
         return model
 
     def _push_rx_model(self, model: HandModel) -> None:
@@ -1289,10 +1378,6 @@ class LowerComputerComm:
         if any(marker in stripped for marker in FIRMWARE_LOG_DEBUG_MARKERS):
             return TERMINAL_LOG_LEVEL_DEBUG
         return TERMINAL_LOG_LEVEL_INFO
-
-    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
-        """兼容旧测试入口；真实帧缓存与提取规则已下沉到 FrameDecoder。"""
-        return self._frame_decoder.extract()
 
     def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
         stable: List[List[List[int]]] = []

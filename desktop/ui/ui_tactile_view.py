@@ -35,7 +35,6 @@ from desktop.core.data_models import (
     TACTILE_BAND_SENSOR_INDEX,
     TACTILE_FOUR_FINGER_GAP,
     TACTILE_JOINT_BAND_INDICES,
-    tactile_apply_fingertip_round_cap,
 )
 from .official_tactile_layout import get_official_tactile_layout
 from .ui_qt_compat import QtCore, QtWidgets
@@ -64,8 +63,6 @@ TACTILE_2D_ARROW_CONTACT_RATIO = 0.16
 TACTILE_2D_ARROW_MAX_LEVEL = 12.0
 TACTILE_2D_ARROW_GRID_STEP = 18
 TACTILE_2D_ARROW_MAX_COUNT = 12
-TACTILE_2D_ARROW_RESULTANT_FLOOR = 3.0
-TACTILE_2D_ARROW_RESULTANT_Z_RATIO = 0.35
 TACTILE_2D_SHOW_ARROWS_IN_Z_VIEW = True
 TACTILE_2D_SHOW_HAND_GUIDE = True
 TACTILE_2D_GUIDE_FILL = (248, 250, 252, 255)
@@ -615,8 +612,8 @@ class TactileView(QtWidgets.QWidget):
             return
         if ok:
             self._settings.setValue(S3_TACTILE_PORT_SETTINGS_KEY, port)
-            self.s3_status_label.setText(f"S3 tactile connected: {port}")
-            self.context.set_status(f"S3 tactile serial connected: {port}")
+            self.s3_status_label.setText(f"S3 serial open: {port}")
+            self.context.set_status(f"S3 tactile serial open: {port}")
         else:
             self.s3_status_label.setText(f"S3 tactile connect failed: {port}")
         self._refresh_s3_status()
@@ -643,8 +640,8 @@ class TactileView(QtWidgets.QWidget):
         except Exception:
             port = ""
         if connected:
-            text = f"S3 tactile connected: {port or self._selected_s3_port()}"
-            color = "#166534"
+            text = f"S3 serial open: {port or self._selected_s3_port()}"
+            color = "#475569"
         else:
             text = "S3 tactile: disconnected"
             color = "#475569"
@@ -1006,6 +1003,36 @@ class TactileView(QtWidgets.QWidget):
                 f"seq_mismatch={int(getattr(state, 'tactile_full_seq_mismatches', 0))} "
                 f"dropped={int(getattr(state, 'tactile_full_dropped', 0))}"
             )
+            if int(getattr(state, "tactile_diag_version", 0) or 0) > 0:
+                lines.append(
+                    "spi "
+                    f"frame={int(getattr(state, 'tactile_diag_frame_count', 0) or 0)} "
+                    f"summary_ok=0x{int(getattr(state, 'tactile_diag_summary_ok_mask', 0) or 0) & 0x7FFF:04X} "
+                    f"full_ok=0x{int(getattr(state, 'tactile_diag_full_ok_mask', 0) or 0) & 0x7FFF:04X} "
+                    f"cmd_fail=0x{int(getattr(state, 'tactile_diag_command_fail_mask', 0) or 0) & 0x7FFF:04X} "
+                    f"rsp_fail=0x{int(getattr(state, 'tactile_diag_response_fail_mask', 0) or 0) & 0x7FFF:04X} "
+                    f"crc_fail=0x{int(getattr(state, 'tactile_diag_crc_fail_mask', 0) or 0) & 0x7FFF:04X} "
+                    f"retry_ok=0x{int(getattr(state, 'tactile_diag_summary_retry_recovered_mask', 0) or 0) & 0x7FFF:04X}"
+                )
+                summary_ok = list(getattr(state, "tactile_diag_summary_success_count", []) or [])
+                summary_fail = list(getattr(state, "tactile_diag_summary_failure_count", []) or [])
+                full_ok = list(getattr(state, "tactile_diag_full_success_count", []) or [])
+                full_fail = list(getattr(state, "tactile_diag_full_failure_count", []) or [])
+                summary_reason = list(getattr(state, "tactile_diag_summary_last_fail_reason", []) or [])
+                full_reason = list(getattr(state, "tactile_diag_full_last_fail_reason", []) or [])
+                sensor_labels = ("Tip", "Pad-1", "Pad-2")
+                for module in range(15):
+                    finger = module // 3
+                    sensor = module % 3
+                    if min(len(summary_ok), len(summary_fail), len(full_ok), len(full_fail)) <= module:
+                        break
+                    lines.append(
+                        f"SPI {TACTILE_FINGER_LABELS[finger]}/{sensor_labels[sensor]} "
+                        f"summary={summary_ok[module]}/{summary_fail[module]} "
+                        f"full={full_ok[module]}/{full_fail[module]} "
+                        f"reason={summary_reason[module] if module < len(summary_reason) else 0}/"
+                        f"{full_reason[module] if module < len(full_reason) else 0}"
+                    )
         for fi in range(5):
             finger = tactile[fi] if fi < len(tactile) else FingerTactile(sensors=[])
             for si in range(3):
@@ -1054,47 +1081,12 @@ class TactileView(QtWidgets.QWidget):
             return False
         return True
 
-    @staticmethod
-    def _state_has_active_tactile_summary(state: Optional[HandModel]) -> bool:
-        tactile = state.tactile_data if state and state.tactile_data else []
-        for finger in tactile:
-            for sensor in getattr(finger, "sensors", []) or []:
-                resultant = getattr(sensor, "resultant", None)
-                if resultant is None or len(resultant) < 3:
-                    continue
-                try:
-                    if max(0.0, float(resultant[2])) >= TACTILE_DISPLAY_FLOOR:
-                        return True
-                except (TypeError, ValueError):
-                    continue
-        return False
-
     def _apply_ready_frame(self) -> None:
         result = self._worker.consume_latest()
         if result is None or result.axis != self.axis or result.token <= self._last_applied_token:
             return
         self._last_applied_token = result.token
         self._apply_matrix(result.matrix, result.axis, result.has_data)
-
-    @staticmethod
-    def _zero_tactile_data() -> List[FingerTactile]:
-        fingers: List[FingerTactile] = []
-        for _finger_idx in range(5):
-            sensors: List[TactileSensor] = []
-            for sensor_idx in range(3):
-                rows, cols = tactile_segment_shape(0 if sensor_idx == 0 else 2)
-                sensors.append(
-                    TactileSensor(
-                        contact_forces=np.zeros((rows, cols, 3), dtype=float),
-                        resultant=np.zeros(3, dtype=float),
-                    )
-                )
-            fingers.append(FingerTactile(sensors=sensors))
-        return fingers
-
-    def _build_zero_matrix(self, axis: int) -> np.ndarray:
-        state = HandModel(tactile_data=self._zero_tactile_data())
-        return self._build_matrix(state, axis)
 
     def _apply_matrix(
         self,
@@ -1153,39 +1145,6 @@ class TactileView(QtWidgets.QWidget):
             self._last_matrix_shape = data.shape[:2]
             self.view.setRange(xRange=(0, data.shape[0]), yRange=(0, data.shape[1]), padding=0.02)
         self.no_data.setVisible(not has_data)
-
-    @staticmethod
-    def _tactile_band_for_matrix_point(row: int, col: int) -> Optional[int]:
-        scale = max(1, int(TACTILE_2D_ARRAY_SCALE))
-        base_row = int(row) // scale
-        base_col = int(col) // scale
-        spec = TACTILE_STITCH_SPEC
-
-        def find_in_strip(top: int, left: int) -> Optional[int]:
-            if not (
-                top <= base_row < top + TACTILE_FINGER_STRIP_ROWS
-                and left <= base_col < left + TACTILE_BAND_WIDTH
-            ):
-                return None
-            local_row = base_row - top
-            band_top = 0
-            for band in range(TACTILE_NBANDS):
-                band_h, _band_w = tactile_band_shape(band)
-                if band_top <= local_row < band_top + band_h:
-                    return band
-                band_top += band_h
-            return None
-
-        thumb_band = find_in_strip(spec.thumb_r, spec.thumb_c)
-        if thumb_band is not None:
-            return thumb_band
-
-        step = TACTILE_BAND_WIDTH + TACTILE_FOUR_FINGER_GAP
-        for fi in range(4):
-            band = find_in_strip(spec.four_r, spec.four_c + fi * step)
-            if band is not None:
-                return band
-        return None
 
     @staticmethod
     def _fill_rect(
@@ -1410,24 +1369,6 @@ class TactileView(QtWidgets.QWidget):
                 if np.any(mask):
                     image[valid_rr[mask], cc[mask]] = color
 
-    @staticmethod
-    def _draw_circle(
-        image: np.ndarray,
-        row: float,
-        col: float,
-        radius: int,
-        color: Tuple[int, int, int, int],
-    ) -> None:
-        r0 = max(0, int(math.floor(row - radius)))
-        r1 = min(image.shape[0], int(math.ceil(row + radius + 1)))
-        c0 = max(0, int(math.floor(col - radius)))
-        c1 = min(image.shape[1], int(math.ceil(col + radius + 1)))
-        if r1 <= r0 or c1 <= c0:
-            return
-        yy, xx = np.ogrid[r0:r1, c0:c1]
-        mask = (yy - row) * (yy - row) + (xx - col) * (xx - col) <= radius * radius
-        image[r0:r1, c0:c1][mask] = color
-
     @classmethod
     def _draw_line(
         cls,
@@ -1509,30 +1450,6 @@ class TactileView(QtWidgets.QWidget):
         return out
 
     @staticmethod
-    def _extract_finger_strip(fd: FingerTactile, axis: int) -> np.ndarray:
-        strip = np.full((TACTILE_FINGER_STRIP_ROWS, TACTILE_BAND_WIDTH), np.nan, dtype=float)
-        row = 0
-        for band in range(TACTILE_NBANDS):
-            h, w = tactile_band_shape(band)
-            if band in TACTILE_JOINT_BAND_INDICES:
-                row += h
-                continue
-            si = TACTILE_BAND_SENSOR_INDEX.get(band)
-            if si is not None and si < len(fd.sensors):
-                cf = getattr(fd.sensors[si], "contact_forces", None)
-                if cf is not None and hasattr(cf, "shape") and len(cf.shape) >= 3:
-                    raw_ch = np.asarray(cf[:, :, min(axis, cf.shape[2] - 1)], dtype=float)
-                    ch = np.clip(raw_ch, 0, None) if axis == 2 else np.abs(raw_ch)
-                    if ch.shape == (h, w):
-                        strip[row:row + h, :w] = ch
-                    elif band == 0:
-                        strip[row:row + h, :] = tactile_upsample_tip_grid_to_band0(ch)
-                    else:
-                        strip[row:row + h, :] = tactile_upsample_pad_grid_to_band(ch, h, w)
-            row += h
-        return strip
-
-    @staticmethod
     def _orient_manual_sensor_array(values: np.ndarray) -> np.ndarray:
         out = np.asarray(values, dtype=float)
         if TACTILE_2D_MANUAL_ORIGIN_AT_ROOT:
@@ -1568,22 +1485,6 @@ class TactileView(QtWidgets.QWidget):
         if not np.all(np.isfinite(force)):
             return True
         return max(0.0, float(force[2])) >= TACTILE_DISPLAY_FLOOR
-
-    @staticmethod
-    def _sensor_resultant_allows_arrows(sensor: TactileSensor) -> bool:
-        resultant = getattr(sensor, "resultant", None)
-        if resultant is None or len(resultant) < 3:
-            return True
-        force = np.asarray(resultant[:3], dtype=float)
-        if not np.all(np.isfinite(force)):
-            return True
-        xy_mag = math.hypot(float(force[0]), float(force[1]))
-        z_mag = max(0.0, float(force[2]))
-        if xy_mag < TACTILE_2D_ARROW_RESULTANT_FLOOR:
-            return False
-        if z_mag >= TACTILE_DISPLAY_FLOOR and xy_mag < z_mag * TACTILE_2D_ARROW_RESULTANT_Z_RATIO:
-            return False
-        return True
 
     @classmethod
     def _extract_sensor_vector_array_raw(cls, fd: FingerTactile, sensor_index: int) -> np.ndarray:
@@ -1743,32 +1644,6 @@ class TactileView(QtWidgets.QWidget):
         projection = (local_rows, local_cols, raw_indices, neighbors, weights, interp_mask)
         _OFFICIAL_TACTILE_PROJECTION_CACHE[key] = projection
         return projection
-
-    @classmethod
-    def _extract_sensor_array(cls, fd: FingerTactile, sensor_index: int, axis: int) -> np.ndarray:
-        expected = tactile_segment_shape(0 if sensor_index == 0 else 2)
-        out = np.zeros(expected, dtype=float)
-        if sensor_index >= len(fd.sensors):
-            return cls._orient_sensor_array(out, sensor_index)
-        sensor = fd.sensors[sensor_index]
-        if not cls._sensor_resultant_is_active(sensor):
-            return cls._orient_sensor_array(out, sensor_index)
-        cf = getattr(sensor, "contact_forces", None)
-        if cf is None or not hasattr(cf, "shape") or len(cf.shape) < 3:
-            return cls._orient_sensor_array(out, sensor_index)
-
-        arr = np.asarray(cf, dtype=float)
-        axis_index = min(max(int(axis), 0), arr.shape[2] - 1)
-        raw = arr[:, :, axis_index]
-        values = np.clip(raw, 0.0, None) if axis_index == 2 else np.abs(raw)
-        if values.shape == expected:
-            return cls._orient_sensor_array(values, sensor_index)
-        if values.size == expected[0] * expected[1]:
-            return cls._orient_sensor_array(values.reshape(expected), sensor_index)
-        rows = min(expected[0], values.shape[0])
-        cols = min(expected[1], values.shape[1])
-        out[:rows, :cols] = values[:rows, :cols]
-        return cls._orient_sensor_array(out, sensor_index)
 
     @staticmethod
     def _place_sensor_array(

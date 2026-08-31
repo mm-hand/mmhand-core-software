@@ -90,7 +90,7 @@ def test_multiturn_restore_result_packet() -> None:
 
 def test_multiturn_restore_result_updates_hand_model_end_to_end() -> None:
     comm = LowerComputerComm("")
-    comm._last_model = HandModel()
+    comm._state_reducer.last_model = HandModel()
     packets = [
         (
             PACKET_TYPE_MULTITURN_RESTORE_RESULT,
@@ -112,7 +112,7 @@ def test_valid_angle_outside_workspace_updates_instead_of_freezing():
     model = _calibrated_model(joint_idx)
     model.encoders[joint_idx].raw = 624
     model.encoders[joint_idx].angle_error = False
-    comm._last_model = model
+    comm._state_reducer.last_model = model
 
     updated = comm._process_packets([
         (PACKET_TYPE_SENSOR, _sensor_payload(joint_idx, -1573)),
@@ -130,7 +130,7 @@ def test_next_in_workspace_angle_clears_workspace_warning():
     comm = LowerComputerComm("")
     model = _calibrated_model(joint_idx)
     model.encoders[joint_idx].angle_out_of_workspace = True
-    comm._last_model = model
+    comm._state_reducer.last_model = model
 
     updated = comm._process_packets([
         (PACKET_TYPE_SENSOR, _sensor_payload(joint_idx, 900)),
@@ -148,7 +148,7 @@ def test_changed_calibration_snapshot_keeps_last_angle_until_p4_refresh(monkeypa
     model.encoders[joint_idx].raw = 777
     model.encoders[joint_idx].angle_error = False
     model.encoders[joint_idx].angle_out_of_workspace = True
-    comm._last_model = model
+    comm._state_reducer.last_model = model
 
     new_result = {"joint": joint_idx, "success": True, "angleMax": 70.0}
     monkeypatch.setattr(
@@ -176,7 +176,7 @@ def test_repeated_identical_snapshot_does_not_invalidate_fresh_angle(monkeypatch
     model = _calibrated_model(joint_idx, angle_max=70.0)
     model.encoders[joint_idx].raw = 321
     model.encoders[joint_idx].angle_error = False
-    comm._last_model = model
+    comm._state_reducer.last_model = model
 
     monkeypatch.setattr(
         comm_layer.protocol_codec,

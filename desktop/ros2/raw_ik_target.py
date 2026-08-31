@@ -16,7 +16,7 @@ from typing import Optional
 
 from desktop.core.hand_backend import HandBackend
 from desktop.ros2.joint_targets import JointTargetCommandHandler
-from desktop.core.joint_target_adapter import LEGACY_CALIBRATED_DEG
+from desktop.core.joint_target_adapter import URDF_DEG
 
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 
@@ -25,7 +25,7 @@ DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 class Ros2RawIkTargetConfig:
     topic: str = DEFAULT_RAW_IK_TARGET_TOPIC
     auto_start: bool = False
-    input_space: str = LEGACY_CALIBRATED_DEG
+    input_space: str = URDF_DEG
 
 
 class RawIkTargetBridge:
@@ -37,7 +37,7 @@ class RawIkTargetBridge:
         *,
         topic: str = DEFAULT_RAW_IK_TARGET_TOPIC,
         auto_start: bool = False,
-        input_space: str = LEGACY_CALIBRATED_DEG,
+        input_space: str = URDF_DEG,
     ) -> None:
         self.backend = backend
         self.config = Ros2RawIkTargetConfig(

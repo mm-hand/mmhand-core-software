@@ -63,6 +63,14 @@ inline constexpr uint16_t kRecoveryProbeTimeoutMs = 5;
 inline constexpr uint8_t kTransportRestartAfterFailedScans = 2;
 inline constexpr uint8_t kRecoveryMaxAttempts = 3; ///< 单次上线恢复最大尝试次数。
 inline constexpr uint32_t kRecoveryRetryIntervalMs = 100; ///< 上线恢复重试间隔。
+/** 单台舵机 RESET Zero 完整事务的最大尝试次数；每次都必须收到单播响应。 */
+inline constexpr uint8_t kResetZeroTransactionAttempts = 3;
+/** RESET 后重新读取反馈的最大次数，用于确认新 turn0 已经真实建立。 */
+inline constexpr uint8_t kResetZeroFeedbackAttempts = 3;
+
+static_assert(kResetZeroTransactionAttempts > 0 &&
+                  kResetZeroFeedbackAttempts > 0,
+              "servo reset-zero attempts must not be zero");
 
 } // namespace mmhand::config::servo
 

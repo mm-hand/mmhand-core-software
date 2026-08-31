@@ -18,19 +18,11 @@ struct JointActuatorRuntimeTarget {
 };
 
 // ServoTargetBuilder 负责把控制器输出转换成舵机总线目标：
-// - 单圈 raw 目标可围绕当前绝对位置锚点展开；
 // - 关节执行器辅助函数向 PID 隐藏单腱/双腱硬件拓扑差异。
 // 将目标限制到本次上电会话确认过的 logical ABS 行程；LUT 边界由控制器先行处理。
 int32_t clampServoPosToSessionRange(SystemRuntimeContext* sharedData,
                                     uint8_t motorChannel,
                                     int32_t value);
-// 在展开为多圈 ABS 前，先把单圈 raw 命令限制到合法范围。
-int16_t clampServoSingleTurnRaw(int32_t value);
-// 在当前姿态附近选择距离最近的等价多圈位置。
-int32_t expandSingleTurnTargetNearCurrent(int32_t currentAbsPos, int16_t singleTurnRaw);
-// 将 0..4095 raw 差值转换为最短有符号单圈位移。
-int32_t wrapServoRawDelta(int32_t delta);
-
 // 如果固定大小 batch 仍有空间，则追加一条 Mxx 命令；BUS 在执行时解析。
 bool appendServoTarget(ServoTargetBatch_t* batch,
                        uint8_t motorChannel,

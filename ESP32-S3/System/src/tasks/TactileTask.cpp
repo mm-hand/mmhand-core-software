@@ -20,6 +20,9 @@ constexpr uint8_t kProtocolHeader = 0xFE;
 constexpr uint8_t kProtocolTail = 0xFF;
 constexpr uint8_t kPacketTypeTactile = 0x0A;
 constexpr uint8_t kPacketTypeTactileFull = 0x0E;
+constexpr uint8_t kPacketTypeTactileDiag = 0x10;
+constexpr uint8_t kTactileDiagVersion = 1;
+constexpr uint8_t kTactileDiagDecimation = 30;
 constexpr uint8_t kTactileFullMagic0 = 'T';
 constexpr uint8_t kTactileFullMagic1 = '2';
 // 256字节串口缓冲中为帧头、元数据和尾字节预留空间。
@@ -190,6 +193,59 @@ void sendSerialTactileFullDump(const TactileData& data, uint8_t seq) {
         Serial.write(buffer, idx);
     }
 }
+
+/** @brief 低频发送分模块SPI诊断；新包号保证旧上位机可直接忽略。 */
+void sendSerialTactileDiagnostics(const TactileReadDiag& diag) {
+    constexpr size_t kMaskCount = 8;
+    constexpr size_t kCounterArrayCount = 4;
+    constexpr size_t kReasonArrayCount = 3;
+    constexpr size_t kPayloadBytes = 1 + 4 + kMaskCount * 2 +
+        kCounterArrayCount * TACTILE_MODULE_NUM * 2 +
+        kReasonArrayCount * TACTILE_MODULE_NUM;
+    uint8_t buffer[2 + 1 + kPayloadBytes + 1] = {0};
+    size_t idx = 0;
+    buffer[idx++] = kProtocolHeader;
+    buffer[idx++] = 0;
+    buffer[idx++] = kPacketTypeTactileDiag;
+    buffer[idx++] = kTactileDiagVersion;
+
+    auto pushU16 = [&](uint16_t value) {
+        buffer[idx++] = (uint8_t)(value & 0xFF);
+        buffer[idx++] = (uint8_t)(value >> 8);
+    };
+    auto pushU32 = [&](uint32_t value) {
+        pushU16((uint16_t)(value & 0xFFFF));
+        pushU16((uint16_t)(value >> 16));
+    };
+    auto pushCounters = [&](const uint16_t* values) {
+        for (uint8_t module = 0; module < TACTILE_MODULE_NUM; module++) {
+            pushU16(values[module]);
+        }
+    };
+
+    pushU32(diag.frameCount);
+    pushU16(diag.enabledMask);
+    pushU16(diag.summaryOkMask);
+    pushU16(diag.fullOkMask);
+    pushU16(diag.commandFailMask);
+    pushU16(diag.responseFailMask);
+    pushU16(diag.crcFailMask);
+    pushU16(diag.statusNonzeroMask);
+    pushU16(diag.summaryRetryRecoveredMask);
+    pushCounters(diag.summarySuccessCount);
+    pushCounters(diag.summaryFailureCount);
+    pushCounters(diag.fullSuccessCount);
+    pushCounters(diag.fullFailureCount);
+    memcpy(buffer + idx, diag.summaryLastFailReason, TACTILE_MODULE_NUM);
+    idx += TACTILE_MODULE_NUM;
+    memcpy(buffer + idx, diag.fullLastFailReason, TACTILE_MODULE_NUM);
+    idx += TACTILE_MODULE_NUM;
+    memcpy(buffer + idx, diag.moduleLastStatus, TACTILE_MODULE_NUM);
+    idx += TACTILE_MODULE_NUM;
+    buffer[idx++] = kProtocolTail;
+    buffer[1] = (uint8_t)(idx - 2);
+    Serial.write(buffer, idx);
+}
 } // namespace
 
 /**
@@ -230,6 +286,12 @@ void Task_Tactile(void* pvParameters) {
 #endif
             // S3串口全量上报不受ENABLE_TACTILE_CAN_FULL_DUMP控制。
             sendSerialTactileFullDump(data, tactileSeq);
+        }
+
+        static uint8_t diagDecimator = 0;
+        if (++diagDecimator >= kTactileDiagDecimation) {
+            diagDecimator = 0;
+            sendSerialTactileDiagnostics(diag);
         }
 
         static uint32_t lastPrint = 0;

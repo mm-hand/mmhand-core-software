@@ -50,10 +50,8 @@ struct ServoTargetBatch_t {
 
 struct ControlCommandSnapshot_t {
     float targetAngles[ENCODER_TOTAL_NUM];               ///< 关节目标角，单位 degree。
-    int32_t motorTargetRaw[SERVO_TOTAL_NUM];             ///< 单次直控相对目标，单位 counts。
-    int32_t motorSweepTargetRaw[SERVO_TOTAL_NUM];        ///< 滑条扫动目标，单位 counts。
+    int32_t motorTargetRaw[SERVO_TOTAL_NUM];             ///< 单次直控 logical ABS，单位 counts。
     uint32_t motorCommandToken;                          ///< 单次直控命令版本号。
-    uint32_t motorSweepCommandToken;                     ///< 扫动命令版本号。
     uint32_t jointCommandToken;                          ///< 关节目标命令版本号。
     uint32_t jointCommandAcceptedMs;                     ///< P4 接收该目标帧的时间。
     uint32_t feedbackCommandJointMask;                   ///< 本次反馈命令实际涉及的关节位图。

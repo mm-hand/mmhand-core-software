@@ -47,8 +47,6 @@ inline constexpr uint8_t CMD_ANGLE_CTRL = 0xCB; ///< 下发完整 21 路关节�
 inline constexpr uint8_t CMD_START = 0xCC; ///< 历史启动命令，进入控制申请流程
 inline constexpr uint8_t CMD_STOP = 0xCD; ///< 停止当前运行并撤销待执行目标
 inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故障锁存
-inline constexpr uint8_t CMD_MOTOR_POS = 0xD0; ///< 27 路单圈 raw 直控目标，每路 uint16
-inline constexpr uint8_t CMD_MOTOR_POS_SWEEP = 0xD2; ///< 27 路 Motor Channel 滑条连续直控目标
 inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 27 路 logical ABS 直控目标，每路 int32 counts
 inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor mask 与 control enable
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
@@ -91,7 +89,6 @@ inline constexpr uint8_t STATE_SYNC_ALL = 127; ///< 同步全部静态运行契�
 // 固定 payload 长度；单位 byte，不包含命令字本身。
 inline constexpr size_t kFloatPayloadBytes = 84;
 inline constexpr size_t kMaskedFloatPayloadBytes = 88;
-inline constexpr size_t kMotorPosPayloadBytes = 54;
 inline constexpr size_t kMotorPosAbsPayloadBytes = 108;
 inline constexpr size_t kMotorPosAbsOnePayloadBytes = 5;
 inline constexpr size_t kActiveScopePayloadBytes = 9;
@@ -118,8 +115,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_START: return 0;
         case CMD_STOP: return 0;
         case CMD_RESET: return 0;
-        case CMD_MOTOR_POS: return kMotorPosPayloadBytes;
-        case CMD_MOTOR_POS_SWEEP: return kMotorPosPayloadBytes;
         case CMD_MOTOR_POS_ABS: return kMotorPosAbsPayloadBytes;
         case CMD_ACTIVE_SCOPE: return kActiveScopePayloadBytes;
         case CMD_RUN_FEEDBACK: return 0;

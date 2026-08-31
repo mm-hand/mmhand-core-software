@@ -20,7 +20,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
     ros2_output_toggled = Signal(bool)
     clear_fault_requested = Signal()
     calibrate_requested = Signal()
-    rope_init_requested = Signal()
 
     def __init__(self, parent=None):
         """Initialize this component."""
@@ -39,10 +38,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
             "Clear latched protection/fault flags, clear command state, and return firmware to UNCONTROLLABLE"
         )
         self.calib_btn = QtWidgets.QPushButton("Calibrate")
-        self.rope_init_btn = QtWidgets.QPushButton("Rope Init")
-        self.rope_init_btn.setToolTip(
-            "Ask the P4 Rope Init task to move selected IDLE joints into their calibrated workspace"
-        )
         self._build()
 
     def _build(self) -> None:
@@ -60,7 +55,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         for button in (
             self.calib_btn,
             self.reset_btn,
-            self.rope_init_btn,
         ):
             button.setMinimumHeight(34)
 
@@ -74,11 +68,10 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         layout.addWidget(self._centered_action_cell(self.pause_btn), 0, 2, 2, 1)
         layout.addWidget(self._centered_action_cell(self.ros2_output_btn), 0, 3, 2, 1)
         layout.addWidget(self.calib_btn, 0, 4)
-        layout.addWidget(self.reset_btn, 0, 5)
-        layout.addWidget(self.rope_init_btn, 1, 4)
+        layout.addWidget(self.reset_btn, 1, 4)
         layout.setRowStretch(0, 1)
         layout.setRowStretch(1, 1)
-        for col in range(6):
+        for col in range(5):
             layout.setColumnStretch(col, 1)
         self.enable_btn.clicked.connect(lambda _checked=False: self.start_requested.emit())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_requested.emit())
@@ -86,7 +79,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.ros2_output_btn.toggled.connect(self.ros2_output_toggled.emit)
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_requested.emit())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate_requested.emit())
-        self.rope_init_btn.clicked.connect(lambda _checked=False: self.rope_init_requested.emit())
 
     @staticmethod
     def _centered_action_cell(button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
@@ -107,4 +99,3 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         self.ros2_output_toggled.connect(panel.toggle_ros2_output)
         self.clear_fault_requested.connect(panel.clear_fault_with_confirm)
         self.calibrate_requested.connect(panel.calibrate)
-        self.rope_init_requested.connect(panel.rope_init_controller)

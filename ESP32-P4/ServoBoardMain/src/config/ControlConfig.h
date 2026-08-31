@@ -19,7 +19,7 @@ inline constexpr float kPeriodSec = 0.010f;
 inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-/** PID 诊断实验期开启，并在 active scope 内轮询输出；验证结束后应恢复为 false。 */
+/** 单腱 PID 调参日志开关；双腱 PID 日志已移除。 */
 inline constexpr bool kPidDiagLogEnabled = true;
 inline constexpr uint32_t kPidDiagLogPeriodMs = 50;
 
@@ -37,7 +37,7 @@ inline constexpr uint16_t kFeedbackServoSpeed = 0;
 
 inline constexpr int32_t kDirectDoneAbsToleranceCounts = 40;
 inline constexpr uint8_t kDirectDoneStableCycles = 5;
-inline constexpr float kFeedbackDoneToleranceDeg = 0.5f;
+inline constexpr float kFeedbackDoneToleranceDeg = 0.8f;
 inline constexpr uint32_t kFeedbackDoneStableMs = 500;
 inline constexpr uint32_t kFeedbackRunTimeoutMs = 8000;
 
@@ -46,13 +46,18 @@ inline constexpr uint8_t kUpperWorkspaceWarningStableFrames = 3;
 
 /**
  * 单腱关节角度 PID。2026-07-19 实测弹簧紧绳方向约有 1.5 度静差；
- * 当前保留标准离散 PID 形式，但 Ki/Kd 仍为 0，待实测后再启用。
+ * D 项对低通后的磁编反馈速度提供阻尼，避免遥操目标阶跃产生微分冲击。
  */
 inline constexpr float kSingleTendonKp = 5.7f;
 inline constexpr float kSingleTendonKi = 0.0f;
-inline constexpr float kSingleTendonKd = 0.0f;
+inline constexpr float kSingleTendonKd = 0.10f;
 inline constexpr float kSingleTendonDeadbandDeg = 0.0f;
 inline constexpr float kSingleTendonIntegralLimit = 100.0f;
+/** 有效 LUT 单腱在反馈完成阈值内仍保持的固定比例增益，用于连续跟随。 */
+inline constexpr float kSingleTendonNearTargetKp = 20.0f;
+/** D 项使用低通后的磁编反馈速度，避免遥操目标阶跃产生微分冲击。 */
+inline constexpr float kSingleTendonVelocityFilterTauSec = 0.050f;
+inline constexpr float kSingleTendonDTermLimitCounts = 20.0f;
 
 /**
  * 单腱双向增益调度：紧绳近端使用 1.2 倍局部斜率，松绳近端保持
@@ -60,16 +65,23 @@ inline constexpr float kSingleTendonIntegralLimit = 100.0f;
  */
 inline constexpr float kSingleTendonDynamicKpErrorMaxDeg = 3.0f;
 inline constexpr float kSingleTendonDynamicKpBlendStartDeg = 2.5f;
-inline constexpr float kSingleTendonDynamicLutGain = 1.2f;
-inline constexpr float kSingleTendonLargeErrorLutGain = 0.7f;
+inline constexpr float kSingleTendonDynamicLutGain = 1.0f;
+inline constexpr float kSingleTendonLargeErrorLutGain = 0.75f;
+/** 单腱目标速度前馈：预测未来目标并通过本关节 LUT 转换为腱绳 counts。 */
+inline constexpr bool kSingleTendonVelocityFeedforwardEnabled = true;
+inline constexpr float kSingleTendonVelocityLeadTimeSec = 0.070f;
+inline constexpr float kSingleTendonTargetVelocityFilterTauSec = 0.040f;
+inline constexpr float kSingleTendonVelocityLeadMaxDeg = 3.0f;
 /**
- * 单腱换向启动：目标沿反方向累计 0.3 度后，给 PID 注入 80 度假定误差。
- * 假定误差不受 URDF 范围限制；最长保持 150 ms，或实际推进 0.6 度后退出。
+ * 单腱换向连续补绳：目标沿反方向累计确认后立即取绳，并以真实控制 dt 持续推进。
+ * 只有关节沿新方向累计响应到退出距离才撤销补偿；最大 counts 仅防异常无限收绳。
  */
-inline constexpr float kSingleTendonReversalConfirmDeg = 0.3f;
-inline constexpr float kSingleTendonReversalAssumedErrorDeg = 80.0f;
-inline constexpr uint32_t kSingleTendonReversalMaxDurationMs = 190;
-inline constexpr float kSingleTendonReversalExitTravelDeg = 0.6f;
+inline constexpr bool kSingleTendonDirectionalTakeupEnabled = true;
+inline constexpr float kSingleTendonDirectionalTakeupConfirmDeg = 0.3f;
+inline constexpr int32_t kSingleTendonDirectionalTakeupInitialCounts = 60;
+inline constexpr float kSingleTendonDirectionalTakeupRateCountsPerSec = 5000.0f;
+inline constexpr float kSingleTendonDirectionalTakeupExitJointTravelDeg = 0.25f;
+inline constexpr int32_t kSingleTendonDirectionalTakeupMaxCounts = 140;
 static_assert(kSingleTendonLargeErrorLutGain > 0.0f &&
                   kSingleTendonLargeErrorLutGain <= 1.0f,
               "single tendon large-error LUT gain must be in (0, 1]");
@@ -78,11 +90,17 @@ static_assert(kFeedbackDoneToleranceDeg <
                   kSingleTendonDynamicKpBlendStartDeg <
                   kSingleTendonDynamicKpErrorMaxDeg,
               "single tendon dynamic Kp error ranges must be ordered");
-static_assert(kSingleTendonReversalConfirmDeg > 0.0f &&
-                  kSingleTendonReversalAssumedErrorDeg > 0.0f &&
-                  kSingleTendonReversalMaxDurationMs > 0 &&
-                  kSingleTendonReversalExitTravelDeg > 0.0f,
-              "single tendon reversal parameters must be positive");
+static_assert(kSingleTendonDirectionalTakeupConfirmDeg > 0.0f &&
+                  kSingleTendonDirectionalTakeupInitialCounts >= 0 &&
+                  kSingleTendonDirectionalTakeupRateCountsPerSec > 0.0f &&
+                  kSingleTendonDirectionalTakeupExitJointTravelDeg > 0.0f &&
+                  kSingleTendonDirectionalTakeupMaxCounts >=
+                      kSingleTendonDirectionalTakeupInitialCounts,
+              "single tendon directional takeup parameters must be valid");
+static_assert(kSingleTendonVelocityLeadTimeSec >= 0.0f &&
+                  kSingleTendonTargetVelocityFilterTauSec > 0.0f &&
+                  kSingleTendonVelocityLeadMaxDeg >= 0.0f,
+              "single tendon velocity feedforward parameters must be valid");
 
 /** 双腱位置环参数。误差和输出均在标定 LUT 的舵机 counts 坐标中计算。 */
 inline constexpr float kDualTendonKp = 0.60f;
@@ -96,7 +114,7 @@ inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
  * 裕量按腱绳方向而非 ABS 数值正负计算，兼容不同电机方向映射。
  */
 inline constexpr int32_t kTendonLutReleaseMarginCounts = 500;
-inline constexpr int32_t kTendonLutTightMarginCounts = 1200;
+inline constexpr int32_t kTendonLutTightMarginCounts = 1000;
 static_assert(kTendonLutReleaseMarginCounts >= 0 &&
                   kTendonLutTightMarginCounts >= 0,
               "tendon LUT margins must be non-negative");

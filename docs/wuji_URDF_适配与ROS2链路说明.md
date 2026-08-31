@@ -1,6 +1,6 @@
 # Wuji 手套适配当前 MMHand URDF 与 ROS2 链路说明
 
-> 当前专项文档，最后核对：2026-08-01。Wuji 发布端使用 `urdf_deg` 和带 model id 的 layout label；desktop raw-IK bridge 的兼容默认仍是 `legacy_calibrated_deg`，接 Wuji 时必须显式选择 `urdf_deg`。desktop 当前尚未严格校验 layout label，详见[ROS2与遥操链路](ROS2与遥操链路.md)。
+> 当前专项文档，最后核对：2026-08-27。Wuji 发布端使用 `urdf_deg` 和带 model id 的 layout label；desktop raw-IK bridge 默认并只接受 URDF 坐标。desktop 当前尚未严格校验 layout label，详见[ROS2与遥操链路](ROS2与遥操链路.md)。
 
 ## 1. 目的与对比范围
 
@@ -106,7 +106,7 @@ target[Jxx] = 当前 URDF 对应 joint 的直接角度（度）
 
 - `build_encoder_target_limits_deg()` 直接读取 URDF `lower/upper`；
 - `/raw_ik_target` 的 21 个值可直接用于 URDF Viewer、ROS2 诊断和 MMHand 上位机；
-- 上位机启动时必须使用 `--ros2-raw-ik-space urdf_deg`，不能按旧的 `legacy_calibrated_deg` 解释。
+- 上位机默认按 `urdf_deg` 解释；若发布端输出弧度，使用 `--ros2-raw-ik-space urdf_rad`。
 
 ### 4.3 手套姿态标定
 

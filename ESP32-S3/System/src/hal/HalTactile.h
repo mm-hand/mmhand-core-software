@@ -4,6 +4,17 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+constexpr uint8_t TACTILE_MODULE_NUM = TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP;
+
+enum class TactileReadFailReason : uint8_t {
+    None = 0,
+    InvalidArgument = 1,
+    SpiNotReady = 2,
+    CommandTransport = 3,
+    ResponseTransport = 4,
+    CrcMismatch = 5,
+};
+
 /** @brief 触觉采集诊断快照，记录本轮成功率和最近一次CRC故障现场。 */
 struct TactileReadDiag {
     uint32_t frameCount;       ///< update()累计轮数。
@@ -13,6 +24,18 @@ struct TactileReadDiag {
     uint16_t summaryOkMask;    ///< 本轮摘要寄存器读取成功模块位图。
     uint16_t fullOkMask;       ///< 本轮全量触元读取成功模块位图。
     uint16_t okMask;           ///< 本轮读取成功模块位图。
+    uint16_t commandFailMask;  ///< 本轮命令事务失败模块位图。
+    uint16_t responseFailMask; ///< 本轮响应事务失败模块位图。
+    uint16_t crcFailMask;      ///< 本轮最终CRC8失败模块位图。
+    uint16_t statusNonzeroMask;///< 本轮返回非零状态字节模块位图，仅诊断不判失败。
+    uint16_t summaryRetryRecoveredMask; ///< 本轮摘要第二次读取恢复模块位图。
+    uint16_t summarySuccessCount[TACTILE_MODULE_NUM]; ///< 分模块摘要成功累计，饱和计数。
+    uint16_t summaryFailureCount[TACTILE_MODULE_NUM]; ///< 分模块摘要最终失败累计，饱和计数。
+    uint16_t fullSuccessCount[TACTILE_MODULE_NUM];    ///< 分模块全量成功累计，饱和计数。
+    uint16_t fullFailureCount[TACTILE_MODULE_NUM];    ///< 分模块全量失败累计，饱和计数。
+    uint8_t summaryLastFailReason[TACTILE_MODULE_NUM];///< 分模块最近摘要失败原因。
+    uint8_t fullLastFailReason[TACTILE_MODULE_NUM];   ///< 分模块最近全量失败原因。
+    uint8_t moduleLastStatus[TACTILE_MODULE_NUM];     ///< 分模块最近响应状态字节。
     uint8_t lastStatus;        ///< 最近一次响应状态字节。
     uint8_t lastRecvCrc;       ///< 最近一次设备返回CRC8。
     uint8_t lastCalcCrc;       ///< 最近一次本地计算CRC8。
@@ -43,6 +66,13 @@ public:
     TactileReadDiag getDiagnostics();
 
 private:
+    struct SpiReadResult {
+        TactileReadFailReason reason;
+        uint8_t status;
+        uint8_t recvCrc;
+        uint8_t calcCrc;
+    };
+
     bool setupSPI();
     void setAllSelectPinsHigh();
     void setSelectorPattern(uint8_t pattern);
@@ -56,6 +86,8 @@ private:
     spi_device_handle_t _spi; ///< ESP-IDF触觉SPI设备句柄。
     bool _spiReady;           ///< SPI初始化是否成功。
     TactileReadDiag _diag;    ///< 最近采集诊断统计。
+    SpiReadResult _lastReadResult; ///< 最近一次SPI读取结果，供分模块统计。
+    uint8_t _lastReadAttempts;     ///< 最近一次模块读取实际尝试次数。
 };
 
 // 全局单例对象，任务层直接调用。

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -31,37 +30,6 @@ from desktop.visualize.urdf_kinematics import (
 # 姿态窗口 Figure / Axes 统一底色（与 ui_app 中 Figure 一致）。mplot3d 的 ax.clear() 会把 axes 恢复成默认白底，必须与 fig.patch 一起设回，否则宽屏两侧「信箱」与绘图区会错色。
 POSE_VIEW_BG = "#e8eaee"
 JOINT_ORDER: List[str] = [JOINT_SPECS[index].urdf_joint_name for index in sorted(JOINT_SPECS)]
-
-
-def load_motor_degrees_from_text(path: str) -> List[float]:
-    """从文本读取 ENCODER_COUNT 路关节角（度）。支持 # 行注释，数字间空格/逗号/分号分隔。"""
-    from desktop.core.protocol import ENCODER_COUNT
-
-    nums: List[float] = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.split("#")[0].strip()
-            if not line:
-                continue
-            for tok in re.split(r"[,;\s]+", line):
-                if not tok:
-                    continue
-                nums.append(float(tok))
-
-    n_in = len(nums)
-    if n_in < ENCODER_COUNT:
-        nums.extend([0.0] * (ENCODER_COUNT - n_in))
-        print(
-            f"load_motor_degrees_from_text: {path!r} 仅解析到 {n_in} 个数，已用 0 填充至 {ENCODER_COUNT}",
-            flush=True,
-        )
-    elif n_in > ENCODER_COUNT:
-        print(
-            f"load_motor_degrees_from_text: {path!r} 有 {n_in} 个数，截断为 {ENCODER_COUNT}",
-            flush=True,
-        )
-        nums = nums[:ENCODER_COUNT]
-    return nums
 
 
 def _default_joint_positions(kin: UrdfKinematics, mode: str) -> Dict[str, float]:
@@ -86,11 +54,6 @@ def _apply_overrides(base: Dict[str, float], specs: List[str]) -> Dict[str, floa
         k, v = s.split("=", 1)
         pos[k.strip()] = float(v.strip())
     return pos
-
-
-def apply_display_transform(poses: Dict[str, np.ndarray], T: np.ndarray) -> Dict[str, np.ndarray]:
-    """将 URDF 连杆位姿左乘显示变换 T（4x4）。"""
-    return {name: T @ M for name, M in poses.items()}
 
 
 def apply_pose_view_background(ax, *, bg: str = POSE_VIEW_BG) -> None:

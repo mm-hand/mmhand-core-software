@@ -65,11 +65,6 @@ TACTILE_FOUR_FINGER_PALM_GAP = 6
 # 每条直角边沿掌底/掌侧占用的格数，实际使用时会限制为不超过掌边长一半以免两角相交
 TACTILE_PALM_BOTTOM_CORNER_CUT_LEG = 15
 
-# 兼容旧脚本名（曾用于 4×13 指腹）
-TACTILE_ROWS = TACTILE_BAND_HEIGHTS[2]
-TACTILE_COLS = TACTILE_BAND_WIDTH
-
-
 def tactile_band_shape(band_index: int) -> Tuple[int, int]:
     """band 0=指尖 … 4=近端指腹，均为 (高, 15)。"""
     if band_index < 0 or band_index >= TACTILE_NBANDS:
@@ -123,37 +118,6 @@ def tactile_upsample_pad_grid_to_band(ch2: np.ndarray, out_h: int, out_w: int) -
     return out
 
 
-def tactile_apply_palm_hexagon_bottom_corners(
-    mat: np.ndarray,
-    pr: int,
-    pc: int,
-    palm_h: int,
-    palm_w: int,
-    leg: Optional[int] = None,
-) -> None:
-    """
-    在已填充的掌矩形区域上，将左下、右下两角各裁去一个等腰直角三角形（斜边朝掌内侧），
-    裁掉格置为 NaN，热力图显示为轮廓外（白）。行向下递增，底行 pr+palm_h-1。
-    """
-    if leg is None:
-        leg = TACTILE_PALM_BOTTOM_CORNER_CUT_LEG
-    leg = min(int(leg), palm_w // 2, palm_h // 2)
-    if leg <= 0:
-        return
-    nrows, ncols = mat.shape
-    for idx in range(leg):
-        r = pr + palm_h - 1 - idx
-        if r < 0 or r >= nrows:
-            continue
-        w = leg - idx
-        # 左下角：自下而上每行多裁 1 列，底行共 leg 列
-        c0l, c1l = pc, pc + w
-        mat[r, max(c0l, 0) : min(c1l, ncols)] = np.nan
-        # 右下角
-        c0r, c1r = pc + palm_w - w, pc + palm_w
-        mat[r, max(c0r, 0) : min(c1r, ncols)] = np.nan
-
-
 def tactile_palm_left_bottom_cut_top_vertex_rc(
     pr: int,
     pc: int,
@@ -163,7 +127,7 @@ def tactile_palm_left_bottom_cut_top_vertex_rc(
 ) -> Tuple[int, int]:
     """
     掌面左下裁切的等腰直角三角形在「掌左侧竖直边」上的顶点（非直角顶点、靠近斜边与左缘交点一侧），
-    与 tactile_apply_palm_hexagon_bottom_corners 的阶梯边界一致：最上一行被挖行的下标为 pr + palm_h - leg，
+    与当前掌面六边形的阶梯边界一致：最上一行被挖行的下标为 pr + palm_h - leg，
     该顶点取为 (row, col) = (pr + palm_h - leg, pc)。
     leg 与裁切函数同样截断到 palm_w//2、palm_h//2。
     """
@@ -175,30 +139,6 @@ def tactile_palm_left_bottom_cut_top_vertex_rc(
     r_v = pr + palm_h - leg
     c_v = pc
     return r_v, c_v
-
-
-def tactile_apply_fingertip_round_cap(mat: np.ndarray, r_top: int, c0: int, W: int) -> None:
-    """
-    竖条指尖（行 r_top 为条带最上缘、指尖朝向图像上方）：将顶端裁成半圆鼓包，
-    圆直径 = W（与手指宽度一致），圆心 local ((W-1)/2, R)、R=W/2，直径边水平贴在指尖带下沿一侧，圆外格置 NaN（白）。
-    """
-    if W < 2:
-        return
-    R = W / 2.0
-    cx = (W - 1) / 2.0
-    r2 = R * R
-    nrows, ncols = mat.shape
-    cap_h = int(np.ceil(R)) + 1
-    for dy in range(cap_h):
-        rr = r_top + dy
-        if rr < 0 or rr >= nrows:
-            break
-        for dx in range(W):
-            cc = c0 + dx
-            if cc < 0 or cc >= ncols:
-                continue
-            if (dx - cx) ** 2 + (dy - R) ** 2 > r2 + 1e-9:
-                mat[rr, cc] = np.nan
 
 
 class TactileStitchSpec(NamedTuple):
@@ -273,89 +213,6 @@ def build_tactile_stitch_spec() -> TactileStitchSpec:
 
 TACTILE_STITCH_SPEC = build_tactile_stitch_spec()
 
-# 仅传感覆盖层：指根参考点相对条带最下行的向下偏移（行，与拼接格网同一单位）
-TACTILE_OVERLAY_FINGER_ROOT_BELOW_UNITS = 10
-
-
-def tactile_sensors_only_anatomy_points(
-    spec: TactileStitchSpec,
-) -> Tuple[Tuple[float, float], List[Tuple[float, float]]]:
-    """
-    「仅传感」示意：掌根点 + 五指（拇…小）参考点，均为 imshow 数据坐标 (x=列, y=行)，行 0 在图像上方。
-    掌根取掌矩形底边中点；指根点取各指条带最下行（靠掌/腕侧）再向腕侧偏移固定格数 TACTILE_OVERLAY_FINGER_ROOT_BELOW_UNITS。
-    """
-    pr, pc, ph, pw = spec.palm_r, spec.palm_c, spec.palm_h, spec.palm_w
-    palm_xy = (float(pc + pw // 2), float(pr + ph - 1))
-
-    dr = int(TACTILE_OVERLAY_FINGER_ROOT_BELOW_UNITS)
-    h_strip = TACTILE_FINGER_STRIP_ROWS
-    step = TACTILE_BAND_WIDTH + TACTILE_FOUR_FINGER_GAP
-    base_four_r = spec.four_r + h_strip - 1
-    thumb_base_r = spec.thumb_r + h_strip - 1
-    thumb_cx = float(spec.thumb_c + TACTILE_BAND_WIDTH // 2)
-
-    finger_pts: List[Tuple[float, float]] = [
-        (thumb_cx, float(thumb_base_r + dr)),
-    ]
-    for fi in range(4):
-        c0 = spec.four_c + fi * step
-        cx = float(c0 + TACTILE_BAND_WIDTH // 2)
-        finger_pts.append((cx, float(base_four_r + dr)))
-
-    H, W = spec.height, spec.width
-    def _clamp(x: float, y: float) -> Tuple[float, float]:
-        return (
-            float(np.clip(x, 0.0, float(W - 1))),
-            float(np.clip(y, 0.0, float(H - 1))),
-        )
-
-    palm_xy = _clamp(*palm_xy)
-    finger_pts = [_clamp(x, y) for x, y in finger_pts]
-    return palm_xy, finger_pts
-
-
-def tactile_sensors_only_finger_chain_polylines(
-    spec: TactileStitchSpec,
-) -> List[List[Tuple[float, float]]]:
-    """
-    五指各一条折线顶点（顺序：指尖顶行中心 → 近端第 1 个关节带行中心 → 第 2 个关节带行中心 → 指根参考点），
-    坐标同 imshow (列, 行)。关节带对应 TACTILE_BAND_HEIGHTS 中间两段 12 行宽条带的几何中心行。
-    """
-    dr = int(TACTILE_OVERLAY_FINGER_ROOT_BELOW_UNITS)
-    h_strip = TACTILE_FINGER_STRIP_ROWS
-    bh = TACTILE_BAND_HEIGHTS
-    tip_lr = 0
-    j1_lr = bh[0] + bh[1] // 2
-    j2_lr = bh[0] + bh[1] + bh[2] + bh[3] // 2
-    root_lr = h_strip - 1 + dr
-    step = TACTILE_BAND_WIDTH + TACTILE_FOUR_FINGER_GAP
-    w = TACTILE_BAND_WIDTH
-    H, W = spec.height, spec.width
-
-    def _clamp(x: float, y: float) -> Tuple[float, float]:
-        return (
-            float(np.clip(x, 0.0, float(W - 1))),
-            float(np.clip(y, 0.0, float(H - 1))),
-        )
-
-    def _one_strip(sr: int, sc: int) -> List[Tuple[float, float]]:
-        cx = float(sc + w // 2)
-        pts = [
-            (cx, float(sr + tip_lr)),
-            (cx, float(sr + j1_lr)),
-            (cx, float(sr + j2_lr)),
-            (cx, float(sr + root_lr)),
-        ]
-        return [_clamp(x, y) for x, y in pts]
-
-    polys: List[List[Tuple[float, float]]] = [
-        _one_strip(spec.thumb_r, spec.thumb_c),
-    ]
-    for fi in range(4):
-        polys.append(_one_strip(spec.four_r, spec.four_c + fi * step))
-    return polys
-
-
 class MotorState(Enum):
     IDLE = 0
     RUNNING = 1
@@ -399,7 +256,7 @@ class JointEncoder:
     encoder_id: int = 0
     raw_sensor: int = 0       # magnetic encoder original raw for UI Raw column
     raw: int = 0              # 原始数据（14 位，0~16383）
-    zero_raw: int = 0         # 矫正的零点值（来自 calib_deg.json / 下位机）
+    zero_raw: int = 0         # 矫正的零点值（来自 P4 标定状态）
     target_angle_deg: float = 0.0   # 目标角度（度）
     error: bool = False       # 传感器/读数异常
     angle_error: bool = True  # mapped angle packet validity; not overwritten by health status
@@ -579,6 +436,24 @@ class HandModel:
     tactile_source: str = TACTILE_SOURCE_NONE
     tactile_data_level: str = TACTILE_DATA_LEVEL_NONE
     tactile_module_valid_mask: int = 0
+    tactile_diag_version: int = 0
+    tactile_diag_frame_count: int = 0
+    tactile_diag_enabled_mask: int = 0
+    tactile_diag_summary_ok_mask: int = 0
+    tactile_diag_full_ok_mask: int = 0
+    tactile_diag_command_fail_mask: int = 0
+    tactile_diag_response_fail_mask: int = 0
+    tactile_diag_crc_fail_mask: int = 0
+    tactile_diag_status_nonzero_mask: int = 0
+    tactile_diag_summary_retry_recovered_mask: int = 0
+    tactile_diag_summary_success_count: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_summary_failure_count: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_full_success_count: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_full_failure_count: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_summary_last_fail_reason: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_full_last_fail_reason: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_module_last_status: List[int] = field(default_factory=lambda: [0] * 15)
+    tactile_diag_last_rx_ts: float = 0.0
     tactile_online: bool = False
     tactile_last_rx_ts: float = 0.0
     tactile_module_online: List[bool] = field(default_factory=lambda: [False] * (5 * TACTILE_SENSORS_PER_FINGER))
@@ -1132,6 +1007,30 @@ class HandModel:
         self.tactile_source = str(getattr(other, "tactile_source", TACTILE_SOURCE_NONE))
         self.tactile_data_level = str(getattr(other, "tactile_data_level", TACTILE_DATA_LEVEL_NONE))
         self.tactile_module_valid_mask = int(getattr(other, "tactile_module_valid_mask", 0) or 0)
+        self.tactile_diag_version = int(getattr(other, "tactile_diag_version", 0) or 0)
+        self.tactile_diag_frame_count = int(getattr(other, "tactile_diag_frame_count", 0) or 0)
+        for name in (
+            "tactile_diag_enabled_mask",
+            "tactile_diag_summary_ok_mask",
+            "tactile_diag_full_ok_mask",
+            "tactile_diag_command_fail_mask",
+            "tactile_diag_response_fail_mask",
+            "tactile_diag_crc_fail_mask",
+            "tactile_diag_status_nonzero_mask",
+            "tactile_diag_summary_retry_recovered_mask",
+        ):
+            setattr(self, name, int(getattr(other, name, 0) or 0))
+        for name in (
+            "tactile_diag_summary_success_count",
+            "tactile_diag_summary_failure_count",
+            "tactile_diag_full_success_count",
+            "tactile_diag_full_failure_count",
+            "tactile_diag_summary_last_fail_reason",
+            "tactile_diag_full_last_fail_reason",
+            "tactile_diag_module_last_status",
+        ):
+            setattr(self, name, list(getattr(other, name, []) or []))
+        self.tactile_diag_last_rx_ts = float(getattr(other, "tactile_diag_last_rx_ts", 0.0) or 0.0)
         self.tactile_online = bool(getattr(other, "tactile_online", False))
         self.tactile_last_rx_ts = float(getattr(other, "tactile_last_rx_ts", 0.0) or 0.0)
         self.tactile_module_online = list(

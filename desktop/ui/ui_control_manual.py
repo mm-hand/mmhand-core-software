@@ -99,7 +99,7 @@ class ControlPanelManualMixin:
         if reset_mask:
             self._joint_target_initialized = False
             self._reset_motor_target_cache_for_device_epoch(
-                "Manual Prepare: all motor turn counters reset"
+                "Release Rope: all motor turn counters reset"
             )
             self._invalidate_local_calibration_scope(reset_mask, joint_mask)
             self._last_calib_snapshot_signature = None
@@ -176,13 +176,6 @@ class ControlPanelManualMixin:
             self.fist_btn.setVisible(mode == "test")
             self.fist_btn.setEnabled(
                 interaction and mode == "test" and joint_workspace_ready
-            )
-        if getattr(self, "rope_init_btn", None) is not None:
-            self.rope_init_btn.setEnabled(
-                interaction and
-                mode == "joint" and
-                joint_workspace_ready and
-                self._p4_rope_init_phase == "idle"
             )
         if getattr(self, "calib_btn", None) is not None:
             connected = bool(self.context.is_comm_connected())
@@ -279,8 +272,6 @@ class ControlPanelManualMixin:
                     )
                 )
             )
-        if getattr(self, "mid_calib_btn", None) is not None:
-            self.mid_calib_btn.setEnabled(bool(self.context.is_comm_connected()))
         if getattr(self, "pause_btn", None) is not None:
             self.pause_btn.setEnabled(system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK))
         self._set_test_button_states()

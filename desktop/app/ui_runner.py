@@ -22,9 +22,6 @@ from desktop.core.session_log import log_session
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
-POSE_DISPLAY_FROM_TEXT = False
-
-
 def _configure_gui_diagnostics() -> None:
     """在 Qt 应用创建前固定渲染后端，并保留原生崩溃的控制台诊断。"""
     from desktop.ui.ui_qt_compat import QT_LIB, configure_opengl_before_app
@@ -69,7 +66,6 @@ def _run_monitor_gui(
         current_port=port,
         current_mode="Monitor",
         action_callback=None,
-        pose_generate=POSE_DISPLAY_FROM_TEXT,
         tactile_port=tactile_port,
         ros2_enabled=ros2_enabled,
         ros_topic=ros_topic,
@@ -96,7 +92,6 @@ def _run_replay_gui(
         current_port=port,
         current_mode="Replay",
         replay_service=replay_service,
-        pose_generate=POSE_DISPLAY_FROM_TEXT,
         tactile_port=tactile_port,
         ros2_enabled=ros2_enabled,
         ros_topic=ros_topic,
@@ -110,7 +105,7 @@ def _make_ros2_bridge(
     ros2_input: str,
     ros_topic: str,
     auto_start: bool,
-    raw_ik_space: str = "legacy_calibrated_deg",
+    raw_ik_space: str = "urdf_deg",
 ):
     if ros2_input == "raw_ik":
         return RawIkTargetBridge(
@@ -164,7 +159,7 @@ def run_ui(
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
-    ros2_raw_ik_space: str = "legacy_calibrated_deg",
+    ros2_raw_ik_space: str = "urdf_deg",
     backend: Optional[HandBackend] = None,
 ) -> int:
     _configure_gui_diagnostics()

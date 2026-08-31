@@ -1,6 +1,6 @@
 from desktop.core.protocol import ENCODER_COUNT
 from desktop.ros2.raw_ik_target import DEFAULT_RAW_IK_TARGET_TOPIC, RawIkTargetBridge
-from desktop.core.joint_target_adapter import LEGACY_CALIBRATED_DEG, URDF_DEG, adapt_joint_targets
+from desktop.core.joint_target_adapter import URDF_DEG
 
 
 class FakeBackend:
@@ -35,9 +35,8 @@ def test_raw_ik_bridge_handler_sends_directly_to_backend() -> None:
 
     assert backend.control_modes == []
     raw = [2.0] * ENCODER_COUNT
-    expected = list(adapt_joint_targets(raw, source_space=LEGACY_CALIBRATED_DEG).urdf_targets_deg)
     assert backend.sent == [
-        (expected, "ROS2:/raw_ik_target", LEGACY_CALIBRATED_DEG, raw)
+        (raw, "ROS2:/raw_ik_target", URDF_DEG, raw)
     ]
 
 
@@ -48,6 +47,14 @@ def test_raw_ik_bridge_can_accept_active_urdf_degrees_explicitly() -> None:
 
     assert bridge.handler.handle_values(raw) is True
     assert backend.sent == [(raw, "ROS2:/raw_ik_target", URDF_DEG, raw)]
+
+
+def test_raw_ik_bridge_rejects_retired_legacy_space_without_sending() -> None:
+    backend = FakeBackend()
+    bridge = RawIkTargetBridge(backend, input_space="legacy_calibrated_deg")
+
+    assert bridge.handler.handle_values([3.0] * ENCODER_COUNT) is False
+    assert backend.sent == []
 
 
 def test_raw_ik_bridge_stop_revokes_output_even_before_start() -> None:

@@ -119,20 +119,27 @@ def read_joint_trace(
     rows = read_rows(session / "02_关节总表.csv")
     prefix = f"J{joint:02d}_"
     samples = []
+    seen_trace_sequences: set[int] = set()
     for row in rows:
         timestamp = row_time_ms(row)
+        sequence = safe_float(row.get("control_trace_sequence", ""))
         feedback_age_ms = safe_float(row.get("feedback_age_ms", "0"))
         target = safe_float(row.get(prefix + "target_deg", ""))
         actual = safe_float(row.get(prefix + "current_deg", ""))
         valid = int(safe_float(row.get(prefix + "current_valid", "0")) or 0)
         if math.isfinite(timestamp) and math.isfinite(target) and math.isfinite(actual) and valid:
+            if math.isfinite(sequence):
+                sequence_key = int(sequence)
+                if sequence_key in seen_trace_sequences:
+                    continue
+                seen_trace_sequences.add(sequence_key)
             actual_timestamp = timestamp - (
                 feedback_age_ms if math.isfinite(feedback_age_ms) else 0.0
             )
             samples.append((timestamp, target, actual_timestamp, actual))
     if len(samples) < 8:
         raise ValueError(f"{session.name}: J{joint:02d} has too few valid samples")
-    data = np.asarray(samples, dtype=float)
+    data = np.asarray(sorted(samples, key=lambda item: item[0]), dtype=float)
     origin_ms = min(data[0, 0], data[0, 2])
     target_time_s = (data[:, 0] - origin_ms) / 1000.0
     actual_time_s = (data[:, 2] - origin_ms) / 1000.0

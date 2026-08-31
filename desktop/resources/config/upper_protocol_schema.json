@@ -42,8 +42,6 @@
     {"name": "CMD_START", "value": 204, "payload_bytes": 0, "description": "历史启动命令，进入控制申请流程"},
     {"name": "CMD_STOP", "value": 205, "payload_bytes": 0, "description": "停止当前运行并撤销待执行目标"},
     {"name": "CMD_RESET", "value": 206, "payload_bytes": 0, "description": "清除允许恢复的系统故障锁存"},
-    {"name": "CMD_MOTOR_POS", "value": 208, "payload_bytes": 54, "description": "27 路单圈 raw 直控目标，每路 uint16"},
-    {"name": "CMD_MOTOR_POS_SWEEP", "value": 210, "payload_bytes": 54, "description": "27 路 Motor Channel 滑条连续直控目标"},
     {"name": "CMD_MOTOR_POS_ABS", "value": 211, "payload_bytes": 108, "description": "27 路 logical ABS 直控目标，每路 int32 counts"},
     {"name": "CMD_ACTIVE_SCOPE", "value": 215, "payload_bytes": 9, "description": "同步 active joint/motor mask 与 control enable"},
     {"name": "CMD_RUN_FEEDBACK", "value": 216, "payload_bytes": 0, "description": "申请状态机进入负反馈运行"},

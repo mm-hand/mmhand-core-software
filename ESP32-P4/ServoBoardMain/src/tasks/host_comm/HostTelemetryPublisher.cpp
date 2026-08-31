@@ -695,7 +695,7 @@ bool sendServoAnglePacket(const ServoAngleData_t& servoAngle)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 100 Hz 单圈位置只发送 RawNow；FlashRaw 改为保存结果触发的独立包。 */
+/** 100 Hz 单圈位置只发送当前 RawNow。 */
 bool sendServoRawPacket(const ServoAngleData_t& servoRaw)
 {
     uint8_t buffer[72];

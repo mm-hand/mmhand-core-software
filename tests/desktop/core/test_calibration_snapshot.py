@@ -11,6 +11,7 @@ from desktop.core.calibration_snapshot import (
     read_snapshot,
     seal_snapshot,
     update_manual_snapshot,
+    update_snapshot_multiturn_anchors,
 )
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 
@@ -104,6 +105,36 @@ def test_atomic_snapshot_round_trip_and_integrity(tmp_path):
         read_snapshot(path)
 
 
+def test_multiturn_anchor_update_preserves_calibrated_joint_snapshot(tmp_path):
+    path = tmp_path / "hand.mmcal.json"
+    motor_idx = 18
+    bit = 1 << motor_idx
+    payload = merge_snapshot(
+        None,
+        _current_payload(14, _result(14, motor_idx)),
+        updated_joint_mask=1 << 14,
+    )
+    atomic_write_snapshot(path, payload)
+
+    logical_abs = [0] * MOTOR_COUNT
+    raw = [0] * MOTOR_COUNT
+    logical_abs[motor_idx] = 8192
+    raw[motor_idx] = 17
+    updated = update_snapshot_multiturn_anchors(
+        path,
+        motor_mask=bit,
+        logical_abs=logical_abs,
+        raw=raw,
+    )
+
+    assert parse_mask(updated["multiturn_anchor_valid_bitmap"]) & bit
+    persisted = read_snapshot(path)
+    assert parse_mask(persisted["multiturn_anchor_valid_bitmap"]) & bit
+    assert persisted["multiturn_anchor_logical_abs"][motor_idx] == 8192
+    assert persisted["multiturn_anchor_raw"][motor_idx] == 17
+    assert persisted["joint_calib_results"][14]["success"] is True
+
+
 def test_old_snapshot_schema_is_rejected(tmp_path):
     path = tmp_path / "legacy.json"
     path.write_text(
@@ -121,8 +152,7 @@ def test_seal_does_not_make_legacy_shape_valid():
         validate_snapshot(seal_snapshot({"joint_calib_results": []}))
 
 
-def test_manual_update_archives_v5_and_creates_v6(tmp_path):
-    """旧 V5 不再阻断新的 Manual 数据，但也不能混入 V6 映射结果。"""
+def test_manual_update_rejects_v5_snapshot(tmp_path):
     path = tmp_path / "calibration_bundle.mmcal.json"
     path.write_text(
         json.dumps(
@@ -135,17 +165,14 @@ def test_manual_update_archives_v5_and_creates_v6(tmp_path):
         encoding="utf-8",
     )
 
-    updated = update_manual_snapshot(
-        path,
-        valid_mask=1 << 3,
-        min_raw=[100] * ENCODER_COUNT,
-        max_raw=[200] * ENCODER_COUNT,
-    )
-
-    assert updated["schema_version"] == 6
-    assert parse_mask(updated["manual_reference_valid_bitmap"]) == 1 << 3
-    assert updated["joint_calib_results"] == [None] * ENCODER_COUNT
-    assert len(list(tmp_path.glob("*.legacy_v5_*.json"))) == 1
+    with pytest.raises(CalibrationSnapshotError, match="schema v5"):
+        update_manual_snapshot(
+            path,
+            valid_mask=1 << 3,
+            min_raw=[100] * ENCODER_COUNT,
+            max_raw=[200] * ENCODER_COUNT,
+        )
+    assert len(list(tmp_path.glob("*.legacy_v5_*.json"))) == 0
 
 
 def test_scope_invalidation_preserves_manual_when_all_auto_is_removed(tmp_path):

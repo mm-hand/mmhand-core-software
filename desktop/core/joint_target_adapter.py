@@ -24,8 +24,7 @@ from desktop.core.protocol import ENCODER_COUNT
 
 URDF_DEG = "urdf_deg"
 URDF_RAD = "urdf_rad"
-LEGACY_CALIBRATED_DEG = "legacy_calibrated_deg"
-SUPPORTED_TARGET_SPACES = (URDF_DEG, URDF_RAD, LEGACY_CALIBRATED_DEG)
+SUPPORTED_TARGET_SPACES = (URDF_DEG, URDF_RAD)
 
 
 @dataclass(frozen=True)
@@ -49,19 +48,6 @@ class NamedJointTargetAdaptation:
     urdf_targets_deg: tuple[float, ...]
     mapped_indices: tuple[int, ...]
     unknown_names: tuple[str, ...]
-
-
-_LEGACY_JOINT_ALIASES = {
-    **{f"4-{offset + 1}": offset for offset in range(4)},
-    **{f"3-{offset + 1}": 4 + offset for offset in range(4)},
-    **{f"2-{offset + 1}": 8 + offset for offset in range(4)},
-    **{f"1-{offset + 1}": 12 + offset for offset in range(4)},
-    "5-1": 20,
-    "5-2": 16,
-    "5-3": 17,
-    "5-4": 18,
-    "5-5": 19,
-}
 
 
 @lru_cache(maxsize=1)
@@ -108,9 +94,6 @@ def normalize_target_space(source_space: str) -> str:
         "degrees": URDF_DEG,
         "rad": URDF_RAD,
         "radians": URDF_RAD,
-        "legacy": LEGACY_CALIBRATED_DEG,
-        "calibrated": LEGACY_CALIBRATED_DEG,
-        "q_target": LEGACY_CALIBRATED_DEG,
     }
     value = aliases.get(value, value)
     if value not in SUPPORTED_TARGET_SPACES:
@@ -146,19 +129,8 @@ def adapt_joint_targets(
     space = normalize_target_space(source_space)
     if space == URDF_DEG:
         urdf_targets = list(targets)
-    elif space == URDF_RAD:
-        urdf_targets = [math.degrees(value) for value in targets]
     else:
-        urdf_targets = [
-            math.degrees(
-                angle_mapping.legacy_calibrated_to_urdf(
-                    idx,
-                    value,
-                    clamp=True,
-                )
-            )
-            for idx, value in enumerate(targets)
-        ]
+        urdf_targets = [math.degrees(value) for value in targets]
     return JointTargetAdaptation(
         source_space=space,
         source_targets=tuple(targets),
@@ -171,8 +143,6 @@ def joint_index_for_urdf_name(joint_name: str) -> int | None:
     name = str(joint_name or "").strip()
     if name in angle_mapping.JOINT_NAME_TO_INDEX:
         return int(angle_mapping.JOINT_NAME_TO_INDEX[name])
-    if name in _LEGACY_JOINT_ALIASES:
-        return int(_LEGACY_JOINT_ALIASES[name])
     match = re.fullmatch(r"J(\d{2})", name, flags=re.IGNORECASE)
     if match:
         idx = int(match.group(1))
@@ -204,7 +174,6 @@ def named_urdf_radians_to_joint_targets(
 
 
 __all__ = [
-    "LEGACY_CALIBRATED_DEG",
     "SUPPORTED_TARGET_SPACES",
     "URDF_DEG",
     "URDF_RAD",

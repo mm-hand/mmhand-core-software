@@ -43,6 +43,8 @@ PID_Status_e PID_Init(PID_Info_TypeDef *pid,
     pid->param.kd = params[2];
     pid->param.Deadband = params[3];
     pid->param.limitIntegral = params[4];
+    pid->param.derivativeFilterTau = params[5];
+    pid->param.limitDerivative = params[6];
     pid->status = PID_ERROR_NONE;
     return PID_ERROR_NONE;
 }
@@ -54,7 +56,8 @@ void PID_Calc_Clear(PID_Info_TypeDef *pid)
     }
 
     pid->error = 0.0f;
-    pid->previousError = 0.0f;
+    pid->previousMeasure = 0.0f;
+    pid->filteredMeasureVelocity = 0.0f;
     pid->Integral = 0.0f;
     pid->Pout = 0.0f;
     pid->Iout = 0.0f;
@@ -91,6 +94,15 @@ float f_PID_Calculate(PID_Info_TypeDef *pid,
 
     pid->error = target - measure;
 
+    // D 项只对磁编反馈速度做阻尼，目标阶跃不会形成 derivative kick。
+    if (pid->derivativeInitialized) {
+        const float velocity = (measure - pid->previousMeasure) / dtSeconds;
+        const float tau = fmaxf(0.0f, pid->param.derivativeFilterTau);
+        const float alpha = dtSeconds / (tau + dtSeconds);
+        pid->filteredMeasureVelocity +=
+            alpha * (velocity - pid->filteredMeasureVelocity);
+    }
+
     if (fabsf(pid->error) >= fabsf(pid->param.Deadband)) {
         if (pid->param.ki != 0.0f) {
             pid->Integral += pid->error * dtSeconds;
@@ -102,14 +114,15 @@ float f_PID_Calculate(PID_Info_TypeDef *pid,
         pid->Pout = pid->param.kp * pid->error;
         pid->Iout = pid->param.ki * pid->Integral;
         pid->Dout = pid->derivativeInitialized
-            ? pid->param.kd * (pid->error - pid->previousError) / dtSeconds
+            ? limitFloat(-pid->param.kd * pid->filteredMeasureVelocity,
+                         pid->param.limitDerivative)
             : 0.0f;
         // 最终位置修正不再使用固定 +/-600 counts 限幅；绝对目标仍由
         // LUT 工作区、会话逻辑范围和硬件范围在发送链路统一约束。
         pid->Output = pid->Pout + pid->Iout + pid->Dout;
     }
 
-    pid->previousError = pid->error;
+    pid->previousMeasure = measure;
     pid->derivativeInitialized = 1U;
 
     if (!isfinite(pid->Output)) {

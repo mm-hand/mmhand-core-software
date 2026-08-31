@@ -19,6 +19,7 @@
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
+#include "../../config/DiagnosticsConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/TaskSignal.h"
@@ -45,6 +46,8 @@ struct HostCommRuntimeContext {
     uint8_t decodedFrame[kSerialRxBufferSize];
     uint32_t lastSensorTimestampSent;
     uint32_t lastControlTraceSequenceSent;
+    uint32_t lastControlTraceTimestampSent;
+    bool controlTraceSentInitialized;
     uint32_t lastEncoderRawTimestampSent;
     uint32_t lastServoAngleTimestampSent;
     uint32_t lastServoRawTimestampSent;
@@ -138,6 +141,8 @@ void setHostControlTraceSubscribed(bool subscribed)
     if (subscribed) {
         // 强制发送订阅后的第一份最新快照。
         g_hostCommRuntime.lastControlTraceSequenceSent = 0;
+        g_hostCommRuntime.lastControlTraceTimestampSent = 0;
+        g_hostCommRuntime.controlTraceSentInitialized = false;
     }
 }
 bool initHostCommService(SystemRuntimeContext* sharedData)
@@ -264,6 +269,22 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     processServoResetZeroResult(
         sharedData, &lastServoResetZeroResultToken);
 
+        // 控制 trace 只保留每 50 ms 的最新同周期快照。先于常规高频遥测发送，
+        // 既保证 CSV 取点密度，也不让 100 Hz trace 与状态流竞争串口。
+        if (runtime.controlTraceSubscribed &&
+            sharedData->controlTraceQueue.peek(&controlTraceData) &&
+            controlTraceData.sequence != lastControlTraceSequenceSent &&
+            (!runtime.controlTraceSentInitialized ||
+             (uint32_t)(controlTraceData.timestamp -
+                        runtime.lastControlTraceTimestampSent) >=
+                 mmhand::config::diagnostics::kControlTracePublishPeriodMs)) {
+            if (sendControlTracePacket(controlTraceData)) {
+                lastControlTraceSequenceSent = controlTraceData.sequence;
+                runtime.lastControlTraceTimestampSent = controlTraceData.timestamp;
+                runtime.controlTraceSentInitialized = true;
+            }
+        }
+
         if (sharedData->mappedAngleQueue.peek(&mappedAngleData) &&
             mappedAngleData.timestamp != lastSensorTimestampSent)
         {
@@ -293,14 +314,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             if (tactileSent) {
                 // 只有整个摘要/全量事件写完，才提交队首。
                 sharedData->tactileQueue.receive(&tactileData);
-            }
-        }
-
-        if (runtime.controlTraceSubscribed &&
-            sharedData->controlTraceQueue.peek(&controlTraceData) &&
-            controlTraceData.sequence != lastControlTraceSequenceSent) {
-            if (sendControlTracePacket(controlTraceData)) {
-                lastControlTraceSequenceSent = controlTraceData.sequence;
             }
         }
 

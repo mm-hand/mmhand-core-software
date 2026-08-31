@@ -45,8 +45,6 @@ CMD_ANGLE_CTRL = 0xCB  # 下发完整 21 路关节目标角，单位 degree
 CMD_START = 0xCC  # 历史启动命令，进入控制申请流程
 CMD_STOP = 0xCD  # 停止当前运行并撤销待执行目标
 CMD_RESET = 0xCE  # 清除允许恢复的系统故障锁存
-CMD_MOTOR_POS = 0xD0  # 27 路单圈 raw 直控目标，每路 uint16
-CMD_MOTOR_POS_SWEEP = 0xD2  # 27 路 Motor Channel 滑条连续直控目标
 CMD_MOTOR_POS_ABS = 0xD3  # 27 路 logical ABS 直控目标，每路 int32 counts
 CMD_ACTIVE_SCOPE = 0xD7  # 同步 active joint/motor mask 与 control enable
 CMD_RUN_FEEDBACK = 0xD8  # 申请状态机进入负反馈运行
@@ -119,8 +117,6 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_START: 0,
     CMD_STOP: 0,
     CMD_RESET: 0,
-    CMD_MOTOR_POS: 54,
-    CMD_MOTOR_POS_SWEEP: 54,
     CMD_MOTOR_POS_ABS: 108,
     CMD_ACTIVE_SCOPE: 9,
     CMD_RUN_FEEDBACK: 0,

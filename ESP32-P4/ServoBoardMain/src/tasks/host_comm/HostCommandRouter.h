@@ -20,14 +20,11 @@ bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
                                   const float* angles,
                                   uint8_t count,
                                   uint32_t jointMask);
-// 暂存最多 27 个逻辑多圈 ABS 直控目标，source 区分普通目标和绝对位置命令。
+// 暂存最多 27 个逻辑多圈 ABS 直控目标。
 // 此处不做统一数值钳位；发送前由舵机层结合每台电机 logicalOffset 做最终硬限制。
 bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
                             const int32_t* targets,
-                            uint8_t count,
-                            uint8_t source);
-// 写入滑条 sweep 目标；MotionControlTask 会基于当前位置把单圈 raw 连续展开。
-bool upperApplyMotorSweepTargets(SystemRuntimeContext* sharedData, const int32_t* targets, uint8_t count);
+                            uint8_t count);
 // 在静止态原子更新 active motor/joint scope；requireCanFeedback 决定是否依赖磁编反馈。
 bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
                            uint32_t activeMotorMask,
@@ -37,7 +34,6 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
 // 暂存一台舵机的逻辑多圈 ABS 目标，并请求状态机进入 RUN_DIRECT。
 bool upperApplySingleMotorTarget(SystemRuntimeContext* sharedData,
                                  uint8_t motorIndex,
-                                 int32_t target,
-                                 uint8_t source);
+                                 int32_t target);
 
 #endif // UPPER_COMM_COMMAND_ROUTER_H

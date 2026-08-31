@@ -85,29 +85,6 @@ def test_estop_is_enqueued_before_test_and_recorder_cleanup():
     assert panel._estop_in_progress is False
 
 
-def test_safe_close_arms_lease_hold_without_latching_estop():
-    events = []
-    panel = SimpleNamespace(
-        stop_all_tests=lambda *_args, **_kwargs: events.append("stop_all_tests"),
-        backend=SimpleNamespace(
-            hold_current_motor_positions=lambda delay_s: events.append(
-                ("hold", delay_s)
-            )
-        ),
-        context=SimpleNamespace(
-            disconnect_current_port=lambda status, stop_lower: events.append(
-                ("disconnect", status, stop_lower)
-            )
-        ),
-    )
-
-    ControlCommandController.safe_close_controller(panel)
-
-    assert ("hold", 0.25) in events
-    disconnect = next(event for event in events if isinstance(event, tuple) and event[0] == "disconnect")
-    assert disconnect[2] is False
-
-
 def test_direct_result_reports_execution_only_after_p4_generation_applies():
     actions = []
     statuses = []

@@ -26,11 +26,7 @@ bool readCommandSnapshot(SystemRuntimeContext* runtime,
     memcpy(snapshot->motorTargetRaw,
            runtime->motorTargetRaw,
            sizeof(snapshot->motorTargetRaw));
-    memcpy(snapshot->motorSweepTargetRaw,
-           runtime->motorSweepTargetRaw,
-           sizeof(snapshot->motorSweepTargetRaw));
     snapshot->motorCommandToken = runtime->motor_command_token;
-    snapshot->motorSweepCommandToken = runtime->motor_sweep_command_token;
     snapshot->jointCommandToken = runtime->joint_command_token;
     snapshot->jointCommandAcceptedMs = runtime->joint_command_accepted_ms;
     snapshot->feedbackCommandJointMask = runtime->feedback_command_joint_mask;

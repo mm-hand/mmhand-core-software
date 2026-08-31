@@ -128,26 +128,6 @@ class JointAngleSpec:
         return (self.urdf_at_calib_min_deg, self.urdf_at_calib_max_deg)
 
 
-@dataclass(frozen=True)
-class AngleMappingDebug:
-    joint_name: str
-    joint_index: int
-    q_ik_urdf_rad: float
-    q_ik_urdf_deg: float
-    q_viewer_deg: float
-    q_calibrated_deg: Optional[float]
-    urdf_range_deg: tuple[float, float]
-    viewer_range_deg: tuple[float, float]
-    calibrated_range_deg: Optional[tuple[float, float]]
-    calibrated_urdf_endpoints_deg: tuple[float, float]
-    sign: int
-    offset_deg: float
-    is_clamped_urdf: bool
-    is_clamped_calibrated: bool
-    mapping_source: str
-    mapping_status: str
-
-
 def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
     """从统一生成的映射文件加载 21 关节全部运行时元数据。"""
     try:
@@ -356,22 +336,6 @@ def effective_calibrated_range_deg(
     return default_calibrated_range_deg(joint) if allow_default else None
 
 
-def urdf_to_viewer(joint: int | str, q_urdf_rad: float) -> float:
-    """URDF rad -> viewer degrees.
-
-    The viewer is intentionally an identity view of URDF angle. It should not
-    apply hardware/calibration sign or range conversion.
-    """
-    resolve_joint(joint)
-    return math.degrees(float(q_urdf_rad))
-
-
-def viewer_to_urdf(joint: int | str, q_viewer_deg: float) -> float:
-    """Viewer degrees -> URDF rad. Viewer degrees are URDF degrees."""
-    resolve_joint(joint)
-    return math.radians(float(q_viewer_deg))
-
-
 def urdf_to_calibrated(
     joint: int | str,
     q_urdf_rad: float,
@@ -459,62 +423,6 @@ def calibrated_to_urdf(
     return clamp_urdf(idx, q_urdf) if clamp else q_urdf
 
 
-def legacy_calibrated_to_urdf(
-    joint: int | str,
-    q_legacy_deg: float,
-    *,
-    clamp: bool = True,
-) -> float:
-    """Legacy pre-URDF q_target degrees -> active URDF radians.
-
-    Unlike :func:`calibrated_to_urdf`, this conversion never reads the current
-    V4 Manual/URDF workspace. The legacy producer contract is fixed by
-    ``calibrated_default_range_deg`` in the URDF mapping JSON, while the
-    runtime workspace guard is applied later by HandBackend.
-    """
-    idx = resolve_joint(joint)
-    spec = JOINT_SPECS[idx]
-    q = (float(q_legacy_deg) - spec.offset_deg) / spec.sign
-    if clamp:
-        lo, hi = sorted(spec.default_calib_range_deg)
-        q = max(lo, min(hi, q))
-    urdf_at_min, urdf_at_max = spec.calibrated_urdf_endpoints_deg
-    q_urdf_deg = _linear_map(
-        q,
-        spec.default_calib_min_deg,
-        spec.default_calib_max_deg,
-        urdf_at_min,
-        urdf_at_max,
-    )
-    q_urdf = math.radians(q_urdf_deg)
-    return clamp_urdf(idx, q_urdf) if clamp else q_urdf
-
-
-def urdf_to_legacy_calibrated(
-    joint: int | str,
-    q_urdf_rad: float,
-    *,
-    clamp: bool = True,
-) -> float:
-    """Active URDF radians -> legacy pre-URDF q_target degrees."""
-    idx = resolve_joint(joint)
-    spec = JOINT_SPECS[idx]
-    q_urdf = clamp_urdf(idx, q_urdf_rad) if clamp else float(q_urdf_rad)
-    urdf_at_min, urdf_at_max = spec.calibrated_urdf_endpoints_deg
-    q = _linear_map(
-        math.degrees(q_urdf),
-        urdf_at_min,
-        urdf_at_max,
-        spec.default_calib_min_deg,
-        spec.default_calib_max_deg,
-    )
-    q = spec.sign * q + spec.offset_deg
-    if clamp:
-        lo, hi = sorted(spec.default_calib_range_deg)
-        q = max(lo, min(hi, q))
-    return q
-
-
 def clamp_urdf(joint: int | str, q_urdf_rad: float) -> float:
     spec = get_spec(joint)
     lo, hi = sorted(spec.urdf_range_rad)
@@ -544,30 +452,6 @@ def clamp_calibrated(
     return max(lo, min(hi, float(q_calibrated_deg)))
 
 
-def batch_urdf_to_calibrated(
-    q_urdf_rad: Iterable[float],
-    *,
-    allow_default: bool = True,
-    clamp: bool = True,
-) -> list[float]:
-    out = [0.0] * ENCODER_COUNT
-    for idx, value in enumerate(list(q_urdf_rad)[:ENCODER_COUNT]):
-        out[idx] = urdf_to_calibrated(idx, float(value), allow_default=allow_default, clamp=clamp)
-    return out
-
-
-def batch_calibrated_to_urdf(
-    q_calibrated_deg: Iterable[float],
-    *,
-    allow_default: bool = True,
-    clamp: bool = True,
-) -> list[float]:
-    out = [0.0] * ENCODER_COUNT
-    for idx, value in enumerate(list(q_calibrated_deg)[:ENCODER_COUNT]):
-        out[idx] = calibrated_to_urdf(idx, float(value), allow_default=allow_default, clamp=clamp)
-    return out
-
-
 def calibrated_angles_to_urdf_joint_positions(
     angles_deg: Iterable[float],
     *,
@@ -595,70 +479,6 @@ def calibrated_angles_to_urdf_joint_positions(
     }
 
 
-def mapping_debug(
-    joint: int | str,
-    q_urdf_rad: float,
-    *,
-    allow_default: bool = True,
-) -> AngleMappingDebug:
-    idx = resolve_joint(joint)
-    spec = JOINT_SPECS[idx]
-    q_urdf = float(q_urdf_rad)
-    q_urdf_clamped = clamp_urdf_for_calibrated_mapping(idx, q_urdf)
-    q_viewer = urdf_to_viewer(idx, q_urdf_clamped)
-    try:
-        q_calib_raw = urdf_to_calibrated(idx, q_urdf, allow_default=allow_default, clamp=True)
-        q_calib = clamp_calibrated(idx, q_calib_raw, allow_default=allow_default)
-        is_clamped_calib = abs(q_calib - q_calib_raw) > 1e-6
-    except AngleMappingError:
-        q_calib = None
-        is_clamped_calib = False
-
-    return AngleMappingDebug(
-        joint_name=spec.joint_name,
-        joint_index=idx,
-        q_ik_urdf_rad=q_urdf,
-        q_ik_urdf_deg=math.degrees(q_urdf),
-        q_viewer_deg=q_viewer,
-        q_calibrated_deg=q_calib,
-        urdf_range_deg=spec.urdf_range_deg,
-        viewer_range_deg=spec.urdf_range_deg,
-        calibrated_range_deg=effective_calibrated_range_deg(idx, allow_default=allow_default),
-        calibrated_urdf_endpoints_deg=spec.calibrated_urdf_endpoints_deg,
-        sign=spec.sign,
-        offset_deg=spec.offset_deg,
-        is_clamped_urdf=abs(q_urdf_clamped - q_urdf) > 1e-8,
-        is_clamped_calibrated=is_clamped_calib,
-        mapping_source=spec.mapping_source,
-        mapping_status=spec.mapping_status,
-    )
-
-
-
-def joint_mapping_rows() -> list[dict[str, object]]:
-    calib_ranges = load_calibrated_ranges()
-    rows: list[dict[str, object]] = []
-    for idx in range(ENCODER_COUNT):
-        spec = JOINT_SPECS[idx]
-        calib = calib_ranges.get(idx)
-        rows.append(
-            {
-                "joint_name": spec.urdf_joint_name,
-                "urdf_range": spec.urdf_range_deg,
-                "viewer_range": spec.urdf_range_deg,
-                "calibrated_urdf_endpoints": spec.calibrated_urdf_endpoints_deg,
-                "calibrated_range": calib,
-                "motor/index": f"J{idx:02d}/M{list(spec.motor_indices) if spec.motor_indices else 'UNKNOWN'}",
-                "unit": "URDF rad internal, viewer deg, calibrated deg",
-                "sign": spec.sign,
-                "offset": spec.offset_deg,
-                "current_mapping_source": spec.mapping_source,
-                "mapping_status": spec.mapping_status,
-            }
-        )
-    return rows
-
-
 def _linear_map(value: float, src_lo: float, src_hi: float, dst_lo: float, dst_hi: float) -> float:
     denom = src_hi - src_lo
     if abs(denom) < 1e-8:
@@ -668,29 +488,20 @@ def _linear_map(value: float, src_lo: float, src_hi: float, dst_lo: float, dst_h
 
 
 __all__ = [
-    "AngleMappingDebug",
     "AngleMappingError",
     "JOINT_SPECS",
     "JointAngleSpec",
     "URDF_JOINT_MAPPING_PATH",
-    "batch_calibrated_to_urdf",
     "calibrated_angles_to_urdf_joint_positions",
-    "batch_urdf_to_calibrated",
     "calibrated_range_deg",
     "calibrated_to_urdf",
     "clamp_calibrated",
     "clamp_urdf",
     "effective_calibrated_range_deg",
     "get_spec",
-    "joint_mapping_rows",
-    "legacy_calibrated_to_urdf",
     "load_calibrated_ranges",
-    "mapping_debug",
     "resolve_joint",
     "urdf_to_calibrated",
-    "urdf_to_legacy_calibrated",
-    "urdf_to_viewer",
     "urdf_feedback_mapping_metadata",
     "urdf_manual_scaled_mapping_metadata",
-    "viewer_to_urdf",
 ]

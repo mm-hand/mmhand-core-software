@@ -38,7 +38,6 @@ inline constexpr int16_t kOverloadLoadThreshold = 800; ///< 标定期间的硬�
 inline constexpr int16_t kDualPrimaryTightLoadThreshold = 190; ///< 主腱首次紧绳阈值。
 inline constexpr int16_t kDualSecondaryPreloadLoadThreshold = 190; ///< 副腱预紧阈值。
 inline constexpr int16_t kDualSecondaryFinalLoadThreshold = 250; ///< 副腱最终 A 姿态阈值。
-inline constexpr int16_t kDualPrimaryFinalLoadThreshold = 120; ///< 普通双腱最终主腱确认阈值。
 
 inline constexpr int16_t kWorkspaceTightLoadThreshold = 190; ///< 辅助手指让位后紧绳阈值。
 inline constexpr int32_t kWorkspaceReleaseCounts = 3200; ///< 工作空间姿态切换释放量。

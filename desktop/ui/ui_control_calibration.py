@@ -1,6 +1,6 @@
 """ui_control_calibration.py - MMHand Desktop 模块契约。
 
-职责：实现控制面板中的标定、Rope Init 和恢复交互。
+职责：实现控制面板中的标定与恢复交互。
 线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
 输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
 输出：Qt 控件状态、用户提示和经门面提交的应用命令。
@@ -25,16 +25,10 @@ from .ui_control_common import (
     HAND_PROFILE,
     List,
     MOTOR_COUNT,
-    MOTOR_MID_CALIB_PATH,
     MOTOR_TO_JOINT_INDEX,
     Optional,
     Path,
     QtWidgets,
-    ROPE_INIT_REASON_LABELS,
-    ROPE_INIT_START_TIMEOUT_S,
-    ROPE_INIT_STATUS_FAILED,
-    ROPE_INIT_STATUS_RUNNING,
-    ROPE_INIT_STATUS_SUCCESS,
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_READY,
@@ -54,6 +48,7 @@ from .ui_control_common import (
     manual_encoder_reference_entry_crc,
     merge_snapshot,
     read_snapshot,
+    snapshot_write_transaction,
     shutil,
     tendon_lut_field,
     threading,
@@ -64,14 +59,6 @@ from .ui_control_common import (
 
 
 class CalibrationWorkflowController:
-    def update_rope_init_progress(self, state) -> None:
-        """Update Rope Init progress from the latest P4 state packet."""
-        self._update_p4_rope_init_progress(state)
-
-    def show_calibration_assembly_warning_if_needed(self, state) -> None:
-        """Show the calibration assembly warning popup once per warning episode."""
-        self._maybe_show_calibration_assembly_warning(state)
-
     def _active_scope_joint_indices(self) -> List[int]:
         """Return the active scope joint indices state."""
         if self._app_mode == "manual":
@@ -82,160 +69,6 @@ class CalibrationWorkflowController:
             _motor_mask, joint_mask, _require_can = data
             return ControlScopeModel.ordered_joint_indices_from_mask(int(joint_mask))
         return list(AUTO_CALIBRATION_JOINT_INDICES)
-
-    def rope_init_controller(self) -> None:
-        """Run the rope init controller workflow."""
-        if self._p4_rope_init_phase != "idle":
-            self._set_status("Rope Init is already queued or running on P4")
-            return
-        if self._manual_submode() != "joint":
-            self._set_status("Rope Init is only available in Joint Channels")
-            return
-        if not self.context.is_comm_connected():
-            if not self.context.connect_selected_port():
-                return
-        if not self.backend.is_started():
-            self._set_status("Rope Init blocked: press ENABLE to enter IDLE first")
-            return
-        state = self._state
-        system_state = getattr(state, "system_state", None)
-        if system_state not in (
-            SYSTEM_STATE_IDLE,
-            SYSTEM_STATE_READY,
-            SYSTEM_STATE_RECOVERY_REQUIRED,
-        ):
-            self._set_status("Rope Init blocked: wait for IDLE/READY/RECOVERY")
-            return
-        unknown_mask = self._active_scope_multiturn_unknown_mask()
-        if unknown_mask != 0:
-            self._show_turn_recovery_guide(unknown_mask, "Rope Init")
-            return
-
-        if not self._apply_active_scope_for_current_mode():
-            self._set_status("Rope Init blocked: active scope was not accepted")
-            return
-        active_joint_mask = int(self._active_joint_mask_from_ui()) & (
-            (1 << ENCODER_COUNT) - 1
-        )
-        if active_joint_mask == 0:
-            self._set_status("Rope Init blocked: no active joint selected")
-            return
-        transition_base = int(
-            getattr(state, "state_transition_count", 0) or 0
-        )
-        sequence_base = int(getattr(state, "rope_init_sequence", 0) or 0)
-        if not self.backend.rope_init(active_joint_mask):
-            self._set_status(
-                "Rope Init rejected: check Manual/v4 calibration, state, and Turn"
-            )
-            return
-        self._p4_rope_init_phase = "queued"
-        self._p4_rope_init_joint_mask = active_joint_mask
-        self._p4_rope_init_requested_at = time.monotonic()
-        self._p4_rope_init_transition_base = transition_base
-        self._p4_rope_init_sequence_base = sequence_base
-        self.rope_init_btn.setText("Rope Init...")
-        self.context.emit_action(
-            f"Rope Init queued on P4: joint_mask=0x{active_joint_mask:08X}"
-        )
-        self._set_status(
-            f"Rope Init queued on P4: joint_mask=0x{active_joint_mask:08X}"
-        )
-        self._update_manual_action_buttons()
-
-    def _reset_p4_rope_init_progress(self) -> None:
-        """Reset the p4 rope init progress state."""
-        self._p4_rope_init_phase = "idle"
-        self._p4_rope_init_joint_mask = 0
-        self._p4_rope_init_requested_at = 0.0
-        self._p4_rope_init_transition_base = 0
-        self._p4_rope_init_sequence_base = 0
-        button = getattr(self, "rope_init_btn", None)
-        if button is not None:
-            button.setText("Rope Init")
-
-    def _finish_p4_rope_init_progress(self, success: bool, detail: str) -> None:
-        """Handle finish p4 rope init progress behavior for the control panel."""
-        joint_mask = self._p4_rope_init_joint_mask
-        result = "complete" if success else "failed"
-        message = (
-            f"Rope Init {result} on P4: joint_mask=0x{joint_mask:08X}; {detail}"
-        )
-        self._reset_p4_rope_init_progress()
-        self.context.emit_action(message)
-        self._update_manual_action_buttons()
-
-    def _update_p4_rope_init_progress(self, state) -> None:
-        """Handle update p4 rope init progress behavior for the control panel."""
-        if self._p4_rope_init_phase == "idle" or state is None:
-            return
-        system_state = int(getattr(state, "system_state", -1) or 0)
-        transition_count = int(getattr(state, "state_transition_count", 0) or 0)
-        transition_delta = max(
-            0, transition_count - self._p4_rope_init_transition_base
-        )
-        elapsed = max(0.0, time.monotonic() - self._p4_rope_init_requested_at)
-
-        if bool(getattr(state, "has_motion_result_status", False)):
-            rope_sequence = int(getattr(state, "rope_init_sequence", 0) or 0)
-            rope_status = int(getattr(state, "rope_init_status", 0) or 0)
-            rope_reason = int(getattr(state, "rope_init_reason", 0) or 0)
-            if rope_sequence > self._p4_rope_init_sequence_base:
-                if rope_status == ROPE_INIT_STATUS_RUNNING:
-                    if self._p4_rope_init_phase != "running":
-                        self._p4_rope_init_phase = "running"
-                        self.context.emit_action(
-                            "Rope Init started on P4: "
-                            f"joint_mask=0x{self._p4_rope_init_joint_mask:08X}"
-                        )
-                        self._update_manual_action_buttons()
-                    self._set_status(f"Rope Init running on P4: {elapsed:.1f} s")
-                    return
-                if rope_status == ROPE_INIT_STATUS_SUCCESS:
-                    self._finish_p4_rope_init_progress(
-                        True, "P4 reported SUCCESS"
-                    )
-                    return
-                if rope_status == ROPE_INIT_STATUS_FAILED:
-                    reason_label = ROPE_INIT_REASON_LABELS.get(
-                        rope_reason, f"unknown reason {rope_reason}"
-                    )
-                    self._finish_p4_rope_init_progress(
-                        False, f"P4 reported FAILED: {reason_label}"
-                    )
-                    return
-
-        if system_state == SYSTEM_STATE_ROPE_INIT_RUNNING:
-            if self._p4_rope_init_phase != "running":
-                self._p4_rope_init_phase = "running"
-                self.context.emit_action(
-                    "Rope Init started on P4: "
-                    f"joint_mask=0x{self._p4_rope_init_joint_mask:08X}"
-                )
-                self._update_manual_action_buttons()
-            self._set_status(f"Rope Init running on P4: {elapsed:.1f} s")
-            return
-
-        task_has_finished = (
-            self._p4_rope_init_phase == "running" or transition_delta >= 2
-        )
-        if task_has_finished:
-            if system_state == SYSTEM_STATE_READY:
-                self._finish_p4_rope_init_progress(True, "READY confirmed")
-            elif system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_UNCONTROLLABLE):
-                self._finish_p4_rope_init_progress(
-                    False,
-                    f"final_state={system_state}; active joints did not reach READY",
-                )
-            return
-
-        if elapsed >= ROPE_INIT_START_TIMEOUT_S:
-            self._finish_p4_rope_init_progress(
-                False,
-                f"P4 did not enter ROPE_INIT within {ROPE_INIT_START_TIMEOUT_S:.1f} s",
-            )
-            return
-        self._set_status(f"Rope Init queued on P4: waiting to start ({elapsed:.1f} s)")
 
     def calibrate(self) -> None:
         """Start the active-scope calibration workflow."""
@@ -433,16 +266,6 @@ class CalibrationWorkflowController:
         valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
         return active_mask & ~valid_bitmap
 
-    def _active_scope_feedback_calibrated(self) -> bool:
-        """Return the active scope feedback calibrated state."""
-        active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK
-        if active_mask == 0 or self._active_scope_abs_limit_missing_mask() != 0:
-            return False
-        mode = self._manual_submode() if self._app_mode == "manual" else "joint"
-        if mode != "motor" and self._active_scope_joint_calib_missing_indices():
-            return False
-        return True
-
     def _format_motor_mask(self, mask: int, limit: int = 6) -> str:
         """Format the motor mask for display."""
         indices = [
@@ -474,7 +297,7 @@ class CalibrationWorkflowController:
             "3. 先等待上位机 JSON 最近圈恢复；若 Turn UNKNOWN 仍未清除，勾选受影响关节。\n"
             "4. 点击 Calibrate；程序会先清除所选舵机 JSON 锚点并下发硬件圈数复位，再开始标定。\n"
             "5. 双电机关节会由两台舵机共同重新标定 LUT，其他关节数据保留。\n"
-            "6. 确认 TURN KNOWN、CALIB SUCCESS、OL OK 后再恢复控制。"
+            "6. 确认 Multi-turn: Known、Calibration: Success、Overload: Normal 后再恢复控制。"
         )
 
     def turn_unknown_popup_seen(self) -> bool:
@@ -854,81 +677,6 @@ class CalibrationWorkflowController:
             unknown = 0
         return unknown & self._active_motor_mask_from_ui()
 
-    def record_mid_calibration(self) -> None:
-        """Record the mid calibration data."""
-        state = self._state
-        if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
-            self._set_status("Mid Calib blocked: waiting for servo ABS feedback")
-            return
-
-        motor_indices = self._active_motor_indices_from_ui()
-        if not motor_indices:
-            self._set_status("Mid Calib blocked: active scope has no motors")
-            return
-
-        servo_abs = getattr(state, "servo_angles", []) or []
-        servo_raw = getattr(state, "servo_raw_positions", []) or []
-        servo_online = getattr(state, "servo_online", []) or []
-        raw_online = getattr(state, "servo_raw_online", []) or []
-        unknown_mask = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
-
-        records = []
-        missing = []
-        for motor_idx in motor_indices:
-            if motor_idx >= len(servo_abs):
-                missing.append(f"M{motor_idx:02d} abs")
-                continue
-            if motor_idx >= len(servo_online) or not bool(servo_online[motor_idx]):
-                missing.append(f"M{motor_idx:02d} online")
-                continue
-            joint_idx = MOTOR_TO_JOINT_INDEX[motor_idx] if motor_idx < len(MOTOR_TO_JOINT_INDEX) else -1
-            raw_value = None
-            raw_ok = motor_idx < len(servo_raw) and motor_idx < len(raw_online) and bool(raw_online[motor_idx])
-            if raw_ok:
-                raw_value = int(servo_raw[motor_idx])
-            records.append({
-                "motor": int(motor_idx),
-                "motor_label": f"M{motor_idx:02d}",
-                "joint": int(joint_idx) if int(joint_idx) >= 0 else None,
-                "joint_label": f"J{int(joint_idx):02d}" if int(joint_idx) >= 0 else None,
-                "abs": int(servo_abs[motor_idx]),
-                "raw": raw_value,
-                "multi_turn_known": ((unknown_mask & (1 << motor_idx)) == 0),
-            })
-
-        if not records:
-            self._set_status(f"Mid Calib blocked: {', '.join(missing[:4])}")
-            return
-
-        payload = {
-            "comment": "Motor middle calibration. Record motor ABS when the tendon/rope is unwrapped; intended for later side-sway joint calibration.",
-            "updated_at_host_time": time.time(),
-            "hand_profile": HAND_PROFILE,
-            "active_scope": {
-                "label": self._active_scope_label_from_ui(),
-                "motor_mask": f"0x{self._active_motor_mask_from_ui():08X}",
-                "joint_mask": f"0x{self._active_joint_mask_from_ui():08X}",
-            },
-            "motors": records,
-            "by_motor": {item["motor_label"]: item for item in records},
-        }
-        try:
-            MOTOR_MID_CALIB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            MOTOR_MID_CALIB_PATH.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            self._set_status(f"Mid Calib save failed: {exc}")
-            return
-
-        self.context.emit_action(
-            "Mid Calib saved: " +
-            ",".join(f"{item['motor_label']}={item['abs']}" for item in records)
-        )
-        suffix = f"; skipped {', '.join(missing[:3])}" if missing else ""
-        self._set_status(f"Mid Calib saved {len(records)} motor ABS to {MOTOR_MID_CALIB_PATH.name}{suffix}")
-
     @staticmethod
     def _format_joint_list(indices: List[int]) -> str:
         """Format the joint list for display."""
@@ -1200,79 +948,53 @@ class CalibrationWorkflowController:
             "joint_calib_results": joint_results,
         }
 
-        previous_payload = None
-        if CALIB_LOAD_SNAPSHOT_PATH.exists():
-            try:
-                previous_payload = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
-            except CalibrationSnapshotError as exc:
-                # V5 使用旧 URDF/映射语义，不能参与 V6 合并；归档后允许本轮标定建立新的 V6。
-                try:
-                    existing_payload = json.loads(
-                        CALIB_LOAD_SNAPSHOT_PATH.read_text(encoding="utf-8")
-                    )
-                    is_legacy_v5 = (
-                        isinstance(existing_payload, dict)
-                        and existing_payload.get("format") == "mmhand_calibration_bundle"
-                        and int(existing_payload.get("schema_version", 0) or 0) == 5
-                    )
-                except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                    is_legacy_v5 = False
-                if not is_legacy_v5:
-                    self._set_status(
-                        f"Calib snapshot save blocked: existing V6 snapshot invalid: {exc}"
-                    )
-                    return
-                archive_path = CALIB_LOAD_SNAPSHOT_PATH.with_name(
-                    f"{CALIB_LOAD_SNAPSHOT_PATH.stem}.legacy_v5_"
-                    f"{time.strftime('%Y%m%d_%H%M%S')}{CALIB_LOAD_SNAPSHOT_PATH.suffix}"
-                )
-                try:
-                    CALIB_LOAD_SNAPSHOT_PATH.replace(archive_path)
-                except OSError as archive_exc:
-                    self._set_status(
-                        f"Calib snapshot save blocked: cannot archive V5 snapshot: {archive_exc}"
-                    )
-                    return
-                self.context.emit_action(
-                    f"Legacy V5 Calib snapshot archived: {archive_path.name}"
-                )
-                self._set_status(
-                    "Legacy V5 Calib snapshot archived; creating a new V6 snapshot"
-                )
-
         try:
-            payload = merge_snapshot(
-                previous_payload,
-                payload,
-                updated_joint_mask=active_joint_mask,
-            )
+            # 标定结果和后台多圈锚点都会修改同一 JSON；锁必须覆盖读取、合并和替换，
+            # 单独原子替换无法阻止旧读取结果覆盖刚写入的锚点位。
+            with snapshot_write_transaction():
+                previous_payload = (
+                    read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+                    if CALIB_LOAD_SNAPSHOT_PATH.exists()
+                    else None
+                )
+                payload = merge_snapshot(
+                    previous_payload,
+                    payload,
+                    updated_joint_mask=active_joint_mask,
+                )
+                signature = json.dumps(
+                    {
+                        "active_joint_mask": payload["active_joint_mask"],
+                        "active_motor_mask": payload["active_motor_mask"],
+                        "valid": payload["motor_abs_limit_valid_bitmap"],
+                        "mins": payload["motor_abs_limit_min"],
+                        "maxs": payload["motor_abs_limit_max"],
+                        "joints": payload["joint_calib_results"],
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+                snapshot_changed = signature != self._last_calib_snapshot_signature
+                if snapshot_changed:
+                    payload = atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, payload)
         except CalibrationSnapshotError as exc:
-            self._set_status(f"Calib snapshot merge failed: {exc}")
+            self._set_status(f"Calib snapshot save blocked: {exc}")
+            return
+        except OSError as exc:
+            self._set_status(f"Calib snapshot save failed: {exc}")
             return
 
-        signature = json.dumps(
-            {
-                "active_joint_mask": payload["active_joint_mask"],
-                "active_motor_mask": payload["active_motor_mask"],
-                "valid": payload["motor_abs_limit_valid_bitmap"],
-                "mins": payload["motor_abs_limit_min"],
-                "maxs": payload["motor_abs_limit_max"],
-                "joints": payload["joint_calib_results"],
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-        if signature == self._last_calib_snapshot_signature:
+        if not snapshot_changed:
             if calib_status in {"SUCCESS", "WARN"}:
                 self._pending_calib_joint_mask = 0
                 self._pending_calib_motor_mask = 0
                 self._pending_calib_result_baselines = {}
             return
-        try:
-            payload = atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, payload)
-        except (OSError, CalibrationSnapshotError) as exc:
-            self._set_status(f"Calib snapshot save failed: {exc}")
-            return
+        request_anchor_capture = getattr(
+            self.backend, "request_multiturn_anchor_capture", None
+        )
+        if callable(request_anchor_capture):
+            request_anchor_capture(active_motor_mask)
         self._last_calib_snapshot_signature = signature
         # 更新已落盘 Jxx 的基线；RUNNING 时继续等待其余关节，不能清空整轮 mask。
         baselines = getattr(self, "_pending_calib_result_baselines", None)
@@ -1427,7 +1149,8 @@ class CalibrationWorkflowController:
         # 仅在文件已通过完整校验且用户确认后才替换本机快照，避免错误 JSON
         # 覆盖自动标定的有效结果。atomic_write_snapshot 会保留可恢复备份。
         try:
-            atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, snapshot)
+            with snapshot_write_transaction():
+                atomic_write_snapshot(CALIB_LOAD_SNAPSHOT_PATH, snapshot)
         except (OSError, CalibrationSnapshotError) as exc:
             self._error("Load Calibration", f"激活本机快照失败：{exc}")
             return
@@ -1559,6 +1282,14 @@ class CalibrationWorkflowController:
                 self._set_status(f"Startup Calib Load skipped: {message}; automatic calibration required")
             return
 
+        if phase == "recovery":
+            self._startup_device_check_running = False
+            self._set_status(
+                f"Startup multi-turn recovery incomplete: {message}; automatic calibration required"
+            )
+            self.context.emit_action(f"Startup multi-turn recovery incomplete: {message}")
+            return
+
         if phase == "manual":
             self._startup_device_check_running = False
             if ok:
@@ -1653,6 +1384,25 @@ class CalibrationWorkflowController:
             if not manual_ok:
                 self.startup_device_check_finished.emit(
                     int(epoch), "manual", False, str(manual_message)
+                )
+                return
+
+            try:
+                active_motor_mask = int(
+                    str(snapshot.get("active_motor_mask", "0")), 0
+                ) & VALID_MOTOR_MASK
+            except (TypeError, ValueError):
+                active_motor_mask = 0
+            try:
+                recovery_ok, recovery_message = self.backend.wait_for_multiturn_recovery(
+                    active_motor_mask
+                )
+            except Exception as exc:
+                recovery_ok = False
+                recovery_message = f"{type(exc).__name__}: {exc}"
+            if not recovery_ok:
+                self.startup_device_check_finished.emit(
+                    int(epoch), "recovery", False, str(recovery_message)
                 )
                 return
 

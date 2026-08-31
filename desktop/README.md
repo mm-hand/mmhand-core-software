@@ -6,7 +6,7 @@
 python -m desktop
 ```
 
-旧的 `desktop/development_mode.py` 和 `desktop/ui_main.py` 兼容文件已经删除；`desktop/main.py` 只保留为薄兼容入口。新代码应优先使用 `python -m desktop ui|cli`，或直接导入 `desktop.app`、`desktop.core`、`desktop.ui` 下的模块。
+旧的 `desktop/development_mode.py`、`desktop/ui_main.py` 和 `desktop/main.py` 兼容入口已经删除。请使用 `python -m desktop ui|cli`，或直接导入 `desktop.app`、`desktop.core`、`desktop.ui` 下的模块。
 
 ## Environment
 
@@ -87,7 +87,7 @@ Replay 不再保存单帧手势 JSON，而是直接读取 `Save Data` 生成的
 操作顺序：
 
 1. 连接P4，选择需要控制的关节并按`ENABLE`。
-2. 完成标定和`Rope Init`，确认系统状态为`READY`。
+2. 完成标定；P4 会自动执行 Rope Init，确认系统状态为`READY`。
 3. `Save Data` 默认开启，连接 P4 后会自动开始保存基础 CSV；如不需要记录可手动取消勾选。
 4. 打开`Replay`页面，点击`导入 CSV`选择轨迹文件。
 5. 核对轨迹时长、帧数、active scope及21关节实时角后点击`Send`。
@@ -148,6 +148,7 @@ CLI 控制键：
 - `q`：quit
 
 CLI 只通过 `HandBackend` 操作硬件，不直接持有或调用 `HandController`。
+它显示当前 P4 映射关节角与 27 路舵机反馈；不依赖已删除的 `JOINT1_DEBUG` 包。
 
 ## ROS2 Joint Target Input
 
@@ -205,10 +206,8 @@ python -m desktop.examples.ros2_joint_target_sender
 desktop/
   __init__.py
   __main__.py                 # package 主入口：python -m desktop
-  main.py                     # 薄兼容入口，转发到 desktop.app.entry
   paths.py                    # 资源路径 helper
   requirements.txt            # desktop 依赖说明
-  serial_log_filter.py        # 串口日志过滤工具
 
   app/
     entry.py                  # argparse 子命令：ui、cli
@@ -221,7 +220,6 @@ desktop/
     comm_layer.py             # 串口通信层
     core_logic.py             # HandController 等核心控制逻辑
     hand_backend.py           # UI/CLI/ROS2 共用 backend facade
-    hand_geometry.py          # 手部几何与姿态计算
     motor_mapping.py          # 电机/关节映射与直控辅助函数
     angle_mapping.py          # 关节/电机映射
     auto_calib_logger.py      # 自动标定日志
@@ -244,8 +242,6 @@ desktop/
   resources/
     config/                   # 标定和运行配置
     hku_hand_v2_urdf/         # URDF、mesh 和相关资源
-    joint_sequence_example.txt
-    pose_fist_21deg.txt
 
   examples/
     ros2_joint_target_sender.py

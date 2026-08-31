@@ -22,14 +22,15 @@ from .ui_dialogs import show_scrollable_message
 class ControlCommandController:
     def start_controller(self) -> None:
         """Start the controller workflow."""
+        if bool(getattr(self, "_startup_device_check_running", False)):
+            self._set_status("ENABLE blocked: restoring P4 calibration state")
+            return
         if self._app_mode == "manual" and self._manual_submode() == "device_check":
             self._set_status("ENABLE blocked: switch to Joint or Motor Channels after Device Check")
             return
         if not self.context.is_comm_connected():
             if not self.context.connect_selected_port():
-                self._update_connection_lights()
                 return
-            self._update_connection_lights()
         mode = self._manual_submode()
         state = self._state
         scan_state = int(getattr(state, "servo_route_scan_state", 0) or 0) if state is not None else 0
@@ -137,7 +138,6 @@ class ControlCommandController:
             return
         self._estop_in_progress = True
         try:
-            self._update_connection_lights()
             self._estop_latched = True
             # STOP is safety-critical. Enqueue it before CSV recorder cleanup
             # or any other UI-side cancellation work.
@@ -163,19 +163,6 @@ class ControlCommandController:
         self.clear_ros2_joint_targets()
         self.context.emit_action("Pause")
         self._set_status("Pause requested: target cache kept for resume")
-
-    def safe_close_controller(self) -> None:
-        """Run the safe close controller workflow."""
-        self.stop_all_tests("safe close", update_status=False)
-        try:
-            self.backend.hold_current_motor_positions(delay_s=0.25)
-        except Exception:
-            pass
-        # “安全关闭”是可恢复的正常断开；真正急停只由 Stop 按钮发送锁存式 STOP。
-        self.context.disconnect_current_port(
-            "Safe closed: current motor targets submitted; P4 lease Hold armed",
-            stop_lower=False,
-        )
 
     def clear_fault_with_confirm(self) -> None:
         """Clear the fault with confirm state."""
@@ -257,7 +244,6 @@ class ControlCommandController:
         # RESET/Clear Fault 会清除 P4 的锁存 E-STOP；控制仍保持关闭，
         # 用户下一次按 ENABLE 时再按当前模式重新取得控制权。
         self._estop_latched = False
-        self._reset_p4_rope_init_progress()
         self.backend.reset()
         self._clear_run_states()
         self.context.emit_action("Clear Fault")

@@ -216,6 +216,13 @@ static void cancelInternalMotionForHostLeaseLoss(
         sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
         sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
         sharedData->rope_init_timestamp = monotonicMillis();
+        if (sharedAtomicLoad(
+                &sharedData->calibration_rope_init_pending) != 0) {
+            // 标定结果已经提交，仅 READY 收尾被租约中断；保留结果并报告 WARN。
+            port.setCalibrationStatus(CALIB_STATUS_WARN);
+            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
+                              (uint8_t)0);
+        }
         sharedAtomicStore(&sharedData->feedback_recovery_pending,
                           (uint8_t)0);
         sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
