@@ -105,7 +105,9 @@ class ControlPanelStateMixin:
         calib_status = str(getattr(state, "calib_status", "IDLE"))
         active_calib_statuses = {"PENDING", "RUNNING"}
         partial_completed_mask = (
-            self._partial_calibration_completed_joint_mask(state)
+            int(getattr(state, "calib_diag_completed_joint_mask", 0) or 0)
+            & ~int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
+            & ((1 << ENCODER_COUNT) - 1)
             if calib_status == "FAILED"
             else 0
         )
@@ -124,19 +126,8 @@ class ControlPanelStateMixin:
             if joint_calib_valid_mask == 0:
                 self._joint_target_user_set = [False] * ENCODER_COUNT
         self._last_joint_calib_valid_mask = joint_calib_valid_mask
-        # FAILED 状态包可能先于最终标定诊断和成功关节快照到达。
-        # 此处不能提前清掉 pending mask，否则部分成功结果无法合并。
-        if (
-            calib_status == "IDLE"
-            and self._last_calib_status
-            in (active_calib_statuses | {"SUCCESS", "WARN", "FAILED"})
-        ):
-            self._pending_calib_joint_mask = 0
-            self._pending_calib_motor_mask = 0
-            self._pending_calib_result_baselines = {}
         self._last_calib_status = calib_status
         self._maybe_show_calibration_assembly_warning(state)
-        self._save_calibration_snapshot_without_blocking_ui(state)
         if self._app_mode != "manual":
             updater = getattr(self._body_widget, "update_state", None)
             if callable(updater):
@@ -149,20 +140,6 @@ class ControlPanelStateMixin:
         )
         self._refresh_motor_feedback_view(sync_target=not self._motor_target_initialized)
         self._update_manual_action_buttons()
-
-    def _save_calibration_snapshot_without_blocking_ui(self, state) -> None:
-        """Keep display refresh alive if optional calibration persistence fails."""
-        try:
-            self._maybe_save_calibration_snapshot(state)
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-            if detail != getattr(self, "_last_calibration_snapshot_error", ""):
-                self._last_calibration_snapshot_error = detail
-                message = f"Calib snapshot save failed: {detail}"
-                self.context.emit_action(message)
-                self._set_status(message)
-        else:
-            self._last_calibration_snapshot_error = ""
 
     @classmethod
     def _encoder_common_zero_snapshot(cls, state) -> bool:
@@ -341,11 +318,10 @@ class ControlPanelStateMixin:
             self._reset_motor_target_cache_for_device_epoch(
                 "Firmware reboot detected: restoring P4 calibration state"
             )
-            # 失效仍在运行的旧 worker；新 worker 先同步 P4 状态，再恢复
-            # Manual 与 Auto/LUT。串口不断开时同样走这条路径。
-            self._startup_device_check_epoch = int(
-                getattr(self, "_startup_device_check_epoch", 0)
-            ) + 1
+            # 核心工作流 epoch 会丢弃旧事务结果；串口不断开时同样重新恢复。
+            cancel_workflow = getattr(self.backend, "cancel_calibration_workflow", None)
+            if callable(cancel_workflow):
+                cancel_workflow()
             self._startup_device_check_running = False
             request_state_sync = getattr(self.backend, "request_state_sync", None)
             if callable(request_state_sync):
@@ -496,7 +472,9 @@ class ControlPanelStateMixin:
     def clear_live_state(self) -> None:
         self.stop_all_tests("stopped on disconnect", update_status=False)
         self._state = None
-        self._startup_device_check_epoch += 1
+        cancel_workflow = getattr(self.backend, "cancel_calibration_workflow", None)
+        if callable(cancel_workflow):
+            cancel_workflow()
         self._startup_device_check_running = False
         self._startup_missing_warning_shown = False
         if self.device_check_view is not None:

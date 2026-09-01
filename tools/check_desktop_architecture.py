@@ -74,7 +74,11 @@ DEPENDENCY_RULES = (
     ),
     DependencyRule(
         "desktop/ui/",
-        ("desktop.core.comm_layer", "desktop.core.core_logic"),
+        (
+            "desktop.core.calibration_snapshot",
+            "desktop.core.comm_layer",
+            "desktop.core.core_logic",
+        ),
     ),
 )
 

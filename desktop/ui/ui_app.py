@@ -1748,16 +1748,6 @@ class HandGUI(QtWidgets.QMainWindow):
         for row in self._motion_record_sampler.flush_due(force=force):
             self._data_logger.write("teleop_input", row)
 
-    def start_calibration(self) -> None:
-        if not self.is_comm_connected():
-            if not self._connect_selected_port():
-                return
-        if self.backend.request_firmware_calibration():
-            self._set_status("Calibration command sent")
-            self.emit_action("Calibrate")
-        else:
-            self._set_status("Calibration blocked: serial port is not connected")
-
     def _start_data_recording(self, options: Optional[Dict[str, bool]] = None) -> None:
         if self._test_recording_stop_active():
             raise RuntimeError("previous test recording is still finalizing")

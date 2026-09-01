@@ -95,9 +95,6 @@ class HandGuiContext:
     def stop_recording_for_test(self, reason: str = "test stopped") -> None:
         self._app.stop_recording_for_test(reason)
 
-    def start_calibration(self) -> None:
-        self._app.start_calibration()
-
     def connect_tactile_serial(self, port: str) -> bool:
         return self._app.connect_tactile_serial(port)
 

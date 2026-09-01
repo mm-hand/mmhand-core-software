@@ -73,21 +73,18 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
     bar.ros2_output_toggled.connect(lambda enabled: events.append(("ros2", enabled)))
     bar.clear_fault_requested.connect(lambda: events.append("clear"))
     bar.calibrate_requested.connect(lambda: events.append("calibrate"))
-    bar.rope_init_requested.connect(lambda: events.append("rope"))
-    bar.nvs_toggle_requested.connect(lambda: events.append("nvs"))
 
     assert bar.enable_btn.text() == "ENABLE"
     assert bar.stop_btn.text() == "E-STOP"
     assert bar.ros2_output_btn.isCheckable()
-    assert bar.nvs_control_btn.text() == "Flash ON"
+    assert not hasattr(bar, "rope_init_btn")
+    assert not hasattr(bar, "nvs_control_btn")
     bar.enable_btn.click()
     bar.stop_btn.click()
     bar.pause_btn.click()
     bar.ros2_output_btn.click()
     bar.reset_btn.click()
     bar.calib_btn.click()
-    bar.rope_init_btn.click()
-    bar.nvs_control_btn.click()
     assert events == [
         "start",
         "stop",
@@ -95,8 +92,6 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
         ("ros2", True),
         "clear",
         "calibrate",
-        "rope",
-        "nvs",
     ]
 
 

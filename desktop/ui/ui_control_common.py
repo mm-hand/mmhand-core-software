@@ -7,29 +7,16 @@
 状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
 禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
 """
-import json
 import math
-import shutil
-import threading
-import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, PROJECT_ROOT
+from desktop.paths import PROJECT_ROOT
 from desktop.core.angle_mapping import (
     get_spec,
     urdf_manual_scaled_mapping_metadata,
-)
-from desktop.core.calibration_snapshot import (
-    CalibrationSnapshotError,
-    atomic_write_snapshot,
-    invalidate_calibration_snapshot_scope,
-    merge_snapshot,
-    read_snapshot,
-    snapshot_write_transaction,
-    validate_snapshot,
 )
 from desktop.core.data_models import (
     HandModel,
@@ -45,7 +32,6 @@ from desktop.core.protocol import (
     HAND_PROFILE,
     MOTOR_COUNT,
     DUAL_TENDON_JOINT_INDICES,
-    TENDON_LUT_MAX_SAMPLES,
     VALID_MOTOR_MASK,
     ControlMode,
     MOTOR_ABS_CMD_MIN,
@@ -74,8 +60,6 @@ from desktop.core.protocol import (
     SERVO_ROUTE_CONFLICT,
     SERVO_ROUTE_BUS_OVERLOADED,
     directed_encoder_delta,
-    manual_encoder_reference_entry_crc,
-    tendon_lut_field,
 )
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 from .ui_device_check_view import DeviceCheckView
@@ -146,11 +130,9 @@ class _ModeBody(QtWidgets.QWidget):
 
 __all__ = [
     "AUTO_CALIBRATION_JOINT_INDICES",
-    "CALIB_LOAD_SNAPSHOT_PATH",
     "CALIB_WARN_AUTO_MAX_SHORTFALL",
     "CALIB_WARN_AUTO_MIN_OFFSET",
     "CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH",
-    "CalibrationSnapshotError",
     "ControlMode",
     "ControlScopeModel",
     "DUAL_TENDON_JOINT_INDICES",
@@ -204,7 +186,6 @@ __all__ = [
     "SYSTEM_STATE_RUN_FEEDBACK",
     "SYSTEM_STATE_UNCONTROLLABLE",
     "Signal",
-    "TENDON_LUT_MAX_SAMPLES",
     "TEST_DEFAULT_FREQ_HZ",
     "TEST_DEFAULT_HOLD_S",
     "TEST_DEFAULT_PHASE_DEG",
@@ -217,23 +198,12 @@ __all__ = [
     "WORKSPACE_URDF_CRC",
     "_ModeBody",
     "_motor_channel_valid",
-    "atomic_write_snapshot",
     "clamp_motor_abs",
     "directed_encoder_delta",
-    "json",
-    "manual_encoder_reference_entry_crc",
     "math",
-    "merge_snapshot",
     "motor_abs_after_tendon_action",
     "motor_target_from_servo_feedback",
     "motor_tendon_shorten_abs_sign",
     "np",
-    "read_snapshot",
-    "snapshot_write_transaction",
-    "shutil",
-    "tendon_lut_field",
-    "threading",
-    "time",
     "urdf_manual_scaled_mapping_metadata",
-    "validate_snapshot",
 ]

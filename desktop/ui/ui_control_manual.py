@@ -102,7 +102,6 @@ class ControlPanelManualMixin:
                 "Release Rope: all motor turn counters reset"
             )
             self._invalidate_local_calibration_scope(reset_mask, joint_mask)
-            self._last_calib_snapshot_signature = None
         try:
             state = self.backend.get_state_snapshot()
         except Exception:

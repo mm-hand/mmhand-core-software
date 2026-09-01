@@ -8,6 +8,8 @@
 禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
 """
 
+import time
+
 from .ui_control_common import (
     ENCODER_COUNT,
     List,
@@ -17,7 +19,6 @@ from .ui_control_common import (
     Tuple,
     math,
     np,
-    time,
 )
 
 

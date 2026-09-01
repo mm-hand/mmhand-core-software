@@ -7,7 +7,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_UNCONTROLLABLE
 from desktop.ui.ui_control_panels import ControlPanel
-from desktop.ui import ui_control_calibration
 from desktop.ui.ui_qt_compat import QtWidgets, ensure_app
 
 
@@ -15,6 +14,11 @@ _APP = ensure_app()
 
 
 class _Backend:
+    def __init__(self):
+        self.calibration_snapshot_path = Path(
+            "C:/temporary/calibration_bundle.mmcal.json"
+        )
+
     def ros2_output_enabled(self):
         """Return the ROS2 output arm state for ControlPanel construction."""
         return False
@@ -25,6 +29,10 @@ class _Backend:
 
     def set_control_mode(self, _mode):
         """Accept control-mode updates during mode-switch tests."""
+        return None
+
+    def register_calibration_workflow_callback(self, _callback):
+        """Accept calibration workflow subscriptions during construction."""
         return None
 
 
@@ -142,13 +150,13 @@ def test_calibration_load_signal_survives_mode_body_rebuild():
 
 
 def test_load_calibration_opens_snapshot_directory_then_restores_selected_file(monkeypatch):
-    """单一入口必须先选文件、校验并激活，再复用既有 P4 恢复事务。"""
+    """UI 只选文件并确认，验证、激活和下发交给核心事务。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
     panel._state = HandModel()
     panel._manual_submode = lambda: "device_check"
     selected_path = Path("C:/temporary/external_hand.mmcal.json")
-    snapshot = {"hand_profile": ui_control_calibration.HAND_PROFILE}
+    snapshot = {"hand_profile": "v2"}
     calls = []
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
@@ -163,22 +171,18 @@ def test_load_calibration_opens_snapshot_directory_then_restores_selected_file(m
         "question",
         lambda *_args, **_kwargs: QtWidgets.QMessageBox.Yes,
     )
-    monkeypatch.setattr(ui_control_calibration, "read_snapshot", lambda path: snapshot)
-    monkeypatch.setattr(
-        ui_control_calibration,
-        "atomic_write_snapshot",
-        lambda path, payload: calls.append((path, payload)),
+    panel.backend.inspect_calibration_snapshot = lambda path: (
+        calls.append(("inspect", path)) or snapshot
     )
-    panel._validate_calibration_snapshot_for_load = lambda _snapshot: None
-    panel.backend.load_calibration_snapshot = lambda payload: (
-        calls.append(("p4", payload)) or (True, "loaded 1 joints")
+    panel.backend.begin_calibration_import = lambda payload, source: (
+        calls.append(("import", payload, source)) or True
     )
 
     panel.load_calibration_from_file()
 
-    assert calls[0] == str(ui_control_calibration.CALIB_LOAD_SNAPSHOT_PATH.parent)
-    assert calls[1] == (ui_control_calibration.CALIB_LOAD_SNAPSHOT_PATH, snapshot)
-    assert calls[2] == ("p4", snapshot)
+    assert calls[0] == str(panel.backend.calibration_snapshot_path.parent)
+    assert calls[1] == ("inspect", selected_path)
+    assert calls[2] == ("import", snapshot, str(selected_path))
 
 
 def test_load_calibration_cancel_does_not_activate_or_send(monkeypatch):
@@ -192,62 +196,28 @@ def test_load_calibration_cancel_does_not_activate_or_send(monkeypatch):
         "getOpenFileName",
         lambda *_args: ("", ""),
     )
-    monkeypatch.setattr(
-        ui_control_calibration,
-        "atomic_write_snapshot",
-        lambda *_args: calls.append("write"),
-    )
-    panel.backend.load_calibration_snapshot = lambda _payload: calls.append("p4")
+    panel.backend.inspect_calibration_snapshot = lambda _path: calls.append("inspect")
+    panel.backend.begin_calibration_import = lambda *_args: calls.append("import")
 
     panel.load_calibration_from_file()
 
     assert calls == []
 
 
-def test_startup_restores_json_manual_before_auto_when_p4_ram_is_empty(
-    monkeypatch, tmp_path
-):
-    """P4 断电清空 Manual RAM 后，启动流程必须先写回 JSON，再加载 Auto/LUT。"""
+def test_startup_restore_is_delegated_to_core_workflow():
+    """UI 启动检查只提交选区，不在 Qt 线程读写 JSON 或等待 P4。"""
     panel = _panel()
     panel.context.is_comm_connected = lambda: True
-    panel._startup_device_check_running = True
-    panel._startup_device_check_epoch = 7
-    state = HandModel()
-    state.manual_reference_committed = False
-    state.manual_reference_valid_bitmap = 0
-    panel._state = state
-    panel.backend.get_state_snapshot = lambda: state
-
-    snapshot_path = tmp_path / "calibration_bundle.mmcal.json"
-    snapshot_path.write_text("{}", encoding="utf-8")
-    snapshot = {"hand_profile": ui_control_calibration.HAND_PROFILE}
     calls = []
-    monkeypatch.setattr(
-        ui_control_calibration, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path
-    )
-    monkeypatch.setattr(
-        ui_control_calibration, "read_snapshot", lambda _path: snapshot
-    )
-    panel._validate_calibration_snapshot_for_load = lambda _snapshot: None
-    panel.backend.restore_manual_references_from_snapshot = lambda payload: (
-        calls.append(("manual", payload)) or (True, "manual restored")
-    )
-    panel.backend.load_calibration_snapshot = lambda payload: (
-        calls.append(("auto", payload)) or (True, "auto loaded")
+    panel._active_joint_mask_from_ui = lambda: (1 << 3) | (1 << 4)
+    panel.backend.begin_startup_calibration_restore = lambda mask: (
+        calls.append(mask) or True
     )
 
-    class _ImmediateThread:
-        def __init__(self, *, target, **_kwargs):
-            self._target = target
+    panel.begin_startup_device_check()
 
-        def start(self):
-            self._target()
-
-    monkeypatch.setattr(ui_control_calibration.threading, "Thread", _ImmediateThread)
-
-    panel._on_startup_device_check_finished(7, "query", True, "Manual received")
-
-    assert calls == [("manual", snapshot), ("auto", snapshot)]
+    assert calls == [(1 << 3) | (1 << 4)]
+    assert panel._startup_device_check_running
 
 
 
@@ -279,33 +249,16 @@ def test_calibrate_skips_offline_workspace_helpers_before_starting():
     panel._active_joint_mask_from_ui = lambda: 1 << 4
     panel._active_motor_mask_from_ui = lambda: (1 << 5) | (1 << 6)
     calls = []
-    panel.backend.prepare_calibration_turn_zero = lambda motor_mask: (
-        calls.append(("reset", motor_mask)) or (True, "ok", motor_mask, 0)
-    )
-    panel._reset_motor_target_cache_for_device_epoch = (
-        lambda _reason: calls.append(("clear-target-cache",))
-    )
-    panel._invalidate_local_calibration_scope = (
-        lambda motor_mask, joint_mask: calls.append(
-            ("invalidate-local", motor_mask, joint_mask)
+    panel.backend.begin_calibration_workflow = (
+        lambda joint_mask, motor_mask, reset_motor_mask: (
+            calls.append((joint_mask, motor_mask, reset_motor_mask)) or True
         )
     )
-    panel._backup_and_invalidate_calib_snapshot_scope = (
-        lambda motor_mask, joint_mask, reason: calls.append(
-            ("invalidate-snapshot", motor_mask, joint_mask, reason)
-        )
-    )
-    panel._apply_active_scope_for_current_mode = lambda: (
-        calls.append(("apply-scope",)) or True
-    )
-    panel._start_calibration_now = lambda: calls.append(("start",))
 
     panel.calibrate()
 
     selected_motor_mask = (1 << 5) | (1 << 6)
-    assert calls[0] == ("reset", selected_motor_mask)
-    assert ("invalidate-local", selected_motor_mask, 1 << 4) in calls
-    assert calls[-2:] == [("apply-scope",), ("start",)]
+    assert calls == [(1 << 4, selected_motor_mask, selected_motor_mask)]
 
 
 def test_calibrate_resets_online_unknown_workspace_helpers_before_starting():
@@ -325,32 +278,17 @@ def test_calibrate_resets_online_unknown_workspace_helpers_before_starting():
     panel._active_motor_mask_from_ui = lambda: selected_motor_mask
     calls = []
     panel.context.emit_action = lambda message: calls.append(("event", message))
-    panel.backend.prepare_calibration_turn_zero = lambda motor_mask: (
-        calls.append(("reset", motor_mask)) or (True, "ok", motor_mask, 0)
-    )
-    panel._reset_motor_target_cache_for_device_epoch = lambda _reason: None
-    panel._invalidate_local_calibration_scope = (
-        lambda motor_mask, joint_mask: calls.append(
-            ("invalidate-local", motor_mask, joint_mask)
+    panel.backend.begin_calibration_workflow = (
+        lambda joint_mask, motor_mask, reset_motor_mask: (
+            calls.append((joint_mask, motor_mask, reset_motor_mask)) or True
         )
     )
-    panel._backup_and_invalidate_calib_snapshot_scope = lambda *_args, **_kwargs: ""
-    panel._apply_active_scope_for_current_mode = lambda: True
-    panel._start_calibration_now = lambda: calls.append(("start",))
 
     panel.calibrate()
 
     final_motor_mask = selected_motor_mask | helper_motor_mask
-    invalidated_joint_mask = sum(
-        1 << joint_idx for joint_idx in (0, 4, 8, 12, 13, 14, 15)
-    )
-    assert ("reset", final_motor_mask) in calls
-    assert (
-        "invalidate-local",
-        final_motor_mask,
-        invalidated_joint_mask,
-    ) in calls
-    assert calls[-1] == ("start",)
+    active_joint_mask = sum(1 << joint_idx for joint_idx in range(12, 16))
+    assert calls[-1] == (active_joint_mask, selected_motor_mask, final_motor_mask)
 
 
 def test_calibrate_rejects_partial_online_workspace_helper_before_reset():

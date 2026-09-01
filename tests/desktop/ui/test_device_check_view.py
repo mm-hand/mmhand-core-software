@@ -45,5 +45,5 @@ def test_device_check_replaces_visible_refresh_with_manual_prepare() -> None:
             return None
 
     view = DeviceCheckView(_Context(), mapping_version=4, urdf_crc=0x12345678)
-    assert view.manual_prepare_btn.text() == "Manual Prepare"
+    assert view.manual_prepare_btn.text() == "Release Rope"
     assert not hasattr(view, "refresh_btn")

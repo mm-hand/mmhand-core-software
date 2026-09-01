@@ -77,7 +77,7 @@ inline constexpr float kSingleTendonVelocityLeadMaxDeg = 3.0f;
  * 只有关节沿新方向累计响应到退出距离才撤销补偿；最大 counts 仅防异常无限收绳。
  */
 inline constexpr bool kSingleTendonDirectionalTakeupEnabled = true;
-inline constexpr float kSingleTendonDirectionalTakeupConfirmDeg = 0.3f;
+inline constexpr float kSingleTendonDirectionalTakeupConfirmDeg = 1.0f;
 inline constexpr int32_t kSingleTendonDirectionalTakeupInitialCounts = 60;
 inline constexpr float kSingleTendonDirectionalTakeupRateCountsPerSec = 5000.0f;
 inline constexpr float kSingleTendonDirectionalTakeupExitJointTravelDeg = 0.25f;
@@ -126,7 +126,7 @@ inline constexpr uint32_t kCollisionVelocityWindowMs = 200;
 inline constexpr float kCollisionArmVelocityDegPerSec = 8.0f;
 // 所有舵机 ABS 增加均代表收绳。放绳侧保留较快的停滞判定，
 // 收绳侧给弹簧、摩擦与抓取形变更长建立时间，降低正常收紧时的误判。
-inline constexpr uint32_t kCollisionReleaseProgressWindowMs = 400;
+inline constexpr uint32_t kCollisionReleaseProgressWindowMs = 600;
 inline constexpr float kCollisionReleaseMinProgressDeg = 0.4f;
 inline constexpr uint32_t kCollisionTightenProgressWindowMs = 750;
 inline constexpr float kCollisionTightenMinProgressDeg = 0.5f;

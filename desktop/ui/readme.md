@@ -9,6 +9,8 @@ python -m desktop ui
 ## Overview
 
 - `desktop.core.hand_backend` defines `HandBackend`, the UI-free application backend facade. It owns `HandController`, tactile serial lifecycle, tendon guard orchestration, state fan-out, Replay motion ownership, and the command API that Qt/ROS2/Replay code shares.
+- `desktop.core.calibration_workflow` owns calibration preparation, incremental snapshot merge, startup restore ordering, and calibration-anchor capture. Its single worker serializes all blocking calibration transactions outside the Qt thread.
+- `desktop.core.calibration_snapshot.CalibrationSnapshotStore` is the only application-facing read/modify/write gateway for the active calibration JSON.
 - `ui_qt_compat.py` selects the Qt binding. It tries `PySide6` first, then falls back to `PyQt5`, and sets `PYQTGRAPH_QT_LIB` before pyqtgraph is imported.
 - `ui_app.py` defines `HandGUI(QMainWindow)`. It owns the Qt window, top toolbar, main splitter, state polling timers, display updates, and UI logging. Hardware lifecycle and command orchestration go through `HandBackend`.
 - `ui_windows.py` manages the `View` menu and the singleton hand-pose and tactile popout windows.
@@ -27,16 +29,18 @@ python -m desktop ui
 
 1. `HandController` receives device state from `LowerComputerComm`.
 2. `HandBackend` registers as the controller callback, clones the state, and fans it out to UI/ROS-style consumers.
-3. `HandGUI._on_state_update` writes the latest snapshot into `LatestStateBuffer`; it does not touch Qt widgets.
-4. A `QTimer` consumes the latest snapshot every 50 ms.
-5. The main thread updates control feedback, display popouts, Plot data, status text, and optional CSV logging.
-6. Display popouts only update while open.
+3. Before UI fan-out, `CalibrationWorkflowService` observes the same immutable snapshot and schedules any required incremental save or anchor capture.
+4. `HandGUI._on_state_update` writes the latest snapshot into `LatestStateBuffer`; it does not touch Qt widgets.
+5. A `QTimer` consumes the latest snapshot every 50 ms.
+6. The main thread updates control feedback, display popouts, Plot data, status text, and optional CSV logging.
+7. Display popouts only update while open.
 
 ## Backend Boundary
 
 - Qt components should call `context.backend` or explicit `HandGuiContext` methods instead of importing or owning `HandController`.
 - `HandController` remains the hardware primitive layer: serial connection, protocol queues, current hardware state, and low-level command methods.
 - `HandBackend` is the application orchestration layer: connect/disconnect, shared command API, tendon guard sync/apply, tactile serial management, state snapshots, and protocol diagnostics.
+- Qt modules must not import `calibration_snapshot`, `comm_layer`, or `core_logic`; the static architecture check enforces this boundary.
 - A future ROS node should wrap `HandBackend` directly, not `ui_app.py` or `HandController`.
 
 ## Threading Rules

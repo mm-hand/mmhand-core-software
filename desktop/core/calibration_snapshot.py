@@ -20,7 +20,14 @@ import uuid
 from pathlib import Path
 
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
-from .protocol import ENCODER_COUNT, MOTOR_COUNT, VALID_MOTOR_MASK
+from .protocol import (
+    DUAL_TENDON_JOINT_INDICES,
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    TENDON_LUT_MAX_SAMPLES,
+    VALID_MOTOR_MASK,
+    tendon_lut_field,
+)
 
 
 CALIBRATION_SNAPSHOT_FORMAT = "mmhand_calibration_bundle"
@@ -33,11 +40,100 @@ class CalibrationSnapshotError(ValueError):
     """快照格式、完整性或版本不满足当前程序要求。"""
 
 
+class CalibrationSnapshotStore:
+    """标定快照的唯一运行时读写门面。
+
+    业务层通过该对象完成完整的 read-modify-write 事务，避免 UI、启动恢复
+    和多圈锚点路径各自操作同一文件。
+    """
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+
+    def exists(self) -> bool:
+        return self.path.exists()
+
+    def load(self) -> dict:
+        return read_snapshot(self.path)
+
+    def inspect(self, path: Path | str) -> dict:
+        return read_snapshot(path)
+
+    def activate(self, payload: dict) -> dict:
+        with snapshot_write_transaction():
+            return atomic_write_snapshot(self.path, payload)
+
+    def merge_calibration(self, payload: dict, joint_mask: int) -> dict:
+        with snapshot_write_transaction():
+            previous = self.load() if self.exists() else None
+            merged = merge_snapshot(
+                previous,
+                payload,
+                updated_joint_mask=joint_mask,
+            )
+            return atomic_write_snapshot(self.path, merged)
+
+    def invalidate_scope(
+        self,
+        *,
+        motor_mask: int,
+        joint_mask: int,
+        reason: str,
+    ) -> str:
+        return invalidate_calibration_snapshot_scope(
+            self.path,
+            motor_mask=motor_mask,
+            joint_mask=joint_mask,
+            reason=reason,
+        )
+
+
 def parse_mask(value) -> int:
     """读取十六进制字符串或整数掩码。"""
     if isinstance(value, str):
         return int(value, 0)
     return int(value or 0)
+
+
+def joint_calib_result_has_valid_tendon_lut(item, joint_idx: int) -> bool:
+    """按当前电机映射校验单关节标定结果中的腱绳 LUT。"""
+    if not isinstance(item, dict) or not bool(item.get("success", False)):
+        return False
+    if not bool(tendon_lut_field(item, "tendonLutValid", False)):
+        return False
+    try:
+        count = int(tendon_lut_field(item, "tendonLutCount", 0))
+    except (TypeError, ValueError):
+        return False
+    if count < 3 or count > TENDON_LUT_MAX_SAMPLES:
+        return False
+    expected_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
+    expected_motors = [
+        motor_idx
+        for motor_idx, mapped_joint in enumerate(MOTOR_TO_JOINT_INDEX)
+        if int(mapped_joint) == int(joint_idx)
+    ]
+    motors = tendon_lut_field(item, "tendonLutMotor", [])
+    if len(expected_motors) != expected_count or not isinstance(motors, list):
+        return False
+    if len(motors) < 2:
+        return False
+    try:
+        if any(int(motors[i]) != expected_motors[i] for i in range(expected_count)):
+            return False
+        if expected_count == 1 and int(motors[1]) != 0xFF:
+            return False
+    except (TypeError, ValueError):
+        return False
+    motor_abs = tendon_lut_field(item, "tendonLutMotorAbs", [])
+    return bool(
+        isinstance(motor_abs, list)
+        and len(motor_abs) >= 2
+        and all(
+            isinstance(row, list) and len(row) >= count
+            for row in motor_abs[:expected_count]
+        )
+    )
 
 
 def format_mask(value: int) -> str:

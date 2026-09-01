@@ -20,6 +20,7 @@ from .calibration_snapshot import (
     CALIBRATION_SNAPSHOT_SCHEMA_VERSION,
     CalibrationSnapshotError,
     invalidate_calibration_snapshot_scope,
+    joint_calib_result_has_valid_tendon_lut,
     joint_mask_for_motor_mask,
     multiturn_anchor_fields,
     read_snapshot,
@@ -49,8 +50,6 @@ from .protocol import (
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_SERVO_RESET_ZERO,
-    DUAL_TENDON_JOINT_INDICES,
-    TENDON_LUT_MAX_SAMPLES,
     ENCODER_COUNT,
     MOTOR_COUNT,
     PROTO_ACK_STATUS_OK,
@@ -70,7 +69,6 @@ from .protocol import (
     STATE_SYNC_ALL,
     manual_encoder_reference_crc,
     manual_encoder_reference_entry_crc,
-    tendon_lut_field,
 )
 from .session_log import log_session
 
@@ -106,45 +104,6 @@ class ManualPrepareResult(NamedTuple):
     failed_motor_mask: int
     invalidated_joint_mask: int
     reached_motor_mask: int
-
-
-def _joint_calib_result_has_valid_tendon_lut(
-    item: Optional[dict], joint_idx: int
-) -> bool:
-    if not isinstance(item, dict) or not bool(item.get("success", False)):
-        return False
-    if not bool(tendon_lut_field(item, "tendonLutValid", False)):
-        return False
-    try:
-        count = int(tendon_lut_field(item, "tendonLutCount", 0))
-    except (TypeError, ValueError):
-        return False
-    if count < 3 or count > TENDON_LUT_MAX_SAMPLES:
-        return False
-    expected_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
-    motors = tendon_lut_field(item, "tendonLutMotor", [])
-    if not isinstance(motors, list) or len(motors) < 2:
-        return False
-    try:
-        expected_motors = [
-            motor_idx for motor_idx, mapped_joint in enumerate(MOTOR_TO_JOINT_INDEX)
-            if int(mapped_joint) == int(joint_idx)
-        ]
-        if len(expected_motors) != expected_count:
-            return False
-        if any(int(motors[i]) != expected_motors[i] for i in range(expected_count)):
-            return False
-        if expected_count == 1 and int(motors[1]) != 0xFF:
-            return False
-    except (TypeError, ValueError):
-        return False
-    motor_abs = tendon_lut_field(item, "tendonLutMotorAbs", [])
-    if not isinstance(motor_abs, list) or len(motor_abs) < 2:
-        return False
-    for row in motor_abs[:expected_count]:
-        if not isinstance(row, list) or len(row) < count:
-            return False
-    return True
 
 
 class HandController:
@@ -2019,7 +1978,7 @@ class HandController:
         missing_tendon_lut = [
             joint_idx for joint_idx in range(ENCODER_COUNT)
             if (active_joint_mask & (1 << joint_idx)) and
-            not _joint_calib_result_has_valid_tendon_lut(
+            not joint_calib_result_has_valid_tendon_lut(
                 joint_results[joint_idx], joint_idx
             )
         ]

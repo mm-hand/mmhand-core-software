@@ -46,7 +46,7 @@ class ControlPanel(
 ):
     """Root control panel facade that composes modular views and controllers."""
 
-    startup_device_check_finished = Signal(int, str, bool, str)
+    calibration_workflow_event = Signal(object)
 
     def __init__(self, context, parent=None):
         """Initialize this control panel component."""
@@ -65,10 +65,26 @@ class ControlPanel(
         self._init_body_state()
 
         self._build()
-        self.startup_device_check_finished.connect(
-            self._on_startup_device_check_finished
+        self.calibration_workflow_event.connect(
+            self._on_calibration_workflow_event
         )
+        self._calibration_event_sink = self.calibration_workflow_event.emit
+        register_workflow_callback = getattr(
+            self.backend, "register_calibration_workflow_callback", None
+        )
+        if callable(register_workflow_callback):
+            register_workflow_callback(self._calibration_event_sink)
+            self.destroyed.connect(
+                self._unregister_calibration_workflow_callback
+            )
         self._apply_control_mode_policy()
+
+    def _unregister_calibration_workflow_callback(self, *_args) -> None:
+        unregister = getattr(
+            self.backend, "unregister_calibration_workflow_callback", None
+        )
+        if callable(unregister):
+            unregister(self._calibration_event_sink)
 
     def _init_joint_panel_state(self) -> None:
         """Initialize joint table state and target caches."""
@@ -106,16 +122,9 @@ class ControlPanel(
         """Initialize calibration state and active scope selections."""
         self._last_calib_status: Optional[str] = None
         self._calibration_warning_popup_mask = 0
-        self._last_calib_snapshot_signature: Optional[str] = None
         self._last_joint_calib_valid_mask: Optional[int] = None
-        self._startup_device_check_epoch = 0
         self._startup_device_check_running = False
         self._startup_missing_warning_shown = False
-        self._pending_calib_joint_mask = 0
-        self._pending_calib_motor_mask = 0
-        # 记录本轮开始前各 Jxx 的结果签名；运行中只把新产生或变化的
-        # 成功结果增量写入快照，避免把上轮旧结果误判成本轮成功。
-        self._pending_calib_result_baselines = {}
         default_motor_mask, default_joint_mask, _default_require_can = self._scope_range(0, 3, True)
         self._selected_joint_mask = int(default_joint_mask)
         self._selected_motor_mask = int(default_motor_mask)

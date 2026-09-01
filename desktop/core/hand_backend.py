@@ -15,6 +15,10 @@ import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
+from .calibration_workflow import (
+    CalibrationWorkflowEvent,
+    CalibrationWorkflowService,
+)
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, resolve_joint_workspace_range
@@ -121,6 +125,7 @@ class HandBackend:
         controller: Optional[HandController] = None,
     ) -> None:
         self._controller = controller or HandController()
+        self._calibration_workflow = CalibrationWorkflowService(self._controller)
         self.tactile_port = ""
         self.tactile_comm: Optional[TactileSerialComm] = None
         self._tactile_state: Optional[HandModel] = None
@@ -166,6 +171,10 @@ class HandBackend:
     def last_sync_status(self) -> str:
         return str(getattr(self._controller, "last_sync_status", ""))
 
+    @property
+    def calibration_snapshot_path(self):
+        return self._calibration_workflow.snapshot_path
+
     def _ensure_controller_callback_registered(self) -> None:
         callbacks = getattr(self._controller, "update_callbacks", None)
         if callbacks is None:
@@ -175,6 +184,7 @@ class HandBackend:
 
     def _on_controller_state_update(self, state: HandModel) -> None:
         snapshot = clone_hand_model(state)
+        self._calibration_workflow.observe_state(snapshot)
         with self._callback_lock:
             callbacks = list(self._state_callbacks)
         for callback in callbacks:
@@ -219,6 +229,7 @@ class HandBackend:
         return self._controller.current_state
 
     def connect(self, port: str) -> bool:
+        self._calibration_workflow.cancel()
         self.cancel_replay_motion("connect")
         self.set_ros2_output_armed(False, reason="connect")
         self._ensure_controller_callback_registered()
@@ -232,6 +243,7 @@ class HandBackend:
     def shutdown(self, stop_lower: bool = False) -> None:
         """关闭上位机链路；默认交由 P4 租约 Hold，显式急停才下发 STOP。"""
         self.cancel_replay_motion("shutdown")
+        self._calibration_workflow.cancel()
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="shutdown")
             self._requested_active_joint_mask = None
@@ -775,6 +787,42 @@ class HandBackend:
     def request_firmware_calibration(self) -> bool:
         return self._controller.request_firmware_calibration()
 
+    def register_calibration_workflow_callback(
+        self, callback: Callable[[CalibrationWorkflowEvent], None]
+    ) -> None:
+        self._calibration_workflow.register_callback(callback)
+
+    def unregister_calibration_workflow_callback(
+        self, callback: Callable[[CalibrationWorkflowEvent], None]
+    ) -> None:
+        self._calibration_workflow.unregister_callback(callback)
+
+    def cancel_calibration_workflow(self) -> None:
+        self._calibration_workflow.cancel()
+
+    def begin_calibration_workflow(
+        self,
+        *,
+        joint_mask: int,
+        motor_mask: int,
+        reset_motor_mask: int,
+    ) -> bool:
+        return self._calibration_workflow.begin_calibration(
+            joint_mask=joint_mask,
+            motor_mask=motor_mask,
+            reset_motor_mask=reset_motor_mask,
+            baseline_state=self.get_state_snapshot(),
+        )
+
+    def begin_startup_calibration_restore(self, active_joint_mask: int) -> bool:
+        return self._calibration_workflow.begin_startup_restore(active_joint_mask)
+
+    def inspect_calibration_snapshot(self, path) -> dict:
+        return self._calibration_workflow.inspect_snapshot(path)
+
+    def begin_calibration_import(self, snapshot: dict, source: str = "") -> bool:
+        return self._calibration_workflow.begin_import(snapshot, source)
+
     def request_run_feedback(self) -> bool:
         return self._controller.request_run_feedback()
 
@@ -814,42 +862,12 @@ class HandBackend:
     def rope_init(self, active_joint_mask: int) -> bool:
         return self._controller.rope_init(active_joint_mask)
 
-    def prepare_calibration_turn_zero(
-        self, motor_mask: int
-    ) -> Tuple[bool, str, int, int]:
-        """标定前归零所选舵机，并返回成功与失败电机掩码。"""
-        return self._controller.prepare_calibration_turn_zero(motor_mask)
-
-    def request_multiturn_anchor_capture(self, motor_mask: int) -> bool:
-        """登记已落盘标定结果对应的多圈锚点保存请求。"""
-        return self._controller.request_multiturn_anchor_capture(motor_mask)
-
-    def multiturn_anchor_capture_status(
-        self, motor_mask: int
-    ) -> Tuple[bool, str]:
-        return self._controller.multiturn_anchor_capture_status(motor_mask)
-
-    def wait_for_multiturn_recovery(
-        self, motor_mask: int, timeout_s: float = 20.0
-    ) -> Tuple[bool, str]:
-        """供启动 worker 等待相关 Mxx 路由就绪并完成多圈恢复。"""
-        return self._controller.wait_for_multiturn_recovery(motor_mask, timeout_s)
-
     def manual_prepare_all_motors(self) -> ManualPrepareResult:
         """停止外部连续输入后执行全手 turn0 与 1500-count 预松事务。"""
         self.cancel_replay_motion("manual_prepare")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="manual_prepare")
             return self._controller.manual_prepare_all_motors()
-
-    def restore_manual_references_from_snapshot(
-        self, snapshot: dict
-    ) -> Tuple[bool, str]:
-        """从便携标定 JSON 恢复 P4 Manual RAM，并等待逐项读回核验。"""
-        return self._controller.restore_manual_references_from_snapshot(snapshot)
-
-    def load_calibration_snapshot(self, snapshot: dict) -> Tuple[bool, str]:
-        return self._controller.load_calibration_snapshot(snapshot)
 
     def start(self) -> None:
         self._controller.start()
