@@ -20,7 +20,6 @@ struct JointActuatorItem {
     uint8_t motorChannel; ///< 逻辑舵机通道 M00..M26。
     int8_t sign;          ///< 关节正方向对应的腱绳/舵机方向符号。
     int32_t offset;       ///< 模型坐标偏移，单位 counts。
-    int32_t tensionBias;  ///< 预紧偏置，单位 counts。
 };
 
 struct JointActuatorGroup {

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable, List, Tuple
 
 from desktop.core.protocol import ENCODER_COUNT
 
@@ -69,11 +69,6 @@ class ReplayPreparation:
     clamped_sample_count: int = 0
     clamped_counts_by_joint: Tuple[Tuple[int, int], ...] = ()
     warnings: Tuple[str, ...] = ()
-
-    @property
-    def clamped_counts(self) -> Dict[int, int]:
-        return dict(self.clamped_counts_by_joint)
-
 
 @dataclass
 class ReplayTrace:

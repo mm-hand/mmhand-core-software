@@ -407,23 +407,6 @@ def is_valid_port(port: str) -> bool:
 class TactileSerialComm:
     """独立 S3 触觉串口兼容门面，只接收触觉数据，不发送控制命令。"""
 
-    @property
-    def serial(self):
-        """兼容旧接口；触觉串口句柄同样由 SerialTransport 统一管理。"""
-        return self._transport.serial
-
-    @serial.setter
-    def serial(self, value) -> None:
-        self._transport.attach(value)
-
-    @property
-    def _rx_buffer(self) -> bytearray:
-        return self._frame_decoder.buffer
-
-    @_rx_buffer.setter
-    def _rx_buffer(self, value: bytearray) -> None:
-        self._frame_decoder.buffer = value
-
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
         self.baudrate = int(baudrate)

@@ -10,22 +10,7 @@
 import threading
 from typing import Optional
 
-from desktop.core.data_models import HandModel
-
-
-def clone_hand_model(model: HandModel) -> HandModel:
-    snapshot = HandModel()
-    snapshot.copy_state_from(model)
-    snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
-    snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
-    try:
-        snapshot.set_target_angles(model.target_angles)
-    except Exception:
-        pass
-    for i, enc in enumerate(snapshot.encoders):
-        if i < len(getattr(model, "encoders", [])):
-            enc.zero_raw = int(model.encoders[i].zero_raw)
-    return snapshot
+from desktop.core.data_models import HandModel, clone_hand_model
 
 
 class LatestStateBuffer:

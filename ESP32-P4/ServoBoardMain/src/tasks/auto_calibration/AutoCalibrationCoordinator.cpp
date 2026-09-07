@@ -183,17 +183,15 @@ bool runAutoCalibrationSequence(SystemRuntimeContext* sharedData,
                       (unsigned long)seenJoints);
         // 具体状态机已经写入真实根因时，调度层不得再用“部分关节失败”覆盖它。
         // 成功/失败汇总改用独立字段，供上位机合并本轮局部标定快照。
-        if (!hasCalibrationDiag(sharedData)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                               CALIB_DIAG_PHASE_SEQUENCE,
-                               firstFailedJoint,
-                               0xFF,
-                               0,
-                               0,
-                               jointCount,
-                               failedJointMask);
-        }
+        setCalibrationDiagIfEmpty(sharedData,
+                                  CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                  CALIB_DIAG_PHASE_SEQUENCE,
+                                  firstFailedJoint,
+                                  0xFF,
+                                  0,
+                                  0,
+                                  0,
+                                  0);
         setCalibrationDiagResultMasks(sharedData,
                                       completedJointMask,
                                       failedJointMask);

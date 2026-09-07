@@ -1967,6 +1967,28 @@
       "registry_function": "ruleForCalibrationDiagReason"
     },
     {
+      "name": "CalibrationDualExchangeStalled",
+      "rule_id": 4034,
+      "code": "CAL-4034",
+      "policy": {
+        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
+        "symbol": "validateCalibrationSequence"
+      },
+      "caller": {
+        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
+        "symbol": "setCalibrationDiag"
+      },
+      "event": {
+        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
+        "symbol": "reportSafetyRuleEvent"
+      },
+      "recovery": {
+        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
+        "symbol": "CALIB_DIAG_REASON_NONE"
+      },
+      "registry_function": "ruleForCalibrationDiagReason"
+    },
+    {
       "name": "CalibrationWarnAutoMinOffset",
       "rule_id": 4101,
       "code": "CAW-4101",

@@ -84,7 +84,9 @@ class ManualControlView(_ModeBody):
         abs_limit_bar = QtWidgets.QWidget()
         abs_limit_layout = QtWidgets.QHBoxLayout(abs_limit_bar)
         abs_limit_layout.setContentsMargins(6, 2, 6, 2)
-        abs_limit_layout.addWidget(QtWidgets.QLabel("Calibrated ABS Range (diagnostic)"))
+        abs_limit_layout.addWidget(
+            QtWidgets.QLabel("Control ABS Range (LUT + margins, diagnostic)")
+        )
         abs_limit_layout.addStretch(1)
         joint_page_layout.addWidget(abs_limit_bar)
         joint_page_layout.addWidget(panel.joint_table, 1)

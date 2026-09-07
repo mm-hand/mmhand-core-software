@@ -15,18 +15,18 @@ import threading
 import time
 from typing import List, NamedTuple, Optional, Tuple
 
-from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
+from .angle_mapping import urdf_manual_scaled_mapping_metadata
 from .calibration_snapshot import (
     CALIBRATION_SNAPSHOT_SCHEMA_VERSION,
     CalibrationSnapshotError,
     invalidate_calibration_snapshot_scope,
-    joint_calib_result_has_valid_tendon_lut,
     joint_mask_for_motor_mask,
     multiturn_anchor_fields,
     read_snapshot,
     update_snapshot_multiturn_anchors,
     update_manual_snapshot,
     validate_snapshot,
+    validate_snapshot_for_load,
 )
 from .comm_layer import LowerComputerComm
 from .data_models import HandModel
@@ -73,6 +73,7 @@ from .protocol import (
 from .session_log import log_session
 
 LOWER_SYNC_TIMEOUT_S = 2.5
+STATE_SYNC_RETRY_PERIOD_S = 1.0
 LOWER_STATUS_STALE_AFTER_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
 CALIBRATION_TURN_RESET_SETTLE_S = 0.30
@@ -89,6 +90,7 @@ HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
 HOST_MULTITURN_IDLE_SAVE_PERIOD_S = 0.50
 HOST_MULTITURN_RESTORE_RETRY_S = 1.0
 STARTUP_MULTITURN_RECOVERY_TIMEOUT_S = 20.0
+MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S = 3.0
 MANUAL_PREPARE_RELEASE_COUNTS = 1500
 MANUAL_PREPARE_FEEDBACK_TIMEOUT_S = 2.0
 MANUAL_PREPARE_MOTION_TIMEOUT_S = 12.0
@@ -130,6 +132,8 @@ class HandController:
         self.state_lock = threading.Lock()
         self.running = False
         self.update_callbacks: List[callable] = []
+        self._last_update_callback_error = ""
+        self._last_update_loop_error = ""
         self._paused = False
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
@@ -155,6 +159,8 @@ class HandController:
         self._calibration_snapshot_anchor_valid_mask = 0
         self._calibration_snapshot_anchor_abs = [0] * MOTOR_COUNT
         self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
+        self._state_sync_last_request_at = 0.0
+        self._state_sync_waiting_logged = False
 
     @staticmethod
     def _clamp_motor_abs(value: int) -> int:
@@ -315,7 +321,7 @@ class HandController:
         if sync_ok:
             self.last_sync_status = "Synced lower status/servo feedback"
         else:
-            self.last_sync_status = "Connected, but lower status/servo feedback sync timed out"
+            self.last_sync_status = "Connected; startup state sync pending, retrying"
         log_session("CTRL", self.last_sync_status)
         return True
 
@@ -323,7 +329,10 @@ class HandController:
         """请求 P4 回传静态状态、标定快照、路由和产品指纹。"""
         if not self.comm:
             return False
-        return bool(self.comm.send_command(("state_sync", int(sync_mask))))
+        sent = bool(self.comm.send_command(("state_sync", int(sync_mask))))
+        if sent and int(sync_mask) == STATE_SYNC_ALL:
+            self._state_sync_last_request_at = time.monotonic()
+        return sent
 
     def set_task_diag_subscription(self, enabled: bool) -> bool:
         """仅在 Task Runtime 窗口打开期间订阅高频任务诊断。"""
@@ -358,6 +367,8 @@ class HandController:
         self._calibration_snapshot_anchor_valid_mask = 0
         self._calibration_snapshot_anchor_abs = [0] * MOTOR_COUNT
         self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
+        self._state_sync_last_request_at = 0.0
+        self._state_sync_waiting_logged = False
         self._started = False
         self._paused = False
         self._control_mode = ControlMode.JOINT_ANGLE
@@ -367,14 +378,41 @@ class HandController:
         while time.time() < deadline:
             with self.state_lock:
                 state = self.current_state
-                has_status = bool(getattr(state, "has_system_status_data", False))
-                has_servo = bool(getattr(state, "has_servo_angle_data", False)) or bool(
-                    getattr(state, "has_servo_raw_data", False)
-                )
-            if has_status and has_servo:
+                ready = self._startup_sync_ready(state)
+            if ready:
                 return True
             time.sleep(0.02)
         return False
+
+    @staticmethod
+    def _startup_sync_ready(state: HandModel) -> bool:
+        """启动恢复所需的状态、反馈、路由和产品身份均已收到。"""
+        has_servo = bool(getattr(state, "has_servo_angle_data", False)) or bool(
+            getattr(state, "has_servo_raw_data", False)
+        )
+        return (
+            bool(getattr(state, "has_system_status_data", False))
+            and has_servo
+            and bool(getattr(state, "has_servo_route_status", False))
+            and bool(getattr(state, "has_product_fingerprint", False))
+        )
+
+    def _service_startup_state_sync(self, state: HandModel) -> None:
+        """静态握手包丢失或早于 P4 就绪时，限频补发全量同步请求。"""
+        if self._startup_sync_ready(state):
+            if self._state_sync_waiting_logged:
+                log_session("SYNC", "required startup data received")
+                self._state_sync_waiting_logged = False
+            return
+        if not self._state_sync_waiting_logged:
+            log_session(
+                "SYNC",
+                "waiting for product fingerprint / servo route; retrying",
+            )
+            self._state_sync_waiting_logged = True
+        now = time.monotonic()
+        if now - self._state_sync_last_request_at >= STATE_SYNC_RETRY_PERIOD_S:
+            self.request_state_sync(STATE_SYNC_ALL)
 
     def shutdown(self, stop_lower: bool = False):
         """
@@ -672,6 +710,21 @@ class HandController:
             return True, "runtime and calibration snapshot anchors saved"
         return False, last_error or "runtime or calibration snapshot anchor missing"
 
+    def wait_for_multiturn_anchor_capture(
+        self,
+        motor_mask: int,
+        timeout_s: float = MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S,
+    ) -> Tuple[bool, str]:
+        """等待标定锚点同时写入运行文件和标定快照。"""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        last_message = "waiting for trusted Mxx feedback"
+        while time.monotonic() < deadline:
+            ok, last_message = self.multiturn_anchor_capture_status(motor_mask)
+            if ok:
+                return True, last_message
+            time.sleep(0.02)
+        return False, last_message
+
     def _service_multiturn_anchor_capture(self, state: HandModel) -> None:
         """确认已标定电机的 ABS/raw 同帧锚点真正写入运行 JSON。"""
         with self._multiturn_anchor_capture_lock:
@@ -705,8 +758,8 @@ class HandController:
                     and motor_idx < len(servo_raw)
                 ):
                     eligible_mask |= bit
-        if eligible_mask != pending_mask:
-            waiting_mask = pending_mask & ~eligible_mask
+        waiting_mask = pending_mask & ~eligible_mask
+        if waiting_mask:
             detail = (
                 "calibrated anchor waiting "
                 f"motors={self._format_motor_mask(waiting_mask)} "
@@ -718,13 +771,14 @@ class HandController:
                     self._multiturn_anchor_capture_last_error = detail
                     log_session("MULTITURN", detail)
             state.host_multiturn_status = detail
+        if eligible_mask == 0:
             return
 
         self._persist_multiturn_state(state, force=True)
         payload = self._multiturn_store_payload or {}
         saved_mask = int(str(payload.get("valid_motor_mask", "0")), 0)
-        confirmed_mask = pending_mask & saved_mask
-        if confirmed_mask != pending_mask:
+        confirmed_mask = eligible_mask & saved_mask
+        if confirmed_mask == 0:
             state.host_multiturn_status = "calibrated anchor runtime save pending"
             return
         try:
@@ -758,8 +812,14 @@ class HandController:
         self._calibration_digest_mtime_ns = -1
         with self._multiturn_anchor_capture_lock:
             self._multiturn_anchor_capture_pending_mask &= ~confirmed_mask
-            self._multiturn_anchor_capture_last_error = ""
-        state.host_multiturn_status = "calibrated anchor saved"
+            remaining_mask = self._multiturn_anchor_capture_pending_mask
+            if remaining_mask == 0:
+                self._multiturn_anchor_capture_last_error = ""
+        state.host_multiturn_status = (
+            "calibrated anchor saved"
+            if remaining_mask == 0
+            else "calibrated anchor partially saved"
+        )
         log_session(
             "MULTITURN",
             f"calibrated anchor saved runtime+snapshot mask=0x{confirmed_mask:08X}",
@@ -853,42 +913,81 @@ class HandController:
             return True, "no calibrated motors require multi-turn recovery"
         deadline = time.monotonic() + max(0.0, float(timeout_s))
         last_message = "waiting for P4 servo feedback"
+        repair_requested_mask = 0
         while time.monotonic() < deadline:
             with self.state_lock:
                 state = HandModel()
                 state.copy_state_from(self.current_state)
+            feedback_ready = (
+                bool(getattr(state, "has_servo_angle_data", False))
+                and bool(getattr(state, "has_servo_raw_data", False))
+                and bool(getattr(state, "has_servo_route_status", False))
+            )
+            route_scan_complete = (
+                int(getattr(state, "servo_route_scan_state", 0) or 0) == 0
+                and int(getattr(state, "servo_route_scan_progress", 0) or 0) >= 100
+            )
+            if not feedback_ready or not route_scan_complete:
+                last_message = "waiting for complete P4 servo feedback and route scan"
+                time.sleep(0.05)
+                continue
             online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
             target_mask = requested_mask & online_mask
             if target_mask == 0:
                 return True, "calibration motors are currently offline; deferred recovery"
-            if bool(getattr(state, "has_servo_route_status", False)):
-                route_mask = int(
-                    getattr(state, "servo_route_controllable_bitmap", 0) or 0
+            route_mask = int(
+                getattr(state, "servo_route_controllable_bitmap", 0) or 0
+            )
+            waiting_route = target_mask & ~route_mask
+            if waiting_route:
+                last_message = (
+                    "waiting for P4 servo route: "
+                    f"{self._format_motor_mask(waiting_route)}"
                 )
-                waiting_route = target_mask & ~route_mask
-                if waiting_route:
-                    last_message = (
-                        "waiting for P4 servo route: "
-                        f"{self._format_motor_mask(waiting_route)}"
-                    )
-                    time.sleep(0.05)
-                    continue
+                time.sleep(0.05)
+                continue
             unknown_mask = int(
                 getattr(state, "multi_turn_unknown_bitmap", 0) or 0
             ) & target_mask
-            if unknown_mask == 0:
-                return True, "multi-turn recovery confirmed"
             saved_mask, _saved_abs, _saved_raw, identity_ready = (
                 self._multiturn_recovery_anchors(state)
             )
-            if identity_ready:
-                missing_anchor = unknown_mask & ~saved_mask
-                if missing_anchor:
+            if not identity_ready:
+                last_message = "waiting for product identity and multi-turn anchors"
+                time.sleep(0.05)
+                continue
+
+            # P4 当前仍可信时，用同帧 ABS/raw 自动补齐旧版本漏写的双份锚点。
+            known_mask = target_mask & ~unknown_mask
+            if known_mask:
+                anchors_ok, anchor_message = self.multiturn_anchor_capture_status(
+                    known_mask
+                )
+                missing_repair = known_mask & ~repair_requested_mask
+                if not anchors_ok and missing_repair:
+                    self.request_multiturn_anchor_capture(missing_repair)
+                    repair_requested_mask |= missing_repair
+                if not anchors_ok:
+                    last_message = "repairing trusted multi-turn anchors: " + anchor_message
+                    time.sleep(0.05)
+                    continue
+
+            if unknown_mask == 0:
+                offline_mask = requested_mask & ~target_mask
+                if offline_mask:
                     return (
-                        False,
-                        "no persistent multi-turn anchor: "
-                        f"{self._format_motor_mask(missing_anchor)}",
+                        True,
+                        "online multi-turn recovery confirmed; deferred offline: "
+                        f"{self._format_motor_mask(offline_mask)}",
                     )
+                return True, "multi-turn recovery confirmed"
+            missing_anchor = unknown_mask & ~saved_mask
+            if missing_anchor:
+                return (
+                    False,
+                    "no persistent multi-turn anchor: "
+                    f"{self._format_motor_mask(missing_anchor)}",
+                )
             last_message = (
                 "waiting for multi-turn restore: "
                 f"{self._format_motor_mask(unknown_mask)}"
@@ -905,6 +1004,7 @@ class HandController:
                 # 状态使用 latest-value 邮箱；ACK/安全规则走独立事件通道，逐条合并。
                 ack_events = self.comm.drain_ack_events()
                 safety_events = self.comm.drain_safety_events()
+                self._service_startup_state_sync(new_model)
                 self._persist_multiturn_state(new_model)
                 self._service_multiturn_anchor_capture(new_model)
                 self._service_multiturn_restore(new_model)
@@ -952,14 +1052,21 @@ class HandController:
                 for cb in self.update_callbacks:
                     try:
                         cb(self.current_state)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        message = f"{type(exc).__name__}: {exc}"
+                        if message != self._last_update_callback_error:
+                            self._last_update_callback_error = message
+                            log_session("CTRL", f"update callback failed: {message}")
+                            print(f"Update callback failed: {message}")
             except queue.Empty:
                 continue
-            except (AttributeError, Exception) as e:
+            except Exception as exc:
                 if self.running:
-                    print(f"Update loop caught exception: {e}")
-                break
+                    message = f"{type(exc).__name__}: {exc}"
+                    if message != self._last_update_loop_error:
+                        self._last_update_loop_error = message
+                        log_session("CTRL", f"update loop recovered: {message}")
+                        print(f"Update loop recovered: {message}")
 
     def set_target_angles(self, angles: List[float]) -> bool:
         """设置 ENCODER_COUNT 路关节目标角（度），JOINT_ANGLE 模式；暂停时不发送"""
@@ -1834,9 +1941,14 @@ class HandController:
         if not self.comm:
             return False, "serial not connected"
         try:
-            validate_snapshot(snapshot)
-        except CalibrationSnapshotError as exc:
-            return False, str(exc)
+            mapping_metadata = urdf_manual_scaled_mapping_metadata()
+        except (OSError, TypeError, ValueError) as exc:
+            return False, f"current URDF mapping is invalid: {exc}"
+        validation_error = validate_snapshot_for_load(
+            snapshot, mapping_metadata=mapping_metadata
+        )
+        if validation_error:
+            return False, validation_error
         try:
             valid_bitmap = int(str(snapshot.get("motor_abs_limit_valid_bitmap", "0")), 0)
             active_joint_mask = int(str(snapshot.get("active_joint_mask", "0")), 0)
@@ -1858,70 +1970,6 @@ class HandController:
             for joint_idx, result in enumerate(joint_results):
                 if isinstance(result, dict) and bool(result.get("success", False)):
                     active_joint_mask |= (1 << joint_idx)
-        missing_joints = [
-            joint_idx for joint_idx in range(ENCODER_COUNT)
-            if (active_joint_mask & (1 << joint_idx)) and (
-                not isinstance(joint_results[joint_idx], dict) or
-                not bool(joint_results[joint_idx].get("success", False))
-            )
-        ]
-        if missing_joints:
-            missing_text = ",".join(f"J{idx:02d}" for idx in missing_joints)
-            return False, f"snapshot missing active joint calibration: {missing_text}"
-        try:
-            expected_mapping_version, expected_urdf_crc = (
-                urdf_manual_scaled_mapping_metadata()
-            )
-        except (OSError, TypeError, ValueError) as exc:
-            return False, f"current URDF mapping is invalid: {exc}"
-        incompatible_mapping = [
-            joint_idx for joint_idx in range(ENCODER_COUNT)
-            if (active_joint_mask & (1 << joint_idx)) and (
-                int(joint_results[joint_idx].get("mappingVersion", 0) or 0)
-                != expected_mapping_version
-                or int(joint_results[joint_idx].get("urdfConfigCrc", 0) or 0)
-                != expected_urdf_crc
-            )
-        ]
-        if incompatible_mapping:
-            mapping_text = ",".join(f"J{idx:02d}" for idx in incompatible_mapping)
-            return False, (
-                f"snapshot URDF mapping mismatch: {mapping_text}; "
-                f"expected v{expected_mapping_version}/0x{expected_urdf_crc:08X}"
-            )
-
-        # V4 的四个范围字段必须全部等于当前 URDF Min/Max。这里在发送前
-        # 拒绝旧动态 Min 快照，P4 仍会使用本机 Manual 再计算一次形成双重门禁。
-        incompatible_ranges = []
-        for joint_idx in range(ENCODER_COUNT):
-            if (active_joint_mask & (1 << joint_idx)) == 0:
-                continue
-            result = joint_results[joint_idx]
-            urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
-            try:
-                values = (
-                    float(result.get("angleMin")),
-                    float(result.get("currentMinDeg")),
-                    float(result.get("angleMax")),
-                    float(result.get("currentMaxDeg")),
-                )
-            except (TypeError, ValueError):
-                incompatible_ranges.append(joint_idx)
-                continue
-            if (
-                not all(math.isfinite(value) for value in values)
-                or abs(values[0] - urdf_min) > 0.01
-                or abs(values[1] - urdf_min) > 0.01
-                or abs(values[2] - urdf_max) > 0.01
-                or abs(values[3] - urdf_max) > 0.01
-            ):
-                incompatible_ranges.append(joint_idx)
-        if incompatible_ranges:
-            range_text = ",".join(f"J{idx:02d}" for idx in incompatible_ranges)
-            return False, (
-                f"snapshot V4 range mismatch: {range_text}; "
-                "re-run automatic calibration with the current firmware"
-            )
 
         manual_ok, manual_message = self._restore_snapshot_manual_references(
             snapshot
@@ -1975,17 +2023,6 @@ class HandController:
                 f"snapshot Manual CRC mismatch: {mismatch_text}; "
                 "re-run automatic calibration for these joints"
             )
-        missing_tendon_lut = [
-            joint_idx for joint_idx in range(ENCODER_COUNT)
-            if (active_joint_mask & (1 << joint_idx)) and
-            not joint_calib_result_has_valid_tendon_lut(
-                joint_results[joint_idx], joint_idx
-            )
-        ]
-        if missing_tendon_lut:
-            missing_text = ",".join(f"J{idx:02d}" for idx in missing_tendon_lut)
-            return False, f"snapshot missing tendon LUT: {missing_text}"
-
         limits_sent_at = time.time()
         # 标定加载只覆盖快照实际包含的电机，P4 上其他已生效关节保持不变。
         self.comm.send_command(

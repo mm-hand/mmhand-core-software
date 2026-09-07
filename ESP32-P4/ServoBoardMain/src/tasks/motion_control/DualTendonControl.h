@@ -20,17 +20,9 @@ struct DualTendonMotorTargets {
     // 由标定 LUT 预测的目标和反馈电机位置。
     float motorRef[2];     ///< qRef 经 LUT 插值得到的模型舵机 ABS。
     float motorFbModel[2]; ///< qFb 经同一 LUT 插值得到的模型舵机 ABS。
-    // 单电机稳定器使用的位置误差和速度项。
     float motorErr[2];     ///< motorRef-motorFbModel，单位 counts。
-    float refVelocity[2];  ///< 模型目标变化率，单位 counts/s。
-    float fbVelocity[2];   ///< 模型反馈变化率，单位 counts/s。
-    float velocityError[2]; ///< refVelocity-fbVelocity。
-    float filteredVelocityError[2]; ///< 一阶低通后的速度误差。
-    float pTerm[2];        ///< Kp*motorErr。
-    float iTerm[2];        ///< Ki*误差时间积分。
-    float dTerm[2];        ///< Kd*filteredVelocityError。
     float pidCorrection[2]; ///< 最终叠加到实际舵机 ABS 的 PID 修正量。
-    // 每台电机独立使用自己的 LUT 最小/最大值并向两端扩展 500 counts。
+    // 每台电机独立使用自己的 LUT 最小/最大值，并按腱绳方向扩展运行裕量。
     uint8_t lutTargetClamped[2]; ///< 原始 PID 目标是否被双腱 LUT 边界截断。
     int32_t lutMinAbs[2];        ///< 加入裕量后的运行下边界。
     int32_t lutMaxAbs[2];        ///< 加入裕量后的运行上边界。

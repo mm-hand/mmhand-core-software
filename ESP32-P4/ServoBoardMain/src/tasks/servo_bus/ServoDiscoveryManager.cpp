@@ -13,9 +13,7 @@
 
 using mmhand::config::servo::kDiscoveryProbeTimeoutMs;
 using mmhand::config::servo::kOfflineRouteRescanIntervalMs;
-using mmhand::config::servo::kTransportRestartAfterFailedScans;
 using mmhand::config::servo::kRecoveryProbeTimeoutMs;
-using mmhand::config::servo::kTransportRestartSettleMs;
 
 ServoDiscoveryManager& servoDiscoveryManager()
 {
@@ -26,8 +24,6 @@ ServoDiscoveryManager& servoDiscoveryManager()
 void ServoDiscoveryManager::begin()
 {
     memset(lastKnownBus_, SERVO_ROUTE_BUS_UNKNOWN, sizeof(lastKnownBus_));
-    memset(failedScanCount_, 0, sizeof(failedScanCount_));
-    unknownBusRestartCursor_ = 0;
     servoRouteTable().begin();
     fullScanPending_ = true;
     startPendingScan(0);
@@ -120,8 +116,7 @@ uint8_t ServoDiscoveryManager::targetedBusForProbe(uint8_t probeIndex) const
     return targetedPreferredBus_;
 }
 
-void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs,
-                                              bool motionActive)
+void ServoDiscoveryManager::finishCurrentScan()
 {
     const uint8_t completedMotor = targetedMotor_;
     servoRouteTable().finishScan();
@@ -130,7 +125,6 @@ void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs,
         if (routes.routes[motor].busIndex < NUM_BUSES &&
             routes.routes[motor].state == ServoRouteState::Online) {
             lastKnownBus_[motor] = routes.routes[motor].busIndex;
-            failedScanCount_[motor] = 0;
         }
     }
     if (completedMotor >= SERVO_TOTAL_NUM) {
@@ -165,97 +159,19 @@ void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs,
                 (unsigned)mmhand::config::servo::kMaxControllableServosPerBus);
         }
     }
-    if (completedMotor < SERVO_TOTAL_NUM &&
-        routes.routes[completedMotor].state == ServoRouteState::Offline) {
-        if (failedScanCount_[completedMotor] < 0xFF) {
-            ++failedScanCount_[completedMotor];
-        }
-        const uint8_t oldBus = lastKnownBus_[completedMotor];
-        if (failedScanCount_[completedMotor] >=
-            kTransportRestartAfterFailedScans) {
-            // 首次启动缺失的舵机没有历史 BUS。此时轮流重启四条 UART；
-            // 全局游标使多台同时缺失时不会反复只冲击 BUS0。
-            const uint8_t restartBus = oldBus < NUM_BUSES
-                ? oldBus
-                : unknownBusRestartCursor_;
-            if (oldBus >= NUM_BUSES) {
-                unknownBusRestartCursor_ =
-                    (uint8_t)((unknownBusRestartCursor_ + 1U) % NUM_BUSES);
-            }
-            if (servoBusRegistry().restartBus(
-                    restartBus, nowMs, motionActive)) {
-                restartProbeMotor_ = completedMotor;
-                restartProbeBus_ = restartBus;
-                restartProbeNotBeforeMs_ = nowMs + kTransportRestartSettleMs;
-                // 保持路由扫描态直到重启后确认探测结束，防止 20 ms 等待窗口内
-                // 状态机提前进入 READY 并开始运动。
-                servoRouteTable().beginMotorScan(completedMotor);
-                FW_LOG_WARN_PRINTF(
-                    "[SERVO HOTPLUG] M%02u BUS%u UART restarted after %u failed scans\r\n",
-                    (unsigned)completedMotor,
-                    (unsigned)restartBus,
-                    (unsigned)failedScanCount_[completedMotor]);
-            }
-        }
-    }
     targetedMotor_ = 0xFF;
     targetedPreferredBus_ = SERVO_ROUTE_BUS_UNKNOWN;
     targetedProbeCount_ = 0;
     scanBus_ = 0;
 }
 
-bool ServoDiscoveryManager::stepRestartProbe(uint32_t nowMs,
-                                             bool motionActive)
+bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
 {
-    if (restartProbeMotor_ >= SERVO_TOTAL_NUM ||
-        restartProbeBus_ >= NUM_BUSES) {
-        return false;
-    }
-    // 只允许在非运动状态完成 BUS 恢复；等待期不阻塞 RTOS，也不访问其他 UART。
+    // 定向扫描不阻断其他 active scope；若其间开始运动，暂停探测以免占用 UART。
     if (motionActive) {
         return false;
     }
-    if ((int32_t)(nowMs - restartProbeNotBeforeMs_) < 0) {
-        return true;
-    }
-
-    const uint8_t motor = restartProbeMotor_;
-    const uint8_t busIndex = restartProbeBus_;
-    const uint8_t servoId = motorMap[motor].servoID;
-    FeetechServoDriver* driver = servoBusRegistry().driver(busIndex);
-    const bool present = driver &&
-        driver->probeFeedback(servoId, kRecoveryProbeTimeoutMs);
-    servoRouteTable().recordProbe(busIndex, servoId, present);
-    servoRouteTable().finishScan();
-
-    const ServoRouteSnapshot routes = servoRouteTable().snapshot();
-    if (present && routes.routes[motor].state == ServoRouteState::Online) {
-        hotplugWatchMask_ &= ~(1UL << motor);
-        failedScanCount_[motor] = 0;
-        lastKnownBus_[motor] = busIndex;
-    }
-    FW_LOG_INFO_PRINTF(
-        "[SERVO HOTPLUG] M%02u BUS%u restart probe present=%u route=%u\r\n",
-        (unsigned)motor,
-        (unsigned)busIndex,
-        present ? 1U : 0U,
-        (unsigned)routes.routes[motor].state);
-    restartProbeMotor_ = 0xFF;
-    restartProbeBus_ = SERVO_ROUTE_BUS_UNKNOWN;
-    restartProbeNotBeforeMs_ = 0;
-    return true;
-}
-
-bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
-{
-    if (restartProbeMotor_ < SERVO_TOTAL_NUM) {
-        return stepRestartProbe(nowMs, motionActive);
-    }
-    // 运行中禁止开始新扫描；已经开始的上电扫描必须在进入运动状态前完成。
     if (!servoRouteTable().scanActive()) {
-        if (motionActive) {
-            return false;
-        }
         startPendingScan(nowMs);
     }
     if (!servoRouteTable().scanActive()) {
@@ -277,7 +193,7 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
         // 又保留热插拔后重复 ID 检测，不能因旧 BUS 命中就静默接受冲突路由。
         ++targetedProbeCount_;
         if (targetedProbeCount_ >= NUM_BUSES) {
-            finishCurrentScan(nowMs, motionActive);
+            finishCurrentScan();
             scanFinished = true;
         } else {
             scanBus_ = targetedBusForProbe(targetedProbeCount_);
@@ -288,7 +204,7 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
             scanBus_ = 0;
             ++scanMotor_;
             if (scanMotor_ >= SERVO_TOTAL_NUM) {
-                finishCurrentScan(nowMs, motionActive);
+                finishCurrentScan();
                 scanFinished = true;
             }
         }
@@ -312,6 +228,5 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
 
 bool ServoDiscoveryManager::active() const
 {
-    return servoRouteTable().scanActive() ||
-        restartProbeMotor_ < SERVO_TOTAL_NUM;
+    return servoRouteTable().scanActive();
 }

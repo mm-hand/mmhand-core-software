@@ -1,7 +1,7 @@
 import queue
 import threading
 
-from desktop.core.angle_mapping import urdf_manual_scaled_mapping_metadata
+from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
 from desktop.core.calibration_snapshot import read_snapshot
 from desktop.core.calibration_workflow import CalibrationWorkflowService
 from desktop.core.data_models import HandModel
@@ -18,6 +18,7 @@ from desktop.core.protocol import (
 class _Controller:
     def __init__(self):
         self.calls = []
+        self.anchor_capture_result = (True, "anchors saved")
         self.state_lock = threading.RLock()
         self.current_state = HandModel()
         self.current_state.system_state = SYSTEM_STATE_IDLE
@@ -41,6 +42,11 @@ class _Controller:
 
     def request_multiturn_anchor_capture(self, motor_mask):
         self.calls.append(("anchor", int(motor_mask)))
+        return True
+
+    def wait_for_multiturn_anchor_capture(self, motor_mask):
+        self.calls.append(("anchor_wait", int(motor_mask)))
+        return self.anchor_capture_result
 
     def query_manual_encoder_references(self):
         self.calls.append(("query_manual",))
@@ -70,6 +76,7 @@ def _motor_for_joint(joint_idx: int) -> int:
 def _successful_state(joint_idx: int) -> HandModel:
     motor_idx = _motor_for_joint(joint_idx)
     mapping_version, urdf_crc = urdf_manual_scaled_mapping_metadata()
+    urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
     manual_min = [100 + idx for idx in range(ENCODER_COUNT)]
     manual_max = [4000 + idx for idx in range(ENCODER_COUNT)]
     state = HandModel()
@@ -93,6 +100,10 @@ def _successful_state(joint_idx: int) -> HandModel:
         "success": True,
         "mappingVersion": mapping_version,
         "urdfConfigCrc": urdf_crc,
+        "angleMin": urdf_min,
+        "currentMinDeg": urdf_min,
+        "angleMax": urdf_max,
+        "currentMaxDeg": urdf_max,
         "manualReferenceCrc": manual_encoder_reference_entry_crc(
             joint_idx, manual_min[joint_idx], manual_max[joint_idx]
         ),
@@ -142,6 +153,34 @@ def test_two_calibration_rounds_merge_results_and_capture_each_anchor(tmp_path):
     )
     assert ("anchor", 1 << _motor_for_joint(14)) in controller.calls
     assert ("anchor", 1 << _motor_for_joint(15)) in controller.calls
+    assert ("anchor_wait", 1 << _motor_for_joint(14)) in controller.calls
+    assert ("anchor_wait", 1 << _motor_for_joint(15)) in controller.calls
+
+
+def test_calibration_does_not_report_saved_before_anchor_commit(tmp_path):
+    controller = _Controller()
+    controller.anchor_capture_result = (False, "M18 missing")
+    service = CalibrationWorkflowService(
+        controller, tmp_path / "calibration_bundle.mmcal.json"
+    )
+    events = queue.Queue()
+    service.register_callback(events.put)
+    joint_idx = 14
+    motor_idx = _motor_for_joint(joint_idx)
+
+    assert service.begin_calibration(
+        joint_mask=1 << joint_idx,
+        motor_mask=1 << motor_idx,
+        reset_motor_mask=1 << motor_idx,
+        baseline_state=HandModel(),
+    )
+    assert _next_phase(events, "prepare").ok
+    service.observe_state(_successful_state(joint_idx))
+    error = _next_phase(events, "snapshot_error")
+
+    assert error.ok is False
+    assert "multi-turn anchors are incomplete" in error.message
+    assert "M18 missing" in error.message
 
 
 def test_startup_restore_orders_manual_turn_recovery_before_auto_load(tmp_path):

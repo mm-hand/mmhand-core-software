@@ -69,6 +69,7 @@ struct DualWorkspacePlanStep {
 enum DualWorkspacePlanStage : int32_t {
     DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT = 101,
     DUAL_WORKSPACE_PLAN_STAGE_EXECUTE = 102,
+    DUAL_WORKSPACE_PLAN_STAGE_POST_CALIBRATION = 103,
 };
 
 // 只保存在 RAM。同一标定序列结束、重启或人工运动后都不能继续信任。
@@ -79,18 +80,31 @@ static void setDualFeedbackLostDiag(SystemRuntimeContext* sharedData,
                                     uint8_t phase,
                                     uint8_t jointIndex,
                                     uint8_t motor,
-                                    int32_t valueA,
-                                    int32_t valueB,
                                     uint32_t motorMask)
 {
+    uint16_t encoderRaw = 0;
+    int32_t encoderOriented = 0;
+    uint32_t encoderValidMask =
+        readLatestEncoderSample(sharedData, jointIndex, &encoderRaw, &encoderOriented)
+            ? (1UL << jointIndex) : 0;
+    uint32_t absValidMask = 0;
+    uint32_t rawValidMask = 0;
+    for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
+        const uint32_t bit = 1UL << channel;
+        if ((motorMask & bit) == 0) continue;
+        int32_t absValue = 0;
+        int16_t rawValue = 0;
+        if (readLatestMotorServoAbs(sharedData, channel, &absValue)) absValidMask |= bit;
+        if (readLatestMotorServoRaw(sharedData, channel, &rawValue)) rawValidMask |= bit;
+    }
     setCalibrationDiagIfEmpty(sharedData,
                               CALIB_DIAG_REASON_FEEDBACK_LOST,
                               phase,
                               jointIndex,
                               motor,
-                              valueA,
-                              valueB,
-                              0,
+                              (int32_t)encoderValidMask,
+                              (int32_t)absValidMask,
+                              (int32_t)rawValidMask,
                               motorMask);
 }
 
@@ -98,7 +112,8 @@ static void setDualPublishFailedDiag(SystemRuntimeContext* sharedData,
                                      uint8_t phase,
                                      uint8_t jointIndex,
                                      uint8_t motor,
-                                     int32_t targetAbs,
+                                     int32_t targetA,
+                                     int32_t targetB,
                                      uint32_t motorMask)
 {
     setCalibrationDiagIfEmpty(
@@ -107,17 +122,17 @@ static void setDualPublishFailedDiag(SystemRuntimeContext* sharedData,
         phase,
         jointIndex,
         motor,
-        targetAbs,
-        sharedData ? sharedData->servo_target_owner : -1,
-        sharedData ? sharedData->system_state : -1,
+        targetA,
+        targetB,
+        sharedData ? (int32_t)sharedAtomicLoad(
+                         &sharedData->calibration_target_apply_status) : -1,
         motorMask);
 }
 
 static void setDualControlLostDiag(SystemRuntimeContext* sharedData,
                                    uint8_t phase,
                                    uint8_t jointIndex,
-                                   uint8_t motor,
-                                   uint32_t motorMask)
+                                   uint8_t motor)
 {
     setCalibrationDiagIfEmpty(
         sharedData,
@@ -128,7 +143,7 @@ static void setDualControlLostDiag(SystemRuntimeContext* sharedData,
         sharedData ? sharedData->system_state : -1,
         sharedData ? sharedData->servo_target_owner : -1,
         sharedData ? sharedData->control_enabled : -1,
-        motorMask);
+        sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
 }
 
 // 等待一台电机到达目标容差并停稳；超时或 owner 丢失时返回 false。
@@ -152,6 +167,7 @@ static bool waitMotorTargetReached(SystemRuntimeContext* sharedData,
                                      jointIndex,
                                      motorChannel,
                                      targetAbs,
+                                     0,
                                      (1UL << motorChannel));
             return false;
         }
@@ -189,8 +205,7 @@ static bool waitMotorTargetReached(SystemRuntimeContext* sharedData,
     setDualControlLostDiag(sharedData,
                            CALIB_DIAG_PHASE_DUAL_PRELOAD,
                            jointIndex,
-                           motorChannel,
-                           (1UL << motorChannel));
+                           motorChannel);
     return false;
 }
 
@@ -234,8 +249,7 @@ static bool waitDualInitialFeedback(SystemRuntimeContext* sharedData,
     setDualControlLostDiag(sharedData,
                            CALIB_DIAG_PHASE_INIT,
                            jointIndex,
-                           primaryMotor,
-                           (1UL << primaryMotor) | (1UL << secondaryMotor));
+                           primaryMotor);
     return false;
 }
 
@@ -281,8 +295,6 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
                                     CALIB_DIAG_PHASE_FIND_MAX,
                                     jointIndex,
                                     motorChannel,
-                                    currentEncoder,
-                                    currentAbs,
                                     (1UL << motorChannel));
             return false;
         }
@@ -386,6 +398,7 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
                                              jointIndex,
                                              motorChannel,
                                              currentAbs,
+                                             holdMotorAbs,
                                              (1UL << motorChannel) |
                                                  (1UL << holdMotorChannel));
                     return false;
@@ -396,6 +409,7 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
                                          jointIndex,
                                          motorChannel,
                                          currentAbs,
+                                         0,
                                          (1UL << motorChannel));
                 return false;
             }
@@ -422,6 +436,7 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
                                                  jointIndex,
                                                  motorChannel,
                                                  commandAbs,
+                                                 holdMotorAbs,
                                                  (1UL << motorChannel) |
                                                      (1UL << holdMotorChannel));
                         return false;
@@ -433,6 +448,7 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
                                                  jointIndex,
                                                  motorChannel,
                                                  commandAbs,
+                                                 0,
                                                  (1UL << motorChannel));
                         return false;
                     }
@@ -470,9 +486,7 @@ static bool findDualTightPoint(SystemRuntimeContext* sharedData,
     setDualControlLostDiag(sharedData,
                            CALIB_DIAG_PHASE_FIND_MAX,
                            jointIndex,
-                           motorChannel,
-                           (1UL << motorChannel) |
-                               (holdOtherMotor ? (1UL << holdMotorChannel) : 0));
+                           motorChannel);
     return false;
 }
 
@@ -636,14 +650,14 @@ bool buildDynamicWorkspaceMotorMask(
                 workspacePairAvailabilityText(availability),
                 (unsigned long)(sharedAtomicLoad(
                     &sharedData->multi_turn_unknown_bitmap) & pairMask));
-            setCalibrationDiag(sharedData,
+            setCalibrationDiagIfEmpty(sharedData,
                                CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                targetJoint,
                                primaryMotor,
                                candidateJoint,
-                               (int32_t)availability,
-                               secondaryMotor,
+                               DUAL_WORKSPACE_POSE_NONE,
+                               DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT,
                                pairMask);
             return false;
         }
@@ -736,12 +750,6 @@ static void setWorkspacePlanFailureDiag(SystemRuntimeContext* sharedData,
                                         DualWorkspacePose pose,
                                         DualWorkspacePlanStage stage)
 {
-    const uint8_t existingReason = calibrationDiagReason(sharedData);
-    if (existingReason != CALIB_DIAG_REASON_NONE &&
-        existingReason != CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED) {
-        return;
-    }
-
     uint8_t primaryMotor = 0xFF;
     uint8_t secondaryMotor = 0xFF;
     uint32_t motorMask = 0;
@@ -750,15 +758,15 @@ static void setWorkspacePlanFailureDiag(SystemRuntimeContext* sharedData,
                                                &secondaryMotor)) {
         motorMask = (1UL << primaryMotor) | (1UL << secondaryMotor);
     }
-    setCalibrationDiag(sharedData,
-                       CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
-                       CALIB_DIAG_PHASE_DUAL_PRELOAD,
-                       targetJoint,
-                       primaryMotor,
-                       helperJoint,
-                       (int32_t)pose,
-                       (int32_t)stage,
-                       motorMask);
+    setCalibrationDiagIfEmpty(sharedData,
+                              CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
+                              CALIB_DIAG_PHASE_DUAL_PRELOAD,
+                              targetJoint,
+                              primaryMotor,
+                              helperJoint,
+                              (int32_t)pose,
+                              (int32_t)stage,
+                              motorMask);
 }
 
 // 输出最终工作空间计划，便于核对各手指实际动作顺序。
@@ -793,14 +801,14 @@ static bool waitDualWorkspaceTargets(SystemRuntimeContext* sharedData,
         int32_t secondaryAbs = 0;
         if (!readLatestMotorServoAbs(sharedData, primaryMotor, &primaryAbs) ||
             !readLatestMotorServoAbs(sharedData, secondaryMotor, &secondaryAbs)) {
-            setCalibrationDiag(sharedData,
+            setCalibrationDiagIfEmpty(sharedData,
                                CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                jointIndex,
                                primaryMotor,
-                               primaryMotor,
-                               secondaryMotor,
-                               0,
+                               jointIndex,
+                               DUAL_WORKSPACE_POSE_NONE,
+                               DUAL_WORKSPACE_PLAN_STAGE_EXECUTE,
                                (1UL << primaryMotor) | (1UL << secondaryMotor));
             return false;
         }
@@ -821,7 +829,8 @@ static bool waitDualWorkspaceTargets(SystemRuntimeContext* sharedData,
                                primaryMotor,
                                primaryTargetAbs,
                                secondaryTargetAbs,
-                               0,
+                               (int32_t)sharedAtomicLoad(
+                                   &sharedData->calibration_target_apply_status),
                                (1UL << primaryMotor) | (1UL << secondaryMotor));
             FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE_%s publish failed J%02u M%02u/M%02u\r\n",
                                phase,
@@ -894,15 +903,15 @@ static bool waitWorkspaceFeedbackKnown(SystemRuntimeContext* sharedData,
         if (unknownMask != 0) {
             const uint8_t firstUnknown = (unknownMask & (1UL << primaryMotor))
                 ? primaryMotor : secondaryMotor;
-            setCalibrationDiag(sharedData,
+            setCalibrationDiagIfEmpty(sharedData,
                                CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                jointIndex,
                                firstUnknown,
-                               (int32_t)unknownMask,
-                               0,
-                               0,
-                               unknownMask);
+                               jointIndex,
+                               DUAL_WORKSPACE_POSE_NONE,
+                               DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT,
+                               motorMask);
             FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail Turn UNKNOWN J%02u mask=0x%08lX; select joint and recalibrate\r\n",
                                (unsigned)jointIndex,
                                (unsigned long)unknownMask);
@@ -920,18 +929,15 @@ static bool waitWorkspaceFeedbackKnown(SystemRuntimeContext* sharedData,
         }
 
         if ((uint32_t)(calibrationNowMs() - startMs) >= kInitialFeedbackWaitMs) {
-            const uint32_t missingMask =
-                (primaryOk && primaryLoadOk ? 0UL : (1UL << primaryMotor)) |
-                (secondaryOk && secondaryLoadOk ? 0UL : (1UL << secondaryMotor));
-            setCalibrationDiag(sharedData,
+            setCalibrationDiagIfEmpty(sharedData,
                                CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
                                CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                jointIndex,
                                primaryOk && primaryLoadOk ? secondaryMotor : primaryMotor,
-                               primaryOk ? 1 : 0,
-                               secondaryOk ? 1 : 0,
-                               0,
-                               missingMask);
+                               jointIndex,
+                               DUAL_WORKSPACE_POSE_NONE,
+                               DUAL_WORKSPACE_PLAN_STAGE_PREFLIGHT,
+                               motorMask);
             FW_LOG_INFO_PRINTF("[AUTO CALIB] WORKSPACE fail feedback J%02u primary=%u secondary=%u load=%u/%u\r\n",
                                (unsigned)jointIndex,
                                primaryOk ? 1U : 0U,
@@ -1057,7 +1063,8 @@ static bool tightenWorkspaceMotor(SystemRuntimeContext* sharedData,
                                    motor,
                                    currentAbs,
                                    holdAbs,
-                                   0,
+                                   (int32_t)sharedAtomicLoad(
+                                       &sharedData->calibration_target_apply_status),
                                    (1UL << motor) | (1UL << holdMotor));
                 return false;
             }
@@ -1101,7 +1108,8 @@ static bool tightenWorkspaceMotor(SystemRuntimeContext* sharedData,
                                        motor,
                                        commandAbs,
                                        holdAbs,
-                                       0,
+                                       (int32_t)sharedAtomicLoad(
+                                           &sharedData->calibration_target_apply_status),
                                        (1UL << motor) | (1UL << holdMotor));
                     return false;
                 }
@@ -1469,8 +1477,6 @@ static bool findDualSecondaryPreloadPoint(SystemRuntimeContext* sharedData,
                                     CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                     jointIndex,
                                     secondaryMotor,
-                                    currentEncoder,
-                                    currentAbs,
                                     (1UL << primaryMotor) |
                                         (1UL << secondaryMotor));
             return false;
@@ -1515,6 +1521,7 @@ static bool findDualSecondaryPreloadPoint(SystemRuntimeContext* sharedData,
                                          jointIndex,
                                          secondaryMotor,
                                          currentAbs,
+                                         primaryHoldAbs,
                                          (1UL << primaryMotor) |
                                              (1UL << secondaryMotor));
             }
@@ -1543,6 +1550,7 @@ static bool findDualSecondaryPreloadPoint(SystemRuntimeContext* sharedData,
                                              jointIndex,
                                              secondaryMotor,
                                              commandAbs,
+                                             primaryHoldAbs,
                                              (1UL << primaryMotor) |
                                                  (1UL << secondaryMotor));
                     return false;
@@ -1579,8 +1587,7 @@ static bool findDualSecondaryPreloadPoint(SystemRuntimeContext* sharedData,
     setDualControlLostDiag(sharedData,
                            CALIB_DIAG_PHASE_DUAL_PRELOAD,
                            jointIndex,
-                           secondaryMotor,
-                           (1UL << primaryMotor) | (1UL << secondaryMotor));
+                           secondaryMotor);
     return false;
 }
 
@@ -1643,8 +1650,6 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                                     CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                                     jointIndex,
                                     secondaryMotor,
-                                    currentSecondaryAbs,
-                                    currentPrimaryAbs,
                                     (1UL << primaryMotor) |
                                         (1UL << secondaryMotor));
             return false;
@@ -1731,7 +1736,7 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                               (unsigned)angleStallStable,
                               (unsigned)kAngleStallStableSamples);
                 setCalibrationDiag(sharedData,
-                                   CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                   CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED,
                                    CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                                    jointIndex,
                                    secondaryMotor,
@@ -1793,6 +1798,7 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                                          jointIndex,
                                          secondaryMotor,
                                          currentSecondaryAbs,
+                                         currentPrimaryAbs,
                                          (1UL << primaryMotor) |
                                              (1UL << secondaryMotor));
             }
@@ -1823,6 +1829,7 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
                                              jointIndex,
                                              secondaryMotor,
                                              secondaryCommandAbs,
+                                             primaryCommandAbs,
                                              (1UL << primaryMotor) |
                                                  (1UL << secondaryMotor));
                     return false;
@@ -1862,8 +1869,7 @@ static bool findDualExchangeLimitPoint(SystemRuntimeContext* sharedData,
     setDualControlLostDiag(sharedData,
                            CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                            jointIndex,
-                           secondaryMotor,
-                           (1UL << primaryMotor) | (1UL << secondaryMotor));
+                           secondaryMotor);
     return false;
 }
 
@@ -1918,8 +1924,6 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                                 CALIB_DIAG_PHASE_INIT,
                                 jointIndex,
                                 primaryMotor,
-                                primaryAbs,
-                                secondaryAbs,
                                 (1UL << primaryMotor) |
                                     (1UL << secondaryMotor));
         return false;
@@ -2012,8 +2016,6 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                                     CALIB_DIAG_PHASE_FIND_MAX,
                                     jointIndex,
                                     primaryMotor,
-                                    initialEncoder,
-                                    primaryAbs,
                                     (1UL << primaryMotor));
             return false;
         }
@@ -2047,8 +2049,6 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                                 CALIB_DIAG_PHASE_DUAL_PRELOAD,
                                 jointIndex,
                                 secondaryMotor,
-                                secondaryStartEncoder,
-                                secondaryStartAbs,
                                 (1UL << secondaryMotor));
         return false;
     }
@@ -2088,8 +2088,6 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                                 CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                                 jointIndex,
                                 secondaryMotor,
-                                exchangeStartEncoder,
-                                0,
                                 (1UL << primaryMotor) |
                                     (1UL << secondaryMotor));
         return false;
@@ -2215,14 +2213,14 @@ static bool runDualAntagonistAutoCalibrationJoint(SystemRuntimeContext* sharedDa
                            readyMap.feedbackReady ? 1U : 0U,
                            (long)readyMap.outsideCounts,
                            (long)kFeedbackReadyEnterOutsideToleranceCounts);
-        setCalibrationDiag(sharedData,
+        setCalibrationDiagIfEmpty(sharedData,
                            CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
                            CALIB_DIAG_PHASE_DUAL_PRELOAD,
                            jointIndex,
                            primaryMotor,
-                           readyEncoder,
-                           readyMap.outsideCounts,
-                           secondaryMotor,
+                           jointIndex,
+                           DUAL_WORKSPACE_POSE_NONE,
+                           DUAL_WORKSPACE_PLAN_STAGE_POST_CALIBRATION,
                            (1UL << primaryMotor) | (1UL << secondaryMotor));
         return false;
     }
@@ -2399,17 +2397,15 @@ DualMotorCalibrationRunResult runDualMotorCalibrationMachine(
                                                jointIndex,
                                                params,
                                                workspaceState)) {
-        if (!hasCalibrationDiag(sharedData)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                               CALIB_DIAG_PHASE_DUAL_EXCHANGE,
-                               jointIndex,
-                               primaryMotor,
-                               sequenceIndex,
-                               jointCount,
-                               secondaryMotor,
-                               selectedJointMask);
-        }
+        setCalibrationDiagIfEmpty(sharedData,
+                                  CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                  CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+                                  jointIndex,
+                                  primaryMotor,
+                                  0,
+                                  0,
+                                  0,
+                                  0);
         return DUAL_MOTOR_CALIBRATION_FAILED;
     }
 

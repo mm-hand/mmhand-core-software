@@ -22,6 +22,20 @@ from desktop.core.session_log import log_session
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
+
+def _schedule_ros2_warning(message: str):
+    from desktop.ui.ui_qt_compat import QtCore, QtWidgets, ensure_app
+
+    app = ensure_app()
+    QtCore.QTimer.singleShot(0, lambda: QtWidgets.QMessageBox.warning(
+        QtWidgets.QApplication.activeWindow(),
+        "ROS2 unavailable",
+        f"{message}\n\nSerial manual control is still available.\n"
+        "Check the configured Python and ROS2 setup, then restart MMHand.",
+    ))
+    return app
+
+
 def _configure_gui_diagnostics() -> None:
     """在 Qt 应用创建前固定渲染后端，并保留原生崩溃的控制台诊断。"""
     from desktop.ui.ui_qt_compat import QT_LIB, configure_opengl_before_app
@@ -173,6 +187,7 @@ def run_ui(
         backend.start()
 
     bridge = None
+    _warning_app = None  # Keep QApplication alive until HandGUI owns it.
     if ros2_enabled:
         bridge = _make_ros2_bridge(
             backend,
@@ -191,6 +206,8 @@ def run_ui(
                 print("Controller auto-started; ROS2 input remains unauthorized")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
+            log_session("ROS2", f"startup failed: {exc}")
+            _warning_app = _schedule_ros2_warning(str(exc))
             bridge = None
 
     try:

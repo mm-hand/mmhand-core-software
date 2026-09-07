@@ -95,6 +95,7 @@ P4_SAFETY_RULE(CalibrationResultSpanInvalid, 4029, "CAL-4029", "标定结果行�
 P4_SAFETY_RULE(CalibrationResultBuildFailed, 4030, "CAL-4030", "标定结果构建失败", Blocking, Calibration, StopMotion, "检查 Manual 基准、端点和 LUT 采样。")
 P4_SAFETY_RULE(CalibrationResultCommitFailed, 4031, "CAL-4031", "标定结果提交失败", Emergency, Calibration, StopMotion, "检查运行时标定存储和关节索引。")
 P4_SAFETY_RULE(CalibrationMultiTurnTrustFailed, 4032, "CAL-4032", "标定多圈可信提交失败", Blocking, Recovery, StopMotion, "检查对应舵机在线、多圈配置和恢复状态。")
+P4_SAFETY_RULE(CalibrationDualExchangeStalled, 4034, "CAL-4034", "双腱换向阶段关节停止响应", Blocking, Calibration, StopMotion, "检查拮抗绳预紧、换向方向、磁编反馈和机械卡滞。")
 P4_SAFETY_RULE(CalibrationWarnAutoMinOffset, 4101, "CAW-4101", "Auto Min 与 Manual Min 偏差不足", Warning, Calibration, WarnOnly, "检查手指松端装配空间。")
 P4_SAFETY_RULE(CalibrationWarnAutoMaxShortfall, 4102, "CAW-4102", "Auto Max 与 Manual Max 偏差不足", Warning, Calibration, WarnOnly, "检查手指紧端装配空间。")
 P4_SAFETY_RULE(CalibrationWarnSpanMismatch, 4103, "CAW-4103", "URDF 与 Manual 跨度差超过阈值", Warning, Calibration, WarnOnly, "检查 Manual 端点和机械装配。")

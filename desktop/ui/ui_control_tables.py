@@ -32,10 +32,10 @@ class JointChannelTable(QtWidgets.QTableWidget):
         """Build the joint table UI section."""
         joint_rows, group_ranges = ControlScopeModel.joint_rows_by_finger_group()
         table = JointChannelTable(len(joint_rows), 13)
-        # ABS Limit 的双腱范围使用显式换行；其他单行单元格不会受此影响。
+        # 双腱 LUT ABS 范围使用显式换行；其他单行单元格不会受此影响。
         table.setWordWrap(True)
         table.setHorizontalHeaderLabels([
-            "Group", "Use", "Joint", "Enc", "Current", "ROS2 Target", "Raw", "ABS Limit", "Min",
+            "Group", "Use", "Joint", "Enc", "Current", "ROS2 Target", "Raw", "Control ABS", "Min",
             "Target", "Max", "Action", "Target Slider",
         ])
         table.verticalHeader().setVisible(False)
@@ -180,7 +180,7 @@ class JointChannelTable(QtWidgets.QTableWidget):
         table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(6, 68)
         table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Fixed)
-        # 双电机关节需要同时显示两台舵机的 ABS 范围，固定宽度避免高频刷新时跳动。
+        # 双电机关节需要同时显示两台舵机的控制 ABS 范围，固定宽度避免高频刷新时跳动。
         table.setColumnWidth(7, 250)
         table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Fixed)
         table.setColumnWidth(8, 64)

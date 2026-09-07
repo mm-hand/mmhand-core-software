@@ -1039,3 +1039,15 @@ class HandModel:
         self.tactile_module_last_rx_ts = list(
             getattr(other, "tactile_module_last_rx_ts", [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
         )
+
+
+def clone_hand_model(model: HandModel) -> HandModel:
+    """建立跨线程只读快照，集中维护目标、零点和状态字段复制。"""
+    snapshot = HandModel()
+    snapshot.copy_state_from(model)
+    snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
+    snapshot.set_target_angles(model.target_angles)
+    for index, encoder in enumerate(snapshot.encoders):
+        if index < len(getattr(model, "encoders", [])):
+            encoder.zero_raw = int(model.encoders[index].zero_raw)
+    return snapshot

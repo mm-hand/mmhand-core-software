@@ -119,6 +119,118 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
     assert snapshot_raw[motor_idx] == 0
 
 
+def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
+    controller = HandController()
+    controller._multiturn_store = MultiTurnRuntimeStore(
+        tmp_path / "multiturn_runtime.json"
+    )
+    identity = {
+        "product_fingerprint": {
+            "schema_version": 1,
+            "feedback_mapping_version": 3,
+            "hardware_map_crc": 0x1234,
+        }
+    }
+    controller._multiturn_identity = lambda _state: identity
+    motor_mask = (1 << 18) | (1 << 19)
+    snapshot_path = tmp_path / "calibration_bundle.mmcal.json"
+    results = [None] * ENCODER_COUNT
+    for joint_idx, motor_idx in ((14, 18), (15, 19)):
+        results[joint_idx] = {
+            "joint": joint_idx,
+            "success": True,
+            "tendonLutValid": True,
+            "tendonLutCount": 3,
+            "tendonLutMotor": [motor_idx, 0xFF],
+            "tendonLutMotorAbs": [[100, 200, 300], [0, 0, 0]],
+        }
+    atomic_write_snapshot(
+        snapshot_path,
+        merge_snapshot(
+            None,
+            {
+                "active_joint_mask": (1 << 14) | (1 << 15),
+                "active_motor_mask": motor_mask,
+                "motor_abs_limit_valid_bitmap": motor_mask,
+                "motor_abs_limit_min": [0] * MOTOR_COUNT,
+                "motor_abs_limit_max": [0] * MOTOR_COUNT,
+                "manual_reference_min_raw": [0] * ENCODER_COUNT,
+                "manual_reference_max_raw": [0] * ENCODER_COUNT,
+                "manual_reference_valid_bitmap": 0,
+                "joint_calib_results": results,
+            },
+            updated_joint_mask=(1 << 14) | (1 << 15),
+        ),
+    )
+    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    state = _trusted_multiturn_state(18)
+
+    assert controller.request_multiturn_anchor_capture(motor_mask)
+    controller._service_multiturn_anchor_capture(state)
+    assert controller._multiturn_anchor_capture_pending_mask == 1 << 19
+
+    state.servo_online_bitmap = motor_mask
+    state.servo_route_controllable_bitmap = motor_mask
+    state.servo_angles[19] = 12288
+    state.servo_raw_positions[19] = 0
+    state.servo_raw_online[19] = True
+    controller._service_multiturn_anchor_capture(state)
+
+    assert controller._multiturn_anchor_capture_pending_mask == 0
+    snapshot_mask, _snapshot_abs, _snapshot_raw = multiturn_anchor_fields(
+        core_logic.read_snapshot(snapshot_path)
+    )
+    assert snapshot_mask & motor_mask == motor_mask
+
+
+def test_startup_multiturn_recovery_waits_for_first_complete_route_scan():
+    controller = HandController()
+
+    ok, message = controller.wait_for_multiturn_recovery(1 << 18, timeout_s=0.01)
+
+    assert ok is False
+    assert "complete P4 servo feedback and route scan" in message
+
+
+def test_startup_multiturn_recovery_defers_motor_offline_after_route_scan():
+    controller = HandController()
+    state = HandModel()
+    state.has_servo_angle_data = True
+    state.has_servo_raw_data = True
+    state.has_servo_route_status = True
+    state.servo_route_scan_state = 0
+    state.servo_route_scan_progress = 100
+    controller.current_state.copy_state_from(state)
+
+    ok, message = controller.wait_for_multiturn_recovery(1 << 18, timeout_s=0.1)
+
+    assert ok is True
+    assert "offline" in message
+
+
+def test_startup_multiturn_recovery_repairs_known_anchor_before_success():
+    controller = HandController()
+    motor_idx = 18
+    bit = 1 << motor_idx
+    state = _trusted_multiturn_state(motor_idx)
+    state.servo_route_scan_state = 0
+    state.servo_route_scan_progress = 100
+    controller.current_state.copy_state_from(state)
+    controller._multiturn_recovery_anchors = MagicMock(
+        return_value=(0, [0] * MOTOR_COUNT, [0] * MOTOR_COUNT, True)
+    )
+    controller.multiturn_anchor_capture_status = MagicMock(
+        side_effect=[(False, "anchor missing"), (True, "anchors saved")]
+    )
+    controller.request_multiturn_anchor_capture = MagicMock(return_value=True)
+
+    ok, message = controller.wait_for_multiturn_recovery(bit, timeout_s=0.2)
+
+    assert ok is True
+    assert message == "multi-turn recovery confirmed"
+    controller.request_multiturn_anchor_capture.assert_called_once_with(bit)
+
+
 class TestSetMotorPositionsAbsolute:
     """Test suite for HandController.set_motor_positions_absolute method."""
 

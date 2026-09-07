@@ -50,7 +50,7 @@ inline constexpr uint8_t kUpperWorkspaceWarningStableFrames = 3;
  */
 inline constexpr float kSingleTendonKp = 5.7f;
 inline constexpr float kSingleTendonKi = 0.0f;
-inline constexpr float kSingleTendonKd = 0.10f;
+inline constexpr float kSingleTendonKd = 0.00f;
 inline constexpr float kSingleTendonDeadbandDeg = 0.0f;
 inline constexpr float kSingleTendonIntegralLimit = 100.0f;
 /** 有效 LUT 单腱在反馈完成阈值内仍保持的固定比例增益，用于连续跟随。 */
@@ -60,15 +60,15 @@ inline constexpr float kSingleTendonVelocityFilterTauSec = 0.050f;
 inline constexpr float kSingleTendonDTermLimitCounts = 20.0f;
 
 /**
- * 单腱双向增益调度：紧绳近端使用 1.2 倍局部斜率，松绳近端保持
- * 0.7 倍局部斜率；大误差统一按 0.7 倍平均斜率推进。
+ * 单腱双向增益调度：紧绳近端使用  倍局部斜率，松绳近端保持
+ *  倍局部斜率；大误差统一按  倍平均斜率推进。
  */
 inline constexpr float kSingleTendonDynamicKpErrorMaxDeg = 3.0f;
 inline constexpr float kSingleTendonDynamicKpBlendStartDeg = 2.5f;
-inline constexpr float kSingleTendonDynamicLutGain = 1.0f;
-inline constexpr float kSingleTendonLargeErrorLutGain = 0.75f;
+inline constexpr float kSingleTendonDynamicLutGain = 0.9f;
+inline constexpr float kSingleTendonLargeErrorLutGain = 0.41f;
 /** 单腱目标速度前馈：预测未来目标并通过本关节 LUT 转换为腱绳 counts。 */
-inline constexpr bool kSingleTendonVelocityFeedforwardEnabled = true;
+inline constexpr bool kSingleTendonVelocityFeedforwardEnabled = false;
 inline constexpr float kSingleTendonVelocityLeadTimeSec = 0.070f;
 inline constexpr float kSingleTendonTargetVelocityFilterTauSec = 0.040f;
 inline constexpr float kSingleTendonVelocityLeadMaxDeg = 3.0f;
@@ -103,7 +103,7 @@ static_assert(kSingleTendonVelocityLeadTimeSec >= 0.0f &&
               "single tendon velocity feedforward parameters must be valid");
 
 /** 双腱位置环参数。误差和输出均在标定 LUT 的舵机 counts 坐标中计算。 */
-inline constexpr float kDualTendonKp = 0.60f;
+inline constexpr float kDualTendonKp = 0.80f;
 inline constexpr float kDualTendonKi = 0.0f;
 inline constexpr float kDualTendonKd = 0.0f;
 inline constexpr float kDualTendonIntegralLimit = 0.0f;

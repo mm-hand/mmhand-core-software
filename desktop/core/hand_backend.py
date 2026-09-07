@@ -21,7 +21,7 @@ from .calibration_workflow import (
 )
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
-from .data_models import HandModel, resolve_joint_workspace_range
+from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT
 from .session_log import log_session
 
@@ -32,28 +32,6 @@ JointTargetCallback = Callable[[dict], None]
 
 def list_ports() -> List[tuple]:
     return _list_ports()
-
-
-def clone_hand_model(model: HandModel) -> HandModel:
-    snapshot = HandModel()
-    snapshot.copy_state_from(model)
-    snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
-    snapshot.tactile_data = list(getattr(model, "tactile_data", []) or [])
-    snapshot.tactile_source = str(getattr(model, "tactile_source", "NONE"))
-    snapshot.tactile_data_level = str(getattr(model, "tactile_data_level", "NONE"))
-    snapshot.tactile_module_valid_mask = int(getattr(model, "tactile_module_valid_mask", 0) or 0)
-    snapshot.tactile_online = bool(getattr(model, "tactile_online", False))
-    snapshot.tactile_last_rx_ts = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
-    snapshot.tactile_module_online = list(getattr(model, "tactile_module_online", []) or [])
-    snapshot.tactile_module_last_rx_ts = list(getattr(model, "tactile_module_last_rx_ts", []) or [])
-    try:
-        snapshot.set_target_angles(model.target_angles)
-    except Exception:
-        pass
-    for i, enc in enumerate(snapshot.encoders):
-        if i < len(getattr(model, "encoders", [])):
-            enc.zero_raw = int(model.encoders[i].zero_raw)
-    return snapshot
 
 
 def merge_tactile_state(state: HandModel, tactile_state: HandModel) -> None:

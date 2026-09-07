@@ -6,6 +6,7 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY,
     CALIB_DIAG_REASON_CONTROL_LOST,
     CALIB_DIAG_REASON_DUPLICATE_JOINT,
+    CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED,
     CALIB_DIAG_REASON_ENCODER_ERROR,
     CALIB_DIAG_REASON_FEEDBACK_LOST,
     CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
@@ -21,6 +22,7 @@ from desktop.core.protocol import (
     CALIB_DIAG_REASON_SERVO_OFFLINE,
     CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
     CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+    CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
     CALIB_DIAG_REASON_TASK_START_FAILED,
     CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
     CALIB_DIAG_REASON_WRAP_TOO_LARGE,
@@ -65,6 +67,7 @@ def test_every_firmware_calibration_reason_has_a_dedicated_popup_explanation():
         CALIB_DIAG_REASON_WRAP_TOO_LARGE,
         CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
         CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+        CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
         CALIB_DIAG_REASON_FEEDBACK_LOST,
         CALIB_DIAG_REASON_TASK_START_FAILED,
         CALIB_DIAG_REASON_CONTROL_LOST,
@@ -80,6 +83,7 @@ def test_every_firmware_calibration_reason_has_a_dedicated_popup_explanation():
         CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
         CALIB_DIAG_REASON_RESULT_COMMIT_FAILED,
         CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED,
+        CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED,
     )
 
     for sequence, reason in enumerate(reasons, start=1):
@@ -104,3 +108,50 @@ def test_every_firmware_calibration_reason_has_a_dedicated_popup_explanation():
         assert summary["active"] is True
         assert not summary["title"].startswith("标定诊断 reason=")
         assert summary["suggestions"], f"reason={reason} 缺少处理建议"
+
+
+def test_joint_step_fallback_uses_result_masks_not_payload_values():
+    state = SimpleNamespace(
+        calib_diag_valid=True,
+        calib_diag_reason=CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+        calib_diag_phase=CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+        calib_diag_joint=14,
+        calib_diag_motor=18,
+        calib_diag_value_a=111,
+        calib_diag_value_b=222,
+        calib_diag_value_c=333,
+        calib_diag_bitmap=0xFFFFFFFF,
+        calib_diag_timestamp_ms=123,
+        calib_diag_sequence=4,
+        calib_diag_completed_joint_mask=(1 << 14),
+        calib_diag_failed_joint_mask=(1 << 15),
+    )
+
+    summary = HandGUI._calib_diag_summary(state)
+
+    assert any("completed=0x00004000" in line for line in summary["lines"])
+    assert any("无具体机械根因" in line for line in summary["lines"])
+    assert all("111" not in line and "222" not in line for line in summary["lines"])
+
+
+def test_dual_exchange_stall_has_dedicated_payload_names():
+    state = SimpleNamespace(
+        calib_diag_valid=True,
+        calib_diag_reason=CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED,
+        calib_diag_phase=CALIB_DIAG_PHASE_DUAL_EXCHANGE,
+        calib_diag_joint=12,
+        calib_diag_motor=16,
+        calib_diag_value_a=180,
+        calib_diag_value_b=250,
+        calib_diag_value_c=37,
+        calib_diag_bitmap=(1 << 16) | (1 << 17),
+        calib_diag_timestamp_ms=456,
+        calib_diag_sequence=5,
+        calib_diag_completed_joint_mask=0,
+        calib_diag_failed_joint_mask=(1 << 12),
+    )
+
+    summary = HandGUI._calib_diag_summary(state)
+
+    assert summary["title"] == "双腱换向阶段关节停止响应"
+    assert any("load=180" in line and "encoder_delta=37" in line for line in summary["lines"])

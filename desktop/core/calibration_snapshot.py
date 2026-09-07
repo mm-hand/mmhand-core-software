@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import threading
@@ -136,6 +137,26 @@ def joint_calib_result_has_valid_tendon_lut(item, joint_idx: int) -> bool:
     )
 
 
+def joint_calib_result_tendon_lut_abs_ranges(
+    item, joint_idx: int
+) -> list[tuple[int, int, int]]:
+    """返回有效 LUT 各执行器的 ``(motor, min_abs, max_abs)``。"""
+    if not joint_calib_result_has_valid_tendon_lut(item, joint_idx):
+        return []
+    count = int(tendon_lut_field(item, "tendonLutCount", 0))
+    motors = tendon_lut_field(item, "tendonLutMotor", [])
+    motor_abs = tendon_lut_field(item, "tendonLutMotorAbs", [])
+    actuator_count = 2 if int(joint_idx) in DUAL_TENDON_JOINT_INDICES else 1
+    ranges: list[tuple[int, int, int]] = []
+    try:
+        for actuator in range(actuator_count):
+            values = [int(value) for value in motor_abs[actuator][:count]]
+            ranges.append((int(motors[actuator]), min(values), max(values)))
+    except (TypeError, ValueError):
+        return []
+    return ranges
+
+
 def format_mask(value: int) -> str:
     """统一用八位十六进制保存掩码，便于人工查看。"""
     return f"0x{int(value) & 0xFFFFFFFF:08X}"
@@ -230,6 +251,128 @@ def validate_snapshot(payload: dict, *, verify_integrity: bool = True) -> dict:
         if expected != actual:
             raise CalibrationSnapshotError("snapshot SHA-256 mismatch")
     return payload
+
+
+def validate_snapshot_for_load(
+    payload: dict, *, mapping_metadata: tuple[int, int] | None = None
+) -> str | None:
+    """校验加载前的静态标定契约；设备回读仍由控制器负责。"""
+    try:
+        validate_snapshot(payload)
+        joint_mask = parse_mask(payload.get("active_joint_mask")) & _JOINT_MASK
+        motor_mask = parse_mask(payload.get("active_motor_mask")) & VALID_MOTOR_MASK
+        valid_motor_mask = (
+            parse_mask(payload.get("motor_abs_limit_valid_bitmap"))
+            & VALID_MOTOR_MASK
+        )
+    except (CalibrationSnapshotError, TypeError, ValueError) as exc:
+        return str(exc)
+
+    results = payload.get("joint_calib_results", [])
+    if len(results) != ENCODER_COUNT:
+        return f"invalid joint calibration count: {len(results)}"
+    if joint_mask == 0:
+        for joint_idx, item in enumerate(results):
+            if isinstance(item, dict) and bool(item.get("success", False)):
+                joint_mask |= 1 << joint_idx
+
+    missing = [
+        joint_idx
+        for joint_idx in range(ENCODER_COUNT)
+        if (joint_mask & (1 << joint_idx))
+        and (
+            not isinstance(results[joint_idx], dict)
+            or not bool(results[joint_idx].get("success", False))
+        )
+    ]
+    if missing:
+        return "snapshot missing active joint calibration: " + ",".join(
+            f"J{int(idx):02d}" for idx in missing
+        )
+
+    try:
+        if mapping_metadata is None:
+            from .angle_mapping import urdf_manual_scaled_mapping_metadata
+
+            mapping_metadata = urdf_manual_scaled_mapping_metadata()
+        expected_version, expected_crc = mapping_metadata
+    except (OSError, TypeError, ValueError) as exc:
+        return f"current manual-scaled URDF mapping is invalid: {exc}"
+
+    incompatible = [
+        joint_idx
+        for joint_idx in range(ENCODER_COUNT)
+        if (joint_mask & (1 << joint_idx))
+        and (
+            int(results[joint_idx].get("mappingVersion", 0) or 0)
+            != expected_version
+            or int(results[joint_idx].get("urdfConfigCrc", 0) or 0)
+            != expected_crc
+        )
+    ]
+    if incompatible:
+        return (
+            "snapshot mapping/URDF contract mismatch; recalibration required: "
+            + ",".join(f"J{int(idx):02d}" for idx in incompatible)
+        )
+
+    try:
+        from .angle_mapping import get_spec
+    except (OSError, TypeError, ValueError) as exc:
+        return f"current URDF joint limits are invalid: {exc}"
+    incompatible_ranges = []
+    for joint_idx in range(ENCODER_COUNT):
+        if (joint_mask & (1 << joint_idx)) == 0:
+            continue
+        try:
+            result = results[joint_idx]
+            urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
+            values = (
+                float(result.get("angleMin")),
+                float(result.get("currentMinDeg")),
+                float(result.get("angleMax")),
+                float(result.get("currentMaxDeg")),
+            )
+            if (
+                not all(math.isfinite(value) for value in values)
+                or abs(values[0] - urdf_min) > 0.01
+                or abs(values[1] - urdf_min) > 0.01
+                or abs(values[2] - urdf_max) > 0.01
+                or abs(values[3] - urdf_max) > 0.01
+            ):
+                incompatible_ranges.append(joint_idx)
+        except (OSError, TypeError, ValueError):
+            incompatible_ranges.append(joint_idx)
+    if incompatible_ranges:
+        return (
+            "snapshot V4 range mismatch: "
+            + ",".join(f"J{int(idx):02d}" for idx in incompatible_ranges)
+            + "; re-run automatic calibration with the current firmware"
+        )
+
+    missing_lut = [
+        joint_idx
+        for joint_idx in range(ENCODER_COUNT)
+        if (joint_mask & (1 << joint_idx))
+        and not joint_calib_result_has_valid_tendon_lut(results[joint_idx], joint_idx)
+    ]
+    if missing_lut:
+        return (
+            "snapshot missing tendon LUT; recalibrate with the current firmware: "
+            + ",".join(f"J{int(idx):02d}" for idx in missing_lut)
+        )
+
+    missing_motors = [
+        motor_idx
+        for motor_idx in range(MOTOR_COUNT)
+        if (motor_mask & (1 << motor_idx))
+        and not (valid_motor_mask & (1 << motor_idx))
+    ]
+    if missing_motors:
+        return "snapshot missing active motor ABS limits: " + ",".join(
+            f"M{int(idx):02d}" for idx in missing_motors
+        )
+    return None
 
 
 def read_snapshot(path: Path | str) -> dict:

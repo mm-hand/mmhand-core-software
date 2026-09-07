@@ -341,8 +341,8 @@ static float computeSingleTendonDirectionalTakeup(
 
 /**
  * 根据单腱 LUT 将角度误差换算为本周期有效 Kp。
- * 紧绳近端采用 1.2 倍局部斜率，松绳近端采用 0.7 倍局部斜率；
- * 大误差统一采用 0.7 倍全行程平均斜率，LUT 不可信时才回退固定 Kp。
+ * 近端采用动态 LUT 增益，大误差采用独立 LUT 增益；
+ * 具体倍率由 ControlConfig 配置，LUT 不可信时才回退固定 Kp。
  */
 static float computeSingleTendonEffectiveKp(
     uint8_t motorCh,

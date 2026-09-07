@@ -28,8 +28,7 @@ public:
 
 private:
     void startPendingScan(uint32_t nowMs);
-    void finishCurrentScan(uint32_t nowMs, bool motionActive);
-    bool stepRestartProbe(uint32_t nowMs, bool motionActive);
+    void finishCurrentScan();
     uint8_t targetedBusForProbe(uint8_t probeIndex) const;
 
     uint8_t scanBus_ = 0;
@@ -43,13 +42,8 @@ private:
     // 一旦收到真实反馈并恢复可控，立即从位图移除，避免在线通道被重复扫描。
     uint32_t hotplugWatchMask_ = 0;
     uint32_t lastHotplugRescanMs_ = 0;
-    // 路由表在掉线时会清成 UNKNOWN；这里保留掉线前 BUS，供定向 UART 恢复使用。
+    // 路由表在掉线时会清成 UNKNOWN；这里保留掉线前 BUS，供定向重扫优先探测。
     uint8_t lastKnownBus_[SERVO_TOTAL_NUM] = {0};
-    uint8_t failedScanCount_[SERVO_TOTAL_NUM] = {0};
-    uint8_t restartProbeMotor_ = 0xFF;
-    uint8_t restartProbeBus_ = 0xFF;
-    uint32_t restartProbeNotBeforeMs_ = 0;
-    uint8_t unknownBusRestartCursor_ = 0; ///< 首次缺失无历史 BUS 时轮流恢复四条 UART。
     bool fullScanPending_ = false;
 };
 

@@ -115,6 +115,39 @@ static void failAutoCalibContextWithDiag(JointCalibContext* ctx,
     failAutoCalibContext(ctx, reasonText);
 }
 
+static void failSingleFeedbackLost(JointCalibContext* ctx,
+                                   SystemRuntimeContext* sharedData,
+                                   const char* reasonText,
+                                   uint8_t phase)
+{
+    uint16_t encoderRaw = 0;
+    int32_t encoderOriented = 0;
+    int32_t servoAbs = 0;
+    int16_t servoRaw = 0;
+    const uint32_t jointBit = ctx && ctx->jointIndex < ENCODER_TOTAL_NUM
+        ? (1UL << ctx->jointIndex) : 0;
+    const uint32_t motorBit = ctx && ctx->motorChannel < SERVO_TOTAL_NUM
+        ? (1UL << ctx->motorChannel) : 0;
+    failAutoCalibContextWithDiag(
+        ctx,
+        sharedData,
+        reasonText,
+        CALIB_DIAG_REASON_FEEDBACK_LOST,
+        phase,
+        ctx ? ctx->motorChannel : 0xFF,
+        readLatestEncoderSample(sharedData,
+                                ctx ? ctx->jointIndex : 0xFF,
+                                &encoderRaw,
+                                &encoderOriented) ? (int32_t)jointBit : 0,
+        readLatestMotorServoAbs(sharedData,
+                                ctx ? ctx->motorChannel : 0xFF,
+                                &servoAbs) ? (int32_t)motorBit : 0,
+        readLatestMotorServoRaw(sharedData,
+                                ctx ? ctx->motorChannel : 0xFF,
+                                &servoRaw) ? (int32_t)motorBit : 0,
+        motorBit);
+}
+
 // 首帧反馈有效后初始化紧端搜索基线、命令方向和停稳窗口。
 static bool initTightenStateFromFeedback(JointCalibContext* ctx,
                                          SystemRuntimeContext* sharedData,
@@ -334,16 +367,10 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             }
 
             if (!initTightenStateFromFeedback(ctx, sharedData, params)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "missing feedback after init",
-                                             CALIB_DIAG_REASON_FEEDBACK_LOST,
-                                             CALIB_DIAG_PHASE_INIT,
-                                             ctx->motorChannel,
-                                             0,
-                                             0,
-                                             0,
-                                             0);
+                failSingleFeedbackLost(ctx,
+                                       sharedData,
+                                       "missing feedback after init",
+                                       CALIB_DIAG_PHASE_INIT);
             }
             return;
         }
@@ -355,16 +382,12 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
             int32_t currentAbs = 0;
             if (!readLatestEncoderSample(sharedData, ctx->jointIndex, &currentRaw, &currentEncoder) ||
                 !readLatestMotorServoAbs(sharedData, ctx->motorChannel, &currentAbs)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "lost encoder/servo feedback",
-                                             CALIB_DIAG_REASON_FEEDBACK_LOST,
-                                             ctx->startFound ? CALIB_DIAG_PHASE_RELEASE : CALIB_DIAG_PHASE_FIND_MAX,
-                                             ctx->motorChannel,
-                                             0,
-                                             0,
-                                             0,
-                                             0);
+                failSingleFeedbackLost(
+                    ctx,
+                    sharedData,
+                    "lost encoder/servo feedback",
+                    ctx->startFound ? CALIB_DIAG_PHASE_RELEASE
+                                    : CALIB_DIAG_PHASE_FIND_MAX);
                 return;
             }
 
@@ -507,8 +530,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                      ctx->motorChannel,
                                                      ctx->preReleaseSyncTargetAbs,
                                                      0,
-                                                     0,
-                                                     0);
+                                                     sharedData ? (int32_t)sharedAtomicLoad(
+                                                         &sharedData->calibration_target_apply_status) : -1,
+                                                     (1UL << ctx->motorChannel));
                         return;
                     }
                     FW_LOG_INFO_PRINTF("[AUTO CALIB] START_FOUND J%02u maxDeg=dynamic raw=%u oriented=%ld abs=%ld load=%d byLoad=%u byStall=%u totalDeg=%.3f loadThreshold=%d encTravelSign=%d\r\n",
@@ -581,8 +605,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                          ctx->motorChannel,
                                                          ctx->commandAbs,
                                                          0,
-                                                         0,
-                                                         0);
+                                                         sharedData ? (int32_t)sharedAtomicLoad(
+                                                             &sharedData->calibration_target_apply_status) : -1,
+                                                         (1UL << ctx->motorChannel));
                             return;
                         }
                     }
@@ -674,8 +699,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                                      ctx->motorChannel,
                                                      ctx->commandAbs,
                                                      0,
-                                                     0,
-                                                     0);
+                                                     sharedData ? (int32_t)sharedAtomicLoad(
+                                                         &sharedData->calibration_target_apply_status) : -1,
+                                                     (1UL << ctx->motorChannel));
                         return;
                     }
                     if (!ctx->releaseCommandStarted) {
@@ -1014,8 +1040,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                             ctx->motorChannel,
                             ctx->targetAbs,
                             0,
-                            0,
-                            0);
+                            sharedData ? (int32_t)sharedAtomicLoad(
+                                &sharedData->calibration_target_apply_status) : -1,
+                            (1UL << ctx->motorChannel));
                     }
                     return;
                 }
@@ -1037,16 +1064,11 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                 !readLatestMotorServoAbs(sharedData,
                                          ctx->motorChannel,
                                          &currentAbs)) {
-                failAutoCalibContextWithDiag(ctx,
-                                             sharedData,
-                                             "pre-release sync lost servo feedback",
-                                             CALIB_DIAG_REASON_FEEDBACK_LOST,
-                                             CALIB_DIAG_PHASE_RELEASE,
-                                             ctx->motorChannel,
-                                             0,
-                                             0,
-                                             0,
-                                             0);
+                failSingleFeedbackLost(
+                    ctx,
+                    sharedData,
+                    "pre-release sync lost servo feedback",
+                    CALIB_DIAG_PHASE_RELEASE);
                 return;
             }
 
@@ -1074,8 +1096,9 @@ static void stepAutoCalibrationJoint(JointCalibContext* ctx,
                                              ctx->motorChannel,
                                              ctx->preReleaseSyncTargetAbs,
                                              0,
-                                             0,
-                                             0);
+                                             sharedData ? (int32_t)sharedAtomicLoad(
+                                                 &sharedData->calibration_target_apply_status) : -1,
+                                             (1UL << ctx->motorChannel));
                 return;
             }
 
@@ -1200,32 +1223,40 @@ SingleMotorCalibrationRunResult runSingleMotorCalibrationMachine(
 
         stepAutoCalibrationJoint(&ctx, sharedData, params, &batch);
         if (!publishCalibrationBatch(sharedData, &batch)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-                               CALIB_DIAG_PHASE_SEQUENCE,
-                               ctx.jointIndex,
-                               0xFF,
-                               batch.count,
-                               sharedData ? sharedData->servo_target_owner : -1,
-                               sharedData ? sharedData->system_state : -1,
-                               selectedJointMask);
+            const uint8_t applyStatus = sharedData
+                ? sharedAtomicLoad(&sharedData->calibration_target_apply_status)
+                : CALIBRATION_TARGET_APPLY_IDLE;
+            uint32_t motorMask = 0;
+            for (uint8_t i = 0; i < batch.count; ++i) {
+                motorMask |= 1UL << batch.commands[i].motorChannel;
+            }
+            setCalibrationDiagIfEmpty(
+                sharedData,
+                applyStatus == CALIBRATION_TARGET_APPLY_PENDING
+                    ? CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT
+                    : CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
+                CALIB_DIAG_PHASE_SEQUENCE,
+                ctx.jointIndex,
+                batch.count ? batch.commands[0].motorChannel : 0xFF,
+                batch.count ? batch.commands[0].position : 0,
+                batch.count > 1 ? batch.commands[1].position : 0,
+                applyStatus,
+                motorMask);
             return SINGLE_MOTOR_CALIBRATION_ABORTED;
         }
         calibrationWaitMs(params.loopMs);
     }
 
     if (ctx.state == AUTO_CALIB_STATE_FAILED) {
-        if (!hasCalibrationDiag(sharedData)) {
-            setCalibrationDiag(sharedData,
-                               CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                               CALIB_DIAG_PHASE_SEQUENCE,
-                               jointIndex,
-                               ctx.motorChannel,
-                               ctx.state,
-                               ctx.releaseAngleStallStable,
-                               sequenceIndex,
-                               selectedJointMask);
-        }
+        setCalibrationDiagIfEmpty(sharedData,
+                                  CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                  CALIB_DIAG_PHASE_SEQUENCE,
+                                  jointIndex,
+                                  ctx.motorChannel,
+                                  0,
+                                  0,
+                                  0,
+                                  0);
         return SINGLE_MOTOR_CALIBRATION_FAILED;
     }
 

@@ -26,7 +26,7 @@ from .calibration_snapshot import (
     joint_calib_result_has_valid_tendon_lut,
     motor_mask_for_joint_mask,
     parse_mask,
-    validate_snapshot,
+    validate_snapshot_for_load as validate_calibration_snapshot_for_load,
 )
 from .data_models import HandModel
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
@@ -64,76 +64,6 @@ def joint_calib_result_signature(item: Optional[dict]) -> Optional[str]:
     if not isinstance(item, dict) or not bool(item.get("success", False)):
         return None
     return json.dumps(item, sort_keys=True, ensure_ascii=False)
-
-
-def validate_calibration_snapshot_for_load(snapshot: dict) -> Optional[str]:
-    try:
-        validate_snapshot(snapshot)
-    except CalibrationSnapshotError as exc:
-        return str(exc)
-    joint_mask = parse_mask(snapshot.get("active_joint_mask")) & _JOINT_MASK
-    motor_mask = parse_mask(snapshot.get("active_motor_mask")) & VALID_MOTOR_MASK
-    valid_motor_mask = (
-        parse_mask(snapshot.get("motor_abs_limit_valid_bitmap")) & VALID_MOTOR_MASK
-    )
-    results = snapshot.get("joint_calib_results", [])
-    if len(results) != ENCODER_COUNT:
-        return f"invalid joint calibration count: {len(results)}"
-    if joint_mask == 0:
-        for joint_idx, item in enumerate(results):
-            if isinstance(item, dict) and bool(item.get("success", False)):
-                joint_mask |= 1 << joint_idx
-    missing = [
-        joint_idx
-        for joint_idx in range(ENCODER_COUNT)
-        if (joint_mask & (1 << joint_idx))
-        and (
-            not isinstance(results[joint_idx], dict)
-            or not bool(results[joint_idx].get("success", False))
-        )
-    ]
-    if missing:
-        return "snapshot missing active joint calibration: " + _format_joints(missing)
-    try:
-        expected_version, expected_crc = urdf_manual_scaled_mapping_metadata()
-    except (OSError, TypeError, ValueError) as exc:
-        return f"current manual-scaled URDF mapping is invalid: {exc}"
-    incompatible = [
-        joint_idx
-        for joint_idx in range(ENCODER_COUNT)
-        if (joint_mask & (1 << joint_idx))
-        and (
-            int(results[joint_idx].get("mappingVersion", 0) or 0)
-            != expected_version
-            or int(results[joint_idx].get("urdfConfigCrc", 0) or 0)
-            != expected_crc
-        )
-    ]
-    if incompatible:
-        return (
-            "snapshot mapping/URDF contract mismatch; recalibration required: "
-            + _format_joints(incompatible)
-        )
-    missing_lut = [
-        joint_idx
-        for joint_idx in range(ENCODER_COUNT)
-        if (joint_mask & (1 << joint_idx))
-        and not joint_calib_result_has_valid_tendon_lut(results[joint_idx], joint_idx)
-    ]
-    if missing_lut:
-        return (
-            "snapshot missing tendon LUT; recalibrate with the current firmware: "
-            + _format_joints(missing_lut)
-        )
-    missing_motors = [
-        motor_idx
-        for motor_idx in range(MOTOR_COUNT)
-        if (motor_mask & (1 << motor_idx))
-        and not (valid_motor_mask & (1 << motor_idx))
-    ]
-    if missing_motors:
-        return "snapshot missing active motor ABS limits: " + _format_motors(missing_motors)
-    return None
 
 
 def _format_joints(indices) -> str:
@@ -445,8 +375,23 @@ class CalibrationWorkflowService:
                     self._clear_calibration_tracking(epoch)
                 return
             saved = self._store.merge_calibration(payload, save_mask)
+            if not self._controller.request_multiturn_anchor_capture(
+                active_motor_mask
+            ):
+                raise CalibrationSnapshotError(
+                    "calibration saved, but multi-turn anchor capture was rejected"
+                )
+            anchors_saved, anchor_message = (
+                self._controller.wait_for_multiturn_anchor_capture(
+                    active_motor_mask
+                )
+            )
+            if not anchors_saved:
+                raise CalibrationSnapshotError(
+                    "calibration saved, but multi-turn anchors are incomplete: "
+                    + str(anchor_message)
+                )
             self._last_snapshot_signature = signature
-            self._controller.request_multiturn_anchor_capture(active_motor_mask)
             with self._lock:
                 for joint_idx in range(ENCODER_COUNT):
                     if save_mask & (1 << joint_idx):
@@ -459,7 +404,7 @@ class CalibrationWorkflowService:
                     epoch,
                     "snapshot_saved",
                     True,
-                    f"saved {self._store.path.name}",
+                    f"saved {self._store.path.name}; {anchor_message}",
                     save_mask,
                     active_motor_mask,
                     details={"digest": saved.get("integrity", {}).get("digest", "")},

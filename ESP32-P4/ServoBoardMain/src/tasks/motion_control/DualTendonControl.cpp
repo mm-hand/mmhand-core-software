@@ -219,13 +219,6 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         outTargets->motorRef[i] = motorRefModel[i];
         outTargets->motorFbModel[i] = motorFbModel[i];
         outTargets->motorErr[i] = outTargets->motorRef[i] - outTargets->motorFbModel[i];
-        outTargets->refVelocity[i] = 0.0f;
-        outTargets->fbVelocity[i] = 0.0f;
-        outTargets->velocityError[i] = 0.0f;
-        outTargets->filteredVelocityError[i] = 0.0f;
-        outTargets->pTerm[i] = 0.0f;
-        outTargets->iTerm[i] = 0.0f;
-        outTargets->dTerm[i] = 0.0f;
         outTargets->pidCorrection[i] = 0.0f;
         outTargets->rawTargetAbs[i] = 0;
         outTargets->lutTargetClamped[i] = 0;
@@ -277,15 +270,8 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
             cfg.dTermLimit[i]);
         const float correction = pTerm + iTerm + dTerm;
 
-        outTargets->refVelocity[i] = refVelocity;
-        outTargets->fbVelocity[i] = fbVelocity;
-        outTargets->velocityError[i] = velocityError;
-        outTargets->filteredVelocityError[i] = state.filteredVelocityError[i];
-        outTargets->pTerm[i] = pTerm;
-        outTargets->iTerm[i] = iTerm;
-        outTargets->dTerm[i] = dTerm;
         outTargets->pidCorrection[i] = correction;
-        const int32_t rawTarget = (int32_t)(motorCurrent + correction);
+        const int32_t rawTarget =servoData->servoAngles[motorChannel] +static_cast<int32_t>(lroundf(correction));
         outTargets->rawTargetAbs[i] = rawTarget;
         int32_t lutMinAbs = 0;
         int32_t lutMaxAbs = 0;
@@ -300,7 +286,7 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
             return false;
         }
 
-        // 双腱两台电机分别按腱绳方向扩展：松端 500、紧端 1200 counts。
+        // 双腱两台电机分别按 ControlConfig 的松端/紧端裕量扩展。
         const p4::safety::AbsBoundaryClampDecision clampDecision =
             p4::safety::clampAbsToBoundary(rawTarget, lutMinAbs, lutMaxAbs);
         if (!clampDecision.valid) {

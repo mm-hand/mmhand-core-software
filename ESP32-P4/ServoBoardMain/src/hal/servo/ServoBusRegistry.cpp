@@ -5,7 +5,6 @@
 #include "ServoBusRegistry.h"
 
 #include "../../config/BoardConfig.h"
-#include "../../config/ServoConfig.h"
 
 ServoBusRegistry& servoBusRegistry()
 {
@@ -30,25 +29,4 @@ void ServoBusRegistry::begin()
                           kServoBusBaud);
     }
     initialized_ = true;
-}
-
-bool ServoBusRegistry::restartBus(uint8_t busIndex,
-                                  uint32_t nowMs,
-                                  bool motionActive)
-{
-    if (!initialized_ || motionActive || busIndex >= NUM_BUSES) {
-        return false;
-    }
-    if (hasRestarted_[busIndex] &&
-        (uint32_t)(nowMs - lastRestartMs_[busIndex]) <
-            mmhand::config::servo::kTransportRestartMinIntervalMs) {
-        return false;
-    }
-    // 从发起重启时刻开始限频；即使底层重启失败，也不能在下一扫描周期连续冲击 BUS。
-    lastRestartMs_[busIndex] = nowMs;
-    hasRestarted_[busIndex] = true;
-    if (!buses_[busIndex].restartTransport()) {
-        return false;
-    }
-    return true;
 }

@@ -20,7 +20,6 @@ using namespace mmhand::config::safety;
 namespace p4::state {
 namespace {
 
-constexpr int32_t kReadyEnterOutsideToleranceCounts = 24;
 constexpr int32_t kReadyExitOutsideToleranceCounts = 48;
 constexpr uint8_t kWorkspaceStableSampleCount = 3;
 
@@ -38,7 +37,9 @@ bool routesControllable(SystemRuntimeContext* runtime, uint32_t requiredMask)
     if (!runtime || requiredMask == 0) {
         return false;
     }
-    return sharedAtomicLoad(&runtime->servo_route_scan_state) == 0 &&
+    const uint8_t scanState =
+        sharedAtomicLoad(&runtime->servo_route_scan_state);
+    return (scanState == 0 || scanState == 2) &&
            (requiredMask &
             ~sharedAtomicLoad(&runtime->servo_route_controllable_bitmap)) == 0;
 }
@@ -331,7 +332,7 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
                 }
             } else {
                 s_workspaceExitStable[joint] = 0;
-                if (outside >= -kReadyEnterOutsideToleranceCounts) {
+                if (outside >= -kFeedbackReadyEnterOutsideToleranceCounts) {
                     if (s_workspaceEnterStable[joint] < 255) {
                         ++s_workspaceEnterStable[joint];
                     }
@@ -346,14 +347,14 @@ FeedbackReadinessDecision evaluateFeedbackReadiness(
         }
 
         if ((s_workspaceReadyLatchMask & bit) == 0) {
-            if (outside < -kReadyEnterOutsideToleranceCounts) {
+            if (outside < -kFeedbackReadyEnterOutsideToleranceCounts) {
                 recoverableMask |= bit;
                 if (!hasReject) {
                     firstReject = reject(FEEDBACK_READY_REJECT_BELOW_WORKSPACE,
                                          joint,
                                          0,
                                          outside,
-                                         kReadyEnterOutsideToleranceCounts);
+                                         kFeedbackReadyEnterOutsideToleranceCounts);
                     hasReject = true;
                 }
             }

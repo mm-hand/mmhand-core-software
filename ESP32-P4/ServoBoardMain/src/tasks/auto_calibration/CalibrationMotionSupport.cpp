@@ -347,17 +347,16 @@ bool waitForCalibrationEncoderRecovery(SystemRuntimeContext* sharedData,
         calibrationWaitMs(10);
     }
 
-    if (!hasCalibrationDiag(sharedData)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_CONTROL_LOST,
-                           CALIB_DIAG_PHASE_INIT,
-                           0xFF,
-                           0xFF,
-                           sharedData ? (int32_t)sharedData->system_state : -1,
-                           sharedData ? (int32_t)sharedData->servo_target_owner : -1,
-                           sharedData ? (int32_t)sharedData->control_enabled : -1,
-                           requiredJointMask);
-    }
+    setCalibrationDiagIfEmpty(
+        sharedData,
+        CALIB_DIAG_REASON_CONTROL_LOST,
+        CALIB_DIAG_PHASE_INIT,
+        0xFF,
+        0xFF,
+        sharedData ? (int32_t)sharedData->system_state : -1,
+        sharedData ? (int32_t)sharedData->servo_target_owner : -1,
+        sharedData ? (int32_t)sharedData->control_enabled : -1,
+        sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
     return false;
 }
 
@@ -477,17 +476,16 @@ bool waitForCalibrationServoRecovery(SystemRuntimeContext* sharedData,
         }
         calibrationWaitMs(10);
     }
-    if (!hasCalibrationDiag(sharedData)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_CONTROL_LOST,
-                           CALIB_DIAG_PHASE_INIT,
-                           0xFF,
-                           0xFF,
-                           sharedData ? (int32_t)sharedData->system_state : -1,
-                           sharedData ? (int32_t)sharedData->servo_target_owner : -1,
-                           sharedData ? (int32_t)sharedData->control_enabled : -1,
-                           requiredMask);
-    }
+    setCalibrationDiagIfEmpty(
+        sharedData,
+        CALIB_DIAG_REASON_CONTROL_LOST,
+        CALIB_DIAG_PHASE_INIT,
+        0xFF,
+        0xFF,
+        sharedData ? (int32_t)sharedData->system_state : -1,
+        sharedData ? (int32_t)sharedData->servo_target_owner : -1,
+        sharedData ? (int32_t)sharedData->control_enabled : -1,
+        sharedData ? sharedAtomicLoad(&sharedData->active_joint_mask) : 0);
     return false;
 }
 

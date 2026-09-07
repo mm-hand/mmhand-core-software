@@ -59,8 +59,12 @@ from .ui_control_common import (
     motor_tendon_shorten_abs_sign,
 )
 from .ui_dialogs import show_scrollable_message
+from desktop.core.calibration_snapshot import (
+    joint_calib_result_tendon_lut_abs_ranges,
+)
 from desktop.core.generated_upper_protocol import STATE_SYNC_ALL
 from desktop.core.safety_rules import explain_direct_reject
+from desktop.core.session_log import log_session
 
 
 class ControlPanelStateMixin:
@@ -69,6 +73,10 @@ class ControlPanelStateMixin:
     _ENCODER_COMMON_ZERO_RECOVERY_FRAMES = 3
     _ROS2_TARGET_STALE_AFTER_S = 0.50
     _P4_REBOOT_BACKWARD_JUMP_MS = 100
+    # 仅用于诊断显示；必须与 P4 ControlConfig 的运行钳位裕量保持一致。
+    # 安全判定仍完全由 P4 执行，桌面端不使用这些值下发或放宽命令。
+    _TENDON_LUT_RELEASE_MARGIN_COUNTS = 500
+    _TENDON_LUT_TIGHT_MARGIN_COUNTS = 1000
     _ENCODER_COMMON_BUS_MESSAGE = (
         "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
         "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
@@ -327,14 +335,16 @@ class ControlPanelStateMixin:
             if callable(request_state_sync):
                 try:
                     request_state_sync(STATE_SYNC_ALL)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_session("UI", f"P4 reboot state sync failed: {exc}")
+                    self._set_status(f"P4 reboot state sync failed: {exc}")
             begin_startup_check = getattr(self, "begin_startup_device_check", None)
             if callable(begin_startup_check):
                 try:
                     begin_startup_check()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_session("UI", f"P4 reboot recovery failed: {exc}")
+                    self._set_status(f"P4 reboot recovery failed: {exc}")
         elif self._last_multi_turn_unknown_bitmap is not None and unknown_bitmap != self._last_multi_turn_unknown_bitmap:
             self._reset_motor_target_cache_for_device_epoch(
                 "Turn status changed: motor targets re-synced to feedback"
@@ -1317,7 +1327,7 @@ class ControlPanelStateMixin:
                 table.setUpdatesEnabled(True)
 
     def _refresh_joint_abs_limit_item(self, joint_idx: int, state: Optional[HandModel]) -> None:
-        """Refresh the joint abs limit item display or controls."""
+        """显示关节标定 LUT 覆盖的舵机 ABS 范围。"""
         if joint_idx < 0 or joint_idx >= len(self.joint_abs_limit_items):
             return
         item = self.joint_abs_limit_items[joint_idx]
@@ -1327,23 +1337,30 @@ class ControlPanelStateMixin:
                 item.setToolTip("")
             return
 
-        valid_bitmap = int(getattr(state, "motor_abs_limit_valid_bitmap", 0) or 0)
-        mins = getattr(state, "motor_abs_limit_min", []) or []
-        maxs = getattr(state, "motor_abs_limit_max", []) or []
         summaries: List[str] = []
         details: List[str] = []
-        motors = self._motors_by_joint[joint_idx] if joint_idx < len(self._motors_by_joint) else []
-        for motor_idx in motors:
-            if motor_idx >= len(mins) or motor_idx >= len(maxs):
+        results = getattr(state, "joint_calib_results", []) or []
+        result = results[joint_idx] if joint_idx < len(results) else None
+        for motor_idx, lo, hi in joint_calib_result_tendon_lut_abs_ranges(
+            result, joint_idx
+        ):
+            shorten_sign = motor_tendon_shorten_abs_sign(motor_idx)
+            if shorten_sign > 0:
+                control_lo = lo - self._TENDON_LUT_RELEASE_MARGIN_COUNTS
+                control_hi = hi + self._TENDON_LUT_TIGHT_MARGIN_COUNTS
+            elif shorten_sign < 0:
+                control_lo = lo - self._TENDON_LUT_TIGHT_MARGIN_COUNTS
+                control_hi = hi + self._TENDON_LUT_RELEASE_MARGIN_COUNTS
+            else:
                 continue
-            if ((valid_bitmap >> motor_idx) & 0x01) == 0:
-                continue
-            lo = int(mins[motor_idx])
-            hi = int(maxs[motor_idx])
-            if lo > hi:
-                lo, hi = hi, lo
-            summaries.append(f"M{motor_idx:02d} [{lo},{hi}]")
-            details.append(f"M{motor_idx:02d}: calibrated ABS range [{lo}, {hi}] (diagnostic)")
+            summaries.append(f"M{motor_idx:02d} [{control_lo},{control_hi}]")
+            details.append(
+                f"M{motor_idx:02d}: control ABS range "
+                f"[{control_lo}, {control_hi}]; LUT [{lo}, {hi}]; "
+                f"release margin={self._TENDON_LUT_RELEASE_MARGIN_COUNTS}, "
+                f"tight margin={self._TENDON_LUT_TIGHT_MARGIN_COUNTS} counts "
+                "(diagnostic mirror; P4 is authoritative)"
+            )
 
         # 双腱范围按舵机分行，避免一行内容被表格列宽截断。
         item.setText("\n".join(summaries) if summaries else "-")

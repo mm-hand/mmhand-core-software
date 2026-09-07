@@ -11,7 +11,7 @@
 
 inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3; ///< 同步读单批等待时限。
 inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400; ///< 标定/直控默认速度。
-inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 200; ///< 标定/直控默认加速度。
+inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 254; ///< 标定/直控默认加速度。
 
 namespace mmhand::config::servo {
 
@@ -54,13 +54,8 @@ inline constexpr uint8_t kMaxControllableServosPerBus = MAX_SERVOS_PER_BUS;
 /** 离线 Mxx 的定向重扫间隔；包括曾经在线后掉线和首次全量扫描时缺失的舵机。 */
 inline constexpr uint32_t kOfflineRouteRescanIntervalMs = 500;
 /** 同一条 UART BUS 两次底层重启之间的最短间隔，避免反复抖动影响同 BUS 在线舵机。 */
-inline constexpr uint32_t kTransportRestartMinIntervalMs = 1000;
-/** UART 重新 begin 后等待驱动和收发方向稳定，再执行单播探测。 */
-inline constexpr uint32_t kTransportRestartSettleMs = 20;
-/** 热插拔定向扫描及 BUS 重启确认允许比启动全量扫描多等待少量时间。 */
+/** 热插拔定向扫描允许比启动全量扫描多等待少量时间。 */
 inline constexpr uint16_t kRecoveryProbeTimeoutMs = 5;
-/** 同一 Mxx 连续定向重扫失败达到该次数后，才重启它掉线前所在的 BUS。 */
-inline constexpr uint8_t kTransportRestartAfterFailedScans = 2;
 inline constexpr uint8_t kRecoveryMaxAttempts = 3; ///< 单次上线恢复最大尝试次数。
 inline constexpr uint32_t kRecoveryRetryIntervalMs = 100; ///< 上线恢复重试间隔。
 /** 单台舵机 RESET Zero 完整事务的最大尝试次数；每次都必须收到单播响应。 */

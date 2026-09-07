@@ -158,15 +158,6 @@ def row_time(row: Dict[str, str]) -> float:
     return float("nan")
 
 
-def finite_arrays(*arrays: np.ndarray) -> Tuple[np.ndarray, ...]:
-    if not arrays:
-        return tuple()
-    mask = np.ones(len(arrays[0]), dtype=bool)
-    for array in arrays:
-        mask &= np.isfinite(array)
-    return tuple(array[mask] for array in arrays)
-
-
 def deduplicate_time(columns: Sequence[np.ndarray]) -> Tuple[np.ndarray, ...]:
     if not columns or len(columns[0]) == 0:
         return tuple(columns)

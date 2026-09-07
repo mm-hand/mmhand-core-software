@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from desktop.core.calibration_snapshot import (
     joint_calib_result_has_valid_tendon_lut,
+    joint_calib_result_tendon_lut_abs_ranges,
 )
 from desktop.core.calibration_workflow import CalibrationWorkflowEvent
 from desktop.core.protocol import SYSTEM_STATE_READY
@@ -102,6 +103,25 @@ class _ReadyStateHarness(ControlPanelStateMixin, CalibrationWorkflowController):
         pass
 
 
+class _TextItem:
+    def __init__(self):
+        self.text = ""
+        self.tooltip = ""
+
+    def setText(self, value):
+        self.text = str(value)
+
+    def setToolTip(self, value):
+        self.tooltip = str(value)
+
+
+class _AbsLimitDisplayHarness(ControlPanelStateMixin):
+    def __init__(self):
+        self.joint_abs_limit_items = [None] * 21
+        self.joint_abs_limit_items[12] = _TextItem()
+        self.joint_table = None
+
+
 def test_tendon_lut_validation_accepts_j14_single_and_a_dual_motor_joint():
     single_joint = 14
     dual_joint = min(DUAL_TENDON_JOINT_INDICES)
@@ -112,6 +132,44 @@ def test_tendon_lut_validation_accepts_j14_single_and_a_dual_motor_joint():
     assert joint_calib_result_has_valid_tendon_lut(
         _valid_tendon_lut_result(dual_joint), dual_joint
     )
+
+
+def test_tendon_lut_abs_ranges_use_only_valid_samples_for_dual_joint():
+    joint_idx = 12
+    result = _valid_tendon_lut_result(joint_idx)
+    result["tendonLutMotorAbs"] = [
+        [351, 663, 1557, -99999],
+        [1901, 1595, 711, 99999],
+    ]
+
+    assert joint_calib_result_tendon_lut_abs_ranges(result, joint_idx) == [
+        (15, 351, 1557),
+        (16, 711, 1901),
+    ]
+
+
+def test_joint_abs_limit_cell_displays_lut_ranges_with_runtime_margins():
+    panel = _AbsLimitDisplayHarness()
+    result = _valid_tendon_lut_result(12)
+    result["tendonLutMotorAbs"] = [
+        [351, 663, 1557],
+        [1901, 1595, 711],
+    ]
+    state = SimpleNamespace(
+        joint_calib_results=[None] * 12 + [result] + [None] * 8,
+        motor_abs_limit_valid_bitmap=(1 << 15) | (1 << 16),
+        motor_abs_limit_min=[-99999] * 27,
+        motor_abs_limit_max=[99999] * 27,
+    )
+
+    panel._refresh_joint_abs_limit_item(12, state)
+
+    item = panel.joint_abs_limit_items[12]
+    assert item.text == "M15 [-149,2557]\nM16 [211,2901]"
+    assert "LUT [351, 1557]" in item.tooltip
+    assert "release margin=500" in item.tooltip
+    assert "tight margin=1000" in item.tooltip
+    assert "99999" not in item.text
 
 
 def test_success_ready_refresh_is_independent_from_snapshot_error_event():

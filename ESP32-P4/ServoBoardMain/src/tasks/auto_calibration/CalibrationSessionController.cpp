@@ -141,16 +141,16 @@ void runAutoCalibrationSession(SystemRuntimeContext* sharedData,
     }
     setCalibrationWorkspaceReadMask(sharedData, 0);
 
-    if (!ok && sharedData && !hasCalibrationDiag(sharedData)) {
-        setCalibrationDiag(sharedData,
-                           CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-                           CALIB_DIAG_PHASE_SEQUENCE,
-                           0xFF,
-                           0xFF,
-                           0,
-                           0,
-                           0,
-                           0);
+    if (!ok && sharedData) {
+        setCalibrationDiagIfEmpty(sharedData,
+                                  CALIB_DIAG_REASON_JOINT_STEP_FAILED,
+                                  CALIB_DIAG_PHASE_SEQUENCE,
+                                  0xFF,
+                                  0xFF,
+                                  0,
+                                  0,
+                                  0,
+                                  0);
     }
     servicePostEvent(output,
                      ok ? SYSTEM_EVENT_CALIBRATION_DONE

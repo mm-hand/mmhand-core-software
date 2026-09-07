@@ -29,40 +29,10 @@ from desktop.core.data_recording.topic_schema import (
     DEFAULT_CSV_TOPICS,
     TACTILE_FULL_TOPICS,
 )
-from desktop.core.data_models import HandModel
+from desktop.core.data_models import HandModel, clone_hand_model
 from desktop.core.hand_backend import HandBackend, list_ports
+from desktop.core.calibration_diagnostics import format_calibration_diagnostic
 from desktop.core.protocol import (
-    CALIB_DIAG_PHASE_DUAL_EXCHANGE,
-    CALIB_DIAG_PHASE_DUAL_PRELOAD,
-    CALIB_DIAG_PHASE_FIND_MAX,
-    CALIB_DIAG_PHASE_INIT,
-    CALIB_DIAG_PHASE_RELEASE,
-    CALIB_DIAG_PHASE_RETURN_ZERO,
-    CALIB_DIAG_PHASE_SEQUENCE,
-    CALIB_DIAG_REASON_ABS_LIMIT_INVALID,
-    CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY,
-    CALIB_DIAG_REASON_CONTROL_LOST,
-    CALIB_DIAG_REASON_DUPLICATE_JOINT,
-    CALIB_DIAG_REASON_ENCODER_ERROR,
-    CALIB_DIAG_REASON_FEEDBACK_LOST,
-    CALIB_DIAG_REASON_HOLD_TARGET_FAILED,
-    CALIB_DIAG_REASON_JOINT_LIST_INVALID,
-    CALIB_DIAG_REASON_JOINT_STEP_FAILED,
-    CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID,
-    CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED,
-    CALIB_DIAG_REASON_OVERLOAD,
-    CALIB_DIAG_REASON_SERVO_OFFLINE,
-    CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT,
-    CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS,
-    CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
-    CALIB_DIAG_REASON_RESULT_COMMIT_FAILED,
-    CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
-    CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED,
-    CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
-    CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT,
-    CALIB_DIAG_REASON_TASK_START_FAILED,
-    CALIB_DIAG_REASON_WRAP_TOO_LARGE,
-    CALIB_DIAG_REASON_ZERO_CROSS_INVALID,
     DUAL_TENDON_JOINT_INDICES,
     ENCODER_COUNT,
     FEEDBACK_ADMISSION_REJECTED,
@@ -94,7 +64,7 @@ from desktop.core.safety_rules import explain_feedback_reject, explain_safety_ru
 from .ui_joint_plot_view import JointRealtimePlotView
 from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal, ensure_app
 from .ui_dialogs import show_scrollable_message
-from .ui_services import LatestStateBuffer, clone_hand_model
+from .ui_services import LatestStateBuffer
 from .ui_style import apply_main_window_defaults, configure_qt_application
 from .ui_task_runtime import TaskRuntimeWindow
 from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX
@@ -1063,215 +1033,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
     @staticmethod
     def _calib_diag_summary(state: HandModel) -> dict:
-        valid = bool(getattr(state, "calib_diag_valid", False))
-        reason = int(getattr(state, "calib_diag_reason", 0) or 0)
-        phase = int(getattr(state, "calib_diag_phase", 0) or 0)
-        joint = int(getattr(state, "calib_diag_joint", 0xFF) or 0)
-        motor = int(getattr(state, "calib_diag_motor", 0xFF) or 0)
-        value_a = int(getattr(state, "calib_diag_value_a", 0) or 0)
-        value_b = int(getattr(state, "calib_diag_value_b", 0) or 0)
-        value_c = int(getattr(state, "calib_diag_value_c", 0) or 0)
-        bitmap = int(getattr(state, "calib_diag_bitmap", 0) or 0)
-        timestamp_ms = int(getattr(state, "calib_diag_timestamp_ms", 0) or 0)
-        sequence = int(getattr(state, "calib_diag_sequence", 0) or 0)
-        completed_mask = int(
-            getattr(state, "calib_diag_completed_joint_mask", 0) or 0
-        )
-        failed_mask = int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
-
-        reason_names = {
-            CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY: "没有可标定的 active 关节",
-            CALIB_DIAG_REASON_ENCODER_ERROR: "磁编码器反馈无效",
-            CALIB_DIAG_REASON_SERVO_OFFLINE: "舵机反馈缺失",
-            CALIB_DIAG_REASON_OVERLOAD: "标定中过载",
-            CALIB_DIAG_REASON_ZERO_CROSS_INVALID: "零点推算无效",
-            CALIB_DIAG_REASON_WRAP_TOO_LARGE: "编码器跨度接近整圈",
-            CALIB_DIAG_REASON_ABS_LIMIT_INVALID: "舵机目标超过安全绝对范围",
-            CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED: "标定目标发送失败",
-            CALIB_DIAG_REASON_FEEDBACK_LOST: "标定过程中反馈丢失",
-            CALIB_DIAG_REASON_TASK_START_FAILED: "标定任务启动失败",
-            CALIB_DIAG_REASON_CONTROL_LOST: "标定控制权丢失",
-            CALIB_DIAG_REASON_HOLD_TARGET_FAILED: "保持其他关节失败",
-            CALIB_DIAG_REASON_JOINT_LIST_INVALID: "标定关节列表无效",
-            CALIB_DIAG_REASON_DUPLICATE_JOINT: "标定关节重复",
-            CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: "标定工作空间准备失败",
-            CALIB_DIAG_REASON_JOINT_STEP_FAILED: "部分关节标定失败",
-            CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT: "舵机热插拔恢复超时",
-            CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: "单电机关节松绳超过两圈",
-            CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID: "关节与舵机映射无效",
-            CALIB_DIAG_REASON_RESULT_SPAN_INVALID: "磁编有效行程无效",
-            CALIB_DIAG_REASON_RESULT_BUILD_FAILED: "标定结果或 LUT 构建失败",
-            CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: "标定结果提交失败",
-            CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: "舵机多圈可信状态提交失败",
-            CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT: "标定目标等待下位机执行确认超时",
-        }
-        phase_names = {
-            CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
-            CALIB_DIAG_PHASE_FIND_MAX: "寻找最大拉紧位置",
-            CALIB_DIAG_PHASE_RELEASE: "松绳/方向判断",
-            CALIB_DIAG_PHASE_RETURN_ZERO: "回到零位",
-            CALIB_DIAG_PHASE_DUAL_PRELOAD: "双电机预紧",
-            CALIB_DIAG_PHASE_DUAL_EXCHANGE: "双电机交替测试",
-            CALIB_DIAG_PHASE_SEQUENCE: "标定任务调度",
-        }
-
-        active = valid and reason != 0
-        title = reason_names.get(reason, f"标定诊断 reason={reason}") if active else ""
-        phase_text = phase_names.get(phase, f"phase={phase}" if phase else "-")
-        joint_text = f"J{joint:02d}" if 0 <= joint < ENCODER_COUNT else "J?"
-        motor_text = f"M{motor:02d}" if 0 <= motor < MOTOR_COUNT else "M?"
-
-        lines: List[str] = []
-        suggestions: List[str] = []
-        if active:
-            lines.append(f"标定失败原因：{title}")
-            lines.append(f"阶段：{phase_text}")
-            lines.append(f"对象：{joint_text}, {motor_text}")
-            if completed_mask or failed_mask:
-                lines.append(
-                    f"本轮结果：completed=0x{completed_mask:08X}, "
-                    f"failed=0x{failed_mask:08X}"
-                )
-
-            if reason == CALIB_DIAG_REASON_OVERLOAD:
-                lines.append(f"数据：load={value_a}, limit={value_b}, raw_load={value_c}, bitmap=0x{bitmap:08X}")
-                suggestions.append("先停止控制并卸载机械外力；检查绳索是否过紧、机构是否卡住，再 Clear Fault 后重新标定。")
-            elif reason in {
-                CALIB_DIAG_REASON_ENCODER_ERROR,
-            }:
-                lines.append(f"数据：encoder_ok={value_a}, abs_ok={value_b}, raw_ok={value_c}, bitmap=0x{bitmap:08X}")
-                suggestions.append("检查对应磁编码器供电、SPI/CAN 接线、S3/P4 通信和传感器板状态；恢复有效反馈后再标定。")
-            elif reason in {
-                CALIB_DIAG_REASON_SERVO_OFFLINE,
-                CALIB_DIAG_REASON_FEEDBACK_LOST,
-            }:
-                lines.append(f"数据：abs_ok={value_a}, raw_ok={value_b}, telem_ok={value_c}, bitmap=0x{bitmap:08X}")
-                suggestions.append("检查对应舵机电源、串口总线、ID 映射和接线；反馈稳定后 Clear Fault 并重新标定。")
-            elif reason == CALIB_DIAG_REASON_ZERO_CROSS_INVALID:
-                lines.append(f"数据：taut={value_a}, zero={value_b}, tight={value_c}")
-                suggestions.append("零点不在有效区间内。检查编码器方向、标定起始姿态和绳索预紧，然后重新标定该关节。")
-            elif reason == CALIB_DIAG_REASON_WRAP_TOO_LARGE:
-                lines.append(f"数据：encoder_span={value_a}, tight={value_b}, max={value_c}")
-                suggestions.append("编码器跨度异常接近整圈，通常是方向/映射或多圈锚点错误；检查后重新标定该关节。")
-            elif reason == CALIB_DIAG_REASON_ABS_LIMIT_INVALID:
-                lines.append(f"数据：command_abs={value_a}, min={value_b}, max={value_c}")
-                suggestions.append("舵机绝对目标超出安全范围。先确认多圈读数、舵机 ID 和绳路，再重新 Rope Init/标定。")
-            elif reason == CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED:
-                lines.append(f"数据：target_abs={value_a}, owner/state={value_b}, bitmap=0x{bitmap:08X}")
-                suggestions.append("下位机未接受标定目标。确认没有其他控制流程占用舵机目标，Clear Fault 后重新进入标定。")
-            elif reason == CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY:
-                lines.append(f"数据：active_joint_mask=0x{value_a:08X}, active_motor_mask=0x{value_b:08X}")
-                suggestions.append("在 Active Scope 中勾选需要标定的关节/电机后再开始标定。")
-            elif reason == CALIB_DIAG_REASON_TASK_START_FAILED:
-                suggestions.append("标定任务没有启动。确认上一次标定已经退出；如果仍失败，重启 P4 后再试。")
-            elif reason == CALIB_DIAG_REASON_CONTROL_LOST:
-                lines.append(f"数据：state={value_a}, owner={value_b}, enabled={value_c}, active_joint_mask=0x{bitmap:08X}")
-                suggestions.append("标定过程中控制权被打断。检查是否按过 STOP/E-STOP/Pause/Clear Fault/Enable，或上位机是否发送了其他控制命令；Clear Fault 后重新 ENABLE，再重新标定。")
-            elif reason == CALIB_DIAG_REASON_HOLD_TARGET_FAILED:
-                lines.append(f"数据：current_index={value_a}, joint_count={value_b}, batch_count={value_c}, selected_joint_mask=0x{bitmap:08X}")
-                suggestions.append("标定当前关节时，其他已选关节的保持目标生成失败。检查所选关节对应舵机是否在线、Turn 是否 known、ABS limit 是否有效；必要时减少勾选范围逐个标定。")
-            elif reason == CALIB_DIAG_REASON_JOINT_LIST_INVALID:
-                lines.append(f"数据：joint_or_count={value_a}, max_joint_count={value_b}, index_or_has_list={value_c}, seen_mask=0x{bitmap:08X}")
-                suggestions.append("下位机收到的 active scope/关节列表不合法。取消勾选后重新选择要标定的关节；如果反复出现，检查上位机 active scope 下发和固件关节数量是否一致。")
-            elif reason == CALIB_DIAG_REASON_DUPLICATE_JOINT:
-                lines.append(f"数据：duplicate_index={value_a}, joint_count={value_b}, seen_mask=0x{bitmap:08X}")
-                suggestions.append("同一个关节被重复加入标定序列。重新勾选关节后再标定；如果还出现，检查 active scope 到标定列表的构造逻辑。")
-            elif reason == CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT:
-                lines.append(
-                    f"数据：online_mask=0x{value_a & 0xFFFFFFFF:08X}, "
-                    f"configured_mask=0x{value_b & 0xFFFFFFFF:08X}, "
-                    f"pending_mask=0x{value_c & 0xFFFFFFFF:08X}, "
-                    f"unresolved_mask=0x{bitmap:08X}"
-                )
-                suggestions.append(
-                    "标定尚未开始运动：P4 等待舵机重新上线、关闭扭矩并切回多圈模式时超时。"
-                )
-                suggestions.append(
-                    "检查 unresolved_mask 对应舵机的电源和总线后重新标定；"
-                    "若固件日志出现 recovery failed，请重新给该舵机上电。"
-                )
-            elif reason == CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS:
-                lines.append(
-                    f"数据：实际放绳={value_a} counts，限制={value_b} counts，"
-                    f"下一命令放绳={value_c} counts，电机位图=0x{bitmap:08X}"
-                )
-                suggestions.append(
-                    "单电机关节从紧端放绳已达到两圈安全边界，标定已停止。"
-                    "请检查绳索是否脱落、断裂、绕线方向错误或磁编码器未随机械运动；"
-                    "确认机械安全后 Clear Fault，再重新标定。"
-                )
-            elif reason == CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID:
-                lines.append(
-                    f"数据：joint={value_a}, primary={value_b}, secondary={value_c}, "
-                    f"motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("检查 HardwareMap 中该关节的 J/M 映射、主副电机编号和舵机总数配置。")
-            elif reason == CALIB_DIAG_REASON_RESULT_SPAN_INVALID:
-                lines.append(
-                    f"数据：encoder_span={value_a}, endpoint_a={value_b}, "
-                    f"endpoint_b={value_c}, motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("磁编两端没有形成有效行程。检查磁编方向、机械是否确实运动到两端，以及 SPI/CAN 数据是否实时更新。")
-            elif reason == CALIB_DIAG_REASON_RESULT_BUILD_FAILED:
-                lines.append(
-                    f"数据：sample_count={value_a}, encoder_span={value_b}, "
-                    f"lut_count={value_c}, motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("端点或 LUT 样本无法组成有效标定结果。检查 Manual Min/Max、采样点数量和磁编行程后重新标定。")
-            elif reason == CALIB_DIAG_REASON_RESULT_COMMIT_FAILED:
-                lines.append(
-                    f"数据：joint={value_a}, encoder_span={value_b}, "
-                    f"lut_count={value_c}, motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("标定计算已结束，但结果未能写入运行时标定表。检查关节索引、共享状态和标定结果结构。")
-            elif reason == CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED:
-                lines.append(
-                    f"数据：joint={value_a}, primary={value_b}, secondary={value_c}, "
-                    f"motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("标定结果已计算，但对应舵机仍不能登记为 Turn Known。检查舵机在线、多圈模式配置和热插拔恢复状态。")
-            elif reason == CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT:
-                lines.append(
-                    f"数据：target_a={value_a}, target_b={value_b}, "
-                    f"timeout_or_status={value_c}, motor_mask=0x{bitmap:08X}"
-                )
-                suggestions.append("目标已发布但 ServoBus 未在 100 ms 内确认整批执行。检查舵机任务是否阻塞、总线扫描是否占用 UART，以及目标 owner 是否仍为 Calibration。")
-            elif reason == CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED:
-                workspace_stage_names = {
-                    101: "动作前反馈预检查",
-                    102: "辅助关节/目标关节姿态执行",
-                    103: "目标标定完成后的让位姿态",
-                }
-                if value_c in workspace_stage_names:
-                    helper_text = f"J{value_a:02d}" if 0 <= value_a < ENCODER_COUNT else "J?"
-                    pose_text = {1: "POSE_A（主松、副紧）", 2: "POSE_B（副松、主紧）"}.get(value_b, f"pose={value_b}")
-                    lines.append(
-                        f"工作空间：标定目标={joint_text}，失败关节={helper_text}，"
-                        f"姿态={pose_text}，阶段={workspace_stage_names[value_c]}，"
-                        f"相关电机=0x{bitmap:08X}"
-                    )
-                    suggestions.append("工作空间准备会先处理辅助关节、最后处理标定目标。检查失败关节的舵机在线状态、ABS/load 反馈和 Turn 是否 known；多圈未知时重新勾选对应关节并点击 Calibrate。")
-                else:
-                    lines.append(f"数据：value_a={value_a}, value_b={value_b}, value_c={value_c}, motor_mask=0x{bitmap:08X}")
-                    suggestions.append("自动标定无法安全安排四指侧摆关节的工作空间。检查相关电机是否在线、Turn 是否 known；若多圈未知，重新勾选对应关节并点击 Calibrate。")
-            elif reason == CALIB_DIAG_REASON_JOINT_STEP_FAILED:
-                lines.append(
-                    f"数据：completed_mask=0x{value_a:08X}, failed_mask=0x{value_b:08X}, "
-                    f"selected_count={value_c}, failed_mask_dup=0x{bitmap:08X}"
-                )
-                suggestions.append("本次已成功的关节结果会保留；下次只勾选 failed_mask 对应的失败关节重新标定。若需要细节，请查看前后几行 [AUTO CALIB] 日志。")
-            else:
-                lines.append(f"数据：valueA={value_a}, valueB={value_b}, valueC={value_c}, bitmap=0x{bitmap:08X}")
-                suggestions.append("记录当前日志，检查对应阶段的反馈、映射、方向和机械状态后重新标定。")
-
-        return {
-            "active": active,
-            "title": title,
-            "lines": lines,
-            "suggestions": suggestions,
-            "key": f"{sequence}:{reason}:{phase}:{joint}:{motor}:{value_a}:{value_b}:{value_c}:{bitmap:08X}:{timestamp_ms}",
-        }
-
+        return format_calibration_diagnostic(state)
     def _calib_tooltip(self, state: HandModel, calib: str) -> str:
         if str(calib or "").upper() == "WARN":
             mask = int(getattr(state, "calibration_warning_bitmap", 0) or 0)

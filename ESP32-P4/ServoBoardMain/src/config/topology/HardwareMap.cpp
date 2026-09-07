@@ -36,9 +36,9 @@ static_assert(
     "motor tendon sign count must match SERVO_TOTAL_NUM"
 );
 
-#define ACT_NONE {0xFF, 1, 0, 0}
-#define ACT_PRIMARY(ch) {ch, 1, 0, 0}
-#define ACT_SECONDARY_OPPOSE(ch) {ch, -1, 0, 0}
+#define ACT_NONE {0xFF, 1, 0}
+#define ACT_PRIMARY(ch) {ch, 1, 0}
+#define ACT_SECONDARY_OPPOSE(ch) {ch, -1, 0}
 #define GROUP1(ch) {1, {ACT_PRIMARY(ch), ACT_NONE}}
 #define GROUP2(primaryCh, secondaryAct) {2, {ACT_PRIMARY(primaryCh), secondaryAct}}
 
@@ -158,7 +158,6 @@ bool getJointActuatorGroup(uint8_t jointIndex, JointActuatorGroup* out)
         out->actuators[i].motorChannel = 0xFF;
         out->actuators[i].sign = 1;
         out->actuators[i].offset = 0;
-        out->actuators[i].tensionBias = 0;
     }
 
     const uint8_t configuredCount = getJointActuatorCount(jointIndex);

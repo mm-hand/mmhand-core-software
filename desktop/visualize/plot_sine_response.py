@@ -443,7 +443,7 @@ def plot_session(
     title = (
         f"{session_label(session)} J{joint:02d}: {metrics.frequency_hz:.3f} Hz, "
         f"fundamental lag={metrics.phase_lag_deg:.1f} deg, "
-        f"midpoint={metrics.midpoint_delay_ms:.0f} ms"
+        f"midpoint={metrics.midpoint_delay_ms:.0f} ms, MAE={metrics.mae_deg:.2f} deg"
         + (" [TRACE SUSPECT]" if metrics.trace_suspect else "")
     )
     figure = make_subplots(
@@ -698,7 +698,7 @@ def plot_comparison(
             f"{session_label(session)}: f={metrics.frequency_hz:.3f} Hz, "
             f"lag={metrics.phase_lag_deg:.1f} deg/{metrics.phase_delay_ms:.0f} ms, "
             f"mid={metrics.midpoint_delay_ms:.0f} ms, "
-            f"p2p gain={metrics.peak_to_peak_ratio:.3f}"
+            f"p2p gain={metrics.peak_to_peak_ratio:.3f}, MAE={metrics.mae_deg:.2f} deg"
             + (" [TRACE SUSPECT]" if metrics.trace_suspect else "")
         )
         figure.add_annotation(
@@ -798,7 +798,8 @@ def main() -> int:
             f"delay={metrics.phase_delay_ms:.1f} ms, "
             f"midpoint={metrics.midpoint_delay_ms:.1f} ms, "
             f"xcorr={metrics.correlation_delay_ms:.1f} ms, "
-            f"p2p_gain={metrics.peak_to_peak_ratio:.4f}, RMSE={metrics.rmse_deg:.3f} deg"
+            f"p2p_gain={metrics.peak_to_peak_ratio:.4f}, RMSE={metrics.rmse_deg:.3f} deg, "
+            f"MAE={metrics.mae_deg:.3f} deg"
         )
     print(f"output: {output_dir}")
     return 0

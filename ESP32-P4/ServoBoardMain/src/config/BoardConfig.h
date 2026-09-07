@@ -30,7 +30,4 @@ inline constexpr size_t kHostUartRxBufferBytes = 1024;
 inline constexpr size_t kServoBusUartRxBufferBytes = 512;
 static_assert(kServoBusUartRxBufferBytes >= MAX_SERVOS_PER_BUS * (15U + 6U) * 2U,
               "servo UART RX ring must hold two maximum sync-read response sets");
-/** 当前 21 关节/27 舵机拓扑版本；参与桌面 JSON 映射签名，数值不得随意修改。 */
-inline constexpr uint8_t kHardwareMappingVersion = 3;
-
 #endif // MMHAND_BOARD_CONFIG_H

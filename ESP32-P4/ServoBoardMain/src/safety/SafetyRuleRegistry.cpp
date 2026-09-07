@@ -120,6 +120,7 @@ SafetyRuleId ruleForCalibrationDiagReason(uint8_t reason)
         case CALIB_DIAG_REASON_RESULT_BUILD_FAILED: return SafetyRuleId::CalibrationResultBuildFailed;
         case CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: return SafetyRuleId::CalibrationResultCommitFailed;
         case CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: return SafetyRuleId::CalibrationMultiTurnTrustFailed;
+        case CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED: return SafetyRuleId::CalibrationDualExchangeStalled;
         default: return SafetyRuleId::None;
     }
 }

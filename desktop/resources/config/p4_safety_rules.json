@@ -795,6 +795,15 @@
       "recovery_zh": "检查对应舵机在线、多圈配置和恢复状态。"
     },
     {
+      "rule_id": 4034,
+      "code": "CAL-4034",
+      "title_zh": "双腱换向阶段关节停止响应",
+      "severity": "Blocking",
+      "layer": "Calibration",
+      "action_zh": "停止当前运动",
+      "recovery_zh": "检查拮抗绳预紧、换向方向、磁编反馈和机械卡滞。"
+    },
+    {
       "rule_id": 4101,
       "code": "CAW-4101",
       "title_zh": "Auto Min 与 Manual Min 偏差不足",
