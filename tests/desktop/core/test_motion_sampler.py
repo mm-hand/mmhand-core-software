@@ -14,7 +14,7 @@ def _row(source="ROS2:/raw_ik_target", *, live=True):
     }
 
 
-def test_continuous_stream_is_limited_and_keeps_tail():
+def test_continuous_stream_preserves_every_input():
     sampler = MotionCommandSampler(period_s=0.05)
 
     first = sampler.submit(_row(), now_monotonic=1.00)
@@ -22,10 +22,10 @@ def test_continuous_stream_is_limited_and_keeps_tail():
     tail = sampler.flush_due(now_monotonic=1.08)
 
     assert len(first) == 1
-    assert middle == []
-    assert len(tail) == 1
+    assert len(middle) == 1
+    assert tail == []
     assert first[0]["frame_kind"] == "continuous"
-    assert tail[0]["stream_id"] == first[0]["stream_id"]
+    assert middle[0]["stream_id"] == first[0]["stream_id"]
 
 
 def test_discrete_ui_command_is_written_immediately():

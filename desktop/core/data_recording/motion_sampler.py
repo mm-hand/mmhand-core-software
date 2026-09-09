@@ -1,6 +1,6 @@
 """motion_sampler.py - MMHand Desktop 模块契约。
 
-职责：分类控制输入并将连续运动轨迹降采样到记录频率。
+职责：分类控制输入并逐条保留连续运动轨迹。
 线程：采样入口可被通信线程调用，磁盘写入由记录器串行化；不得阻塞设备控制。
 输入：带双时间戳的类型化 Topic 样本、事件和会话配置。
 输出：CSV 文件以及结构化写入状态。
@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from typing import Dict, List, Tuple
 
 
@@ -41,11 +40,7 @@ def classify_motion_source(source: str, live: bool) -> Tuple[str, str, bool]:
 
 
 class MotionCommandSampler:
-    """连续动作最多20 Hz落盘，离散命令逐条原样保存。
-
-    连续流切换来源或停止时会补写最后一个尚未落盘的目标，防止手最终姿态
-    因为50 ms节流窗口而丢失。类内部持锁，可由ROS2线程和Qt线程共同调用。
-    """
+    """逐条编号和分类，不在入口降采样；50 ms 仅用于 writer 刷新。"""
 
     def __init__(self, period_s: float = MOTION_RECORD_PERIOD_SECONDS) -> None:
         self.period_s = max(0.001, float(period_s))
@@ -54,9 +49,6 @@ class MotionCommandSampler:
         self._command_sequence = 0
         self._active_key: Tuple[object, ...] | None = None
         self._active_stream_id = ""
-        self._last_write_monotonic = 0.0
-        self._last_input_monotonic = 0.0
-        self._pending: Dict[str, object] | None = None
 
     def reset(self) -> None:
         with self._lock:
@@ -64,9 +56,6 @@ class MotionCommandSampler:
             self._command_sequence = 0
             self._active_key = None
             self._active_stream_id = ""
-            self._last_write_monotonic = 0.0
-            self._last_input_monotonic = 0.0
-            self._pending = None
 
     def submit(
         self,
@@ -75,7 +64,6 @@ class MotionCommandSampler:
         now_monotonic: float | None = None,
     ) -> List[Dict[str, object]]:
         """接收一条backend命令记录，返回本次应立即写入的0到多行。"""
-        now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         out = dict(row)
         source_kind, frame_kind, source_replayable = classify_motion_source(
             str(out.get("source", "")),
@@ -93,7 +81,6 @@ class MotionCommandSampler:
         with self._lock:
             emitted: List[Dict[str, object]] = []
             if frame_kind != "continuous":
-                emitted.extend(self._flush_pending_locked())
                 self._close_stream_locked()
                 self._stream_counter += 1
                 out["stream_id"] = f"event-{self._stream_counter:06d}"
@@ -106,43 +93,19 @@ class MotionCommandSampler:
                 str(out.get("command_joint_mask", "")),
             )
             if key != self._active_key:
-                emitted.extend(self._flush_pending_locked())
                 self._stream_counter += 1
                 self._active_key = key
                 self._active_stream_id = f"stream-{self._stream_counter:06d}"
-                self._last_write_monotonic = 0.0
 
             out["stream_id"] = self._active_stream_id
-            self._last_input_monotonic = now
-            if (
-                self._last_write_monotonic <= 0.0
-                or now - self._last_write_monotonic >= self.period_s
-            ):
-                emitted.append(self._stamp_locked(out))
-                self._last_write_monotonic = now
-                self._pending = None
-            else:
-                self._pending = out
+            emitted.append(self._stamp_locked(out))
             return emitted
 
-    def flush_due(
-        self,
-        *,
-        now_monotonic: float | None = None,
-        force: bool = False,
-    ) -> List[Dict[str, object]]:
-        """连续流静默一个采样周期或记录结束时补写末帧。"""
-        now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+    def flush_due(self, *, now_monotonic=None, force=False) -> List[Dict[str, object]]:
         with self._lock:
-            if self._pending is None:
-                return []
-            if not force and now - self._last_input_monotonic < self.period_s:
-                return []
-            emitted = self._flush_pending_locked()
-            self._last_write_monotonic = now
             if force:
                 self._close_stream_locked()
-            return emitted
+        return []
 
     def _stamp_locked(self, row: Dict[str, object]) -> Dict[str, object]:
         stamped = dict(row)
@@ -150,18 +113,9 @@ class MotionCommandSampler:
         self._command_sequence += 1
         return stamped
 
-    def _flush_pending_locked(self) -> List[Dict[str, object]]:
-        if self._pending is None:
-            return []
-        row = self._stamp_locked(self._pending)
-        self._pending = None
-        return [row]
-
     def _close_stream_locked(self) -> None:
         self._active_key = None
         self._active_stream_id = ""
-        self._last_write_monotonic = 0.0
-        self._last_input_monotonic = 0.0
 
 
 __all__ = [

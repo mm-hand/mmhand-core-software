@@ -109,6 +109,17 @@ inline constexpr float kDualTendonKd = 0.0f;
 inline constexpr float kDualTendonIntegralLimit = 0.0f;
 inline constexpr float kDualTendonDTermLimitCounts = 100.0f;
 inline constexpr float kDualTendonVelocityFilterTauSec = 0.050f;
+/** 配对恢复试验：不累计偏置；每台最大修正按真实 dt 限制。 */
+inline constexpr bool kDualTendonPairRecoveryEnabled = true;
+inline constexpr float kDualTendonPairRecoveryGain = 0.05f;
+inline constexpr float kDualTendonPairRecoveryDeadbandCounts = 10.0f;
+inline constexpr float kDualTendonPairRecoveryMaxCounts = 3.0f;
+inline constexpr float kDualTendonPairRecoveryRateCountsPerSec = 200.0f;
+static_assert(kDualTendonPairRecoveryGain >= 0.0f &&
+              kDualTendonPairRecoveryDeadbandCounts >= 0.0f &&
+              kDualTendonPairRecoveryMaxCounts >= 0.0f &&
+              kDualTendonPairRecoveryRateCountsPerSec >= 0.0f,
+              "dual tendon recovery parameters must be non-negative");
 /**
  * 单腱和双腱闭环允许越过 LUT 端点的运行裕量，单位为 logical ABS counts。
  * 裕量按腱绳方向而非 ABS 数值正负计算，兼容不同电机方向映射。

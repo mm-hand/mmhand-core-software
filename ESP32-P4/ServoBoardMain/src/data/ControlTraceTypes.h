@@ -1,7 +1,7 @@
 /**
  * @file ControlTraceTypes.h
  * @brief 定义使用同一 P4 单调时钟采集的关节控制跟踪快照。
- * @details 控制任务只覆盖最新快照；HostComm 按需读取，不得反向阻塞 10 ms 控制周期。
+ * @details 订阅时逐周期非阻塞入队，HostComm 批量发送；不得反向阻塞控制周期。
  */
 #ifndef MMHAND_CONTROL_TRACE_TYPES_H
 #define MMHAND_CONTROL_TRACE_TYPES_H
@@ -21,6 +21,14 @@ struct ControlTraceData_t {
     int16_t actualDegCenti[ENCODER_TOTAL_NUM]; ///< 同周期磁编反馈角，0.01 degree。
     int32_t motorCommandAbs[SERVO_TOTAL_NUM];  ///< 最终舵机 logical ABS CMD，单位 counts。
     uint32_t timestamp;                ///< 当前控制周期的 P4 单调毫秒时间。
+    uint32_t servoTimestamp;
+    uint32_t dtMicros;
+    uint32_t servoValidMask;
+    uint32_t recoveryAppliedMask;
+    uint32_t droppedFrames;
+    int32_t motorActualAbs[SERVO_TOTAL_NUM];
+    int16_t pidCounts[SERVO_TOTAL_NUM]; ///< 四舍五入并饱和到 int16 的双腱 PID 修正。
+    int16_t recoveryCounts[SERVO_TOTAL_NUM]; ///< 实际叠加的整数恢复量。
 };
 
 #endif // MMHAND_CONTROL_TRACE_TYPES_H

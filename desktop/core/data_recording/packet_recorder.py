@@ -1,0 +1,67 @@
+"""逐帧记录 P4/S3 原始载荷，并在 writer 线程生成无 UI 抽样的控制总表。"""
+from __future__ import annotations
+
+import struct
+from ..protocol import PACKET_TYPE_CONTROL_TRACE, split_p4_timestamp, parse_control_trace_packet
+
+
+class PacketRecorder:
+    def __init__(self, write):
+        self.write = write
+        self.details = {}
+        self.previous = None
+
+    def consume(self, source, packets, received_at):
+        for packet_type, raw in packets:
+            payload, stamp = split_p4_timestamp(packet_type, raw) if source == "p4" else (raw, None)
+            self.write("packet_frames", {
+                "host_time": received_at, "p4_time_ms": stamp,
+                "source": source, "packet_type": packet_type, "payload_hex": raw.hex(),
+            })
+            if source != "p4" or packet_type != PACKET_TYPE_CONTROL_TRACE:
+                continue
+            if len(payload) == 240:
+                header = struct.unpack_from(">6I", payload)
+                detail = dict(zip(("sequence", "servo_timestamp", "control_dt_us", "servo_valid_mask",
+                                   "recovery_applied_mask", "p4_trace_dropped"), header))
+                detail["actual_abs"] = struct.unpack_from(">27i", payload, 24)
+                detail["pid_counts"] = struct.unpack_from(">27h", payload, 132)
+                detail["recovery_counts"] = struct.unpack_from(">27h", payload, 186)
+                self.details[(stamp, header[0])] = detail
+                while len(self.details) > 32:
+                    self.details.pop(next(iter(self.details)))
+                continue
+            trace = parse_control_trace_packet(payload)
+            if trace is None or stamp is None:
+                continue
+            key = (stamp, trace["sequence"])
+            detail = self.details.pop(key, None)
+            if key == self.previous:
+                continue
+            delta = (trace["sequence"] - self.previous[1]) & 0xFFFFFFFF if self.previous else 0
+            row = {
+                "host_time": received_at, "p4_time_ms": stamp,
+                "control_trace_sequence": trace["sequence"], "target_token": trace["target_token"],
+                "command_age_ms": (stamp - trace["target_accepted_ms"]) & 0xFFFFFFFF,
+                "feedback_age_ms": (stamp - trace["encoder_timestamp_ms"]) & 0xFFFFFFFF,
+                "trace_period_ms": (stamp - self.previous[0]) & 0xFFFFFFFF if self.previous else "",
+                "trace_sequence_gap": max(0, delta - 1) if delta < 0x80000000 else 0,
+                "motor_command_mask": f'0x{trace["motor_command_mask"]:08X}',
+                "trace_detail_valid": int(detail is not None),
+            }
+            if detail:
+                row.update({k: detail[k] for k in ("control_dt_us", "servo_valid_mask", "recovery_applied_mask", "p4_trace_dropped")})
+                row["servo_feedback_age_ms"] = (stamp - detail["servo_timestamp"]) & 0xFFFFFFFF
+            for i in range(21):
+                valid = bool(trace["valid_joint_mask"] & (1 << i))
+                row.update({f"J{i:02d}_target_deg": trace["target_deg"][i],
+                            f"J{i:02d}_current_deg": trace["actual_deg"][i] if valid else "",
+                            f"J{i:02d}_current_valid": int(valid),
+                            f"J{i:02d}_active": int(bool(trace["active_joint_mask"] & (1 << i)))})
+            for i in range(27):
+                row[f"M{i:02d}_cmd_abs"] = trace["motor_command_abs"][i] if trace["motor_command_mask"] & (1 << i) else ""
+                if detail:
+                    for field in ("actual_abs", "pid_counts", "recovery_counts"):
+                        row[f"M{i:02d}_{field}"] = detail[field][i] if detail["servo_valid_mask"] & (1 << i) else ""
+            self.write("joint_wide", row)
+            self.previous = key

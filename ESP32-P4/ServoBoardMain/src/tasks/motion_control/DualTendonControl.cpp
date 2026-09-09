@@ -204,6 +204,25 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
     }
 
     DualTendonJointState& state = g_dualTendonState[jointIndex];
+    // 内部点为等角度间隔；去掉首尾后做最小二乘，不使用端点负载拉伸斜率。
+    float slope[2] = {};
+    const int n = calibration.tendonLutCount;
+    if (n >= 4 && n <= TENDON_LUT_MAX_SAMPLES) {
+        const float center = (n - 1) * 0.5f;
+        float denominator = 0.0f;
+        for (int j = 1; j < n - 1; ++j) {
+            const float dq = (j - center) * calibration.tendonLutAngleStepDeg;
+            denominator += dq * dq;
+            for (int i = 0; i < 2; ++i)
+                slope[i] += dq * calibration.tendonLutMotorAbs[i][j];
+        }
+        if (denominator > 1.0e-6f) {
+            slope[0] /= denominator;
+            slope[1] /= denominator;
+        }
+    }
+    const bool slopeValid = isfinite(slope[0]) && isfinite(slope[1]) &&
+        fabsf(slope[0]) > 1.0e-3f && fabsf(slope[1]) > 1.0e-3f;
     outTargets->count = 2;
     for (uint8_t i = 0; i < 2; i++) {
         // 两个电机都必须有效且在线；任一侧丢失都会使拮抗解失效，
@@ -216,8 +235,9 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         }
 
         outTargets->motorChannel[i] = motorChannel;
-        outTargets->motorRef[i] = motorRefModel[i];
-        outTargets->motorFbModel[i] = motorFbModel[i];
+        outTargets->motorRef[i] = slopeValid ? slope[i] * qRefDeg : motorRefModel[i];
+        outTargets->motorFbModel[i] = slopeValid ? slope[i] * qFbDeg : motorFbModel[i];
+        outTargets->recoveryCounts[i] = 0.0f;
         outTargets->motorErr[i] = outTargets->motorRef[i] - outTargets->motorFbModel[i];
         outTargets->pidCorrection[i] = 0.0f;
         outTargets->rawTargetAbs[i] = 0;
@@ -243,7 +263,6 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         // 微分项基于模型速度误差，而不是 raw 编码器速度，
         // 这样阻尼项始终处在已标定的电机空间中。
         const uint8_t motorChannel = outTargets->motorChannel[i];
-        const float motorCurrent = (float)servoData->servoAngles[motorChannel];
         const float refVelocity = resetState
             ? 0.0f
             : (outTargets->motorRef[i] - state.prevMotorRef[i]) / dtSeconds;
@@ -300,5 +319,31 @@ bool computeDualTendonMotorTargets(uint8_t jointIndex,
         state.prevMotorFbModel[i] = outTargets->motorFbModel[i];
     }
 
+    // 在 raw ABS 中投影与统一收绳坐标等价（两轴符号翻转保持内积）。
+    // 不外推恢复基准；内部样本不足时保留旧 PID，但禁止配对恢复。
+    const float lutLast = fminf(calibration.currentMaxDeg,
+        calibration.tendonLutAngleStartDeg + (n - 1) * calibration.tendonLutAngleStepDeg);
+    if (kDualTendonPairRecoveryEnabled && slopeValid &&
+        qFbDeg >= calibration.tendonLutAngleStartDeg && qFbDeg <= lutLast) {
+        float z[2];
+        for (int i = 0; i < 2; ++i)
+            z[i] = motorFbModel[i] - servoData->servoAngles[outTargets->motorChannel[i]];
+        const float along = (slope[0] * z[0] + slope[1] * z[1]) /
+            (slope[0] * slope[0] + slope[1] * slope[1]);
+        float peak = 0.0f;
+        for (int i = 0; i < 2; ++i) {
+            z[i] -= slope[i] * along;
+            peak = fmaxf(peak, fabsf(z[i]));
+        }
+        if (peak > kDualTendonPairRecoveryDeadbandCounts) {
+            const float limit = fminf(kDualTendonPairRecoveryMaxCounts,
+                kDualTendonPairRecoveryRateCountsPerSec * dtSeconds);
+            const float scale = fminf(limit,
+                kDualTendonPairRecoveryGain *
+                (peak - kDualTendonPairRecoveryDeadbandCounts)) / peak;
+            for (int i = 0; i < 2; ++i)
+                outTargets->recoveryCounts[i] = z[i] * scale;
+        }
+    }
     return true;
 }

@@ -96,8 +96,8 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         self.manual_prepare_btn = QtWidgets.QPushButton("Release Rope")
         self.manual_prepare_btn.setToolTip(
-            "Reset all 27 servo turn counters, clear desktop multi-turn anchors, "
-            "invalidate Auto/LUT, then release every motor by 1500 counts"
+            "Reset online, uniquely routed servo turn counters, clear desktop multi-turn anchors, "
+            "invalidate their Auto/LUT, then release these motors by 1500 counts"
         )
         self.write_btn = QtWidgets.QPushButton("Write Modified")
         self.write_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
@@ -293,10 +293,10 @@ class DeviceCheckView(QtWidgets.QWidget):
             self,
             "Release Rope",
             (
-                "该操作要求 27 台舵机全部在线，并将：\n\n"
-                "1. 重置全部舵机硬件圈数；\n"
-                "2. 清除上位机多圈 JSON 锚点；\n"
-                "3. 作废全部 Auto/LUT/ABS Limit（保留 Manual Min/Max）；\n"
+                "该操作仅处理当前在线且路由唯一的舵机，并将：\n\n"
+                "1. 重置这些舵机硬件圈数；\n"
+                "2. 清除这些舵机的多圈 JSON 锚点；\n"
+                "3. 作废这些舵机所属关节的 Auto/LUT/ABS Limit（保留 Manual Min/Max）；\n"
                 "4. 将每台舵机向放绳方向移动 1500 counts。\n\n"
                 "完成后必须重新执行自动标定。确认继续？"
             ),
@@ -308,7 +308,7 @@ class DeviceCheckView(QtWidgets.QWidget):
 
         self._busy = True
         self._refresh_buttons()
-        self.context.set_status("Release Rope: checking all 27 motors...")
+        self.context.set_status("Release Rope: checking connected motors...")
 
         def worker() -> None:
             try:

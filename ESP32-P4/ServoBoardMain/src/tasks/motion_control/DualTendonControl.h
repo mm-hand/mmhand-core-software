@@ -17,9 +17,9 @@ struct DualTendonMotorTargets {
     int32_t targetAbs[2];
     // PID 原始目标，用于区分模型输出与实际应用的边界目标。
     int32_t rawTargetAbs[2];
-    // 由标定 LUT 预测的目标和反馈电机位置。
-    float motorRef[2];     ///< qRef 经 LUT 插值得到的模型舵机 ABS。
-    float motorFbModel[2]; ///< qFb 经同一 LUT 插值得到的模型舵机 ABS。
+    // 内部拟合斜率乘角度的等效坐标；拟合不可用时回退原 LUT ABS。
+    float motorRef[2];     ///< 目标等效 counts，仅用于 PID 差值和微分。
+    float motorFbModel[2]; ///< 反馈等效 counts，不是实际舵机 ABS。
     float motorErr[2];     ///< motorRef-motorFbModel，单位 counts。
     float pidCorrection[2]; ///< 最终叠加到实际舵机 ABS 的 PID 修正量。
     // 每台电机独立使用自己的 LUT 最小/最大值，并按腱绳方向扩展运行裕量。
@@ -28,6 +28,7 @@ struct DualTendonMotorTargets {
     int32_t lutMaxAbs[2];        ///< 加入裕量后的运行上边界。
     // 上述数组中有效的电机条目数量。
     uint8_t count;
+    float recoveryCounts[2]; ///< 待调用方整对检查边界的恢复量，raw ABS counts。
 };
 
 // 只有关节已配置且硬件映射为异号双执行器时才返回 true。

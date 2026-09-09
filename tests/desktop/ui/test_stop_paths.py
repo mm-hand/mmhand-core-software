@@ -173,6 +173,7 @@ def test_test_stop_returns_without_waiting_for_recording_finalize():
         _recording_csv_path="session-test",
         _set_status=lambda _text: None,
         _stop_joint_debug_packet_log=lambda: None,
+        _set_control_trace_recording_subscription=lambda _enabled: None,
         test_recording_stop_finished=_FakeSignal(),
     )
     app.finish_test_recording_stop = MethodType(HandGUI.finish_test_recording_stop, app)
@@ -216,6 +217,12 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
         _sync_motor_targets_to_feedback=lambda: events.append("sync_motor") or True,
         _build_motor_abs_command_list=lambda: [0] * 27,
         _motor_last_sent_abs=[],
+        _active_motor_mask_from_ui=lambda: 8,
+        _motor_session_origin_abs=[None] * 27,
+        _motor_abs_pos=[None] * 27,
+        _motor_last_slider=[None] * 27,
+        _motor_target_user_set=[False] * 27,
+        _set_motor_target_widget=lambda *_args: None,
         _estop_latched=True,
         backend=backend,
         context=SimpleNamespace(
@@ -227,6 +234,8 @@ def test_joint_enable_does_not_stage_a_direct_motor_command():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert ("mode", ControlMode.JOINT_ANGLE) in events
@@ -265,6 +274,8 @@ def test_joint_enable_resets_uncontrollable_p4_after_desktop_restart():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert events.index("reset") < events.index("scope") < events.index("start")
@@ -304,6 +315,8 @@ def test_joint_enable_does_not_arm_ros2_output():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert not any(event[0] == "ros2_arm" for event in events if isinstance(event, tuple))
@@ -374,6 +387,12 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
         _sync_motor_targets_to_feedback=lambda: True,
         _build_motor_abs_command_list=lambda: targets,
         _motor_last_sent_abs=[],
+        _active_motor_mask_from_ui=lambda: 8,
+        _motor_session_origin_abs=[None] * 27,
+        _motor_abs_pos=[None] * 27,
+        _motor_last_slider=[None] * 27,
+        _motor_target_user_set=[False] * 27,
+        _set_motor_target_widget=lambda *_args: None,
         _estop_latched=True,
         backend=backend,
         context=SimpleNamespace(
@@ -385,12 +404,20 @@ def test_motor_enable_stages_direct_hold_without_extra_start_event():
         _update_connection_lights=lambda: None,
     )
 
+    def hold(mask):
+        assert mask == 8
+        events.append("hold")
+        return True, "hold", targets
+    backend.enable_direct_hold = hold
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
-    assert ("mode", ControlMode.DIRECT_MOTOR) in events
-    assert ("motor_abs", targets) in events
-    assert "start" in events
-    assert events.index("reset") < events.index("start") < events.index(("motor_abs", targets))
+    assert "hold" in events
+    assert panel._motor_session_origin_abs[3] == targets[3]
+    assert panel._motor_abs_pos[3] == 0
+    assert events.index("reset") < events.index("hold")
+    assert "start" not in events
 
 
 def test_motor_enable_checks_servo_online_but_not_encoder_online():
@@ -408,11 +435,18 @@ def test_motor_enable_checks_servo_online_but_not_encoder_online():
         _sync_motor_targets_to_feedback=lambda: True,
         _build_motor_abs_command_list=lambda: [0] * 27,
         _motor_last_sent_abs=[],
+        _active_motor_mask_from_ui=lambda: 8,
+        _motor_session_origin_abs=[None] * 27,
+        _motor_abs_pos=[None] * 27,
+        _motor_last_slider=[None] * 27,
+        _motor_target_user_set=[False] * 27,
+        _set_motor_target_widget=lambda *_args: None,
         _estop_latched=False,
         backend=SimpleNamespace(
             set_control_mode=lambda _mode: events.append("mode"),
             start=lambda: events.append("start"),
             set_motor_positions_absolute=lambda _targets: events.append("direct"),
+            enable_direct_hold=lambda _mask: (events.append("direct") or True, "hold", [0] * 27),
         ),
         context=SimpleNamespace(
             is_comm_connected=lambda: True,
@@ -423,6 +457,8 @@ def test_motor_enable_checks_servo_online_but_not_encoder_online():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert "direct" in events
@@ -451,6 +487,8 @@ def test_joint_enable_requires_corresponding_servo_online_before_start():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert "start" not in events
@@ -476,6 +514,8 @@ def test_joint_enable_rejects_offline_encoder_before_start():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert "start" not in events
@@ -507,6 +547,8 @@ def test_motor_enable_turn_unknown_guides_new_device_before_reset_or_start():
         _update_connection_lights=lambda: None,
     )
 
+    panel._clear_motor_target_after_single_send = MethodType(
+        ControlPanelStateMixin._clear_motor_target_after_single_send, panel)
     ControlCommandController.start_controller(panel)
 
     assert ("turn_guide", 1 << 4, "ENABLE") in events

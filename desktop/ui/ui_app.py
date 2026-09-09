@@ -1657,6 +1657,7 @@ class HandGUI(QtWidgets.QMainWindow):
     def _set_control_trace_recording_subscription(self, enabled: bool) -> None:
         """控制跟踪只服务数据记录；订阅失败不阻断其余 CSV 表。"""
         try:
+            self.backend.set_recording_packet_sink(self._data_logger.record_packets if enabled else None)
             if not self.backend.set_control_trace_subscription(bool(enabled)):
                 log_session("RECORDER", f"control trace subscribe failed enabled={int(enabled)}")
         except Exception as exc:
@@ -1857,7 +1858,6 @@ class HandGUI(QtWidgets.QMainWindow):
             active_joint_mask=active_joint_mask,
         )
 
-        self._write_joint_wide_row(state, host_time, p4_time_ms, active_joint_mask)
 
         motor_targets = self.control_panel.resolved_motor_targets()
         self._write_servo_wide_row(
@@ -1873,109 +1873,6 @@ class HandGUI(QtWidgets.QMainWindow):
         if self._record_tactile_full:
             self._write_tactile_full_rows(state, host_time, p4_time_ms)
 
-    def _write_joint_wide_row(
-        self,
-        state: HandModel,
-        host_time: float,
-        p4_time_ms,
-        active_joint_mask,
-    ) -> None:
-        trace_valid = bool(
-            getattr(state, "has_control_trace", False)
-            and float(getattr(state, "control_trace_last_rx_ts", 0.0) or 0.0)
-            >= self._control_trace_recording_started_at
-        )
-        trace_time = int(getattr(state, "control_trace_p4_time_ms", 0) or 0)
-        trace_sequence = int(getattr(state, "control_trace_sequence", 0) or 0)
-        target_accepted = int(
-            getattr(state, "control_trace_target_accepted_ms", 0) or 0
-        )
-        encoder_timestamp = int(
-            getattr(state, "control_trace_encoder_timestamp_ms", 0) or 0
-        )
-        trace_joint_mask = int(
-            getattr(state, "control_trace_active_joint_mask", 0) or 0
-        )
-        trace_valid_mask = int(
-            getattr(state, "control_trace_valid_joint_mask", 0) or 0
-        )
-        trace_motor_command_mask = int(
-            getattr(state, "control_trace_motor_command_mask", 0) or 0
-        )
-        trace_targets = list(getattr(state, "control_trace_target_deg", []))
-        trace_actual = list(getattr(state, "control_trace_actual_deg", []))
-        trace_motor_commands = list(
-            getattr(state, "control_trace_motor_command_abs", [])
-        )
-        previous_sequence = self._last_recorded_control_trace_sequence
-        previous_trace_time = self._last_recorded_control_trace_timestamp_ms
-        if trace_valid and trace_sequence == previous_sequence:
-            return
-        sequence_delta = (trace_sequence - previous_sequence) & 0xFFFFFFFF
-        sequence_gap = (
-            max(0, sequence_delta - 1)
-            if trace_valid and previous_sequence and sequence_delta < 0x80000000
-            else 0
-        )
-        row: Dict[str, object] = {
-            "host_time": host_time,
-            "p4_time_ms": trace_time if trace_valid else p4_time_ms,
-            "control_trace_sequence": trace_sequence if trace_valid else "",
-            "target_token": (
-                int(getattr(state, "control_trace_target_token", 0) or 0)
-                if trace_valid else ""
-            ),
-            "command_age_ms": (
-                ((trace_time - target_accepted) & 0xFFFFFFFF)
-                if trace_valid and target_accepted else ""
-            ),
-            "feedback_age_ms": (
-                ((trace_time - encoder_timestamp) & 0xFFFFFFFF)
-                if trace_valid and encoder_timestamp else ""
-            ),
-            "trace_sequence_gap": sequence_gap if trace_valid else "",
-            "trace_period_ms": (
-                (trace_time - previous_trace_time) & 0xFFFFFFFF
-                if trace_valid and previous_trace_time is not None
-                else ""
-            ),
-            "motor_command_mask": (
-                f"0x{trace_motor_command_mask:08X}" if trace_valid else ""
-            ),
-        }
-        for i in range(ENCODER_COUNT):
-            label = f"J{i:02d}"
-            encoder = state.encoders[i] if i < len(state.encoders) else None
-            # Trace 有效位来自本周期 P4 映射结果，不再复用异步 UI 显示门禁。
-            current_valid = bool(trace_valid and self._mask_has_bit(trace_valid_mask, i))
-            row[f"{label}_current_deg"] = (
-                trace_actual[i] if current_valid and i < len(trace_actual) else ""
-            )
-            row[f"{label}_current_valid"] = 1 if current_valid else 0
-            row[f"{label}_target_deg"] = (
-                trace_targets[i] if trace_valid and i < len(trace_targets) else ""
-            )
-            row[f"{label}_encoder_raw"] = (
-                getattr(encoder, "raw_sensor", getattr(encoder, "raw", "")) if encoder is not None else ""
-            )
-            row[f"{label}_active"] = 1 if self._mask_has_bit(
-                trace_joint_mask if trace_valid else active_joint_mask, i
-            ) else 0
-        # CMD 与角度来自同一 P4 控制周期，不能从上位机直控输入缓存拼接。
-        for i in range(MOTOR_COUNT):
-            label = f"M{i:02d}"
-            command_valid = bool(
-                trace_valid and self._mask_has_bit(trace_motor_command_mask, i)
-            )
-            row[f"{label}_cmd_abs"] = (
-                trace_motor_commands[i]
-                if command_valid and i < len(trace_motor_commands)
-                else ""
-            )
-        self._data_logger.write("joint_wide", row)
-        if trace_valid:
-            self._last_recorded_control_trace_sequence = trace_sequence
-            self._last_recorded_control_trace_timestamp_ms = trace_time
 
     def _write_servo_wide_row(
         self,

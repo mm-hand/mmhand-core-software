@@ -721,6 +721,9 @@ class TactileSerialComm:
     def _process_tactile_packets(self, packets: List[tuple]) -> Optional[HandModel]:
         if not packets:
             return None
+        sink = getattr(self, "recording_packet_sink", None)
+        if sink is not None:
+            sink("s3", packets)
         model = HandModel()
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
@@ -1399,6 +1402,9 @@ class LowerComputerComm:
 
     def _process_packets(self, packets: List[tuple]) -> Optional[HandModel]:
         """???????????????? StateReducer ???"""
+        sink = getattr(self, "recording_packet_sink", None)
+        if sink is not None:
+            sink("p4", packets)
         return self._state_reducer.process_packets(self, packets)
 
     @staticmethod
@@ -1528,6 +1534,19 @@ class LowerComputerComm:
                 "joint_target_run_masked",
             )
         )
+
+    def invalidate_pending_direct_commands(self) -> int:
+        """Discard old motion intentions, without touching recovery data."""
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            kept = [item for item in pending if item != "start" and not (
+                isinstance(item, tuple) and item[0] in ("motor_pos_abs", "motor_pos_abs_one")
+            )]
+            removed = len(pending) - len(kept)
+            pending.clear()
+            pending.extend(kept)
+            self.tx_queue.not_full.notify_all()
+            return removed
 
     def invalidate_pending_joint_commands(self) -> int:
         """Drop pending joint targets and their feedback ownership request."""

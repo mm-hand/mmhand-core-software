@@ -20,6 +20,7 @@ from typing import Dict, Iterable, Optional
 
 from .csv_exporter import CsvSessionExporter
 from .event_recorder import EventRecorder
+from .packet_recorder import PacketRecorder
 from .topic_schema import (
     CSV_TOPIC_FILENAMES,
     DEFAULT_TOPICS,
@@ -39,9 +40,6 @@ class DataSessionRecorder:
         self._csv = CsvSessionExporter(flush_every=flush_every)
         self._event = EventRecorder(self.write)
         self._queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue(maxsize=self.max_queue)
-        # Replay 要恢复每一帧已记录动作，轨迹不能沿用普通遥测的“队满丢最旧”策略。
-        # 独立队列由同一个 writer 线程落盘，保证外部 ROS2 轨迹不被普通遥测挤掉。
-        self._trajectory_queue: queue.Queue[tuple[str, Dict[str, object]]] = queue.Queue()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -50,6 +48,7 @@ class DataSessionRecorder:
         self._topic_sample_indices: Dict[str, int] = {}
         self._selected_topics: set[str] = set()
         self._fatal_error = ""
+        self._packet_recorder = PacketRecorder(self._write_now)
 
     @property
     def path(self) -> str:
@@ -106,6 +105,7 @@ class DataSessionRecorder:
             self._selected_topics = set(csv_fieldnames)
             self._stop.clear()
             self._fatal_error = ""
+            self._packet_recorder = PacketRecorder(self._write_now)
             self._running = True
             self._thread = threading.Thread(target=self._worker, daemon=True)
             self._thread.start()
@@ -154,28 +154,27 @@ class DataSessionRecorder:
             self._stop.set()
 
     def write(self, topic: str, row: Dict[str, object]) -> None:
-        if not self.is_running():
-            return
-        topic = str(topic)
-        # CSV 以会话启动时的表清单为准；未选择的旧长表数据不进入写队列。
-        if topic not in self._selected_topics:
-            return
-        item = (topic, dict(row))
-        if topic == "teleop_input":
-            self._trajectory_queue.put_nowait(item)
-            return
-        try:
-            self._queue.put_nowait(item)
-        except queue.Full:
+        overflow = False
+        with self._lock:
+            if not self._running:
+                return
+            topic = str(topic)
+            if topic not in self._selected_topics and topic != "_packets":
+                return
             try:
-                self._queue.get_nowait()
-                self._queue.task_done()
-            except queue.Empty:
-                pass
-            try:
-                self._queue.put_nowait(item)
+                self._queue.put_nowait((topic, dict(row)))
             except queue.Full:
-                pass
+                self._running = False
+                self._stop.set()
+                overflow = True
+        if overflow:
+            self._mark_failed(RuntimeError("Recording queue overflow: session incomplete; no silent downsampling"))
+
+    def record_packets(self, source: str, packets) -> None:
+        """RX 线程只复制不可变载荷入队；解码和 CSV 写入均在 writer 中。"""
+        if packets and self.is_running():
+            self.write("_packets", {"source": source, "packets": tuple(
+                (int(kind), bytes(payload)) for kind, payload in packets), "received_at": time.time()})
 
     def event(self, event_type: str, **kwargs) -> None:
         if not self.is_running():
@@ -184,40 +183,28 @@ class DataSessionRecorder:
 
     def _worker(self) -> None:
         try:
+            deadline = time.monotonic() + 0.05
             while (
                 not self._stop.is_set()
-                or not self._trajectory_queue.empty()
                 or not self._queue.empty()
             ):
                 try:
-                    topic, row = self._trajectory_queue.get_nowait()
+                    topic, row = self._queue.get(timeout=max(0.0, deadline - time.monotonic()))
                 except queue.Empty:
-                    pass
-                else:
-                    try:
-                        self._write_now(topic, row)
-                    finally:
-                        self._trajectory_queue.task_done()
-                    continue
-                try:
-                    topic, row = self._queue.get(timeout=0.1)
-                except queue.Empty:
+                    self._csv.flush()
+                    deadline = time.monotonic() + 0.05
                     continue
                 try:
                     self._write_now(topic, row)
                 finally:
                     self._queue.task_done()
+                if time.monotonic() >= deadline:
+                    self._csv.flush()
+                    deadline = time.monotonic() + 0.05
         except Exception as exc:
             self._mark_failed(exc)
 
     def _drain_queue(self) -> None:
-        while True:
-            try:
-                topic, row = self._trajectory_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._write_now(topic, row)
-            self._trajectory_queue.task_done()
         while True:
             try:
                 topic, row = self._queue.get_nowait()
@@ -227,6 +214,9 @@ class DataSessionRecorder:
             self._queue.task_done()
 
     def _write_now(self, topic: str, row: Dict[str, object]) -> None:
+        if topic == "_packets":
+            self._packet_recorder.consume(row["source"], row["packets"], row["received_at"])
+            return
         row = self._normalize_time_fields(topic, row)
         self._csv.write_row(topic, row)
 

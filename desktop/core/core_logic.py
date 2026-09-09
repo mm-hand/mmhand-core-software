@@ -36,7 +36,7 @@ from .device_state_store import (
     canonical_product_fingerprint,
     nearest_logical_abs,
 )
-from .motor_mapping import MOTOR_TO_JOINT_INDEX
+from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH
 from .protocol import (
     CMD_ACTIVE_SCOPE,
@@ -254,6 +254,47 @@ class HandController:
             print(f"Warning: Failed to hold current motor positions: {e}")
             return False
 
+    def invalidate_direct_commands(self) -> None:
+        if self.comm:
+            self.comm.invalidate_pending_direct_commands()
+
+    def enable_direct_hold(self, motor_mask: int) -> Tuple[bool, str, List[int]]:
+        """Enable only from a fresh logical ABS snapshot; never rebuild from sliders."""
+        mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
+        with self.state_lock:
+            state = HandModel()
+            state.copy_state_from(self.current_state)
+        targets = list(state.servo_angles)
+        age = time.time() - state.servo_abs_last_rx_ts
+        p4_age = (state.p4_time_ms - state.servo_feedback_p4_time_ms) & 0xFFFFFFFF
+        valid = state.servo_online_bitmap & state.servo_route_controllable_bitmap
+        reason = ""
+        if not self.comm or not mask:
+            reason = "not connected or empty motor scope"
+        elif state.servo_route_scan_state == 1:
+            reason = "full route scan is running"
+        elif not state.has_servo_angle_data or not state.has_servo_route_status:
+            reason = "waiting for logical ABS and routes"
+        elif not state.has_p4_time or not 0 <= age <= 0.5 or p4_age > 500:
+            reason = "logical ABS feedback is stale"
+        elif mask & (~valid | state.multi_turn_unknown_bitmap):
+            reason = "selected motor offline, unroutable or Turn Unknown"
+        elif len(targets) != MOTOR_COUNT or any(
+            targets[i] != self._clamp_motor_abs_for_current_session(i, targets[i])
+            for i in range(MOTOR_COUNT) if mask & (1 << i)
+        ):
+            reason = "current ABS outside command range; refusing a clamped hold"
+        if not reason:
+            self.invalidate_direct_commands()
+            self.set_control_mode(ControlMode.DIRECT_MOTOR)
+            self.start()
+            if not self.comm.send_command(("motor_pos_abs", targets)):
+                reason = "hold command was not queued"
+        selected = {i: targets[i] for i in range(min(len(targets), MOTOR_COUNT)) if mask & (1 << i)}
+        log_session("DIRECT_ENABLE", f"mask=0x{mask:08X} feedback_ms={state.servo_feedback_p4_time_ms} "
+                    f"age_s={age:.3f} ABS={selected} hold={selected if not reason else {}} reject={reason or 'none'}")
+        return not reason, reason or "Direct motor hold requested", targets
+
     def set_control_mode(self, mode: ControlMode):
         """设置电机控制模式：JOINT_ANGLE 或 DIRECT_MOTOR"""
         self._control_mode = mode
@@ -288,6 +329,7 @@ class HandController:
         log_session("CTRL", f"initialize requested port={comm_port}")
         try:
             self.comm = LowerComputerComm(comm_port)
+            self.comm.recording_packet_sink = getattr(self, "_recording_packet_sink", None)
         except (ValueError, RuntimeError) as exc:
             log_session("CTRL", f"initialize failed before connect: {exc}")
             print(f"连接失败: {exc}")
@@ -345,6 +387,11 @@ class HandController:
         if not self.comm:
             return False
         return bool(self.comm.send_command(("control_trace_subscribe", bool(enabled))))
+
+    def set_recording_packet_sink(self, sink) -> None:
+        self._recording_packet_sink = sink
+        if self.comm:
+            self.comm.recording_packet_sink = sink
 
     def _reset_local_runtime_state(self, calib_status: str = "IDLE") -> None:
         with self.state_lock:
@@ -924,8 +971,9 @@ class HandController:
                 and bool(getattr(state, "has_servo_route_status", False))
             )
             route_scan_complete = (
-                int(getattr(state, "servo_route_scan_state", 0) or 0) == 0
-                and int(getattr(state, "servo_route_scan_progress", 0) or 0) >= 100
+                int(getattr(state, "servo_route_scan_state", 0) or 0) == 2
+                or (int(getattr(state, "servo_route_scan_state", 0) or 0) == 0
+                    and int(getattr(state, "servo_route_scan_progress", 0) or 0) >= 100)
             )
             if not feedback_ready or not route_scan_complete:
                 last_message = "waiting for complete P4 servo feedback and route scan"
@@ -1456,13 +1504,14 @@ class HandController:
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
         if not self.comm:
             return False
+        sent_at = time.time()
         self.comm.send_command((
             "active_scope",
             int(active_motor_mask) & 0xFFFFFFFF,
             int(active_joint_mask) & 0xFFFFFFFF,
             bool(require_can_feedback),
         ))
-        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S)
+        ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after=sent_at)
         return bool(ack is not None and int(ack[2]) == 0)
 
     def prepare_calibration_turn_zero(
@@ -1615,15 +1664,14 @@ class HandController:
         )
 
     def manual_prepare_all_motors(self) -> ManualPrepareResult:
-        """归零 27 路舵机坐标并统一放绳 1500 counts。
+        """冻结当前在线且路由可控的电机集合，归零并放绳 1500 counts。
 
         该维护事务允许从 Turn Unknown 状态开始，但不会放宽普通直控门禁：
         只有全部硬件 Reset Zero 成功、P4 已清除 Unknown 且反馈重新对齐后，
-        才会临时申请全电机直控并发送放绳目标。任何部分失败都停止后续运动。
+        才会临时申请该集合直控并发送放绳目标。任何部分失败都停止后续运动。
         """
-        all_motor_mask = (1 << MOTOR_COUNT) - 1
-        all_joint_mask = (1 << ENCODER_COUNT) - 1
-        empty = ManualPrepareResult(False, "", 0, all_motor_mask, 0, 0)
+        requested_mask = (1 << MOTOR_COUNT) - 1
+        empty = ManualPrepareResult(False, "", 0, requested_mask, 0, 0)
         if not self.comm:
             return empty._replace(message="serial not connected")
 
@@ -1635,7 +1683,9 @@ class HandController:
                 getattr(state, "servo_route_controllable_bitmap", 0) or 0
             )
             has_routes = bool(getattr(state, "has_servo_route_status", False))
-            has_abs = bool(getattr(state, "has_servo_angle_data", False))
+            has_abs = (bool(getattr(state, "has_servo_angle_data", False))
+                       and 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                       and state.servo_route_scan_state != 1)
 
         allowed_states = (
             SYSTEM_STATE_UNCONTROLLABLE,
@@ -1647,33 +1697,19 @@ class HandController:
             return empty._replace(
                 message=f"Manual Prepare requires a stopped state; current={system_state}"
             )
-        missing_online = all_motor_mask & ~online_mask
-        missing_route = all_motor_mask & ~route_mask if has_routes else all_motor_mask
-        if missing_online or missing_route or not has_abs:
-            return empty._replace(
-                message=(
-                    "Manual Prepare requires all 27 motors online with fresh ABS and "
-                    f"unique routes; offline=0x{missing_online:08X}, "
-                    f"unroutable=0x{missing_route:08X}, abs={int(has_abs)}"
-                )
-            )
+        requested_mask &= online_mask & route_mask
+        selected = [i for i in range(MOTOR_COUNT) if requested_mask & (1 << i)]
+        if not selected or not has_routes or not has_abs:
+            return empty._replace(message="Release Rope requires online motors with unique routes and ABS")
+        log_session("RELEASE_ROPE", f"frozen mask=0x{requested_mask:08X}")
 
         ok, reset_message, reset_mask, failed_mask = (
             self.prepare_calibration_turn_zero(
-                all_motor_mask,
+                requested_mask,
                 invalidation_reason="manual_prepare",
             )
         )
         invalidated_joint_mask = joint_mask_for_motor_mask(reset_mask)
-        if not ok or reset_mask != all_motor_mask:
-            return ManualPrepareResult(
-                False,
-                reset_message,
-                reset_mask,
-                failed_mask | (all_motor_mask & ~reset_mask),
-                invalidated_joint_mask,
-                0,
-            )
 
         # 硬件 turn0 已改变，必须先原子作废旧 Auto/LUT/ABS Limit；即使程序
         # 在放绳途中退出，下次启动也不能重新加载旧舵机坐标。Manual 端点保留。
@@ -1681,9 +1717,9 @@ class HandController:
             snapshot_message = invalidate_calibration_snapshot_scope(
                 CALIB_LOAD_SNAPSHOT_PATH,
                 motor_mask=reset_mask,
-                joint_mask=all_joint_mask,
+                joint_mask=invalidated_joint_mask,
                 reason="manual_prepare",
-            )
+            ) if reset_mask else "no motors reset"
         except (OSError, CalibrationSnapshotError, ValueError) as exc:
             return ManualPrepareResult(
                 False,
@@ -1692,6 +1728,12 @@ class HandController:
                 0,
                 invalidated_joint_mask,
                 0,
+            )
+
+        if not ok or reset_mask != requested_mask:
+            return ManualPrepareResult(
+                False, reset_message, reset_mask,
+                failed_mask | (requested_mask & ~reset_mask), invalidated_joint_mask, 0,
             )
 
         # Reset Zero 后 logical ABS 必须与新单圈 raw 对齐。等待这一条件而不是
@@ -1703,21 +1745,23 @@ class HandController:
                 state = self.current_state
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & all_motor_mask
+                ) & requested_mask
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)
+                fresh = 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
                 servo_raw = list(getattr(state, "servo_raw_positions", []) or [])
                 raw_online = list(getattr(state, "servo_raw_online", []) or [])
             aligned = (
-                unknown == 0
-                and (online & all_motor_mask) == all_motor_mask
+                fresh and routable and unknown == 0
+                and (online & requested_mask) == requested_mask
                 and len(servo_abs) >= MOTOR_COUNT
                 and len(servo_raw) >= MOTOR_COUNT
                 and len(raw_online) >= MOTOR_COUNT
-                and all(bool(raw_online[i]) for i in range(MOTOR_COUNT))
+                and all(bool(raw_online[i]) for i in selected)
                 and all(
                     abs(int(servo_abs[i]) - self._raw_single_turn(servo_raw[i])) <= 2
-                    for i in range(MOTOR_COUNT)
+                    for i in selected
                 )
             )
             if aligned:
@@ -1737,14 +1781,14 @@ class HandController:
         targets = [
             self._clamp_motor_abs_for_current_session(
                 motor_idx,
-                baseline[motor_idx] - MANUAL_PREPARE_RELEASE_COUNTS,
-            )
+                motor_abs_after_tendon_action(baseline[motor_idx], motor_idx, -MANUAL_PREPARE_RELEASE_COUNTS),
+            ) if motor_idx in selected else baseline[motor_idx]
             for motor_idx in range(MOTOR_COUNT)
         ]
-        if not self.set_active_scope(all_motor_mask, 0, False):
+        if not self.set_active_scope(requested_mask, 0, False):
             return ManualPrepareResult(
                 False,
-                "turn counters reset, but full-motor direct scope was rejected",
+                "turn counters reset, but selected-motor direct scope was rejected",
                 reset_mask,
                 0,
                 invalidated_joint_mask,
@@ -1772,25 +1816,27 @@ class HandController:
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)
                 unknown = int(
                     getattr(state, "multi_turn_unknown_bitmap", 0) or 0
-                ) & all_motor_mask
+                ) & requested_mask
+                fresh = 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.5
+                routable = (state.servo_route_controllable_bitmap & requested_mask) == requested_mask
                 servo_abs = list(getattr(state, "servo_angles", []) or [])
-            if unknown or (online & all_motor_mask) != all_motor_mask:
+            if not fresh or not routable or unknown or (online & requested_mask) != requested_mask:
                 break
             if len(servo_abs) >= MOTOR_COUNT:
                 reached_mask = 0
-                for motor_idx in range(MOTOR_COUNT):
+                for motor_idx in selected:
                     if abs(int(servo_abs[motor_idx]) - targets[motor_idx]) <= (
                         MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS
                     ):
                         reached_mask |= 1 << motor_idx
-                if reached_mask == all_motor_mask:
+                if reached_mask == requested_mask:
                     break
             time.sleep(0.05)
 
         # Manual Prepare 是一次维护动作；完成或超时后均释放 owner，禁止在
         # Device Check 页面遗留 RUN_DIRECT。舵机继续保持最后收到的位置目标。
         self.reset()
-        if reached_mask != all_motor_mask:
+        if reached_mask != requested_mask:
             return ManualPrepareResult(
                 False,
                 (
@@ -1805,7 +1851,7 @@ class HandController:
         return ManualPrepareResult(
             True,
             (
-                f"27 motor turn counters reset; released {MANUAL_PREPARE_RELEASE_COUNTS} "
+                f"{len(selected)} motor turn counters reset; released {MANUAL_PREPARE_RELEASE_COUNTS} "
                 f"counts; {snapshot_message}; automatic calibration is required"
             ),
             reset_mask,

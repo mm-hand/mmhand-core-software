@@ -467,6 +467,7 @@ class HandModel:
     # 最近一帧 PACKET_TYPE_SERVO_ANGLE 自带的 P4 时间戳；记录舵机 ABS 时
     # 必须使用该值，不能借用随后到达的其他状态包时间。
     servo_feedback_p4_time_ms: int = 0
+    servo_abs_last_rx_ts: float = 0.0
     # 控制跟踪由 P4 10 ms 控制周期一次性封装，禁止与其他状态包时间拼接。
     has_control_trace: bool = False
     control_trace_sequence: int = 0
@@ -668,6 +669,7 @@ class HandModel:
         self.host_rx_time = float(getattr(other, "host_rx_time", 0.0) or 0.0)
         self.p4_time_ms = int(getattr(other, "p4_time_ms", 0) or 0)
         self.has_p4_time = bool(getattr(other, "has_p4_time", False))
+        self.servo_abs_last_rx_ts = float(getattr(other, "servo_abs_last_rx_ts", 0.0))
         self.servo_feedback_p4_time_ms = int(
             getattr(other, "servo_feedback_p4_time_ms", 0) or 0
         )

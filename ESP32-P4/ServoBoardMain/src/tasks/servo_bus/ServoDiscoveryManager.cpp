@@ -116,7 +116,7 @@ uint8_t ServoDiscoveryManager::targetedBusForProbe(uint8_t probeIndex) const
     return targetedPreferredBus_;
 }
 
-void ServoDiscoveryManager::finishCurrentScan()
+void ServoDiscoveryManager::finishCurrentScan(uint32_t nowMs)
 {
     const uint8_t completedMotor = targetedMotor_;
     servoRouteTable().finishScan();
@@ -144,6 +144,10 @@ void ServoDiscoveryManager::finishCurrentScan()
     }
     // 唯一且未超容量的路由已经恢复，不再继续低频探测对应 Mxx。
     hotplugWatchMask_ &= ~routes.controllableMotorMask;
+    // Cooldown starts after the complete sweep, not its first probe.
+    if (pendingMotorMask_ == 0) {
+        lastHotplugRescanMs_ = nowMs;
+    }
     FW_LOG_INFO_PRINTF(
         "[SERVO ROUTE] scan done valid=0x%08lx controllable=0x%08lx conflict=0x%08lx overload=0x%02x\r\n",
         (unsigned long)routes.validMotorMask,
@@ -193,7 +197,7 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
         // 又保留热插拔后重复 ID 检测，不能因旧 BUS 命中就静默接受冲突路由。
         ++targetedProbeCount_;
         if (targetedProbeCount_ >= NUM_BUSES) {
-            finishCurrentScan();
+            finishCurrentScan(nowMs);
             scanFinished = true;
         } else {
             scanBus_ = targetedBusForProbe(targetedProbeCount_);
@@ -204,7 +208,7 @@ bool ServoDiscoveryManager::step(uint32_t nowMs, bool motionActive)
             scanBus_ = 0;
             ++scanMotor_;
             if (scanMotor_ >= SERVO_TOTAL_NUM) {
-                finishCurrentScan();
+                finishCurrentScan(nowMs);
                 scanFinished = true;
             }
         }

@@ -621,24 +621,27 @@ class TestPrepareCalibrationTurnZero:
         assert call("reset") in controller.comm.send_command.call_args_list
         assert call(("servo_reset_zero", 1 << 2)) in controller.comm.send_command.call_args_list
 
-    def test_manual_prepare_requires_all_27_motors_before_reset(self):
-        """缺任意一路时必须在硬件 Reset Zero 前失败，禁止制造部分新坐标。"""
+    def test_manual_prepare_freezes_only_online_motors(self):
+        """离线通道不加入 Release Rope 的冻结集合。"""
         controller = HandController()
         controller.comm = MagicMock()
-        controller.prepare_calibration_turn_zero = MagicMock()
+        controller.prepare_calibration_turn_zero = MagicMock(return_value=(False, "reset rejected", 0, 0))
         state = controller.current_state
         state.system_state = 0
         state.has_servo_angle_data = True
         state.has_servo_route_status = True
         all_motors = (1 << MOTOR_COUNT) - 1
+        state.servo_abs_last_rx_ts = core_logic.time.time()
         state.servo_online_bitmap = all_motors & ~(1 << 24)
         state.servo_route_controllable_bitmap = all_motors
 
         result = controller.manual_prepare_all_motors()
 
         assert result.ok is False
-        assert "offline=0x01000000" in result.message
-        controller.prepare_calibration_turn_zero.assert_not_called()
+        assert "reset rejected" in result.message
+        controller.prepare_calibration_turn_zero.assert_called_once_with(
+            all_motors & ~(1 << 24), invalidation_reason="manual_prepare"
+        )
 
 
 

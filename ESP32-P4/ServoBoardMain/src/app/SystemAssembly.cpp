@@ -62,7 +62,7 @@ bool assembleAndStartSystem() {
     sharedData.servoRawQueue.create(1);
     sharedData.servoTelemetryQueue.create(1);
     sharedData.mappedAngleQueue.create(1);
-    sharedData.controlTraceQueue.create(1);
+    sharedData.controlTraceQueue.create(32);
     sharedData.tactileQueue.create(3);
 
     const bool queuesCreated =

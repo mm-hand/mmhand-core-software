@@ -285,6 +285,8 @@ class ControlPanelStateMixin:
 
     def _reset_motor_target_cache_for_device_epoch(self, reason: str) -> None:
         """Reset the motor target cache for device epoch state."""
+        self._pause_resume_allowed = False
+        self.backend.invalidate_direct_commands()
         self._motor_target_initialized = False
         self._motor_abs_pos = [None] * MOTOR_COUNT
         self._motor_session_origin_abs = [None] * MOTOR_COUNT
@@ -489,6 +491,8 @@ class ControlPanelStateMixin:
         self._startup_missing_warning_shown = False
         if self.device_check_view is not None:
             self.device_check_view.clear_state()
+        self._pause_resume_allowed = False
+        self.backend.invalidate_direct_commands()
         self._joint_target_initialized = False
         self._motor_target_initialized = False
         self._last_calib_status = None
@@ -873,16 +877,6 @@ class ControlPanelStateMixin:
         self._motor_session_origin_abs[idx] = dev_abs
         self._motor_abs_pos[idx] = 0
         self._motor_last_slider[idx] = 0
-
-    def _sync_motor_targets_to_feedback(self) -> bool:
-        """Synchronize the motor targets to feedback state."""
-        state = self._state
-        if state is None or not (
-            bool(getattr(state, "has_servo_angle_data", False)) or bool(getattr(state, "has_servo_raw_data", False))
-        ):
-            return False
-        self._refresh_motor_feedback_view(sync_target=True)
-        return any(origin is not None for origin in self._motor_session_origin_abs)
 
     def _motor_feedback_abs(self, idx: int) -> Optional[int]:
         """Compute or update motor feedback abs data."""

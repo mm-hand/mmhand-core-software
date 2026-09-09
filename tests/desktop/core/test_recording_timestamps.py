@@ -180,7 +180,7 @@ def test_default_csv_layout_contains_only_six_merged_tables(tmp_path) -> None:
     expected_names = sorted(CSV_TOPIC_FILENAMES[topic] for topic in DEFAULT_CSV_TOPICS)
 
     assert csv_names == expected_names
-    assert len(csv_names) == 6
+    assert len(csv_names) == 7
     assert {path.name for path in session_dir.iterdir()} == {
         *expected_names,
         "meta.json",
@@ -206,7 +206,7 @@ def test_tactile_full_option_adds_exactly_one_csv_table(tmp_path) -> None:
     )
 
     assert csv_names == expected_names
-    assert len(csv_names) == 7
+    assert len(csv_names) == 8
 
 
 def test_merged_joint_and_servo_tables_expose_required_fields() -> None:
@@ -215,6 +215,6 @@ def test_merged_joint_and_servo_tables_expose_required_fields() -> None:
 
     assert "J00_current_deg" in joint_fields
     assert "J00_current_valid" in joint_fields
-    assert "J20_debug_pid_output" in joint_fields
+    assert "M26_pid_counts" in joint_fields
     assert "M00_current_raw" in servo_fields
     assert "M26_current_raw" in servo_fields

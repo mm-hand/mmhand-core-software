@@ -125,6 +125,8 @@ struct ControlServiceRuntime {
     uint32_t lastMotorCommandToken;
     uint32_t lastJointCommandToken;
     uint32_t controlTraceSequence;
+    uint32_t controlTraceDropped;
+    ControlTraceData_t cycleTrace;
     uint8_t directRunDoneStableCount;
     uint32_t feedbackRunToken;
     uint32_t feedbackRunStartMs;
@@ -665,7 +667,8 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
                                        const ServoAngleData_t& servoData,
                                        uint16_t speed,
                                        uint8_t acc,
-                                       bool* outPidPushActive)
+                                       bool* outPidPushActive,
+                                       ControlTraceData_t* trace)
 {
     // 将逻辑关节目标转换成两个拮抗电机目标，并返回下一周期碰撞检测需要的
     // PID 推进证据；双腱 LUT 先按扩展边界钳位，再应用会话 logical range。
@@ -727,6 +730,45 @@ static uint8_t appendDualTendonTargets(ServoTargetBatch_t* batch,
             fabsf(tendonTargets.pidCorrection[i]) >= 1.0f &&
             tendonTargets.pidCorrection[i] * tendonTargets.motorErr[i] > 0.0f) {
             *outPidPushActive = true;
+        }
+    }
+    // 恢复不越过任一侧 LUT/会话边界；触界时整对取消，保留原 PID 输出。
+    int32_t recovered[2] = {};
+    bool recoveryAllowed = targetCount == 2 && !anyLutTargetClamped;
+    for (uint8_t i = 0; i < targetCount && i < 2; ++i) {
+        const auto& target = runtimeTargets[i];
+        recovered[i] = target.targetAbs +
+            static_cast<int32_t>(lroundf(tendonTargets.recoveryCounts[i]));
+        if (target.targetAbs != tendonTargets.targetAbs[i] ||
+            recovered[i] < tendonTargets.lutMinAbs[i] ||
+            recovered[i] > tendonTargets.lutMaxAbs[i] ||
+            clampServoPosToSessionRange(sharedData, target.motorChannel, recovered[i]) != recovered[i])
+            recoveryAllowed = false;
+    }
+    if (recoveryAllowed) {
+        for (uint8_t i = 0; i < 2; ++i)
+            runtimeTargets[i].targetAbs = recovered[i];
+    }
+    if (trace) {
+        for (uint8_t i = 0; i < targetCount; ++i) {
+            const uint8_t motor = runtimeTargets[i].motorChannel;
+            trace->pidCounts[motor] = static_cast<int16_t>(lroundf(
+                fmaxf(-32768.0f, fminf(32767.0f, tendonTargets.pidCorrection[i]))));
+            if (recoveryAllowed) {
+                trace->recoveryAppliedMask |= 1UL << motor;
+                trace->recoveryCounts[motor] = static_cast<int16_t>(
+                    recovered[i] - tendonTargets.targetAbs[i]);
+            }
+        }
+    }
+    if (outPidPushActive && *outPidPushActive) {
+        *outPidPushActive = false;
+        for (uint8_t i = 0; i < targetCount; ++i) {
+            const float applied = runtimeTargets[i].targetAbs -
+                servoData.servoAngles[runtimeTargets[i].motorChannel];
+            if (applied * tendonTargets.motorErr[i] > 0.0f &&
+                tendonTargets.pidCorrection[i] * tendonTargets.motorErr[i] > 0.0f)
+                *outPidPushActive = true;
         }
     }
     if (outPidPushActive && anyLutTargetClamped) {
@@ -871,6 +913,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         }
 
         ServoTargetBatch_t targetBatch;
+        runtime.cycleTrace = {};
         memset(&targetBatch, 0, sizeof(targetBatch));
         // 每个循环生成一个 batch 并用 overwrite 发布，下游始终看到最新完整命令集。
         targetBatch.timestamp = nowMs;
@@ -1442,6 +1485,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             if (!isfinite(pidDtSeconds) || pidDtSeconds < 0.001f || pidDtSeconds > 0.100f) {
                 pidDtSeconds = 0.010f;
             }
+            runtime.cycleTrace.dtMicros = static_cast<uint32_t>(lroundf(pidDtSeconds * 1000000.0f));
             // 默认保持固定 Kp；有效单腱关节按各自 LUT 计算双向增益，
             // 双腱关节继续使用独立的双电机 PID，不进入该分支。
             for (uint8_t jointIndex = 0;
@@ -1695,7 +1739,8 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                                                 servoData,
                                                 kFeedbackServoSpeed,
                                                 SERVO_TARGET_ACC_DEFAULT,
-                                                &feedbackCollisionPidPushActive[jointIndex]);
+                                                &feedbackCollisionPidPushActive[jointIndex],
+                                                &runtime.cycleTrace);
                     if (appended == 0) {
                         appendJointActuatorHoldTargets(&targetBatch, jointIndex, servoData,
                                                        SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
@@ -1915,9 +1960,16 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
 
         // Target、Actual 与成功发布的 Servo CMD 在同一个控制周期内封装。
         // 只有 Gateway 接受的 batch 才记入 CMD，禁止把未执行的候选值画成指令。
-        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT) {
-            ControlTraceData_t trace = {};
+        if (commandSnapshot.controlMode == CONTROL_MODE_JOINT &&
+            sharedAtomicLoad(&sharedData->controlTraceRecordingEnabled)) {
+            ControlTraceData_t& trace = runtime.cycleTrace;
             trace.sequence = ++runtime.controlTraceSequence;
+            trace.droppedFrames = runtime.controlTraceDropped;
+            trace.servoTimestamp = servoData.timestamp;
+            for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+                trace.motorActualAbs[motor] = servoData.servoAngles[motor];
+                if (servoData.onlineStatus[motor]) trace.servoValidMask |= 1UL << motor;
+            }
             trace.targetToken = commandSnapshot.jointCommandToken;
             trace.targetAcceptedTimestamp = commandSnapshot.jointCommandAcceptedMs;
             trace.encoderTimestamp = sensorData.timestamp;
@@ -1945,7 +1997,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     }
                 }
             }
-            sharedData->controlTraceQueue.overwrite(trace);
+            if (!sharedData->controlTraceQueue.send(trace)) ++runtime.controlTraceDropped;
         }
 
         if (directRunningState &&

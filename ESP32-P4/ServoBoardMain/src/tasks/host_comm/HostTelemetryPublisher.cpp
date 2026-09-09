@@ -649,6 +649,27 @@ bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle)
 /** 上报同一 10 ms 控制周期采用的目标和反馈；包尾时间即 controlTimestamp。 */
 bool sendControlTracePacket(const ControlTraceData_t& trace)
 {
+    // 同 packet type 按精确载荷长度区分扩展帧(240)与旧基础帧(220)。
+    // 先发扩展后发基础；旧桌面忽略未知长度，新桌面按 sequence+timestamp 合并。
+    uint8_t detail[256];
+    size_t di = 0;
+    detail[di++] = PROTOCOL_HEADER;
+    detail[di++] = 0;
+    detail[di++] = PACKET_TYPE_CONTROL_TRACE;
+    appendU32BigEndian(detail, &di, trace.sequence);
+    appendU32BigEndian(detail, &di, trace.servoTimestamp);
+    appendU32BigEndian(detail, &di, trace.dtMicros);
+    appendU32BigEndian(detail, &di, trace.servoValidMask);
+    appendU32BigEndian(detail, &di, trace.recoveryAppliedMask);
+    appendU32BigEndian(detail, &di, trace.droppedFrames);
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) appendI32BigEndian(detail, &di, trace.motorActualAbs[i]);
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) appendI16BigEndian(detail, &di, trace.pidCounts[i]);
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) appendI16BigEndian(detail, &di, trace.recoveryCounts[i]);
+    appendU32BigEndian(detail, &di, trace.timestamp);
+    detail[di++] = PROTOCOL_TAIL;
+    detail[1] = static_cast<uint8_t>(di - 2U);
+    static_assert(24 + SERVO_TOTAL_NUM * 8 + 8 <= 256, "trace detail packet too large");
+    if (FW_SERIAL_WRITE(detail, di) != di) return false;
     // 21 路目标角/反馈角与 27 路实际舵机 CMD 共用同一个控制周期时间戳。
     // 完整帧为 228 bytes，仍在单字节协议长度上限内。
     uint8_t buffer[256];

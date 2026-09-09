@@ -38,6 +38,7 @@
 using namespace p4::host;
 /** 上位机通信跨周期状态；仅由 HostCommTask 单线程访问。 */
 struct HostCommRuntimeContext {
+    SystemRuntimeContext* sharedData;
     bool initialized;
     RemoteSensorData_t sensorRawData;
     MappedAngleData_t mappedAngleData;
@@ -137,6 +138,12 @@ void setHostTaskDiagSubscribed(bool subscribed, uint32_t nowMs)
 
 void setHostControlTraceSubscribed(bool subscribed)
 {
+    auto* sharedData = g_hostCommRuntime.sharedData;
+    if (sharedData) {
+        sharedAtomicStore(&sharedData->controlTraceRecordingEnabled, (uint8_t)0);
+        sharedData->controlTraceQueue.reset();
+        sharedAtomicStore(&sharedData->controlTraceRecordingEnabled, (uint8_t)subscribed);
+    }
     g_hostCommRuntime.controlTraceSubscribed = subscribed;
     if (subscribed) {
         // 强制发送订阅后的第一份最新快照。
@@ -151,6 +158,7 @@ bool initHostCommService(SystemRuntimeContext* sharedData)
         return false;
     }
     memset(&g_hostCommRuntime, 0, sizeof(g_hostCommRuntime));
+    g_hostCommRuntime.sharedData = sharedData;
     g_hostCommRuntime.lastServoRouteGenerationSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
@@ -269,23 +277,24 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     processServoResetZeroResult(
         sharedData, &lastServoResetZeroResultToken);
 
-        // 控制 trace 只保留每 50 ms 的最新同周期快照。先于常规高频遥测发送，
-        // 既保证 CSV 取点密度，也不让 100 Hz trace 与状态流竞争串口。
+        // 50 ms 批次最多发送 8 帧；失败保留队首重试，控制任务永不等待串口。
         if (runtime.controlTraceSubscribed &&
-            sharedData->controlTraceQueue.peek(&controlTraceData) &&
-            controlTraceData.sequence != lastControlTraceSequenceSent &&
             (!runtime.controlTraceSentInitialized ||
-             (uint32_t)(controlTraceData.timestamp -
+             (uint32_t)(nowMs -
                         runtime.lastControlTraceTimestampSent) >=
                  mmhand::config::diagnostics::kControlTracePublishPeriodMs)) {
-            if (sendControlTracePacket(controlTraceData)) {
+            runtime.lastControlTraceTimestampSent = nowMs;
+            runtime.controlTraceSentInitialized = true;
+            for (uint8_t count = 0; count < 8 &&
+                 sharedData->controlTraceQueue.peek(&controlTraceData); ++count) {
+                if (!sendControlTracePacket(controlTraceData)) break;
                 lastControlTraceSequenceSent = controlTraceData.sequence;
-                runtime.lastControlTraceTimestampSent = controlTraceData.timestamp;
-                runtime.controlTraceSentInitialized = true;
+                sharedData->controlTraceQueue.receive(&controlTraceData);
             }
         }
 
         if (sharedData->mappedAngleQueue.peek(&mappedAngleData) &&
+            (!runtime.controlTraceSubscribed || (uint32_t)(mappedAngleData.timestamp - lastSensorTimestampSent) >= 50) &&
             mappedAngleData.timestamp != lastSensorTimestampSent)
         {
             if (sendMappedAnglePacket(mappedAngleData)) {
@@ -337,6 +346,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
 
         ServoAngleData_t servoAngleData;
         if (sharedData->servoFeedbackQueue.peek(&servoAngleData) &&
+            (!runtime.controlTraceSubscribed || (uint32_t)(servoAngleData.timestamp - lastServoAngleTimestampSent) >= 50) &&
             servoAngleData.timestamp != lastServoAngleTimestampSent)
         {
             if (sendServoAnglePacket(servoAngleData)) {

@@ -99,7 +99,7 @@ class ControlPanelManualMixin:
         if reset_mask:
             self._joint_target_initialized = False
             self._reset_motor_target_cache_for_device_epoch(
-                "Release Rope: all motor turn counters reset"
+                f"Release Rope: reset motor mask=0x{reset_mask:08X}"
             )
             self._invalidate_local_calibration_scope(reset_mask, joint_mask)
         try:

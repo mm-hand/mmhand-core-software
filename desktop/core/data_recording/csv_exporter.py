@@ -27,8 +27,6 @@ class CsvTopicWriter:
     def write_row(self, row: Dict[str, object]) -> None:
         self._writer.writerow(row)
         self._pending += 1
-        if self._pending >= self.flush_every:
-            self.flush()
 
     def flush(self) -> None:
         try:
@@ -98,6 +96,13 @@ class CsvSessionExporter:
                 writer = CsvTopicWriter(path, fields, flush_every=self.flush_every)
                 self._writers[topic] = writer
             writer.write_row(row)
+
+    def flush(self) -> None:
+        """由唯一 writer 每 50 ms 刷新全部有新行的文件。"""
+        with self._lock:
+            for writer in self._writers.values():
+                if writer._pending:
+                    writer.flush()
 
     def _path_for_topic(self, topic: str) -> str:
         filename = self._topic_filenames.get(topic) or f"{topic}.csv"

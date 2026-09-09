@@ -165,6 +165,18 @@ def discover_motors(session: Path, joint: int) -> list[int]:
 def read_servo_trace(
     session: Path, motor: int, origin_ms: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # 新记录直接使用求解器同周期实际 ABS；不把异步负载拼成同帧真值。
+    trace_path = session / "02_关节总表.csv"
+    trace_samples = []
+    if trace_path.exists():
+        for row in read_rows(trace_path):
+            stamp = row_time_ms(row)
+            actual = safe_float(row.get(f"M{motor:02d}_actual_abs", ""))
+            if math.isfinite(stamp) and math.isfinite(actual):
+                trace_samples.append((stamp, actual))
+    if trace_samples:
+        values = np.asarray(trace_samples, dtype=float)
+        return (values[:, 0] - origin_ms) / 1000.0, values[:, 1], np.full(len(values), np.nan)
     rows = read_rows(session / "03_舵机总表.csv")
     prefix = f"M{motor:02d}_"
     samples = []

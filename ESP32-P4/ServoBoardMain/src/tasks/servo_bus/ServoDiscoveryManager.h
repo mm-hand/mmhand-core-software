@@ -28,7 +28,7 @@ public:
 
 private:
     void startPendingScan(uint32_t nowMs);
-    void finishCurrentScan();
+    void finishCurrentScan(uint32_t nowMs);
     uint8_t targetedBusForProbe(uint8_t probeIndex) const;
 
     uint8_t scanBus_ = 0;

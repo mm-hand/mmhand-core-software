@@ -18,6 +18,7 @@ TIME_FIELDS = ["sample_index", "host_time", "p4_time_ms"]
 
 
 TOPIC_FIELDNAMES: Dict[str, List[str]] = {
+    "packet_frames": [*TIME_FIELDS, "source", "packet_type", "payload_hex"],
     "core_state": [
         *TIME_FIELDS,
         "mode",
@@ -107,6 +108,8 @@ def _wide_joint_fields() -> List[str]:
         "trace_sequence_gap",
         "trace_period_ms",
         "motor_command_mask",
+        "trace_detail_valid", "servo_feedback_age_ms", "control_dt_us",
+        "p4_trace_dropped", "servo_valid_mask", "recovery_applied_mask",
     ]
     for idx in range(21):
         label = f"J{idx:02d}"
@@ -119,6 +122,7 @@ def _wide_joint_fields() -> List[str]:
         ])
     for idx in range(27):
         fields.append(f"M{idx:02d}_cmd_abs")
+        fields.extend(f"M{idx:02d}_{suffix}" for suffix in ("actual_abs", "pid_counts", "recovery_counts"))
     return fields
 
 
@@ -185,6 +189,7 @@ TOPIC_FIELDNAMES.update(
 
 
 CSV_TOPIC_FILENAMES: Dict[str, str] = {
+    "packet_frames": "08_原始接收帧.csv",
     "core_state": "01_基础状态.csv",
     "joint_wide": "02_关节总表.csv",
     "servo_wide": "03_舵机总表.csv",
@@ -196,6 +201,7 @@ CSV_TOPIC_FILENAMES: Dict[str, str] = {
 
 
 DEFAULT_TOPICS = [
+    "packet_frames",
     "core_state",
     "joint_wide",
     "servo_wide",
@@ -206,6 +212,7 @@ DEFAULT_TOPICS = [
 
 # Save Data 仅维护这些 CSV 总表。
 DEFAULT_CSV_TOPICS = [
+    "packet_frames",
     "core_state",
     "joint_wide",
     "servo_wide",

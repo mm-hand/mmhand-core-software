@@ -241,6 +241,7 @@ class HandBackend:
         if not port:
             return False
         comm = TactileSerialComm(str(port))
+        comm.recording_packet_sink = getattr(self, "_recording_packet_sink", None)
         if not comm.connect():
             return False
         self.tactile_comm = comm
@@ -719,6 +720,13 @@ class HandBackend:
         """透传静态状态显式同步请求，避免 UI 依赖固件周期广播。"""
         return self._controller.request_state_sync(sync_mask)
 
+    def set_recording_packet_sink(self, sink) -> None:
+        """独立记录入口只入队，不经过 UI/latest-state 邮箱。"""
+        self._recording_packet_sink = sink
+        self._controller.set_recording_packet_sink(sink)
+        if self.tactile_comm:
+            self.tactile_comm.recording_packet_sink = sink
+
     def set_task_diag_subscription(self, enabled: bool) -> bool:
         """根据 Task Runtime 窗口生命周期控制诊断带宽。"""
         return self._controller.set_task_diag_subscription(enabled)
@@ -731,6 +739,12 @@ class HandBackend:
     # HandController remains the hardware-control primitive layer.
     def hold_current_motor_positions(self, delay_s: float = 0.15) -> bool:
         return self._controller.hold_current_motor_positions(delay_s=delay_s)
+
+    def invalidate_direct_commands(self) -> None:
+        self._controller.invalidate_direct_commands()
+
+    def enable_direct_hold(self, motor_mask: int):
+        return self._controller.enable_direct_hold(motor_mask)
 
     def set_control_mode(self, mode: ControlMode) -> None:
         self._controller.set_control_mode(mode)

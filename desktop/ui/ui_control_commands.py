@@ -34,7 +34,7 @@ class ControlCommandController:
         mode = self._manual_submode()
         state = self._state
         scan_state = int(getattr(state, "servo_route_scan_state", 0) or 0) if state is not None else 0
-        if scan_state:
+        if scan_state == 1:
             self._set_status("ENABLE blocked: wait for P4 servo route scan to finish")
             return
         missing_motors = self._active_scope_offline_motor_indices(state)
@@ -76,13 +76,17 @@ class ControlCommandController:
         system_state = (
             getattr(state, "system_state", None) if state is not None else None
         )
-        if self._estop_latched or system_state == SYSTEM_STATE_UNCONTROLLABLE:
+        resume_allowed = (bool(getattr(self, "_pause_resume_allowed", False))
+                          and getattr(self, "_pause_resume_scope", None)
+                          == (mode, self._active_motor_mask_from_ui()))
+        if (self._estop_latched or system_state == SYSTEM_STATE_UNCONTROLLABLE
+                or (system_state == SYSTEM_STATE_PAUSED and not resume_allowed)):
             self.backend.reset()
             self._estop_latched = False
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Enable blocked: active scope was not accepted by lower controller")
             return
-        if state is not None and getattr(state, "system_state", None) == SYSTEM_STATE_PAUSED:
+        if system_state == SYSTEM_STATE_PAUSED and resume_allowed:
             self._estop_latched = False
             self.backend.start()
             self.context.emit_action("Resume")
@@ -100,20 +104,17 @@ class ControlCommandController:
             self._set_status("Enable requested: waiting for joint READY")
             return
 
-        if not self._sync_motor_targets_to_feedback():
-            self._set_status("Enable waits for fresh motor feedback")
+        ok, message, targets = self.backend.enable_direct_hold(self._active_motor_mask_from_ui())
+        if not ok:
+            self._set_status(f"Enable blocked: {message}")
             return
-        targets = self._build_motor_abs_command_list()
-        self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-        # 直控也先申请基础 IDLE。E-STOP 后该 START 排在 RESET 之后，
-        # 随后的 ABS 包再申请 RUN_DIRECT，三者保持单一串口 FIFO 顺序。
-        self.backend.start()
-        self.backend.set_motor_positions_absolute(targets)
+        for i, target in enumerate(targets):
+            if self._active_motor_mask_from_ui() & (1 << i):
+                self._clear_motor_target_after_single_send(i, target)
         self._motor_last_sent_abs = list(targets)
         self._estop_latched = False
-        # 绝对位置直控命令自带 RUN_DIRECT 请求，不再叠加 START 事件。
         self.context.emit_action("Start direct motor hold from current feedback")
-        self._set_status("Direct motor hold requested")
+        self._set_status(message)
 
     def toggle_ros2_output(self, enabled: bool) -> None:
         """只切换外部 ROS2 输出授权，不改变普通负反馈或当前控制目标。"""
@@ -138,6 +139,7 @@ class ControlCommandController:
             return
         self._estop_in_progress = True
         try:
+            self._pause_resume_allowed = False
             self._estop_latched = True
             # STOP is safety-critical. Enqueue it before CSV recorder cleanup
             # or any other UI-side cancellation work.
@@ -158,6 +160,8 @@ class ControlCommandController:
         self.context.cancel_replay("Pause")
         try:
             self.backend.pause()
+            self._pause_resume_allowed = True
+            self._pause_resume_scope = (self._manual_submode(), self._active_motor_mask_from_ui())
         except Exception:
             pass
         self.clear_ros2_joint_targets()

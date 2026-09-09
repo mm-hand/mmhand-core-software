@@ -197,6 +197,7 @@ class StateReducer:
                     # CSV 不会误用同批次中随后到达的 SYSTEM_STATUS 等包时间。
                     if packet_p4_time_ms is not None:
                         model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
+                    model.servo_abs_last_rx_ts = time.time()
                     model.has_servo_angle_data = True
                     emitted = True
 
