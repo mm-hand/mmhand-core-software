@@ -43,6 +43,18 @@ float tendonLutSampleAngleDeg(const JointCalibrationResult& calibration,
 
 } // namespace
 
+bool tendonCalibrationContainsAngle(const JointCalibrationResult& calibration,
+                                    float urdfDeg)
+{
+    if (!isfinite(urdfDeg) || !calibrationHasUsableTendonLut(calibration, 0)) {
+        return false;
+    }
+    const float firstDeg = tendonLutSampleAngleDeg(calibration, 0);
+    const float lastDeg = tendonLutSampleAngleDeg(
+        calibration, calibration.tendonLutCount - 1U);
+    return urdfDeg >= firstDeg && urdfDeg <= lastDeg;
+}
+
 bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,
                                     uint8_t actuatorIndex,
                                     int32_t* outMinAbs,

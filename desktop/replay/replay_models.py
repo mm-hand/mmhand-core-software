@@ -24,9 +24,9 @@ ALL_JOINTS_MASK = (1 << ENCODER_COUNT) - 1
 def _joint_values(values: Iterable[float], field_name: str) -> List[float]:
     result = [float(value) for value in values]
     if len(result) != ENCODER_COUNT:
-        raise ValueError(f"{field_name} 必须包含 {ENCODER_COUNT} 个关节角")
+        raise ValueError(f"{field_name} must contain {ENCODER_COUNT} joint angles")
     if not all(math.isfinite(value) for value in result):
-        raise ValueError(f"{field_name} 包含 NaN 或无穷值")
+        raise ValueError(f"{field_name} contains NaN or an infinite value")
     return result
 
 
@@ -45,14 +45,14 @@ class ReplayFrame:
 
     def validate(self) -> None:
         if not math.isfinite(float(self.time_s)) or float(self.time_s) < 0.0:
-            raise ValueError("Replay帧时间必须是非负有限值")
+            raise ValueError("Replay frame time must be finite and non-negative")
         _joint_values(self.target_urdf_deg, "target_urdf_deg")
         if self.frame_kind not in ("continuous", "discrete"):
-            raise ValueError(f"不支持的Replay帧类型：{self.frame_kind}")
+            raise ValueError(f"Unsupported Replay frame type: {self.frame_kind}")
         if int(self.command_joint_mask) & ~ALL_JOINTS_MASK:
-            raise ValueError("Replay帧包含越界的关节mask")
+            raise ValueError("Replay frame contains an out-of-range joint mask")
         if int(self.joint_value_mask) & ~ALL_JOINTS_MASK:
-            raise ValueError("Replay帧包含越界的数值有效mask")
+            raise ValueError("Replay frame contains an out-of-range value-valid mask")
 
 
 @dataclass(frozen=True)
@@ -109,13 +109,13 @@ class ReplayTrace:
 
     def validate(self) -> None:
         if not self.frames:
-            raise ValueError("动作CSV没有可回放的有效帧")
+            raise ValueError("Motion CSV has no valid replayable frames")
         if len(self.frames) == 1 and self.frames[0].frame_kind != "discrete":
-            raise ValueError("连续动作CSV至少需要两帧有效数据")
+            raise ValueError("A continuous motion CSV requires at least two valid frames")
         previous = -1.0
         for frame in self.frames:
             frame.validate()
             if float(frame.time_s) <= previous:
-                raise ValueError("Replay轨迹时间必须严格递增")
+                raise ValueError("Replay trace time must be strictly increasing")
             previous = float(frame.time_s)
         self.active_joint_mask = int(self.active_joint_mask) & ALL_JOINTS_MASK

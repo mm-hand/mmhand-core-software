@@ -52,7 +52,7 @@ def replay_start_state_allowed(system_state: object) -> bool:
 @dataclass(frozen=True)
 class ReplayStatus:
     state: str = "idle"
-    message: str = "Replay空闲"
+    message: str = "Replay idle"
     frame_index: int = 0
     total_frames: int = 0
     elapsed_s: float = 0.0
@@ -109,7 +109,7 @@ class ReplayController:
         trace.validate()
         with self._lock:
             if self._thread and self._thread.is_alive():
-                return False, "Replay已经运行"
+                return False, "Replay is already running"
             state = self.backend.get_state_snapshot()
             reason, preparation, output_samples = self._prepare_replay(trace, state)
             if reason:
@@ -123,7 +123,7 @@ class ReplayController:
                 return False, reason
             assert preparation is not None
             if not output_samples:
-                reason = "Replay没有可发送的有效关节帧"
+                reason = "Replay has no valid joint frames to send"
                 self._set_status(
                     "rejected",
                     reason,
@@ -159,7 +159,7 @@ class ReplayController:
             )
             self._set_status(
                 "running",
-                f"正在播放 {trace.name}",
+                f"Playing {trace.name}",
                 total_frames=len(output_samples),
                 duration_s=trace.duration_s,
                 source_joint_mask=preparation.source_joint_mask,
@@ -181,9 +181,9 @@ class ReplayController:
                 f"clamped_samples={preparation.clamped_sample_count}"
             ),
         )
-        return True, "Replay已启动"
+        return True, "Replay started"
 
-    def stop(self, reason: str = "用户停止") -> bool:
+    def stop(self, reason: str = "User stopped replay") -> bool:
         with self._lock:
             event = self._stop_event
             running = bool(self._thread and self._thread.is_alive())
@@ -191,13 +191,13 @@ class ReplayController:
             return False
         event.set()
         self.backend.cancel_replay_motion(reason)
-        if reason in ("用户停止", "Replay UI Stop"):
+        if reason in ("User stopped replay", "Replay UI Stop"):
             self._hold_current_joint_feedback()
         self._emit("replay_stop", reason)
         return True
 
     def shutdown(self, timeout_s: float = 3.0) -> None:
-        self.stop("窗口关闭")
+        self.stop("Replay window closed")
         with self._lock:
             thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -211,10 +211,10 @@ class ReplayController:
         """将历史轨迹降级到当前可用关节，并在插值前钳入当前标定工作空间。"""
         system_state = int(getattr(state, "system_state", -1))
         if not replay_start_state_allowed(system_state):
-            return "P4必须处于READY/RUN_FEEDBACK才能开始Replay", None, []
+            return "P4 must be in READY or RUN_FEEDBACK before Replay can start", None, []
         current_active = int(getattr(state, "active_joint_mask", 0) or 0) & ALL_JOINTS_MASK
         if current_active == 0:
-            return "当前active joint scope为空", None, []
+            return "The current active joint scope is empty", None, []
         source_mask = int(trace.active_joint_mask) & ALL_JOINTS_MASK
         if source_mask == 0:
             source_mask = current_active
@@ -223,33 +223,33 @@ class ReplayController:
         warnings = list(trace.warnings)
         if trace.joint_order_crc:
             if int(trace.joint_order_crc) != int(mapping.joint_order_crc):
-                return "CSV的J00-J20关节顺序与当前模型不一致", None, []
+                return "CSV J00-J20 joint order does not match the current model", None, []
             if trace.mapping_id and trace.mapping_id != mapping.mapping_id:
                 warnings.append(
-                    "mapping_id不同，但J00-J20关节顺序一致；按当前工作空间降级播放"
+                    "mapping_id differs, but J00-J20 order matches; Replay will use the current workspace"
                 )
             if trace.mapping_version and int(trace.mapping_version) != int(
                 mapping.mapping_version
             ):
                 warnings.append(
-                    "mapping_version不同，但关节顺序一致；按当前工作空间降级播放"
+                    "mapping_version differs, but joint order matches; Replay will use the current workspace"
                 )
         elif trace.mapping_id and trace.mapping_id != mapping.mapping_id:
             return (
-                "旧CSV缺少关节顺序签名且mapping_id不同，无法安全确认J00-J20含义",
+                "Legacy CSV has no joint-order signature and mapping_id differs; J00-J20 cannot be verified safely",
                 None,
                 [],
             )
         elif trace.mapping_version and int(trace.mapping_version) != int(mapping.mapping_version):
             return (
-                "旧CSV缺少关节顺序签名且mapping_version不同，无法安全确认J00-J20含义",
+                "Legacy CSV has no joint-order signature and mapping_version differs; J00-J20 cannot be verified safely",
                 None,
                 [],
             )
         elif trace.mapping_id or trace.mapping_version or trace.urdf_crc:
-            warnings.append("CSV缺少joint_order_crc，只能依赖mapping ID/version确认关节顺序")
+            warnings.append("CSV has no joint_order_crc; joint order can only be checked by mapping ID/version")
         if trace.urdf_crc and int(trace.urdf_crc) != int(mapping.urdf_config_crc):
-            warnings.append("URDF范围CRC不同；历史角度将钳位到当前标定工作空间")
+            warnings.append("URDF range CRC differs; historical angles will be clamped to the current calibrated workspace")
 
         mapping_version, urdf_crc = urdf_manual_scaled_mapping_metadata()
         workspaces: Dict[int, object] = {}
@@ -288,21 +288,21 @@ class ReplayController:
         skipped_mask = source_mask & ~effective_mask
         if unavailable_mask:
             warnings.append(
-                "跳过当前P4 active scope外关节："
+                "Skipped joints outside the current P4 active scope: "
                 + self._format_joint_mask(unavailable_mask)
             )
         if uncalibrated_mask:
             warnings.append(
-                "跳过当前Manual/Auto未就绪关节："
+                "Skipped joints without ready Manual/Auto calibration: "
                 + self._format_joint_mask(uncalibrated_mask)
             )
         if missing_value_mask:
             warnings.append(
-                "跳过CSV没有有效数值的关节："
+                "Skipped joints without valid CSV values: "
                 + self._format_joint_mask(missing_value_mask)
             )
         if effective_mask == 0:
-            return "CSV与当前P4状态没有可共同控制的已标定关节", None, []
+            return "CSV and current P4 state have no calibrated joints in common", None, []
 
         baseline = list(getattr(state, "angles", []) or [])
         if len(baseline) != ENCODER_COUNT:
@@ -320,7 +320,7 @@ class ReplayController:
             baseline,
         )
         if not prepared_frames:
-            return "CSV有效关节在所有帧中都没有可发送数值", None, []
+            return "No frame contains a sendable value for the valid CSV joints", None, []
 
         clamped_joint_mask = 0
         for joint in clamp_counts:
@@ -328,8 +328,8 @@ class ReplayController:
         clamped_sample_count = sum(clamp_counts.values())
         if clamped_sample_count:
             warnings.append(
-                f"{self._format_joint_mask(clamped_joint_mask)}共有"
-                f"{clamped_sample_count}个关键帧目标被钳位"
+                f"{clamped_sample_count} keyframe target(s) were clamped for "
+                f"{self._format_joint_mask(clamped_joint_mask)}"
             )
         preparation = ReplayPreparation(
             source_joint_mask=source_mask,
@@ -453,16 +453,16 @@ class ReplayController:
 
     def _runtime_reject_reason(self, token: int, active_mask: int) -> str:
         if not self.backend.replay_motion_token_valid(token):
-            return "Replay控制权已被其他命令撤销"
+            return "Replay control ownership was revoked by another command"
         state = self.backend.get_state_snapshot()
         system_state = int(getattr(state, "system_state", -1))
         if system_state not in (SYSTEM_STATE_READY, SYSTEM_STATE_RUN_FEEDBACK):
-            return f"P4离开READY/RUN_FEEDBACK，state={system_state}"
+            return f"P4 left READY/RUN_FEEDBACK, state={system_state}"
         # 碰撞 HOLD 只冻结对应关节的舵机 ABS，不是遥操/Replay暂停条件。
         # 必须继续发送后续目标，P4才能在目标反向回撤至少1°时解除 HOLD。
         current_active = int(getattr(state, "active_joint_mask", 0) or 0)
         if active_mask & ~current_active:
-            return "active scope在Replay期间发生变化"
+            return "Active scope changed during Replay"
         return ""
 
     def _run(
@@ -481,7 +481,7 @@ class ReplayController:
         try:
             while frame_index < len(output_samples):
                 if stop_event.is_set():
-                    abort_reason = "Replay已停止"
+                    abort_reason = "Replay stopped"
                     break
                 abort_reason = self._runtime_reject_reason(
                     token, preparation.effective_joint_mask
@@ -496,7 +496,7 @@ class ReplayController:
                     if remaining <= 0.0:
                         break
                     if stop_event.wait(min(REPLAY_WAIT_POLL_SECONDS, remaining)):
-                        abort_reason = "Replay已停止"
+                        abort_reason = "Replay stopped"
                         break
                     abort_reason = self._runtime_reject_reason(
                         token, preparation.effective_joint_mask
@@ -528,12 +528,12 @@ class ReplayController:
                     motion_token=token,
                 )
                 if not result.sent:
-                    abort_reason = result.message or "Replay目标发送失败"
+                    abort_reason = result.message or "Failed to send Replay target"
                     break
 
                 self._set_status(
                     "running",
-                    f"正在播放 {trace.name}",
+                    f"Playing {trace.name}",
                     frame_index=frame_index + 1,
                     total_frames=len(output_samples),
                     # 进度按动作时间轴而非墙钟时间计算；重定位后的等待不应让进度虚增。
@@ -552,7 +552,7 @@ class ReplayController:
                 )
                 frame_index += 1
         except Exception as exc:
-            abort_reason = f"Replay异常：{exc}"
+            abort_reason = f"Replay error: {exc}"
         finally:
             self.backend.end_replay_motion(token)
             with self._lock:
@@ -591,7 +591,7 @@ class ReplayController:
                 final_sample = output_samples[-1]
                 self._set_status(
                     "completed",
-                    f"Replay完成：{trace.name}",
+                    f"Replay completed: {trace.name}",
                     frame_index=len(output_samples),
                     total_frames=len(output_samples),
                     elapsed_s=trace.duration_s,

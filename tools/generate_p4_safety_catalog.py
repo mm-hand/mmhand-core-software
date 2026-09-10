@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """从 P4 SafetyRuleCatalog.def 生成固件枚举及离线安全审计数据。
 
-P4 枚举头、上位机中文目录和完整调用索引都以同一个 .def 文件为真值源。
+P4 枚举头、上位机英文目录和完整调用索引都以同一个 .def 文件为真值源。
 调用索引只生成 JSON，不再把无运行时消费者的字符串表编进固件。
 """
 
@@ -49,17 +49,17 @@ OBSOLETE_FIRMWARE_INDEX_FILES = (
 )
 
 _ROW_RE = re.compile(r"^P4_SAFETY_RULE\((.*)\)\s*$")
-_ACTION_ZH = {
-    "Allow": "允许",
-    "RejectCommand": "拒绝命令",
-    "HoldActualPosition": "保持当前位置",
-    "DisableTorque": "关闭扭矩",
-    "EnterFault": "进入故障",
-    "ClampToBoundary": "钳位到工作区边界",
-    "MarkUncontrollable": "转为不可控",
-    "MarkIdle": "转为 IDLE",
-    "StopMotion": "停止当前运动",
-    "WarnOnly": "仅记录警告",
+_ACTION_TEXT = {
+    "Allow": "Allow",
+    "RejectCommand": "Reject command",
+    "HoldActualPosition": "Hold current position",
+    "DisableTorque": "Disable torque",
+    "EnterFault": "Enter fault state",
+    "ClampToBoundary": "Clamp to workspace boundary",
+    "MarkUncontrollable": "Mark system uncontrollable",
+    "MarkIdle": "Return to IDLE",
+    "StopMotion": "Stop current motion",
+    "WarnOnly": "Report warning only",
 }
 
 
@@ -280,11 +280,11 @@ def load_rule_definitions() -> list[dict]:
                 "name": name.strip(),
                 "rule_id": rule_id,
                 "code": code_text,
-                "title_zh": _unquote(title),
+                "title": _unquote(title),
                 "severity": severity.strip(),
                 "layer": layer.strip(),
-                "action_zh": _ACTION_ZH.get(action.strip(), action.strip()),
-                "recovery_zh": _unquote(recovery),
+                "action": _ACTION_TEXT.get(action.strip(), action.strip()),
+                "recovery": _unquote(recovery),
             }
         )
     return rules
@@ -311,7 +311,7 @@ def resolve_rule_binding(rule: dict) -> RuleBinding | None:
 def render() -> str:
     payload = {
         "schema_version": 2,
-        "description": "由 P4 SafetyRuleCatalog.def 自动生成；禁止手工编辑",
+        "description": "Generated from P4 SafetyRuleCatalog.def; do not edit manually",
         "rules": load_rules(),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

@@ -520,7 +520,7 @@ class HandGUI(QtWidgets.QMainWindow):
         self._data_logger.stop()
         # close/flush 可能重复报告同一磁盘错误，当前会话统一丢弃后续副本。
         self._data_logger.consume_error()
-        message = f"数据记录已停止：{error}"
+        message = f"Data recording stopped: {error}"
         log_session("RECORDER", f"fatal write error path={path} error={error}")
         self._set_status(message)
         if self._recording_error_popup_seen:
@@ -528,8 +528,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self._recording_error_popup_seen = True
         show_scrollable_message(
             self,
-            "数据记录失败",
-            f"{message}\n\n保存目录：{path}\n\n请释放磁盘空间后重新勾选 Save Data。",
+            "Data Recording Failed",
+            f"{message}\n\nSave directory: {path}\n\nFree disk space, then enable Save Data again.",
             severity="warning",
         )
 
@@ -771,7 +771,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         if hold_mask:
             joints = [i for i in range(ENCODER_COUNT) if hold_mask & (1 << i)]
-            short_joints, _full_joints = self._format_index_mask("J", hold_mask)
+            short_joints, _full_joints = HandGUI._format_index_mask("J", hold_mask)
             text = f"Collision: Hold {short_joints}"
             detail = "\n".join(joint_detail(i) for i in joints)
             return (
@@ -785,11 +785,13 @@ class HandGUI(QtWidgets.QMainWindow):
             )
 
         if armed_mask:
-            short_joints, full_joints = self._format_index_mask("J", armed_mask)
+            short_joints, full_joints = HandGUI._format_index_mask("J", armed_mask)
+            joints = [i for i in range(ENCODER_COUNT) if armed_mask & (1 << i)]
+            detail = ", ".join(joint_detail(i) for i in joints)
             return (
                 f"Collision: Monitoring {short_joints}",
                 "Motion confirmed; collision progress windows are monitoring: "
-                f"{full_joints}\n{mask_detail}",
+                f"{detail or full_joints}\n{mask_detail}",
                 False,
                 True,
             )
@@ -1064,61 +1066,61 @@ class HandGUI(QtWidgets.QMainWindow):
         calib_diag = self._calib_diag_summary(state)
 
         if (bitmap & SYSTEM_FAULT_OVERLOAD) or overload_items:
-            titles.append("舵机过载")
+            titles.append("Servo overload")
             if overload_items:
-                lines.append("舵机过载：")
+                lines.append("Servo overload:")
                 lines.extend(f"  M{i:02d} load={load}" for i, load in overload_items)
             else:
-                lines.append("舵机过载：触发电机未知")
-            suggestions.append("检查机构是否卡住、绳索是否过紧、目标角度是否过大，以及是否误加载了旧标定。")
+                lines.append("Servo overload: triggering motor is unknown")
+            suggestions.append("Check for mechanical blockage, excessive tendon tension, an excessive target angle, or a stale calibration snapshot.")
 
         if bitmap & SYSTEM_FAULT_SERVO_OFFLINE:
-            titles.append("舵机离线")
-            lines.append("舵机离线：下位机未获得完整舵机反馈。")
-            suggestions.append("检查舵机电源、总线、ID 映射和接线。")
+            titles.append("Servo offline")
+            lines.append("Servo offline: P4 did not receive complete servo feedback.")
+            suggestions.append("Check servo power, bus wiring, ID mapping, and connectors.")
 
         if bitmap & SYSTEM_FAULT_CAN_OFFLINE:
-            titles.append("CAN/磁编码器离线")
-            lines.append("CAN/磁编码器离线：下位机未获得有效磁编码器/CAN 数据。")
-            suggestions.append("检查 S3/P4 CAN 通信、磁编码器供电、SPI 接线和传感器板状态。")
+            titles.append("CAN or magnetic encoder offline")
+            lines.append("CAN or magnetic encoder offline: P4 did not receive valid encoder/CAN data.")
+            suggestions.append("Check S3/P4 CAN communication, encoder power, SPI wiring, and sensor-board state.")
 
         if bitmap & SYSTEM_FAULT_CALIBRATION:
             if calib_diag.get("active"):
-                titles.append(str(calib_diag.get("title") or "标定故障"))
+                titles.append(str(calib_diag.get("title") or "Calibration fault"))
                 lines.extend(list(calib_diag.get("lines") or []))
                 suggestions.extend(list(calib_diag.get("suggestions") or []))
             else:
-                titles.append("标定故障")
-                lines.append("标定故障：下位机标定流程失败或被保护中断，但没有收到细分诊断包。")
-                suggestions.append("先检查下位机固件是否为最新版本；再检查负载阈值、编码器方向、机械限位和绳索预紧后重新标定。")
+                titles.append("Calibration fault")
+                lines.append("Calibration fault: the P4 calibration task failed or was interrupted, but no detailed diagnostic packet was received.")
+                suggestions.append("Check the P4 firmware version, load thresholds, encoder direction, mechanical limits, and tendon preload before recalibrating.")
 
         if bitmap & SYSTEM_FAULT_JOINT16_DUAL:
-            titles.append("J16 双电机约束异常")
-            lines.append("J16 双电机约束异常：主/副电机反馈差异超出限制。")
-            suggestions.append("检查 J16 双电机映射、副电机反馈、对抗绳路和预紧。")
+            titles.append("J16 dual-motor constraint fault")
+            lines.append("J16 dual-motor constraint fault: primary/secondary motor feedback difference exceeded the limit.")
+            suggestions.append("Check the J16 motor mapping, secondary-motor feedback, antagonistic tendon routing, and preload.")
 
         if bitmap & SYSTEM_FAULT_MULTITURN_UNKNOWN:
-            titles.append("多圈位置未知")
+            titles.append("Multi-turn position unknown")
             if unknown_mask:
-                lines.append(f"多圈位置未知：Turn UNKNOWN mask=0x{unknown_mask:08X}")
+                lines.append(f"Multi-turn position unknown: Turn UNKNOWN mask=0x{unknown_mask:08X}")
             else:
-                lines.append("多圈位置未知：故障已锁存，当前 unknown mask 已清除。")
+                lines.append("Multi-turn position unknown: the fault is latched, but the current unknown mask is clear.")
             suggestions.append(
-                "不要继续发运动命令。先等待上位机按 JSON SavedRaw/logical ABS 做最近圈恢复；"
-                "若 Turn UNKNOWN 仍未清除，勾选受影响关节并点击 Calibrate。"
-                "Calibrate 会先统一硬件圈数和 JSON 锚点，然后重建 Auto/LUT。"
+                "Do not send motion commands. Wait for JSON SavedRaw/logical ABS nearest-turn recovery; "
+                "if Turn UNKNOWN remains, select the affected joints and press Calibrate. "
+                "Calibration synchronizes hardware turn counts and JSON anchors before rebuilding Auto/LUT data."
             )
 
         if not lines and bitmap != 0:
-            titles.append("未知系统故障")
-            lines.append(f"未知系统故障 bitmap=0x{bitmap:08X}")
-            suggestions.append("记录日志后检查下位机状态机和通信包解析。")
+            titles.append("Unknown system fault")
+            lines.append(f"Unknown system fault bitmap=0x{bitmap:08X}")
+            suggestions.append("Preserve the log, then inspect the P4 state machine and packet parsing.")
 
         # 安全事件由 P4 已完成裁决；此处仅在已有故障时补充诊断上下文，
         # 不能把一条历史事件本身当作新的停机条件。
         safety_event_text = self._latest_safety_event_text(state)
         if lines and safety_event_text:
-            lines.append("最近 P4 安全事件：" + safety_event_text)
+            lines.append("Latest P4 safety event: " + safety_event_text)
 
         active = bool(lines or bitmap != 0)
         offline_bits = SYSTEM_FAULT_CAN_OFFLINE | SYSTEM_FAULT_SERVO_OFFLINE
@@ -1130,9 +1132,9 @@ class HandGUI(QtWidgets.QMainWindow):
             not overload_items and
             not calib_diag.get("active")
         )
-        title = " / ".join(titles[:2]) if titles else "系统状态正常"
+        title = " / ".join(titles[:2]) if titles else "System status normal"
         if len(titles) > 2:
-            title += f" 等 {len(titles)} 项"
+            title += f" and {len(titles) - 2} more"
         key = f"{bitmap:08X}:{overload_mask:08X}:{unknown_mask:08X}:{calib_diag.get('key', '')}"
         return {
             "active": active,
@@ -1150,12 +1152,12 @@ class HandGUI(QtWidgets.QMainWindow):
     def _fault_body_text(summary: dict, include_title: bool = False) -> str:
         parts: List[str] = []
         if include_title:
-            parts.append(str(summary.get("title") or "系统故障"))
+            parts.append(str(summary.get("title") or "System fault"))
         parts.extend(list(summary.get("lines") or []))
         suggestions = list(summary.get("suggestions") or [])
         if suggestions:
             parts.append("")
-            parts.append("建议：")
+            parts.append("Recommended action:")
             for item in suggestions:
                 parts.append(f"- {item}")
         return "\n".join(parts).strip()
@@ -1213,7 +1215,7 @@ class HandGUI(QtWidgets.QMainWindow):
             except Exception:
                 pass
             log_session("FAULT", f"stop requested: {summary.get('key')} {summary.get('title')}")
-            self._set_status("检测到故障，已发送 STOP")
+            self._set_status("Fault detected; STOP sent")
 
         if not self._fault_popup_allowed(summary, state):
             return
@@ -1254,10 +1256,10 @@ class HandGUI(QtWidgets.QMainWindow):
             log_session("FAULT", self._fault_body_text(summary).replace("\n", " | "))
             show_scrollable_message(
                 self,
-                "系统故障保护",
-                "检测到系统故障，控制已停止。\n\n"
+                "System Fault Protection",
+                "A system fault was detected and control has stopped.\n\n"
                 f"{self._fault_body_text(summary)}\n\n"
-                "确认机械和接线安全后，点击 Clear Fault 清除故障。",
+                "Confirm that the mechanism and wiring are safe, then press Clear Fault.",
                 severity="warning",
             )
         finally:
@@ -1305,7 +1307,7 @@ class HandGUI(QtWidgets.QMainWindow):
         # 即使系统当前未处于故障，也在状态提示中保留最近事件，便于联调定位。
         safety_event_text = self._latest_safety_event_text(state)
         if safety_event_text and not summary.get("active"):
-            lines.append("最近 P4 安全事件：" + safety_event_text)
+            lines.append("Latest P4 safety event: " + safety_event_text)
 
         return text, "\n".join(lines)
 
@@ -1713,10 +1715,10 @@ class HandGUI(QtWidgets.QMainWindow):
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Save Data Format")
         layout = QtWidgets.QVBoxLayout(dialog)
-        label = QtWidgets.QLabel("本次记录固定保存为 CSV；可选是否额外保存触觉全量表。")
+        label = QtWidgets.QLabel("This recording is saved as CSV; full tactile data is optional.")
         layout.addWidget(label)
 
-        tactile_full_check = QtWidgets.QCheckBox("触觉全量数据（数据量大，需要时勾选）")
+        tactile_full_check = QtWidgets.QCheckBox("Full tactile data (large; enable only when needed)")
         tactile_full_check.setChecked(bool(self._recording_format_options.get("tactile_full", False)))
         layout.addWidget(tactile_full_check)
 

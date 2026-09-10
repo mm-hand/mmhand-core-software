@@ -40,6 +40,7 @@ from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH
 from .protocol import (
     CMD_ACTIVE_SCOPE,
+    CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
@@ -76,6 +77,7 @@ LOWER_SYNC_TIMEOUT_S = 2.5
 STATE_SYNC_RETRY_PERIOD_S = 1.0
 LOWER_STATUS_STALE_AFTER_S = 1.0
 ACTIVE_SCOPE_ACK_TIMEOUT_S = 1.0
+CALIBRATE_ACK_TIMEOUT_S = 1.0
 CALIBRATION_TURN_RESET_SETTLE_S = 0.30
 CALIBRATION_TURN_RESET_ACK_TIMEOUT_S = 1.0
 MULTITURN_RESTORE_ACK_TIMEOUT_S = 1.0
@@ -332,7 +334,7 @@ class HandController:
             self.comm.recording_packet_sink = getattr(self, "_recording_packet_sink", None)
         except (ValueError, RuntimeError) as exc:
             log_session("CTRL", f"initialize failed before connect: {exc}")
-            print(f"连接失败: {exc}")
+            print(f"Connection failed: {exc}")
             self.last_sync_status = str(exc)
             return False
 
@@ -340,7 +342,7 @@ class HandController:
             connected = self.comm.connect()
         except (ValueError, RuntimeError) as exc:
             log_session("CTRL", f"serial open failed port={comm_port}: {exc}")
-            print(f"连接失败: {exc}")
+            print(f"Connection failed: {exc}")
             self.last_sync_status = str(exc)
             return False
 
@@ -1121,7 +1123,7 @@ class HandController:
         if self._paused:
             return False
         if len(angles) != ENCODER_COUNT:
-            raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
+            raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
 
         angles = self._validate_angles(angles)
         with self.state_lock:
@@ -1137,7 +1139,7 @@ class HandController:
         if self._paused:
             return False
         if len(angles) != ENCODER_COUNT:
-            raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
+            raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
 
         angles = self._validate_angles(angles)
         with self.state_lock:
@@ -1162,7 +1164,7 @@ class HandController:
         if self._paused or not self.comm or self._control_mode != ControlMode.JOINT_ANGLE:
             return False
         if len(angles) != ENCODER_COUNT:
-            raise ValueError(f"需要 {ENCODER_COUNT} 个角度值")
+            raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
         validated = self._validate_angles(angles)
         with self.state_lock:
             self.current_state.set_target_angles(validated)
@@ -1177,7 +1179,7 @@ class HandController:
         if self._paused:
             return
         if len(motor_abs) != MOTOR_COUNT:
-            raise ValueError(f"需要 {MOTOR_COUNT} 个绝对位置值")
+            raise ValueError(f"Expected {MOTOR_COUNT} absolute motor positions")
         raw = [
             self._clamp_motor_abs_for_current_session(i, value)
             for i, value in enumerate(motor_abs)
@@ -1210,7 +1212,20 @@ class HandController:
     def request_firmware_calibration(self) -> bool:
         if not self.comm:
             return False
-        self.comm.send_command("calibrate")
+        sent_at = time.time()
+        if not self.comm.send_command("calibrate"):
+            log_session("CALIB", "firmware calibration command queue rejected")
+            return False
+        ack = self.comm.wait_for_ack(
+            CMD_CALIBRATE, CALIBRATE_ACK_TIMEOUT_S, received_after=sent_at
+        )
+        if ack is None or int(ack[2]) not in (
+            PROTO_ACK_STATUS_OK,
+            PROTO_ACK_STATUS_QUEUED,
+        ):
+            status = "timeout" if ack is None else str(int(ack[2]))
+            log_session("CALIB", f"firmware calibration ACK rejected: {status}")
+            return False
         self._started = False
         return True
 

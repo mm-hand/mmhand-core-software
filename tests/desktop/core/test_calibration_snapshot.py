@@ -3,6 +3,7 @@ import json
 import pytest
 
 from desktop.core.calibration_snapshot import (
+    _empty_v6_snapshot,
     CalibrationSnapshotError,
     atomic_write_snapshot,
     invalidate_calibration_snapshot_scope,
@@ -12,6 +13,7 @@ from desktop.core.calibration_snapshot import (
     seal_snapshot,
     update_manual_snapshot,
     update_snapshot_multiturn_anchors,
+    validate_snapshot_for_load,
 )
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 
@@ -53,6 +55,12 @@ def _current_payload(joint: int, result: dict) -> dict:
         "manual_reference_max_raw": [5000] * ENCODER_COUNT,
         "joint_calib_results": results,
     }
+
+
+def test_empty_auto_snapshot_is_not_loadable():
+    assert validate_snapshot_for_load(seal_snapshot(_empty_v6_snapshot())) == (
+        "snapshot contains no automatic calibration result"
+    )
 
 
 def test_partial_recalibration_preserves_unaffected_joint_and_limits():

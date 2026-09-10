@@ -15,6 +15,10 @@ bool interpolateTendonCalibrationMotorAbs(const JointCalibrationResult& calibrat
                                           float urdfDeg,
                                           float* outMotorAbs);
 
+/** 返回指定角度是否位于 LUT 的实际采样横轴内，不允许端部外推。 */
+bool tendonCalibrationContainsAngle(const JointCalibrationResult& calibration,
+                                    float urdfDeg);
+
 // 返回某一路执行器在 LUT 实测样本中的 raw ABS 最小值和最大值。
 // 该范围用于生成单腱关节的标定后舵机工作区。
 bool tendonCalibrationMotorAbsRange(const JointCalibrationResult& calibration,

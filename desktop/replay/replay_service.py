@@ -41,7 +41,7 @@ class ReplayService:
 
     def load_csv(self, path: Path | str) -> ReplayTrace:
         if self.controller.is_running():
-            raise RuntimeError("Replay运行期间不能更换CSV")
+            raise RuntimeError("CSV cannot be changed while Replay is running")
         trace = load_replay_csv(path)
         with self._lock:
             self._trace = trace
@@ -61,10 +61,10 @@ class ReplayService:
     def send(self) -> tuple[bool, str]:
         trace = self.trace()
         if trace is None:
-            return False, "请先导入动作或关节状态CSV"
+            return False, "Import a motion or joint-state CSV first"
         return self.controller.start(trace)
 
-    def stop(self, reason: str = "用户停止") -> bool:
+    def stop(self, reason: str = "User stopped replay") -> bool:
         return self.controller.stop(reason)
 
     def status(self) -> ReplayStatus:

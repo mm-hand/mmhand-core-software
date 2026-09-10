@@ -410,6 +410,8 @@ class StateReducer:
                     )
                     model.has_system_status_data = True
                     model.system_status_last_rx_ts = time.time()
+                    if packet_p4_time_ms is not None:
+                        model.system_status_p4_time_ms = int(packet_p4_time_ms)
                     if calib_status == 0:
                         if (
                             model.calib_status in ("PENDING", "RUNNING") and

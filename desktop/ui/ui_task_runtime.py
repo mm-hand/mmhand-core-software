@@ -98,7 +98,7 @@ class TaskRuntimeWindow(QtWidgets.QDialog):
         self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         layout.addWidget(self.table, 1)
 
-        hint = QtWidgets.QLabel("窗口: 1 s；CPU 为该任务占全系统运行时间比例；P95/P99 为窗口执行时间分位数。")
+        hint = QtWidgets.QLabel("Window: 1 s; CPU is the task share of total runtime; P95/P99 are execution-time percentiles.")
         hint.setStyleSheet("color:#57606a;")
         layout.addWidget(hint)
 

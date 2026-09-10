@@ -275,6 +275,8 @@ def validate_snapshot_for_load(
         for joint_idx, item in enumerate(results):
             if isinstance(item, dict) and bool(item.get("success", False)):
                 joint_mask |= 1 << joint_idx
+    if joint_mask == 0 or motor_mask == 0:
+        return "snapshot contains no automatic calibration result"
 
     missing = [
         joint_idx

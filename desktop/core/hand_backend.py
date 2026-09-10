@@ -674,9 +674,9 @@ class HandBackend:
     def begin_replay_motion(self) -> Tuple[bool, int, str]:
         """取得 Replay 独占令牌，并明确撤销 ROS2 输出授权。"""
         if not self.is_comm_connected():
-            return False, 0, "Replay拒绝：P4串口未连接"
+            return False, 0, "Replay rejected: P4 serial port is not connected"
         if not self.is_started():
-            return False, 0, "Replay拒绝：请先按ENABLE"
+            return False, 0, "Replay rejected: press ENABLE first"
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="replay_start")
         with self._replay_motion_lock:

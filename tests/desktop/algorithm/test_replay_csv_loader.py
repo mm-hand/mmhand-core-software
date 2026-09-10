@@ -116,7 +116,7 @@ def test_loader_rejects_timestamp_rollback(tmp_path):
         ],
     )
 
-    with pytest.raises(ValueError, match="倒退"):
+    with pytest.raises(ValueError, match="moves backward"):
         load_replay_csv(path)
 
 

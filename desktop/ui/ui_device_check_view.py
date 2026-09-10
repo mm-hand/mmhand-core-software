@@ -293,12 +293,12 @@ class DeviceCheckView(QtWidgets.QWidget):
             self,
             "Release Rope",
             (
-                "该操作仅处理当前在线且路由唯一的舵机，并将：\n\n"
-                "1. 重置这些舵机硬件圈数；\n"
-                "2. 清除这些舵机的多圈 JSON 锚点；\n"
-                "3. 作废这些舵机所属关节的 Auto/LUT/ABS Limit（保留 Manual Min/Max）；\n"
-                "4. 将每台舵机向放绳方向移动 1500 counts。\n\n"
-                "完成后必须重新执行自动标定。确认继续？"
+                "This operation affects only online servos with unique routes and will:\n\n"
+                "1. Reset their hardware turn counts;\n"
+                "2. Remove their multi-turn JSON anchors;\n"
+                "3. Invalidate Auto/LUT/ABS Limit for their joints while preserving Manual Min/Max;\n"
+                "4. Move each servo 1500 counts in the tendon-release direction.\n\n"
+                "Automatic calibration is required afterward. Continue?"
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,

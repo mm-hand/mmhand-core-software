@@ -22,9 +22,9 @@ class _FirmwareEpochHarness(ControlPanelStateMixin):
             cancel_calibration_workflow=MagicMock(),
         )
         self.context = SimpleNamespace(emit_action=MagicMock())
-        self._last_state_transition_count = transition_count
         self._last_multi_turn_unknown_bitmap = 0
-        self._last_p4_time_ms = p4_time_ms
+        self._last_system_status_p4_time_ms = p4_time_ms
+        self._last_p4_reboot_host_ts = 0.0
         self._startup_device_check_running = False
         self.cache_reset_reasons = []
         self.startup_checks = 0
@@ -191,14 +191,13 @@ def test_success_ready_refresh_is_independent_from_snapshot_error_event():
     assert panel.statuses == ["Calib snapshot save blocked: write failure"]
 
 
-def test_p4_timestamp_rollback_restarts_startup_restore_workflow():
+def test_system_status_uptime_restart_restarts_startup_restore_workflow():
     panel = _FirmwareEpochHarness(transition_count=10, p4_time_ms=5000)
     state = SimpleNamespace(
         has_system_status_data=True,
         state_transition_count=10,
         multi_turn_unknown_bitmap=0,
-        has_p4_time=True,
-        p4_time_ms=20,
+        system_status_p4_time_ms=20,
     )
 
     panel._handle_firmware_epoch_change(state)
@@ -212,14 +211,47 @@ def test_p4_timestamp_rollback_restarts_startup_restore_workflow():
     ]
 
 
-def test_p4_timestamp_wrap_does_not_restart_startup_restore_workflow():
+def test_system_status_uptime_wrap_does_not_restart_startup_restore_workflow():
     panel = _FirmwareEpochHarness(transition_count=10, p4_time_ms=0xFFFFFFF0)
     state = SimpleNamespace(
         has_system_status_data=True,
         state_transition_count=11,
         multi_turn_unknown_bitmap=0,
+        system_status_p4_time_ms=20,
+    )
+
+    panel._handle_firmware_epoch_change(state)
+
+    panel.backend.cancel_calibration_workflow.assert_not_called()
+    panel.backend.request_state_sync.assert_not_called()
+    assert panel.startup_checks == 0
+
+
+def test_global_packet_timestamp_rollback_does_not_fake_firmware_reboot():
+    panel = _FirmwareEpochHarness(transition_count=10, p4_time_ms=5000)
+    state = SimpleNamespace(
+        has_system_status_data=True,
+        state_transition_count=10,
+        multi_turn_unknown_bitmap=0,
         has_p4_time=True,
         p4_time_ms=20,
+        system_status_p4_time_ms=5100,
+    )
+
+    panel._handle_firmware_epoch_change(state)
+
+    panel.backend.cancel_calibration_workflow.assert_not_called()
+    panel.backend.request_state_sync.assert_not_called()
+    assert panel.startup_checks == 0
+
+
+def test_transition_counter_reset_without_uptime_restart_is_not_reboot():
+    panel = _FirmwareEpochHarness(transition_count=80, p4_time_ms=30000)
+    state = SimpleNamespace(
+        has_system_status_data=True,
+        state_transition_count=0,
+        multi_turn_unknown_bitmap=0,
+        system_status_p4_time_ms=30100,
     )
 
     panel._handle_firmware_epoch_change(state)

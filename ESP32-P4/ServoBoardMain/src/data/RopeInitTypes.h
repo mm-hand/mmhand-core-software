@@ -28,6 +28,9 @@ inline constexpr uint8_t ROPE_INIT_REASON_CANCELLED = 9;
 struct RopeInitRuntimeState {
     uint8_t active;              ///< 1 表示状态机需要继续调用 step()。
     uint8_t insideStableSamples; ///< 连续进入工作区的反馈帧数。
+    uint8_t zeroPublishActive;   ///< 标定后正在逐关节发布双腱 LUT(0 deg)。
+    uint8_t zeroPublishComplete; ///< 最后一对目标已发布，等待执行器消费一周期。
+    uint32_t zeroPendingJointMask; ///< 尚未发布 LUT(0 deg) 的双腱关节。
     uint32_t beginMs;            ///< 本轮开始的单调毫秒时间。
     uint32_t nextStepMs;         ///< 下一次允许推进的时间，保持原 50 ms 节拍。
 };

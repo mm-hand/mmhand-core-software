@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import re
+
 from desktop.core.calibration_diagnostics import CALIBRATION_DIAGNOSTICS, format_calibration_diagnostic
 from desktop.core.protocol import (
     CALIB_DIAG_REASON_LEGACY_ANGLE_NOT_MOVING,
@@ -35,5 +37,12 @@ def test_all_reserved_legacy_reasons_remain_readable():
             SimpleNamespace(calib_diag_valid=True, calib_diag_reason=reason)
         )
         assert summary["active"] is True
-        assert summary["title"].startswith("旧版")
+        assert summary["title"].startswith("Legacy")
         assert summary["suggestions"]
+        assert not re.search(r"[\u4e00-\u9fff]", " ".join(summary["lines"] + summary["suggestions"]))
+
+
+def test_calibration_reason_titles_are_unique_and_english():
+    titles = [spec.title for spec in CALIBRATION_DIAGNOSTICS.values()]
+    assert len(titles) == len(set(titles))
+    assert not any(re.search(r"[\u4e00-\u9fff]", title) for title in titles)

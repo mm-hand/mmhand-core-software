@@ -49,7 +49,7 @@ def test_all_zero_all_online_is_confirmed_and_overlays_red_health():
     assert confirmed.encoder_online_bitmap == 0
     assert confirmed.encoder_fault_bitmap == ALL_ENCODERS_MASK
     assert len(guard.actions) == 1
-    assert "图三末端" in guard.actions[0]
+    assert "encoder FPC to S3" in guard.actions[0]
 
 
 def test_zero_snapshot_is_not_fault_when_firmware_does_not_report_all_online():
@@ -80,4 +80,4 @@ def test_fault_recovers_after_three_valid_nonzero_raw_snapshots():
     assert not guard._encoder_common_bus_fault
     assert recovered.encoder_online_bitmap == ALL_ENCODERS_MASK
     assert recovered.encoder_fault_bitmap == 0
-    assert "异常已解除" in guard.actions[-1]
+    assert "fault has cleared" in guard.actions[-1]

@@ -1019,7 +1019,7 @@ class LowerComputerComm:
             if not is_valid_port(self.port):
                 raise ValueError(f"serial port '{self.port}' is not available")
             if not self.connect():
-                raise RuntimeError(f"无法打开端口 '{self.port}'")
+                raise RuntimeError(f"Unable to open port '{self.port}'")
 
     def connect(self) -> bool:
         if self._transport.is_open:
@@ -1064,7 +1064,7 @@ class LowerComputerComm:
             except Exception:
                 pass
             log_session("COMM", f"serial connect failed port={self.port}: {exc}")
-            print(f"连接失败: {exc}")
+            print(f"Connection failed: {exc}")
             return False
 
     @staticmethod

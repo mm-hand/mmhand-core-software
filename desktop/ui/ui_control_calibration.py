@@ -10,9 +10,6 @@
 
 from .ui_control_common import (
     AUTO_CALIBRATION_JOINT_INDICES,
-    CALIB_WARN_AUTO_MAX_SHORTFALL,
-    CALIB_WARN_AUTO_MIN_OFFSET,
-    CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH,
     CALIB_DIAG_REASON_JOINT_STEP_FAILED,
     CALIB_DIAG_PHASE_SEQUENCE,
     ControlMode,
@@ -36,6 +33,10 @@ from .ui_control_common import (
     VALID_MOTOR_MASK,
     _motor_channel_valid,
     directed_encoder_delta,
+)
+from desktop.core.calibration_diagnostics import (
+    format_calibration_batch_summary,
+    format_calibration_warning,
 )
 
 
@@ -177,12 +178,16 @@ class CalibrationWorkflowController:
                 else "..."
             )
         )
+        self._calibration_batch_active = True
+        self._calibration_batch_alerts = []
+        self._calibration_warning_popup_mask = 0
         accepted = self.backend.begin_calibration_workflow(
             joint_mask=active_joint_mask,
             motor_mask=active_motor_mask,
             reset_motor_mask=reset_motor_mask,
         )
         if not accepted:
+            self._calibration_batch_active = False
             self._set_status("Calibrate blocked: another calibration transaction is running")
             return
         for joint_idx in ControlScopeModel.ordered_joint_indices_from_mask(active_joint_mask):
@@ -220,20 +225,20 @@ class CalibrationWorkflowController:
         source_text = f"{source}\n\n" if source else ""
         return (
             f"{source_text}"
-            "当前存在 Turn UNKNOWN，多圈位置不可信，系统已阻止相关关节继续控制。\n\n"
-            f"受影响电机：{motors}\n"
-            f"unknown mask：0x{int(unknown_mask):08X}\n\n"
-            "为什么会这样：\n"
-            "- 舵机单独断电后，P4 保存的多圈状态可能与重新上电后的 raw 不匹配。\n"
-            "- 上位机会用最近一次 SavedRaw/logical ABS 展开到当前 raw 最近的圈数。\n"
-            "- 机构被手动转动、换舵机或改映射后，旧 LUT 也不能继续使用。\n\n"
-            "恢复步骤：\n"
-            "1. 停止发送运动命令，必要时点击 E-STOP。\n"
-            "2. 确认舵机电源、总线和 ID 映射正常，机构不再被手动转动。\n"
-            "3. 先等待上位机 JSON 最近圈恢复；若 Turn UNKNOWN 仍未清除，勾选受影响关节。\n"
-            "4. 点击 Calibrate；程序会先清除所选舵机 JSON 锚点并下发硬件圈数复位，再开始标定。\n"
-            "5. 双电机关节会由两台舵机共同重新标定 LUT，其他关节数据保留。\n"
-            "6. 确认 Multi-turn: Known、Calibration: Success、Overload: Normal 后再恢复控制。"
+            "Turn UNKNOWN is active. Multi-turn positions are untrusted, so control of the affected joints is blocked.\n\n"
+            f"Affected motors: {motors}\n"
+            f"Unknown mask: 0x{int(unknown_mask):08X}\n\n"
+            "Why this can happen:\n"
+            "- After an individual servo power cycle, the P4 multi-turn state may not match the new raw position.\n"
+            "- The desktop attempts nearest-turn recovery from the last SavedRaw/logical ABS pair.\n"
+            "- A manually moved mechanism, replaced servo, or changed mapping makes the old LUT unsafe.\n\n"
+            "Recovery steps:\n"
+            "1. Stop motion commands; use E-STOP if necessary.\n"
+            "2. Check servo power, buses, and ID mapping, and stop moving the mechanism by hand.\n"
+            "3. Wait for JSON nearest-turn recovery. If Turn UNKNOWN remains, select the affected joints.\n"
+            "4. Press Calibrate. It invalidates the selected JSON anchors, resets hardware turn counts, and starts calibration.\n"
+            "5. A dual-motor joint recalibrates both motors together; unrelated joint data is preserved.\n"
+            "6. Resume control only after Multi-turn: Known, Calibration: Success, and Overload: Normal."
         )
 
     def turn_unknown_popup_seen(self) -> bool:
@@ -280,14 +285,14 @@ class CalibrationWorkflowController:
         self._warn(
             "Servo Turn Overflow",
             (
-                "检测到舵机内部硬件 ABS 严格越过圈数安全阈值 "
-                "[-30715, +30715]。\n"
-                "底层命令硬边界仍为 [-30719, +30719]，当前保护会提前触发。\n\n"
-                f"越界舵机：{motor_text}\n\n"
-                "P4 已停止这些舵机的目标输出。请确认机构和绳路安全，"
-                "在 Joint Channels 勾选越界舵机所属关节并点击 Calibrate。\n"
-                "Calibrate 会先清除所选舵机的 JSON 锚点和硬件圈数，"
-                "同时失效对应 Auto/LUT/ABS Limit，再建立新标定。"
+                "Servo hardware ABS exceeded the strict turn-count safety range "
+                "[-30715, +30715].\n"
+                "The command hard limit remains [-30719, +30719], so this protection triggers first.\n\n"
+                f"Affected motors: {motor_text}\n\n"
+                "P4 stopped target output for these motors. Confirm that the mechanism and tendon routing are safe, "
+                "select their joints in Joint Channels, and press Calibrate.\n"
+                "Calibration clears the selected JSON anchors and hardware turn counts, invalidates the related "
+                "Auto/LUT/ABS Limit data, and then builds a new calibration."
             ),
         )
 
@@ -626,7 +631,7 @@ class CalibrationWorkflowController:
     def load_calibration_from_file(self) -> None:
         """选择标定 JSON；验证、激活和下发统一交给核心工作流。"""
         if not self.context.is_comm_connected():
-            self._warn("Load Calibration", "请先连接 P4，再加载标定文件。")
+            self._warn("Load Calibration", "Connect to P4 before loading a calibration file.")
             return
         state = self._state
         system_state = getattr(state, "system_state", None) if state is not None else None
@@ -636,7 +641,7 @@ class CalibrationWorkflowController:
             SYSTEM_STATE_CALIBRATION_RUNNING,
             SYSTEM_STATE_ROPE_INIT_RUNNING,
         ):
-            self._warn("Load Calibration", "控制或标定任务正在运行，请先 E-STOP 或 Pause 后再加载。")
+            self._warn("Load Calibration", "A control or calibration task is running. Use E-STOP or Pause before loading.")
             return
 
         # 默认定位到自动标定生成的本机快照目录；文件对话框仍允许用户浏览任意目录。
@@ -652,14 +657,14 @@ class CalibrationWorkflowController:
         try:
             snapshot = self.backend.inspect_calibration_snapshot(source_path)
         except Exception as exc:
-            self._error("Load Calibration", f"拒绝加载：{exc}")
+            self._error("Load Calibration", f"Load rejected: {exc}")
             return
         reply = QtWidgets.QMessageBox.question(
             self,
             "Load Calibration",
             (
-                f"确认加载标定文件？\n\n文件：{source_path.name}\n\n"
-                "仅当机械、舵机 ID、映射和标定姿态没有变化时才应使用。"
+                f"Load this calibration file?\n\nFile: {source_path.name}\n\n"
+                "Use it only if the mechanism, servo IDs, mapping, and calibration pose have not changed."
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
@@ -753,6 +758,7 @@ class CalibrationWorkflowController:
             if ok:
                 self._set_status(f"Calibrate started: {message}")
             else:
+                self._calibration_batch_active = False
                 failed_mask = int(
                     getattr(event, "failed_motor_mask", 0) or 0
                 ) & VALID_MOTOR_MASK
@@ -761,6 +767,48 @@ class CalibrationWorkflowController:
                     f"{message}\nfailed motors: {self._format_motor_mask(failed_mask)}",
                 )
                 self._set_status(f"Calibrate blocked: {message}")
+            return
+
+        if phase == "phase_complete":
+            details = dict(getattr(event, "details", {}) or {})
+            summary = details.get("warning_summary")
+            if isinstance(summary, dict):
+                self._remember_calibration_batch_alert(summary, details)
+            index = int(details.get("phase_index", 0)) + 1
+            count = int(details.get("phase_count", 1))
+            status = str(details.get("status", ""))
+            suffix = "; continuing automatically" if details.get("has_next_phase") else ""
+            self._set_status(
+                f"Calibration phase {index}/{count} completed: {status}{suffix}"
+            )
+            return
+
+        if phase == "calibration_complete":
+            details = dict(getattr(event, "details", {}) or {})
+            for record in details.get("records", []):
+                if isinstance(record, dict) and isinstance(
+                    record.get("warning_summary"), dict
+                ):
+                    self._remember_calibration_batch_alert(
+                        record["warning_summary"], record
+                    )
+            was_active = self._calibration_batch_active
+            self._calibration_batch_active = False
+            records = list(details.get("records", []))
+            records.extend(self._calibration_batch_alerts)
+            self._calibration_batch_alerts = []
+            if ok:
+                self._set_status("Calibration completed")
+                summary = format_calibration_batch_summary(records)
+                if summary["active"]:
+                    self._warn(summary["title"], summary["message"])
+            else:
+                self._set_status(f"Calibration failed: {message}")
+                # Firmware calibration failures are shown by the central system-fault
+                # dialog with the structured reason. Local persistence failures still
+                # need a workflow-owned dialog.
+                if was_active and details.get("terminal_status") != "FAILED":
+                    self._error("Calibration failed", message)
             return
 
         if phase == "snapshot_saved":
@@ -827,7 +875,7 @@ class CalibrationWorkflowController:
 
         if phase == "import":
             if not ok:
-                self._error("Load Calibration", f"加载失败：{message}")
+                self._error("Load Calibration", f"Load failed: {message}")
                 self._set_status(f"Load Calibration failed: {message}")
                 return
             self._joint_target_initialized = False
@@ -882,103 +930,35 @@ class CalibrationWorkflowController:
         new_mask = mask & ~self._calibration_warning_popup_mask
         if new_mask == 0:
             return
-        min_offsets = list(
-            getattr(state, "calibration_auto_min_offset_counts", []) or []
-        )
-        results = list(getattr(state, "joint_calib_results", []) or [])
-        joint_sections = []
-        event_items = []
-        for joint in range(ENCODER_COUNT):
-            if (new_mask & (1 << joint)) == 0:
-                continue
-            result = results[joint] if joint < len(results) else None
-            if not isinstance(result, dict):
-                # SYSTEM_STATUS may arrive before this joint's snapshot.
-                return
-
-            reason = int(result.get("assemblyWarningReason", 0) or 0)
-            min_offset = (
-                int(min_offsets[joint]) if joint < len(min_offsets) else 0
-            )
-            max_shortfall = 0
-            auto_span = 0
-            manual_span = 0
-            urdf_span = 0
-            span_difference = 0
-            details = []
-            if bool(result.get("hasAssemblyWarningFields", False)):
-                min_offset = int(result.get("autoMinOffsetCounts", 0) or 0)
-                max_shortfall = int(
-                    result.get("autoMaxShortfallCounts", 0) or 0
-                )
-                auto_span = int(result.get("assemblyAutoSpanCounts", 0) or 0)
-                has_span_comparison = bool(
-                    result.get("hasAssemblySpanComparisonFields", False)
-                )
-                manual_span = int(
-                    result.get("assemblyManualSpanCounts", 0) or 0
-                )
-                urdf_span = int(
-                    result.get("assemblyUrdfSpanCounts", 0) or 0
-                )
-                span_difference = int(
-                    result.get("assemblySpanDifferenceCounts", 0) or 0
-                )
-                if reason & CALIB_WARN_AUTO_MIN_OFFSET:
-                    details.append(
-                        f"Auto Min 比 Manual Min 正向内缩 {min_offset} counts，"
-                        "达到或超过 350 counts"
-                    )
-                if reason & CALIB_WARN_AUTO_MAX_SHORTFALL:
-                    details.append(
-                        f"Auto Max 距 Manual Max 仍差 {max_shortfall} counts，"
-                        "达到或超过 300 counts"
-                    )
-                if reason & CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH:
-                    if has_span_comparison:
-                        details.append(
-                            f"Manual Span 为 {manual_span} counts，URDF 理论磁编 "
-                            f"Span 为 {urdf_span} counts，差值 {span_difference} "
-                            "counts，超过 360 counts"
-                        )
-                    else:
-                        details.append(
-                            f"旧固件报告 Auto Span 范围警告：{auto_span} counts"
-                        )
-            else:
-                # Compatibility with the first WARN-capable firmware, which
-                # only reported the Auto Min offset in SYSTEM_STATUS.
-                reason = CALIB_WARN_AUTO_MIN_OFFSET
-                details.append(
-                    f"Auto Min 比 Manual Min 正向内缩 {min_offset} counts，"
-                    "达到或超过 350 counts"
-                )
-
-            if not details:
-                details.append("P4 报告装配警告，但未提供可识别的原因位")
-            joint_sections.append(
-                f"J{joint:02d}：\n" + "\n".join(f"- {item}" for item in details)
-            )
-            event_items.append(
-                f"J{joint:02d}:reason=0x{reason:02X},"
-                f"minOffset={min_offset},maxShortfall={max_shortfall},"
-                f"autoSpan={auto_span},manualSpan={manual_span},"
-                f"urdfSpan={urdf_span},spanDifference={span_difference}"
-            )
-
+        summary = format_calibration_warning(state, new_mask)
+        if not summary.get("ready"):
+            return
         self._calibration_warning_popup_mask |= new_mask
-        detail = "\n\n".join(joint_sections)
-        message = (
-            "标定已成功保存，但检测到可能的手指装配偏差：\n\n"
-            f"{detail}\n\n"
-            "该提示不属于故障，不会阻止 READY 或负反馈控制。\n"
-            "建议检查对应手指的绳路、装配位置和机械端点。"
-        )
         self.context.emit_action(
             f"Calibration assembly warning mask=0x{new_mask:08X}: " +
-            ", ".join(event_items)
+            str(summary.get("event_detail", ""))
         )
-        self._warn("标定装配警告", message)
+        if bool(getattr(self, "_calibration_batch_active", False)):
+            self._remember_calibration_batch_alert(summary)
+            return
+        self._warn(summary["title"], summary["message"])
+
+    def _remember_calibration_batch_alert(self, summary: dict, details=None) -> None:
+        record = dict(details or {})
+        record["warning_summary"] = dict(summary)
+        key = str(summary.get("event_detail") or summary.get("message") or "")
+        if not key:
+            return
+        for item in self._calibration_batch_alerts:
+            item_summary = item.get("warning_summary", {})
+            item_key = str(
+                item_summary.get("event_detail") or item_summary.get("message") or ""
+            )
+            if item_key == key:
+                if details:
+                    item.update(record)
+                return
+        self._calibration_batch_alerts.append(record)
 
 
     def _invalidate_local_calibration_scope(

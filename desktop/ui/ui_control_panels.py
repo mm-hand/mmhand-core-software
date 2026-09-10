@@ -122,6 +122,8 @@ class ControlPanel(
         """Initialize calibration state and active scope selections."""
         self._last_calib_status: Optional[str] = None
         self._calibration_warning_popup_mask = 0
+        self._calibration_batch_active = False
+        self._calibration_batch_alerts = []
         self._last_joint_calib_valid_mask: Optional[int] = None
         self._startup_device_check_running = False
         self._startup_missing_warning_shown = False
@@ -169,9 +171,9 @@ class ControlPanel(
         # SYSTEM_STATUS 周期重复提示同一次执行/拒绝结果。
         self._last_reported_direct_generation: Optional[int] = None
         self._motor_run_states = [False] * MOTOR_COUNT
-        self._last_state_transition_count: Optional[int] = None
         self._last_multi_turn_unknown_bitmap: Optional[int] = None
-        self._last_p4_time_ms: Optional[int] = None
+        self._last_system_status_p4_time_ms: Optional[int] = None
+        self._last_p4_reboot_host_ts = 0.0
         self._turn_recovery_popup_episode_active = False
         self._turn_recovery_popup_episode_mask = 0
         self._servo_turn_overflow_popup_episode_active = False

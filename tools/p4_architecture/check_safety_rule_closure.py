@@ -132,7 +132,7 @@ def audit(repo_root: Path) -> dict[str, object]:
             "mapping": mapping_ok,
             "event": probe_ok(source_root, contract.event),
             "recovery": (
-                bool(str(rule["recovery_zh"]).strip())
+                bool(str(rule["recovery"]).strip())
                 and probe_ok(source_root, contract.recovery)
             ),
             "policy_ref": f"{contract.policy.path}::{contract.policy.token}",

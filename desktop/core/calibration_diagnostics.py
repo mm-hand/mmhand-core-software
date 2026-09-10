@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Tuple
 
 from . import protocol
+from .safety_rules import explain_rope_init_reason
 
 
 Formatter = Callable[[Tuple[int, int, int], int], str]
@@ -69,7 +70,7 @@ def _format_workspace(values: Tuple[int, int, int], bitmap: int) -> str:
 
 
 def _format_joint_step(_values: Tuple[int, int, int], _bitmap: int) -> str:
-    return "仅使用本轮 completed/failed joint mask；无具体机械根因"
+    return "uses completed/failed joint masks only; no specific mechanical cause was reported"
 
 
 def _spec(
@@ -88,170 +89,170 @@ def _spec(
 
 CALIBRATION_DIAGNOSTICS: Dict[int, CalibrationDiagnosticSpec] = {
     protocol.CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY: _spec(
-        "没有可标定的 active 关节",
+        "No active joints selected for calibration",
         ("active_joint_mask", "active_motor_mask", "", ""),
-        "在 Active Scope 中选择需要标定的关节和电机后重试。",
+        "Select the required joints and motors in Active Scope, then retry.",
         kinds=("hex", "hex", "int", "hex"),
     ),
     protocol.CALIB_DIAG_REASON_ENCODER_ERROR: _spec(
-        "磁编码器反馈无效",
+        "Invalid magnetic encoder feedback",
         ("encoder_valid_mask", "online_joint_mask", "fault_joint_mask", "affected_joint_mask"),
-        "检查对应磁编码器供电、SPI/CAN 接线、S3/P4 通信和传感器板状态。",
+        "Check encoder power, SPI/CAN wiring, S3/P4 communication, and the sensor board.",
         kinds=("hex", "hex", "hex", "hex"),
     ),
     protocol.CALIB_DIAG_REASON_SERVO_OFFLINE: _spec(
-        "舵机反馈缺失",
+        "Servo feedback missing",
         ("online_motor_mask", "configured_motor_mask", "", "affected_motor_mask"),
-        "检查对应舵机电源、串口总线、ID 映射和接线。",
+        "Check servo power, UART bus, ID mapping, and wiring.",
         kinds=("hex", "hex", "int", "hex"),
     ),
     protocol.CALIB_DIAG_REASON_OVERLOAD: _spec(
-        "标定中过载", ("load", "limit", "raw_load", "motor_mask"),
-        "卸载机械外力，检查绳索是否过紧或机构卡住，Clear Fault 后重新标定。",
+        "Overload during calibration", ("load", "limit", "raw_load", "motor_mask"),
+        "Remove external load, check for an over-tight tendon or mechanical jam, clear the fault, and recalibrate.",
     ),
     protocol.CALIB_DIAG_REASON_ZERO_CROSS_INVALID: _spec(
-        "零点推算无效", ("taut", "zero", "tight", "motor_mask"),
-        "检查编码器方向、标定起始姿态和绳索预紧。",
+        "Invalid zero-position estimate", ("taut", "zero", "tight", "motor_mask"),
+        "Check encoder direction, the calibration start pose, and tendon preload.",
     ),
     protocol.CALIB_DIAG_REASON_WRAP_TOO_LARGE: _spec(
-        "编码器跨度接近整圈", ("encoder_span", "tight", "max", "motor_mask"),
-        "检查磁编方向、映射和多圈锚点。",
+        "Encoder span is near a full turn", ("encoder_span", "tight", "max", "motor_mask"),
+        "Check magnetic encoder direction, mapping, and the multi-turn anchor.",
     ),
     protocol.CALIB_DIAG_REASON_ABS_LIMIT_INVALID: _spec(
-        "舵机目标超过安全绝对范围", ("command_abs", "min", "max", "motor_mask"),
-        "确认多圈读数、舵机 ID、绳路和 ABS limit 后重新标定。",
+        "Servo target exceeds the safe absolute range", ("command_abs", "min", "max", "motor_mask"),
+        "Verify the multi-turn reading, servo ID, tendon routing, and ABS limits before recalibrating.",
     ),
     protocol.CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED: _spec(
-        "标定目标发送失败", ("target_a", "target_b", "apply_status", "motor_mask"),
-        "确认目标 owner、执行状态和舵机任务正常后重新标定。",
+        "Calibration target publish failed", ("target_a", "target_b", "apply_status", "motor_mask"),
+        "Verify target ownership, apply status, and the servo task before recalibrating.",
     ),
     protocol.CALIB_DIAG_REASON_FEEDBACK_LOST: _spec(
-        "标定过程中反馈丢失",
+        "Feedback lost during calibration",
         ("encoder_valid_mask", "servo_abs_valid_mask", "servo_raw_valid_mask", "affected_motor_mask"),
-        "根据三个 valid mask 检查磁编、舵机 ABS/raw 反馈及对应总线。",
+        "Use the three valid masks to check encoder, servo ABS/raw feedback, and the affected buses.",
         kinds=("hex", "hex", "hex", "hex"),
     ),
     protocol.CALIB_DIAG_REASON_TASK_START_FAILED: _spec(
-        "标定任务启动失败", ("task_create_result", "", "", "selected_joint_mask"),
-        "确认上一次标定已退出；若仍失败，检查任务栈和系统资源。",
+        "Calibration task failed to start", ("task_create_result", "", "", "selected_joint_mask"),
+        "Confirm the previous calibration has exited; if it still fails, check task stack and system resources.",
     ),
     protocol.CALIB_DIAG_REASON_CONTROL_LOST: _spec(
-        "标定控制权丢失", ("system_state", "owner", "control_enabled", "active_joint_mask"),
-        "检查 STOP、Pause、Clear Fault、Enable 或其他控制流程是否打断标定。",
+        "Calibration control ownership lost", ("system_state", "owner", "control_enabled", "active_joint_mask"),
+        "Check whether STOP, Pause, Clear Fault, Enable, or another control flow interrupted calibration.",
     ),
     protocol.CALIB_DIAG_REASON_HOLD_TARGET_FAILED: _spec(
-        "保持其他关节失败", ("current_index", "joint_count", "batch_count", "selected_joint_mask"),
-        "检查其他已选关节的舵机在线、Turn Known 和 ABS limit 状态。",
+        "Failed to hold other joints", ("current_index", "joint_count", "batch_count", "selected_joint_mask"),
+        "Check servo online state, Turn Known state, and ABS limits for the other selected joints.",
     ),
     protocol.CALIB_DIAG_REASON_JOINT_LIST_INVALID: _spec(
-        "标定关节列表无效", ("joint_or_count", "max_joint_count", "index_or_has_list", "seen_joint_mask"),
-        "重新选择 active scope；若重复出现，检查上位机与固件的关节数量。",
+        "Invalid calibration joint list", ("joint_or_count", "max_joint_count", "index_or_has_list", "seen_joint_mask"),
+        "Select the active scope again; if this repeats, check desktop and firmware joint counts.",
     ),
     protocol.CALIB_DIAG_REASON_DUPLICATE_JOINT: _spec(
-        "标定关节重复", ("duplicate_index", "joint_count", "", "seen_joint_mask"),
-        "重新选择关节并检查 active scope 到标定序列的构造。",
+        "Duplicate joint in calibration list", ("duplicate_index", "joint_count", "", "seen_joint_mask"),
+        "Reselect the joints and check active-scope construction of the calibration sequence.",
     ),
     protocol.CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: _spec(
-        "标定工作空间准备失败",
+        "Calibration workspace preparation failed",
         ("helper_joint", "pose", "stage", "motor_mask"),
-        "检查失败辅助关节的舵机在线、ABS/load 反馈和 Turn Known 状态。",
+        "Check servo online state, ABS/load feedback, and Turn Known state for the helper joint.",
         formatter=_format_workspace,
     ),
     protocol.CALIB_DIAG_REASON_JOINT_STEP_FAILED: _spec(
-        "部分关节标定失败", ("", "", "", ""),
-        "这是调度层兜底；按 failed joint mask 重标，并查看此前固件日志中的具体根因。",
+        "One or more joints failed calibration", ("", "", "", ""),
+        "This is a scheduler fallback. Recalibrate the failed joint mask and inspect the preceding firmware log for the specific cause.",
         formatter=_format_joint_step,
     ),
     protocol.CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT: _spec(
-        "舵机热插拔恢复超时",
+        "Servo hot-plug recovery timed out",
         ("online_mask", "configured_mask", "pending_mask", "unresolved_mask"),
-        "检查 unresolved mask 对应舵机的电源、总线和多圈模式。",
+        "Check power, bus communication, and multi-turn mode for the unresolved motor mask.",
         kinds=("hex", "hex", "hex", "hex"),
     ),
     protocol.CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: _spec(
-        "单电机关节松绳超过两圈",
+        "Single-tendon release exceeded two turns",
         ("released_counts", "limit_counts", "next_released_counts", "motor_mask"),
-        "检查绳索脱落、断裂、绕线方向或磁编未随机械运动。",
+        "Check for a detached or broken tendon, wrong winding direction, or encoder motion mismatch.",
     ),
     protocol.CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID: _spec(
-        "关节与舵机映射无效", ("joint", "primary", "secondary", "motor_mask"),
-        "检查 HardwareMap 中的 J/M、主副电机映射。",
+        "Invalid joint-to-servo mapping", ("joint", "primary", "secondary", "motor_mask"),
+        "Check the J/M and primary/secondary motor mapping in HardwareMap.",
     ),
     protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID: _spec(
-        "磁编有效行程无效", ("encoder_span", "endpoint_a", "endpoint_b", "motor_mask"),
-        "检查磁编方向、机械端点以及 SPI/CAN 数据是否实时更新。",
+        "Invalid magnetic encoder travel", ("encoder_span", "endpoint_a", "endpoint_b", "motor_mask"),
+        "Check encoder direction, mechanical endpoints, and whether SPI/CAN data updates in real time.",
     ),
     protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED: _spec(
-        "标定结果或 LUT 构建失败", ("sample_count", "encoder_span", "lut_count", "motor_mask"),
-        "检查 Manual 基准、端点、样本数量和磁编行程。",
+        "Calibration result or LUT build failed", ("sample_count", "encoder_span", "lut_count", "motor_mask"),
+        "Check Manual references, endpoints, sample count, and encoder travel.",
     ),
     protocol.CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: _spec(
-        "标定结果提交失败", ("joint", "encoder_span", "lut_count", "motor_mask"),
-        "检查关节索引、共享状态和运行时标定存储。",
+        "Calibration result commit failed", ("joint", "encoder_span", "lut_count", "motor_mask"),
+        "Check the joint index, shared state, and runtime calibration storage.",
     ),
     protocol.CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: _spec(
-        "舵机多圈可信状态提交失败", ("joint", "primary", "secondary", "motor_mask"),
-        "检查对应舵机在线、多圈配置和恢复状态。",
+        "Failed to commit trusted multi-turn state", ("joint", "primary", "secondary", "motor_mask"),
+        "Check servo online state, multi-turn configuration, and recovery state.",
     ),
     protocol.CALIB_DIAG_REASON_TARGET_APPLY_TIMEOUT: _spec(
-        "标定目标等待下位机执行确认超时",
+        "Timed out waiting for calibration target confirmation",
         ("target_a", "target_b", "apply_status", "motor_mask"),
-        "检查 ServoBus 是否阻塞、UART 是否被扫描占用以及 owner 是否仍为 Calibration。",
+        "Check whether ServoBus is blocked, UART is occupied by scanning, and the owner is still Calibration.",
     ),
     protocol.CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED: _spec(
-        "双腱换向阶段关节停止响应",
+        "Joint stalled during dual-tendon exchange",
         ("load", "load_threshold", "encoder_delta", "motor_mask"),
-        "检查主副腱预紧、收放方向、磁编反馈和机械卡滞。",
+        "Check primary/secondary tendon preload, winding directions, encoder feedback, and mechanical binding.",
     ),
 }
 
 
 _LEGACY = {
     protocol.CALIB_DIAG_REASON_LEGACY_CAN_FEEDBACK_TIMEOUT: (
-        "旧版 CAN feedback timeout", ("can_online", "sample_age_ms", "timeout_ms", "affected_joint_mask")
+        "Legacy CAN feedback timeout", ("can_online", "sample_age_ms", "timeout_ms", "affected_joint_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_SERVO_FEEDBACK_TIMEOUT: (
-        "旧版 servo feedback timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
+        "Legacy servo feedback timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_TELEMETRY_TIMEOUT: (
-        "旧版 telemetry timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
+        "Legacy telemetry timeout", ("abs_ok", "raw_ok", "telemetry_ok", "affected_motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_TURN_UNKNOWN: (
-        "旧版 turn unknown", ("", "", "", "unknown_motor_mask")
+        "Legacy turn unknown", ("", "", "", "unknown_motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_LOAD_NOT_REACHED: (
-        "旧版 load not reached", ("load", "threshold", "travel_counts", "motor_mask")
+        "Legacy load not reached", ("load", "threshold", "travel_counts", "motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_ANGLE_NOT_MOVING: (
-        "旧版 angle not moving", ("angle_delta", "threshold", "stable_samples", "motor_mask")
+        "Legacy angle not moving", ("angle_delta", "threshold", "stable_samples", "motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_WRONG_DIRECTION: (
-        "旧版 wrong direction", ("actual_delta", "expected_sign", "threshold", "motor_mask")
+        "Legacy wrong direction", ("actual_delta", "expected_sign", "threshold", "motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_ZERO_RETURN_TIMEOUT: (
-        "旧版 zero return timeout", ("abs_error", "required_travel", "zero_deg_x100", "motor_mask")
+        "Legacy zero return timeout", ("abs_error", "required_travel", "zero_deg_x100", "motor_mask")
     ),
     protocol.CALIB_DIAG_REASON_LEGACY_INTERNAL_ERROR: (
-        "旧版 internal error", ("detail_a", "detail_b", "detail_c", "affected_mask")
+        "Legacy internal error", ("detail_a", "detail_b", "detail_c", "affected_mask")
     ),
 }
 for reason, (title, fields) in _LEGACY.items():
     CALIBRATION_DIAGNOSTICS[reason] = _spec(
         title,
         fields,
-        "该诊断来自旧固件或历史日志；保留原始数据，并使用对应版本日志定位。",
+        "This diagnostic came from legacy firmware or a historical log. Preserve the raw values and inspect logs from the matching version.",
         legacy=True,
     )
 
 
 PHASE_NAMES = {
-    protocol.CALIB_DIAG_PHASE_INIT: "初始化反馈检查",
-    protocol.CALIB_DIAG_PHASE_FIND_MAX: "寻找最大拉紧位置",
-    protocol.CALIB_DIAG_PHASE_RELEASE: "松绳/方向判断",
-    protocol.CALIB_DIAG_PHASE_RETURN_ZERO: "回到零位",
-    protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD: "双电机预紧",
-    protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE: "双电机交替测试",
-    protocol.CALIB_DIAG_PHASE_SEQUENCE: "标定任务调度",
+    protocol.CALIB_DIAG_PHASE_INIT: "Initial feedback check",
+    protocol.CALIB_DIAG_PHASE_FIND_MAX: "Find maximum tightened position",
+    protocol.CALIB_DIAG_PHASE_RELEASE: "Tendon release and direction check",
+    protocol.CALIB_DIAG_PHASE_RETURN_ZERO: "Return to zero",
+    protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD: "Dual-motor preload",
+    protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE: "Dual-motor exchange test",
+    protocol.CALIB_DIAG_PHASE_SEQUENCE: "Calibration sequence",
 }
 
 
@@ -272,28 +273,133 @@ def format_calibration_diagnostic(state: object) -> dict:
     failed = int(getattr(state, "calib_diag_failed_joint_mask", 0) or 0)
     active = valid and reason != protocol.CALIB_DIAG_REASON_NONE
     spec = CALIBRATION_DIAGNOSTICS.get(reason)
-    title = spec.title if active and spec else (f"标定诊断 reason={reason}" if active else "")
+    title = spec.title if active and spec else (f"Unknown calibration reason: {reason}" if active else "")
     lines = []
     suggestions = []
     if active:
         phase_text = PHASE_NAMES.get(phase, f"phase={phase}" if phase else "-")
         joint_text = f"J{joint:02d}" if 0 <= joint < protocol.ENCODER_COUNT else "J?"
         motor_text = f"M{motor:02d}" if 0 <= motor < protocol.MOTOR_COUNT else "M?"
-        lines.extend((f"标定失败原因：{title}", f"阶段：{phase_text}", f"对象：{joint_text}, {motor_text}"))
+        lines.extend((f"Cause: {title}", f"Phase: {phase_text}", f"Affected: {joint_text}, {motor_text}"))
         if completed or failed:
-            lines.append(f"本轮结果：completed={_hex(completed)}, failed={_hex(failed)}")
+            lines.append(f"Result: completed={_hex(completed)}, failed={_hex(failed)}")
         if spec:
-            lines.append(f"数据：{_format_from_spec(spec, values, bitmap)}")
+            lines.append(f"Raw data: {_format_from_spec(spec, values, bitmap)}")
             suggestions.append(spec.suggestion)
         else:
             lines.append(
-                f"数据：valueA={values[0]}, valueB={values[1]}, valueC={values[2]}, bitmap={_hex(bitmap)}"
+                f"Raw data: reason={reason}, valueA={values[0]}, valueB={values[1]}, "
+                f"valueC={values[2]}, bitmap={_hex(bitmap)}"
             )
-            suggestions.append("保留当前日志并按对应固件版本核对诊断协议。")
+            suggestions.append("Preserve the current log and check the diagnostic protocol for the matching firmware version.")
     return {
         "active": active,
         "title": title,
         "lines": lines,
         "suggestions": suggestions,
         "key": f"{sequence}:{reason}:{phase}:{joint}:{motor}:{values[0]}:{values[1]}:{values[2]}:{bitmap:08X}:{timestamp_ms}",
+    }
+
+
+def format_calibration_warning(state: object, warning_mask: int) -> dict:
+    """Format calibration assembly warning bits for UI display."""
+    mask = int(warning_mask) & ((1 << protocol.ENCODER_COUNT) - 1)
+    min_offsets = list(getattr(state, "calibration_auto_min_offset_counts", []) or [])
+    results = list(getattr(state, "joint_calib_results", []) or [])
+    sections = []
+    event_items = []
+    for joint in range(protocol.ENCODER_COUNT):
+        if not (mask & (1 << joint)):
+            continue
+        result = results[joint] if joint < len(results) else None
+        if not isinstance(result, dict):
+            return {"ready": False}
+        reason = int(result.get("assemblyWarningReason", 0) or 0)
+        min_offset = int(min_offsets[joint]) if joint < len(min_offsets) else 0
+        max_shortfall = auto_span = manual_span = urdf_span = span_difference = 0
+        details = []
+        if bool(result.get("hasAssemblyWarningFields", False)):
+            min_offset = int(result.get("autoMinOffsetCounts", 0) or 0)
+            max_shortfall = int(result.get("autoMaxShortfallCounts", 0) or 0)
+            auto_span = int(result.get("assemblyAutoSpanCounts", 0) or 0)
+            manual_span = int(result.get("assemblyManualSpanCounts", 0) or 0)
+            urdf_span = int(result.get("assemblyUrdfSpanCounts", 0) or 0)
+            span_difference = int(result.get("assemblySpanDifferenceCounts", 0) or 0)
+            if reason & protocol.CALIB_WARN_AUTO_MIN_OFFSET:
+                details.append(
+                    f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts)."
+                )
+            if reason & protocol.CALIB_WARN_AUTO_MAX_SHORTFALL:
+                details.append(
+                    f"Auto Max remains {max_shortfall} counts below Manual Max (limit: 300 counts)."
+                )
+            if reason & protocol.CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH:
+                if bool(result.get("hasAssemblySpanComparisonFields", False)):
+                    details.append(
+                        f"Manual span={manual_span} counts, URDF span={urdf_span} counts, "
+                        f"difference={span_difference} counts (limit: 360 counts)."
+                    )
+                else:
+                    details.append(f"Legacy firmware reported an Auto span warning: {auto_span} counts.")
+        else:
+            reason = protocol.CALIB_WARN_AUTO_MIN_OFFSET
+            details.append(
+                f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts)."
+            )
+        known = (
+            protocol.CALIB_WARN_AUTO_MIN_OFFSET
+            | protocol.CALIB_WARN_AUTO_MAX_SHORTFALL
+            | protocol.CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH
+        )
+        if reason & ~known:
+            details.append(f"Unknown calibration warning bits: 0x{reason & ~known:02X}.")
+        if not details:
+            details.append(f"P4 reported warning bits 0x{reason:02X} without recognized detail.")
+        sections.append(f"J{joint:02d}:\n" + "\n".join(f"- {item}" for item in details))
+        event_items.append(
+            f"J{joint:02d}:reason=0x{reason:02X},minOffset={min_offset},"
+            f"maxShortfall={max_shortfall},autoSpan={auto_span},manualSpan={manual_span},"
+            f"urdfSpan={urdf_span},spanDifference={span_difference}"
+        )
+    return {
+        "ready": True,
+        "title": "Calibration Assembly Warning",
+        "message": (
+            "Calibration was saved successfully, but possible finger assembly offsets were detected:\n\n"
+            + "\n\n".join(sections)
+            + "\n\nThis warning does not block READY or feedback control.\n"
+            "Check tendon routing, assembly position, and mechanical endpoints for the affected joints."
+        ),
+        "event_detail": ", ".join(event_items),
+    }
+
+
+def format_calibration_batch_summary(records: list[dict]) -> dict:
+    """Combine per-phase calibration warnings into one final UI message."""
+    sections = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        details = []
+        summary = record.get("warning_summary")
+        if isinstance(summary, dict) and summary.get("ready"):
+            details.append(str(summary.get("message", "")))
+        rope_reason = int(record.get("rope_init_reason", 0) or 0)
+        if str(record.get("status", "")) == "WARN" and rope_reason:
+            details.append(
+                "Automatic Rope Init warning:\n- "
+                + explain_rope_init_reason(rope_reason)
+            )
+        key = "\n".join(details)
+        if not details or key in seen:
+            continue
+        seen.add(key)
+        phase_index = int(record.get("phase_index", 0)) + 1
+        phase_count = int(record.get("phase_count", 1))
+        sections.append(f"Phase {phase_index}/{phase_count}:\n" + "\n\n".join(details))
+    return {
+        "active": bool(sections),
+        "title": "Calibration Completed with Warnings",
+        "message": "\n\n".join(sections),
     }

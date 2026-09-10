@@ -117,7 +117,7 @@ def test_replay_requires_startable_system_state():
     ok, message = controller.start(_trace())
 
     assert ok is False
-    assert "READY/RUN_FEEDBACK" in message
+    assert "READY or RUN_FEEDBACK" in message
     assert backend.sent == []
 
 
@@ -295,10 +295,10 @@ def test_matching_joint_order_allows_mapping_and_range_changes():
 
     assert ok
     assert controller.status().state == "completed"
-    warnings = "；".join(controller.status().warnings)
-    assert "mapping_id不同" in warnings
-    assert "mapping_version不同" in warnings
-    assert "URDF范围CRC不同" in warnings
+    warnings = "; ".join(controller.status().warnings)
+    assert "mapping_id differs" in warnings
+    assert "mapping_version differs" in warnings
+    assert "URDF range CRC differs" in warnings
 
 
 def test_mismatched_joint_order_is_rejected():
@@ -311,5 +311,5 @@ def test_mismatched_joint_order_is_rejected():
     ok, message = controller.start(trace)
 
     assert not ok
-    assert "关节顺序" in message
+    assert "joint order" in message
     assert backend.sent == []

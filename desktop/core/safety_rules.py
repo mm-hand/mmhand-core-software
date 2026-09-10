@@ -1,9 +1,9 @@
 """safety_rules.py - P4 安全规则的上位机只读解释服务。
 
-职责：加载稳定 rule_id 对应的中文标题、动作和恢复建议，并为现有门禁枚举提供统一文本。
+职责：加载稳定 rule_id 对应的英文标题、动作和恢复建议，并为现有门禁枚举提供统一文本。
 线程：首次导入时只读 JSON；之后仅访问内存字典，可在通信线程和 Qt 主线程读取。
 输入：P4 rule_id，或 SYSTEM_STATUS 中的 direct/feedback reject reason。
-输出：面向日志、状态栏和弹窗的中文解释，不参与任何控制裁决。
+输出：面向日志、状态栏和弹窗的英文解释，不参与任何控制裁决。
 状态所有权：规则真值属于 P4；本模块仅拥有展示副本。
 禁止依赖：不得导入 Qt、串口或 HandBackend，不得在 UI 文件复制规则文本。
 """
@@ -38,13 +38,13 @@ def safety_rule_table() -> Mapping[int, dict]:
 
 
 def explain_safety_rule(rule_id: int) -> str:
-    """返回含规则编号、动作和恢复建议的完整中文解释。"""
+    """Return the rule code, action, and recovery guidance."""
     item = safety_rule_table().get(int(rule_id))
     if item is None:
-        return f"未知安全规则 {int(rule_id)}"
+        return f"Unknown safety rule {int(rule_id)}"
     return (
-        f"{item['code']} {item['title_zh']}；"
-        f"动作：{item['action_zh']}；恢复：{item['recovery_zh']}"
+        f"{item['code']} {item['title']}; "
+        f"Action: {item['action']}; Recovery: {item['recovery']}"
     )
 
 
@@ -67,6 +67,7 @@ _FEEDBACK_REASON_TO_RULE = {
     6: 3206,
     7: 3207,
 }
+_ROPE_INIT_REASON_TO_RULE = {reason: 3400 + reason for reason in range(1, 10)}
 
 
 def explain_direct_reject(reason: int) -> str:
@@ -75,7 +76,7 @@ def explain_direct_reject(reason: int) -> str:
     rule_id = _DIRECT_REASON_TO_RULE.get(reason)
     if rule_id is not None:
         return explain_safety_rule(rule_id)
-    return f"未知直控拒绝原因 {reason}"
+    return f"Unknown direct-control rejection reason {reason}"
 
 
 def explain_feedback_reject(reason: int) -> str:
@@ -84,4 +85,15 @@ def explain_feedback_reject(reason: int) -> str:
     rule_id = _FEEDBACK_REASON_TO_RULE.get(reason)
     if rule_id is not None:
         return explain_safety_rule(rule_id)
-    return f"未知负反馈拒绝原因 {reason}"
+    return f"Unknown feedback-control rejection reason {reason}"
+
+
+def explain_rope_init_reason(reason: int) -> str:
+    """Explain SYSTEM_STATUS.rope_init_reason using the same rule catalog."""
+    reason = int(reason)
+    if reason == 0:
+        return "Rope Init completed without an error"
+    rule_id = _ROPE_INIT_REASON_TO_RULE.get(reason)
+    if rule_id is not None:
+        return explain_safety_rule(rule_id)
+    return f"Unknown Rope Init reason {reason}"

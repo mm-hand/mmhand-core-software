@@ -208,20 +208,20 @@ class ControlCommandController:
                     f"{self._turn_recovery_guide_text(guide_mask, 'Clear Fault')}"
                 )
             text = (
-                "当前仍检测到故障：\n\n"
+                "The following fault is still active:\n\n"
                 f"{detail}\n\n"
-                "请先确认故障原因已经排除。\n"
-                "清除故障会让下位机回到不可控状态，之后需要重新按 ENABLE。"
+                "Confirm that the cause has been resolved.\n"
+                "Clearing the fault returns P4 to UNCONTROLLABLE; press ENABLE afterward."
             )
             title = "Clear Fault"
-            accept_text = "清除故障"
+            accept_text = "Clear Fault"
         else:
             text = (
-                "确认清除当前故障/保护状态？\n\n"
-                "这会发送 reset 指令，让下位机回到不可控状态，之后需要重新按 ENABLE。"
+                "Clear the current fault/protection state?\n\n"
+                "This sends RESET and returns P4 to UNCONTROLLABLE; press ENABLE afterward."
             )
             title = "Clear Fault"
-            accept_text = "清除"
+            accept_text = "Clear"
         confirmed = show_scrollable_message(
             self,
             title,
@@ -232,7 +232,7 @@ class ControlCommandController:
                 else "question"
             ),
             accept_text=accept_text,
-            reject_text="取消",
+            reject_text="Cancel",
         )
         if not confirmed:
             self._set_status("Clear Fault cancelled")
@@ -259,7 +259,7 @@ class ControlCommandController:
         if bool(getattr(self, "_encoder_common_bus_fault", False)):
             if show_status:
                 self._set_status(
-                    "Feedback blocked: 21路磁编Raw全零，疑似图三末端至S3的公共SPI FPC短路"
+                    "Feedback blocked: all 21 encoder Raw values are zero; the common SPI FPC to S3 may be shorted"
                 )
             return False
         active_mask = self._active_motor_mask_from_ui() & VALID_MOTOR_MASK

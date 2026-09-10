@@ -72,14 +72,16 @@ class ControlPanelStateMixin:
     _ENCODER_COMMON_ZERO_CONFIRM_S = 0.20
     _ENCODER_COMMON_ZERO_RECOVERY_FRAMES = 3
     _ROS2_TARGET_STALE_AFTER_S = 0.50
-    _P4_REBOOT_BACKWARD_JUMP_MS = 100
+    _P4_REBOOT_PREVIOUS_UPTIME_MIN_MS = 5000
+    _P4_REBOOT_STARTUP_UPTIME_MAX_MS = 2000
+    _P4_REBOOT_DEBOUNCE_S = 5.0
     # 仅用于诊断显示；必须与 P4 ControlConfig 的运行钳位裕量保持一致。
     # 安全判定仍完全由 P4 执行，桌面端不使用这些值下发或放宽命令。
     _TENDON_LUT_RELEASE_MARGIN_COUNTS = 500
     _TENDON_LUT_TIGHT_MARGIN_COUNTS = 1000
     _ENCODER_COMMON_BUS_MESSAGE = (
-        "检测到21路磁编Raw持续为0x0000，但固件仍报告全部在线：疑似公共SPI MISO被拉低。"
-        "优先检查或更换图三末端接回S3的磁编FPC，并检查连接器MISO与GND是否短路。"
+        "All 21 encoder Raw values remain 0x0000 while firmware reports them online; common SPI MISO may be held low. "
+        "Check or replace the encoder FPC to S3 and inspect the connector for a MISO-to-GND short."
     )
 
     def update_state(self, state) -> None:
@@ -232,7 +234,7 @@ class ControlPanelStateMixin:
                     self._encoder_common_bus_fault = False
                     self._encoder_common_zero_first_ts = 0.0
                     self._encoder_common_zero_recovery_frames = 0
-                    message = "磁编公共SPI全零异常已解除；请转动关节确认Raw值连续变化。"
+                    message = "The all-zero encoder SPI fault has cleared; move a joint and confirm that Raw changes continuously."
                     self.context.emit_action(message)
                     self._set_status(message)
             else:
@@ -302,29 +304,30 @@ class ControlPanelStateMixin:
         if state is None or not bool(getattr(state, "has_system_status_data", False)):
             return
         try:
-            transition_count = int(getattr(state, "state_transition_count", 0))
-        except (TypeError, ValueError):
-            transition_count = 0
-        try:
             unknown_bitmap = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
         except (TypeError, ValueError):
             unknown_bitmap = 0
-        p4_time_ms = int(getattr(state, "p4_time_ms", 0) or 0)
-        has_p4_time = bool(getattr(state, "has_p4_time", False))
-        transition_restarted = (
-            self._last_state_transition_count is not None
-            and transition_count < self._last_state_transition_count
+        p4_time_ms = int(getattr(state, "system_status_p4_time_ms", 0) or 0)
+        previous_p4_time_ms = getattr(
+            self, "_last_system_status_p4_time_ms", None
         )
-        p4_time_restarted = False
-        previous_p4_time_ms = getattr(self, "_last_p4_time_ms", None)
-        if has_p4_time and previous_p4_time_ms is not None:
-            backward_ms = (previous_p4_time_ms - p4_time_ms) & 0xFFFFFFFF
-            p4_time_restarted = (
-                p4_time_ms < previous_p4_time_ms
-                and self._P4_REBOOT_BACKWARD_JUMP_MS <= backward_ms < 0x80000000
-            )
+        now = time.monotonic()
+        backward_ms = (
+            (previous_p4_time_ms - p4_time_ms) & 0xFFFFFFFF
+            if previous_p4_time_ms is not None
+            else 0
+        )
+        p4_time_restarted = (
+            previous_p4_time_ms is not None
+            and previous_p4_time_ms >= self._P4_REBOOT_PREVIOUS_UPTIME_MIN_MS
+            and p4_time_ms <= self._P4_REBOOT_STARTUP_UPTIME_MAX_MS
+            and backward_ms < 0x80000000
+            and now - getattr(self, "_last_p4_reboot_host_ts", 0.0)
+            >= self._P4_REBOOT_DEBOUNCE_S
+        )
 
-        if transition_restarted or p4_time_restarted:
+        if p4_time_restarted:
+            self._last_p4_reboot_host_ts = now
             self._reset_motor_target_cache_for_device_epoch(
                 "Firmware reboot detected: restoring P4 calibration state"
             )
@@ -352,10 +355,8 @@ class ControlPanelStateMixin:
                 "Turn status changed: motor targets re-synced to feedback"
             )
 
-        self._last_state_transition_count = transition_count
         self._last_multi_turn_unknown_bitmap = unknown_bitmap
-        if has_p4_time:
-            self._last_p4_time_ms = p4_time_ms
+        self._last_system_status_p4_time_ms = p4_time_ms
 
     def _handle_connectivity_transitions(self, state) -> None:
         """Handle handle connectivity transitions behavior for the control panel."""
@@ -459,24 +460,24 @@ class ControlPanelStateMixin:
             return
         self._last_servo_route_warning_signature = signature
 
-        lines = ["P4 已停止存在布线冲突的舵机路由："]
+        lines = ["P4 disabled servo routes with wiring conflicts:"]
         if conflict_mask:
             lines.append(
-                "- 重复 ID：" + self._format_motor_mask(conflict_mask)
-                + "；同一个 ID 只能出现在一条 BUS 上。"
+                "- Duplicate IDs: " + self._format_motor_mask(conflict_mask)
+                + "; each ID may appear on only one bus."
             )
         for bus in range(min(4, len(counts))):
             if (overload_mask & (1 << bus)) != 0:
                 lines.append(
-                    f"- BUS{bus} 检测到 {counts[bus]} 个响应 ID，最多允许 10 个；"
-                    "请把部分舵机移动到其他 BUS。"
+                    f"- BUS{bus} reported {counts[bus]} IDs; the limit is 10. "
+                    "Move some servos to another bus."
                 )
         message = "\n".join(lines)
         self.context.emit_action(message.replace("\n", " "))
         self._set_status("Servo route blocked: check duplicate IDs or BUS capacity")
         show_scrollable_message(
             self,
-            "舵机 BUS 路由异常",
+            "Servo Bus Routing Fault",
             message,
             severity="warning",
         )
@@ -506,9 +507,9 @@ class ControlPanelStateMixin:
         self._motor_slider_dragging = [False] * MOTOR_COUNT
         self._motor_last_sent_abs = [None] * MOTOR_COUNT
         self._last_reported_direct_generation = None
-        self._last_state_transition_count = None
         self._last_multi_turn_unknown_bitmap = None
-        self._last_p4_time_ms = None
+        self._last_system_status_p4_time_ms = None
+        self._last_p4_reboot_host_ts = 0.0
         self.reset_turn_unknown_popup_episode()
         self._last_servo_online_bitmap = None
         self._last_servo_route_warning_signature = None
@@ -1464,9 +1465,9 @@ class ControlPanelStateMixin:
                         QtGui.QBrush(QtGui.QColor("#000000"))
                     )
                     flash_item.setToolTip(
-                        "上位机 JSON 最近一次保存的可信单圈 raw"
+                        "Last trusted single-turn raw saved in the desktop JSON"
                         if flash_raw is not None
-                        else "该舵机没有有效的上位机多圈锚点"
+                        else "This servo has no valid desktop multi-turn anchor"
                     )
                 if i < len(self.motor_abs_items):
                     abs_item = self.motor_abs_items[i]
@@ -1513,10 +1514,10 @@ class ControlPanelStateMixin:
                     )
                     if flash_diff >= MOTOR_SAVED_RAW_WARN_COUNTS:
                         tip = (
-                            f"当前 raw 与上位机保存锚点偏差过大："
+                            f"Current raw is too far from the saved desktop anchor: "
                             f"RawNow={int(raw_single)}, SavedRaw={int(flash_raw)}, "
-                            f"环形差值={flash_diff} counts（阈值 "
-                            f"{MOTOR_SAVED_RAW_WARN_COUNTS}）。"
+                            f"circular difference={flash_diff} counts (limit: "
+                            f"{MOTOR_SAVED_RAW_WARN_COUNTS})."
                         )
                         if i < len(self.motor_raw_items):
                             self.motor_raw_items[i].setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))

@@ -39,7 +39,7 @@ class ScrollableMessageDialog(QtWidgets.QDialog):
         text: str,
         *,
         severity: str = "information",
-        accept_text: str = "确定",
+        accept_text: str = "OK",
         reject_text: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
@@ -122,7 +122,7 @@ def show_scrollable_message(
     text: str,
     *,
     severity: str = "information",
-    accept_text: str = "确定",
+    accept_text: str = "OK",
     reject_text: Optional[str] = None,
 ) -> bool:
     """显示统一长文本弹窗；返回 True 表示用户点击了确认按钮。"""

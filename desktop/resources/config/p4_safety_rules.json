@@ -1,933 +1,933 @@
 {
   "schema_version": 2,
-  "description": "由 P4 SafetyRuleCatalog.def 自动生成；禁止手工编辑",
+  "description": "Generated from P4 SafetyRuleCatalog.def; do not edit manually",
   "rules": [
     {
       "rule_id": 1001,
       "code": "ACT-1001",
-      "title_zh": "舵机命令结构非法",
+      "title": "Invalid servo command structure",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查批次数量、Mxx 和命令来源。"
+      "action": "Reject command",
+      "recovery": "Check batch size, Mxx indices, and command source."
     },
     {
       "rule_id": 1002,
       "code": "ACT-1002",
-      "title_zh": "舵机 BUS 路由未知",
+      "title": "Servo bus route is unknown",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待路由扫描完成或检查舵机供电。"
+      "action": "Reject command",
+      "recovery": "Wait for route scanning to finish or check servo power."
     },
     {
       "rule_id": 1003,
       "code": "ACT-1003",
-      "title_zh": "舵机 ID 在多 BUS 冲突",
+      "title": "Servo ID conflicts across buses",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "移除重复 ID 或重新分配 BUS。"
+      "action": "Reject command",
+      "recovery": "Remove the duplicate ID or assign it to only one bus."
     },
     {
       "rule_id": 1004,
       "code": "ACT-1004",
-      "title_zh": "BUS 舵机数量超限",
+      "title": "Servo bus capacity exceeded",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "每条 BUS 最多连接 10 台舵机。"
+      "action": "Reject command",
+      "recovery": "Connect no more than 10 servos to each bus."
     },
     {
       "rule_id": 1005,
       "code": "ACT-1005",
-      "title_zh": "E-STOP 已锁存",
+      "title": "E-STOP is latched",
       "severity": "Emergency",
       "layer": "Actuator",
-      "action_zh": "关闭扭矩",
-      "recovery_zh": "确认机械安全后重新 ENABLE。"
+      "action": "Disable torque",
+      "recovery": "Confirm mechanical safety, then press ENABLE again."
     },
     {
       "rule_id": 1006,
       "code": "ACT-1006",
-      "title_zh": "命令生产者不持有输出权",
+      "title": "Command producer does not own output",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查模式切换和 owner 释放流程。"
+      "action": "Reject command",
+      "recovery": "Check mode switching and owner release."
     },
     {
       "rule_id": 1007,
       "code": "ACT-1007",
-      "title_zh": "系统状态不允许该舵机命令",
+      "title": "System state rejects this servo command",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "恢复到对应 DIRECT、FEEDBACK 或标定状态。"
+      "action": "Reject command",
+      "recovery": "Return to the matching DIRECT, FEEDBACK, or calibration state."
     },
     {
       "rule_id": 1008,
       "code": "ACT-1008",
-      "title_zh": "目标舵机离线",
+      "title": "Target servo is offline",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查供电、BUS 和舵机 ID。"
+      "action": "Reject command",
+      "recovery": "Check power, bus wiring, and servo ID."
     },
     {
       "rule_id": 1009,
       "code": "ACT-1009",
-      "title_zh": "舵机多圈不可信",
+      "title": "Servo multi-turn position is untrusted",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待 JSON 最近圈恢复；仍未恢复时勾选受影响关节并重新 Calibrate。"
+      "action": "Reject command",
+      "recovery": "Wait for JSON nearest-turn recovery; if it still fails, select the affected joint and recalibrate."
     },
     {
       "rule_id": 1010,
       "code": "ACT-1010",
-      "title_zh": "舵机目标已过期",
+      "title": "Servo target is stale",
       "severity": "Warning",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查任务阻塞和控制生产者周期。"
+      "action": "Reject command",
+      "recovery": "Check task blocking and the control producer period."
     },
     {
       "rule_id": 1011,
       "code": "ACT-1011",
-      "title_zh": "目标超出 logical 范围",
+      "title": "Target exceeds the logical range",
       "severity": "Blocking",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查多圈恢复、逻辑偏移和上层角度换算。"
+      "action": "Reject command",
+      "recovery": "Check multi-turn recovery, logical offset, and upper-layer angle conversion."
     },
     {
       "rule_id": 1012,
       "code": "ACT-1012",
-      "title_zh": "目标超出舵机硬件行程",
+      "title": "Target exceeds servo hardware travel",
       "severity": "Emergency",
       "layer": "Actuator",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查 logicalOffset、多圈恢复和目标换算。"
+      "action": "Reject command",
+      "recovery": "Check logicalOffset, multi-turn recovery, and target conversion."
     },
     {
       "rule_id": 1013,
       "code": "ACT-1013",
-      "title_zh": "舵机圈数达到安全阈值",
+      "title": "Servo turn count reached the safety limit",
       "severity": "Emergency",
       "layer": "Actuator",
-      "action_zh": "关闭扭矩",
-      "recovery_zh": "勾选受影响关节并重新 Calibrate。"
+      "action": "Disable torque",
+      "recovery": "Select the affected joint and recalibrate."
     },
     {
       "rule_id": 2001,
       "code": "CTL-2001",
-      "title_zh": "CAN 或磁编反馈不可用",
+      "title": "CAN or magnetic encoder feedback unavailable",
       "severity": "Blocking",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查 S3、CAN 接线和反馈新鲜度。"
+      "action": "Hold current position",
+      "recovery": "Check S3, CAN wiring, and feedback freshness."
     },
     {
       "rule_id": 2002,
       "code": "CTL-2002",
-      "title_zh": "控制关节索引非法",
+      "title": "Invalid control joint index",
       "severity": "Emergency",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查 HardwareMap 与关节循环边界。"
+      "action": "Hold current position",
+      "recovery": "Check HardwareMap and joint loop bounds."
     },
     {
       "rule_id": 2003,
       "code": "CTL-2003",
-      "title_zh": "目标关节磁编故障",
+      "title": "Target joint encoder fault",
       "severity": "Blocking",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查对应磁编和 S3 传感器状态。"
+      "action": "Hold current position",
+      "recovery": "Check the affected encoder and S3 sensor state."
     },
     {
       "rule_id": 2004,
       "code": "CTL-2004",
-      "title_zh": "关节角映射无效",
+      "title": "Invalid mapped joint angle",
       "severity": "Blocking",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查 Manual、Auto 标定和角度映射。"
+      "action": "Hold current position",
+      "recovery": "Check Manual/Auto calibration and angle mapping."
     },
     {
       "rule_id": 2005,
       "code": "CTL-2005",
-      "title_zh": "关节运动进展不足进入碰撞保持",
+      "title": "Insufficient joint motion triggered collision hold",
       "severity": "Warning",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "确认是否接触物体；反向目标可解除保持。"
+      "action": "Hold current position",
+      "recovery": "Confirm whether the hand contacted an object; a reverse target releases the hold."
     },
     {
       "rule_id": 2006,
       "code": "CTL-2006",
-      "title_zh": "双腱 PID 输出触及 LUT 扩展边界",
+      "title": "Dual-tendon PID output reached the LUT extension limit",
       "severity": "Warning",
       "layer": "Control",
-      "action_zh": "钳位到工作区边界",
-      "recovery_zh": "检查目标角、双腱 LUT 标定和 500 counts 运行裕量。"
+      "action": "Clamp to workspace boundary",
+      "recovery": "Check target angle, dual-tendon LUT calibration, and the 500-count runtime margin."
     },
     {
       "rule_id": 2007,
       "code": "CTL-2007",
-      "title_zh": "关节目标超出当前动态角度范围",
+      "title": "Joint target exceeds the current dynamic range",
       "severity": "Warning",
       "layer": "Control",
-      "action_zh": "钳位到工作区边界",
-      "recovery_zh": "检查发送目标与当前标定范围；目标回到范围内后自动恢复。"
+      "action": "Clamp to workspace boundary",
+      "recovery": "Check the requested target and current calibration range; recovery is automatic when the target returns in range."
     },
     {
       "rule_id": 2008,
       "code": "CTL-2008",
-      "title_zh": "关节反馈超过 Current Max 警告边界",
+      "title": "Joint feedback exceeded the Current Max warning boundary",
       "severity": "Warning",
       "layer": "Control",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查机械装配、磁编方向和 Auto Max；反馈回到边界内后自动恢复。"
+      "action": "Report warning only",
+      "recovery": "Check mechanical assembly, encoder direction, and Auto Max; recovery is automatic when feedback returns in range."
     },
     {
       "rule_id": 2009,
       "code": "CTL-2009",
-      "title_zh": "舵机热插拔恢复后保持当前 ABS",
+      "title": "Servo held at current ABS after hot-plug recovery",
       "severity": "Warning",
       "layer": "Control",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "确认舵机多圈可信后重新发送显式目标以解除保持。"
+      "action": "Hold current position",
+      "recovery": "Confirm trusted multi-turn state, then send an explicit target to release the hold."
     },
     {
       "rule_id": 3001,
       "code": "SYS-3001",
-      "title_zh": "上位机控制租约超时",
+      "title": "Host control lease expired",
       "severity": "Emergency",
       "layer": "System",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查上位机进程、串口和任务阻塞。"
+      "action": "Hold current position",
+      "recovery": "Check the desktop process, serial connection, and blocked tasks."
     },
     {
       "rule_id": 3002,
       "code": "SYS-3002",
-      "title_zh": "当前状态拒绝 START",
+      "title": "Current state rejected START",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "先处理当前运行任务或故障。"
+      "action": "Reject command",
+      "recovery": "Resolve the active task or fault before retrying."
     },
     {
       "rule_id": 3003,
       "code": "SYS-3003",
-      "title_zh": "当前状态拒绝直控",
+      "title": "Current state rejected direct control",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "切换到可进入 DIRECT 的状态。"
+      "action": "Reject command",
+      "recovery": "Switch to a state that permits DIRECT control."
     },
     {
       "rule_id": 3004,
       "code": "SYS-3004",
-      "title_zh": "当前状态拒绝负反馈",
+      "title": "Current state rejected feedback control",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "完成 Rope Init 并等待 READY。"
+      "action": "Reject command",
+      "recovery": "Complete Rope Init and wait for READY."
     },
     {
       "rule_id": 3005,
       "code": "SYS-3005",
-      "title_zh": "当前状态拒绝自动标定",
+      "title": "Current state rejected automatic calibration",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "停止其他运动任务后重试。"
+      "action": "Reject command",
+      "recovery": "Stop other motion tasks before retrying."
     },
     {
       "rule_id": 3101,
       "code": "DIR-3101",
-      "title_zh": "直控状态准入失败",
+      "title": "Direct-control state admission failed",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "停止当前任务后重新 ENABLE 直控。"
+      "action": "Reject command",
+      "recovery": "Stop the current task, then enable direct control again."
     },
     {
       "rule_id": 3102,
       "code": "DIR-3102",
-      "title_zh": "直控所选舵机不可用",
+      "title": "Selected direct-control servo is unavailable",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查所选舵机在线状态和 BUS 路由。"
+      "action": "Reject command",
+      "recovery": "Check selected servo online state and bus routing."
     },
     {
       "rule_id": 3103,
       "code": "DIR-3103",
-      "title_zh": "直控所选舵机多圈未知",
+      "title": "Selected direct-control servo has unknown multi-turn state",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
+      "action": "Reject command",
+      "recovery": "Wait for JSON nearest-turn recovery; recalibrate if recovery still fails."
     },
     {
       "rule_id": 3104,
       "code": "DIR-3104",
-      "title_zh": "直控状态事件队列已满",
+      "title": "Direct-control state event queue is full",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查状态机是否阻塞并稍后重试。"
+      "action": "Reject command",
+      "recovery": "Check for a blocked state machine and retry later."
     },
     {
       "rule_id": 3105,
       "code": "DIR-3105",
-      "title_zh": "直控命令代次已经过期",
+      "title": "Direct-control command generation is stale",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待模式切换完成后重新发送。"
+      "action": "Reject command",
+      "recovery": "Wait for mode switching to complete, then send the command again."
     },
     {
       "rule_id": 3106,
       "code": "DIR-3106",
-      "title_zh": "系统故障阻止直控",
+      "title": "System fault blocks direct control",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "处理状态栏故障后重新 ENABLE。"
+      "action": "Reject command",
+      "recovery": "Resolve the status-bar fault, then press ENABLE again."
     },
     {
       "rule_id": 3201,
       "code": "FBK-3201",
-      "title_zh": "负反馈缺少 Manual 参考",
+      "title": "Feedback control is missing Manual references",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "在 Device Check 写入当前关节 Manual Min 和 Max。"
+      "action": "Reject command",
+      "recovery": "Enter Manual Min and Max for the selected joints in Device Check."
     },
     {
       "rule_id": 3202,
       "code": "FBK-3202",
-      "title_zh": "负反馈状态准入失败",
+      "title": "Feedback-control state admission failed",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待系统进入 READY 后重试。"
+      "action": "Reject command",
+      "recovery": "Wait for READY, then retry."
     },
     {
       "rule_id": 3203,
       "code": "FBK-3203",
-      "title_zh": "关节未进入动态工作区",
+      "title": "Joint is outside the dynamic workspace",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "执行 Rope Init 使所选关节进入 READY。"
+      "action": "Reject command",
+      "recovery": "Run Rope Init to move the selected joints into READY."
     },
     {
       "rule_id": 3204,
       "code": "FBK-3204",
-      "title_zh": "负反馈所选舵机多圈未知",
+      "title": "Selected feedback-control servo has unknown multi-turn state",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
+      "action": "Reject command",
+      "recovery": "Wait for JSON nearest-turn recovery; recalibrate if recovery still fails."
     },
     {
       "rule_id": 3205,
       "code": "FBK-3205",
-      "title_zh": "负反馈缺少有效 ABS 或 LUT 限位",
+      "title": "Feedback control is missing valid ABS or LUT limits",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "重新自动标定或加载匹配快照。"
+      "action": "Reject command",
+      "recovery": "Run automatic calibration again or load a matching snapshot."
     },
     {
       "rule_id": 3206,
       "code": "FBK-3206",
-      "title_zh": "控制模式切换尚未完成",
+      "title": "Control mode switch is not complete",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "等待 owner 释放并重新发送目标。"
+      "action": "Reject command",
+      "recovery": "Wait for owner release, then send the target again."
     },
     {
       "rule_id": 3207,
       "code": "FBK-3207",
-      "title_zh": "负反馈状态事件队列已满",
+      "title": "Feedback-control state event queue is full",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查状态机是否阻塞并稍后重试。"
+      "action": "Reject command",
+      "recovery": "Check for a blocked state machine and retry later."
     },
     {
       "rule_id": 3301,
       "code": "RDY-3301",
-      "title_zh": "CAN 总门禁不满足",
+      "title": "CAN readiness gate failed",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "检查 S3、CAN 和磁编反馈。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Check S3, CAN wiring, and magnetic encoder feedback."
     },
     {
       "rule_id": 3302,
       "code": "RDY-3302",
-      "title_zh": "READY 多圈门禁不满足",
+      "title": "READY multi-turn gate failed",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "等待 JSON 最近圈恢复或重新 Calibrate。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Wait for JSON nearest-turn recovery or recalibrate."
     },
     {
       "rule_id": 3303,
       "code": "RDY-3303",
-      "title_zh": "READY active scope 为空",
+      "title": "READY active scope is empty",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "在 Joint Channels 选择至少一个关节。"
+      "action": "Return to IDLE",
+      "recovery": "Select at least one joint in Joint Channels."
     },
     {
       "rule_id": 3304,
       "code": "RDY-3304",
-      "title_zh": "READY 缺少映射角快照",
+      "title": "READY is missing a mapped-angle snapshot",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "检查 CAN 反馈和角度映射发布。"
+      "action": "Return to IDLE",
+      "recovery": "Check CAN feedback and mapped-angle publishing."
     },
     {
       "rule_id": 3305,
       "code": "RDY-3305",
-      "title_zh": "READY 缺少 Auto 标定",
+      "title": "READY is missing Auto calibration",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "自动标定所选关节。"
+      "action": "Return to IDLE",
+      "recovery": "Run automatic calibration for the selected joints."
     },
     {
       "rule_id": 3306,
       "code": "RDY-3306",
-      "title_zh": "READY 映射角无效",
+      "title": "READY mapped angle is invalid",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "检查 Manual、Auto 方向和跨度。"
+      "action": "Return to IDLE",
+      "recovery": "Check Manual/Auto direction and span."
     },
     {
       "rule_id": 3307,
       "code": "RDY-3307",
-      "title_zh": "关节位于动态工作区下边界外",
+      "title": "Joint is below the dynamic workspace",
       "severity": "Warning",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "执行 Rope Init。"
+      "action": "Return to IDLE",
+      "recovery": "Run Rope Init."
     },
     {
       "rule_id": 3308,
       "code": "RDY-3308",
-      "title_zh": "Manual 与 Auto 标定版本不匹配",
+      "title": "Manual and Auto calibration versions do not match",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为 IDLE",
-      "recovery_zh": "重新自动标定对应关节。"
+      "action": "Return to IDLE",
+      "recovery": "Run automatic calibration again for the affected joint."
     },
     {
       "rule_id": 3309,
       "code": "RDY-3309",
-      "title_zh": "active 关节磁编或 CAN 故障",
+      "title": "Active joint has an encoder or CAN fault",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "检查对应磁编和 CAN 链路。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Check the affected encoder and CAN link."
     },
     {
       "rule_id": 3310,
       "code": "RDY-3310",
-      "title_zh": "系统故障阻止 READY",
+      "title": "System fault blocks READY",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "处理故障位后重新评估 READY。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Resolve the fault bits, then evaluate READY again."
     },
     {
       "rule_id": 3311,
       "code": "RDY-3311",
-      "title_zh": "舵机圈数溢出阻止 READY",
+      "title": "Servo turn overflow blocks READY",
       "severity": "Emergency",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "勾选受影响关节并重新 Calibrate。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Select the affected joint and recalibrate."
     },
     {
       "rule_id": 3401,
       "code": "ROP-3401",
-      "title_zh": "Rope Init 超时",
+      "title": "Rope Init timed out",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查绳路、方向和工作区边界。"
+      "action": "Stop current motion",
+      "recovery": "Check tendon routing, winding direction, and workspace boundaries."
     },
     {
       "rule_id": 3402,
       "code": "ROP-3402",
-      "title_zh": "Rope Init 反馈过期",
+      "title": "Rope Init feedback is stale",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查舵机与磁编反馈周期。"
+      "action": "Stop current motion",
+      "recovery": "Check servo and magnetic encoder feedback periods."
     },
     {
       "rule_id": 3403,
       "code": "ROP-3403",
-      "title_zh": "Rope Init 舵机离线",
+      "title": "Servo went offline during Rope Init",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查对应舵机供电和 BUS。"
+      "action": "Stop current motion",
+      "recovery": "Check power and bus communication for the affected servo."
     },
     {
       "rule_id": 3404,
       "code": "ROP-3404",
-      "title_zh": "Rope Init 多圈未知",
+      "title": "Rope Init has unknown multi-turn state",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "先等待 JSON 最近圈恢复，或重新 Calibrate。"
+      "action": "Stop current motion",
+      "recovery": "Wait for JSON nearest-turn recovery or recalibrate."
     },
     {
       "rule_id": 3405,
       "code": "ROP-3405",
-      "title_zh": "Rope Init 缺少 Manual",
+      "title": "Rope Init is missing Manual data",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "在 Device Check 写入 Manual 数据。"
+      "action": "Stop current motion",
+      "recovery": "Enter Manual data in Device Check."
     },
     {
       "rule_id": 3406,
       "code": "ROP-3406",
-      "title_zh": "Rope Init 缺少 Auto",
+      "title": "Rope Init is missing Auto calibration",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "先自动标定对应关节。"
+      "action": "Stop current motion",
+      "recovery": "Run automatic calibration for the affected joint first."
     },
     {
       "rule_id": 3407,
       "code": "ROP-3407",
-      "title_zh": "Rope Init 目标发布失败",
+      "title": "Rope Init target publish failed",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 owner、消息通道和舵机任务。"
+      "action": "Stop current motion",
+      "recovery": "Check owner state, message channel, and the servo task."
     },
     {
       "rule_id": 3408,
       "code": "ROP-3408",
-      "title_zh": "系统故障中止 Rope Init",
+      "title": "System fault aborted Rope Init",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "处理系统故障后重试。"
+      "action": "Stop current motion",
+      "recovery": "Resolve the system fault, then retry."
     },
     {
       "rule_id": 3409,
       "code": "ROP-3409",
-      "title_zh": "Rope Init 被模式切换取消",
+      "title": "Mode switching cancelled Rope Init",
       "severity": "Info",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "确认操作顺序后重新启动。"
+      "action": "Stop current motion",
+      "recovery": "Confirm the operation sequence, then start again."
     },
     {
       "rule_id": 3501,
       "code": "FLT-3501",
-      "title_zh": "CAN 链路离线故障",
+      "title": "CAN link offline fault",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "恢复 S3 与 CAN 通信。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Restore S3 and CAN communication."
     },
     {
       "rule_id": 3502,
       "code": "FLT-3502",
-      "title_zh": "舵机过载硬故障",
+      "title": "Servo overload fault",
       "severity": "Emergency",
       "layer": "Actuator",
-      "action_zh": "关闭扭矩",
-      "recovery_zh": "排除卡死或绳路阻塞后清除故障。"
+      "action": "Disable torque",
+      "recovery": "Remove mechanical binding or tendon blockage, then clear the fault."
     },
     {
       "rule_id": 3503,
       "code": "FLT-3503",
-      "title_zh": "active 舵机离线故障",
+      "title": "Active servo offline fault",
       "severity": "Blocking",
       "layer": "System",
-      "action_zh": "转为不可控",
-      "recovery_zh": "恢复对应舵机供电和路由。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Restore power and routing for the affected servo."
     },
     {
       "rule_id": 3504,
       "code": "FLT-3504",
-      "title_zh": "自动标定失败故障",
+      "title": "Automatic calibration failure",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "按标定诊断原因处理后清除故障。"
+      "action": "Stop current motion",
+      "recovery": "Resolve the calibration diagnostic cause, then clear the fault."
     },
     {
       "rule_id": 3505,
       "code": "FLT-3505",
-      "title_zh": "多圈未知故障",
+      "title": "Unknown multi-turn position fault",
       "severity": "Blocking",
       "layer": "Recovery",
-      "action_zh": "转为不可控",
-      "recovery_zh": "等待 JSON 最近圈恢复；仍失败时重新 Calibrate。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Wait for JSON nearest-turn recovery; recalibrate if recovery still fails."
     },
     {
       "rule_id": 4001,
       "code": "CAL-4001",
-      "title_zh": "标定 active scope 为空",
+      "title": "Calibration active scope is empty",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "选择至少一个关节。"
+      "action": "Stop current motion",
+      "recovery": "Select at least one joint."
     },
     {
       "rule_id": 4005,
       "code": "CAL-4005",
-      "title_zh": "标定磁编错误",
+      "title": "Encoder error during calibration",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查对应磁编和 S3 错误码。"
+      "action": "Stop current motion",
+      "recovery": "Check the affected encoder and S3 error code."
     },
     {
       "rule_id": 4006,
       "code": "CAL-4006",
-      "title_zh": "标定舵机离线",
+      "title": "Servo offline during calibration",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查舵机供电、ID 和 BUS。"
+      "action": "Stop current motion",
+      "recovery": "Check servo power, ID, and bus wiring."
     },
     {
       "rule_id": 4008,
       "code": "CAL-4008",
-      "title_zh": "标定负载过高",
+      "title": "Calibration load is too high",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查绳路卡死和机械干涉。"
+      "action": "Stop current motion",
+      "recovery": "Check for blocked tendon routing or mechanical interference."
     },
     {
       "rule_id": 4013,
       "code": "CAL-4013",
-      "title_zh": "标定磁编跨圈无效",
+      "title": "Invalid encoder wrap during calibration",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 Manual 方向和跨圈路径。"
+      "action": "Stop current motion",
+      "recovery": "Check Manual direction and the wrap path."
     },
     {
       "rule_id": 4014,
       "code": "CAL-4014",
-      "title_zh": "标定磁编跨圈跨度异常",
+      "title": "Calibration encoder wrap span is abnormal",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查磁编读数和机械行程。"
+      "action": "Stop current motion",
+      "recovery": "Check encoder readings and mechanical travel."
     },
     {
       "rule_id": 4015,
       "code": "CAL-4015",
-      "title_zh": "标定 ABS 限位无效",
+      "title": "Calibration ABS limit is invalid",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查多圈坐标和 LUT 端点。"
+      "action": "Stop current motion",
+      "recovery": "Check multi-turn coordinates and LUT endpoints."
     },
     {
       "rule_id": 4016,
       "code": "CAL-4016",
-      "title_zh": "标定目标发布失败",
+      "title": "Calibration target publish failed",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 owner、消息通道和舵机任务。"
+      "action": "Stop current motion",
+      "recovery": "Check owner state, message channel, and the servo task."
     },
     {
       "rule_id": 4017,
       "code": "CAL-4017",
-      "title_zh": "标定过程反馈丢失",
+      "title": "Feedback lost during calibration",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查舵机和磁编反馈新鲜度。"
+      "action": "Stop current motion",
+      "recovery": "Check servo and magnetic encoder feedback freshness."
     },
     {
       "rule_id": 4018,
       "code": "CAL-4018",
-      "title_zh": "自动标定任务创建失败",
+      "title": "Automatic calibration task creation failed",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查内存、栈和任务资源。"
+      "action": "Stop current motion",
+      "recovery": "Check memory, stack, and task resources."
     },
     {
       "rule_id": 4020,
       "code": "CAL-4020",
-      "title_zh": "标定失去输出所有权",
+      "title": "Calibration lost output ownership",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查模式切换和 E-STOP 操作顺序。"
+      "action": "Stop current motion",
+      "recovery": "Check mode switching and E-STOP operation order."
     },
     {
       "rule_id": 4021,
       "code": "CAL-4021",
-      "title_zh": "非活动关节保持目标失败",
+      "title": "Failed to hold non-active joints",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 active scope 和舵机反馈。"
+      "action": "Stop current motion",
+      "recovery": "Check active scope and servo feedback."
     },
     {
       "rule_id": 4022,
       "code": "CAL-4022",
-      "title_zh": "标定关节列表非法",
+      "title": "Calibration joint list is invalid",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 active joint mask。"
+      "action": "Stop current motion",
+      "recovery": "Check the active joint mask."
     },
     {
       "rule_id": 4023,
       "code": "CAL-4023",
-      "title_zh": "标定关节列表重复",
+      "title": "Calibration joint list contains duplicates",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "去除重复关节选择。"
+      "action": "Stop current motion",
+      "recovery": "Remove duplicate joint selections."
     },
     {
       "rule_id": 4024,
       "code": "CAL-4024",
-      "title_zh": "双腱工作空间准备失败",
+      "title": "Dual-tendon workspace preparation failed",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查辅助双腱电机在线和多圈状态。"
+      "action": "Stop current motion",
+      "recovery": "Check helper dual-tendon motors, online state, and multi-turn state."
     },
     {
       "rule_id": 4025,
       "code": "CAL-4025",
-      "title_zh": "关节标定步骤失败",
+      "title": "Joint calibration step failed",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "查看 phase 和 valueA/B/C 诊断。"
+      "action": "Stop current motion",
+      "recovery": "Inspect phase and valueA/valueB/valueC diagnostics."
     },
     {
       "rule_id": 4026,
       "code": "CAL-4026",
-      "title_zh": "标定等待舵机恢复超时",
+      "title": "Timed out waiting for servo recovery during calibration",
       "severity": "Blocking",
       "layer": "Recovery",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查热插拔恢复和 Turn Unknown。"
+      "action": "Stop current motion",
+      "recovery": "Check hot-plug recovery and Turn Unknown state."
     },
     {
       "rule_id": 4027,
       "code": "CAL-4027",
-      "title_zh": "单腱松绳超过两圈",
+      "title": "Single tendon released more than two turns",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查绳路和初始装配后重新标定。"
+      "action": "Stop current motion",
+      "recovery": "Check tendon routing and initial assembly before recalibrating."
     },
     {
       "rule_id": 4028,
       "code": "CAL-4028",
-      "title_zh": "标定电机映射无效",
+      "title": "Calibration motor mapping is invalid",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 J/M 产品拓扑和双腱主副电机映射。"
+      "action": "Stop current motion",
+      "recovery": "Check J/M topology and dual-tendon primary/secondary mapping."
     },
     {
       "rule_id": 4029,
       "code": "CAL-4029",
-      "title_zh": "标定结果行程无效",
+      "title": "Calibration result travel is invalid",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查磁编方向、机械端点和有效行程。"
+      "action": "Stop current motion",
+      "recovery": "Check encoder direction, mechanical endpoints, and effective travel."
     },
     {
       "rule_id": 4030,
       "code": "CAL-4030",
-      "title_zh": "标定结果构建失败",
+      "title": "Calibration result build failed",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查 Manual 基准、端点和 LUT 采样。"
+      "action": "Stop current motion",
+      "recovery": "Check Manual references, endpoints, and LUT samples."
     },
     {
       "rule_id": 4031,
       "code": "CAL-4031",
-      "title_zh": "标定结果提交失败",
+      "title": "Calibration result commit failed",
       "severity": "Emergency",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查运行时标定存储和关节索引。"
+      "action": "Stop current motion",
+      "recovery": "Check runtime calibration storage and the joint index."
     },
     {
       "rule_id": 4032,
       "code": "CAL-4032",
-      "title_zh": "标定多圈可信提交失败",
+      "title": "Calibration multi-turn trust commit failed",
       "severity": "Blocking",
       "layer": "Recovery",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查对应舵机在线、多圈配置和恢复状态。"
+      "action": "Stop current motion",
+      "recovery": "Check servo online state, multi-turn configuration, and recovery state."
     },
     {
       "rule_id": 4034,
       "code": "CAL-4034",
-      "title_zh": "双腱换向阶段关节停止响应",
+      "title": "Joint stalled during dual-tendon exchange",
       "severity": "Blocking",
       "layer": "Calibration",
-      "action_zh": "停止当前运动",
-      "recovery_zh": "检查拮抗绳预紧、换向方向、磁编反馈和机械卡滞。"
+      "action": "Stop current motion",
+      "recovery": "Check antagonistic tendon preload, exchange direction, encoder feedback, and mechanical binding."
     },
     {
       "rule_id": 4101,
       "code": "CAW-4101",
-      "title_zh": "Auto Min 与 Manual Min 偏差不足",
+      "title": "Auto Min offset from Manual Min is insufficient",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查手指松端装配空间。"
+      "action": "Report warning only",
+      "recovery": "Check release-side finger assembly clearance."
     },
     {
       "rule_id": 4102,
       "code": "CAW-4102",
-      "title_zh": "Auto Max 与 Manual Max 偏差不足",
+      "title": "Auto Max offset from Manual Max is insufficient",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查手指紧端装配空间。"
+      "action": "Report warning only",
+      "recovery": "Check tightened-side finger assembly clearance."
     },
     {
       "rule_id": 4103,
       "code": "CAW-4103",
-      "title_zh": "URDF 与 Manual 跨度差超过阈值",
+      "title": "URDF and Manual span difference exceeds the limit",
       "severity": "Warning",
       "layer": "Calibration",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查 Manual 端点和机械装配。"
+      "action": "Report warning only",
+      "recovery": "Check Manual endpoints and mechanical assembly."
     },
     {
       "rule_id": 6001,
       "code": "COM-6001",
-      "title_zh": "CAN 驱动初始化失败",
+      "title": "CAN driver initialization failed",
       "severity": "Emergency",
       "layer": "Communication",
-      "action_zh": "转为不可控",
-      "recovery_zh": "检查 TWAI 引脚、电源和驱动安装状态后重启 P4。"
+      "action": "Mark system uncontrollable",
+      "recovery": "Check TWAI pins, power, and driver installation, then restart P4."
     },
     {
       "rule_id": 6002,
       "code": "COM-6002",
-      "title_zh": "CAN 数据帧长度或编号非法",
+      "title": "CAN frame length or identifier is invalid",
       "severity": "Warning",
       "layer": "Communication",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查 S3 与 P4 协议版本及 CAN 总线干扰。"
+      "action": "Report warning only",
+      "recovery": "Check S3/P4 protocol versions and CAN bus interference."
     },
     {
       "rule_id": 6003,
       "code": "COM-6003",
-      "title_zh": "磁编批次 CRC 或分帧无效",
+      "title": "Encoder batch CRC or fragment is invalid",
       "severity": "Blocking",
       "layer": "Communication",
-      "action_zh": "保持当前位置",
-      "recovery_zh": "检查 CAN 丢帧、CRC 和 S3 磁编发送周期。"
+      "action": "Hold current position",
+      "recovery": "Check CAN packet loss, CRC, and the S3 encoder publish period."
     },
     {
       "rule_id": 6004,
       "code": "COM-6004",
-      "title_zh": "触觉批次 CRC 或分帧无效",
+      "title": "Tactile batch CRC or fragment is invalid",
       "severity": "Warning",
       "layer": "Communication",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查触觉分帧顺序、CRC 和 CAN 带宽。"
+      "action": "Report warning only",
+      "recovery": "Check tactile fragment order, CRC, and CAN bandwidth."
     },
     {
       "rule_id": 6005,
       "code": "COM-6005",
-      "title_zh": "上位机协议帧被拒绝",
+      "title": "Desktop protocol frame was rejected",
       "severity": "Warning",
       "layer": "Communication",
-      "action_zh": "拒绝命令",
-      "recovery_zh": "检查协议版本、命令长度、帧尾和串口噪声。"
+      "action": "Reject command",
+      "recovery": "Check protocol version, command length, frame tail, and serial noise."
     },
     {
       "rule_id": 8001,
       "code": "RUN-8001",
-      "title_zh": "安全事件缓存发生覆盖",
+      "title": "Safety event cache overflow",
       "severity": "Warning",
       "layer": "Runtime",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "导出最近安全事件并检查是否存在高频重复规则。"
+      "action": "Report warning only",
+      "recovery": "Export recent safety events and check for a high-frequency repeated rule."
     },
     {
       "rule_id": 8002,
       "code": "RUN-8002",
-      "title_zh": "系统邮箱创建失败",
+      "title": "System queue creation failed",
       "severity": "Emergency",
       "layer": "Runtime",
-      "action_zh": "进入故障",
-      "recovery_zh": "检查堆内存和邮箱容量配置后重启。"
+      "action": "Enter fault state",
+      "recovery": "Check heap memory and queue capacity, then restart P4."
     },
     {
       "rule_id": 8003,
       "code": "RUN-8003",
-      "title_zh": "系统互斥锁创建失败",
+      "title": "System mutex creation failed",
       "severity": "Emergency",
       "layer": "Runtime",
-      "action_zh": "进入故障",
-      "recovery_zh": "检查堆内存并禁止启动业务任务。"
+      "action": "Enter fault state",
+      "recovery": "Check heap memory and do not start business tasks."
     },
     {
       "rule_id": 8004,
       "code": "RUN-8004",
-      "title_zh": "关键任务创建失败",
+      "title": "Critical task creation failed",
       "severity": "Emergency",
       "layer": "Runtime",
-      "action_zh": "进入故障",
-      "recovery_zh": "检查任务栈、优先级和可用内存。"
+      "action": "Enter fault state",
+      "recovery": "Check task stack, priority, and available memory."
     },
     {
       "rule_id": 8005,
       "code": "RUN-8005",
-      "title_zh": "实时任务连续周期超限",
+      "title": "Real-time task repeatedly exceeded its period",
       "severity": "Warning",
       "layer": "Runtime",
-      "action_zh": "仅记录警告",
-      "recovery_zh": "检查阻塞调用、串口输出和任务优先级。"
+      "action": "Report warning only",
+      "recovery": "Check blocking calls, serial output, and task priority."
     },
     {
       "rule_id": 8006,
       "code": "RUN-8006",
-      "title_zh": "实时任务剩余栈过低",
+      "title": "Real-time task stack is low",
       "severity": "Emergency",
       "layer": "Runtime",
-      "action_zh": "进入故障",
-      "recovery_zh": "增加任务栈或减少局部大对象后重新验证。"
+      "action": "Enter fault state",
+      "recovery": "Increase task stack or reduce large local objects, then validate again."
     }
   ]
 }

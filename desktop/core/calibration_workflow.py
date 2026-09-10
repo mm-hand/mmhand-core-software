@@ -28,9 +28,11 @@ from .calibration_snapshot import (
     parse_mask,
     validate_snapshot_for_load as validate_calibration_snapshot_for_load,
 )
+from .calibration_diagnostics import format_calibration_warning
 from .data_models import HandModel
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .protocol import (
+    DUAL_TENDON_JOINT_INDICES,
     ENCODER_COUNT,
     HAND_PROFILE,
     MOTOR_COUNT,
@@ -45,6 +47,7 @@ from .session_log import log_session
 
 
 _JOINT_MASK = (1 << ENCODER_COUNT) - 1
+_DUAL_JOINT_MASK = sum(1 << joint for joint in DUAL_TENDON_JOINT_INDICES)
 _CALIB_STATUSES = {"PENDING", "RUNNING", "SUCCESS", "WARN", "FAILED"}
 
 
@@ -90,6 +93,11 @@ class CalibrationWorkflowService:
         self._operation = ""
         self._pending_joint_mask = 0
         self._pending_motor_mask = 0
+        self._calibration_phase_masks: list[int] = []
+        self._calibration_phase_index = 0
+        self._calibration_motor_mask = 0
+        self._calibration_phase_records: list[dict] = []
+        self._phase_waiting_for_start = False
         self._result_baselines: dict[int, Optional[str]] = {}
         self._last_snapshot_signature = ""
         self._last_observation_signature = ""
@@ -119,6 +127,11 @@ class CalibrationWorkflowService:
             self._operation = ""
             self._pending_joint_mask = 0
             self._pending_motor_mask = 0
+            self._calibration_phase_masks = []
+            self._calibration_phase_index = 0
+            self._calibration_motor_mask = 0
+            self._calibration_phase_records = []
+            self._phase_waiting_for_start = False
             self._result_baselines = {}
             self._last_snapshot_signature = ""
             self._last_observation_signature = ""
@@ -131,6 +144,11 @@ class CalibrationWorkflowService:
             self._operation = operation
             self._pending_joint_mask = 0
             self._pending_motor_mask = 0
+            self._calibration_phase_masks = []
+            self._calibration_phase_index = 0
+            self._calibration_motor_mask = 0
+            self._calibration_phase_records = []
+            self._phase_waiting_for_start = False
             self._result_baselines = {}
             self._last_snapshot_signature = ""
             self._last_observation_signature = ""
@@ -147,6 +165,11 @@ class CalibrationWorkflowService:
                 return
             self._pending_joint_mask = 0
             self._pending_motor_mask = 0
+            self._calibration_phase_masks = []
+            self._calibration_phase_index = 0
+            self._calibration_motor_mask = 0
+            self._calibration_phase_records = []
+            self._phase_waiting_for_start = False
             self._result_baselines = {}
             self._operation = ""
 
@@ -169,6 +192,179 @@ class CalibrationWorkflowService:
             except Exception:
                 pass
 
+    def _start_calibration_phase(
+        self,
+        epoch: int,
+        baseline_results: list,
+        *,
+        reset_mask: int = 0,
+    ) -> bool:
+        with self._lock:
+            if epoch != self._epoch:
+                return False
+            joint_mask = self._calibration_phase_masks[
+                self._calibration_phase_index
+            ]
+            phase_count = len(self._calibration_phase_masks)
+            phase_index = self._calibration_phase_index
+            motor_mask = (
+                motor_mask_for_joint_mask(joint_mask)
+                & self._calibration_motor_mask
+                & VALID_MOTOR_MASK
+            )
+        self._controller.set_control_mode(ControlMode.JOINT_ANGLE)
+        if not motor_mask or not self._controller.set_active_scope(
+            motor_mask, joint_mask, True
+        ):
+            self._emit(
+                CalibrationWorkflowEvent(
+                    epoch,
+                    "prepare",
+                    False,
+                    "active scope apply failed for calibration phase",
+                    joint_mask,
+                    reset_mask,
+                    motor_mask,
+                )
+            )
+            return False
+        with self._lock:
+            if epoch != self._epoch:
+                return False
+            self._pending_joint_mask = joint_mask
+            self._pending_motor_mask = motor_mask
+            self._result_baselines = {
+                joint_idx: joint_calib_result_signature(
+                    baseline_results[joint_idx]
+                    if joint_idx < len(baseline_results)
+                    else None
+                )
+                for joint_idx in range(ENCODER_COUNT)
+                if joint_mask & (1 << joint_idx)
+            }
+            self._last_snapshot_signature = ""
+            self._last_observation_signature = ""
+        if not self._controller.request_firmware_calibration():
+            self._emit(
+                CalibrationWorkflowEvent(
+                    epoch,
+                    "prepare",
+                    False,
+                    "firmware calibration command was not queued",
+                    joint_mask,
+                    reset_mask,
+                    motor_mask,
+                )
+            )
+            return False
+        self._emit(
+            CalibrationWorkflowEvent(
+                epoch,
+                "prepare",
+                True,
+                (
+                    "turn counters reset; " if reset_mask else ""
+                ) + f"calibration phase {phase_index + 1}/{phase_count} started",
+                joint_mask,
+                reset_mask,
+                details={"phase_index": phase_index, "phase_count": phase_count},
+            )
+        )
+        return True
+
+    def _advance_calibration_phase(
+        self, epoch: int, state: HandModel
+    ) -> bool:
+        with self._lock:
+            if (
+                epoch != self._epoch
+                or self._calibration_phase_index + 1
+                >= len(self._calibration_phase_masks)
+            ):
+                return False
+            self._calibration_phase_index += 1
+            self._phase_waiting_for_start = True
+        results = list(getattr(state, "joint_calib_results", []) or [])
+        if self._start_calibration_phase(epoch, results):
+            return True
+        self._clear_calibration_tracking(epoch)
+        return False
+
+    def _complete_calibration_phase(
+        self, epoch: int, state: HandModel, status: str
+    ) -> None:
+        """Record one terminal phase, continue immediately, then emit one batch result."""
+        with self._lock:
+            if epoch != self._epoch:
+                return
+            phase_index = self._calibration_phase_index
+            phase_count = len(self._calibration_phase_masks)
+            joint_mask = self._pending_joint_mask
+            motor_mask = self._pending_motor_mask
+        warning_mask = int(
+            getattr(state, "calibration_warning_bitmap", 0) or 0
+        ) & joint_mask
+        warning_summary = (
+            format_calibration_warning(state, warning_mask) if warning_mask else None
+        )
+        record = {
+            "phase_index": phase_index,
+            "phase_count": phase_count,
+            "status": status,
+            "joint_mask": joint_mask,
+            "motor_mask": motor_mask,
+            "warning_mask": warning_mask,
+            "warning_summary": (
+                warning_summary if warning_summary and warning_summary.get("ready") else None
+            ),
+            "rope_init_status": int(getattr(state, "rope_init_status", 0) or 0),
+            "rope_init_reason": int(getattr(state, "rope_init_reason", 0) or 0),
+            "completed_joint_mask": int(
+                getattr(state, "calib_diag_completed_joint_mask", 0) or 0
+            ) & joint_mask,
+            "failed_joint_mask": int(
+                getattr(state, "calib_diag_failed_joint_mask", 0) or 0
+            ) & joint_mask,
+        }
+        with self._lock:
+            if epoch != self._epoch:
+                return
+            self._calibration_phase_records.append(record)
+            records = list(self._calibration_phase_records)
+            has_next = phase_index + 1 < phase_count
+        self._emit(
+            CalibrationWorkflowEvent(
+                epoch,
+                "phase_complete",
+                status != "FAILED",
+                f"calibration phase {phase_index + 1}/{phase_count} ended with {status}",
+                joint_mask,
+                motor_mask,
+                details={**record, "has_next_phase": has_next},
+            )
+        )
+        if status != "FAILED" and has_next and self._advance_calibration_phase(
+            epoch, state
+        ):
+            return
+        ok = status != "FAILED" and not has_next
+        self._emit(
+            CalibrationWorkflowEvent(
+                epoch,
+                "calibration_complete",
+                ok,
+                (
+                    "all calibration phases completed"
+                    if ok
+                    else "calibration stopped before all phases completed"
+                ),
+                joint_mask,
+                motor_mask,
+                details={"records": records, "terminal_status": status},
+            )
+        )
+        self._clear_calibration_tracking(epoch)
+
     def begin_calibration(
         self,
         *,
@@ -186,6 +382,13 @@ class CalibrationWorkflowService:
         baseline_results = list(
             getattr(baseline_state, "joint_calib_results", []) or []
         )
+        dual_mask = joint_mask & _DUAL_JOINT_MASK
+        single_mask = joint_mask & ~_DUAL_JOINT_MASK
+        phase_masks = [mask for mask in (dual_mask, single_mask) if mask]
+        with self._lock:
+            self._calibration_phase_masks = phase_masks
+            self._calibration_phase_index = 0
+            self._calibration_motor_mask = motor_mask
 
         def worker() -> None:
             reset_mask = 0
@@ -216,65 +419,8 @@ class CalibrationWorkflowService:
                         )
                     )
                     return
-                self._controller.set_control_mode(ControlMode.JOINT_ANGLE)
-                if not self._controller.set_active_scope(
-                    motor_mask, joint_mask, True
-                ):
-                    self._emit(
-                        CalibrationWorkflowEvent(
-                            epoch,
-                            "prepare",
-                            False,
-                            "active scope reapply failed after turn reset",
-                            joint_mask,
-                            reset_mask,
-                            motor_mask,
-                        )
-                    )
-                    return
-                if not self._is_current(epoch):
-                    return
-                with self._lock:
-                    if epoch != self._epoch:
-                        return
-                    self._pending_joint_mask = joint_mask
-                    self._pending_motor_mask = motor_mask
-                    self._result_baselines = {
-                        joint_idx: joint_calib_result_signature(
-                            baseline_results[joint_idx]
-                            if joint_idx < len(baseline_results)
-                            else None
-                        )
-                        for joint_idx in range(ENCODER_COUNT)
-                        if joint_mask & (1 << joint_idx)
-                    }
-                    self._last_snapshot_signature = ""
-                    self._last_observation_signature = ""
-                if not self._is_current(epoch):
-                    return
-                if not self._controller.request_firmware_calibration():
-                    self._emit(
-                        CalibrationWorkflowEvent(
-                            epoch,
-                            "prepare",
-                            False,
-                            "firmware calibration command was not queued",
-                            joint_mask,
-                            reset_mask,
-                            motor_mask,
-                        )
-                    )
-                    return
-                started = True
-                self._emit(
-                    CalibrationWorkflowEvent(
-                        epoch,
-                        "prepare",
-                        True,
-                        "turn counters reset; calibration started",
-                        joint_mask,
-                        reset_mask,
-                    )
+                started = self._start_calibration_phase(
+                    epoch, baseline_results, reset_mask=reset_mask
                 )
             except Exception as exc:
                 self._emit(
@@ -331,6 +477,14 @@ class CalibrationWorkflowService:
             pending_mask = self._pending_joint_mask
             baselines = dict(self._result_baselines)
         status = str(getattr(state, "calib_status", "IDLE") or "IDLE")
+        with self._lock:
+            waiting_for_start = self._phase_waiting_for_start
+        if waiting_for_start:
+            if status not in {"PENDING", "RUNNING"}:
+                return
+            with self._lock:
+                if epoch == self._epoch:
+                    self._phase_waiting_for_start = False
         if status not in _CALIB_STATUSES:
             if status == "IDLE" and self._last_calib_status in _CALIB_STATUSES:
                 with self._lock:
@@ -364,7 +518,7 @@ class CalibrationWorkflowService:
             save_mask = pending_mask
         if save_mask == 0:
             if status == "FAILED":
-                self._clear_calibration_tracking(epoch)
+                self._complete_calibration_phase(epoch, state, status)
             return
         try:
             payload, active_motor_mask, signature = self._snapshot_payload(
@@ -372,7 +526,7 @@ class CalibrationWorkflowService:
             )
             if signature == self._last_snapshot_signature:
                 if status in {"SUCCESS", "WARN", "FAILED"}:
-                    self._clear_calibration_tracking(epoch)
+                    self._complete_calibration_phase(epoch, state, status)
                 return
             saved = self._store.merge_calibration(payload, save_mask)
             if not self._controller.request_multiturn_anchor_capture(
@@ -397,8 +551,6 @@ class CalibrationWorkflowService:
                     if save_mask & (1 << joint_idx):
                         item = results[joint_idx] if joint_idx < len(results) else None
                         self._result_baselines[joint_idx] = joint_calib_result_signature(item)
-            if status in {"SUCCESS", "WARN", "FAILED"}:
-                self._clear_calibration_tracking(epoch)
             self._emit(
                 CalibrationWorkflowEvent(
                     epoch,
@@ -410,6 +562,8 @@ class CalibrationWorkflowService:
                     details={"digest": saved.get("integrity", {}).get("digest", "")},
                 )
             )
+            if status in {"SUCCESS", "WARN", "FAILED"}:
+                self._complete_calibration_phase(epoch, state, status)
         except (CalibrationSnapshotError, OSError, TypeError, ValueError) as exc:
             self._notice_once(
                 CalibrationWorkflowEvent(
@@ -421,11 +575,21 @@ class CalibrationWorkflowService:
                 )
             )
             if status == "FAILED":
-                self._clear_calibration_tracking(epoch)
+                self._complete_calibration_phase(epoch, state, status)
             elif status in {"SUCCESS", "WARN"}:
                 # 终态保存异常不能永久占用工作流；保留 pending 数据，后续
                 # 状态若补齐仍可重试，同时允许用户主动重新标定。
-                self._finish_operation(epoch)
+                self._emit(
+                    CalibrationWorkflowEvent(
+                        epoch,
+                        "calibration_complete",
+                        False,
+                        f"calibration result could not be persisted: {exc}",
+                        save_mask,
+                        details={"records": list(self._calibration_phase_records)},
+                    )
+                )
+                self._clear_calibration_tracking(epoch)
 
     def _snapshot_payload(self, state: HandModel, joint_mask: int):
         valid_bitmap = int(

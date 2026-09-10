@@ -64,7 +64,7 @@ def _parse_host_time(row: Dict[str, str]) -> tuple[float, str]:
             return parsed.timestamp(), text
         except ValueError:
             continue
-    raise ValueError("缺少可解析的host_time")
+    raise ValueError("Missing a parseable host_time")
 
 
 def _parse_joint_targets(
@@ -80,11 +80,11 @@ def _parse_joint_targets(
         try:
             values = [float(value) for value in json.loads(text)]
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError(f"{field_name}不是有效JSON数组") from exc
+            raise ValueError(f"{field_name} is not a valid JSON array") from exc
         if len(values) != ENCODER_COUNT:
-            raise ValueError(f"{field_name}不是{ENCODER_COUNT}维关节角")
+            raise ValueError(f"{field_name} does not contain {ENCODER_COUNT} joint angles")
         if not all(math.isfinite(value) for value in values):
-            raise ValueError(f"{field_name}包含NaN或无穷值")
+            raise ValueError(f"{field_name} contains NaN or an infinite value")
         return values, ALL_JOINTS_MASK
 
     values = list(previous_values) if previous_values is not None else [0.0] * ENCODER_COUNT
@@ -95,11 +95,11 @@ def _parse_joint_targets(
             continue
         value = float(text)
         if not math.isfinite(value):
-            raise ValueError(f"J{joint:02d}_target_deg包含NaN或无穷值")
+            raise ValueError(f"J{joint:02d}_target_deg contains NaN or an infinite value")
         values[joint] = value
         value_mask |= 1 << joint
     if value_mask == 0:
-        raise ValueError("缺少关节目标数组或Jxx_target_deg具名列")
+        raise ValueError("Missing a joint target array or named Jxx_target_deg columns")
     return values, value_mask
 
 
@@ -118,7 +118,7 @@ def _detect_csv_kind(fieldnames: Sequence[str]) -> str:
     if any(f"J{joint:02d}_target_deg" in names for joint in range(ENCODER_COUNT)):
         return "command"
     raise ValueError(
-        "CSV既不是动作指令总表，也没有任何Jxx_target_deg/Jxx_current_deg列"
+        "CSV is neither a motion command table nor a table with Jxx_target_deg/Jxx_current_deg columns"
     )
 
 
@@ -146,13 +146,13 @@ def _parse_actual_joint_row(
             continue
         value = float(text)
         if not math.isfinite(value):
-            raise ValueError(f"{label}_current_deg包含NaN或无穷值")
+            raise ValueError(f"{label}_current_deg contains NaN or an infinite value")
         values[joint] = value
         valid_mask |= 1 << joint
     if not has_active_columns:
         active_mask = valid_mask
     if active_mask == 0:
-        raise ValueError("该行没有活动关节")
+        raise ValueError("This row has no active joints")
     return values, active_mask & ALL_JOINTS_MASK, valid_mask
 
 
@@ -211,7 +211,7 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
     """载入动作指令总表或关节实际角总表，生成可安全回放的完整轨迹。"""
     csv_path = Path(path).expanduser().resolve()
     if not csv_path.is_file():
-        raise FileNotFoundError(f"CSV不存在：{csv_path}")
+        raise FileNotFoundError(f"CSV does not exist: {csv_path}")
 
     frames: list[ReplayFrame] = []
     warnings: list[str] = []
@@ -238,7 +238,7 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
-            raise ValueError("CSV没有表头")
+            raise ValueError("CSV has no header")
         data_kind = _detect_csv_kind(reader.fieldnames)
 
         for row_number, row in enumerate(reader, start=2):
@@ -246,9 +246,9 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
             try:
                 epoch, host_text = _parse_host_time(row)
             except ValueError as exc:
-                raise ValueError(f"CSV第{row_number}行无效：{exc}") from exc
+                raise ValueError(f"Invalid CSV row {row_number}: {exc}") from exc
             if previous_epoch is not None and epoch < previous_epoch:
-                raise ValueError(f"CSV第{row_number}行host_time发生倒退")
+                raise ValueError(f"host_time moves backward at CSV row {row_number}")
 
             if data_kind == "command":
                 row_source = str(row.get("source", "") or "").strip()
@@ -299,15 +299,15 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
                     row_crc = _parse_int(row.get("urdf_config_crc"), 0)
                     row_order_crc = _parse_int(row.get("joint_order_crc"), 0)
                 except (TypeError, ValueError) as exc:
-                    raise ValueError(f"CSV第{row_number}行无效：{exc}") from exc
+                    raise ValueError(f"Invalid CSV row {row_number}: {exc}") from exc
                 if not _same_optional_metadata(mapping_id, row_mapping_id):
-                    raise ValueError(f"CSV第{row_number}行mapping_id发生变化")
+                    raise ValueError(f"mapping_id changes at CSV row {row_number}")
                 if not _same_optional_metadata(mapping_version, row_mapping_version):
-                    raise ValueError(f"CSV第{row_number}行mapping_version发生变化")
+                    raise ValueError(f"mapping_version changes at CSV row {row_number}")
                 if not _same_optional_metadata(urdf_crc, row_crc):
-                    raise ValueError(f"CSV第{row_number}行URDF CRC发生变化")
+                    raise ValueError(f"URDF CRC changes at CSV row {row_number}")
                 if not _same_optional_metadata(joint_order_crc, row_order_crc):
-                    raise ValueError(f"CSV第{row_number}行joint_order_crc发生变化")
+                    raise ValueError(f"joint_order_crc changes at CSV row {row_number}")
                 mapping_id = mapping_id or row_mapping_id
                 mapping_version = mapping_version or row_mapping_version
                 urdf_crc = urdf_crc or row_crc
@@ -365,20 +365,20 @@ def load_replay_csv(path: Path | str) -> ReplayTrace:
             previous_epoch = epoch
 
     if legacy_sent_unknown:
-        warnings.append("历史CSV没有sent_to_backend，无法确认每帧当时是否真正入队")
+        warnings.append("Legacy CSV has no sent_to_backend field; original queue acceptance cannot be verified")
     if legacy_scope_unknown or active_joint_mask == 0:
-        warnings.append("CSV有帧缺少active scope，播放时将使用P4当前active joint mask")
+        warnings.append("Some CSV frames have no active scope; Replay will use the current P4 active joint mask")
     if data_kind == "joint_actual":
-        warnings.append("关节实际角CSV没有模型CRC，播放前只能使用当前标定工作空间校验")
+        warnings.append("Joint-angle CSV has no model CRC; Replay can only validate against the current calibrated workspace")
     if missing_requested_value_mask:
         missing_text = ", ".join(
             f"J{joint:02d}"
             for joint in range(ENCODER_COUNT)
             if missing_requested_value_mask & (1 << joint)
         )
-        warnings.append(f"部分活动关节没有有效数值，播放时将跳过：{missing_text}")
+        warnings.append(f"Some active joints have no valid values and will be skipped: {missing_text}")
     if max_gap_s > REPLAY_LARGE_GAP_SECONDS:
-        warnings.append(f"存在{max_gap_s:.3f}s无目标间隔，Replay会保留这段停顿")
+        warnings.append(f"A {max_gap_s:.3f}s target gap exists; Replay will preserve this pause")
 
     trace = ReplayTrace(
         path=csv_path,

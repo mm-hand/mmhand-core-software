@@ -51,7 +51,7 @@ def test_popup_explains_result_span_failure_instead_of_generic_step_failure():
     summary = HandGUI._calib_diag_summary(state)
 
     assert summary["active"] is True
-    assert summary["title"] == "磁编有效行程无效"
+    assert summary["title"] == "Invalid magnetic encoder travel"
     assert any("J12, M16" in line for line in summary["lines"])
     assert any("completed=0x00000100" in line for line in summary["lines"])
     assert any("encoder_span=0" in line for line in summary["lines"])
@@ -106,8 +106,8 @@ def test_every_firmware_calibration_reason_has_a_dedicated_popup_explanation():
         summary = HandGUI._calib_diag_summary(state)
 
         assert summary["active"] is True
-        assert not summary["title"].startswith("标定诊断 reason=")
-        assert summary["suggestions"], f"reason={reason} 缺少处理建议"
+        assert not summary["title"].startswith("Unknown calibration reason:")
+        assert summary["suggestions"], f"reason={reason} has no recovery guidance"
 
 
 def test_joint_step_fallback_uses_result_masks_not_payload_values():
@@ -130,7 +130,7 @@ def test_joint_step_fallback_uses_result_masks_not_payload_values():
     summary = HandGUI._calib_diag_summary(state)
 
     assert any("completed=0x00004000" in line for line in summary["lines"])
-    assert any("无具体机械根因" in line for line in summary["lines"])
+    assert any("no specific mechanical cause" in line for line in summary["lines"])
     assert all("111" not in line and "222" not in line for line in summary["lines"])
 
 
@@ -153,5 +153,5 @@ def test_dual_exchange_stall_has_dedicated_payload_names():
 
     summary = HandGUI._calib_diag_summary(state)
 
-    assert summary["title"] == "双腱换向阶段关节停止响应"
+    assert summary["title"] == "Joint stalled during dual-tendon exchange"
     assert any("load=180" in line and "encoder_delta=37" in line for line in summary["lines"])

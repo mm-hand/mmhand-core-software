@@ -23,7 +23,7 @@ def test_dual_tendon_j00_hold_is_visible_in_top_status():
         hold_mask=1 << 0,
     )
 
-    assert text == "COLLISION HOLD J00"
+    assert text == "Collision: Hold J00"
     assert "J00 (dual tendon)" in tooltip
     assert "hold_mask=0x00000001" in tooltip
     assert active is True
@@ -36,7 +36,7 @@ def test_dual_tendon_j20_armed_is_visible_in_top_status():
         hold_mask=0,
     )
 
-    assert text == "COLLISION MON"
+    assert text == "Collision: Monitoring J20"
     assert "J20 (dual tendon)" in tooltip
     assert "armed_mask=0x00100000" in tooltip
     assert active is False

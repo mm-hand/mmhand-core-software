@@ -68,7 +68,7 @@ TACTILE_PALM_BOTTOM_CORNER_CUT_LEG = 15
 def tactile_band_shape(band_index: int) -> Tuple[int, int]:
     """band 0=指尖 … 4=近端指腹，均为 (高, 15)。"""
     if band_index < 0 or band_index >= TACTILE_NBANDS:
-        raise ValueError(f"band_index 需在 0..{TACTILE_NBANDS - 1}")
+        raise ValueError(f"band_index must be within 0..{TACTILE_NBANDS - 1}")
     return (TACTILE_BAND_HEIGHTS[band_index], TACTILE_BAND_WIDTH)
 
 
@@ -499,6 +499,7 @@ class HandModel:
     has_servo_raw_data: bool = False
     has_system_status_data: bool = False
     system_status_last_rx_ts: float = 0.0
+    system_status_p4_time_ms: int = 0
     system_state: int = 0
     control_enabled: bool = False
     servo_target_owner: int = 0
@@ -749,6 +750,9 @@ class HandModel:
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
         self.has_system_status_data = bool(other.has_system_status_data)
         self.system_status_last_rx_ts = float(getattr(other, "system_status_last_rx_ts", 0.0) or 0.0)
+        self.system_status_p4_time_ms = int(
+            getattr(other, "system_status_p4_time_ms", 0) or 0
+        )
         self.system_state = int(other.system_state)
         self.control_enabled = bool(other.control_enabled)
         self.servo_target_owner = int(other.servo_target_owner)

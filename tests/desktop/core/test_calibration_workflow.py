@@ -7,6 +7,7 @@ from desktop.core.calibration_workflow import CalibrationWorkflowService
 from desktop.core.data_models import HandModel
 from desktop.core.motor_mapping import MOTOR_TO_JOINT_INDEX
 from desktop.core.protocol import (
+    CALIB_WARN_AUTO_MIN_OFFSET,
     ENCODER_COUNT,
     MOTOR_COUNT,
     SYSTEM_STATE_IDLE,
@@ -73,8 +74,17 @@ def _motor_for_joint(joint_idx: int) -> int:
     )
 
 
+def _motors_for_joint(joint_idx: int) -> list[int]:
+    return [
+        motor_idx
+        for motor_idx, mapped_joint in enumerate(MOTOR_TO_JOINT_INDEX)
+        if int(mapped_joint) == int(joint_idx)
+    ]
+
+
 def _successful_state(joint_idx: int) -> HandModel:
-    motor_idx = _motor_for_joint(joint_idx)
+    motors = _motors_for_joint(joint_idx)
+    motor_idx = motors[0]
     mapping_version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     urdf_min, urdf_max = get_spec(joint_idx).urdf_range_deg
     manual_min = [100 + idx for idx in range(ENCODER_COUNT)]
@@ -83,11 +93,12 @@ def _successful_state(joint_idx: int) -> HandModel:
     state.calib_status = "SUCCESS"
     state.calib_diag_completed_joint_mask = 1 << joint_idx
     state.calib_diag_failed_joint_mask = 0
-    state.motor_abs_limit_valid_bitmap = 1 << motor_idx
+    state.motor_abs_limit_valid_bitmap = sum(1 << motor for motor in motors)
     state.motor_abs_limit_min = [0] * MOTOR_COUNT
     state.motor_abs_limit_max = [0] * MOTOR_COUNT
-    state.motor_abs_limit_min[motor_idx] = 1000
-    state.motor_abs_limit_max[motor_idx] = 5000
+    for motor in motors:
+        state.motor_abs_limit_min[motor] = 1000
+        state.motor_abs_limit_max[motor] = 5000
     state.manual_reference_valid_bitmap = (1 << ENCODER_COUNT) - 1
     state.manual_reference_min_raw = manual_min
     state.manual_reference_max_raw = manual_max
@@ -109,8 +120,11 @@ def _successful_state(joint_idx: int) -> HandModel:
         ),
         "tendonLutValid": True,
         "tendonLutCount": 3,
-        "tendonLutMotor": [motor_idx, 0xFF],
-        "tendonLutMotorAbs": [[1000, 3000, 5000], [0, 0, 0]],
+        "tendonLutMotor": [motor_idx, motors[1] if len(motors) > 1 else 0xFF],
+        "tendonLutMotorAbs": [
+            [1000, 3000, 5000],
+            [5000, 3000, 1000] if len(motors) > 1 else [0, 0, 0],
+        ],
     }
     return state
 
@@ -320,3 +334,132 @@ def test_identical_recalibration_is_saved_after_scope_invalidation(tmp_path):
     snapshot = read_snapshot(service.snapshot_path)
     assert snapshot["joint_calib_results"][joint_idx]["success"] is True
     assert int(snapshot["active_joint_mask"], 0) & (1 << joint_idx)
+
+
+def test_mixed_calibration_runs_dual_then_single_with_one_reset(tmp_path):
+    controller = _Controller()
+    service = CalibrationWorkflowService(
+        controller, tmp_path / "calibration_bundle.mmcal.json"
+    )
+    events = queue.Queue()
+    service.register_callback(events.put)
+    dual_joint = 0
+    single_joint = 14
+    joint_mask = (1 << dual_joint) | (1 << single_joint)
+    motor_mask = sum(
+        1 << motor
+        for motor, joint in enumerate(MOTOR_TO_JOINT_INDEX)
+        if joint_mask & (1 << int(joint))
+    )
+
+    assert service.begin_calibration(
+        joint_mask=joint_mask,
+        motor_mask=motor_mask,
+        reset_motor_mask=motor_mask,
+        baseline_state=HandModel(),
+    )
+    first = _next_phase(events, "prepare")
+    assert first.ok and first.joint_mask == 1 << dual_joint
+
+    service.observe_state(_successful_state(dual_joint))
+    assert _next_phase(events, "snapshot_saved").joint_mask == 1 << dual_joint
+    second = _next_phase(events, "prepare")
+    assert second.ok and second.joint_mask == 1 << single_joint
+
+    running = HandModel()
+    running.calib_status = "RUNNING"
+    service.observe_state(running)
+    service.observe_state(_successful_state(single_joint))
+    assert _next_phase(events, "snapshot_saved").joint_mask == 1 << single_joint
+
+    assert [call[0] for call in controller.calls].count("reset_zero") == 1
+    scopes = [call for call in controller.calls if call[0] == "scope"]
+    assert [call[2] for call in scopes] == [1 << dual_joint, 1 << single_joint]
+    assert [call[0] for call in controller.calls].count("calibrate") == 2
+
+
+def test_mixed_calibration_warn_continues_and_emits_one_final_batch(tmp_path):
+    controller = _Controller()
+    service = CalibrationWorkflowService(
+        controller, tmp_path / "calibration_bundle.mmcal.json"
+    )
+    events = queue.Queue()
+    service.register_callback(events.put)
+    dual_joint, single_joint = 0, 14
+    joint_mask = (1 << dual_joint) | (1 << single_joint)
+    motor_mask = sum(
+        1 << motor
+        for motor, joint in enumerate(MOTOR_TO_JOINT_INDEX)
+        if joint_mask & (1 << int(joint))
+    )
+    assert service.begin_calibration(
+        joint_mask=joint_mask,
+        motor_mask=motor_mask,
+        reset_motor_mask=motor_mask,
+        baseline_state=HandModel(),
+    )
+    assert _next_phase(events, "prepare").joint_mask == 1 << dual_joint
+
+    warned = _successful_state(dual_joint)
+    warned.calib_status = "WARN"
+    warned.has_calibration_warning_status = True
+    warned.calibration_warning_bitmap = 1 << dual_joint
+    warned.joint_calib_results[dual_joint].update(
+        {
+            "hasAssemblyWarningFields": True,
+            "assemblyWarningReason": CALIB_WARN_AUTO_MIN_OFFSET,
+            "autoMinOffsetCounts": 400,
+        }
+    )
+    service.observe_state(warned)
+    assert _next_phase(events, "snapshot_saved").joint_mask == 1 << dual_joint
+    phase_done = _next_phase(events, "phase_complete")
+    assert phase_done.details["status"] == "WARN"
+    assert phase_done.details["has_next_phase"] is True
+    assert _next_phase(events, "prepare").joint_mask == 1 << single_joint
+
+    running = HandModel()
+    running.calib_status = "RUNNING"
+    service.observe_state(running)
+    service.observe_state(_successful_state(single_joint))
+    assert _next_phase(events, "snapshot_saved").joint_mask == 1 << single_joint
+    assert _next_phase(events, "phase_complete").details["status"] == "SUCCESS"
+    completed = _next_phase(events, "calibration_complete")
+    assert completed.ok is True
+    assert [item["status"] for item in completed.details["records"]] == [
+        "WARN",
+        "SUCCESS",
+    ]
+
+
+def test_mixed_calibration_stops_when_dual_phase_fails(tmp_path):
+    controller = _Controller()
+    service = CalibrationWorkflowService(
+        controller, tmp_path / "calibration_bundle.mmcal.json"
+    )
+    events = queue.Queue()
+    service.register_callback(events.put)
+    joint_mask = (1 << 0) | (1 << 14)
+    motor_mask = sum(
+        1 << motor
+        for motor, joint in enumerate(MOTOR_TO_JOINT_INDEX)
+        if joint_mask & (1 << int(joint))
+    )
+    assert service.begin_calibration(
+        joint_mask=joint_mask,
+        motor_mask=motor_mask,
+        reset_motor_mask=motor_mask,
+        baseline_state=HandModel(),
+    )
+    assert _next_phase(events, "prepare").joint_mask == 1 << 0
+
+    failed = HandModel()
+    failed.calib_status = "FAILED"
+    failed.calib_diag_failed_joint_mask = 1 << 0
+    service.observe_state(failed)
+    drained = threading.Event()
+    service._executor.submit(drained.set)
+    assert drained.wait(2.0)
+
+    assert [call[0] for call in controller.calls].count("calibrate") == 1
+    assert [call for call in controller.calls if call[0] == "scope"][-1][2] == 1 << 0
