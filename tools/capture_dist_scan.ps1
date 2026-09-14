@@ -2,10 +2,11 @@ param(
     [string]$Label = "dist",
     [string]$PortName = "COM11",
     [int]$Seconds = 12,
-    [int]$DelaySeconds = 5
+    [int]$DelaySeconds = 5,
+    [int]$BaudRate = 921600
 )
 
-$port = New-Object System.IO.Ports.SerialPort $PortName, 921600, 'None', 8, 'One'
+$port = New-Object System.IO.Ports.SerialPort $PortName, $BaudRate, 'None', 8, 'One'
 $port.ReadTimeout = 500
 $records = @{}
 $samples = 0

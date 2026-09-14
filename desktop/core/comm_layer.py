@@ -1,3 +1,12 @@
+"""comm_layer.py - MMHand Desktop 模块契约。
+
+职责：保留历史通信 API，并编排已拆分的串口、解帧、路由、状态归并和 ACK 组件。
+线程：RX/TX 线程由兼容门面创建；各通信组件不自行创建线程。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：SerialTransport 持有串口，FrameDecoder 持有半帧，StateReducer 持有 HandModel，AckTracker 持有 ACK。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
+"""
 from __future__ import annotations
 
 import os
@@ -14,19 +23,47 @@ except ModuleNotFoundError:  # pragma: no cover - depends on local environment
     serial = None
 
 from .auto_calib_logger import AutoCalibLogger
-from .data_models import FingerTactile, HandModel, MotorState, TactileSensor, tactile_segment_shape
+from . import protocol as protocol_codec
+from .communication import (
+    AckTracker,
+    EventChannel,
+    FrameDecoder,
+    P4PacketRouter,
+    SerialTransport,
+    StateReducer,
+)
+from .data_models import (
+    FingerTactile,
+    HandModel,
+    MotorState,
+    TACTILE_DATA_LEVEL_FULL,
+    TACTILE_DATA_LEVEL_NONE,
+    TACTILE_DATA_LEVEL_SUMMARY,
+    TACTILE_SOURCE_P4_CAN_RELAY,
+    TACTILE_SOURCE_S3_SERIAL,
+    TactileSensor,
+    tactile_segment_shape,
+)
 from .protocol import (
     BAUDRATE,
     ENCODER_COUNT,
     MOTOR_COUNT,
     PACKET_TYPE_CALIB_DIAG,
+    PACKET_TYPE_CONTROL_TRACE,
     PACKET_TYPE_FAULT_STATUS,
-    PACKET_TYPE_JOINT_DEBUG,
-    PACKET_TYPE_RELEASE_FAULT,
     PACKET_TYPE_ENCODER_RAW,
     PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
+    PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+    PACKET_TYPE_PRODUCT_FINGERPRINT,
+    PACKET_TYPE_SERVO_ROUTE_STATUS,
+    PACKET_TYPE_SAFETY_EVENT,
+    PACKET_TYPE_SENSOR,
+    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_LOGICAL_RANGE,
     PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_SERVO_TELEM,
     PACKET_TYPE_SYSTEM_STATUS,
     PACKET_TYPE_TASK_DIAG,
     PACKET_TYPE_TACTILE,
@@ -39,92 +76,52 @@ from .protocol import (
     TX_QUEUE_GET_TIMEOUT,
     TX_QUEUE_MAXSIZE,
     build_angle_cmd,
+    build_masked_angle_cmd,
     build_active_scope_cmd,
-    build_calib_data_cmd,
     build_calib_load_joint_cmd,
     build_calib_load_limits_cmd,
     build_calibrate_cmd,
     build_clear_calibration_cmd,
-    build_local_test_params_cmd,
-    build_local_test_start_cmd,
-    build_local_test_stop_cmd,
+    build_clear_calibration_scope_cmd,
+    build_servo_reset_zero_cmd,
     build_host_heartbeat_cmd,
-    build_motor_abs_limit_lock_cmd,
-    build_motor_pos_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_abs_one_cmd,
-    build_motor_pos_sweep_cmd,
-    build_multiturn_nvs_control_cmd,
+    build_manual_encoder_reference_cmd,
+    build_clear_manual_encoder_reference_cmd,
+    build_manual_encoder_query_cmd,
+    build_manual_encoder_single_cmd,
+    build_state_sync_request_cmd,
+    build_task_diag_subscribe_cmd,
+    build_control_trace_subscribe_cmd,
+    build_rope_init_cmd,
     build_pause_cmd,
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
-    build_side_sway_adjust_cmd,
-    build_stream_mode_cmd,
     build_reset_cmd,
     build_start_cmd,
     build_stop_cmd,
-    build_tendon_guard_cmd,
-    CMD_CALIBRATE,
-    CMD_CLEAR_CALIBRATION,
-    CMD_CALIB_LOAD_JOINT,
-    CMD_CALIB_LOAD_LIMITS,
-    CMD_ACTIVE_SCOPE,
-    CMD_CALIB_DATA,
-    CMD_START,
-    CMD_STOP,
-    CMD_RESET,
-    CMD_RUN_FEEDBACK,
-    CMD_SIDE_SWAY_ADJUST,
-    CMD_PAUSE,
-    CMD_RESTORE_MULTITURN,
-    CMD_MOTOR_ABS_LIMIT_LOCK,
-    CMD_MULTITURN_NVS_CONTROL,
-    CMD_SENSOR_STREAM_MODE,
-    SYSTEM_STATE_UNCONTROLLABLE,
-    SYSTEM_STATE_RUN_FEEDBACK,
-    SYSTEM_STATE_IDLE,
-    SYSTEM_STATE_CALIBRATION_RUNNING,
-    SYSTEM_STATE_READY,
-    SYSTEM_STATE_PAUSED,
-    SYSTEM_FAULT_CALIBRATION,
-    parse_calib_diag_packet,
-    parse_calib_ack,
-    parse_fault_status_packet,
-    parse_release_fault_packet,
-    parse_joint_debug_packet,
-    parse_joint_calib_snapshot_packet,
-    parse_motor_abs_limit_packet,
-    parse_proto_ack,
-    parse_sensor_packet,
-    parse_servo_angle_packet,
-    parse_servo_raw_packet,
-    parse_servo_telem_packet,
-    parse_system_status_packet,
-    parse_task_diag_packet,
     parse_tactile_full_fragment,
     parse_tactile_packet,
+    split_p4_timestamp,
     TACTILE_GROUP_COUNT,
     TACTILE_FULL_BYTES,
     TACTILE_SENSOR_PER_GROUP,
     TACTILE_SENSOR_TAXEL_COUNTS,
     crc16_ccitt,
-    PROTO_ACK_STATUS_OK,
-    PROTO_ACK_STATUS_QUEUED,
-    SENSOR_STREAM_MODE_SIGNED_I16,
 )
-from .run_data_logger import RunDataLogger
 from .session_log import log_session
 
 # String command / HandModel / tuple command.
 SendCmd = Union[str, HandModel, tuple]
-# 固件连续丢失两次 0.5s heartbeat 后，会认为上位机离线并保存 NVS。
+# 固件连续丢失心跳后会撤销上位机控制租约；桌面 JSON 仍独立保存多圈锚点。
 HOST_HEARTBEAT_INTERVAL_S = 0.5
 TACTILE_ZERO_NOISE_FLOOR = 3
 TACTILE_ZERO_HOLD_FRAMES = 6
 TACTILE_HOLD_MIN_MAGNITUDE = 12
 TACTILE_FULL_STALE_AFTER_S = 1.0
 TACTILE_SERIAL_OFFLINE_AFTER_S = 0.6
-TACTILE_MODULE_OFFLINE_AFTER_S = 0.6
+TACTILE_P4_RELAY_OFFLINE_AFTER_S = 0.2
 TERMINAL_LOG_LEVEL_ERROR = 1
 TERMINAL_LOG_LEVEL_WARN = 2
 TERMINAL_LOG_LEVEL_INFO = 3
@@ -173,8 +170,91 @@ FIRMWARE_LOG_ERROR_MARKERS = (
 # The UI/model order is also thumb, index, middle, ring, pinky.
 TACTILE_UI_GROUP_FROM_RAW = (0, 1, 2, 3, 4)
 TACTILE_SERIAL_FULL_PACKET_TYPES = (0x0E, PACKET_TYPE_TACTILE_FULL)
-MAPPED_ANGLE_COUNT_MARGIN = 512
+TACTILE_SERIAL_DIAG_PACKET_TYPE = 0x10
+TACTILE_SERIAL_DIAG_VERSION = 1
+TACTILE_SERIAL_DIAG_MODULE_COUNT = TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP
+TACTILE_SERIAL_DIAG_PAYLOAD_BYTES = 1 + 4 + 8 * 2 + 4 * TACTILE_SERIAL_DIAG_MODULE_COUNT * 2 + 3 * TACTILE_SERIAL_DIAG_MODULE_COUNT
 MAPPED_ANGLE_COUNTS_PER_DEG = 16384.0 / 360.0
+
+# P4PacketRouter 只负责“包号 -> 稳定语义名”。当前状态归并仍按 packet_type
+# 保持完全兼容，语义名用于诊断和后续把各分支进一步下沉到独立 reducer。
+P4_PACKET_KINDS = {
+    PACKET_TYPE_SENSOR: "sensor",
+    PACKET_TYPE_ENCODER_RAW: "encoder_raw",
+    PACKET_TYPE_SERVO_ANGLE: "servo_abs",
+    PACKET_TYPE_SERVO_RAW: "servo_raw",
+    PACKET_TYPE_SERVO_TELEM: "servo_telemetry",
+    PACKET_TYPE_FAULT_STATUS: "fault_status",
+    PACKET_TYPE_SYSTEM_STATUS: "system_status",
+    PACKET_TYPE_PRODUCT_FINGERPRINT: "product_fingerprint",
+    PACKET_TYPE_SERVO_ROUTE_STATUS: "servo_route_status",
+    PACKET_TYPE_SAFETY_EVENT: "safety_event",
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT: "multiturn_restore_result",
+    PACKET_TYPE_MOTOR_ABS_LIMIT: "motor_abs_limit",
+    PACKET_TYPE_SERVO_LOGICAL_RANGE: "servo_logical_range",
+    PACKET_TYPE_MANUAL_ENCODER_REFERENCE: "manual_reference",
+    PACKET_TYPE_JOINT_CALIB_SNAPSHOT: "joint_calibration_snapshot",
+    PACKET_TYPE_CALIB_DIAG: "calibration_diagnostic",
+    PACKET_TYPE_CONTROL_TRACE: "control_trace",
+    PACKET_TYPE_TASK_DIAG: "task_diagnostic",
+    PACKET_TYPE_TACTILE: "tactile_summary",
+    PACKET_TYPE_TACTILE_FULL: "tactile_full",
+    TACTILE_SERIAL_DIAG_PACKET_TYPE: "tactile_diagnostic",
+    0x06: "protocol_ack",
+}
+
+
+def _parse_tactile_diagnostic_packet(payload: bytes) -> Optional[dict]:
+    if len(payload) != TACTILE_SERIAL_DIAG_PAYLOAD_BYTES:
+        return None
+    cursor = 0
+    version = int(payload[cursor])
+    cursor += 1
+    if version != TACTILE_SERIAL_DIAG_VERSION:
+        return None
+
+    def read_u16() -> int:
+        nonlocal cursor
+        value = int.from_bytes(payload[cursor:cursor + 2], "little")
+        cursor += 2
+        return value
+
+    def read_u32() -> int:
+        nonlocal cursor
+        value = int.from_bytes(payload[cursor:cursor + 4], "little")
+        cursor += 4
+        return value
+
+    def read_u16_array() -> List[int]:
+        return [read_u16() for _ in range(TACTILE_SERIAL_DIAG_MODULE_COUNT)]
+
+    result = {"version": version, "frame_count": read_u32()}
+    for name in (
+        "enabled_mask",
+        "summary_ok_mask",
+        "full_ok_mask",
+        "command_fail_mask",
+        "response_fail_mask",
+        "crc_fail_mask",
+        "status_nonzero_mask",
+        "summary_retry_recovered_mask",
+    ):
+        result[name] = read_u16()
+    for name in (
+        "summary_success_count",
+        "summary_failure_count",
+        "full_success_count",
+        "full_failure_count",
+    ):
+        result[name] = read_u16_array()
+    for name in (
+        "summary_last_fail_reason",
+        "full_last_fail_reason",
+        "module_last_status",
+    ):
+        result[name] = list(payload[cursor:cursor + TACTILE_SERIAL_DIAG_MODULE_COUNT])
+        cursor += TACTILE_SERIAL_DIAG_MODULE_COUNT
+    return result if cursor == len(payload) else None
 
 
 def _synthetic_contact_grid(rows: int, cols: int, fx: int, fy: int, fz: int) -> np.ndarray:
@@ -325,16 +405,27 @@ def is_valid_port(port: str) -> bool:
 
 
 class TactileSerialComm:
-    """Read-only S3 tactile serial stream using the desktop binary protocol."""
+    """独立 S3 触觉串口兼容门面，只接收触觉数据，不发送控制命令。"""
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
         self.baudrate = int(baudrate)
-        self.serial: Optional[serial.Serial] = None
+        serial_factory = serial.Serial if serial is not None else None
+        self._transport = SerialTransport(
+            self.port,
+            self.baudrate,
+            SERIAL_TIMEOUT,
+            serial_factory,
+        )
+        self._frame_decoder = FrameDecoder(
+            PROTOCOL_HEADER,
+            PROTOCOL_TAIL,
+            log_byte_callback=self._append_firmware_log_byte,
+            flush_log_callback=self._flush_firmware_log_text,
+        )
         self.rx_queue: queue.Queue = queue.Queue(maxsize=20)
         self.running = False
         self._rx_thread: Optional[threading.Thread] = None
-        self._rx_buffer = bytearray()
         self._firmware_text_buffer = bytearray()
         self._last_model: Optional[HandModel] = None
         self._last_tactile_summary_groups: Optional[List[List[List[int]]]] = None
@@ -350,14 +441,17 @@ class TactileSerialComm:
         self._tactile_full_dropped = 0
         self._last_tactile_full_ts = 0.0
         self._last_tactile_rx_ts = 0.0
+        self._last_tactile_module_valid_mask = 0
         self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         self._tactile_offline_emitted = False
+        self._last_tactile_diag_log_at = 0.0
+        self._last_tactile_diag_signature = None
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
         self._rx_diag_bytes = 0
 
     def connect(self) -> bool:
-        if self.serial and getattr(self.serial, "is_open", False):
+        if self._transport.is_open:
             return True
         if not self.port:
             return False
@@ -367,17 +461,18 @@ class TactileSerialComm:
         try:
             if not is_valid_port(self.port):
                 raise ValueError(f"tactile port '{self.port}' is not available")
-            self.serial = serial.Serial()
-            self.serial.port = self.port
-            self.serial.baudrate = self.baudrate
-            self.serial.timeout = SERIAL_TIMEOUT
-            self.serial.dtr = False
-            self.serial.rts = False
-            self.serial.open()
-            self.serial.setDTR(False)
-            self.serial.setRTS(False)
+            if not self._transport.open():
+                log_session("TACTILE", f"serial open failed port={self.port}")
+                return False
+            handle = self._transport.serial
+            log_session(
+                "TACTILE",
+                f"serial opened port={self.port} baud={self.baudrate} "
+                f"dtr={int(bool(getattr(handle, 'dtr', False)))} "
+                f"rts={int(bool(getattr(handle, 'rts', False)))}",
+            )
             self.running = True
-            self._rx_buffer = bytearray()
+            self._frame_decoder.reset()
             self._firmware_text_buffer = bytearray()
             self._last_model = None
             self._clear_queue(self.rx_queue)
@@ -386,8 +481,11 @@ class TactileSerialComm:
             self._last_tactile_summary_seq = None
             self._last_tactile_full_ts = 0.0
             self._last_tactile_rx_ts = 0.0
+            self._last_tactile_module_valid_mask = 0
             self._tactile_module_last_rx_ts = [0.0] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
             self._tactile_offline_emitted = False
+            self._last_tactile_diag_log_at = 0.0
+            self._last_tactile_diag_signature = None
             self._rx_diag_last_print = time.time()
             self._rx_diag_total_packets = 0
             self._rx_diag_bytes = 0
@@ -395,17 +493,20 @@ class TactileSerialComm:
             self._rx_thread.start()
             return True
         except Exception as exc:
+            try:
+                self._transport.close()
+            except Exception:
+                pass
+            log_session("TACTILE", f"serial open failed port={self.port}: {exc}")
             print(f"Tactile serial connect failed: {exc}")
             return False
 
     def disconnect(self) -> None:
         self.running = False
-        if self.serial and self.serial.is_open:
-            try:
-                self.serial.close()
-            except Exception:
-                pass
-            self.serial = None
+        try:
+            self._transport.close()
+        except Exception:
+            pass
         thread = self._rx_thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=1.0)
@@ -425,13 +526,12 @@ class TactileSerialComm:
         return latest
 
     def is_connected(self) -> bool:
-        return bool(self.running and self.serial and getattr(self.serial, "is_open", False))
+        return bool(self.running and self._transport.is_open)
 
     def _mark_serial_offline(self) -> None:
         self.running = False
         try:
-            if self.serial and getattr(self.serial, "is_open", False):
-                self.serial.close()
+            self._transport.close()
         except Exception:
             pass
 
@@ -446,97 +546,43 @@ class TactileSerialComm:
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
         model.tactile_data = []
+        model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+        model.tactile_data_level = TACTILE_DATA_LEVEL_NONE
+        model.tactile_module_valid_mask = 0
         model.tactile_online = False
         model.tactile_last_rx_ts = self._last_tactile_rx_ts
         model.tactile_module_online = [False] * (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         self._last_model = model
         self._tactile_offline_emitted = True
         return model
 
-    @staticmethod
-    def _summary_sensor_has_tactile_data(values: Optional[List[int]]) -> bool:
-        if not values:
-            return False
-        padded = list(values[:3])
-        while len(padded) < 3:
-            padded.append(0)
-        return (
-            abs(int(padded[0])) > TACTILE_ZERO_NOISE_FLOOR or
-            abs(int(padded[1])) > TACTILE_ZERO_NOISE_FLOOR or
-            int(padded[2]) > TACTILE_ZERO_NOISE_FLOOR
-        )
-
-    @staticmethod
-    def _full_sensor_has_tactile_data(raw: bytes, cursor: int, taxel_count: int) -> bool:
-        end = min(len(raw), int(cursor) + int(taxel_count) * 3)
-        idx = int(cursor)
-        while idx + 2 < end:
-            x = _u8_to_i8(raw[idx])
-            y = _u8_to_i8(raw[idx + 1])
-            z = int(raw[idx + 2])
-            if (
-                abs(int(x)) > TACTILE_ZERO_NOISE_FLOOR or
-                abs(int(y)) > TACTILE_ZERO_NOISE_FLOOR or
-                z > TACTILE_ZERO_NOISE_FLOOR
-            ):
-                return True
-            idx += 3
-        return False
-
-    def _mark_tactile_modules_seen(
-        self,
-        groups: Optional[List[List[List[int]]]] = None,
-        full_raw: Optional[bytes] = None,
-    ) -> None:
+    def _mark_tactile_summary_received(self, module_valid_mask: int) -> None:
+        """记录S3摘要链路和模块有效性；零受力不再被当成模块离线。"""
         now = time.time()
         self._last_tactile_rx_ts = now
         self._tactile_offline_emitted = False
-        full_active = [[False] * TACTILE_SENSOR_PER_GROUP for _ in range(TACTILE_GROUP_COUNT)]
-        if full_raw is not None:
-            cursor = 0
-            raw_bytes = bytes(full_raw)
-            for group_idx in range(TACTILE_GROUP_COUNT):
-                for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
-                    taxel_count = (
-                        TACTILE_SENSOR_TAXEL_COUNTS[sensor_idx]
-                        if sensor_idx < len(TACTILE_SENSOR_TAXEL_COUNTS)
-                        else 0
-                    )
-                    full_active[group_idx][sensor_idx] = self._full_sensor_has_tactile_data(
-                        raw_bytes,
-                        cursor,
-                        int(taxel_count),
-                    )
-                    cursor += int(taxel_count) * 3
-        for group_idx in range(TACTILE_GROUP_COUNT):
-            src_group = groups[group_idx] if groups and group_idx < len(groups) else None
-            for sensor_idx in range(TACTILE_SENSOR_PER_GROUP):
-                if src_group is not None and sensor_idx >= len(src_group):
-                    continue
-                summary_active = (
-                    src_group is not None and
-                    sensor_idx < len(src_group) and
-                    self._summary_sensor_has_tactile_data(src_group[sensor_idx])
-                )
-                if not summary_active and not full_active[group_idx][sensor_idx]:
-                    continue
-                self._tactile_module_last_rx_ts[
-                    group_idx * TACTILE_SENSOR_PER_GROUP + sensor_idx
-                ] = now
+        valid_mask = int(module_valid_mask) & ((1 << (TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)) - 1)
+        self._last_tactile_module_valid_mask = valid_mask
+        for module_index in range(TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP):
+            if valid_mask & (1 << module_index):
+                self._tactile_module_last_rx_ts[module_index] = now
 
     def _apply_tactile_status(self, model: HandModel) -> None:
         now = time.time()
         online = self._last_tactile_rx_ts > 0.0 and (
             now - self._last_tactile_rx_ts
         ) <= TACTILE_SERIAL_OFFLINE_AFTER_S
+        valid_mask = self._last_tactile_module_valid_mask if online else 0
+        model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+        model.tactile_module_valid_mask = int(valid_mask)
         model.tactile_online = bool(online)
         model.tactile_last_rx_ts = float(self._last_tactile_rx_ts)
-        module_online: List[bool] = []
-        for ts in self._tactile_module_last_rx_ts:
-            module_online.append(bool(online and ts > 0.0 and (now - ts) <= TACTILE_MODULE_OFFLINE_AFTER_S))
-        model.tactile_module_online = module_online
+        model.tactile_module_online = [
+            bool(valid_mask & (1 << module_index))
+            for module_index in range(TACTILE_GROUP_COUNT * TACTILE_SENSOR_PER_GROUP)
+        ]
         model.tactile_module_last_rx_ts = list(self._tactile_module_last_rx_ts)
 
     @staticmethod
@@ -628,13 +674,11 @@ class TactileSerialComm:
         return raw, accepted_summary_seq, accepted_crc
 
     def _rx_loop(self) -> None:
-        while self.running and self.serial and self.serial.is_open:
+        while self.running and self._transport.is_open:
             try:
-                waiting = self.serial.in_waiting
-                if waiting:
-                    chunk = self.serial.read(waiting)
-                    self._rx_buffer.extend(chunk)
-                    packets = self._extract_packets_and_firmware_logs()
+                chunk = self._transport.read_available()
+                if chunk:
+                    packets = self._frame_decoder.feed(chunk)
                     self._rx_diag_total_packets += len(packets)
                     self._rx_diag_bytes += len(chunk)
                     model = self._process_tactile_packets(packets)
@@ -645,6 +689,7 @@ class TactileSerialComm:
                     time.sleep(RX_POLL_SLEEP)
             except Exception as exc:
                 if self.running:
+                    log_session("TACTILE", f"RX error port={self.port}: {exc}")
                     print(f"Tactile RX error: {exc}")
                 self._mark_serial_offline()
 
@@ -658,35 +703,6 @@ class TactileSerialComm:
 
     def _flush_firmware_log_text(self) -> None:
         self._firmware_text_buffer.clear()
-
-    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
-        packets: List[tuple] = []
-        buffer = self._rx_buffer
-        while buffer:
-            if buffer[0] != PROTOCOL_HEADER:
-                self._append_firmware_log_byte(buffer.pop(0))
-                continue
-
-            if len(buffer) < 4:
-                break
-
-            frame_len = 2 + buffer[1]
-            if frame_len < 4:
-                self._append_firmware_log_byte(buffer.pop(0))
-                continue
-
-            if len(buffer) < frame_len:
-                break
-
-            if buffer[frame_len - 1] == PROTOCOL_TAIL:
-                self._flush_firmware_log_text()
-                pkt_type = buffer[2]
-                payload = bytes(buffer[3:frame_len - 1])
-                packets.append((pkt_type, payload))
-                del buffer[:frame_len]
-            else:
-                self._append_firmware_log_byte(buffer.pop(0))
-        return packets
 
     @staticmethod
     def _stabilize_tactile_groups(groups: List[List[List[int]]]) -> List[List[List[int]]]:
@@ -705,10 +721,13 @@ class TactileSerialComm:
     def _process_tactile_packets(self, packets: List[tuple]) -> Optional[HandModel]:
         if not packets:
             return None
+        sink = getattr(self, "recording_packet_sink", None)
+        if sink is not None:
+            sink("s3", packets)
         model = HandModel()
         if self._last_model is not None:
             model.copy_state_from(self._last_model)
-        model.timestamp = time.time()
+        model.host_rx_time = time.time()
         emitted = False
 
         for pkt_type, payload in packets:
@@ -716,18 +735,33 @@ class TactileSerialComm:
                 parsed = parse_tactile_packet(payload)
                 if parsed is None:
                     continue
-                seq, groups = parsed
+                seq, groups, module_valid_mask = parsed
                 stable_groups = self._stabilize_tactile_groups(groups)
-                self._mark_tactile_modules_seen(stable_groups)
+                first_summary = self._last_tactile_rx_ts <= 0.0
+                self._mark_tactile_summary_received(module_valid_mask)
+                if first_summary:
+                    log_session(
+                        "TACTILE",
+                        f"first summary port={self.port} seq={int(seq)} "
+                        f"mask=0x{int(module_valid_mask) & 0x7FFF:04X}",
+                    )
                 self._last_tactile_summary_groups = stable_groups
                 self._last_tactile_summary_seq = int(seq)
                 model.tactile_summary_seq = int(seq)
+                model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+                model.tactile_module_valid_mask = int(module_valid_mask)
                 model.tactile_full_crc_errors = self._tactile_full_crc_errors
                 model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
                 model.tactile_full_dropped = self._tactile_full_dropped
                 if _summary_groups_all_zero(stable_groups):
                     self._last_tactile_full_ts = 0.0
-                model.tactile_data = _build_tactile_fingers(stable_groups)
+                full_is_fresh = (
+                    bool(model.tactile_data) and
+                    (time.time() - self._last_tactile_full_ts) <= TACTILE_FULL_STALE_AFTER_S
+                )
+                if not full_is_fresh:
+                    model.tactile_data = _build_tactile_fingers(stable_groups)
+                    model.tactile_data_level = TACTILE_DATA_LEVEL_SUMMARY
                 emitted = True
 
             elif pkt_type in TACTILE_SERIAL_FULL_PACKET_TYPES:
@@ -758,7 +792,8 @@ class TactileSerialComm:
                     raw,
                     self._last_tactile_summary_groups,
                 )
-                self._mark_tactile_modules_seen(self._last_tactile_summary_groups, raw)
+                model.tactile_source = TACTILE_SOURCE_S3_SERIAL
+                model.tactile_data_level = TACTILE_DATA_LEVEL_FULL
                 model.tactile_full_seq = int(seq)
                 model.tactile_full_summary_seq = (
                     int(accepted_summary_seq)
@@ -774,6 +809,57 @@ class TactileSerialComm:
                 model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
                 model.tactile_full_dropped = self._tactile_full_dropped
                 self._last_tactile_full_ts = time.time()
+                emitted = True
+
+            elif pkt_type == TACTILE_SERIAL_DIAG_PACKET_TYPE:
+                diag = _parse_tactile_diagnostic_packet(payload)
+                if diag is None:
+                    continue
+                now = time.time()
+                model.tactile_diag_version = int(diag["version"])
+                model.tactile_diag_frame_count = int(diag["frame_count"])
+                for field in (
+                    "enabled_mask",
+                    "summary_ok_mask",
+                    "full_ok_mask",
+                    "command_fail_mask",
+                    "response_fail_mask",
+                    "crc_fail_mask",
+                    "status_nonzero_mask",
+                    "summary_retry_recovered_mask",
+                ):
+                    setattr(model, f"tactile_diag_{field}", int(diag[field]))
+                for field in (
+                    "summary_success_count",
+                    "summary_failure_count",
+                    "full_success_count",
+                    "full_failure_count",
+                    "summary_last_fail_reason",
+                    "full_last_fail_reason",
+                    "module_last_status",
+                ):
+                    setattr(model, f"tactile_diag_{field}", list(diag[field]))
+                model.tactile_diag_last_rx_ts = now
+                signature = (
+                    int(diag["summary_ok_mask"]),
+                    int(diag["full_ok_mask"]),
+                    int(diag["command_fail_mask"]),
+                    int(diag["response_fail_mask"]),
+                    int(diag["crc_fail_mask"]),
+                )
+                if signature != self._last_tactile_diag_signature or now - self._last_tactile_diag_log_at >= 10.0:
+                    log_session(
+                        "TACTILE_SPI",
+                        f"frame={int(diag['frame_count'])} "
+                        f"summary=0x{int(diag['summary_ok_mask']) & 0x7FFF:04X} "
+                        f"full=0x{int(diag['full_ok_mask']) & 0x7FFF:04X} "
+                        f"cmd=0x{int(diag['command_fail_mask']) & 0x7FFF:04X} "
+                        f"rsp=0x{int(diag['response_fail_mask']) & 0x7FFF:04X} "
+                        f"crc=0x{int(diag['crc_fail_mask']) & 0x7FFF:04X} "
+                        f"retry=0x{int(diag['summary_retry_recovered_mask']) & 0x7FFF:04X}",
+                    )
+                    self._last_tactile_diag_signature = signature
+                    self._last_tactile_diag_log_at = now
                 emitted = True
 
         if emitted:
@@ -839,52 +925,69 @@ def choose_serial_port_interactive() -> Optional[str]:
 
 
 class LowerComputerComm:
-    """
-    ===========================================================================
-    LowerComputerComm - 底层通信与协议解析引擎
-    ===========================================================================
-    定位：
-    这是上位机最底层的硬件交互层。所有的业务逻辑最终都会转换为指令经过本类发往串口；
-    下位机所有的状态回传也都会先经过本类的解析，再向上传递。
+    """P4 通信兼容门面。
 
-    核心机制：
-    1. 异步双线程架构：
-       - TX 线程 (_tx_loop)：阻塞等待 `tx_queue`，一旦有指令对象，就通过 `_encode_command`
-         封包为大端序二进制流，并调用 `serial.write` 下发。
-       - RX 线程 (_rx_loop)：轮询串口读取字节流，处理“粘包”和串口断帧问题。提取出
-         合法的包后，交给 `_process_packets` 根据包头 ID (pkt_type) 进行 `struct.unpack`
-         解包。
-    2. 高频命令截流 (High-rate throttling)：
-       - 对于滑动条拖动等产生的海量实时命令（如 `angle_live`, `motor_pos_abs`），
-         通过 `_enqueue_latest_high_rate` 方法清除队列中积压的旧历史指令，仅保留最新一帧。
-         这极大地防止了 UI 事件堆积导致的手臂运动延迟（Latency）。
-    ===========================================================================
+    旧调用方仍通过本类连接设备、提交命令、等待 ACK 和取得 ``HandModel``。内部 RX
+    链路已固定为 ``SerialTransport -> FrameDecoder -> P4PacketRouter ->
+    StateReducer``，TX 链路保留原有高频命令去重和命令编码，最终统一写入
+    ``SerialTransport``。本类不得重新持有串口、半帧、ACK 或最新模型的真实状态。
     """
+
+    # 触觉数据仍由兼容门面持有重组缓存；把纯函数显式暴露给 StateReducer，
+    # 避免新核心模块反向导入 comm_layer 形成循环依赖。后续触觉链路拆分时可整体迁走。
+    _summary_groups_all_zero = staticmethod(_summary_groups_all_zero)
+    _build_tactile_fingers = staticmethod(_build_tactile_fingers)
+    _build_tactile_fingers_from_full = staticmethod(_build_tactile_fingers_from_full)
+    _tactile_full_stale_after_s = TACTILE_FULL_STALE_AFTER_S
+
+    @staticmethod
+    def _parse_protocol_payload(parser_name: str, payload: bytes):
+        """从唯一协议模块取得 parser，并保留临时覆盖 parser 的能力。
+
+        生产解析器统一归属 ``protocol.py``；局部同名函数只作为调试覆盖点。
+        这样通信拆分后不会因漏写某个重复 import 让整条 RX 链路掉线。
+        """
+        parser = globals().get(str(parser_name))
+        if not callable(parser):
+            parser = getattr(protocol_codec, str(parser_name), None)
+        if not callable(parser):
+            raise RuntimeError(f"protocol parser is unavailable: {parser_name}")
+        return parser(payload)
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
         self.port = (port or "").strip()
         self.baudrate = baudrate
-        self.serial: Optional[serial.Serial] = None
+        serial_factory = serial.Serial if serial is not None else None
+        # 五个通信组件各自拥有单一状态，LowerComputerComm 仅负责编排和旧 API 兼容。
+        self._transport = SerialTransport(
+            self.port,
+            self.baudrate,
+            SERIAL_TIMEOUT,
+            serial_factory,
+        )
+        self._frame_decoder = FrameDecoder(
+            PROTOCOL_HEADER,
+            PROTOCOL_TAIL,
+            log_byte_callback=self._append_firmware_log_byte,
+            flush_log_callback=self._flush_firmware_log_text,
+        )
+        self._ack_tracker = AckTracker()
+        self._safety_event_channel: EventChannel[dict] = EventChannel()
+        self._packet_router = P4PacketRouter(P4_PACKET_KINDS, split_p4_timestamp)
+        self._state_reducer = StateReducer(
+            self._packet_router,
+            self._ack_tracker,
+            self._safety_event_channel,
+        )
         self.rx_queue: queue.Queue = queue.Queue(maxsize=RX_QUEUE_MAXSIZE)
         self.tx_queue: queue.Queue = queue.Queue(maxsize=TX_QUEUE_MAXSIZE)
         self.running = False
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
-        self._tx_lock = threading.Lock()
         self._offline_lock = threading.Lock()
-        self._ack_lock = threading.Condition()
-        self._rx_buffer = bytearray()
         self._firmware_text_buffer = bytearray()
-        self._last_model: Optional[HandModel] = None
-        self._last_proto_ack: Optional[tuple] = None
-        self._stream_mode_requested = SENSOR_STREAM_MODE_SIGNED_I16
-        self._stream_mode_applied: Optional[int] = None
-        self._stream_mode_ack_pending = False
-        self._stream_mode_ack_deadline = 0.0
-        self._stream_mode_ack_warned = False
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
-        self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
         self._rx_diag_bytes = 0
         self._tx_diag_last_print = time.time()
@@ -894,7 +997,6 @@ class LowerComputerComm:
         self._last_heartbeat_tx = 0.0
         self._heartbeat_enabled = False
         self._offline_reported = False
-        self._joint_debug_packet_logger = RunDataLogger(flush_every=20)
         self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
         self._tactile_zero_counts: List[List[int]] = [
@@ -917,10 +1019,10 @@ class LowerComputerComm:
             if not is_valid_port(self.port):
                 raise ValueError(f"serial port '{self.port}' is not available")
             if not self.connect():
-                raise RuntimeError(f"无法打开端口 '{self.port}'")
+                raise RuntimeError(f"Unable to open port '{self.port}'")
 
     def connect(self) -> bool:
-        if self.serial and getattr(self.serial, "is_open", False):
+        if self._transport.is_open:
             log_session("COMM", f"serial connected port={self.port} baud={self.baudrate}")
             return True
         if not self.port:
@@ -928,13 +1030,15 @@ class LowerComputerComm:
         if serial is None:
             raise RuntimeError("Missing Python dependency: pyserial. Install it with: python -m pip install pyserial")
         try:
-            self.serial = serial.Serial(self.port, self.baudrate, timeout=SERIAL_TIMEOUT)
+            if not self._transport.open():
+                return False
             self.running = True
             self._offline_reported = False
-            self._rx_buffer = bytearray()
+            self._frame_decoder.reset()
             self._firmware_text_buffer = bytearray()
-            self._last_model = None
-            self._last_proto_ack = None
+            self._state_reducer.reset()
+            self._ack_tracker.reset()
+            self._safety_event_channel.reset()
             self._clear_queue(self.rx_queue)
             self._clear_queue(self.tx_queue)
             self._reset_rx_diag()
@@ -953,11 +1057,14 @@ class LowerComputerComm:
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
             self._tx_thread.start()
-            self._request_stream_mode_negotiation()
             return True
         except Exception as exc:
+            try:
+                self._transport.close()
+            except Exception:
+                pass
             log_session("COMM", f"serial connect failed port={self.port}: {exc}")
-            print(f"连接失败: {exc}")
+            print(f"Connection failed: {exc}")
             return False
 
     @staticmethod
@@ -970,14 +1077,11 @@ class LowerComputerComm:
     def disconnect(self):
         self.running = False
         self._heartbeat_enabled = False
-        self.stop_joint_debug_packet_log()
         auto_calib_path = self._auto_calib_logger.close()
         if auto_calib_path:
             log_session("AUTO_CALIB", f"log saved {auto_calib_path}")
         log_session("COMM", "serial disconnect requested")
-        if self.serial and self.serial.is_open:
-            self.serial.close()
-            self.serial = None
+        self._transport.close()
         rx_thread = self._rx_thread
         tx_thread = self._tx_thread
         if rx_thread and rx_thread.is_alive():
@@ -989,22 +1093,34 @@ class LowerComputerComm:
         log_session("COMM", "serial disconnected")
 
     def is_connected(self) -> bool:
-        return bool(self.running and self.serial and getattr(self.serial, "is_open", False))
+        return bool(self.running and self._transport.is_open)
 
     def _build_offline_model(self) -> HandModel:
         model = HandModel()
-        if self._last_model is not None:
-            model.copy_state_from(self._last_model)
-        model.timestamp = time.time()
+        previous = self._state_reducer.last_model
+        if previous is not None:
+            model.copy_state_from(previous)
+        model.host_rx_time = time.time()
         model.calib_status = "DISCONNECTED"
         model.has_system_status_data = False
+        model.has_feedback_collision_status = False
+        model.feedback_collision_armed_bitmap = 0
+        model.feedback_collision_hold_bitmap = 0
         model.has_connectivity_status = False
         model.has_encoder_health_status = False
         model.has_servo_angle_data = False
         model.has_servo_raw_data = False
-        model.has_servo_hardware_data = False
         model.has_fault_status_data = False
         model.servo_online_bitmap = 0
+        model.has_servo_route_status = False
+        model.servo_route_controllable_bitmap = 0
+        model.servo_route_conflict_bitmap = 0
+        model.servo_bus_overload_mask = 0
+        model.servo_route_scan_state = 0
+        model.servo_route_scan_progress = 0
+        model.servo_bus_device_count = [0] * 4
+        model.servo_route_bus = [0xFF] * MOTOR_COUNT
+        model.servo_route_state = [0] * MOTOR_COUNT
         model.encoder_online_bitmap = 0
         model.encoder_warn_bitmap = 0
         model.encoder_fault_bitmap = 0
@@ -1017,10 +1133,11 @@ class LowerComputerComm:
             motor.state = MotorState.ERROR
         model.tactile_online = False
         model.tactile_module_online = [False] * len(model.tactile_module_online)
-        self._last_model = model
+        self._state_reducer.last_model = model
         return model
 
     def _push_rx_model(self, model: HandModel) -> None:
+        """发布最新状态；邮箱已有旧状态时先丢旧再写新，禁止形成状态积压。"""
         try:
             self.rx_queue.put_nowait(model)
         except queue.Full:
@@ -1034,6 +1151,14 @@ class LowerComputerComm:
             except queue.Full:
                 pass
 
+    def drain_ack_events(self) -> list[dict]:
+        """排空 ACK 事件通道；命令等待仍由 AckTracker 的 Condition 独立完成。"""
+        return self._ack_tracker.drain_events()
+
+    def drain_safety_events(self) -> list[dict]:
+        """排空安全事件通道，避免状态邮箱覆盖时遗漏规则证据。"""
+        return self._safety_event_channel.drain()
+
     def _mark_comm_offline(self, reason: str, exc: Optional[BaseException] = None) -> None:
         with self._offline_lock:
             if self._offline_reported:
@@ -1044,73 +1169,16 @@ class LowerComputerComm:
             print(f"Serial offline: {detail}")
             self.running = False
             self._heartbeat_enabled = False
-            self._stream_mode_ack_pending = False
-            with self._ack_lock:
-                self._last_proto_ack = None
-                self._ack_lock.notify_all()
+            self._ack_tracker.reset(notify_waiters=True)
             try:
-                if self.serial and getattr(self.serial, "is_open", False):
-                    self.serial.close()
+                self._transport.close()
             except Exception as close_exc:
                 log_session("COMM", f"serial close after offline failed: {close_exc}")
-            self.serial = None
             self._push_rx_model(self._build_offline_model())
-
-    def start_joint_debug_packet_log(self, path: str) -> None:
-        fieldnames = [
-            "host_ts_wall",
-            "device_ts_ms",
-            "joint_index",
-            "valid",
-            "target_deg",
-            "actual_deg",
-            "loop1_output",
-            "loop2_actual",
-            "loop2_output",
-            "cmd_valid",
-            "cmd_target_pos",
-        ]
-        self._joint_debug_packet_logger.start(path, fieldnames=fieldnames)
-
-    def stop_joint_debug_packet_log(self) -> None:
-        self._joint_debug_packet_logger.stop()
-
-    def _log_joint_debug_packet(
-        self,
-        host_ts_wall: float,
-        joint_index: int,
-        valid: bool,
-        target_deg: float,
-        actual_deg: float,
-        loop1_out: float,
-        loop2_act: float,
-        loop2_out: float,
-        cmd_valid: bool,
-        cmd_target_pos: int,
-        device_timestamp_ms: int,
-    ) -> None:
-        if not self._joint_debug_packet_logger.is_running():
-            return
-        self._joint_debug_packet_logger.write_row(
-            {
-                "host_ts_wall": f"{float(host_ts_wall):.6f}",
-                "device_ts_ms": int(device_timestamp_ms),
-                "joint_index": int(joint_index),
-                "valid": 1 if valid else 0,
-                "target_deg": float(target_deg),
-                "actual_deg": float(actual_deg),
-                "loop1_output": float(loop1_out),
-                "loop2_actual": float(loop2_act),
-                "loop2_output": float(loop2_out),
-                "cmd_valid": 1 if cmd_valid else 0,
-                "cmd_target_pos": int(cmd_target_pos),
-            }
-        )
 
     def _reset_rx_diag(self) -> None:
         self._rx_diag_last_print = time.time()
         self._rx_diag_total_packets = 0
-        self._rx_diag_joint_debug_packets = 0
         self._rx_diag_sensor_packets = 0
         self._rx_diag_bytes = 0
 
@@ -1189,9 +1257,7 @@ class LowerComputerComm:
         self._rx_diag_bytes += int(chunk_len)
         self._rx_diag_total_packets += len(packets)
         for pkt_type, _payload in packets:
-            if pkt_type == PACKET_TYPE_JOINT_DEBUG:
-                self._rx_diag_joint_debug_packets += 1
-            elif pkt_type == 0x01:
+            if pkt_type == 0x01:
                 self._rx_diag_sensor_packets += 1
 
     def _maybe_print_rx_diag(self) -> None:
@@ -1200,12 +1266,10 @@ class LowerComputerComm:
         if elapsed < TERMINAL_DIAG_INTERVAL_S:
             return
         total_rate = self._rx_diag_total_packets / elapsed
-        joint_debug_rate = self._rx_diag_joint_debug_packets / elapsed
         sensor_rate = self._rx_diag_sensor_packets / elapsed
         byte_rate = self._rx_diag_bytes / elapsed
         diag_msg = (
             f"total={total_rate:.1f} pkt/s "
-            f"jointDebug={joint_debug_rate:.1f} pkt/s "
             f"sensor={sensor_rate:.1f} pkt/s "
             f"bytes={byte_rate:.0f} B/s"
         )
@@ -1217,7 +1281,7 @@ class LowerComputerComm:
     def _update_tx_diag(self, cmd: SendCmd, data_len: int) -> None:
         self._tx_diag_total_cmds += 1
         self._tx_diag_bytes += int(data_len)
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
+        if isinstance(cmd, tuple) and cmd[0] in ("angle_live", "angle_live_masked"):
             self._tx_diag_angle_live_cmds += 1
 
     def _maybe_print_tx_diag(self) -> None:
@@ -1239,22 +1303,19 @@ class LowerComputerComm:
         self._reset_tx_diag()
 
     def _rx_loop(self):
-        while self.running and self.serial and self.serial.is_open:
+        while self.running and self._transport.is_open:
             try:
-                if self.serial.in_waiting:
-                    chunk = self.serial.read(self.serial.in_waiting)
-                    self._rx_buffer.extend(chunk)
-                    packets = self._extract_packets_and_firmware_logs()
+                chunk = self._transport.read_available()
+                if chunk:
+                    received_ns = time.time_ns()
+                    received_monotonic_ns = time.monotonic_ns()
+                    packets = self._frame_decoder.feed(chunk)
                     self._update_rx_diag(packets, len(chunk))
-                    model = self._process_packets(packets)
+                    model = self._process_packets(packets, received_ns, received_monotonic_ns)
                     if model:
-                        try:
-                            self.rx_queue.put_nowait(model)
-                        except queue.Full:
-                            pass
+                        self._push_rx_model(model)
                 else:
                     time.sleep(RX_POLL_SLEEP)
-                self._check_stream_mode_ack_timeout()
                 self._maybe_print_rx_diag()
             except Exception as exc:
                 log_session("COMM", f"RX error: {exc}")
@@ -1280,12 +1341,12 @@ class LowerComputerComm:
         stripped = text.strip()
         if stripped:
             log_session("FW", stripped)
-            if "[AUTO CALIB]" in stripped or "[BOOT CALIB]" in stripped:
+            if (
+                "[AUTO CALIB]" in stripped
+                or "[BOOT CALIB]" in stripped
+                or "[CALIB_TX_APPLY]" in stripped
+            ):
                 self._auto_calib_logger.log("FW", stripped)
-        if "<<<SYS_READY>>>" in stripped:
-            # P4 may reboot after the first frame was sent; negotiate again
-            # only after the firmware reports that its tasks are ready.
-            self._request_stream_mode_negotiation()
         if not FIRMWARE_LOG_TO_TERMINAL:
             return
         if stripped.startswith(FIRMWARE_LOG_FILTER_PREFIXES):
@@ -1305,52 +1366,6 @@ class LowerComputerComm:
         if any(marker in stripped for marker in FIRMWARE_LOG_DEBUG_MARKERS):
             return TERMINAL_LOG_LEVEL_DEBUG
         return TERMINAL_LOG_LEVEL_INFO
-
-    def _extract_packets_and_firmware_logs(self) -> List[tuple]:
-        packets: List[tuple] = []
-        buffer = self._rx_buffer
-        while buffer:
-            if buffer[0] != PROTOCOL_HEADER:
-                self._append_firmware_log_byte(buffer.pop(0))
-                continue
-
-            if len(buffer) < 4:
-                break
-
-            frame_len = 2 + buffer[1]
-            if frame_len < 4:
-                self._append_firmware_log_byte(buffer.pop(0))
-                continue
-
-            if len(buffer) < frame_len:
-                break
-
-            if buffer[frame_len - 1] == PROTOCOL_TAIL:
-                self._flush_firmware_log_text()
-                pkt_type = buffer[2]
-                payload = bytes(buffer[3:frame_len - 1])
-                packets.append((pkt_type, payload))
-                del buffer[:frame_len]
-            else:
-                self._append_firmware_log_byte(buffer.pop(0))
-        return packets
-
-    def _request_stream_mode_negotiation(self) -> None:
-        if not self.running:
-            return
-        self._stream_mode_applied = None
-        self._stream_mode_ack_pending = True
-        self._stream_mode_ack_warned = False
-        self._stream_mode_ack_deadline = time.time() + 2.0
-        self.send_command(("stream_mode", self._stream_mode_requested))
-
-    def _check_stream_mode_ack_timeout(self):
-        if self._stream_mode_ack_pending and not self._stream_mode_ack_warned:
-            if time.time() >= self._stream_mode_ack_deadline:
-                log_session("PROTO", "no stream-mode ACK from firmware; continue with current decoding")
-                print("Protocol warning: no stream-mode ACK from firmware; continue with current decoding.")
-                self._stream_mode_ack_warned = True
-                self._stream_mode_ack_pending = False
 
     def _stabilize_tactile_groups(self, groups: List[List[List[int]]]) -> List[List[List[int]]]:
         stable: List[List[List[int]]] = []
@@ -1387,438 +1402,17 @@ class LowerComputerComm:
             stable.append(group_out)
         return stable
 
-    def _process_packets(self, packets: List[tuple]) -> Optional[HandModel]:
-        if packets:
-            self._heartbeat_enabled = True
-        model = HandModel()
-        if self._last_model:
-            model.copy_state_from(self._last_model)
-            model.calib_status = self._last_model.calib_status
-            model.has_sensor_data = bool(self._last_model.has_sensor_data)
-            model.has_servo_angle_data = bool(self._last_model.has_servo_angle_data)
-            model.has_servo_raw_data = bool(self._last_model.has_servo_raw_data)
-
-        model.timestamp = time.time()
-        emitted = False
-
-        for pkt_type, payload in packets:
-            if pkt_type == 0x01:
-                angles, errors = parse_sensor_packet(payload)
-                if angles:
-                    for i in range(min(ENCODER_COUNT, len(angles), len(model.encoders))):
-                        model.encoders[i].encoder_id = i
-                        if self._mapped_angle_count_plausible(i, int(angles[i]), model):
-                            model.encoders[i].raw = angles[i]
-                        model.encoders[i].zero_raw = 0
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
-
-                    for i in range(min(ENCODER_COUNT, len(model.motors))):
-                        model.motors[i].motor_id = i
-                        model.motors[i].error = errors[i] if i < len(errors) else False
-                        model.motors[i].state = (
-                            MotorState.ERROR if model.motors[i].error else MotorState.RUNNING
-                        )
-
-                    model.has_sensor_data = True
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_ENCODER_RAW:
-                raw_values, errors = parse_sensor_packet(payload)
-                if raw_values:
-                    for i in range(min(ENCODER_COUNT, len(raw_values), len(model.encoders))):
-                        model.encoders[i].raw_sensor = raw_values[i]
-                        model.encoders[i].error = errors[i] if i < len(errors) else False
-                    emitted = True
-
-            elif pkt_type == 0x02:
-                code = parse_calib_ack(payload)
-                if code == 1:
-                    model.calib_status = "RUNNING"
-                elif code == 2:
-                    model.calib_status = "SUCCESS"
-                elif code == 3:
-                    model.calib_status = "FAILED"
-                emitted = True
-
-            elif pkt_type == 0x03:
-                parsed = parse_servo_angle_packet(payload)
-                if parsed is not None:
-                    angles, online_flags = parsed
-                    for i in range(min(MOTOR_COUNT, len(angles))):
-                        model.servo_angles[i] = int(angles[i])
-                        model.servo_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
-                    model.has_servo_angle_data = True
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_SERVO_RAW:
-                parsed = parse_servo_raw_packet(payload)
-                if parsed is not None:
-                    raw_positions, hardware_positions, online_flags, has_hardware_positions = parsed
-                    for i in range(min(MOTOR_COUNT, len(raw_positions))):
-                        model.servo_raw_positions[i] = int(raw_positions[i])
-                        if has_hardware_positions and i < len(hardware_positions):
-                            model.servo_hardware_positions[i] = int(hardware_positions[i])
-                        model.servo_raw_online[i] = bool(online_flags[i]) if i < len(online_flags) else False
-                    model.has_servo_raw_data = True
-                    model.has_servo_hardware_data = bool(has_hardware_positions)
-                    emitted = True
-
-            elif pkt_type == 0x05:
-                parsed = parse_servo_telem_packet(payload)
-                if parsed is not None:
-                    speeds, loads, volts, temps, online = parsed
-                    for i in range(min(MOTOR_COUNT, len(speeds))):
-                        model.servo_speed[i] = int(speeds[i])
-                        model.servo_load[i] = int(loads[i])
-                        model.servo_voltage[i] = int(volts[i])
-                        model.servo_temperature[i] = int(temps[i])
-                        model.servo_telem_online[i] = bool(online[i]) if i < len(online) else False
-                    emitted = True
-
-            elif pkt_type == 0x04:
-                parsed = parse_joint_debug_packet(payload)
-                if parsed is not None:
-                    (
-                        joint_index,
-                        valid,
-                        target_deg,
-                        actual_deg,
-                        loop1_out,
-                        loop2_act,
-                        loop2_out,
-                        cmd_valid,
-                        cmd_target_pos,
-                        device_timestamp_ms,
-                    ) = parsed
-                    self._log_joint_debug_packet(
-                        host_ts_wall=time.time(),
-                        joint_index=joint_index,
-                        valid=valid,
-                        target_deg=target_deg,
-                        actual_deg=actual_deg,
-                        loop1_out=loop1_out,
-                        loop2_act=loop2_act,
-                        loop2_out=loop2_out,
-                        cmd_valid=cmd_valid,
-                        cmd_target_pos=cmd_target_pos,
-                        device_timestamp_ms=device_timestamp_ms,
-                    )
-                    if 0 <= joint_index < ENCODER_COUNT:
-                        model.joint_debug_valid[joint_index] = valid
-                        model.joint_debug_target_deg[joint_index] = float(target_deg)
-                        model.joint_debug_actual_deg[joint_index] = float(actual_deg)
-                        model.joint_debug_loop1_output[joint_index] = float(loop1_out)
-                        model.joint_debug_loop2_actual[joint_index] = float(loop2_act)
-                        model.joint_debug_loop2_output[joint_index] = float(loop2_out)
-                        model.joint_debug_cmd_valid[joint_index] = bool(cmd_valid)
-                        model.joint_debug_cmd_target_pos[joint_index] = int(cmd_target_pos)
-                        model.joint_debug_timestamp_ms[joint_index] = int(device_timestamp_ms)
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_FAULT_STATUS:
-                parsed_fault = parse_fault_status_packet(payload)
-                if parsed_fault is not None:
-                    fault_bitmap, trigger_loads = parsed_fault
-                    for i in range(MOTOR_COUNT):
-                        faulted = ((fault_bitmap >> i) & 0x01) != 0
-                        model.servo_overload_fault[i] = faulted
-                        if i < len(trigger_loads):
-                            model.servo_overload_trigger_load[i] = trigger_loads[i] if faulted else None
-                    model.has_fault_status_data = True
-                    model.fault_status_last_rx_ts = time.time()
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_RELEASE_FAULT:
-                release_fault_bitmap = parse_release_fault_packet(payload)
-                if release_fault_bitmap is not None:
-                    for i in range(ENCODER_COUNT):
-                        model.joint_reverse_release_fault[i] = ((release_fault_bitmap >> i) & 0x01) != 0
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_SYSTEM_STATUS:
-                parsed = parse_system_status_packet(payload)
-                if parsed is not None:
-                    (
-                        system_state,
-                        control_enabled,
-                        servo_target_owner,
-                        control_mode,
-                        calib_status,
-                        system_fault_bitmap,
-                        state_transition_count,
-                        multi_turn_unknown_bitmap,
-                        multiturn_nvs_enabled,
-                        multiturn_nvs_snapshot_valid,
-                        active_motor_mask,
-                        active_joint_mask,
-                        require_can_feedback,
-                        has_active_scope_status,
-                        servo_online_bitmap,
-                        encoder_online_bitmap,
-                        can_link_online,
-                        has_connectivity_status,
-                        encoder_warn_bitmap,
-                        encoder_fault_bitmap,
-                        has_encoder_health_status,
-                        multiturn_nvs_save_request_token,
-                        multiturn_nvs_save_result_token,
-                        multiturn_nvs_save_valid_mask,
-                        multiturn_nvs_save_fail_count,
-                        has_multiturn_nvs_status,
-                    ) = parsed
-                    model.system_state = int(system_state)
-                    model.control_enabled = bool(control_enabled)
-                    model.servo_target_owner = int(servo_target_owner)
-                    model.control_mode = int(control_mode)
-                    model.system_fault_bitmap = int(system_fault_bitmap)
-                    model.state_transition_count = int(state_transition_count)
-                    model.multi_turn_unknown_bitmap = int(multi_turn_unknown_bitmap)
-                    model.multiturn_nvs_enabled = bool(multiturn_nvs_enabled)
-                    model.multiturn_nvs_snapshot_valid = bool(multiturn_nvs_snapshot_valid)
-                    model.multiturn_nvs_save_request_token = int(multiturn_nvs_save_request_token)
-                    model.multiturn_nvs_save_result_token = int(multiturn_nvs_save_result_token)
-                    model.multiturn_nvs_save_valid_mask = int(multiturn_nvs_save_valid_mask)
-                    model.multiturn_nvs_save_fail_count = int(multiturn_nvs_save_fail_count)
-                    model.has_multiturn_nvs_status = bool(has_multiturn_nvs_status)
-                    model.active_motor_mask = int(active_motor_mask)
-                    model.active_joint_mask = int(active_joint_mask)
-                    model.require_can_feedback = bool(require_can_feedback)
-                    model.has_active_scope_status = bool(has_active_scope_status)
-                    model.servo_online_bitmap = int(servo_online_bitmap)
-                    model.encoder_online_bitmap = int(encoder_online_bitmap)
-                    model.encoder_warn_bitmap = int(encoder_warn_bitmap)
-                    model.encoder_fault_bitmap = int(encoder_fault_bitmap)
-                    model.can_link_online = bool(can_link_online)
-                    model.has_connectivity_status = bool(has_connectivity_status)
-                    model.has_encoder_health_status = bool(has_encoder_health_status)
-                    model.has_system_status_data = True
-                    model.system_status_last_rx_ts = time.time()
-                    if calib_status == 0:
-                        if (
-                            model.calib_status in ("PENDING", "RUNNING") and
-                            model.system_state != SYSTEM_STATE_CALIBRATION_RUNNING
-                        ):
-                            if (model.system_fault_bitmap & SYSTEM_FAULT_CALIBRATION) != 0:
-                                model.calib_status = "FAILED"
-                            elif model.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY):
-                                model.calib_status = "SUCCESS"
-                            else:
-                                model.calib_status = "IDLE"
-                        else:
-                            model.calib_status = "IDLE"
-                    elif calib_status == 1:
-                        model.calib_status = "RUNNING"
-                    elif calib_status == 2:
-                        model.calib_status = "SUCCESS"
-                    elif calib_status == 3:
-                        model.calib_status = "FAILED"
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_MOTOR_ABS_LIMIT:
-                parsed = parse_motor_abs_limit_packet(payload)
-                if parsed is not None:
-                    valid_bitmap, locked_bitmap, mins, maxs = parsed
-                    model.motor_abs_limit_valid_bitmap = int(valid_bitmap)
-                    model.motor_abs_limit_locked_bitmap = int(locked_bitmap)
-                    for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
-                        model.motor_abs_limit_min[i] = int(mins[i])
-                        model.motor_abs_limit_max[i] = int(maxs[i])
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_JOINT_CALIB_SNAPSHOT:
-                parsed = parse_joint_calib_snapshot_packet(payload)
-                if parsed is not None:
-                    joint_idx = int(parsed.get("joint", -1))
-                    if 0 <= joint_idx < ENCODER_COUNT:
-                        model.joint_calib_results[joint_idx] = dict(parsed)
-                        emitted = True
-
-            elif pkt_type == PACKET_TYPE_CALIB_DIAG:
-                parsed = parse_calib_diag_packet(payload)
-                if parsed is not None:
-                    self._log_auto_calib_diag(parsed)
-                    model.calib_diag_valid = bool(parsed.get("valid", False))
-                    model.calib_diag_reason = int(parsed.get("reason", 0) or 0)
-                    model.calib_diag_phase = int(parsed.get("phase", 0) or 0)
-                    model.calib_diag_joint = int(parsed.get("joint", 0xFF) or 0)
-                    model.calib_diag_motor = int(parsed.get("motor", 0xFF) or 0)
-                    model.calib_diag_value_a = int(parsed.get("valueA", 0) or 0)
-                    model.calib_diag_value_b = int(parsed.get("valueB", 0) or 0)
-                    model.calib_diag_value_c = int(parsed.get("valueC", 0) or 0)
-                    model.calib_diag_bitmap = int(parsed.get("bitmap", 0) or 0)
-                    model.calib_diag_timestamp_ms = int(parsed.get("timestamp_ms", 0) or 0)
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_TASK_DIAG:
-                parsed = parse_task_diag_packet(payload)
-                if parsed is not None:
-                    task_id = int(parsed.get("task_id", -1) or -1)
-                    if task_id >= 0:
-                        now = time.time()
-                        parsed["host_rx_ts"] = now
-                        model.task_runtime[task_id] = dict(parsed)
-                        model.task_runtime_last_rx_ts = now
-                        emitted = True
-
-            elif pkt_type == PACKET_TYPE_TACTILE:
-                parsed = parse_tactile_packet(payload)
-                if parsed is not None:
-                    _seq, groups = parsed
-                    stable_groups = self._stabilize_tactile_groups(groups)
-                    self._last_tactile_summary_groups = stable_groups
-                    self._last_tactile_summary_seq = int(_seq)
-                    model.tactile_summary_seq = int(_seq)
-                    model.tactile_full_crc_errors = self._tactile_full_crc_errors
-                    model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
-                    model.tactile_full_dropped = self._tactile_full_dropped
-                    if _summary_groups_all_zero(stable_groups):
-                        self._last_tactile_full_ts = 0.0
-                        model.tactile_data = _build_tactile_fingers(stable_groups)
-                    elif (
-                        not model.tactile_data or
-                        (time.time() - self._last_tactile_full_ts) > TACTILE_FULL_STALE_AFTER_S
-                    ):
-                        model.tactile_data = _build_tactile_fingers(stable_groups)
-                    emitted = True
-
-            elif pkt_type == PACKET_TYPE_TACTILE_FULL:
-                parsed = parse_tactile_full_fragment(payload)
-                if parsed is not None:
-                    seq, frag_idx, frag_count, chunk, summary_seq, full_crc = parsed
-                    accepted = self._accept_tactile_full_fragment(
-                        seq,
-                        frag_idx,
-                        frag_count,
-                        chunk,
-                        summary_seq,
-                        full_crc,
-                    )
-                    if accepted is not None:
-                        raw, accepted_summary_seq, accepted_crc = accepted
-                        if (
-                            accepted_summary_seq is not None and
-                            self._last_tactile_summary_seq != accepted_summary_seq
-                        ):
-                            self._tactile_full_seq_mismatches += 1
-                            model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
-                            emitted = True
-                            continue
-                        model.tactile_data = _build_tactile_fingers_from_full(
-                            raw,
-                            self._last_tactile_summary_groups,
-                        )
-                        model.tactile_full_seq = int(seq)
-                        model.tactile_full_summary_seq = (
-                            int(accepted_summary_seq)
-                            if accepted_summary_seq is not None
-                            else None
-                        )
-                        model.tactile_full_crc = (
-                            int(accepted_crc)
-                            if accepted_crc is not None
-                            else None
-                        )
-                        model.tactile_full_crc_errors = self._tactile_full_crc_errors
-                        model.tactile_full_seq_mismatches = self._tactile_full_seq_mismatches
-                        model.tactile_full_dropped = self._tactile_full_dropped
-                        self._last_tactile_full_ts = time.time()
-                        emitted = True
-
-            elif pkt_type == 0x06:
-                parsed = parse_proto_ack(payload)
-                if parsed is not None:
-                    ack_cmd, applied_mode, status = parsed
-                    if ack_cmd in (CMD_CALIBRATE, CMD_SIDE_SWAY_ADJUST, CMD_CLEAR_CALIBRATION):
-                        self._auto_calib_logger.log(
-                            "ACK",
-                            f"cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
-                        )
-                    log_session(
-                        "PROTO",
-                        f"ACK cmd=0x{int(ack_cmd):02X} mode={int(applied_mode)} status={int(status)}",
-                    )
-                    if ack_cmd == CMD_SENSOR_STREAM_MODE:
-                        self._stream_mode_applied = int(applied_mode)
-                        self._stream_mode_ack_pending = False
-                        if status != PROTO_ACK_STATUS_OK and not self._stream_mode_ack_warned:
-                            print(
-                                f"Protocol warning: stream-mode rejected "
-                                f"(status={status}, applied={applied_mode})."
-                            )
-                            self._stream_mode_ack_warned = True
-                    with self._ack_lock:
-                        self._last_proto_ack = (int(ack_cmd), int(applied_mode), int(status), time.time())
-                        self._ack_lock.notify_all()
-                    if (
-                        ack_cmd in (CMD_STOP, CMD_RESET) and
-                        status in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)
-                    ):
-                        model.control_enabled = False
-                        model.system_state = SYSTEM_STATE_UNCONTROLLABLE
-                        if model.calib_status in ("PENDING", "RUNNING"):
-                            model.calib_status = "IDLE"
-                    if ack_cmd in (
-                        CMD_START,
-                        CMD_STOP,
-                        CMD_RESET,
-                        CMD_CALIBRATE,
-                        CMD_CALIB_DATA,
-                        CMD_ACTIVE_SCOPE,
-                        CMD_RUN_FEEDBACK,
-                        CMD_PAUSE,
-                        CMD_RESTORE_MULTITURN,
-                        CMD_MOTOR_ABS_LIMIT_LOCK,
-                        CMD_MULTITURN_NVS_CONTROL,
-                        CMD_CLEAR_CALIBRATION,
-                    ) and status == PROTO_ACK_STATUS_OK:
-                        model.system_state = int(applied_mode)
-                        if ack_cmd == CMD_START:
-                            model.control_enabled = False
-                        elif ack_cmd == CMD_STOP:
-                            model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_UNCONTROLLABLE
-                            if model.calib_status in ("PENDING", "RUNNING"):
-                                model.calib_status = "IDLE"
-                        elif ack_cmd == CMD_RESET:
-                            model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_UNCONTROLLABLE
-                            if model.calib_status in ("PENDING", "RUNNING"):
-                                model.calib_status = "IDLE"
-                        elif ack_cmd == CMD_CALIBRATE:
-                            model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_CALIBRATION_RUNNING
-                        elif ack_cmd == CMD_CALIB_DATA:
-                            model.control_enabled = False
-                        elif ack_cmd == CMD_ACTIVE_SCOPE:
-                            pass
-                        elif ack_cmd == CMD_RUN_FEEDBACK:
-                            model.control_enabled = int(applied_mode) == SYSTEM_STATE_RUN_FEEDBACK
-                        elif ack_cmd == CMD_PAUSE:
-                            model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_PAUSED
-                        elif ack_cmd == CMD_RESTORE_MULTITURN:
-                            pass
-                        elif ack_cmd == CMD_MOTOR_ABS_LIMIT_LOCK:
-                            pass
-                        elif ack_cmd == CMD_MULTITURN_NVS_CONTROL:
-                            pass
-                        elif ack_cmd == CMD_CLEAR_CALIBRATION:
-                            model.calib_status = "IDLE"
-                            model.motor_abs_limit_valid_bitmap = 0
-                            model.motor_abs_limit_locked_bitmap = 0
-                            model.joint_calib_results = [None] * ENCODER_COUNT
-                    emitted = True
-
-        self._apply_connectivity_visibility(model)
-        self._last_model = model
-        return model if emitted else None
+    def _process_packets(self, packets: List[tuple], received_ns=None, received_monotonic_ns=None) -> Optional[HandModel]:
+        """???????????????? StateReducer ???"""
+        sink = getattr(self, "recording_packet_sink", None)
+        if sink is not None:
+            sink("p4", packets)
+        return self._state_reducer.process_packets(self, packets, received_ns, received_monotonic_ns)
 
     @staticmethod
-    def _mapped_angle_count_plausible(joint_idx: int, value: int, model: HandModel) -> bool:
+    def _mapped_angle_out_of_workspace(joint_idx: int, value: int, model: HandModel) -> bool:
         if joint_idx < 0 or joint_idx >= ENCODER_COUNT:
             return False
-        if value == 0:
-            return True
         results = getattr(model, "joint_calib_results", []) or []
         if joint_idx >= len(results):
             return False
@@ -1826,16 +1420,30 @@ class LowerComputerComm:
         if not isinstance(result, dict) or not bool(result.get("success", False)):
             return False
         try:
+            angle_min = float(result.get("angleMin", 0.0) or 0.0)
             angle_max = float(result.get("angleMax", 0.0) or 0.0)
         except (TypeError, ValueError):
             return False
-        if not np.isfinite(angle_max) or angle_max <= 0.0:
+        if not np.isfinite(angle_min) or not np.isfinite(angle_max) or angle_min >= angle_max:
             return False
+        min_count = int(round(angle_min * MAPPED_ANGLE_COUNTS_PER_DEG))
         max_count = int(round(angle_max * MAPPED_ANGLE_COUNTS_PER_DEG))
-        return -MAPPED_ANGLE_COUNT_MARGIN <= int(value) <= (max_count + MAPPED_ANGLE_COUNT_MARGIN)
+        return int(value) < min_count or int(value) > max_count
 
     @staticmethod
     def _apply_connectivity_visibility(model: HandModel) -> None:
+        # P4仍有其他遥测包到达时，在统一收尾阶段根据摘要时间判定触觉中继超时。
+        # 链路在线与模块有效必须分开：即使15位均为0，刚收到摘要也说明CAN中继在线。
+        if (
+            getattr(model, "tactile_source", "") == TACTILE_SOURCE_P4_CAN_RELAY and
+            bool(getattr(model, "tactile_online", False))
+        ):
+            last_rx = float(getattr(model, "tactile_last_rx_ts", 0.0) or 0.0)
+            if last_rx <= 0.0 or (time.time() - last_rx) > TACTILE_P4_RELAY_OFFLINE_AFTER_S:
+                model.tactile_online = False
+                model.tactile_module_valid_mask = 0
+                model.tactile_module_online = [False] * 15
+
         if bool(getattr(model, "has_connectivity_status", False)):
             servo_mask = int(getattr(model, "servo_online_bitmap", 0) or 0)
             for i in range(MOTOR_COUNT):
@@ -1857,11 +1465,14 @@ class LowerComputerComm:
                 usable = ((online_mask & (1 << i)) != 0) and ((fault_mask & (1 << i)) == 0)
                 model.encoders[i].error = not usable
 
-    def send_command(self, cmd: SendCmd):
+    def send_command(self, cmd: SendCmd) -> bool:
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
-            return
-        if cmd in ("calibrate", "side_sway_adjust", "clear_calibration"):
+            return False
+        if cmd in ("calibrate", "clear_calibration") or (
+            isinstance(cmd, tuple) and len(cmd) == 2 and
+            cmd[0] == "clear_calibration_scope"
+        ):
             self._auto_calib_logger.log("TX", str(cmd))
         elif isinstance(cmd, tuple) and len(cmd) >= 1 and cmd[0] in (
             "active_scope",
@@ -1871,17 +1482,18 @@ class LowerComputerComm:
             self._auto_calib_logger.log("TX", repr(cmd))
         if cmd == "stop":
             self._enqueue_stop_immediately()
-            return
+            return True
         if cmd == "pause":
             self._enqueue_pause_immediately()
-            return
+            return True
         if self._is_high_rate_command(cmd):
-            self._enqueue_latest_high_rate(cmd)
-            return
+            return self._enqueue_latest_high_rate(cmd)
         try:
             self.tx_queue.put_nowait(cmd)
+            return True
         except queue.Full:
-            pass
+            log_session("COMM", f"drop TX queue full cmd={cmd!r}")
+            return False
 
     def _enqueue_stop_immediately(self) -> None:
         with self.tx_queue.mutex:
@@ -1904,23 +1516,48 @@ class LowerComputerComm:
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
         return isinstance(cmd, tuple) and cmd[0] in (
-            "motor_pos_sweep",
             "motor_pos_abs",
             "motor_pos_abs_one",
             "angle_live",
+            "joint_target_run",
+            "angle_live_masked",
+            "joint_target_run_masked",
         )
 
     @staticmethod
     def _is_joint_command(cmd: SendCmd) -> bool:
         if isinstance(cmd, HandModel):
             return True
-        return isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live"
+        return (
+            isinstance(cmd, tuple) and cmd[0] in (
+                "angle_live",
+                "joint_target_run",
+                "angle_live_masked",
+                "joint_target_run_masked",
+            )
+        )
 
-    def invalidate_pending_joint_commands(self) -> int:
-        """Drop pending joint-control commands from TX queue."""
+    def invalidate_pending_direct_commands(self) -> int:
+        """Discard old motion intentions, without touching recovery data."""
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_joint_command(item)]
+            kept = [item for item in pending if item != "start" and not (
+                isinstance(item, tuple) and item[0] in ("motor_pos_abs", "motor_pos_abs_one")
+            )]
+            removed = len(pending) - len(kept)
+            pending.clear()
+            pending.extend(kept)
+            self.tx_queue.not_full.notify_all()
+            return removed
+
+    def invalidate_pending_joint_commands(self) -> int:
+        """Drop pending joint targets and their feedback ownership request."""
+        with self.tx_queue.mutex:
+            pending = self.tx_queue.queue
+            kept = [
+                item for item in pending
+                if not self._is_joint_command(item) and item != "run_feedback"
+            ]
             removed = len(pending) - len(kept)
             if removed <= 0:
                 return 0
@@ -1935,46 +1572,58 @@ class LowerComputerComm:
         timeout_s: float = 1.0,
         received_after: Optional[float] = None,
     ) -> Optional[tuple]:
-        deadline = time.time() + max(0.0, float(timeout_s))
-        with self._ack_lock:
-            while True:
-                ack = self._last_proto_ack
-                ack_is_new = (
-                    received_after is None or
-                    (ack is not None and len(ack) >= 4 and float(ack[3]) >= float(received_after))
-                )
-                if ack is not None and int(ack[0]) == int(cmd) and ack_is_new:
-                    return ack
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    return None
-                self._ack_lock.wait(timeout=remaining)
+        return self._ack_tracker.wait_for(cmd, timeout_s, received_after)
 
-    def _enqueue_latest_high_rate(self, cmd: SendCmd):
+    def _enqueue_latest_high_rate(self, cmd: SendCmd) -> bool:
         # Keep only the latest pending high-rate command to avoid UI backlog.
+        # For joint live control, the target must remain ahead of its paired
+        # RUN_FEEDBACK request. Otherwise replacing an older angle_live packet
+        # can move the new target behind RUN_FEEDBACK, letting P4 start and
+        # finish a one-shot run against the stale target.
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_high_rate_command(item)]
+            paired_joint_command = (
+                isinstance(cmd, tuple) and cmd[0] in (
+                    "joint_target_run",
+                    "joint_target_run_masked",
+                )
+            )
+            kept = []
+            for item in pending:
+                drop_item = self._is_high_rate_command(item)
+                if paired_joint_command:
+                    drop_item = drop_item or self._is_joint_command(item) or item == "run_feedback"
+                if not drop_item:
+                    kept.append(item)
             pending.clear()
             pending.extend(kept)
 
             maxsize = self.tx_queue.maxsize
             if maxsize > 0 and len(pending) >= maxsize:
-                return
+                log_session("COMM", f"drop high-rate TX queue full cmd={cmd!r}")
+                return False
 
-            pending.append(cmd)
+            if isinstance(cmd, tuple) and cmd[0] in ("angle_live", "angle_live_masked"):
+                for index, pending_cmd in enumerate(pending):
+                    if pending_cmd == "run_feedback":
+                        pending.insert(index, cmd)
+                        break
+                else:
+                    pending.append(cmd)
+            else:
+                pending.append(cmd)
             self.tx_queue.unfinished_tasks += 1
             self.tx_queue.not_empty.notify()
+            return True
 
     def _tx_loop(self):
-        while self.running and self.serial and self.serial.is_open:
+        while self.running and self._transport.is_open:
             try:
                 self._maybe_send_host_heartbeat()
                 cmd = self.tx_queue.get(timeout=TX_QUEUE_GET_TIMEOUT)
                 data = self._encode_command(cmd)
                 if data:
-                    with self._tx_lock:
-                        self.serial.write(data)
+                    self._transport.write(data)
                     self._update_tx_diag(cmd, len(data))
                 self._maybe_print_tx_diag()
             except queue.Empty:
@@ -1990,13 +1639,12 @@ class LowerComputerComm:
         now = time.time()
         if now - self._last_heartbeat_tx < HOST_HEARTBEAT_INTERVAL_S:
             return
-        if not (self.serial and self.serial.is_open):
+        if not self._transport.is_open:
             return
         if not self._heartbeat_enabled:
             return
         data = build_host_heartbeat_cmd()
-        with self._tx_lock:
-            self.serial.write(data)
+        self._transport.write(data)
         self._last_heartbeat_tx = now
         self._update_tx_diag("host_heartbeat", len(data))
 
@@ -2022,44 +1670,57 @@ class LowerComputerComm:
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
         if cmd == "calibrate":
             return build_calibrate_cmd()
-        if cmd == "side_sway_adjust":
-            return build_side_sway_adjust_cmd()
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_data":
-            return build_calib_data_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":
             return build_active_scope_cmd(cmd[1], cmd[2], bool(cmd[3]))
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "restore_multiturn":
             return build_restore_multiturn_cmd(cmd[1], cmd[2])
-        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_abs_limit_lock":
-            return build_motor_abs_limit_lock_cmd(cmd[1], bool(cmd[2]))
         if isinstance(cmd, tuple) and len(cmd) == 5 and cmd[0] == "calib_load_limits":
-            return build_calib_load_limits_cmd(cmd[1], cmd[2], cmd[3], cmd[4])
+            return build_calib_load_limits_cmd(
+                cmd[1], cmd[2], cmd[3], cmd[4]
+            )
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "calib_load_joint":
             return build_calib_load_joint_cmd(cmd[1])
         if cmd == "clear_calibration":
             return build_clear_calibration_cmd()
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "multiturn_nvs_control":
-            return build_multiturn_nvs_control_cmd(bool(cmd[1]))
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos":
-            return build_motor_pos_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_sweep":
-            return build_motor_pos_sweep_cmd(cmd[1])
+        if (
+            isinstance(cmd, tuple) and len(cmd) == 2
+            and cmd[0] == "clear_calibration_scope"
+        ):
+            return build_clear_calibration_scope_cmd(cmd[1])
+        if (
+            isinstance(cmd, tuple) and len(cmd) == 2
+            and cmd[0] == "servo_reset_zero"
+        ):
+            return build_servo_reset_zero_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":
+            return build_manual_encoder_reference_cmd(cmd[1], cmd[2])
+        if cmd == "clear_manual_encoder_reference":
+            return build_clear_manual_encoder_reference_cmd()
+        if cmd == "query_manual_encoder_reference":
+            return build_manual_encoder_query_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "state_sync":
+            return build_state_sync_request_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "task_diag_subscribe":
+            return build_task_diag_subscribe_cmd(bool(cmd[1]))
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "control_trace_subscribe":
+            return build_control_trace_subscribe_cmd(bool(cmd[1]))
+        if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "manual_encoder_single":
+            return build_manual_encoder_single_cmd(cmd[1], cmd[2], cmd[3])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "rope_init":
+            return build_rope_init_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "motor_pos_abs_one":
             return build_motor_pos_abs_one_cmd(cmd[1], cmd[2])
         if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "angle_live":
             return build_angle_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "stream_mode":
-            return build_stream_mode_cmd(cmd[1])
-        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "local_test_params":
-            return build_local_test_params_cmd(cmd[1], cmd[2])
-        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "tendon_guard":
-            return build_tendon_guard_cmd(cmd[1])
-        if cmd == "local_test_start":
-            return build_local_test_start_cmd()
-        if cmd == "local_test_stop":
-            return build_local_test_stop_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "angle_live_masked":
+            return build_masked_angle_cmd(cmd[1], cmd[2])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "joint_target_run":
+            # 目标角与负反馈所有权请求合为一次串口写入，避免只送达其中一条。
+            return build_angle_cmd(cmd[1]) + build_run_feedback_cmd()
+        if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "joint_target_run_masked":
+            return build_masked_angle_cmd(cmd[1], cmd[2]) + build_run_feedback_cmd()
         if cmd == "start":
             return build_start_cmd()
         if cmd == "run_feedback":

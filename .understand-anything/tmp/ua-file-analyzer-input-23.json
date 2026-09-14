@@ -1,1 +1,0 @@
-{"projectRoot": "D:\\hand\\mmhand-cl (3)\\mmhand-cl", "batchFiles": [{"path": "pytest.ini", "language": "config", "sizeLines": 10, "fileCategory": "config"}, {"path": "tools/build_protocol_docx.py", "language": "python", "sizeLines": 329, "fileCategory": "code"}], "batchImportData": {"pytest.ini": [], "tools/build_protocol_docx.py": []}}

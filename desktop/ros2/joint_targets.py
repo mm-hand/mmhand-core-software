@@ -1,15 +1,22 @@
-"""Optional ROS2 joint-target subscriber for desktop backends."""
+"""joint_targets.py - MMHand Desktop 模块契约。
+
+职责：订阅最终关节目标 Topic 并经 HandBackend 下发 21 关节角。
+线程：ROS2 executor 线程执行；与 Qt/串口线程通过 HandBackend 边界协作。
+输入：ROS2 Topic 消息、节点参数和活动模型契约。
+输出：校验后的 21 关节目标或明确拒绝诊断。
+状态所有权：仅拥有 ROS2 节点、订阅器和最近消息元数据，不拥有设备状态。
+禁止依赖：禁止依赖 Qt/UI，禁止直接写串口或绕过 HandBackend 的控制门禁。
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 import threading
 import time
 from typing import Callable, Iterable, Optional
 
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import ControlMode, ENCODER_COUNT
+from desktop.core.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 
@@ -18,6 +25,7 @@ DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 class Ros2JointTargetConfig:
     topic: str = DEFAULT_JOINT_TARGET_TOPIC
     auto_start: bool = False
+    input_space: str = URDF_DEG
 
 
 class JointTargetCommandHandler:
@@ -29,12 +37,14 @@ class JointTargetCommandHandler:
         *,
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
+        input_space: str = URDF_DEG,
         warning_sink: Optional[Callable[[str], None]] = None,
         warn_interval_s: float = 1.0,
     ) -> None:
         self.backend = backend
         self.topic = topic
         self.auto_start = bool(auto_start)
+        self.input_space = str(input_space)
         self.warning_sink = warning_sink or print
         self.warn_interval_s = float(warn_interval_s)
         self._last_warn_ts = 0.0
@@ -45,29 +55,29 @@ class JointTargetCommandHandler:
 
     def handle_values(self, values: Iterable[float]) -> bool:
         try:
-            targets = [float(v) for v in values]
-        except (TypeError, ValueError):
-            self._warn("ignored ROS2 joint target: data must be numeric")
-            return False
-        if len(targets) != ENCODER_COUNT:
-            self._warn(
-                f"ignored ROS2 joint target: expected {ENCODER_COUNT} values, got {len(targets)}"
-            )
-            return False
-        if not all(math.isfinite(v) for v in targets):
-            self._warn("ignored ROS2 joint target: values must be finite")
+            adaptation = adapt_joint_targets(values, source_space=self.input_space)
+        except (TypeError, ValueError) as exc:
+            self._warn(f"ignored ROS2 joint target: {exc}")
             return False
 
-        self.backend.set_control_mode(ControlMode.JOINT_ANGLE)
-        if self.auto_start and not self._auto_started:
+        # 两个 ROS2 输入 topic 统一经过 backend 的授权门。这里不能直接调用
+        # send_joint_targets，否则 E-STOP 后的下一帧会再次发送 RUN_FEEDBACK。
+        result = self.backend.send_ros2_joint_targets(
+            adaptation.urdf_targets_deg,
+            source=f"ROS2:{self.topic}",
+            input_space=adaptation.source_space,
+            raw_targets=adaptation.source_targets,
+        )
+        sent = bool(getattr(result, "sent", True))
+        message = str(getattr(result, "message", "") or "")
+        if message:
+            self._warn(message)
+        if not sent and not message:
+            self._warn(f"ignored ROS2 joint target on {self.topic}: backend rejected frame")
+        if sent and self.auto_start and not self._auto_started:
             self.backend.start()
             self._auto_started = True
-        self.backend.send_joint_targets(
-            targets,
-            source=f"ROS2:{self.topic}",
-            live=True,
-        )
-        return True
+        return sent
 
     def _warn(self, text: str) -> None:
         now = time.time()
@@ -86,12 +96,19 @@ class Ros2JointTargetBridge:
         *,
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
+        input_space: str = URDF_DEG,
+        feedback_mode: str = "armed",
+        state_topic: str = "/mmhand/joint_states",
     ) -> None:
-        self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start)
+        self.backend = backend
+        self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=input_space)
+        self.feedback_mode = feedback_mode
+        self.state_topic = state_topic
         self.handler = JointTargetCommandHandler(
             backend,
             topic=self.config.topic,
             auto_start=self.config.auto_start,
+            input_space=self.config.input_space,
             warning_sink=self._warn,
         )
         self._thread: Optional[threading.Thread] = None
@@ -107,9 +124,12 @@ class Ros2JointTargetBridge:
             import rclpy
             from rclpy.node import Node
             from std_msgs.msg import Float32MultiArray
+            from sensor_msgs.msg import JointState
+            from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+            from rclpy.clock import Clock, ClockType
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(
-                "ROS2 support requires rclpy and std_msgs in the active Python environment"
+                "ROS2 support requires rclpy, sensor_msgs and std_msgs in the active Python environment"
             ) from exc
 
         if not rclpy.ok():
@@ -117,6 +137,7 @@ class Ros2JointTargetBridge:
             self._shutdown_rclpy = True
 
         bridge = self
+        self.backend.configure_ros2_feedback(self.feedback_mode)
 
         class _JointTargetNode(Node):
             def __init__(self) -> None:
@@ -125,8 +146,25 @@ class Ros2JointTargetBridge:
                     Float32MultiArray,
                     bridge.config.topic,
                     bridge.handler.handle_message,
-                    10,
+                    1,
                 )
+                if bridge.feedback_mode != "off":
+                    publisher = self.create_publisher(JointState, bridge.state_topic,
+                        QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
+                                   durability=DurabilityPolicy.VOLATILE))
+
+                    def publish(stamp_ns, positions):
+                        msg = JointState()
+                        msg.header.stamp.sec = stamp_ns // 1_000_000_000
+                        msg.header.stamp.nanosec = stamp_ns % 1_000_000_000
+                        msg.name = [f"J{i:02d}" for i in range(21)]
+                        msg.position = positions
+                        publisher.publish(msg)
+
+                    self.create_timer(0.01, lambda: bridge.backend.publish_ros2_feedback(publish),
+                                      clock=Clock(clock_type=ClockType.STEADY_TIME))
+                if bridge.feedback_mode == "always":
+                    self.get_logger().warning("always feedback: HORA continues inference while ROS2 INPUT is off")
                 self.get_logger().info(
                     f"Listening for Float32MultiArray joint targets on {bridge.config.topic}"
                 )
@@ -138,6 +176,7 @@ class Ros2JointTargetBridge:
         self._thread.start()
 
     def stop(self) -> None:
+        self.backend.set_ros2_output_armed(False, reason="ros2_bridge_stop")
         if not self._started:
             return
         rclpy = self._rclpy
@@ -166,6 +205,8 @@ class Ros2JointTargetBridge:
             self._rclpy.spin(self._node)
         except Exception as exc:
             self._warn(f"ROS2 joint target subscriber stopped: {exc}")
+        finally:
+            self.backend.set_ros2_output_armed(False, reason="ros2_executor_exit")
 
     def _warn(self, text: str) -> None:
         node = self._node

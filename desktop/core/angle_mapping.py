@@ -1,34 +1,77 @@
-"""Central angle mapping helpers.
+"""angle_mapping.py - MMHand Desktop 模块契约。
 
-Canonical rule:
-    MANUS / retarget / IK / FK / viewer internals use URDF joint angles.
-
-Units:
-    URDF angle: radians in IK/FK code, degrees only in UI text/JSON streams.
-    Viewer angle: URDF degrees. The viewer converts degrees back to radians.
-    Calibrated angle: degrees sent to firmware CMD_ANGLE_CTRL.
-
-The calibrated mapping below is a temporary linear framework that mirrors the
-current host behavior. It must be verified on hardware. Tendon/coupled joints
-may need a non-linear or multi-motor model; they are explicitly marked.
+职责：统一 URDF、标定坐标和下位机角度空间之间的换算。
+线程：除 comm_layer 的串口收发线程外不主动创建 GUI 线程；共享状态必须按既有锁读取。
+输入：P4 字节流、上层类型化命令、配置和持久化数据。
+输出：线程安全的 HandModel 快照、协议帧、ACK 和后端操作结果。
+状态所有权：通信对象拥有串口与解析缓存；HandModel 的写入只允许在核心同步边界内发生。
+禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
 """
 
 from __future__ import annotations
 
 import json
 import math
+import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH as DEFAULT_CALIB_LOAD_SNAPSHOT_PATH
+from desktop.paths import (
+    CALIB_LOAD_SNAPSHOT_PATH as DEFAULT_CALIB_LOAD_SNAPSHOT_PATH,
+    URDF_JOINT_MAPPING_PATH as DEFAULT_URDF_JOINT_MAPPING_PATH,
+)
+from .calibration_snapshot import validate_snapshot
 
 from .protocol import ENCODER_COUNT
 
 
-DEBUG_ANGLE_MAPPING = False
-
 CALIB_LOAD_SNAPSHOT_PATH = Path(DEFAULT_CALIB_LOAD_SNAPSHOT_PATH)
+URDF_JOINT_MAPPING_PATH = Path(DEFAULT_URDF_JOINT_MAPPING_PATH)
+
+
+def _urdf_mapping_metadata(
+    version_key: str,
+    label: str,
+    mapping_path: Path | str,
+) -> tuple[int, int]:
+    data = json.loads(Path(mapping_path).read_text(encoding="utf-8"))
+    version = int(data.get(version_key, 0))
+    joints = data.get("joints")
+    if version <= 0 or not isinstance(joints, list) or len(joints) != ENCODER_COUNT:
+        raise AngleMappingError(f"invalid {label} mapping metadata")
+
+    payload = bytearray(struct.pack(">BB", version & 0xFF, len(joints) & 0xFF))
+    for expected_index, item in enumerate(joints):
+        if not isinstance(item, dict) or int(item.get("joint_index", -1)) != expected_index:
+            raise AngleMappingError(f"invalid {label} joint index J{expected_index:02d}")
+        limits = item.get("urdf_limit_deg")
+        if not isinstance(limits, list) or len(limits) != 2:
+            raise AngleMappingError(f"invalid {label} limits J{expected_index:02d}")
+        lower, upper = float(limits[0]), float(limits[1])
+        if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+            raise AngleMappingError(f"invalid {label} range J{expected_index:02d}")
+        payload.extend(struct.pack(">Bff", expected_index, lower, upper))
+    return version, zlib.crc32(payload) & 0xFFFFFFFF
+
+
+def urdf_feedback_mapping_metadata(
+    mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
+) -> tuple[int, int]:
+    """Return the generated-P4 runtime mapping version and canonical CRC32."""
+    return _urdf_mapping_metadata(
+        "feedback_mapping_version", "URDF feedback", mapping_path
+    )
+
+
+def urdf_manual_scaled_mapping_metadata(
+    mapping_path: Path | str = URDF_JOINT_MAPPING_PATH,
+) -> tuple[int, int]:
+    """Return the V4 Manual-to-URDF mapping version and canonical CRC32."""
+    return _urdf_mapping_metadata(
+        "manual_scaled_mapping_version", "manual-scaled", mapping_path
+    )
 
 
 @dataclass(frozen=True)
@@ -40,11 +83,14 @@ class JointAngleSpec:
     urdf_max_rad: float
     default_calib_min_deg: float
     default_calib_max_deg: float
+    urdf_at_calib_min_rad: Optional[float] = None
+    urdf_at_calib_max_rad: Optional[float] = None
     sign: int = 1
     offset_deg: float = 0.0
     is_coupled: bool = False
     motor_indices: tuple[int, ...] = ()
     mapping_source: str = "current host linear framework"
+    mapping_status: str = "legacy"
 
     @property
     def urdf_min_deg(self) -> float:
@@ -66,48 +112,104 @@ class JointAngleSpec:
     def urdf_range_deg(self) -> tuple[float, float]:
         return (self.urdf_min_deg, self.urdf_max_deg)
 
+    @property
+    def urdf_at_calib_min_deg(self) -> float:
+        value = self.urdf_min_rad if self.urdf_at_calib_min_rad is None else self.urdf_at_calib_min_rad
+        return math.degrees(value)
 
-@dataclass(frozen=True)
-class AngleMappingDebug:
-    joint_name: str
-    joint_index: int
-    q_ik_urdf_rad: float
-    q_ik_urdf_deg: float
-    q_viewer_deg: float
-    q_calibrated_deg: Optional[float]
-    urdf_range_deg: tuple[float, float]
-    viewer_range_deg: tuple[float, float]
-    calibrated_range_deg: Optional[tuple[float, float]]
-    sign: int
-    offset_deg: float
-    is_clamped_urdf: bool
-    is_clamped_calibrated: bool
-    mapping_source: str
+    @property
+    def urdf_at_calib_max_deg(self) -> float:
+        value = self.urdf_max_rad if self.urdf_at_calib_max_rad is None else self.urdf_at_calib_max_rad
+        return math.degrees(value)
+
+    @property
+    def calibrated_urdf_endpoints_deg(self) -> tuple[float, float]:
+        """URDF degrees corresponding to default calibrated min/max respectively."""
+        return (self.urdf_at_calib_min_deg, self.urdf_at_calib_max_deg)
 
 
-JOINT_SPECS: Dict[int, JointAngleSpec] = {
-    0: JointAngleSpec(0, "Pinky root", "little_aa_joint", -0.802851, 0.331613, -45.0, 11.0, is_coupled=True, motor_indices=(0, 1), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    1: JointAngleSpec(1, "Pinky MCP", "mmhand_finger_4_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(2,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    2: JointAngleSpec(2, "Pinky PIP", "mmhand_finger_4_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(3,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    3: JointAngleSpec(3, "Pinky DIP", "mmhand_finger_4_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(4,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    4: JointAngleSpec(4, "Ring root", "ring_aa_joint", -0.802851, 0.506145, -51.0, 21.0, is_coupled=True, motor_indices=(5, 6), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    5: JointAngleSpec(5, "Ring MCP", "mmhand_finger_3_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(7,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    6: JointAngleSpec(6, "Ring PIP", "mmhand_finger_3_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(8,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    7: JointAngleSpec(7, "Ring DIP", "mmhand_finger_3_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(9,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    8: JointAngleSpec(8, "Middle root", "middle_aa_joint", -0.523599, 0.593412, -24.0, 23.0, is_coupled=True, motor_indices=(10, 11), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    9: JointAngleSpec(9, "Middle MCP", "mmhand_finger_2_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(12,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    10: JointAngleSpec(10, "Middle PIP", "mmhand_finger_2_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(13,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    11: JointAngleSpec(11, "Middle DIP", "mmhand_finger_2_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(14,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    12: JointAngleSpec(12, "Index root", "index_aa_joint", -0.506145, 0.610865, -11.0, 30.0, is_coupled=True, motor_indices=(15, 16), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    13: JointAngleSpec(13, "Index MCP", "mmhand_finger_1_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(17,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    14: JointAngleSpec(14, "Index PIP", "mmhand_finger_1_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(18,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    15: JointAngleSpec(15, "Index DIP", "mmhand_finger_1_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(19,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    16: JointAngleSpec(16, "Thumb AA", "thumb_aa_joint", -0.506145, 0.523599, -29.0, 30.0, is_coupled=True, motor_indices=(20, 21), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-    17: JointAngleSpec(17, "Thumb MCP", "mmhand_thumb_1_mmhand_finger_5_proximal_phalanx_1_mcp_fe_joint", -1.570796, 0.244346, 0.0, math.degrees(1.570796), motor_indices=(22,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    18: JointAngleSpec(18, "Thumb PIP", "mmhand_thumb_1_mmhand_finger_5_distal_phalanx_1_pip_joint", -1.53589, 0.15708, 0.0, math.degrees(1.53589), motor_indices=(23,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    19: JointAngleSpec(19, "Thumb DIP", "mmhand_thumb_1_mmhand_finger_5_fingertip_1_dip_joint", -1.570796, 0.20944, 0.0, math.degrees(1.570796), motor_indices=(24,), mapping_source="flexion maps URDF [lower,0] -> calibrated [max,0]"),
-    20: JointAngleSpec(20, "Thumb CMC", "thumb_cmc1_joint", -1.396263, 0.017453, -80.0, 1.0, is_coupled=True, motor_indices=(25, 26), mapping_source="coupled tendon joint, temporary linear joint-angle mapping"),
-}
+def _load_structure_urdf_joint_specs() -> Dict[int, JointAngleSpec]:
+    """从统一生成的映射文件加载 21 关节全部运行时元数据。"""
+    try:
+        data = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"missing URDF joint mapping: {URDF_JOINT_MAPPING_PATH}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid URDF joint mapping JSON: {URDF_JOINT_MAPPING_PATH}") from exc
+
+    if not isinstance(data, dict) or int(data.get("schema_version", 0)) != 4:
+        raise RuntimeError("unsupported URDF joint mapping schema")
+    entries = data.get("joints")
+    if not isinstance(entries, list):
+        raise RuntimeError("URDF joint mapping must contain a joints list")
+
+    by_index: Dict[int, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("URDF joint mapping entry must be an object")
+        try:
+            idx = int(entry["joint_index"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("URDF joint mapping entry has invalid joint_index") from exc
+        if idx in by_index:
+            raise RuntimeError(f"duplicate URDF joint mapping entry J{idx:02d}")
+        by_index[idx] = entry
+
+    expected_indices = set(range(ENCODER_COUNT))
+    if set(by_index) != expected_indices:
+        missing = sorted(expected_indices - set(by_index))
+        extra = sorted(set(by_index) - expected_indices)
+        raise RuntimeError(f"URDF joint mapping indices mismatch: missing={missing}, extra={extra}")
+
+    specs: Dict[int, JointAngleSpec] = {}
+    used_motors: set[int] = set()
+    for idx in range(ENCODER_COUNT):
+        entry = by_index[idx]
+        try:
+            joint_name = str(entry["display_name"])
+            urdf_joint_name = str(entry["urdf_joint_name"])
+            urdf_lo_deg, urdf_hi_deg = [float(v) for v in entry["urdf_limit_deg"]]
+            calib_lo_deg, calib_hi_deg = [float(v) for v in entry["calibrated_default_range_deg"]]
+            urdf_at_calib_min_deg = float(entry["urdf_at_calibrated_min_deg"])
+            urdf_at_calib_max_deg = float(entry["urdf_at_calibrated_max_deg"])
+            motor_indices = tuple(int(value) for value in entry["motor_indices"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid numeric fields") from exc
+        if not joint_name or not urdf_joint_name or len(motor_indices) not in (1, 2):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid semantic fields")
+        if any(motor < 0 or motor >= 27 or motor in used_motors for motor in motor_indices):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has invalid motor bindings")
+        used_motors.update(motor_indices)
+        values = (urdf_lo_deg, urdf_hi_deg, calib_lo_deg, calib_hi_deg, urdf_at_calib_min_deg, urdf_at_calib_max_deg)
+        if not all(math.isfinite(value) for value in values):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} contains a non-finite value")
+        if abs(urdf_hi_deg - urdf_lo_deg) < 1e-6 or abs(calib_hi_deg - calib_lo_deg) < 1e-6:
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} has a zero-size range")
+        if not min(urdf_lo_deg, urdf_hi_deg) <= urdf_at_calib_min_deg <= max(urdf_lo_deg, urdf_hi_deg):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} calibrated-min endpoint is outside URDF limits")
+        if not min(urdf_lo_deg, urdf_hi_deg) <= urdf_at_calib_max_deg <= max(urdf_lo_deg, urdf_hi_deg):
+            raise RuntimeError(f"URDF joint mapping J{idx:02d} calibrated-max endpoint is outside URDF limits")
+        specs[idx] = JointAngleSpec(
+            joint_index=idx,
+            joint_name=joint_name,
+            urdf_joint_name=urdf_joint_name,
+            urdf_min_rad=math.radians(urdf_lo_deg),
+            urdf_max_rad=math.radians(urdf_hi_deg),
+            default_calib_min_deg=calib_lo_deg,
+            default_calib_max_deg=calib_hi_deg,
+            urdf_at_calib_min_rad=math.radians(urdf_at_calib_min_deg),
+            urdf_at_calib_max_rad=math.radians(urdf_at_calib_max_deg),
+            is_coupled=bool(entry.get("is_coupled", False)),
+            motor_indices=motor_indices,
+            mapping_source=str(entry.get("mapping_source", data.get("mapping_id", "structure URDF"))),
+            mapping_status=str(entry.get("mapping_status", "unverified")),
+        )
+    if used_motors != set(range(27)):
+        raise RuntimeError("URDF joint mapping does not bind every motor M00-M26")
+    return specs
+
+
+JOINT_SPECS = _load_structure_urdf_joint_specs()
 
 JOINT_NAME_TO_INDEX: Dict[str, int] = {}
 for _idx, _spec in JOINT_SPECS.items():
@@ -115,8 +217,6 @@ for _idx, _spec in JOINT_SPECS.items():
     JOINT_NAME_TO_INDEX[_spec.urdf_joint_name] = _idx
     JOINT_NAME_TO_INDEX[f"J{_idx:02d}"] = _idx
     JOINT_NAME_TO_INDEX[str(_idx)] = _idx
-
-FLEXION_JOINT_INDICES = frozenset({1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19})
 
 _CALIB_CACHE: tuple[float, Dict[int, tuple[float, float]]] | None = None
 
@@ -142,8 +242,26 @@ def get_spec(joint: int | str) -> JointAngleSpec:
     return JOINT_SPECS[resolve_joint(joint)]
 
 
-def load_calibrated_ranges(snapshot_path: Path | str = CALIB_LOAD_SNAPSHOT_PATH) -> Dict[int, tuple[float, float]]:
-    path = Path(snapshot_path)
+def _has_consistent_auto_raw_endpoints(item: dict) -> bool:
+    try:
+        direction = -1 if int(item.get("encoderDirection", 1)) < 0 else 1
+        start_oriented = int(item.get("startEncoder", 0)) % 16384
+        tight_oriented = int(item.get("tightEncoder", 0)) % 16384
+        auto_min_raw = int(item.get("autoMinRaw", -1))
+        auto_max_raw = int(item.get("autoMaxRaw", -1))
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= auto_min_raw < 16384 or not 0 <= auto_max_raw < 16384:
+        return False
+    expected_min = (-start_oriented) % 16384 if direction < 0 else start_oriented
+    expected_max = (-tight_oriented) % 16384 if direction < 0 else tight_oriented
+    return auto_min_raw == expected_min and auto_max_raw == expected_max
+
+
+def load_calibrated_ranges(
+    snapshot_path: Path | str | None = None,
+) -> Dict[int, tuple[float, float]]:
+    path = Path(CALIB_LOAD_SNAPSHOT_PATH if snapshot_path is None else snapshot_path)
     try:
         mtime = path.stat().st_mtime
     except OSError:
@@ -156,20 +274,43 @@ def load_calibrated_ranges(snapshot_path: Path | str = CALIB_LOAD_SNAPSHOT_PATH)
     ranges: Dict[int, tuple[float, float]] = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        validate_snapshot(data)
         results = data.get("joint_calib_results", [])
+        expected_version, expected_crc = urdf_manual_scaled_mapping_metadata()
     except Exception:
         results = []
+        expected_version, expected_crc = 0, 0
 
     if isinstance(results, list):
         for idx, item in enumerate(results[:ENCODER_COUNT]):
             if not isinstance(item, dict) or not item.get("success"):
                 continue
             try:
+                mapping_version = int(item.get("mappingVersion", 0) or 0)
+                mapping_crc = int(item.get("urdfConfigCrc", 0) or 0)
+                angle_min = float(item.get("angleMin", 0.0))
                 angle_max = float(item.get("angleMax", 0.0))
+                current_min = float(item.get("currentMinDeg", float("nan")))
+                current_max = float(item.get("currentMaxDeg", float("nan")))
             except (TypeError, ValueError):
                 continue
-            if math.isfinite(angle_max) and angle_max > 0.0:
-                ranges[idx] = (0.0, angle_max)
+            urdf_min, urdf_max = JOINT_SPECS[idx].urdf_range_deg
+            if (
+                mapping_version == expected_version
+                and mapping_crc == expected_crc
+                and math.isfinite(angle_min)
+                and math.isfinite(angle_max)
+                and math.isfinite(current_min)
+                and math.isfinite(current_max)
+                and abs(angle_min - urdf_min) <= 0.01
+                and abs(angle_max - urdf_max) <= 0.01
+                and abs(current_min - urdf_min) <= 0.01
+                and abs(current_max - urdf_max) <= 0.01
+                and _has_consistent_auto_raw_endpoints(item)
+            ):
+                # V4 快照只证明该关节已有有效 Auto/LUT；实际命令范围始终取
+                # 当前 URDF 静态上下限，不能让历史 Auto Span 再次改变比例。
+                ranges[idx] = (urdf_min, urdf_max)
 
     if path == CALIB_LOAD_SNAPSHOT_PATH:
         _CALIB_CACHE = (mtime, dict(ranges))
@@ -195,22 +336,6 @@ def effective_calibrated_range_deg(
     return default_calibrated_range_deg(joint) if allow_default else None
 
 
-def urdf_to_viewer(joint: int | str, q_urdf_rad: float) -> float:
-    """URDF rad -> viewer degrees.
-
-    The viewer is intentionally an identity view of URDF angle. It should not
-    apply hardware/calibration sign or range conversion.
-    """
-    resolve_joint(joint)
-    return math.degrees(float(q_urdf_rad))
-
-
-def viewer_to_urdf(joint: int | str, q_viewer_deg: float) -> float:
-    """Viewer degrees -> URDF rad. Viewer degrees are URDF degrees."""
-    resolve_joint(joint)
-    return math.radians(float(q_viewer_deg))
-
-
 def urdf_to_calibrated(
     joint: int | str,
     q_urdf_rad: float,
@@ -221,31 +346,21 @@ def urdf_to_calibrated(
     """URDF rad -> calibrated/hardware command degrees.
 
     This is a temporary linear mapping framework. The measured calibration
-    range is read from calib_load_snapshot.json as [0, angleMax]. If no
+    range is read from the active V6 calibration bundle. If no
     calibrated range is available and allow_default is False, this raises.
     """
     idx = resolve_joint(joint)
     spec = JOINT_SPECS[idx]
     q_urdf_clamped = clamp_urdf_for_calibrated_mapping(idx, q_urdf_rad) if clamp else float(q_urdf_rad)
     q_urdf_deg = math.degrees(q_urdf_clamped)
-
-    if idx in FLEXION_JOINT_INDICES:
-        urdf_lo, urdf_hi = _calibrated_mapping_urdf_range_deg(idx)
-        default_deg = _linear_map(
-            q_urdf_deg,
-            urdf_lo,
-            urdf_hi,
-            spec.default_calib_max_deg,
-            spec.default_calib_min_deg,
-        )
-    else:
-        default_deg = _linear_map(
-            q_urdf_deg,
-            spec.urdf_min_deg,
-            spec.urdf_max_deg,
-            spec.default_calib_min_deg,
-            spec.default_calib_max_deg,
-        )
+    urdf_at_min, urdf_at_max = spec.calibrated_urdf_endpoints_deg
+    default_deg = _linear_map(
+        q_urdf_deg,
+        urdf_at_min,
+        urdf_at_max,
+        spec.default_calib_min_deg,
+        spec.default_calib_max_deg,
+    )
 
     calib = calibrated_range_deg(idx)
     if calib is None:
@@ -296,23 +411,14 @@ def calibrated_to_urdf(
             spec.default_calib_max_deg,
         )
 
-    if idx in FLEXION_JOINT_INDICES:
-        urdf_lo, urdf_hi = _calibrated_mapping_urdf_range_deg(idx)
-        q_urdf_deg = _linear_map(
-            default_deg,
-            spec.default_calib_min_deg,
-            spec.default_calib_max_deg,
-            urdf_hi,
-            urdf_lo,
-        )
-    else:
-        q_urdf_deg = _linear_map(
-            default_deg,
-            spec.default_calib_min_deg,
-            spec.default_calib_max_deg,
-            spec.urdf_min_deg,
-            spec.urdf_max_deg,
-        )
+    urdf_at_min, urdf_at_max = spec.calibrated_urdf_endpoints_deg
+    q_urdf_deg = _linear_map(
+        default_deg,
+        spec.default_calib_min_deg,
+        spec.default_calib_max_deg,
+        urdf_at_min,
+        urdf_at_max,
+    )
     q_urdf = math.radians(q_urdf_deg)
     return clamp_urdf(idx, q_urdf) if clamp else q_urdf
 
@@ -324,20 +430,13 @@ def clamp_urdf(joint: int | str, q_urdf_rad: float) -> float:
 
 
 def clamp_urdf_for_calibrated_mapping(joint: int | str, q_urdf_rad: float) -> float:
-    """Clamp URDF angle before converting to calibrated/hardware degrees.
+    """Clamp only to the active URDF hard limits before command conversion.
 
-    MCP/PIP/DIP joints have positive extension room in the URDF, but hardware
-    flexion commands are defined from open hand at URDF 0 toward negative URDF
-    flexion. Therefore calibrated mapping uses [URDF lower, 0] and clamps any
-    positive URDF angle to 0 before mapping.
+    Old code special-cased MCP/PIP/DIP as negative-angle flexion and discarded
+    their positive URDF range. The structure URDF stores each joint's physical
+    command endpoints explicitly, so every joint now follows one rule.
     """
-    idx = resolve_joint(joint)
-    if idx not in FLEXION_JOINT_INDICES:
-        return clamp_urdf(idx, q_urdf_rad)
-    lo_deg, hi_deg = _calibrated_mapping_urdf_range_deg(idx)
-    lo = math.radians(min(lo_deg, hi_deg))
-    hi = math.radians(max(lo_deg, hi_deg))
-    return max(lo, min(hi, float(q_urdf_rad)))
+    return clamp_urdf(joint, q_urdf_rad)
 
 
 def clamp_calibrated(
@@ -353,114 +452,31 @@ def clamp_calibrated(
     return max(lo, min(hi, float(q_calibrated_deg)))
 
 
-def batch_urdf_to_calibrated(
-    q_urdf_rad: Iterable[float],
+def calibrated_angles_to_urdf_joint_positions(
+    angles_deg: Iterable[float],
     *,
     allow_default: bool = True,
     clamp: bool = True,
-) -> list[float]:
-    out = [0.0] * ENCODER_COUNT
-    for idx, value in enumerate(list(q_urdf_rad)[:ENCODER_COUNT]):
-        out[idx] = urdf_to_calibrated(idx, float(value), allow_default=allow_default, clamp=clamp)
-    return out
+) -> Dict[str, float]:
+    """把 21 路标定角转换为活动 URDF 的真实关节名和弧度。
 
-
-def batch_calibrated_to_urdf(
-    q_calibrated_deg: Iterable[float],
-    *,
-    allow_default: bool = True,
-    clamp: bool = True,
-) -> list[float]:
-    out = [0.0] * ENCODER_COUNT
-    for idx, value in enumerate(list(q_calibrated_deg)[:ENCODER_COUNT]):
-        out[idx] = calibrated_to_urdf(idx, float(value), allow_default=allow_default, clamp=clamp)
-    return out
-
-
-def mapping_debug(
-    joint: int | str,
-    q_urdf_rad: float,
-    *,
-    allow_default: bool = True,
-) -> AngleMappingDebug:
-    idx = resolve_joint(joint)
-    spec = JOINT_SPECS[idx]
-    q_urdf = float(q_urdf_rad)
-    q_urdf_clamped = clamp_urdf_for_calibrated_mapping(idx, q_urdf)
-    q_viewer = urdf_to_viewer(idx, q_urdf_clamped)
-    try:
-        q_calib_raw = urdf_to_calibrated(idx, q_urdf, allow_default=allow_default, clamp=True)
-        q_calib = clamp_calibrated(idx, q_calib_raw, allow_default=allow_default)
-        is_clamped_calib = abs(q_calib - q_calib_raw) > 1e-6
-    except AngleMappingError:
-        q_calib = None
-        is_clamped_calib = False
-
-    return AngleMappingDebug(
-        joint_name=spec.joint_name,
-        joint_index=idx,
-        q_ik_urdf_rad=q_urdf,
-        q_ik_urdf_deg=math.degrees(q_urdf),
-        q_viewer_deg=q_viewer,
-        q_calibrated_deg=q_calib,
-        urdf_range_deg=spec.urdf_range_deg,
-        viewer_range_deg=spec.urdf_range_deg,
-        calibrated_range_deg=effective_calibrated_range_deg(idx, allow_default=allow_default),
-        sign=spec.sign,
-        offset_deg=spec.offset_deg,
-        is_clamped_urdf=abs(q_urdf_clamped - q_urdf) > 1e-8,
-        is_clamped_calibrated=is_clamped_calib,
-        mapping_source=spec.mapping_source,
-    )
-
-
-def debug_print_joint_command(
-    joint: int | str,
-    q_urdf_rad: float,
-    *,
-    allow_default: bool = True,
-    prefix: str = "[ANGLE_MAP]",
-) -> None:
-    if not DEBUG_ANGLE_MAPPING:
-        return
-    d = mapping_debug(joint, q_urdf_rad, allow_default=allow_default)
-    calib = "UNKNOWN" if d.q_calibrated_deg is None else f"{d.q_calibrated_deg:+.3f}"
-    calib_range = "UNKNOWN" if d.calibrated_range_deg is None else _range_text(d.calibrated_range_deg)
-    print(
-        f"{prefix} J{d.joint_index:02d} {d.joint_name} "
-        f"q_ik_urdf={d.q_ik_urdf_deg:+.3f}deg "
-        f"q_viewer={d.q_viewer_deg:+.3f}deg "
-        f"q_calibrated={calib}deg "
-        f"urdf_range={_range_text(d.urdf_range_deg)} "
-        f"viewer_range={_range_text(d.viewer_range_deg)} "
-        f"calibrated_range={calib_range} "
-        f"sign={d.sign:+d} offset={d.offset_deg:+.3f} "
-        f"clamped_urdf={int(d.is_clamped_urdf)} "
-        f"clamped_calibrated={int(d.is_clamped_calibrated)} "
-        f"source={d.mapping_source}"
-    )
-
-
-def joint_mapping_rows() -> list[dict[str, object]]:
-    calib_ranges = load_calibrated_ranges()
-    rows: list[dict[str, object]] = []
-    for idx in range(ENCODER_COUNT):
-        spec = JOINT_SPECS[idx]
-        calib = calib_ranges.get(idx)
-        rows.append(
-            {
-                "joint_name": spec.urdf_joint_name,
-                "urdf_range": spec.urdf_range_deg,
-                "viewer_range": spec.urdf_range_deg,
-                "calibrated_range": calib,
-                "motor/index": f"J{idx:02d}/M{list(spec.motor_indices) if spec.motor_indices else 'UNKNOWN'}",
-                "unit": "URDF rad internal, viewer deg, calibrated deg",
-                "sign": spec.sign,
-                "offset": spec.offset_deg,
-                "current_mapping_source": spec.mapping_source,
-            }
+    Hand Pose 只能消费活动模型的 ``urdf_joint_name``。此函数统一复用现有
+    标定角→URDF 映射，避免显示端再维护一份旧手型的 ``1-1`` 风格关节表。
+    """
+    values = list(angles_deg)
+    if len(values) != ENCODER_COUNT:
+        raise AngleMappingError(
+            f"need exactly {ENCODER_COUNT} calibrated joint angles, got {len(values)}"
         )
-    return rows
+    return {
+        JOINT_SPECS[index].urdf_joint_name: calibrated_to_urdf(
+            index,
+            float(value),
+            allow_default=allow_default,
+            clamp=clamp,
+        )
+        for index, value in enumerate(values)
+    }
 
 
 def _linear_map(value: float, src_lo: float, src_hi: float, dst_lo: float, dst_hi: float) -> float:
@@ -471,37 +487,21 @@ def _linear_map(value: float, src_lo: float, src_hi: float, dst_lo: float, dst_h
     return dst_lo + ratio * (dst_hi - dst_lo)
 
 
-def _calibrated_mapping_urdf_range_deg(joint: int | str) -> tuple[float, float]:
-    spec = get_spec(joint)
-    if spec.joint_index in FLEXION_JOINT_INDICES:
-        return (spec.urdf_min_deg, 0.0)
-    return spec.urdf_range_deg
-
-
-def _range_text(rng: tuple[float, float]) -> str:
-    return f"[{rng[0]:+.3f},{rng[1]:+.3f}]"
-
-
 __all__ = [
-    "AngleMappingDebug",
     "AngleMappingError",
-    "DEBUG_ANGLE_MAPPING",
     "JOINT_SPECS",
     "JointAngleSpec",
-    "batch_calibrated_to_urdf",
-    "batch_urdf_to_calibrated",
+    "URDF_JOINT_MAPPING_PATH",
+    "calibrated_angles_to_urdf_joint_positions",
     "calibrated_range_deg",
     "calibrated_to_urdf",
     "clamp_calibrated",
     "clamp_urdf",
-    "debug_print_joint_command",
     "effective_calibrated_range_deg",
     "get_spec",
-    "joint_mapping_rows",
     "load_calibrated_ranges",
-    "mapping_debug",
     "resolve_joint",
     "urdf_to_calibrated",
-    "urdf_to_viewer",
-    "viewer_to_urdf",
+    "urdf_feedback_mapping_metadata",
+    "urdf_manual_scaled_mapping_metadata",
 ]

@@ -1,3 +1,12 @@
+"""ui_context.py - MMHand Desktop 模块契约。
+
+职责：保存 UI 组件共享的只读服务引用和短生命周期上下文。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 from typing import Optional
 
 from desktop.core.data_models import HandModel
@@ -32,8 +41,8 @@ class HandGuiContext:
         return self._app.control_panel
 
     @property
-    def tendon_guard(self):
-        return self._app.backend.tendon_guard
+    def replay_service(self):
+        return self._app.replay_service
 
     def is_comm_connected(self) -> bool:
         return self._app.is_comm_connected()
@@ -43,6 +52,9 @@ class HandGuiContext:
 
     def emit_action(self, msg: str) -> None:
         self._app.emit_action(msg)
+
+    def cancel_replay(self, reason: str = "stop requested") -> None:
+        self._app.cancel_replay(reason)
 
     def set_status(self, text: str) -> None:
         self._app._set_status(text)
@@ -59,23 +71,29 @@ class HandGuiContext:
     def set_state(self, state: Optional[HandModel]) -> None:
         self._app.set_state(state)
 
-    def send_joint_targets(self, angles, source: str = "", live: bool = False) -> None:
-        self._app.send_joint_targets(angles, source=source, live=live)
+    def send_joint_targets(
+        self,
+        angles,
+        source: str = "",
+        live: bool = False,
+        input_space: str = "urdf_deg",
+        raw_targets=None,
+        command_joint_mask=None,
+    ):
+        return self._app.send_joint_targets(
+            angles,
+            source=source,
+            live=live,
+            input_space=input_space,
+            raw_targets=raw_targets,
+            command_joint_mask=command_joint_mask,
+        )
 
     def start_recording_for_test(self, reason: str = "test") -> None:
         self._app.start_recording_for_test(reason)
 
     def stop_recording_for_test(self, reason: str = "test stopped") -> None:
         self._app.stop_recording_for_test(reason)
-
-    def refresh_cameras(self) -> None:
-        self._app.refresh_cameras()
-
-    def draw_pose_angles(self, angles) -> None:
-        self._app.draw_pose_angles(angles)
-
-    def start_calibration(self) -> None:
-        self._app.start_calibration()
 
     def connect_tactile_serial(self, port: str) -> bool:
         return self._app.connect_tactile_serial(port)

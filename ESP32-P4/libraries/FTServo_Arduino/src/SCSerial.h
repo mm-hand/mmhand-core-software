@@ -27,6 +27,7 @@ protected:
 	int writeSCS(unsigned char *nDat, int nLen);//输出nLen字节
 	int readSCS(unsigned char *nDat, int nLen);//输入nLen字节
 	int readSCS(unsigned char *nDat, int nLen, unsigned long TimeOut);
+	int readSCSAvailable(unsigned char *nDat, int nLen);//只读取当前已到达字节，不等待
 	int writeSCS(unsigned char bDat);//输出1字节
 	void rFlushSCS();//
 	void wFlushSCS();//

@@ -1,3 +1,12 @@
+"""ui_joint_plot_view.py - MMHand Desktop 模块契约。
+
+职责：实时绘制关节磁编反馈和上位机目标缓存曲线。
+线程：Qt GUI 主线程执行；耗时工作必须委托后台服务，禁止阻塞界面事件循环。
+输入：用户操作、HandModel 只读快照以及 HandBackend/服务返回结果。
+输出：Qt 控件状态、用户提示和经门面提交的应用命令。
+状态所有权：仅拥有本视图控件和瞬时交互状态；设备真值由 core 层拥有。
+禁止依赖：禁止直接导入串口通信和底层控制实现，禁止在 UI 中复制协议或安全规则。
+"""
 import time
 from collections import deque
 from typing import Dict, List, Optional
@@ -20,6 +29,7 @@ class JointRealtimePlotView(QtWidgets.QDialog):
         self.resize(820, 420)
         self.window_sec = 12.0
         self.plot_interval = 0.05
+        self.last_sample_ts = 0.0
         self.last_plot_ts = 0.0
         self.t0_map: Dict[int, float] = {}
         self.series_t: Dict[int, deque] = {}
@@ -49,6 +59,7 @@ class JointRealtimePlotView(QtWidgets.QDialog):
         self.plot = pg.PlotWidget()
         self.plot.setLabel("bottom", "Time", units="s")
         self.plot.setLabel("left", "Angle", units="deg")
+        self.plot.setTitle("Solid: magnetic feedback; dashed: host target cache")
         self.plot.showGrid(x=True, y=True, alpha=0.25)
         layout.addWidget(self.plot, 1)
         self.combos[0].setCurrentIndex(1)
@@ -79,42 +90,37 @@ class JointRealtimePlotView(QtWidgets.QDialog):
         self.t0_map.clear()
         self.curves.clear()
         self.plot.clear()
+        self.last_sample_ts = 0.0
+        self.last_plot_ts = 0.0
+
+    def showEvent(self, event) -> None:
+        """隐藏窗口期间不积累历史；每次打开从当前设备状态重新观察。"""
+        self.clear()
+        super().showEvent(event)
 
     def close(self) -> None:
         self.hide()
 
     def append_state(self, state) -> None:
+        if not self.isVisible():
+            return
         selected = self.selected_indices()
         if not selected:
             return
-        targets = None
-        try:
-            targets = self.context.control_panel.resolved_joint_targets()
-        except Exception:
-            pass
+        # 不读取尚未发送的编辑框。目标线来自控制层 HandModel 的目标缓存；
+        # 当前协议没有 P4 目标回显，故不能标成“下位机已执行目标”或“P4已确认”。
+        targets = list(getattr(state, "target_angles", []) or [])
         now = time.time()
+        if now - self.last_sample_ts < self.plot_interval:
+            return
+        self.last_sample_ts = now
         for idx in selected:
             self._ensure_series(idx)
-            debug_ts = 0
-            if idx < len(getattr(state, "joint_debug_timestamp_ms", [])):
-                try:
-                    debug_ts = int(state.joint_debug_timestamp_ms[idx])
-                except Exception:
-                    debug_ts = 0
-            if debug_ts > 0:
-                if idx not in self.t0_map:
-                    self.t0_map[idx] = float(debug_ts)
-                t_rel = (float(debug_ts) - self.t0_map[idx]) / 1000.0
-                actual = self._safe_get(getattr(state, "joint_debug_actual_deg", []), idx)
-                target = self._safe_get(getattr(state, "joint_debug_target_deg", []), idx)
-                if self.series_t[idx] and t_rel <= float(self.series_t[idx][-1]):
-                    continue
-            else:
-                if idx not in self.t0_map:
-                    self.t0_map[idx] = now
-                t_rel = now - self.t0_map[idx]
-                actual = self._safe_get(getattr(state, "angles", []), idx)
-                target = self._safe_get(targets or [], idx)
+            if idx not in self.t0_map:
+                self.t0_map[idx] = now
+            t_rel = now - self.t0_map[idx]
+            actual = self._safe_get(getattr(state, "angles", []), idx)
+            target = self._safe_get(targets, idx)
             self.series_t[idx].append(float(t_rel))
             self.series_actual[idx].append(float(actual))
             self.series_target[idx].append(float(target))
@@ -146,7 +152,8 @@ class JointRealtimePlotView(QtWidgets.QDialog):
                     pen = pg.mkPen(colors[idx], width=2 if kind == "actual" else 1.5)
                     if kind == "target":
                         pen.setStyle(QtCore.Qt.DashLine)
-                    curve = self.plot.plot([], [], pen=pen, name=f"J{idx:02d} {kind}")
+                    label = "magnetic feedback" if kind == "actual" else "host target cache"
+                    curve = self.plot.plot([], [], pen=pen, name=f"J{idx:02d} {label}")
                     self.curves[key] = curve
                 curve.setData(t, data)
         self.plot.setXRange(max(0.0, x_max - self.window_sec), max(self.window_sec, x_max + 0.05), padding=0)

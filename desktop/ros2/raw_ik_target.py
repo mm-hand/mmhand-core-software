@@ -1,13 +1,15 @@
-"""Optional ROS2 raw-IK target subscriber for desktop backends."""
+"""raw_ik_target.py - raw-IK ROS2 兼容入口模块契约。
 
-from __future__ import annotations
-
+职责：为 raw_ik 输入选择复用唯一的双向 ROS2 关节桥实现。
+线程：不创建额外线程；生命周期与 Ros2JointTargetBridge 完全一致。
+输入：raw-IK 目标 topic、单位和反馈门控配置。
+输出：配置后的共享 ROS2 bridge。
+状态所有权：不拥有额外订阅器或设备状态，仅保留兼容配置类型。
+禁止依赖：禁止依赖 Qt/UI、直接写串口或复制 ROS2 订阅实现。
+"""
 from dataclasses import dataclass
-import threading
-from typing import Optional
-
-from desktop.core.hand_backend import HandBackend
-from desktop.ros2.joint_targets import JointTargetCommandHandler
+from desktop.core.joint_target_adapter import URDF_DEG
+from desktop.ros2.joint_targets import Ros2JointTargetBridge
 
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 
@@ -16,107 +18,16 @@ DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
 class Ros2RawIkTargetConfig:
     topic: str = DEFAULT_RAW_IK_TARGET_TOPIC
     auto_start: bool = False
+    input_space: str = URDF_DEG
 
 
-class RawIkTargetBridge:
-    """Background ROS2 subscriber for external MANUS/IK 21-angle output."""
-
-    def __init__(
-        self,
-        backend: HandBackend,
-        *,
-        topic: str = DEFAULT_RAW_IK_TARGET_TOPIC,
-        auto_start: bool = False,
-    ) -> None:
-        self.config = Ros2RawIkTargetConfig(topic=topic, auto_start=auto_start)
-        self.handler = JointTargetCommandHandler(
-            backend,
-            topic=self.config.topic,
-            auto_start=self.config.auto_start,
-            warning_sink=self._warn,
-        )
-        self._thread: Optional[threading.Thread] = None
-        self._node = None
-        self._rclpy = None
-        self._shutdown_rclpy = False
-        self._started = False
-
-    def start(self) -> None:
-        if self._started:
-            return
-        try:
-            import rclpy
-            from rclpy.node import Node
-            from std_msgs.msg import Float32MultiArray
-        except Exception as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError(
-                "ROS2 support requires rclpy and std_msgs in the active Python environment"
-            ) from exc
-
-        if not rclpy.ok():
-            rclpy.init(args=None)
-            self._shutdown_rclpy = True
-
-        bridge = self
-
-        class _RawIkTargetNode(Node):
-            def __init__(self) -> None:
-                super().__init__("mmhand_desktop_raw_ik_target_subscriber")
-                self.create_subscription(
-                    Float32MultiArray,
-                    bridge.config.topic,
-                    bridge.handler.handle_message,
-                    10,
-                )
-                self.get_logger().info(
-                    f"Listening for Float32MultiArray raw IK targets on {bridge.config.topic}"
-                )
-
-        self._rclpy = rclpy
-        self._node = _RawIkTargetNode()
-        self._thread = threading.Thread(target=self._spin, name="mmhand-ros2-raw-ik-target", daemon=True)
-        self._started = True
-        self._thread.start()
-
-    def stop(self) -> None:
-        if not self._started:
-            return
-        rclpy = self._rclpy
-        node = self._node
-        if node is not None:
-            try:
-                node.destroy_node()
-            except Exception:
-                pass
-        if self._shutdown_rclpy and rclpy is not None:
-            try:
-                if rclpy.ok():
-                    rclpy.shutdown()
-            except Exception:
-                pass
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-        self._thread = None
-        self._node = None
-        self._rclpy = None
-        self._started = False
-        self._shutdown_rclpy = False
-
-    def _spin(self) -> None:
-        try:
-            self._rclpy.spin(self._node)
-        except Exception as exc:
-            self._warn(f"ROS2 raw IK target subscriber stopped: {exc}")
-
-    def _warn(self, text: str) -> None:
-        node = self._node
-        try:
-            if node is not None:
-                node.get_logger().warn(text)
-                return
-        except Exception:
-            pass
-        print(text)
+class RawIkTargetBridge(Ros2JointTargetBridge):
+    def __init__(self, backend, *, topic=DEFAULT_RAW_IK_TARGET_TOPIC,
+                 auto_start=False, input_space=URDF_DEG, feedback_mode="armed",
+                 state_topic="/mmhand/joint_states"):
+        super().__init__(backend, topic=topic, auto_start=auto_start,
+                         input_space=input_space, feedback_mode=feedback_mode,
+                         state_topic=state_topic)
 
 
 __all__ = ["DEFAULT_RAW_IK_TARGET_TOPIC", "RawIkTargetBridge", "Ros2RawIkTargetConfig"]

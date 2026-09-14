@@ -1,3 +1,12 @@
+"""cli_monitor.py - MMHand Desktop 模块契约。
+
+职责：提供无图形界面的设备连接、状态查看和诊断命令。
+线程：在进程主线程执行；仅负责创建和关闭 CLI、Qt 及可选 ROS2 生命周期。
+输入：命令行参数、环境变量和启动配置。
+输出：已装配的应用服务、进程退出码和启动诊断。
+状态所有权：只拥有启动期配置与生命周期句柄，不拥有设备运行状态。
+禁止依赖：禁止实现协议解析、控制算法和设备安全判断，统一委托 core/服务层。
+"""
 import os
 import time
 import importlib
@@ -7,7 +16,7 @@ from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from desktop.core.comm_layer import choose_serial_port_interactive
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import ENCODER_COUNT
+from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
 from desktop.ros2.raw_ik_target import RawIkTargetBridge
 
@@ -23,7 +32,9 @@ except Exception:
             return ""
     Fore = Back = Style = _DummyColor()
 
-DEBUG_JOINTS = [4, 5, 6, 7]
+# CLI 仅消费当前仍由 P4 上报的映射关节角和舵机反馈。旧 JOINT1_DEBUG
+# 协议已删除，不能再把已废弃的调试字段当作运行时状态来源。
+MONITOR_JOINTS = [0, 4, 8, 12, 16, 20]
 PLOT_MAX_POINTS = 1000
 PLOT_WINDOW_SEC = 10.0
 
@@ -82,6 +93,8 @@ def _render_calib_status(calib_status: str) -> str:
         return f"{Fore.YELLOW}Sending calibration request...{Style.RESET_ALL}"
     if calib_status == "SUCCESS":
         return f"{Back.GREEN}{Fore.WHITE} Calibration SUCCESS {Style.RESET_ALL}"
+    if calib_status == "WARN":
+        return f"{Back.YELLOW}{Fore.BLACK} Calibration WARN {Style.RESET_ALL}"
     if calib_status == "FAILED":
         return f"{Back.RED}{Fore.WHITE} Calibration FAILED {Style.RESET_ALL}"
     if calib_status == "NO_CALIB":
@@ -92,10 +105,14 @@ def _render_calib_status(calib_status: str) -> str:
 def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
     s = backend.get_state_snapshot()
     return {
-        "timestamp": s.timestamp,
+        "host_rx_time": s.host_rx_time,
+        "p4_time_ms": s.p4_time_ms if s.has_p4_time else None,
         "calib_status": s.calib_status,
         "enc_raw": [e.raw for e in s.encoders],
         "enc_err": [e.error for e in s.encoders],
+        "joint_current": [e.current_angle_deg for e in s.encoders],
+        "joint_target": list(s.target_angles),
+        "joint_valid": [not bool(e.angle_error) for e in s.encoders],
         "servo_angles": list(s.servo_angles),
         "servo_online": list(s.servo_online),
         "servo_speed": list(s.servo_speed),
@@ -105,20 +122,12 @@ def _snapshot_backend_state(backend: HandBackend) -> Dict[str, object]:
         "servo_telem_online": list(s.servo_telem_online),
         "servo_overload_fault": list(s.servo_overload_fault),
         "servo_overload_trigger_load": list(getattr(s, "servo_overload_trigger_load", [])),
-        "jd_valid": list(s.joint_debug_valid),
-        "jd_target": list(s.joint_debug_target_deg),
-        "jd_actual": list(s.joint_debug_actual_deg),
-        "jd_l1": list(s.joint_debug_loop1_output),
-        "jd_l2a": list(s.joint_debug_loop2_actual),
-        "jd_l2o": list(s.joint_debug_loop2_output),
-        "jd_cmd_valid": list(s.joint_debug_cmd_valid),
-        "jd_cmd_pos": list(s.joint_debug_cmd_target_pos),
     }
 
 
 def _print_console(backend: HandBackend, connected_port: str, plot_status: str, ros_status: str = "") -> None:
     snap = _snapshot_backend_state(backend)
-    last_update = float(snap["timestamp"])
+    last_update = float(snap["host_rx_time"])
     latency_ms = (time.time() - last_update) * 1000.0 if last_update > 0 else 9999.0
     rows = (ENCODER_COUNT + 2) // 3
 
@@ -145,17 +154,32 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
             idx = row + col * rows
             if idx < ENCODER_COUNT:
                 cells.append(_fmt_sensor_cell(idx, int(enc_raw[idx]), bool(enc_err[idx])))
+    print("   ".join(cells))
+    print("-" * 88)
+
+    print("Mapped joint angles (target | current):")
+    joint_target = snap["joint_target"]
+    joint_current = snap["joint_current"]
+    joint_valid = snap["joint_valid"]
+    for row in range(rows):
+        cells = []
+        for col in range(3):
+            idx = row + col * rows
+            if idx < ENCODER_COUNT:
+                current = f"{float(joint_current[idx]):7.2f}" if bool(joint_valid[idx]) else "   N/A "
+                cells.append(f"J{idx:02d} {float(joint_target[idx]):7.2f} | {current}")
         print("   ".join(cells))
     print("-" * 88)
 
     print("Servo absolute positions:")
     servo_angles = snap["servo_angles"]
     servo_online = snap["servo_online"]
-    for row in range(rows):
+    servo_rows = (MOTOR_COUNT + 2) // 3
+    for row in range(servo_rows):
         cells = []
         for col in range(3):
-            idx = row + col * rows
-            if idx < ENCODER_COUNT:
+            idx = row + col * servo_rows
+            if idx < MOTOR_COUNT:
                 cells.append(_fmt_servo_cell(idx, int(servo_angles[idx]), bool(servo_online[idx])))
         print("   ".join(cells))
     print("-" * 88)
@@ -168,11 +192,11 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
     telem_online = snap["servo_telem_online"]
     overload_fault = snap["servo_overload_fault"]
     overload_trigger_load = snap["servo_overload_trigger_load"]
-    for row in range(rows):
+    for row in range(servo_rows):
         cells = []
         for col in range(3):
-            idx = row + col * rows
-            if idx < ENCODER_COUNT:
+            idx = row + col * servo_rows
+            if idx < MOTOR_COUNT:
                 cells.append(
                     _fmt_telem_cell(
                         idx,
@@ -192,34 +216,19 @@ def _print_console(backend: HandBackend, connected_port: str, plot_status: str, 
     print(f"Overload latch: {', '.join(active_fault_idx) if active_fault_idx else 'none'}")
     print("-" * 88)
 
-    print("Debug joints (packet 0x04):")
-    jd_valid = snap["jd_valid"]
-    jd_target = snap["jd_target"]
-    jd_actual = snap["jd_actual"]
-    jd_l1 = snap["jd_l1"]
-    jd_l2a = snap["jd_l2a"]
-    jd_l2o = snap["jd_l2o"]
-    jd_cmd_valid = snap["jd_cmd_valid"]
-    jd_cmd_pos = snap["jd_cmd_pos"]
-    for idx in [j for j in DEBUG_JOINTS if 0 <= j < ENCODER_COUNT]:
-        cmd_text = f"{int(jd_cmd_pos[idx]):6d}" if bool(jd_cmd_valid[idx]) else "  N/A "
-        print(
-            f"J{idx:02d} valid={int(bool(jd_valid[idx]))} "
-            f"target={float(jd_target[idx]):8.3f} actual={float(jd_actual[idx]):8.3f} "
-            f"loop1={float(jd_l1[idx]):8.3f} loop2a={float(jd_l2a[idx]):8.3f} "
-            f"loop2o={float(jd_l2o[idx]):8.3f} cmd={cmd_text}"
-        )
-    print("-" * 88)
-    print("Controls: 's' start, 'x' stop, 'r' reset, 'c' calibrate, 'q' quit.")
+    print(
+        "Controls: 's' start, 'i' ROS2 input enable, 'o' ROS2 input disable, "
+        "'x' stop, 'r' reset, 'c' calibrate, 'q' quit."
+    )
     print(f"Calibration: {_render_calib_status(str(snap['calib_status']))}")
 
 
 @dataclass
 class _JointPlotBuffers:
-    t: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in DEBUG_JOINTS})
-    target: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in DEBUG_JOINTS})
-    actual: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in DEBUG_JOINTS})
-    t0: Dict[int, float] = field(default_factory=lambda: {j: 0.0 for j in DEBUG_JOINTS})
+    t: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in MONITOR_JOINTS})
+    target: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in MONITOR_JOINTS})
+    actual: Dict[int, Deque[float]] = field(default_factory=lambda: {j: deque(maxlen=PLOT_MAX_POINTS) for j in MONITOR_JOINTS})
+    t0: Dict[int, float] = field(default_factory=lambda: {j: 0.0 for j in MONITOR_JOINTS})
 
 
 class _JointPlotter:
@@ -231,13 +240,13 @@ class _JointPlotter:
         self._plt.ion()
         self.fig, self.ax = self._plt.subplots()
         self.lines: Dict[int, Tuple[object, object]] = {}
-        for idx in DEBUG_JOINTS:
+        for idx in MONITOR_JOINTS:
             (line_t,) = self.ax.plot([], [], linestyle="--", label=f"J{idx} Target")
             (line_a,) = self.ax.plot([], [], linestyle="-", label=f"J{idx} Actual")
             self.lines[idx] = (line_t, line_a)
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Angle (deg)")
-        self.ax.set_title("Debug joints target vs actual")
+        self.ax.set_title("Mapped joint target vs actual")
         self.ax.grid(True)
         self.ax.legend(loc="upper right", ncol=2, fontsize=8)
         self._plt.show(block=False)
@@ -245,30 +254,30 @@ class _JointPlotter:
     def update(self, backend: HandBackend) -> None:
         snap = _snapshot_backend_state(backend)
         now = time.time()
-        jd_valid = snap["jd_valid"]
-        jd_target = snap["jd_target"]
-        jd_actual = snap["jd_actual"]
+        joint_valid = snap["joint_valid"]
+        joint_target = snap["joint_target"]
+        joint_current = snap["joint_current"]
 
-        for j in DEBUG_JOINTS:
+        for j in MONITOR_JOINTS:
             if self._buf.t0[j] == 0.0:
                 self._buf.t0[j] = now
             self._buf.t[j].append(now - self._buf.t0[j])
-            self._buf.target[j].append(float(jd_target[j]))
-            self._buf.actual[j].append(float(jd_actual[j]) if bool(jd_valid[j]) else float("nan"))
+            self._buf.target[j].append(float(joint_target[j]))
+            self._buf.actual[j].append(float(joint_current[j]) if bool(joint_valid[j]) else float("nan"))
 
             line_t, line_a = self.lines[j]
             t = list(self._buf.t[j])
             line_t.set_data(t, list(self._buf.target[j]))
             line_a.set_data(t, list(self._buf.actual[j]))
 
-        all_t = [v for j in DEBUG_JOINTS for v in self._buf.t[j]]
+        all_t = [v for j in MONITOR_JOINTS for v in self._buf.t[j]]
         if all_t:
             t_max = max(all_t)
             t_min = max(0.0, t_max - PLOT_WINDOW_SEC)
             self.ax.set_xlim(t_min, t_max + 0.1)
 
         vals: List[float] = []
-        for j in DEBUG_JOINTS:
+        for j in MONITOR_JOINTS:
             vals.extend([v for v in self._buf.target[j] if v == v])
             vals.extend([v for v in self._buf.actual[j] if v == v])
         if vals:
@@ -296,10 +305,26 @@ def _make_ros2_bridge(
     ros2_input: str,
     ros_topic: str,
     auto_start: bool,
+    raw_ik_space: str = "urdf_deg",
+    feedback_mode: str = "armed",
+    joint_state_topic: str = "/mmhand/joint_states",
 ):
     if ros2_input == "raw_ik":
-        return RawIkTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
-    return Ros2JointTargetBridge(backend, topic=ros_topic, auto_start=auto_start)
+        return RawIkTargetBridge(
+            backend,
+            topic=ros_topic,
+            auto_start=auto_start,
+            input_space=raw_ik_space,
+            feedback_mode=feedback_mode,
+            state_topic=joint_state_topic,
+        )
+    return Ros2JointTargetBridge(
+        backend,
+        topic=ros_topic,
+        auto_start=auto_start,
+        feedback_mode=feedback_mode,
+        state_topic=joint_state_topic,
+    )
 
 
 def run_cli_monitor(
@@ -307,10 +332,13 @@ def run_cli_monitor(
     port: Optional[str] = None,
     tactile_port: Optional[str] = None,
     no_plot: bool = False,
-    ros2_enabled: bool = False,
+    ros2_enabled: bool = True,
     ros2_input: str = "joint_target",
     ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
     auto_start: bool = False,
+    ros2_raw_ik_space: str = "urdf_deg",
+    ros2_feedback_mode: str = "armed",
+    ros2_joint_state_topic: str = "/mmhand/joint_states",
     backend: Optional[HandBackend] = None,
     key_reader_factory: Callable[[], _KeyReader] = _KeyReader,
     max_iterations: Optional[int] = None,
@@ -327,7 +355,6 @@ def run_cli_monitor(
         return 2
 
     print(f"Connecting to {selected_port} ...")
-    backend.set_pid_control(bool(ros2_enabled))
     if tactile_port:
         if backend.connect_tactile_serial(tactile_port):
             print(f"Connected tactile serial: {tactile_port}")
@@ -354,10 +381,15 @@ def run_cli_monitor(
             ros2_input=ros2_input,
             ros_topic=ros_topic,
             auto_start=auto_start,
+            raw_ik_space=ros2_raw_ik_space,
+            feedback_mode=ros2_feedback_mode,
+            joint_state_topic=ros2_joint_state_topic,
         )
         try:
             ros_bridge.start()
             ros_status = f"ON {ros2_input} {ros_topic}"
+            if auto_start:
+                print("Controller auto-started; ROS2 input remains unauthorized")
         except Exception as exc:
             print(f"ROS2 disabled: {exc}")
             ros_bridge = None
@@ -368,7 +400,11 @@ def run_cli_monitor(
         with key_reader_factory() as key_reader:
             while True:
                 if render:
-                    _print_console(backend, selected_port, plot_status, ros_status)
+                    live_ros_status = ros_status
+                    if (ros_bridge is not None and
+                            getattr(backend, "ros2_feedback_waiting", lambda: False)()):
+                        live_ros_status = f"{ros_status} (WAITING POLICY RESET)"
+                    _print_console(backend, selected_port, plot_status, live_ros_status)
                 if plotter is not None:
                     plotter.update(backend)
 
@@ -377,6 +413,13 @@ def run_cli_monitor(
                     break
                 if key == "s":
                     backend.start()
+                if key == "i" and ros_bridge is not None:
+                    # CLI 与 GUI 使用同一独立授权门；普通 start 不得放行遥操。
+                    ok, message = backend.set_ros2_output_enabled(True)
+                    print(message if ok else f"ROS2 input enable blocked: {message}")
+                if key == "o" and ros_bridge is not None:
+                    _, message = backend.set_ros2_output_enabled(False)
+                    print(message)
                 if key == "x":
                     backend.stop()
                 if key == "r":

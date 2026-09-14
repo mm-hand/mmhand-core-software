@@ -1,5 +1,7 @@
 # Hand Control Software
 
+> 文档状态（2026-08-01）：保留为 Arduino IDE 安装/烧录快速指南；它不描述当前控制架构。P4 工程阅读、生成物和提交前检查请从[上手代码必读](上手代码必读.md)开始。
+
 ### Installation
 1. Clone this repository.
 2. Install [Arduino IDE](https://support.arduino.cc/hc/en-us/articles/360019833020-Download-and-install-Arduino-IDE). If your Arduino IDE hangs on startup process, check this [link](https://forum.arduino.cc/t/ide-hangs-on-startup-with-no-error-shown-in-logs/1200013).

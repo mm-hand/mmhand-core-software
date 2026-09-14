@@ -1,2 +1,10 @@
-"""Desktop control package for the mmhand upper-computer application."""
+"""__init__.py - MMHand Desktop 模块契约。
+
+职责：声明 MMHand 上位机 Python 包及稳定公共边界。
+线程：纯模块初始化或工具调用线程执行，不创建后台线程。
+输入：包配置、路径参数或文本流。
+输出：稳定导入边界、路径或过滤后的数据。
+状态所有权：只拥有模块级不可变配置，不拥有设备运行状态。
+禁止依赖：禁止导入 Qt 控件或直接操作下位机通信。
+"""
 

@@ -1,4 +1,12 @@
-"""Command-line entrypoint for the desktop package."""
+"""entry.py - MMHand Desktop 模块契约。
+
+职责：解析上位机命令行参数并选择 CLI 或 Qt 运行模式。
+线程：在进程主线程执行；仅负责创建和关闭 CLI、Qt 及可选 ROS2 生命周期。
+输入：命令行参数、环境变量和启动配置。
+输出：已装配的应用服务、进程退出码和启动诊断。
+状态所有权：只拥有启动期配置与生命周期句柄，不拥有设备运行状态。
+禁止依赖：禁止实现协议解析、控制算法和设备安全判断，统一委托 core/服务层。
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,7 @@ from typing import Optional, Sequence
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
+RAW_IK_SPACES = ["urdf_deg", "urdf_rad"]
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -16,12 +25,28 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional S3 tactile serial port. Other data/control stay on --port.",
     )
-    parser.add_argument("--ros2", action="store_true", help="Enable ROS2 21-angle subscriber.")
+    ros2_group = parser.add_mutually_exclusive_group()
+    ros2_group.add_argument(
+        "--ros2",
+        dest="ros2",
+        action="store_true",
+        help="Enable the ROS2 21-angle input bridge (default).",
+    )
+    ros2_group.add_argument(
+        "--no-ros2",
+        dest="ros2",
+        action="store_false",
+        help="Launch without the ROS2 21-angle input bridge.",
+    )
+    # 上位机默认装配 ROS2 输入桥；无 ROS2 环境可显式使用 --no-ros2。
+    parser.set_defaults(ros2=True)
+    parser.add_argument("--ros2-feedback-mode", choices=["off", "always", "armed"], default="armed")
+    parser.add_argument("--ros2-joint-state-topic", default="/mmhand/joint_states")
     parser.add_argument(
         "--ros2-input",
         choices=["joint_target", "raw_ik"],
         default="joint_target",
-        help="Select ROS2 input path: final joint targets or external MANUS/IK raw targets.",
+        help="Select ROS2 input path: final joint targets or external raw IK targets.",
     )
     parser.add_argument(
         "--ros2-joint-target-topic",
@@ -31,7 +56,13 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ros2-raw-ik-topic",
         default=DEFAULT_RAW_IK_TARGET_TOPIC,
-        help=f"ROS2 Float32MultiArray topic for external MANUS/IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
+        help=f"ROS2 Float32MultiArray topic for external raw IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
+    )
+    parser.add_argument(
+        "--ros2-raw-ik-space",
+        choices=RAW_IK_SPACES,
+        default="urdf_deg",
+        help="Coordinate space used by /raw_ik_target.",
     )
     parser.add_argument(
         "--ros-topic",
@@ -54,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--mode",
         "-m",
-        choices=["monitor", "teleop", "algorithm"],
+        choices=["monitor", "replay"],
         default="monitor",
         help="UI mode to launch.",
     )
@@ -89,6 +120,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
             ros_topic=_resolve_ros_topic(args),
+            ros2_raw_ik_space=args.ros2_raw_ik_space,
+            ros2_feedback_mode=args.ros2_feedback_mode,
+            ros2_joint_state_topic=args.ros2_joint_state_topic,
             auto_start=bool(args.auto_start),
         )
     if args.command == "cli":
@@ -101,6 +135,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
             ros_topic=_resolve_ros_topic(args),
+            ros2_raw_ik_space=args.ros2_raw_ik_space,
+            ros2_feedback_mode=args.ros2_feedback_mode,
+            ros2_joint_state_topic=args.ros2_joint_state_topic,
             auto_start=bool(args.auto_start),
         )
     parser.error(f"unknown command: {args.command}")
