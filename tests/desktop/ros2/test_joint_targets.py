@@ -2,7 +2,11 @@ import math
 from types import SimpleNamespace
 
 from desktop.core.protocol import ENCODER_COUNT
-from desktop.ros2.joint_targets import JointTargetCommandHandler, format_p4_time_frame_id
+from desktop.ros2.joint_targets import (
+    JointTargetCommandHandler,
+    Ros2JointTargetBridge,
+    format_p4_time_frame_id,
+)
 
 
 class FakeBackend:
@@ -43,6 +47,36 @@ def test_ros2_handler_sends_valid_21_degree_targets() -> None:
     assert backend.sent == [
         ([1.5] * ENCODER_COUNT, "ROS2:/mmhand/joint_targets", "urdf_deg", [1.5] * ENCODER_COUNT)
     ]
+
+
+def test_joint_cmd_reports_the_valid_frame_exactly_as_received() -> None:
+    backend = FakeBackend(SimpleNamespace(sent=False, message="not armed"))
+    commands = []
+    handler = JointTargetCommandHandler(
+        backend,
+        topic="/raw_ik_target",
+        command_sink=lambda stamp, values, space: commands.append((stamp, values, space)),
+        warn_interval_s=0.0,
+    )
+    received = [0.01 * index for index in range(ENCODER_COUNT)]
+
+    assert handler.handle_values(received) is False
+
+    assert len(commands) == 1
+    stamp, values, space = commands[0]
+    assert stamp > 0
+    assert values == tuple(received)
+    assert space == "urdf_deg"
+
+
+def test_bridge_output_mode_selects_fixed_publishers() -> None:
+    backend = FakeBackend()
+
+    states = Ros2JointTargetBridge(backend, output="joint_states")
+    command = Ros2JointTargetBridge(backend, output="joint_cmd")
+
+    assert (states.publish_joint_states, states.publish_joint_cmd) == (True, False)
+    assert (command.publish_joint_states, command.publish_joint_cmd) == (False, True)
 
 
 def test_ros2_handler_rejects_wrong_length_and_non_finite_values() -> None:

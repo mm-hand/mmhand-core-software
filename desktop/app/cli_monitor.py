@@ -18,7 +18,7 @@ from desktop.core.comm_layer import choose_serial_port_interactive
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import ENCODER_COUNT, MOTOR_COUNT
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
-from desktop.ros2.raw_ik_target import RawIkTargetBridge
+from desktop.ros2.raw_ik_target import DEFAULT_RAW_IK_TARGET_TOPIC, RawIkTargetBridge
 
 try:
     _colorama = importlib.import_module("colorama")
@@ -303,27 +303,23 @@ def _make_ros2_bridge(
     backend: HandBackend,
     *,
     ros2_input: str,
-    ros_topic: str,
     auto_start: bool,
-    raw_ik_space: str = "urdf_deg",
     feedback_mode: str = "armed",
-    joint_state_topic: str = "/mmhand/joint_states",
+    output: str = "all",
 ):
     if ros2_input == "raw_ik":
         return RawIkTargetBridge(
             backend,
-            topic=ros_topic,
             auto_start=auto_start,
-            input_space=raw_ik_space,
             feedback_mode=feedback_mode,
-            state_topic=joint_state_topic,
+            output=output,
         )
     return Ros2JointTargetBridge(
         backend,
-        topic=ros_topic,
+        topic=None if ros2_input == "off" else DEFAULT_JOINT_TARGET_TOPIC,
         auto_start=auto_start,
         feedback_mode=feedback_mode,
-        state_topic=joint_state_topic,
+        output=output,
     )
 
 
@@ -334,11 +330,9 @@ def run_cli_monitor(
     no_plot: bool = False,
     ros2_enabled: bool = True,
     ros2_input: str = "joint_target",
-    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+    ros2_output: str = "all",
     auto_start: bool = False,
-    ros2_raw_ik_space: str = "urdf_deg",
     ros2_feedback_mode: str = "armed",
-    ros2_joint_state_topic: str = "/mmhand/joint_states",
     backend: Optional[HandBackend] = None,
     key_reader_factory: Callable[[], _KeyReader] = _KeyReader,
     max_iterations: Optional[int] = None,
@@ -375,19 +369,22 @@ def run_cli_monitor(
 
     ros_bridge = None
     ros_status = "OFF"
-    if ros2_enabled:
+    if ros2_enabled and (ros2_input != "off" or ros2_output != "off"):
         ros_bridge = _make_ros2_bridge(
             backend,
             ros2_input=ros2_input,
-            ros_topic=ros_topic,
             auto_start=auto_start,
-            raw_ik_space=ros2_raw_ik_space,
             feedback_mode=ros2_feedback_mode,
-            joint_state_topic=ros2_joint_state_topic,
+            output=ros2_output,
         )
         try:
             ros_bridge.start()
-            ros_status = f"ON {ros2_input} {ros_topic}"
+            input_topic = {
+                "joint_target": DEFAULT_JOINT_TARGET_TOPIC,
+                "raw_ik": DEFAULT_RAW_IK_TARGET_TOPIC,
+                "off": "off",
+            }[ros2_input]
+            ros_status = f"ON input={input_topic} output={ros2_output}"
             if auto_start:
                 print("Controller auto-started; ROS2 input remains unauthorized")
         except Exception as exc:

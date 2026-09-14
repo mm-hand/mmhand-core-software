@@ -169,33 +169,33 @@ CLI + ROS2：
 python -m desktop cli --port COMx
 ```
 
-自定义 topic：
+选择 raw IK 输入：
 
 ```bash
-python -m desktop cli --port COMx --ros2 --ros-topic /mmhand/joint_targets
+python -m desktop cli --port COMx --ros2-input raw_ik
 ```
 
-默认同时把 P4 实测映射角发布到 `/mmhand/joint_states`。完整 HORA 配置：
+所有话题名固定且唯一，启动时无需传话题名。默认订阅 joint target，并同时发布
+关节反馈和收到的命令，因此完整的常用启动命令是：
 
 ```bash
-python -m desktop ui --mode monitor --port /dev/ttyUSB0 \
-  --ros2-input joint_target \
-  --ros2-feedback-mode armed \
-  --ros2-joint-state-topic /mmhand/joint_states \
-  --ros2-joint-target-topic /mmhand/joint_targets
+python -m desktop ui --mode monitor --port /dev/ttyUSB0
 ```
 
-`--ros2-input joint_target|raw_ik` 只创建所选目标 topic 的一份订阅。
-`--ros2-feedback-mode` 支持：
+`--ros2-input off|joint_target|raw_ik` 选择不订阅、订阅最终目标或订阅 raw IK；
+`--ros2-output off|joint_states|joint_cmd|all` 选择不发布、只发布反馈、只发布
+收到的命令或同时发布两者。默认分别是 `joint_target` 和 `all`。
+当输出包含 `joint_states` 时，`--ros2-feedback-mode` 支持：
 
 - `armed`（默认）：现有 `ROS2 INPUT` 同时控制目标下发与反馈发布。
 - `always`：持续发布反馈用于诊断；关闭按钮不会使 HORA 超时重置。
-- `off`：不发布关节反馈，仅保留目标输入。
+
+不需要发布关节反馈时使用 `--ros2-output joint_cmd` 或 `--ros2-output off`。
 
 自动 start：
 
 ```bash
-python -m desktop cli --port COMx --ros2 --auto-start
+python -m desktop cli -p COMx --auto-start
 ```
 
 `--auto-start` 只启动普通控制器，不会自动放行遥操。GUI 中还需点击
@@ -212,8 +212,12 @@ ROS2 消息约定：
 
 - 目标：`/mmhand/joint_targets`，`std_msgs.msg.Float32MultiArray`，21 个
   J00-J20 URDF degree（raw-IK 可由 CLI 显式选 radian）。
+- raw IK：`/raw_ik_target`，`std_msgs.msg.Float32MultiArray`，21 个 J00-J20
+  URDF degree；弧度到度的转换由遥操作发布端负责。
 - 反馈：`/mmhand/joint_states`，`sensor_msgs.msg.JointState`，名称 J00-J20，
   `position` 为 21 个 P4 实测 URDF radian。
+- 命令镜像：`/mmhand/joint_cmd`，`sensor_msgs.msg.JointState`，名称 J00-J20；
+  `position` 保留上位机实际收到的有效输入值，输入空间写在 `header.frame_id`。
 - 反馈 `header.stamp` 是该映射角帧到达上位机的系统时间；其他遥测不会刷新。
 - 反馈 `header.frame_id` 使用 `mmhand:p4_time_ms=<uint32>`，携带同一映射角包
   自带的 P4 `millis()`。它是 P4 开机后的回绕毫秒计数，只用于跨日志关联，

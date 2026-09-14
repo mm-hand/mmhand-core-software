@@ -54,7 +54,7 @@ desktop 提供两条 ROS2 输入：
 | final joint target | `/mmhand/joint_targets` | `urdf_deg` | 已经是当前 URDF 21 关节目标 |
 | raw IK | `/raw_ik_target` | `urdf_deg` | 外部 IK 或 Wuji 输出 |
 
-`/raw_ik_target` 仅接受 `urdf_deg` 或 `urdf_rad`。坐标空间设错可能出现数值长度正常但方向/零点错误，这是比 ROS2 是否连通更关键的检查。
+`/raw_ik_target` 固定接受 `urdf_deg`。遥操作或其他 IK 发布端必须在发布前完成弧度到度的转换；单位错误可能出现数值长度正常但动作幅度错误。
 
 订阅节点分别为 `mmhand_desktop_joint_target_subscriber` 和 `mmhand_desktop_raw_ik_target_subscriber`，均使用 `Float32MultiArray`、QoS depth 10，并在后台线程 spin。`adapt_joint_targets()` 负责长度、finite 和坐标变换；随后统一调用 `HandBackend.send_ros2_joint_targets()`，不能直接调用普通 send。
 

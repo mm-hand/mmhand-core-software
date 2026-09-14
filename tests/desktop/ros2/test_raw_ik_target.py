@@ -40,21 +40,13 @@ def test_raw_ik_bridge_handler_sends_directly_to_backend() -> None:
     ]
 
 
-def test_raw_ik_bridge_can_accept_active_urdf_degrees_explicitly() -> None:
+def test_raw_ik_bridge_is_fixed_to_active_urdf_degrees() -> None:
     backend = FakeBackend()
-    bridge = RawIkTargetBridge(backend, input_space=URDF_DEG)
+    bridge = RawIkTargetBridge(backend)
     raw = [3.0] * ENCODER_COUNT
 
     assert bridge.handler.handle_values(raw) is True
     assert backend.sent == [(raw, "ROS2:/raw_ik_target", URDF_DEG, raw)]
-
-
-def test_raw_ik_bridge_rejects_retired_legacy_space_without_sending() -> None:
-    backend = FakeBackend()
-    bridge = RawIkTargetBridge(backend, input_space="legacy_calibrated_deg")
-
-    assert bridge.handler.handle_values([3.0] * ENCODER_COUNT) is False
-    assert backend.sent == []
 
 
 def test_raw_ik_bridge_stop_revokes_output_even_before_start() -> None:

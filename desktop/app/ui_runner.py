@@ -20,7 +20,7 @@ from typing import Optional
 from desktop.core.hand_backend import HandBackend
 from desktop.core.session_log import log_session
 from desktop.ros2.joint_targets import DEFAULT_JOINT_TARGET_TOPIC, Ros2JointTargetBridge
-from desktop.ros2.raw_ik_target import RawIkTargetBridge
+from desktop.ros2.raw_ik_target import DEFAULT_RAW_IK_TARGET_TOPIC, RawIkTargetBridge
 
 
 def _schedule_ros2_warning(message: str):
@@ -117,27 +117,23 @@ def _make_ros2_bridge(
     backend: HandBackend,
     *,
     ros2_input: str,
-    ros_topic: str,
     auto_start: bool,
-    raw_ik_space: str = "urdf_deg",
     feedback_mode: str = "armed",
-    joint_state_topic: str = "/mmhand/joint_states",
+    output: str = "all",
 ):
     if ros2_input == "raw_ik":
         return RawIkTargetBridge(
             backend,
-            topic=ros_topic,
             auto_start=auto_start,
-            input_space=raw_ik_space,
             feedback_mode=feedback_mode,
-            state_topic=joint_state_topic,
+            output=output,
         )
     return Ros2JointTargetBridge(
         backend,
-        topic=ros_topic,
+        topic=None if ros2_input == "off" else DEFAULT_JOINT_TARGET_TOPIC,
         auto_start=auto_start,
         feedback_mode=feedback_mode,
-        state_topic=joint_state_topic,
+        output=output,
     )
 
 
@@ -181,11 +177,9 @@ def run_ui(
     tactile_port: Optional[str] = None,
     ros2_enabled: bool = True,
     ros2_input: str = "joint_target",
-    ros_topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+    ros2_output: str = "all",
     auto_start: bool = False,
-    ros2_raw_ik_space: str = "urdf_deg",
     ros2_feedback_mode: str = "armed",
-    ros2_joint_state_topic: str = "/mmhand/joint_states",
     backend: Optional[HandBackend] = None,
 ) -> int:
     _configure_gui_diagnostics()
@@ -200,19 +194,22 @@ def run_ui(
 
     bridge = None
     _warning_app = None  # Keep QApplication alive until HandGUI owns it.
-    if ros2_enabled:
+    if ros2_enabled and (ros2_input != "off" or ros2_output != "off"):
         bridge = _make_ros2_bridge(
             backend,
             ros2_input=ros2_input,
-            ros_topic=ros_topic,
             auto_start=auto_start,
-            raw_ik_space=ros2_raw_ik_space,
             feedback_mode=ros2_feedback_mode,
-            joint_state_topic=ros2_joint_state_topic,
+            output=ros2_output,
         )
         try:
             bridge.start()
-            print(f"ROS2 {ros2_input} input enabled on {ros_topic}")
+            input_topic = {
+                "joint_target": DEFAULT_JOINT_TARGET_TOPIC,
+                "raw_ik": DEFAULT_RAW_IK_TARGET_TOPIC,
+                "off": "off",
+            }[ros2_input]
+            print(f"ROS2 input={input_topic} output={ros2_output}")
             if auto_start:
                 # --auto-start 只启动普通控制器，不授予外部 ROS2 输出权限。
                 # ROS2 可继续接收和刷新最新帧，用户必须显式点击 ROS2 INPUT。
@@ -233,7 +230,11 @@ def run_ui(
             gui=True,
             ros2_enabled=bridge is not None,
             ros2_input=ros2_input,
-            ros_topic=ros_topic,
+            ros_topic={
+                "joint_target": DEFAULT_JOINT_TARGET_TOPIC,
+                "raw_ik": DEFAULT_RAW_IK_TARGET_TOPIC,
+                "off": "",
+            }[ros2_input],
         )
     finally:
         if bridge is not None:

@@ -11,10 +11,7 @@
 ```bash
 cd /home/mmhand/hand_ws/mh
 source /opt/ros/jazzy/setup.bash
-.venv/bin/python -m desktop ui --mode monitor --port /dev/ttyUSB0 \
-  --ros2-input joint_target --ros2-feedback-mode armed \
-  --ros2-joint-state-topic /mmhand/joint_states \
-  --ros2-joint-target-topic /mmhand/joint_targets
+.venv/bin/python -m desktop ui --mode monitor --port /dev/ttyUSB0
 ```
 
 另一个终端提前启动 HORA：
@@ -46,6 +43,7 @@ ros2 topic info -v /mmhand/joint_states
 ros2 topic hz /mmhand/joint_states
 ros2 topic echo /mmhand/joint_states --once
 ros2 topic info -v /mmhand/joint_targets
+ros2 topic echo /mmhand/joint_cmd --once
 ```
 
 `armed` 模式且按钮关闭时，看不到 `/mmhand/joint_states` 数据是预期行为。

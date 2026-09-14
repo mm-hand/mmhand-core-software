@@ -13,9 +13,8 @@ from __future__ import annotations
 import argparse
 from typing import Optional, Sequence
 
-DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
-DEFAULT_RAW_IK_TARGET_TOPIC = "/raw_ik_target"
-RAW_IK_SPACES = ["urdf_deg", "urdf_rad"]
+ROS2_INPUTS = ["off", "joint_target", "raw_ik"]
+ROS2_OUTPUTS = ["off", "joint_states", "joint_cmd", "all"]
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -30,44 +29,28 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--ros2",
         dest="ros2",
         action="store_true",
-        help="Enable the ROS2 21-angle input bridge (default).",
+        help="Enable the selected ROS2 input/output bridge (default).",
     )
     ros2_group.add_argument(
         "--no-ros2",
         dest="ros2",
         action="store_false",
-        help="Launch without the ROS2 21-angle input bridge.",
+        help="Launch without any ROS2 subscription or publisher.",
     )
     # 上位机默认装配 ROS2 输入桥；无 ROS2 环境可显式使用 --no-ros2。
     parser.set_defaults(ros2=True)
-    parser.add_argument("--ros2-feedback-mode", choices=["off", "always", "armed"], default="armed")
-    parser.add_argument("--ros2-joint-state-topic", default="/mmhand/joint_states")
+    parser.add_argument("--ros2-feedback-mode", choices=["always", "armed"], default="armed")
     parser.add_argument(
         "--ros2-input",
-        choices=["joint_target", "raw_ik"],
+        choices=ROS2_INPUTS,
         default="joint_target",
-        help="Select ROS2 input path: final joint targets or external raw IK targets.",
+        help="Select the fixed ROS2 input, or disable subscription (default: joint_target).",
     )
     parser.add_argument(
-        "--ros2-joint-target-topic",
-        default=DEFAULT_JOINT_TARGET_TOPIC,
-        help=f"ROS2 Float32MultiArray topic for final 21 joint targets (default: {DEFAULT_JOINT_TARGET_TOPIC}).",
-    )
-    parser.add_argument(
-        "--ros2-raw-ik-topic",
-        default=DEFAULT_RAW_IK_TARGET_TOPIC,
-        help=f"ROS2 Float32MultiArray topic for external raw IK 21-angle output (default: {DEFAULT_RAW_IK_TARGET_TOPIC}).",
-    )
-    parser.add_argument(
-        "--ros2-raw-ik-space",
-        choices=RAW_IK_SPACES,
-        default="urdf_deg",
-        help="Coordinate space used by /raw_ik_target.",
-    )
-    parser.add_argument(
-        "--ros-topic",
-        default=None,
-        help="Legacy ROS2 topic override for the selected --ros2-input.",
+        "--ros2-output",
+        choices=ROS2_OUTPUTS,
+        default="all",
+        help="Publish fixed joint_states, joint_cmd, both (all), or neither (off).",
     )
     parser.add_argument(
         "--auto-start",
@@ -96,14 +79,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_ros_topic(args: argparse.Namespace) -> str:
-    if args.ros_topic:
-        return str(args.ros_topic)
-    if args.ros2_input == "raw_ik":
-        return str(args.ros2_raw_ik_topic)
-    return str(args.ros2_joint_target_topic)
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -119,10 +94,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             tactile_port=args.tactile_port,
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
-            ros_topic=_resolve_ros_topic(args),
-            ros2_raw_ik_space=args.ros2_raw_ik_space,
+            ros2_output=args.ros2_output,
             ros2_feedback_mode=args.ros2_feedback_mode,
-            ros2_joint_state_topic=args.ros2_joint_state_topic,
             auto_start=bool(args.auto_start),
         )
     if args.command == "cli":
@@ -134,10 +107,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             no_plot=bool(args.no_plot),
             ros2_enabled=bool(args.ros2),
             ros2_input=args.ros2_input,
-            ros_topic=_resolve_ros_topic(args),
-            ros2_raw_ik_space=args.ros2_raw_ik_space,
+            ros2_output=args.ros2_output,
             ros2_feedback_mode=args.ros2_feedback_mode,
-            ros2_joint_state_topic=args.ros2_joint_state_topic,
             auto_start=bool(args.auto_start),
         )
     parser.error(f"unknown command: {args.command}")
