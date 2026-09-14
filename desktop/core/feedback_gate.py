@@ -3,7 +3,7 @@
 职责：按 off/always/armed 模式筛选新鲜 P4 关节反馈并执行 300 ms 重置窗口。
 线程：由 ROS2 executor 定时器调用；HandBackend 使用同一把 ROS2 锁串行化访问。
 输入：HandModel 实测映射角、主机接收时间及 ROS2 INPUT 授权状态。
-输出：可发布的系统时间戳和 21 个 URDF 弧度角，或丢弃当前帧。
+输出：可发布的系统时间戳、同帧 P4 millis 和 21 个 URDF 弧度角，或丢弃当前帧。
 状态所有权：拥有冷却截止时间、发布高水位和 ready 状态，不拥有设备状态。
 禁止依赖：禁止依赖 Qt、rclpy、串口或直接发送任何硬件命令。
 """
@@ -41,13 +41,19 @@ class FeedbackGate:
                 return None
         age = now - state.joint_state_host_rx_monotonic_ns
         stamp = state.joint_state_host_rx_ns
+        p4_time_ms = state.joint_state_p4_time_ms
         values = state.angles
+        try:
+            p4_time_ms = int(p4_time_ms)
+        except (TypeError, ValueError, OverflowError):
+            return None
         if (not state.joint_state_valid or not 0 <= age <= 200_000_000
                 or stamp <= self.last_stamp_ns or len(values) != 21
+                or not 0 <= p4_time_ms <= 0xFFFFFFFF
                 or any(e.angle_error for e in state.encoders)
                 or not all(math.isfinite(x) for x in values)):
             return None
-        return stamp, [math.radians(x) for x in values]
+        return stamp, [math.radians(x) for x in values], p4_time_ms
 
     def published(self, stamp):
         self.last_stamp_ns = stamp

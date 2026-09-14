@@ -19,6 +19,15 @@ from desktop.core.hand_backend import HandBackend
 from desktop.core.joint_target_adapter import URDF_DEG, adapt_joint_targets
 
 DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
+P4_TIME_FRAME_ID_PREFIX = "mmhand:p4_time_ms="
+
+
+def format_p4_time_frame_id(p4_time_ms: int) -> str:
+    """Encode the mapped-angle packet's P4 uint32 millis in JointState metadata."""
+    value = int(p4_time_ms)
+    if value != p4_time_ms or not 0 <= value <= 0xFFFFFFFF:
+        raise ValueError("P4 time must be a uint32 millisecond value")
+    return f"{P4_TIME_FRAME_ID_PREFIX}{value}"
 
 
 @dataclass(frozen=True)
@@ -153,10 +162,11 @@ class Ros2JointTargetBridge:
                         QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                                    durability=DurabilityPolicy.VOLATILE))
 
-                    def publish(stamp_ns, positions):
+                    def publish(stamp_ns, positions, p4_time_ms):
                         msg = JointState()
                         msg.header.stamp.sec = stamp_ns // 1_000_000_000
                         msg.header.stamp.nanosec = stamp_ns % 1_000_000_000
+                        msg.header.frame_id = format_p4_time_frame_id(p4_time_ms)
                         msg.name = [f"J{i:02d}" for i in range(21)]
                         msg.position = positions
                         publisher.publish(msg)

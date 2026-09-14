@@ -21,6 +21,7 @@ def make_state(clock: FakeClock, *, sequence: int = 1, valid: bool = True):
         encoders=[SimpleNamespace(angle_error=False) for _ in range(21)],
         joint_state_valid=valid,
         joint_state_sequence=sequence,
+        joint_state_p4_time_ms=12_000 + sequence,
         joint_state_host_rx_ns=1_700_000_000_000_000_000 + sequence,
         joint_state_host_rx_monotonic_ns=clock.now_ns,
     )
@@ -40,9 +41,10 @@ def test_armed_gate_waits_300_ms_then_requires_a_post_cooldown_frame() -> None:
 
     clock.advance_ms(1)
     fresh_state = make_state(clock, sequence=2)
-    stamp, positions = gate.next_sample(fresh_state, requested=True)
+    stamp, positions, p4_time_ms = gate.next_sample(fresh_state, requested=True)
     assert stamp == fresh_state.joint_state_host_rx_ns
     assert positions == [math.radians(float(i)) for i in range(21)]
+    assert p4_time_ms == fresh_state.joint_state_p4_time_ms
 
 
 def test_reopen_waits_from_later_of_disable_and_last_publish() -> None:
@@ -93,3 +95,12 @@ def test_off_mode_never_publishes() -> None:
     gate = FeedbackGate("off", clock=clock)
     clock.advance_ms(500)
     assert gate.next_sample(make_state(clock), requested=True) is None
+
+
+def test_gate_rejects_feedback_without_same_frame_p4_time() -> None:
+    clock = FakeClock()
+    gate = FeedbackGate("always", clock=clock)
+    state = make_state(clock)
+    state.joint_state_p4_time_ms = None
+
+    assert gate.next_sample(state, requested=False) is None

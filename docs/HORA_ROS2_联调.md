@@ -50,3 +50,9 @@ ros2 topic info -v /mmhand/joint_targets
 
 `armed` 模式且按钮关闭时，看不到 `/mmhand/joint_states` 数据是预期行为。
 `always` 仅用于诊断，因为它会让 HORA 持续推理，按钮关闭也不会触发历史重置。
+
+`JointState.header.stamp` 是映射角包到达上位机的系统时间，供 HORA 判断
+200 ms 新鲜度。`JointState.header.frame_id` 为
+`mmhand:p4_time_ms=<uint32>`，其中数值是同一映射角包携带的 P4 开机后
+`millis()`；该值会约 49.7 天回绕，只用于诊断和上下位机日志关联。
+当前没有做 P4 到 ROS 时钟映射，禁止把两个时间戳直接相减。

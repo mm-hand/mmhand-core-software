@@ -2,7 +2,7 @@ import math
 from types import SimpleNamespace
 
 from desktop.core.protocol import ENCODER_COUNT
-from desktop.ros2.joint_targets import JointTargetCommandHandler
+from desktop.ros2.joint_targets import JointTargetCommandHandler, format_p4_time_frame_id
 
 
 class FakeBackend:
@@ -12,7 +12,6 @@ class FakeBackend:
         self.starts = 0
         self.result = result
         self.armed = True
-
     def set_control_mode(self, mode) -> None:
         self.control_modes.append(mode)
 
@@ -26,6 +25,11 @@ class FakeBackend:
     def send_ros2_joint_targets(self, targets, *, source="", input_space="", raw_targets=None):
         self.sent.append((list(targets), source, input_space, list(raw_targets or [])))
         return self.result
+
+
+def test_p4_time_uses_parseable_joint_state_frame_id_metadata() -> None:
+    assert format_p4_time_frame_id(0) == "mmhand:p4_time_ms=0"
+    assert format_p4_time_frame_id(0xFFFFFFFF) == "mmhand:p4_time_ms=4294967295"
 
 
 def test_ros2_handler_sends_valid_21_degree_targets() -> None:

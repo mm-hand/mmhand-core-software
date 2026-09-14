@@ -63,8 +63,15 @@ feedback_age = HORA 当前系统时间 - header.stamp
 若跨机器部署，必须先同步系统时钟。
 
 每个关节角状态还独立保存 P4 来源时间、上位机单调接收时间和帧序号用于内部
-诊断与新鲜度判断；其他遥测包和 UI 刷新不会更新 `header.stamp`。P4 来源时间
-当前不映射到 ROS 时钟。
+诊断与新鲜度判断；其他遥测包和 UI 刷新不会更新 `header.stamp`。同一映射角包
+携带的 P4 开机后 `millis()` 写入 `header.frame_id`：
+
+```text
+mmhand:p4_time_ms=<uint32>
+```
+
+该值约 49.7 天回绕，只用于上下位机日志关联。它没有映射到 ROS 时钟，不能与
+`header.stamp` 直接相减；这里的 `frame_id` 是诊断元数据，不表示 TF 坐标系。
 
 以下反馈不会发布：
 
@@ -136,3 +143,26 @@ ros2 topic hz /mmhand/joint_targets
 `/mmhand/joint_states` 数据是预期行为。
 
 更完整的联调步骤见 `docs/HORA_ROS2_联调.md`。
+
+## 切换到 mmhand_teleop 并持续发布实测关节角
+
+停止 HORA 节点并关闭原上位机进程后，以 `raw_ik` 输入重新启动。`always` 模式
+会持续发布 `/mmhand/joint_states`；遥操作目标仍需在界面中点击 `ROS2 INPUT`
+才会下发。
+
+```bash
+cd /home/mmhand/hand_ws/mh
+source /opt/ros/jazzy/setup.bash
+
+export ROS_DOMAIN_ID=42
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+.venv/bin/python -m desktop ui \
+  --mode monitor \
+  --port /dev/ttyUSB0 \
+  --ros2-input raw_ik \
+  --ros2-raw-ik-topic /raw_ik_target \
+  --ros2-raw-ik-space urdf_deg \
+  --ros2-feedback-mode always \
+  --ros2-joint-state-topic /mmhand/joint_states
+```

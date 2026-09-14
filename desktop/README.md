@@ -215,7 +215,9 @@ ROS2 消息约定：
 - 反馈：`/mmhand/joint_states`，`sensor_msgs.msg.JointState`，名称 J00-J20，
   `position` 为 21 个 P4 实测 URDF radian。
 - 反馈 `header.stamp` 是该映射角帧到达上位机的系统时间；其他遥测不会刷新。
-  P4 `millis()` 只保留诊断，不做时钟映射。
+- 反馈 `header.frame_id` 使用 `mmhand:p4_time_ms=<uint32>`，携带同一映射角包
+  自带的 P4 `millis()`。它是 P4 开机后的回绕毫秒计数，只用于跨日志关联，
+  不是 TF 坐标系名称，也不能直接与 `header.stamp` 相减。当前不做时钟映射。
 - 不完整、无效、重复或超过 200 ms 的反馈不发布；错误长度、NaN、Inf 目标拒收。
 
 测试发布脚本：
