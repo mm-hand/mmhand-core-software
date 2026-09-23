@@ -1,7 +1,7 @@
 /**
  * @file ControlTraceTypes.h
  * @brief 定义使用同一 P4 单调时钟采集的关节控制跟踪快照。
- * @details 订阅时逐周期非阻塞入队，HostComm 批量发送；不得反向阻塞控制周期。
+ * @details 订阅时覆盖最新快照，HostComm 以固定周期采样；不得反向阻塞控制周期。
  */
 #ifndef MMHAND_CONTROL_TRACE_TYPES_H
 #define MMHAND_CONTROL_TRACE_TYPES_H

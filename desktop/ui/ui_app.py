@@ -1403,6 +1403,7 @@ class HandGUI(QtWidgets.QMainWindow):
         input_space: str = "urdf_deg",
         raw_targets=None,
         command_joint_mask=None,
+        request_feedback_start=None,
     ):
         guard = getattr(self.control_panel, "feedback_command_allowed", None)
         if callable(guard) and not guard(source=source, show_status=True):
@@ -1416,6 +1417,7 @@ class HandGUI(QtWidgets.QMainWindow):
             input_space=input_space,
             raw_targets=raw_targets,
             command_joint_mask=command_joint_mask,
+            request_feedback_start=request_feedback_start,
         )
         if result.message:
             self._set_status(result.message)

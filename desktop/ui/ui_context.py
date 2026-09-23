@@ -79,6 +79,7 @@ class HandGuiContext:
         input_space: str = "urdf_deg",
         raw_targets=None,
         command_joint_mask=None,
+        request_feedback_start=None,
     ):
         return self._app.send_joint_targets(
             angles,
@@ -87,6 +88,7 @@ class HandGuiContext:
             input_space=input_space,
             raw_targets=raw_targets,
             command_joint_mask=command_joint_mask,
+            request_feedback_start=request_feedback_start,
         )
 
     def start_recording_for_test(self, reason: str = "test") -> None:

@@ -163,6 +163,30 @@ def test_backend_clamps_active_joint_to_static_urdf_workspace():
     assert controller.run_requests == 1
 
 
+def test_backend_can_start_feedback_once_then_send_live_targets_only():
+    state = _ready_state()
+    controller = _Controller(state)
+    backend = HandBackend(controller=controller)
+    targets = [10.0] * ENCODER_COUNT
+
+    first = backend.send_joint_targets(
+        targets,
+        source="Test",
+        live=True,
+        request_feedback_start=True,
+    )
+    second = backend.send_joint_targets(
+        targets,
+        source="Test",
+        live=True,
+        request_feedback_start=False,
+    )
+
+    assert first.sent and second.sent
+    assert controller.run_requests == 1
+    assert [entry[0] for entry in controller.sent] == ["live", "live"]
+
+
 def test_backend_blocks_active_joint_without_valid_auto():
     state = _ready_state()
     state.auto_calibration_valid_bitmap = 0

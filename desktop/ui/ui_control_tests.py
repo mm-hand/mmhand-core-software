@@ -168,7 +168,14 @@ class ManualTestPanelMixin:
             return
         self._test_active_rows = active
         self._test_hold_s = max(0.0, float(self.test_hold_spin.value()))
+        self._test_duration_s = float(self.test_duration_spin.value())
+        if not np.isfinite(self._test_duration_s) or self._test_duration_s <= 0.0:
+            self._warn("Test Config", "Sine Duration(s) must be finite and > 0.")
+            self.context.stop_recording_for_test("invalid sine duration")
+            self._test_active_rows = []
+            return
         self._test_running = True
+        self._test_feedback_start_pending = True
         self._test_t0 = time.time()
         self._set_test_button_states()
         self.context.emit_action("Test started")
@@ -179,6 +186,7 @@ class ManualTestPanelMixin:
         """Handle the stop test event."""
         was_running = self._test_running
         self._test_running = False
+        self._test_feedback_start_pending = False
         self._test_timer.stop()
         self._test_active_rows = []
         self._set_test_button_states()
@@ -240,6 +248,7 @@ class ManualTestPanelMixin:
         self._ff_test_t_accum = 0.0
         self._ff_test_last_ts = time.time()
         self._ff_test_running = True
+        self._test_feedback_start_pending = True
         self._set_test_button_states()
         self.context.emit_action(f"Feedforward Test started on J{self._ff_test_joint_idx:02d}")
         self._ff_test_tick()
@@ -249,6 +258,7 @@ class ManualTestPanelMixin:
         """Handle the stop ff test event."""
         was_running = self._ff_test_running
         self._ff_test_running = False
+        self._test_feedback_start_pending = False
         self._ff_test_timer.stop()
         self._ff_test_targets = []
         self._ff_test_idx = 0
@@ -271,6 +281,11 @@ class ManualTestPanelMixin:
             self._on_stop_test("stopped: P4 controller is no longer controllable")
             return
         elapsed = max(0.0, time.time() - self._test_t0)
+        if elapsed >= self._test_hold_s + self._test_duration_s:
+            self._on_stop_test(
+                f"completed after {self._test_duration_s:g} s sine duration"
+            )
+            return
         angles = self.resolved_joint_targets()
         for joint_idx, lo, hi, freq, phase_deg in self._test_active_rows:
             center = 0.5 * (lo + hi)
@@ -284,7 +299,15 @@ class ManualTestPanelMixin:
             self._set_joint_target_widget(joint_idx, angles[joint_idx])
             self._joint_target_user_set[joint_idx] = True
         try:
-            self.context.send_joint_targets(angles, source="Test", live=True)
+            request_start = self._test_feedback_start_pending
+            result = self.context.send_joint_targets(
+                angles,
+                source="Test",
+                live=True,
+                request_feedback_start=request_start,
+            )
+            if request_start and bool(getattr(result, "sent", result)):
+                self._test_feedback_start_pending = False
         except Exception as exc:
             self._on_stop_test(f"stopped by send error: {exc}")
 
@@ -314,7 +337,15 @@ class ManualTestPanelMixin:
         self._set_joint_target_widget(self._ff_test_joint_idx, target)
         self._joint_target_user_set[self._ff_test_joint_idx] = True
         try:
-            self.context.send_joint_targets(angles, source="Feedforward Test", live=True)
+            request_start = self._test_feedback_start_pending
+            result = self.context.send_joint_targets(
+                angles,
+                source="Feedforward Test",
+                live=True,
+                request_feedback_start=request_start,
+            )
+            if request_start and bool(getattr(result, "sent", result)):
+                self._test_feedback_start_pending = False
         except Exception as exc:
             self._on_stop_ff_test(f"stopped by send error: {exc}")
 
@@ -385,6 +416,7 @@ class ManualTestPanelMixin:
         self._tri_test_joint_idx, self._tri_test_min_deg, self._tri_test_max_deg, self._tri_test_freq_hz = validated
         self._tri_test_t0 = time.time()
         self._tri_test_running = True
+        self._test_feedback_start_pending = True
         self._set_test_button_states()
         self.context.emit_action(f"Triangle Wave Test started on J{self._tri_test_joint_idx:02d}")
         self._tri_test_tick()
@@ -393,6 +425,7 @@ class ManualTestPanelMixin:
     def _on_stop_tri_test(self, reason: str = "stopped by triangle test", update_status: bool = True) -> None:
         was_running = self._tri_test_running
         self._tri_test_running = False
+        self._test_feedback_start_pending = False
         self._tri_test_timer.stop()
         self._tri_test_t0 = 0.0
         self._set_test_button_states()
@@ -421,6 +454,14 @@ class ManualTestPanelMixin:
         self._set_joint_target_widget(self._tri_test_joint_idx, target)
         self._joint_target_user_set[self._tri_test_joint_idx] = True
         try:
-            self.context.send_joint_targets(angles, source="Triangle Wave Test", live=True)
+            request_start = self._test_feedback_start_pending
+            result = self.context.send_joint_targets(
+                angles,
+                source="Triangle Wave Test",
+                live=True,
+                request_feedback_start=request_start,
+            )
+            if request_start and bool(getattr(result, "sent", result)):
+                self._test_feedback_start_pending = False
         except Exception as exc:
             self._on_stop_tri_test(f"stopped by send error: {exc}")

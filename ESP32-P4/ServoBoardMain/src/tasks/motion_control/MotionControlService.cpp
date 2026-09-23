@@ -1997,7 +1997,9 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                     }
                 }
             }
-            if (!sharedData->controlTraceQueue.send(trace)) ++runtime.controlTraceDropped;
+            // 诊断流按固定 20 Hz 观察控制状态，不积压 100 Hz 历史帧。
+            // 深度 1 邮箱覆盖旧快照不会阻塞实时控制，也不会制造串口突发。
+            sharedData->controlTraceQueue.overwrite(trace);
         }
 
         if (directRunningState &&

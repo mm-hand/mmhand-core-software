@@ -406,6 +406,7 @@ class HandBackend:
         raw_targets: Optional[Iterable[float]] = None,
         command_joint_mask: Optional[int] = None,
         motion_token: Optional[int] = None,
+        request_feedback_start: Optional[bool] = None,
     ) -> JointCommandResult:
         """串行化Replay令牌检查与实际入队，杜绝STOP之后补入一帧旧目标。"""
         with self._replay_motion_lock:
@@ -417,6 +418,7 @@ class HandBackend:
                 raw_targets=raw_targets,
                 command_joint_mask=command_joint_mask,
                 motion_token=motion_token,
+                request_feedback_start=request_feedback_start,
             )
 
     def _send_joint_targets_locked(
@@ -429,6 +431,7 @@ class HandBackend:
         raw_targets: Optional[Iterable[float]] = None,
         command_joint_mask: Optional[int] = None,
         motion_token: Optional[int] = None,
+        request_feedback_start: Optional[bool] = None,
     ) -> JointCommandResult:
         from desktop.core.joint_target_adapter import active_mapping_identity
 
@@ -494,7 +497,11 @@ class HandBackend:
             )
             return result
 
-        start_feedback = bool(source and not str(source).startswith("Hold"))
+        start_feedback = (
+            bool(source and not str(source).startswith("Hold"))
+            if request_feedback_start is None
+            else bool(request_feedback_start)
+        )
         if start_feedback:
             sent = self._controller.send_target_angles_and_run_feedback(
                 guarded,

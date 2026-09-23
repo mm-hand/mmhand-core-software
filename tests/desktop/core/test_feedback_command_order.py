@@ -30,6 +30,28 @@ def test_latest_paired_joint_command_replaces_stale_target_and_run_request():
     assert list(comm.tx_queue.queue) == [command]
 
 
+def test_live_target_preserves_pending_atomic_feedback_start():
+    comm = LowerComputerComm("")
+    start = ("joint_target_run", [1.0] * 21)
+    comm.tx_queue.put_nowait(start)
+    latest = ("angle_live", [2.0] * 21)
+
+    assert comm._enqueue_latest_high_rate(latest) is True
+    assert list(comm.tx_queue.queue) == [start, latest]
+
+
+def test_new_live_target_replaces_only_live_frame_after_pending_start():
+    comm = LowerComputerComm("")
+    start = ("joint_target_run", [1.0] * 21)
+    stale = ("angle_live", [2.0] * 21)
+    latest = ("angle_live", [3.0] * 21)
+    comm.tx_queue.put_nowait(start)
+    comm.tx_queue.put_nowait(stale)
+
+    assert comm._enqueue_latest_high_rate(latest) is True
+    assert list(comm.tx_queue.queue) == [start, latest]
+
+
 def test_latest_masked_joint_command_replaces_stale_full_hand_command():
     comm = LowerComputerComm("")
     comm.tx_queue.put_nowait(("joint_target_run", [1.0] * 21))

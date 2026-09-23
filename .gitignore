@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 .pytest_cache/
+.venv/
 desktop/teleop/Posture/.vscode/
 
 # Local run artifacts

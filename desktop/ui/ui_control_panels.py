@@ -20,6 +20,7 @@ from .ui_control_common import (
     QtWidgets,
     Signal,
     TEST_DEFAULT_HOLD_S,
+    TEST_DEFAULT_DURATION_S,
     TEST_TICK_MS,
     TRI_TEST_DEFAULT_FREQ_HZ,
     Tuple,
@@ -202,6 +203,8 @@ class ControlPanel(
         self._test_active_rows: List[Tuple[int, float, float, float, float]] = []
         self._test_t0 = 0.0
         self._test_hold_s = float(TEST_DEFAULT_HOLD_S)
+        self._test_duration_s = float(TEST_DEFAULT_DURATION_S)
+        self._test_feedback_start_pending = False
         self._ff_test_joint_idx = 0
         self._ff_test_targets: List[float] = []
         self._ff_test_step_s = float(FF_TEST_DEFAULT_STEP_S)

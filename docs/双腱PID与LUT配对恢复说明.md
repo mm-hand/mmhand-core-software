@@ -1,6 +1,6 @@
 # 双腱 PID 与 LUT 配对恢复说明
 
-更新日期：2026-09-08。对应 DualTendonControl.cpp、MotionControlService.cpp 和 ControlConfig.h。
+更新日期：2026-09-22。对应 DualTendonControl.cpp、MotionControlService.cpp 和 ControlConfig.h。
 本文替代已撤回的角度 P 修正查表角、5 度外推方案；当前不使用 q*，也不锁定两台命令总和。
 
 ## 1. 最新 J08 数据结论
@@ -105,7 +105,7 @@ H <= B 时：c_1=c_2=0
 | B | 10 counts | 恢复偏差死区，以两侧最大绝对偏差判定 |
 | Cmax | 3 counts | 单次每台恢复修正的最大绝对值 |
 | Vmax | 200 counts/秒 | 按 dt 换算单次输出上限，不是舵机物理速度保证，也不是输出变化率限制 |
-| Enabled | true | 配对恢复开关；关闭不撤销内部斜率 PID |
+| Enabled | false | 配对恢复暂时关闭；不撤销内部斜率 PID |
 
 10 ms 时 C=2 counts。上例 H=40，所以 c=[1.5,1.5]，整数输出各加 2 counts。
 没有跨周期累计恢复偏置；小于约 0.5 counts 的项取整为零。取整后不再严格保持投影正交。

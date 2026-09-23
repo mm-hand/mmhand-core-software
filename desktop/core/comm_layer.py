@@ -1590,7 +1590,13 @@ class LowerComputerComm:
             )
             kept = []
             for item in pending:
-                drop_item = self._is_high_rate_command(item)
+                preserve_pending_feedback_start = (
+                    isinstance(cmd, tuple)
+                    and cmd[0] in ("angle_live", "angle_live_masked")
+                    and isinstance(item, tuple)
+                    and item[0] in ("joint_target_run", "joint_target_run_masked")
+                )
+                drop_item = self._is_high_rate_command(item) and not preserve_pending_feedback_start
                 if paired_joint_command:
                     drop_item = drop_item or self._is_joint_command(item) or item == "run_feedback"
                 if not drop_item:

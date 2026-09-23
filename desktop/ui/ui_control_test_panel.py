@@ -15,6 +15,7 @@ from .ui_control_common import (
     List,
     QtWidgets,
     TEST_DEFAULT_FREQ_HZ,
+    TEST_DEFAULT_DURATION_S,
     TEST_DEFAULT_HOLD_S,
     TEST_DEFAULT_PHASE_DEG,
     TEST_ROW_COUNT,
@@ -89,10 +90,19 @@ class ManualTestPanel(QtWidgets.QWidget):
         panel.test_start_btn = QtWidgets.QPushButton("Start Test")
         panel.test_stop_btn = QtWidgets.QPushButton("Stop Test")
         panel.test_hold_spin = ManualTestPanel.make_float_spin(0.0, 60.0, TEST_DEFAULT_HOLD_S, 3)
+        panel.test_duration_spin = ManualTestPanel.make_float_spin(
+            0.1, 3600.0, TEST_DEFAULT_DURATION_S, 1
+        )
+        panel.test_duration_spin.setToolTip("Duration of sine motion after the initial hold")
         panel.test_start_btn.clicked.connect(lambda _checked=False: panel._on_start_test())
         panel.test_stop_btn.clicked.connect(lambda _checked=False: panel._on_stop_test())
         for widget in [
-            panel.test_start_btn, panel.test_stop_btn, QtWidgets.QLabel("Initial Hold(s)"), panel.test_hold_spin,
+            panel.test_start_btn,
+            panel.test_stop_btn,
+            QtWidgets.QLabel("Initial Hold(s)"),
+            panel.test_hold_spin,
+            QtWidgets.QLabel("Sine Duration(s)"),
+            panel.test_duration_spin,
         ]:
             row.addWidget(widget)
         row.addStretch(1)

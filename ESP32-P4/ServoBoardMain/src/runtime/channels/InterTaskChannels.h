@@ -31,7 +31,7 @@ struct InterTaskChannels {
     MessageChannel<ServoAngleData_t> servoRawQueue; ///< 单圈 raw 快照。
     MessageChannel<ServoTelemetryData_t> servoTelemetryQueue; ///< 控制、标定和上行共读的最新遥测。
     MessageChannel<MappedAngleData_t> mappedAngleQueue; ///< 21 关节角快照。
-    MessageChannel<ControlTraceData_t> controlTraceQueue; ///< 订阅期间逐周期 FIFO，不阻塞控制。
+    MessageChannel<ControlTraceData_t> controlTraceQueue; ///< 订阅期间只保留最新控制快照。
     uint8_t controlTraceRecordingEnabled = 0; ///< HostComm 写，控制任务原子读取。
     MessageChannel<RemoteTactileData_t> tactileQueue; ///< 顺序触觉数据。
     SemaphoreHandle_t commandStateMutex; ///< 保护目标角和直控命令的成组读写。

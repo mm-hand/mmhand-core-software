@@ -19,8 +19,8 @@ inline constexpr float kPeriodSec = 0.010f;
 inline constexpr int32_t kEncoderModulo = 16384;
 inline constexpr uint16_t kEncoderDisconnectRaw = 0xFFFF;
 
-/** 单腱 PID 调参日志开关；双腱 PID 日志已移除。 */
-inline constexpr bool kPidDiagLogEnabled = true;
+/** 单腱 PID 调参日志开关；正式跟踪测试时禁止占用上位机串口。 */
+inline constexpr bool kPidDiagLogEnabled = false;
 inline constexpr uint32_t kPidDiagLogPeriodMs = 50;
 
 inline constexpr uint32_t kCanBusOfflineTimeoutMs = 1000;
@@ -77,7 +77,7 @@ inline constexpr float kSingleTendonVelocityLeadMaxDeg = 3.0f;
  * 只有关节沿新方向累计响应到退出距离才撤销补偿；最大 counts 仅防异常无限收绳。
  */
 inline constexpr bool kSingleTendonDirectionalTakeupEnabled = true;
-inline constexpr float kSingleTendonDirectionalTakeupConfirmDeg = 1.0f;
+inline constexpr float kSingleTendonDirectionalTakeupConfirmDeg = 0.25f;
 inline constexpr int32_t kSingleTendonDirectionalTakeupInitialCounts = 60;
 inline constexpr float kSingleTendonDirectionalTakeupRateCountsPerSec = 5000.0f;
 inline constexpr float kSingleTendonDirectionalTakeupExitJointTravelDeg = 0.25f;

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""使用 Plotly 绘制 Test 页面正弦波的目标角、反馈角、舵机 CMD 和实际 ABS。
+"""绘制 Test 页面正弦波的目标角、反馈角、舵机 CMD 和实际 ABS。
 
 脚本只读取 run_data，不向 P4 发送命令。默认选择最近的正弦 Test 会话，
-也可以显式指定一个或多个数据记录目录，适用于任意 J00..J20。输出为
-可离线打开的交互式 HTML，所有曲线共享同一 P4 单调时间轴。旧 CSV 没有
-``Mxx_cmd_abs`` 时只省略 CMD，不使用上位机缓存值伪造这条曲线。
+也可以显式指定一个或多个数据记录目录，适用于任意 J00..J20。输出包含
+可直接查看的 PNG 合图、对应显示窗口的紧凑绘图 CSV 和可离线打开的交互式
+HTML。PNG 与 CSV 使用同一时间轴；右轴使用 counts 显示对应电机的位置和
+同周期 CMD。旧 CSV 没有 ``Mxx_cmd_abs`` 时只省略 CMD，不使用上位机缓存值
+伪造这条曲线。
 """
 
 from __future__ import annotations
@@ -17,6 +19,10 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -25,6 +31,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 JOINT_COUNT = 21
 MOTOR_COUNT = 27
 SERVO_COLORS = ("#9467bd", "#17becf", "#8c564b", "#e377c2")
+PLOT_DATA_FIELDS = (
+    "session",
+    "joint",
+    "motor",
+    "time_s",
+    "target_deg",
+    "actual_deg",
+    "cmd_counts",
+    "position_counts",
+)
 
 
 @dataclass
@@ -103,9 +119,17 @@ def is_sine_session(session: Path, joint: int) -> bool:
 
 
 def find_latest_sessions(run_data: Path, joint: int, count: int) -> list[Path]:
+    return find_latest_sessions_for_joints(run_data, [joint], count)
+
+
+def find_latest_sessions_for_joints(
+    run_data: Path, joints: list[int], count: int
+) -> list[Path]:
     sessions = [
         path for path in run_data.iterdir()
-        if path.is_dir() and path.name.startswith("数据记录_") and is_sine_session(path, joint)
+        if path.is_dir()
+        and path.name.startswith("数据记录_")
+        and all(is_sine_session(path, joint) for joint in joints)
     ]
     sessions.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     selected = sessions[:count]
@@ -609,6 +633,129 @@ def write_metrics(path: Path, metrics: list[SineMetrics]) -> None:
             writer.writerow(row)
 
 
+def _interpolate_within_samples(
+    time_s: np.ndarray,
+    sample_time_s: np.ndarray,
+    sample_values: np.ndarray,
+) -> np.ndarray:
+    """只在原始采样覆盖区间内插值，区间外保持空值。"""
+    result = np.full(len(time_s), np.nan, dtype=float)
+    valid = np.isfinite(sample_time_s) & np.isfinite(sample_values)
+    if not np.any(valid):
+        return result
+    source_time = sample_time_s[valid]
+    source_values = sample_values[valid]
+    order = np.argsort(source_time)
+    source_time = source_time[order]
+    source_values = source_values[order]
+    source_time, unique_indices = np.unique(source_time, return_index=True)
+    source_values = source_values[unique_indices]
+    covered = (time_s >= source_time[0]) & (time_s <= source_time[-1])
+    result[covered] = np.interp(
+        time_s[covered], source_time, source_values
+    )
+    return result
+
+
+def build_aligned_plot_data(
+    session: Path,
+    joint: int,
+    motors: Iterable[int],
+    trace: tuple[
+        Path,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        float,
+        SineMetrics,
+    ],
+    start_s: float,
+    end_s: float,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    dict[int, tuple[np.ndarray, np.ndarray]],
+]:
+    """构造 PNG 和紧凑 CSV 共用的单一时间轴数据。"""
+    _, target_t, target, actual_t, actual, origin_ms, _ = trace
+    time_s, target_deg = _window_trace(target_t, target, start_s, end_s)
+    actual_deg = _interpolate_within_samples(time_s, actual_t, actual)
+    motor_data = {}
+    for motor in motors:
+        command_t, command = read_motor_command_trace(session, motor, origin_ms)
+        position_t, position, _load = read_servo_trace(session, motor, origin_ms)
+        motor_data[motor] = (
+            _interpolate_within_samples(time_s, command_t, command),
+            _interpolate_within_samples(time_s, position_t, position),
+        )
+    return time_s, target_deg, actual_deg, motor_data
+
+
+def _compact_number(value: float, digits: int) -> object:
+    if not math.isfinite(value):
+        return ""
+    rounded = round(float(value), digits)
+    if rounded == 0:
+        return 0
+    return rounded
+
+
+def write_plot_data_csv(
+    path: Path,
+    joints: list[int],
+    motors_by_trace: dict[tuple[Path, int], list[int]],
+    traces_by_joint: dict[
+        int,
+        list[
+            tuple[
+                Path,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                float,
+                SineMetrics,
+            ]
+        ],
+    ],
+    start_s: float,
+    end_s: float,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PLOT_DATA_FIELDS)
+        writer.writeheader()
+        for joint in joints:
+            for trace in traces_by_joint[joint]:
+                session = trace[0]
+                motors = motors_by_trace[(session, joint)]
+                time_s, target, actual, motor_data = build_aligned_plot_data(
+                    session, joint, motors, trace, start_s, end_s
+                )
+                row_motors: list[int | None] = motors or [None]
+                for index, timestamp in enumerate(time_s):
+                    for motor in row_motors:
+                        command = position = float("nan")
+                        if motor is not None:
+                            command, position = (
+                                values[index] for values in motor_data[motor]
+                            )
+                        writer.writerow(
+                            {
+                                "session": session_label(session),
+                                "joint": f"J{joint:02d}",
+                                "motor": "" if motor is None else f"M{motor:02d}",
+                                "time_s": _compact_number(timestamp, 6),
+                                "target_deg": _compact_number(target[index], 4),
+                                "actual_deg": _compact_number(actual[index], 4),
+                                "cmd_counts": _compact_number(command, 3),
+                                "position_counts": _compact_number(position, 3),
+                            }
+                        )
+
+
 def plot_comparison(
     traces: list[
         tuple[Path, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, SineMetrics]
@@ -750,16 +897,226 @@ def plot_comparison(
         figure.show()
 
 
+def _window_trace(
+    time_s: np.ndarray,
+    values: np.ndarray,
+    start_s: float,
+    end_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    mask = (time_s >= start_s) & (time_s <= end_s)
+    return time_s[mask], values[mask]
+
+
+def plot_static_grid(
+    sessions: list[Path],
+    joints: list[int],
+    motors_by_trace: dict[tuple[Path, int], list[int]],
+    traces_by_joint: dict[
+        int,
+        list[
+            tuple[
+                Path,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                float,
+                SineMetrics,
+            ]
+        ],
+    ],
+    path: Path,
+    start_s: float,
+    display_seconds: float | None,
+    dpi: int,
+) -> None:
+    if display_seconds is None:
+        end_s = max(
+            max(float(trace[1][-1]), float(trace[3][-1]))
+            for traces in traces_by_joint.values()
+            for trace in traces
+        )
+    else:
+        end_s = start_s + display_seconds
+
+    rows = len(joints)
+    columns = len(sessions)
+    figure, axes = plt.subplots(
+        rows,
+        columns,
+        figsize=(4.6 * columns, 2.8 * rows),
+        sharex=True,
+        sharey="row",
+        squeeze=False,
+        constrained_layout=False,
+    )
+    target_color = "#2563eb"
+    actual_color = "#dc2626"
+    legend_handles = []
+    legend_labels = []
+
+    for row, joint in enumerate(joints):
+        row_values: list[np.ndarray] = []
+        for trace in traces_by_joint[joint]:
+            _, target_t, target, actual_t, actual, _, _ = trace
+            _, target_window = _window_trace(target_t, target, start_s, end_s)
+            _, actual_window = _window_trace(actual_t, actual, start_s, end_s)
+            if len(target_window):
+                row_values.append(target_window)
+            if len(actual_window):
+                row_values.append(actual_window)
+        finite_values = (
+            np.concatenate(row_values) if row_values else np.asarray([0.0, 1.0])
+        )
+        finite_values = finite_values[np.isfinite(finite_values)]
+        row_min = float(np.min(finite_values))
+        row_max = float(np.max(finite_values))
+        padding = max(1.0, 0.08 * max(1.0, row_max - row_min))
+
+        for column, trace in enumerate(traces_by_joint[joint]):
+            session, _target_t, _target, _actual_t, _actual, _origin_ms, metrics = trace
+            motors = motors_by_trace[(session, joint)]
+            time_s, target_window, actual_window, motor_data = build_aligned_plot_data(
+                session, joint, motors, trace, start_s, end_s
+            )
+            axis = axes[row][column]
+            target_line = axis.plot(
+                time_s,
+                target_window,
+                color=target_color,
+                linewidth=1.4,
+                label="Target",
+            )
+            actual_line = axis.plot(
+                time_s,
+                actual_window,
+                color=actual_color,
+                linewidth=1.25,
+                label="Actual",
+            )
+            counts_axis = axis.twinx()
+            counts_axis.tick_params(axis="y", colors="#6b7280", labelsize=7)
+            counts_axis.spines["right"].set_color("#9ca3af")
+            motor_lines = []
+            for motor_offset, motor in enumerate(motors):
+                color = SERVO_COLORS[motor_offset % len(SERVO_COLORS)]
+                command_window, position_window = motor_data[motor]
+                if np.any(np.isfinite(position_window)):
+                    motor_lines.extend(
+                        counts_axis.plot(
+                            time_s,
+                            position_window,
+                            color=color,
+                            linewidth=1.15,
+                            alpha=0.82,
+                            label=f"M{motor:02d} position",
+                        )
+                    )
+                if np.any(np.isfinite(command_window)):
+                    motor_lines.extend(
+                        counts_axis.plot(
+                            time_s,
+                            command_window,
+                            color=color,
+                            linewidth=1.0,
+                            linestyle="--",
+                            alpha=0.72,
+                            label=f"M{motor:02d} CMD",
+                        )
+                    )
+            if column == columns - 1:
+                motor_label = "/".join(f"M{motor:02d}" for motor in motors) or "Motor"
+                counts_axis.set_ylabel(
+                    f"{motor_label} position (counts)",
+                    color="#6b7280",
+                    fontsize=8,
+                )
+            else:
+                counts_axis.set_yticklabels([])
+            axis.set_xlim(start_s, end_s)
+            axis.set_ylim(row_min - padding, row_max + padding)
+            axis.grid(True, color="#d1d5db", linewidth=0.6, alpha=0.8)
+            axis.text(
+                0.02,
+                0.96,
+                (
+                    f"f={metrics.frequency_hz:.3f} Hz  gain={metrics.amplitude_ratio:.2f}\n"
+                    f"lag={metrics.phase_lag_deg:.1f} deg  MAE={metrics.mae_deg:.2f} deg"
+                ),
+                transform=axis.transAxes,
+                va="top",
+                ha="left",
+                fontsize=8,
+                color="#111827",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 2},
+            )
+            if row == 0:
+                axis.set_title(session_label(session), fontsize=10)
+            if column == 0:
+                axis.set_ylabel(f"J{joint:02d} (deg)")
+            if row == rows - 1:
+                axis.set_xlabel("P4 elapsed time (s)")
+            if row == 0 and column == 0:
+                legend_handles.extend(target_line + actual_line + motor_lines)
+                legend_labels.extend(line.get_label() for line in legend_handles)
+
+    if legend_handles:
+        figure.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.945),
+            ncol=min(6, len(legend_handles)),
+            framealpha=0.9,
+            fontsize=8,
+        )
+    duration_label = f"{display_seconds:g} s" if display_seconds is not None else "full"
+    figure.suptitle(
+        f"Sine response comparison: {', '.join(f'J{joint:02d}' for joint in joints)} ({duration_label})",
+        fontsize=14,
+        y=0.99,
+    )
+    figure.tight_layout(rect=(0.01, 0.01, 0.99, 0.89))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build interactive Plotly sine-response reports from Test-tab CSV sessions."
     )
-    parser.add_argument("--joint", required=True, type=parse_joint, help="joint, for example J15")
+    parser.add_argument(
+        "--joint",
+        required=True,
+        action="append",
+        type=parse_joint,
+        help="joint, for example J15; repeat to create a multi-joint PNG grid",
+    )
     parser.add_argument("--motor", action="append", type=parse_motor, help="optional Mxx; repeat for dual motors")
     parser.add_argument("--session", action="append", type=Path, help="session directory; may be repeated")
     parser.add_argument("--latest", type=int, default=1, help="latest matching sine sessions, default 1")
     parser.add_argument("--run-data-dir", type=Path, default=PROJECT_ROOT / "run_data")
     parser.add_argument("--out-dir", type=Path)
+    parser.add_argument(
+        "--start-seconds",
+        type=float,
+        default=0.0,
+        help="first elapsed second shown in the PNG, default 0",
+    )
+    parser.add_argument(
+        "--display-seconds",
+        "--duration",
+        dest="display_seconds",
+        type=float,
+        help="seconds shown in each PNG panel; default uses the full recording",
+    )
+    parser.add_argument(
+        "--png-dpi",
+        type=int,
+        default=160,
+        help="PNG resolution, default 160 DPI",
+    )
     parser.add_argument(
         "--show",
         action="store_true",
@@ -770,49 +1127,117 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    joints = list(dict.fromkeys(args.joint))
+    if args.start_seconds < 0.0:
+        raise ValueError("--start-seconds must be >= 0")
+    if args.display_seconds is not None and args.display_seconds <= 0.0:
+        raise ValueError("--display-seconds must be > 0")
+    if args.png_dpi < 72:
+        raise ValueError("--png-dpi must be >= 72")
+    if args.motor and len(joints) != 1:
+        raise ValueError("--motor can only be used with one --joint")
+
     sessions = [path.resolve() for path in (args.session or [])]
     if not sessions:
-        sessions = find_latest_sessions(args.run_data_dir.resolve(), args.joint, max(1, args.latest))
+        sessions = find_latest_sessions_for_joints(
+            args.run_data_dir.resolve(), joints, max(1, args.latest)
+        )
     if not sessions:
-        raise FileNotFoundError(f"no sine Test session found for J{args.joint:02d}")
+        joint_label = ", ".join(f"J{joint:02d}" for joint in joints)
+        raise FileNotFoundError(f"no common sine Test session found for {joint_label}")
+    joint_tag = "_".join(f"J{joint:02d}" for joint in joints)
+    output_prefix = "正弦响应分析" if len(joints) == 1 else "正弦响应合图"
     output_dir = args.out_dir or (
-        args.run_data_dir.resolve() / f"正弦响应分析_{sessions[-1].name.removeprefix('数据记录_')}_J{args.joint:02d}"
+        args.run_data_dir.resolve()
+        / f"{output_prefix}_{sessions[-1].name.removeprefix('数据记录_')}_{joint_tag}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    all_metrics = []
-    traces = []
-    for session in sessions:
-        motors = list(args.motor or discover_motors(session, args.joint))
-        metrics, _output_path = plot_session(session, args.joint, motors, output_dir)
-        target_time_s, target, actual_time_s, actual, origin_ms = read_joint_trace(
-            session, args.joint
-        )
-        all_metrics.append(metrics)
-        traces.append(
-            (
-                session,
-                target_time_s,
-                target,
-                actual_time_s,
-                actual,
-                origin_ms,
-                metrics,
+    traces_by_joint = {}
+    motors_by_trace: dict[tuple[Path, int], list[int]] = {}
+    for joint in joints:
+        all_metrics = []
+        traces = []
+        for session in sessions:
+            motors = list(args.motor or discover_motors(session, joint))
+            motors_by_trace[(session, joint)] = motors
+            if len(joints) == 1:
+                metrics, _output_path = plot_session(
+                    session, joint, motors, output_dir
+                )
+                target_time_s, target, actual_time_s, actual, origin_ms = read_joint_trace(
+                    session, joint
+                )
+            else:
+                target_time_s, target, actual_time_s, actual, origin_ms = read_joint_trace(
+                    session, joint
+                )
+                metrics = compute_metrics(
+                    session, target_time_s, target, actual_time_s, actual
+                )
+            all_metrics.append(metrics)
+            traces.append(
+                (
+                    session,
+                    target_time_s,
+                    target,
+                    actual_time_s,
+                    actual,
+                    origin_ms,
+                    metrics,
+                )
             )
+        traces_by_joint[joint] = traces
+        write_metrics(output_dir / f"J{joint:02d}_sine_metrics.csv", all_metrics)
+        plot_comparison(
+            traces,
+            joint,
+            output_dir / f"J{joint:02d}_sine_frequency_comparison.html",
+            show=args.show and len(joints) == 1,
         )
-    metrics_path = output_dir / f"J{args.joint:02d}_sine_metrics.csv"
-    comparison_path = output_dir / f"J{args.joint:02d}_sine_frequency_comparison.html"
-    write_metrics(metrics_path, all_metrics)
-    plot_comparison(traces, args.joint, comparison_path, show=args.show)
-    for metrics in all_metrics:
-        print(
-            f"{metrics.session.name}: f={metrics.frequency_hz:.4f} Hz, "
-            f"gain={metrics.amplitude_ratio:.4f}, lag={metrics.phase_lag_deg:.2f} deg, "
-            f"delay={metrics.phase_delay_ms:.1f} ms, "
-            f"midpoint={metrics.midpoint_delay_ms:.1f} ms, "
-            f"xcorr={metrics.correlation_delay_ms:.1f} ms, "
-            f"p2p_gain={metrics.peak_to_peak_ratio:.4f}, RMSE={metrics.rmse_deg:.3f} deg, "
-            f"MAE={metrics.mae_deg:.3f} deg"
+        for metrics in all_metrics:
+            print(
+                f"J{joint:02d} {metrics.session.name}: f={metrics.frequency_hz:.4f} Hz, "
+                f"gain={metrics.amplitude_ratio:.4f}, lag={metrics.phase_lag_deg:.2f} deg, "
+                f"delay={metrics.phase_delay_ms:.1f} ms, "
+                f"midpoint={metrics.midpoint_delay_ms:.1f} ms, "
+                f"xcorr={metrics.correlation_delay_ms:.1f} ms, "
+                f"p2p_gain={metrics.peak_to_peak_ratio:.4f}, RMSE={metrics.rmse_deg:.3f} deg, "
+                f"MAE={metrics.mae_deg:.3f} deg"
+            )
+
+    duration_tag = (
+        f"{args.display_seconds:g}s" if args.display_seconds is not None else "full"
+    )
+    image_path = output_dir / f"{joint_tag}_sine_comparison_{duration_tag}.png"
+    raw_csv_path = output_dir / "sine_raw_data.csv"
+    if args.display_seconds is None:
+        csv_end_s = max(
+            max(float(trace[1][-1]), float(trace[3][-1]))
+            for traces in traces_by_joint.values()
+            for trace in traces
         )
+    else:
+        csv_end_s = args.start_seconds + args.display_seconds
+    write_plot_data_csv(
+        raw_csv_path,
+        joints,
+        motors_by_trace,
+        traces_by_joint,
+        args.start_seconds,
+        csv_end_s,
+    )
+    plot_static_grid(
+        sessions,
+        joints,
+        motors_by_trace,
+        traces_by_joint,
+        image_path,
+        args.start_seconds,
+        args.display_seconds,
+        args.png_dpi,
+    )
+    print(f"image: {image_path}")
+    print(f"raw_csv: {raw_csv_path}")
     print(f"output: {output_dir}")
     return 0
 

@@ -62,7 +62,9 @@ bool assembleAndStartSystem() {
     sharedData.servoRawQueue.create(1);
     sharedData.servoTelemetryQueue.create(1);
     sharedData.mappedAngleQueue.create(1);
-    sharedData.controlTraceQueue.create(32);
+    // 控制跟踪按旧版 J12 的均匀采样语义只保留最新快照；HostComm
+    // 每 50 ms 读取一次，避免逐周期 FIFO 在串口侧形成批量突发。
+    sharedData.controlTraceQueue.create(1);
     sharedData.tactileQueue.create(3);
 
     const bool queuesCreated =

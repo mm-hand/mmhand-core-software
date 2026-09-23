@@ -277,7 +277,8 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     processServoResetZeroResult(
         sharedData, &lastServoResetZeroResultToken);
 
-        // 50 ms 批次最多发送 8 帧；失败保留队首重试，控制任务永不等待串口。
+        // 恢复旧版 J12 的均匀采样：每 50 ms 发送一份最新控制快照。
+        // 队列是深度 1 邮箱，禁止在这里补发历史帧形成串口突发。
         if (runtime.controlTraceSubscribed &&
             (!runtime.controlTraceSentInitialized ||
              (uint32_t)(nowMs -
@@ -285,11 +286,10 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
                  mmhand::config::diagnostics::kControlTracePublishPeriodMs)) {
             runtime.lastControlTraceTimestampSent = nowMs;
             runtime.controlTraceSentInitialized = true;
-            for (uint8_t count = 0; count < 8 &&
-                 sharedData->controlTraceQueue.peek(&controlTraceData); ++count) {
-                if (!sendControlTracePacket(controlTraceData)) break;
+            if (sharedData->controlTraceQueue.peek(&controlTraceData) &&
+                controlTraceData.sequence != lastControlTraceSequenceSent &&
+                sendControlTracePacket(controlTraceData)) {
                 lastControlTraceSequenceSent = controlTraceData.sequence;
-                sharedData->controlTraceQueue.receive(&controlTraceData);
             }
         }
 
