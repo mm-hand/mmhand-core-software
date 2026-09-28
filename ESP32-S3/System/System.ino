@@ -8,23 +8,26 @@
 #include "esp_idf_version.h"
 #include "esp_log.h"
 
-extern TaskHandle_t xEncTask;
-extern TaskHandle_t xTacTask;
-extern TaskHandle_t xCanTask;
-
 namespace {
-constexpr uint32_t kBootSettleDelayMs = 10000;
+// 上电后等待外围电源、下载串口和传感器选择线稳定；该延时会直接增加10秒启动时间。这里计划修改只等待5S即可
+constexpr uint32_t kBootSettleDelayMs = 5000;
 }
 
+/**
+ * @brief Arduino启动入口：初始化日志、看门狗、磁编、触觉、CAN和FreeRTOS任务。
+ * @note 外设初始化完成后，实际周期工作均由FreeRTOS任务承担。
+ */
 void setup() {
     Serial.begin(921600);
 #if ENABLE_TACTILE_TASK
+    // 延时前先把触觉片选线置为非选中，防止上电阶段误选多个传感器。
     tactile.prepareBootSelectPins();
 #endif
     delay(kBootSettleDelayMs);
     Serial.println("\n\n--- System Boot (XSimple AI) ---");
 
 #if ESP_IDF_VERSION_MAJOR >= 5
+    // 监控两个CPU核的Idle任务；任务长期占满CPU时触发panic，便于定位死循环。
     esp_task_wdt_config_t wdt_config = {
         .timeout_ms = 1000,
         .idle_core_mask = (1 << 0) | (1 << 1),
@@ -56,24 +59,7 @@ void setup() {
     Serial.println("[System] Tasks Started. Main Loop Running.");
 }
 
-void printSystemMonitor() {
-    EncoderData enc = encoders.getData();
-
-    Serial.println("\n======= [ XSimple Monitor ] =======");
-    Serial.println(">>> Encoders (Final Angle: 0~16383)");
-    for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-        Serial.printf("[%02d:%05u] ", i, enc.rawAngles[i]);
-        if ((i + 1) % 5 == 0) {
-            Serial.println();
-        }
-    }
-    if (ENCODER_TOTAL_NUM % 5 != 0) {
-        Serial.println();
-    }
-
-    Serial.println("===================================");
-}
-
 void loop() {
+    // Arduino主循环不承载业务，主动让出CPU给FreeRTOS任务。
     vTaskDelay(pdMS_TO_TICKS(100));
 }

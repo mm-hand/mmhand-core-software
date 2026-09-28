@@ -1,0 +1,140 @@
+"""由 upper_protocol_schema.json 自动生成的 Desktop 协议常量。
+
+职责：提供上下位机共享的包类型、命令编号和固定长度。
+线程：纯常量模块，不创建线程，可由任意线程只读导入。
+输入：tools/generate_upper_protocol.py 读取的唯一协议 schema。
+输出：供 protocol.py 和协议测试读取的不可变常量。
+状态所有权：不拥有运行状态；文件内容由生成器独占维护。
+禁止依赖：禁止手工编辑，禁止导入 UI、通信对象或业务状态。
+"""
+
+PROTOCOL_HEADER = 0xFE
+PROTOCOL_TAIL = 0xFF
+DISCONNECT_SENTINEL = 32767
+P4_TIMESTAMP_BYTES = 4
+ENCODER_COUNT = 21
+MOTOR_COUNT = 27
+ENCODER_RAW_MODULO = 16384
+
+# P4 -> Desktop 包类型。
+PACKET_TYPE_SENSOR = 0x01  # 21 关节映射角
+PACKET_TYPE_SERVO_ANGLE = 0x03  # 27 路 logical ABS
+PACKET_TYPE_SERVO_TELEM = 0x05  # 舵机遥测
+PACKET_TYPE_PROTO_ACK = 0x06  # 命令 ACK
+PACKET_TYPE_FAULT_STATUS = 0x07  # 故障与在线位图
+PACKET_TYPE_SERVO_RAW = 0x09  # 27 路单圈 raw
+PACKET_TYPE_TACTILE = 0x0A  # 五指触觉摘要
+PACKET_TYPE_ENCODER_RAW = 0x0B  # 21 路磁编 raw
+PACKET_TYPE_SYSTEM_STATUS = 0x0C  # 状态机与 owner
+PACKET_TYPE_MOTOR_ABS_LIMIT = 0x0D  # 标定 ABS 边界
+PACKET_TYPE_JOINT_CALIB_SNAPSHOT = 0x0E  # Auto/LUT 快照
+PACKET_TYPE_TACTILE_FULL = 0x0F  # 全量触觉阵列
+PACKET_TYPE_CALIB_DIAG = 0x10  # 结构化标定诊断
+PACKET_TYPE_TASK_DIAG = 0x11  # RTOS 任务诊断
+PACKET_TYPE_MANUAL_ENCODER_REFERENCE = 0x12  # 21 路 Manual Min/Max
+PACKET_TYPE_SERVO_LOGICAL_RANGE = 0x13  # 27 路会话 logical range
+PACKET_TYPE_PRODUCT_FINGERPRINT = 0x14  # 产品配置指纹
+PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15  # 动态舵机 BUS 路由、冲突、容量和扫描状态
+PACKET_TYPE_SAFETY_EVENT = 0x16  # 去重后的结构化安全规则事件
+PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17  # 桌面 JSON 多圈恢复异步最终结果
+PACKET_TYPE_CONTROL_TRACE = 0x18  # 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
+
+# Desktop -> P4 命令。
+CMD_CALIBRATE = 0xCA  # 按当前 active scope 启动自动标定
+CMD_ANGLE_CTRL = 0xCB  # 下发完整 21 路关节目标角，单位 degree
+CMD_START = 0xCC  # 历史启动命令，进入控制申请流程
+CMD_STOP = 0xCD  # 停止当前运行并撤销待执行目标
+CMD_RESET = 0xCE  # 清除允许恢复的系统故障锁存
+CMD_MOTOR_POS_ABS = 0xD3  # 27 路 logical ABS 直控目标，每路 int32 counts
+CMD_ACTIVE_SCOPE = 0xD7  # 同步 active joint/motor mask 与 control enable
+CMD_RUN_FEEDBACK = 0xD8  # 申请状态机进入负反馈运行
+CMD_PAUSE = 0xD9  # 暂停当前负反馈或直控运行
+CMD_RESTORE_MULTITURN = 0xDA  # 按位图恢复 27 路 logical ABS 多圈快照
+CMD_HOST_HEARTBEAT = 0xDC  # 刷新上位机在线计时器，不携带业务数据
+CMD_MOTOR_POS_ABS_ONE = 0xDE  # 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
+CMD_CALIB_LOAD_JOINT = 0xDF  # 恢复单关节唯一 Auto/LUT v4 标定快照
+CMD_CALIB_LOAD_LIMITS = 0xE0  # 批量恢复 27 路 ABS 标定范围与有效位图
+CMD_CLEAR_CALIBRATION = 0xE5  # 清除全部 Auto/LUT 标定结果，保留 Manual
+CMD_MANUAL_ENCODER_REFERENCE = 0xE6  # 写入或清除 21 组 Manual Min/Max 原始磁编值
+CMD_MANUAL_ENCODER_QUERY = 0xE7  # 请求 P4 立即回传 Manual 标定表
+CMD_MANUAL_ENCODER_SINGLE = 0xE8  # 写入单个 Jxx 的 Manual Min/Max
+CMD_ROPE_INIT = 0xE9  # 按 21 位关节掩码启动 P4 Rope Init
+CMD_ANGLE_CTRL_MASKED = 0xEA  # 按关节掩码下发稀疏关节目标角
+CMD_CLEAR_CALIBRATION_SCOPE = 0xEB  # 按电机位图清除关联关节 Auto/LUT
+CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除对应多圈锚点
+CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
+CMD_TASK_DIAG_SUBSCRIBE = 0xEE  # 打开或关闭 RTOS 任务诊断按需上报
+CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF  # 打开或关闭统一下位机时间的控制跟踪流
+
+PROTO_ACK_STATUS_OK = 0  # 命令已同步执行成功
+PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1  # 当前状态或 owner 不允许该命令
+PROTO_ACK_STATUS_QUEUED = 2  # 异步请求已入队，最终结果看状态包
+PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED = 3  # 缺少目标关节 Manual Min/Max
+PROTO_ACK_STATUS_INVALID_DATA = 4  # 字段、长度、索引或数值范围非法
+PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6  # Auto 快照绑定的 Manual CRC 不一致
+PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7  # 缺少目标关节有效 Auto/LUT
+
+MANUAL_SAVE_STATUS_NONE = 0  # 本次上电尚未收到桌面端 Manual 数据
+MANUAL_SAVE_STATUS_OK = 1  # 最近一次 Manual 已提交到 P4 RAM 并完成校验
+MANUAL_SAVE_STATUS_FAILED = 2  # 最近一次 Manual RAM 提交或校验失败
+
+STATE_SYNC_MANUAL_REFERENCE = 1  # 同步 21 路 Manual Min/Max
+STATE_SYNC_MOTOR_ABS_LIMIT = 2  # 同步 27 路 ABS Limit
+STATE_SYNC_SERVO_LOGICAL_RANGE = 4  # 同步 27 路逻辑行程
+STATE_SYNC_JOINT_CALIBRATION = 8  # 同步全部有效 Auto/LUT 标定快照
+STATE_SYNC_SERVO_ROUTE = 16  # 同步动态舵机 BUS 路由
+STATE_SYNC_PRODUCT_FINGERPRINT = 32  # 同步产品配置指纹
+STATE_SYNC_MULTITURN_STATE = 64  # 同步桌面 JSON 多圈恢复结果
+STATE_SYNC_ALL = 127  # 同步全部静态运行契约
+
+# 当前 P4 会在这些上行包的业务负载末尾追加 uint32 毫秒时间戳。
+P4_TRAILING_TIMESTAMP_PACKET_TYPES = frozenset({
+    PACKET_TYPE_SENSOR,
+    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_TELEM,
+    PACKET_TYPE_PROTO_ACK,
+    PACKET_TYPE_FAULT_STATUS,
+    PACKET_TYPE_SERVO_RAW,
+    PACKET_TYPE_TACTILE,
+    PACKET_TYPE_ENCODER_RAW,
+    PACKET_TYPE_SYSTEM_STATUS,
+    PACKET_TYPE_MOTOR_ABS_LIMIT,
+    PACKET_TYPE_JOINT_CALIB_SNAPSHOT,
+    PACKET_TYPE_TACTILE_FULL,
+    PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
+    PACKET_TYPE_SERVO_LOGICAL_RANGE,
+    PACKET_TYPE_PRODUCT_FINGERPRINT,
+    PACKET_TYPE_SERVO_ROUTE_STATUS,
+    PACKET_TYPE_SAFETY_EVENT,
+    PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+    PACKET_TYPE_CONTROL_TRACE,
+})
+
+# 固定下行 payload 长度，不包含命令字。
+COMMAND_PAYLOAD_LENGTHS = {
+    CMD_CALIBRATE: 0,
+    CMD_ANGLE_CTRL: 84,
+    CMD_START: 0,
+    CMD_STOP: 0,
+    CMD_RESET: 0,
+    CMD_MOTOR_POS_ABS: 108,
+    CMD_ACTIVE_SCOPE: 9,
+    CMD_RUN_FEEDBACK: 0,
+    CMD_PAUSE: 0,
+    CMD_RESTORE_MULTITURN: 112,
+    CMD_HOST_HEARTBEAT: 0,
+    CMD_MOTOR_POS_ABS_ONE: 5,
+    CMD_CALIB_LOAD_JOINT: 189,
+    CMD_CALIB_LOAD_LIMITS: 224,
+    CMD_CLEAR_CALIBRATION: 0,
+    CMD_MANUAL_ENCODER_REFERENCE: 85,
+    CMD_MANUAL_ENCODER_QUERY: 0,
+    CMD_MANUAL_ENCODER_SINGLE: 5,
+    CMD_ROPE_INIT: 4,
+    CMD_ANGLE_CTRL_MASKED: 88,
+    CMD_CLEAR_CALIBRATION_SCOPE: 4,
+    CMD_SERVO_RESET_ZERO: 4,
+    CMD_STATE_SYNC_REQUEST: 4,
+    CMD_TASK_DIAG_SUBSCRIBE: 1,
+    CMD_CONTROL_TRACE_SUBSCRIBE: 1,
+}

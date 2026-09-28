@@ -1,0 +1,11 @@
+#!/bin/sh
+# P4 提交前快速门禁：只检查生成物与分层契约，不执行固件编译。
+repo_root="$(git rev-parse --show-toplevel)" || exit 1
+
+if command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -ExecutionPolicy Bypass -File \
+        "$repo_root/tools/p4_architecture/check_p4_architecture.ps1"
+else
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
+        "$repo_root/tools/p4_architecture/check_p4_architecture.ps1"
+fi

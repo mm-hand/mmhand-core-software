@@ -1,15 +1,39 @@
 # 对抗双电机标定与 Rope Init 说明
 
-本文档说明当前对抗双电机关节的自动标定流程，以及上位机 `Rope Init` 按钮的最新行为。这里的“对抗双电机”指一个关节由两根互相拮抗的绳/电机控制，例如主电机拉向正向角度，副电机拉向反向角度。
+> 当前专项文档，最后核对：2026-08-01。RopeInit 不是负载寻端或重新标定，而是在 Manual/Auto V3/URDF/mapping/反馈均可信时，以 50 ms 小步把工作区外 active joints 拉回；当前步长、阈值见[控制算法与标定](控制算法与标定.md)。
+
+本文档同时保留“当前实现摘要”和旧版流程，便于理解对抗双电机方案如何演进。凡是调参、联调或面试说明，应以前部当前参数表以及 P4 `AutoCalibrationTask.cpp`、`RopeInitTask.cpp` 为准；后文明确标为“历史”的章节只用于追溯设计变化。这里的“对抗双电机”指一个关节由两根互相拮抗的绳/电机控制，例如主电机拉向正向角度，副电机拉向反向角度。
 
 ## 相关代码位置
 
 - 下位机自动标定：`ESP32-P4/ServoBoardMain/src/calibration/AutoCalibrationTask.cpp`
 - 下位机状态机 READY 判定：`ESP32-P4/ServoBoardMain/src/system/StateMachineTask.cpp`
-- 上位机 Rope Init：`desktop/ui/ui_control_panels.py`
+- 上位机 Rope Init 入口：desktop UI 只下发一次 `0xE9 + 4-byte joint mask`；执行状态与小步输出由 P4 `RopeInitTask.cpp` 管理
 - 电机和关节映射：`ESP32-P4/ServoBoardMain/src/hardware/HardwareMap.cpp`、`desktop/ui/ui_tendon_guard.py`
 
-## 当前关键参数
+## 当前实现摘要（2026-08-01）
+
+当前 RopeInit 已从 desktop 的定时循环迁入 P4 `RopeInitTask.cpp`，上位机只发送一次 `CMD_ROPE_INIT (0xE9, 4-byte joint mask)`，状态机进入 `ROPE_INIT_RUNNING` 并授予 `CALIBRATION` owner。P4 每 50 ms 读取最新 mapped angle/servo feedback，只移动 `outsideCounts < -24` 的 active joints：主执行器每帧收绳 60 counts，双腱副执行器同时放绳 30 counts；连续 3 帧全部进入工作区后完成，总超时 8 s。
+
+当前关键阈值：
+
+| 类别 | 当前值 |
+| --- | --- |
+| 双腱准备释放 / 工作空间姿态释放 | 3200 counts |
+| 主腱首次紧端 / 副腱预紧 | load 190 / 190 |
+| 副腱最终 A 姿态 / 普通双腱最终主腱 | load 250 / 120 |
+| 标定硬过载 | load magnitude 800 |
+| 端点观察窗口 | 200 ms |
+| 窗口内电机确实运动 | ABS delta ≥50 counts |
+| 磁编角停稳 | angle delta ≤0.75°，连续 2 个窗口 |
+| 反向有效跟随 | ≥12° |
+| 单腱最大释放 | 8192 counts |
+
+双腱标定不再依赖固定的 `-3°/80°` 作为真实机械端点。它使用 Manual/URDF 契约、实测磁编端点和两路 Tendon LUT 建立当前关节/电机工作区；标定结果还要通过 10°~359° 总行程、近整圈 span <15360、Manual 条目 CRC、URDF CRC 与 mapping version 校验。
+
+详细现行流程和全部阈值见[控制算法与标定](控制算法与标定.md)。
+
+## 历史实现参数（已停用，仅保留演进背景）
 
 ### 下位机自动标定参数
 
@@ -34,7 +58,7 @@
 | `ROPE_INIT_DUAL_TARGET_DEG` | `40.0 deg` | 对抗双电机关节 Rope Init 中位目标 |
 | `ROPE_INIT_DUAL_TOL_DEG` | `0.3 deg` | 对抗双电机关节中位停止容差 |
 
-## 对抗双电机自动标定流程
+## 历史对抗双电机自动标定流程（固定 -3°/80° 方案已停用）
 
 ### 目标
 
@@ -112,7 +136,7 @@ DUAL_RESULT
 
 其中 `CHECK_DUAL_EXCHANGE_NEG3` 中的 `load=... ignored` 表示 NEG3 阶段会打印副电机负载，但成功条件不再依赖负载。
 
-## 单电机自动标定相关变化
+## 历史单电机标定变化记录
 
 单电机关节仍使用原本的单电机流程，但当前逻辑已经做过两点调整：
 
@@ -144,11 +168,11 @@ READY 判定位于下位机状态机 `activeJointsInControlWorkspace()`。
 也就是说，READY 判定和 Rope Init 停止条件是两套逻辑：
 
 - READY 只判断是否已经处于允许控制的工作空间。
-- Rope Init 是上位机主动发送电机 ABS 命令，把关节带回期望位置。
+- Rope Init 由上位机发送一次启动命令和关节掩码；随后 P4 每 50 ms 根据最新反馈决定是否输出小步目标，并在稳定、超时或安全条件失效时退出。
 
-## Rope Init 最新行为
+## 历史 desktop Rope Init 行为（当前已迁入 P4）
 
-`Rope Init` 现在不是单纯的 `+50` 一次性动作，而是一个短周期自动过程。
+以下内容描述旧版 desktop 定时发送完整 `CMD_MOTOR_POS_ABS` 的实现，用于解释迁移原因；当前版本不得按这一节调参或实现。现行逻辑以本文件“当前实现摘要”和 P4 `RopeInitTask.cpp` 为准。
 
 点击按钮后，上位机会：
 
@@ -243,7 +267,7 @@ Rope Init 会在以下情况下停止：
 
 6. Rope Init 完成后，再进入负反馈控制或其他测试。
 
-## 后续可调参数
+## 历史 desktop 调参入口（当前无效）
 
 如果实测侧摆中位不是 `40 deg`，优先调整：
 

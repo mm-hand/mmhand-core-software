@@ -5,6 +5,44 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 desktop/teleop/Posture/.vscode/
+
+# Local run artifacts
+run_data/
 desktop/logs/
-desktop/logs/
+desktop/multiturn_cache.json
+desktop/resources/config/calib_load_snapshot.json
+desktop/resources/config/calibration_bundle.mmcal.json
+desktop/resources/config/calibration_bundle.mmcal.json.bak
+desktop/resources/config/calibration_bundle.mmcal.legacy_v5_*.json
+desktop/resources/config/calibration_bundle.mmcal.before_*.json
+desktop/resources/config/device_state/
+*.mmcal.json
+ESP32-P4ID/
+
+# Local firmware experiments and waveform captures
+ESP32-P4/ServoBoardMain/debug.log
+ESP32-S3/System/build/
+ESP32-P4Test/
+ESP32-P4Test2/
+ESP32-P4Test3/
+ESP32-P4/CanWaveform/
+ESP32-P4/I2cWaveform/
+ESP32-P4/SpiWaveform/
+ESP32-P4/UartLoopback/
+
+# Local analysis/cache artifacts
+.understand-anything/
+tmp/
+.debug/
+desktop/resources/config/calib_load_snapshot.before_new_device_*.json
+desktop/resources/hku_hand_v2_urdf_builtin/
+docs/images/磁编码器舵机拟合_*/
+tools/analyze_encoder_servo_linearity.py
+
+# ROSexample/colcon generated artifacts
+ROSexample/**/build/
+ROSexample/**/install/
+ROSexample/**/log/
+*.egg-info/

@@ -1,0 +1,328 @@
+/**
+ * @file RopeInitController.cpp
+ * @brief 以非阻塞状态机实现 active scope 从 IDLE 正向进入 READY 工作区。
+ * @details 本模块复用统一舵机目标邮箱，不再占用独立 FreeRTOS Task 和 8K 栈。
+ */
+#include "RopeInitController.h"
+
+#include <math.h>
+#include <string.h>
+
+#include "../../modules/actuator/ActuatorCommandGateway.h"
+#include "../../modules/calibration/CalibrationMath.h"
+#include "../../modules/calibration/CalibrationRuntimeStore.h"
+#include "../../modules/calibration/ManualEncoderReferenceStore.h"
+#include "../../modules/calibration/TendonCalibrationLut.h"
+#include "../../config/topology/HardwareMap.h"
+#include "../../platform/rtos/SharedSafetyState.h"
+#include "../../safety/SafetyEventReporter.h"
+#include "../../safety/SafetyRuleRegistry.h"
+#include "../../safety/policies/RopeInitSafetyPolicy.h"
+#include "../../safety/policies/SystemReadinessPolicy.h"
+#include "../../platform/log/FirmwareLog.h"
+#include "../../runtime/ports/SystemEventPort.h"
+
+namespace p4::recovery {
+namespace {
+
+inline constexpr uint32_t kStepPeriodMs = 50;       ///< 保持原 Rope Init 控制频率。
+inline constexpr int32_t kTightenStepCounts = 60;  ///< 主执行器每步收绳量。
+inline constexpr int32_t kReleaseStepCounts = 30;  ///< 双腱副执行器每步放绳量。
+inline constexpr uint8_t kInsideStableSamples = 3; ///< READY 连续确认帧数。
+
+bool appendMotorTarget(ServoTargetBatch_t* batch,
+                       uint8_t motorChannel,
+                       int32_t targetAbs)
+{
+    if (!batch || batch->count >= SERVO_TARGET_BATCH_MAX ||
+        !isMotorChannelValid(motorChannel)) {
+        return false;
+    }
+    ServoTargetCommand_t& command = batch->commands[batch->count++];
+    command.motorChannel = motorChannel;
+    command.position = targetAbs;
+    command.speed = SERVO_TARGET_SPEED_DEFAULT;
+    command.acc = SERVO_TARGET_ACC_DEFAULT;
+    return true;
+}
+
+uint32_t completedDualJointMask(SystemRuntimeContext* sharedData)
+{
+    if (!sharedData) return 0;
+    const uint32_t completed =
+        sharedAtomicLoad(&sharedData->calibration_completed_joint_bitmap);
+    const uint32_t active = sharedAtomicLoad(&sharedData->active_joint_mask) &
+                            kManualEncoderReferenceFullMask;
+    uint32_t dualMask = 0;
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        JointActuatorGroup group = {};
+        if ((completed & active & (1UL << joint)) != 0 &&
+            getJointActuatorGroup(joint, &group) && group.count == 2) {
+            dualMask |= 1UL << joint;
+        }
+    }
+    return dualMask;
+}
+
+uint8_t publishNextDualZeroTarget(SystemRuntimeContext* sharedData,
+                                  const ServoAngleData_t& servo,
+                                  uint32_t nowMs)
+{
+    RopeInitRuntimeState& runtime = sharedData->ropeInitRuntime;
+    if (!p4::state::activeMotorsMultiTurnKnown(sharedData)) {
+        return ROPE_INIT_REASON_MULTITURN_UNKNOWN;
+    }
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
+        const uint32_t bit = 1UL << joint;
+        if ((runtime.zeroPendingJointMask & bit) == 0) continue;
+
+        JointActuatorGroup group = {};
+        JointCalibrationRuntimeSnapshot snapshot = {};
+        if (!getJointActuatorGroup(joint, &group) || group.count != 2 ||
+            !readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
+            return ROPE_INIT_REASON_AUTO_REQUIRED;
+        }
+        const JointCalibrationResult& calib = snapshot.result;
+        if (!calib.success || !calib.tendonLutValid ||
+            calib.tendonLutCount < 3 ||
+            !tendonCalibrationContainsAngle(calib, 0.0f)) {
+            return ROPE_INIT_REASON_AUTO_REQUIRED;
+        }
+
+        ServoTargetBatch_t batch = {};
+        batch.source = SERVO_TARGET_OWNER_CALIBRATION;
+        batch.timestamp = nowMs;
+        for (uint8_t actuator = 0; actuator < 2; ++actuator) {
+            const uint8_t motor = group.actuators[actuator].motorChannel;
+            float target = 0.0f;
+            if (motor >= SERVO_TOTAL_NUM || servo.onlineStatus[motor] == 0) {
+                return ROPE_INIT_REASON_SERVO_OFFLINE;
+            }
+            if (calib.tendonLutMotor[actuator] != motor ||
+                !interpolateTendonCalibrationMotorAbs(
+                    calib, actuator, 0.0f, &target)) {
+                return ROPE_INIT_REASON_AUTO_REQUIRED;
+            }
+            if (!appendMotorTarget(
+                    &batch, motor, (int32_t)lroundf(target))) {
+                return ROPE_INIT_REASON_TARGET_PUBLISH_FAILED;
+            }
+        }
+        if (!p4::actuator::publishLatest(sharedData, batch)) {
+            return ROPE_INIT_REASON_TARGET_PUBLISH_FAILED;
+        }
+        runtime.zeroPendingJointMask &= ~bit;
+        FW_LOG_INFO_PRINTF(
+            "[ROPE INIT] ZERO_TARGET J%02u M%02u=%ld M%02u=%ld pending=0x%08lX\r\n",
+            (unsigned)joint,
+            (unsigned)batch.commands[0].motorChannel,
+            (long)batch.commands[0].position,
+            (unsigned)batch.commands[1].motorChannel,
+            (long)batch.commands[1].position,
+            (unsigned long)runtime.zeroPendingJointMask);
+        return ROPE_INIT_REASON_NONE;
+    }
+    return ROPE_INIT_REASON_AUTO_REQUIRED;
+}
+
+/** 统一提交最终状态、安全事件和内部完成事件，确保一个会话只结束一次。 */
+void finish(SystemRuntimeContext* sharedData,
+            bool success,
+            uint8_t reason,
+            uint32_t nowMs)
+{
+    if (!sharedData || sharedData->ropeInitRuntime.active == 0) return;
+    sharedData->ropeInitRuntime.active = 0;
+    sharedAtomicStore(&sharedData->rope_init_status,
+                      success ? ROPE_INIT_STATUS_SUCCESS
+                              : ROPE_INIT_STATUS_FAILED);
+    sharedAtomicStore(&sharedData->rope_init_reason,
+                      success ? ROPE_INIT_REASON_NONE : reason);
+    sharedAtomicStore(&sharedData->rope_init_timestamp, nowMs);
+
+    if (!success) {
+        const SafetyRuleId ruleId = p4::safety::ruleForRopeInitReason(reason);
+        if (ruleId != SafetyRuleId::None) {
+            p4::safety::reportSafetyRuleEvent(sharedData,
+                                              ruleId,
+                                              reason,
+                                              0);
+        }
+    }
+    postSystemEvent(sharedData,
+                    success ? SYSTEM_EVENT_ROPE_INIT_DONE
+                            : SYSTEM_EVENT_ROPE_INIT_FAILED);
+}
+
+} // namespace
+
+bool startRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
+{
+    if (!sharedData || sharedData->ropeInitRuntime.active != 0) return false;
+    RopeInitRuntimeState& runtime = sharedData->ropeInitRuntime;
+    runtime.active = 1;
+    runtime.insideStableSamples = 0;
+    runtime.zeroPublishActive = 0;
+    runtime.zeroPublishComplete = 0;
+    runtime.zeroPendingJointMask = 0;
+    runtime.beginMs = nowMs;
+    runtime.nextStepMs = nowMs;
+    return true;
+}
+
+void cancelRopeInitController(SystemRuntimeContext* sharedData)
+{
+    if (!sharedData) return;
+    sharedData->ropeInitRuntime.active = 0;
+    sharedData->ropeInitRuntime.insideStableSamples = 0;
+    sharedData->ropeInitRuntime.zeroPublishActive = 0;
+    sharedData->ropeInitRuntime.zeroPublishComplete = 0;
+    sharedData->ropeInitRuntime.zeroPendingJointMask = 0;
+}
+
+void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
+{
+    if (!sharedData || sharedData->ropeInitRuntime.active == 0) return;
+    RopeInitRuntimeState& runtime = sharedData->ropeInitRuntime;
+    if ((int32_t)(nowMs - runtime.nextStepMs) < 0) return;
+    runtime.nextStepMs = nowMs + kStepPeriodMs;
+
+    // Policy 只判断会话是否仍持有控制权；Controller 负责取消或结束。
+    const p4::safety::RopeInitSessionDecision session =
+        p4::safety::evaluateRopeInitSession(sharedData,
+                                            nowMs,
+                                            runtime.beginMs);
+    if (!session.active) {
+        cancelRopeInitController(sharedData);
+        return;
+    }
+    if (session.reason != ROPE_INIT_REASON_NONE) {
+        FW_LOG_INFO_PRINTF("[ROPE INIT] session rejected reason=%u\r\n",
+                           (unsigned)session.reason);
+        finish(sharedData, false, session.reason, nowMs);
+        return;
+    }
+    if (runtime.zeroPublishComplete != 0) {
+        FW_LOG_INFO_PRINTLN("[ROPE INIT] calibration zero targets published");
+        finish(sharedData, true, ROPE_INIT_REASON_NONE, nowMs);
+        return;
+    }
+
+    const uint32_t activeJointMask =
+        sharedAtomicLoad(&sharedData->active_joint_mask) &
+        kManualEncoderReferenceFullMask;
+    MappedAngleData_t mapped = {};
+    ServoAngleData_t servo = {};
+    const uint8_t feedbackReason =
+        p4::safety::readRopeInitFeedback(sharedData,
+                                         nowMs,
+                                         &mapped,
+                                         &servo);
+    if (activeJointMask == 0 || feedbackReason != ROPE_INIT_REASON_NONE) {
+        FW_LOG_INFO_PRINTLN("[ROPE INIT] feedback unavailable");
+        finish(sharedData,
+               false,
+               feedbackReason != ROPE_INIT_REASON_NONE
+                   ? feedbackReason
+                   : ROPE_INIT_REASON_MANUAL_REQUIRED,
+               nowMs);
+        return;
+    }
+
+    if (runtime.zeroPublishActive != 0) {
+        const uint8_t reason =
+            publishNextDualZeroTarget(sharedData, servo, nowMs);
+        if (reason != ROPE_INIT_REASON_NONE) {
+            finish(sharedData, false, reason, nowMs);
+            return;
+        }
+        if (runtime.zeroPendingJointMask == 0) {
+            runtime.zeroPublishComplete = 1;
+        }
+        return;
+    }
+
+    ServoTargetBatch_t batch = {};
+    batch.source = SERVO_TARGET_OWNER_CALIBRATION;
+    batch.timestamp = nowMs;
+    bool allInside = true;
+    uint32_t movedMotorMask = 0;
+
+    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; joint++) {
+        if ((activeJointMask & (1UL << joint)) == 0) continue;
+        if (!p4::safety::ropeInitCalibrationMatchesManual(joint) ||
+            mapped.validFlags[joint] == 0) {
+            finish(sharedData, false, ROPE_INIT_REASON_AUTO_REQUIRED, nowMs);
+            return;
+        }
+        if (mapped.outsideCounts[joint] >=
+            -kFeedbackReadyEnterOutsideToleranceCounts) {
+            continue;
+        }
+
+        allInside = false;
+        JointActuatorGroup group = {};
+        if (!getJointActuatorGroup(joint, &group) || group.count == 0) {
+            finish(sharedData, false, ROPE_INIT_REASON_AUTO_REQUIRED, nowMs);
+            return;
+        }
+        for (uint8_t actuator = 0; actuator < group.count; actuator++) {
+            const uint8_t motor = group.actuators[actuator].motorChannel;
+            if ((movedMotorMask & (1UL << motor)) != 0 ||
+                servo.onlineStatus[motor] == 0) {
+                finish(sharedData, false, ROPE_INIT_REASON_SERVO_OFFLINE, nowMs);
+                return;
+            }
+            const int32_t tendonDelta =
+                actuator == 0 ? kTightenStepCounts : -kReleaseStepCounts;
+            const int32_t target = motorApplyTendonDelta(
+                motor, servo.servoAngles[motor], tendonDelta);
+            if (!appendMotorTarget(&batch, motor, target)) {
+                finish(sharedData,
+                       false,
+                       ROPE_INIT_REASON_TARGET_PUBLISH_FAILED,
+                       nowMs);
+                return;
+            }
+            movedMotorMask |= 1UL << motor;
+        }
+    }
+
+    if (allInside) {
+        if (runtime.insideStableSamples < 255) runtime.insideStableSamples++;
+        if (runtime.insideStableSamples >= kInsideStableSamples) {
+            if (sharedAtomicLoad(
+                    &sharedData->calibration_rope_init_pending) != 0) {
+                runtime.zeroPendingJointMask = completedDualJointMask(sharedData);
+                if (runtime.zeroPendingJointMask != 0) {
+                    runtime.zeroPublishActive = 1;
+                    runtime.insideStableSamples = 0;
+                    runtime.beginMs = nowMs;
+                    FW_LOG_INFO_PRINTF(
+                        "[ROPE INIT] sequential calibration zero targets joints=0x%08lX\r\n",
+                        (unsigned long)runtime.zeroPendingJointMask);
+                    return;
+                }
+            }
+            FW_LOG_INFO_PRINTF("[ROPE INIT] complete joints=0x%08lX\r\n",
+                               (unsigned long)activeJointMask);
+            finish(sharedData, true, ROPE_INIT_REASON_NONE, nowMs);
+        }
+        return;
+    }
+
+    runtime.insideStableSamples = 0;
+    if (batch.count == 0 || !p4::actuator::publishLatest(sharedData, batch)) {
+        finish(sharedData,
+               false,
+               ROPE_INIT_REASON_TARGET_PUBLISH_FAILED,
+               nowMs);
+    }
+}
+
+uint8_t ropeInitActiveScopeRejectReason(SystemRuntimeContext* sharedData)
+{
+    return p4::safety::evaluateRopeInitActiveScope(sharedData);
+}
+
+} // namespace p4::recovery

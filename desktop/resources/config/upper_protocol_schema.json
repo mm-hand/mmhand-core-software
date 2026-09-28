@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "description": "MMHand Desktop 与 ESP32-P4 当前唯一上位串口协议契约",
+  "maintenance_note": "只修改本文件，再运行 tools/generate_upper_protocol.py；payload_bytes 不包含命令字和帧尾",
+  "frame": {
+    "header": 254,
+    "tail": 255,
+    "disconnect_sentinel": 32767,
+    "p4_timestamp_bytes": 4
+  },
+  "dimensions": {
+    "encoder_count": 21,
+    "motor_count": 27,
+    "encoder_raw_modulo": 16384
+  },
+  "packets": [
+    {"name": "PACKET_TYPE_SENSOR", "value": 1, "timestamp": true, "description": "21 关节映射角"},
+    {"name": "PACKET_TYPE_SERVO_ANGLE", "value": 3, "timestamp": true, "description": "27 路 logical ABS"},
+    {"name": "PACKET_TYPE_SERVO_TELEM", "value": 5, "timestamp": true, "description": "舵机遥测"},
+    {"name": "PACKET_TYPE_PROTO_ACK", "value": 6, "timestamp": true, "description": "命令 ACK"},
+    {"name": "PACKET_TYPE_FAULT_STATUS", "value": 7, "timestamp": true, "description": "故障与在线位图"},
+    {"name": "PACKET_TYPE_SERVO_RAW", "value": 9, "timestamp": true, "description": "27 路单圈 raw"},
+    {"name": "PACKET_TYPE_TACTILE", "value": 10, "timestamp": true, "description": "五指触觉摘要"},
+    {"name": "PACKET_TYPE_ENCODER_RAW", "value": 11, "timestamp": true, "description": "21 路磁编 raw"},
+    {"name": "PACKET_TYPE_SYSTEM_STATUS", "value": 12, "timestamp": true, "description": "状态机与 owner"},
+    {"name": "PACKET_TYPE_MOTOR_ABS_LIMIT", "value": 13, "timestamp": true, "description": "标定 ABS 边界"},
+    {"name": "PACKET_TYPE_JOINT_CALIB_SNAPSHOT", "value": 14, "timestamp": true, "description": "Auto/LUT 快照"},
+    {"name": "PACKET_TYPE_TACTILE_FULL", "value": 15, "timestamp": true, "description": "全量触觉阵列"},
+    {"name": "PACKET_TYPE_CALIB_DIAG", "value": 16, "timestamp": false, "description": "结构化标定诊断"},
+    {"name": "PACKET_TYPE_TASK_DIAG", "value": 17, "timestamp": false, "description": "RTOS 任务诊断"},
+    {"name": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE", "value": 18, "timestamp": true, "description": "21 路 Manual Min/Max"},
+    {"name": "PACKET_TYPE_SERVO_LOGICAL_RANGE", "value": 19, "timestamp": true, "description": "27 路会话 logical range"},
+    {"name": "PACKET_TYPE_PRODUCT_FINGERPRINT", "value": 20, "timestamp": true, "description": "产品配置指纹"},
+    {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"},
+    {"name": "PACKET_TYPE_SAFETY_EVENT", "value": 22, "timestamp": true, "description": "去重后的结构化安全规则事件"},
+    {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"},
+    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角、舵机CMD和下位机时间"}
+  ],
+  "commands": [
+    {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},
+    {"name": "CMD_ANGLE_CTRL", "value": 203, "payload_bytes": 84, "description": "下发完整 21 路关节目标角，单位 degree"},
+    {"name": "CMD_START", "value": 204, "payload_bytes": 0, "description": "历史启动命令，进入控制申请流程"},
+    {"name": "CMD_STOP", "value": 205, "payload_bytes": 0, "description": "停止当前运行并撤销待执行目标"},
+    {"name": "CMD_RESET", "value": 206, "payload_bytes": 0, "description": "清除允许恢复的系统故障锁存"},
+    {"name": "CMD_MOTOR_POS_ABS", "value": 211, "payload_bytes": 108, "description": "27 路 logical ABS 直控目标，每路 int32 counts"},
+    {"name": "CMD_ACTIVE_SCOPE", "value": 215, "payload_bytes": 9, "description": "同步 active joint/motor mask 与 control enable"},
+    {"name": "CMD_RUN_FEEDBACK", "value": 216, "payload_bytes": 0, "description": "申请状态机进入负反馈运行"},
+    {"name": "CMD_PAUSE", "value": 217, "payload_bytes": 0, "description": "暂停当前负反馈或直控运行"},
+    {"name": "CMD_RESTORE_MULTITURN", "value": 218, "payload_bytes": 112, "description": "按位图恢复 27 路 logical ABS 多圈快照"},
+    {"name": "CMD_HOST_HEARTBEAT", "value": 220, "payload_bytes": 0, "description": "刷新上位机在线计时器，不携带业务数据"},
+    {"name": "CMD_MOTOR_POS_ABS_ONE", "value": 222, "payload_bytes": 5, "description": "单台 Mxx logical ABS 直控，Mxx 加 int32 counts"},
+    {"name": "CMD_CALIB_LOAD_JOINT", "value": 223, "payload_bytes": 189, "description": "恢复单关节唯一 Auto/LUT v4 标定快照"},
+    {"name": "CMD_CALIB_LOAD_LIMITS", "value": 224, "payload_bytes": 224, "description": "批量恢复 27 路 ABS 标定范围与有效位图"},
+    {"name": "CMD_CLEAR_CALIBRATION", "value": 229, "payload_bytes": 0, "description": "清除全部 Auto/LUT 标定结果，保留 Manual"},
+    {"name": "CMD_MANUAL_ENCODER_REFERENCE", "value": 230, "payload_bytes": 85, "description": "写入或清除 21 组 Manual Min/Max 原始磁编值"},
+    {"name": "CMD_MANUAL_ENCODER_QUERY", "value": 231, "payload_bytes": 0, "description": "请求 P4 立即回传 Manual 标定表"},
+    {"name": "CMD_MANUAL_ENCODER_SINGLE", "value": 232, "payload_bytes": 5, "description": "写入单个 Jxx 的 Manual Min/Max"},
+    {"name": "CMD_ROPE_INIT", "value": 233, "payload_bytes": 4, "description": "按 21 位关节掩码启动 P4 Rope Init"},
+    {"name": "CMD_ANGLE_CTRL_MASKED", "value": 234, "payload_bytes": 88, "description": "按关节掩码下发稀疏关节目标角"},
+    {"name": "CMD_CLEAR_CALIBRATION_SCOPE", "value": 235, "payload_bytes": 4, "description": "按电机位图清除关联关节 Auto/LUT"},
+    {"name": "CMD_SERVO_RESET_ZERO", "value": 236, "payload_bytes": 4, "description": "标定前归零所选舵机硬件圈数并清除对应多圈锚点"},
+    {"name": "CMD_STATE_SYNC_REQUEST", "value": 237, "payload_bytes": 4, "description": "按位请求静态状态、标定快照、路由和产品指纹"},
+    {"name": "CMD_TASK_DIAG_SUBSCRIBE", "value": 238, "payload_bytes": 1, "description": "打开或关闭 RTOS 任务诊断按需上报"},
+    {"name": "CMD_CONTROL_TRACE_SUBSCRIBE", "value": 239, "payload_bytes": 1, "description": "打开或关闭统一下位机时间的控制跟踪流"}
+  ],
+  "proto_ack_status": {
+    "PROTO_ACK_STATUS_OK": 0,
+    "PROTO_ACK_STATUS_UNSUPPORTED_MODE": 1,
+    "PROTO_ACK_STATUS_QUEUED": 2,
+    "PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED": 3,
+    "PROTO_ACK_STATUS_INVALID_DATA": 4,
+    "PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH": 6,
+    "PROTO_ACK_STATUS_CALIBRATION_REQUIRED": 7
+  },
+  "proto_ack_status_descriptions": {
+    "PROTO_ACK_STATUS_OK": "命令已同步执行成功",
+    "PROTO_ACK_STATUS_UNSUPPORTED_MODE": "当前状态或 owner 不允许该命令",
+    "PROTO_ACK_STATUS_QUEUED": "异步请求已入队，最终结果看状态包",
+    "PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED": "缺少目标关节 Manual Min/Max",
+    "PROTO_ACK_STATUS_INVALID_DATA": "字段、长度、索引或数值范围非法",
+    "PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH": "Auto 快照绑定的 Manual CRC 不一致",
+    "PROTO_ACK_STATUS_CALIBRATION_REQUIRED": "缺少目标关节有效 Auto/LUT"
+  },
+  "manual_save_status": {
+    "MANUAL_SAVE_STATUS_NONE": 0,
+    "MANUAL_SAVE_STATUS_OK": 1,
+    "MANUAL_SAVE_STATUS_FAILED": 2
+  },
+  "manual_save_status_descriptions": {
+    "MANUAL_SAVE_STATUS_NONE": "本次上电尚未收到桌面端 Manual 数据",
+    "MANUAL_SAVE_STATUS_OK": "最近一次 Manual 已提交到 P4 RAM 并完成校验",
+    "MANUAL_SAVE_STATUS_FAILED": "最近一次 Manual RAM 提交或校验失败"
+  },
+  "state_sync_masks": {
+    "STATE_SYNC_MANUAL_REFERENCE": 1,
+    "STATE_SYNC_MOTOR_ABS_LIMIT": 2,
+    "STATE_SYNC_SERVO_LOGICAL_RANGE": 4,
+    "STATE_SYNC_JOINT_CALIBRATION": 8,
+    "STATE_SYNC_SERVO_ROUTE": 16,
+    "STATE_SYNC_PRODUCT_FINGERPRINT": 32,
+    "STATE_SYNC_MULTITURN_STATE": 64,
+    "STATE_SYNC_ALL": 127
+  },
+  "state_sync_masks_descriptions": {
+    "STATE_SYNC_MANUAL_REFERENCE": "同步 21 路 Manual Min/Max",
+    "STATE_SYNC_MOTOR_ABS_LIMIT": "同步 27 路 ABS Limit",
+    "STATE_SYNC_SERVO_LOGICAL_RANGE": "同步 27 路逻辑行程",
+    "STATE_SYNC_JOINT_CALIBRATION": "同步全部有效 Auto/LUT 标定快照",
+    "STATE_SYNC_SERVO_ROUTE": "同步动态舵机 BUS 路由",
+    "STATE_SYNC_PRODUCT_FINGERPRINT": "同步产品配置指纹",
+    "STATE_SYNC_MULTITURN_STATE": "同步桌面 JSON 多圈恢复结果",
+    "STATE_SYNC_ALL": "同步全部静态运行契约"
+  },
+  "p4_runtime": {
+    "serial_rx_buffer_size": 1024,
+    "heartbeats_ms": {
+      "kFaultStatusHeartbeatMs": 200,
+      "kSystemStatusHeartbeatMs": 100
+    }
+  }
+}

@@ -5,6 +5,7 @@
 #include <cstring>
 
 namespace {
+// 触觉模块寄存器读取协议：5字节命令头、1字节状态、负载、1字节CRC8。
 constexpr uint8_t kCmdRead = 0xFB;
 constexpr uint16_t kLenCmdHead = 5;
 constexpr uint16_t kLenStatus = 1;
@@ -13,27 +14,26 @@ constexpr uint16_t kForceSummaryAddr = 1008;
 constexpr uint16_t kForceSummaryLen = 3;
 constexpr uint16_t kForceDistributionAddr = 1038;
 constexpr uint16_t kForceDistributionMaxLen = TACTILE_PAD_TAXELS * TACTILE_AXIS_COUNT;
-constexpr uint16_t kDelayCsHoldUs = 10;
+// 板级片选建立、模块准备响应及释放片选所需延时。
+constexpr uint16_t kDelayCsHoldUs = 30;
 constexpr uint16_t kDelayResponseUs = 100;
 constexpr uint16_t kDelaySelectSettleUs = 80;
-constexpr uint8_t kReadRetryCount = 1;
-constexpr uint8_t kRetryDelayMs = 2;
+constexpr uint8_t kSummaryReadAttempts = 2;
+constexpr uint8_t kFullReadAttempts = 1;
+constexpr uint16_t kRetryDelayUs = 200;
 
 struct SensorPattern {
-    bool enabled;
-    uint8_t pattern;
+    bool enabled;  ///< 是否扫描该物理模块。
+    uint8_t pattern;///< GPIO17/14/13/6/7组成的五位路由编码。
 };
 
+/** @brief 合成“手指组高三位+组内触觉模块低两位”的选择器编码。 */
 constexpr uint8_t makeSelectorPattern(uint8_t group, uint8_t sensorBits) {
     return (uint8_t)((TACTILE_GROUP_CHANNEL_MAP[group] << 2) | (sensorBits & 0x03));
 }
 
-// Logical desktop order is thumb, index, middle, ring, pinky.
-// Pattern bits are GPIO17 GPIO14 GPIO13 GPIO6 GPIO7 as printed by the scanner.
-// Keep the explicit group map from Config.h so logical fingers stay aligned
-// with the PCB route selector discovered during bring-up.
-// CS_A/CS_B are selector address bits on this board. The scanner default is:
-// S0=DP/fingertip: 11, S1=IP/middle phalanx: 10, S2=CP/proximal phalanx: 01.
+// 显式表保存实机调通得到的“逻辑手指×模块”到选择器编码映射。
+// CS_A/CS_B是组内地址位：S0指尖=11、S1中段=10、S2近端=01。
 constexpr SensorPattern kSensorPatterns[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GROUP] = {
     {{true, makeSelectorPattern(0, 0x03)}, {true, makeSelectorPattern(0, 0x02)}, {true, makeSelectorPattern(0, 0x01)}},
     {{true, makeSelectorPattern(1, 0x03)}, {true, makeSelectorPattern(1, 0x02)}, {true, makeSelectorPattern(1, 0x01)}},
@@ -42,6 +42,7 @@ constexpr SensorPattern kSensorPatterns[TACTILE_GROUP_NUM][TACTILE_SENSOR_PER_GR
     {{true, makeSelectorPattern(4, 0x03)}, {true, makeSelectorPattern(4, 0x02)}, {true, makeSelectorPattern(4, 0x01)}},
 };
 
+/** @brief 先启用内部上拉，再切成高电平输出，降低上电片选毛刺风险。 */
 void configureSelectPinHighWithPullup(int pin) {
     if (pin < 0) {
         return;
@@ -55,20 +56,7 @@ void configureSelectPinHighWithPullup(int pin) {
     gpio_pullup_en((gpio_num_t)pin);
 }
 
-uint8_t axisMagnitude(const uint8_t* axes) {
-    const int x = abs((int8_t)axes[0]);
-    const int y = abs((int8_t)axes[1]);
-    const int z = axes[2];
-    int value = x;
-    if (y > value) {
-        value = y;
-    }
-    if (z > value) {
-        value = z;
-    }
-    return (uint8_t)value;
-}
-
+/** @brief 返回不同触觉模块对应的全量力数组字节数。 */
 uint16_t sensorForceLen(uint8_t sensor) {
     switch (sensor) {
         case 0:
@@ -82,6 +70,8 @@ uint16_t sensorForceLen(uint8_t sensor) {
     }
 }
 
+// [待确认是否启用或删除] 当前未调用；可从全量力数据推导摘要，理论上可省去一次摘要寄存器读取，
+// 但推导规则是否等价于模块固件的摘要算法需要实机确认。
 void deriveGlobalFromForces(const uint8_t* forces, uint16_t forceLen, uint8_t* globalOut, uint8_t* rawOut) {
     if (!forces || !globalOut || forceLen < TACTILE_AXIS_COUNT) {
         return;
@@ -123,45 +113,7 @@ void deriveGlobalFromForces(const uint8_t* forces, uint16_t forceLen, uint8_t* g
     }
 }
 
-void sensorPointers(
-    TactileData& data,
-    uint8_t group,
-    uint8_t sensor,
-    uint8_t** global,
-    uint8_t** rawSummary,
-    uint8_t** forces = nullptr,
-    uint16_t* forceLen = nullptr
-) {
-    TacGroup& grp = data.groups[group];
-    uint8_t* globals[TACTILE_SENSOR_PER_GROUP] = {
-        grp.sensor_A.global,
-        grp.sensor_B.global,
-        grp.sensor_C.global,
-    };
-    uint8_t* raws[TACTILE_SENSOR_PER_GROUP] = {
-        grp.sensor_A.rawSummary,
-        grp.sensor_B.rawSummary,
-        grp.sensor_C.rawSummary,
-    };
-    uint8_t* forcePtrs[TACTILE_SENSOR_PER_GROUP] = {
-        &grp.sensor_A.forces[0][0],
-        &grp.sensor_B.forces[0][0],
-        &grp.sensor_C.forces[0][0],
-    };
-    if (global) {
-        *global = globals[sensor];
-    }
-    if (rawSummary) {
-        *rawSummary = raws[sensor];
-    }
-    if (forces) {
-        *forces = forcePtrs[sensor];
-    }
-    if (forceLen) {
-        *forceLen = sensorForceLen(sensor);
-    }
-}
-
+// CRC8查找表：以256字节Flash换取逐字节O(1)更新，适合每轮大量触觉数据校验。
 constexpr uint8_t kCrc8Table[] = {
     0x00, 0xC0, 0xC1, 0x01, 0xC3, 0x03, 0x02, 0xC2, 0xC6, 0x06, 0x07, 0xC7, 0x05, 0xC5, 0xC4, 0x04,
     0xCC, 0x0C, 0x0D, 0xCD, 0x0F, 0xCF, 0xCE, 0x0E, 0x0A, 0xCA, 0xCB, 0x0B, 0xC9, 0x09, 0x08, 0xC8,
@@ -182,12 +134,25 @@ constexpr uint8_t kCrc8Table[] = {
 };
 } // namespace
 
+// 全局唯一触觉HAL对象。
 HalTactile tactile;
 
-HalTactile::HalTactile() : _mutex(xSemaphoreCreateMutex()), _data(new TactileData()), _spi(nullptr), _spiReady(false), _diag{} {
+/**
+ * @brief 创建快照互斥量和数据存储。
+ * @note [待确认是否简化] _data只在全局对象生命周期使用，可改为类内直接成员以避免new。
+ */
+HalTactile::HalTactile()
+    : _mutex(xSemaphoreCreateMutex()),
+      _data(new TactileData()),
+      _spi(nullptr),
+      _spiReady(false),
+      _diag{},
+      _lastReadResult{TactileReadFailReason::None, 0, 0, 0},
+      _lastReadAttempts(0) {
     memset(_data, 0, sizeof(TactileData));
 }
 
+/** @brief 在10秒启动等待前释放所有触觉路由，避免同时选中多个模块。 */
 void HalTactile::prepareBootSelectPins() {
     configureSelectPinHighWithPullup(PIN_MUX_G);
 
@@ -204,6 +169,7 @@ void HalTactile::prepareBootSelectPins() {
     setAllSelectPinsHigh();
 }
 
+/** @brief 初始化选择线和SPI；失败时保留_spiReady=false供update上报全失败。 */
 void HalTactile::begin() {
     prepareBootSelectPins();
     _spiReady = setupSPI();
@@ -212,12 +178,14 @@ void HalTactile::begin() {
     }
 }
 
+/** @brief 获取公共SPI模块创建的触觉设备句柄。 */
 bool HalTactile::setupSPI() {
     _spi = beginTactileSensorSpi() ? tactileSpiDevice : nullptr;
     setAllSelectPinsHigh();
     return _spi != nullptr;
 }
 
+/** @brief 使用查表法计算协议CRC8，初值0xFF。 */
 uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
     uint8_t crc = 0xFF;
     while (len--) {
@@ -226,6 +194,7 @@ uint8_t HalTactile::crc8(const uint8_t* data, uint32_t len) {
     return crc;
 }
 
+/** @brief 将所有地址/使能线恢复为非选中状态，并等待硬件稳定。 */
 void HalTactile::setAllSelectPinsHigh() {
     digitalWrite(PIN_MUX_G, HIGH);
     digitalWrite(PIN_TAC_CS_A, HIGH);
@@ -239,6 +208,7 @@ void HalTactile::setAllSelectPinsHigh() {
     delayMicroseconds(kDelaySelectSettleUs);
 }
 
+/** @brief 输出五位物理选择编码，选中一个手指上的一个触觉模块。 */
 void HalTactile::setSelectorPattern(uint8_t pattern) {
     digitalWrite(PIN_TAC_CS_A, (pattern & 0x01) ? HIGH : LOW);
     digitalWrite(PIN_TAC_CS_B, (pattern & 0x02) ? HIGH : LOW);
@@ -251,19 +221,23 @@ void HalTactile::setSelectorPattern(uint8_t pattern) {
     delayMicroseconds(kDelaySelectSettleUs);
 }
 
+/**
+ * @brief 向指定模块发送寄存器读取命令，再读取状态、负载和CRC8。
+ * @note 命令和响应拆成两次SPI事务，但在此期间保持同一物理路由被选中。
+ */
 bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint8_t* payload, uint16_t payloadLen) {
-    if (!_spiReady || _spi == nullptr || !payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
+    _lastReadResult = {TactileReadFailReason::None, 0, 0, 0};
+    if (!payload || payloadLen == 0 || payloadLen > kForceDistributionMaxLen) {
+        _lastReadResult.reason = TactileReadFailReason::InvalidArgument;
+        return false;
+    }
+    if (!_spiReady || _spi == nullptr) {
+        _lastReadResult.reason = TactileReadFailReason::SpiNotReady;
         return false;
     }
 
-    const bool locked =
-        (g_sensorSelectMutex == NULL) ||
-        (xSemaphoreTake(g_sensorSelectMutex, pdMS_TO_TICKS(20)) == pdTRUE);
-    if (!locked) {
-        memset(payload, 0, payloadLen);
-        return false;
-    }
-
+    // 触觉使用独立SPI2和GPIO7/6/13/14/17/18选路线，可与磁编SPI3并行工作。
+    // 栈上按最大52触元帧分配DMA对齐缓冲；摘要读取也复用同一大小。
     uint8_t raw[kLenCmdHead + kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
     uint8_t zeros[kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
     uint8_t response[kLenStatus + kForceDistributionMaxLen + kLenCrc] __attribute__((aligned(4))) = {0};
@@ -280,6 +254,7 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     setSelectorPattern(selectorPattern);
     delayMicroseconds(kDelayCsHoldUs);
 
+    // 第一阶段只发送5字节读取命令。
     spi_transaction_t commandTransaction = {};
     commandTransaction.length = kLenCmdHead * 8U;
     commandTransaction.tx_buffer = raw;
@@ -287,6 +262,7 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
 
     delayMicroseconds(kDelayResponseUs);
 
+    // 第二阶段发送0填充时钟，同时接收状态+负载+CRC。
     spi_transaction_t responseTransaction = {};
     responseTransaction.length = responseLen * 8U;
     responseTransaction.tx_buffer = zeros;
@@ -297,39 +273,32 @@ bool HalTactile::readRegisters(uint8_t selectorPattern, uint16_t startAddr, uint
     setAllSelectPinsHigh();
 
     if (!commandOk || !responseOk) {
+        _lastReadResult.reason = commandOk
+            ? TactileReadFailReason::ResponseTransport
+            : TactileReadFailReason::CommandTransport;
         memset(payload, 0, payloadLen);
-        if (g_sensorSelectMutex != NULL) {
-            xSemaphoreGive(g_sensorSelectMutex);
-        }
         return false;
     }
     memcpy(raw + kLenCmdHead, response, responseLen);
 
+    // CRC覆盖命令头、状态和负载，不包含末尾CRC本身。
     const uint8_t recvCrc = raw[totalLen - 1];
     const uint8_t calcCrc = crc8(raw, totalLen - 1);
-    _diag.lastStatus = raw[kLenCmdHead];
-    _diag.lastRecvCrc = recvCrc;
-    _diag.lastCalcCrc = calcCrc;
+    _lastReadResult.status = raw[kLenCmdHead];
+    _lastReadResult.recvCrc = recvCrc;
+    _lastReadResult.calcCrc = calcCrc;
 
     if (recvCrc != calcCrc) {
-        _diag.lastFailedPattern = selectorPattern;
-        _diag.lastFailStatus = raw[kLenCmdHead];
-        _diag.lastFailRecvCrc = recvCrc;
-        _diag.lastFailCalcCrc = calcCrc;
+        _lastReadResult.reason = TactileReadFailReason::CrcMismatch;
         memset(payload, 0, payloadLen);
-        if (g_sensorSelectMutex != NULL) {
-            xSemaphoreGive(g_sensorSelectMutex);
-        }
         return false;
     }
 
     memcpy(payload, raw + kLenCmdHead + kLenStatus, payloadLen);
-    if (g_sensorSelectMutex != NULL) {
-        xSemaphoreGive(g_sensorSelectMutex);
-    }
     return true;
 }
 
+/** @brief 读取单模块3字节摘要寄存器，失败时清零输出。 */
 bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* globalOut, uint8_t* rawOut) {
     if (!globalOut || groupIndex >= TACTILE_GROUP_NUM || sensorIndex >= TACTILE_SENSOR_PER_GROUP) {
         return false;
@@ -348,12 +317,16 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
     const uint8_t selectorPattern = cfg.pattern;
 
     bool ok = false;
-    for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
+    _lastReadAttempts = 0;
+    for (uint8_t attempt = 0; attempt < kSummaryReadAttempts; attempt++) {
+        _lastReadAttempts++;
         ok = readRegisters(selectorPattern, kForceSummaryAddr, payload, kForceSummaryLen);
         if (ok) {
             break;
         }
-        delay(kRetryDelayMs);
+        if (attempt + 1 < kSummaryReadAttempts) {
+            delayMicroseconds(kRetryDelayUs);
+        }
     }
     if (ok) {
         globalOut[0] = payload[0];
@@ -373,6 +346,7 @@ bool HalTactile::readSensorSummary(uint8_t groupIndex, uint8_t sensorIndex, uint
     return ok;
 }
 
+/** @brief 读取单模块完整触元力分布，失败时清零整块输出。 */
 bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8_t* forcesOut, uint16_t forcesLen) {
     if (
         !forcesOut ||
@@ -392,12 +366,16 @@ bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8
 
     const uint8_t selectorPattern = cfg.pattern;
     bool ok = false;
-    for (uint8_t attempt = 0; attempt < kReadRetryCount; attempt++) {
+    _lastReadAttempts = 0;
+    for (uint8_t attempt = 0; attempt < kFullReadAttempts; attempt++) {
+        _lastReadAttempts++;
         ok = readRegisters(selectorPattern, kForceDistributionAddr, forcesOut, forcesLen);
         if (ok) {
             break;
         }
-        delay(kRetryDelayMs);
+        if (attempt + 1 < kFullReadAttempts) {
+            delayMicroseconds(kRetryDelayUs);
+        }
     }
     if (!ok) {
         memset(forcesOut, 0, forcesLen);
@@ -405,6 +383,10 @@ bool HalTactile::readSensorForces(uint8_t groupIndex, uint8_t sensorIndex, uint8
     return ok;
 }
 
+/**
+ * @brief 扫描5组×3模块，每个模块分别读取摘要和全量力分布。
+ * @note 一轮共最多30次寄存器读取；这是33ms任务周期中的主要耗时来源。
+ */
 void HalTactile::update() {
     TactileData next{};
     TactileReadDiag nextDiag = _diag;
@@ -412,7 +394,57 @@ void HalTactile::update() {
     nextDiag.enabledMask = 0;
     nextDiag.okReads = 0;
     nextDiag.failedReads = 0;
+    nextDiag.summaryOkMask = 0;
+    nextDiag.fullOkMask = 0;
     nextDiag.okMask = 0;
+    nextDiag.commandFailMask = 0;
+    nextDiag.responseFailMask = 0;
+    nextDiag.crcFailMask = 0;
+    nextDiag.statusNonzeroMask = 0;
+    nextDiag.summaryRetryRecoveredMask = 0;
+
+    auto incrementSaturated = [](uint16_t& value) {
+        if (value != UINT16_MAX) value++;
+    };
+    auto recordRead = [&](uint8_t moduleIndex, bool summary, bool ok) {
+        const uint16_t moduleBit = (uint16_t)(1U << moduleIndex);
+        nextDiag.lastStatus = _lastReadResult.status;
+        nextDiag.lastRecvCrc = _lastReadResult.recvCrc;
+        nextDiag.lastCalcCrc = _lastReadResult.calcCrc;
+        nextDiag.moduleLastStatus[moduleIndex] = _lastReadResult.status;
+        if (_lastReadResult.status != 0) nextDiag.statusNonzeroMask |= moduleBit;
+        if (summary) {
+            incrementSaturated(ok
+                ? nextDiag.summarySuccessCount[moduleIndex]
+                : nextDiag.summaryFailureCount[moduleIndex]);
+            if (ok && _lastReadAttempts > 1) nextDiag.summaryRetryRecoveredMask |= moduleBit;
+            if (!ok) nextDiag.summaryLastFailReason[moduleIndex] = (uint8_t)_lastReadResult.reason;
+        } else {
+            incrementSaturated(ok
+                ? nextDiag.fullSuccessCount[moduleIndex]
+                : nextDiag.fullFailureCount[moduleIndex]);
+            if (!ok) nextDiag.fullLastFailReason[moduleIndex] = (uint8_t)_lastReadResult.reason;
+        }
+        if (ok) return;
+        switch (_lastReadResult.reason) {
+            case TactileReadFailReason::CommandTransport:
+                nextDiag.commandFailMask |= moduleBit;
+                break;
+            case TactileReadFailReason::ResponseTransport:
+                nextDiag.responseFailMask |= moduleBit;
+                break;
+            case TactileReadFailReason::CrcMismatch:
+                nextDiag.crcFailMask |= moduleBit;
+                break;
+            default:
+                break;
+        }
+        nextDiag.lastFailedPattern = kSensorPatterns[moduleIndex / TACTILE_SENSOR_PER_GROUP]
+            [moduleIndex % TACTILE_SENSOR_PER_GROUP].pattern;
+        nextDiag.lastFailStatus = _lastReadResult.status;
+        nextDiag.lastFailRecvCrc = _lastReadResult.recvCrc;
+        nextDiag.lastFailCalcCrc = _lastReadResult.calcCrc;
+    };
 
     if (_spiReady) {
         for (uint8_t g = 0; g < TACTILE_GROUP_NUM; g++) {
@@ -442,12 +474,26 @@ void HalTactile::update() {
                 }
                 nextDiag.enabledMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
 
+                // [待确认是否优化] 摘要与全量分开读取；若确认deriveGlobalFromForces等价，可减少一半事务数。
                 const bool summaryOk = readSensorSummary(g, s, globals[s], rawSummaries[s]);
+                const uint8_t moduleIndex = g * TACTILE_SENSOR_PER_GROUP + s;
+                recordRead(moduleIndex, true, summaryOk);
                 const bool forcesOk = readSensorForces(g, s, forces[s], forceLen);
+                recordRead(moduleIndex, false, forcesOk);
+                const uint16_t moduleBit = (uint16_t)(1U << moduleIndex);
+
+                // 摘要与全量有效性必须独立记录：摘要为零可能是正常无受力，
+                // 只有SPI事务及CRC8失败时才清除summaryOkMask对应位。
+                if (summaryOk) {
+                    nextDiag.summaryOkMask |= moduleBit;
+                }
+                if (forcesOk) {
+                    nextDiag.fullOkMask |= moduleBit;
+                }
 
                 if (summaryOk && forcesOk) {
                     nextDiag.okReads++;
-                    nextDiag.okMask |= (uint16_t)(1U << (g * TACTILE_SENSOR_PER_GROUP + s));
+                    nextDiag.okMask |= moduleBit;
                 } else {
                     nextDiag.failedReads++;
                 }
@@ -457,17 +503,15 @@ void HalTactile::update() {
         nextDiag.failedReads = TACTILE_GROUP_NUM * TACTILE_SENSOR_PER_GROUP;
     }
 
+    // 先在局部next中构建完整帧，再在短临界区内一次替换，避免消费者读到半帧。
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(10))) {
         *_data = next;
-        _diag.frameCount = nextDiag.frameCount;
-        _diag.enabledMask = nextDiag.enabledMask;
-        _diag.okReads = nextDiag.okReads;
-        _diag.failedReads = nextDiag.failedReads;
-        _diag.okMask = nextDiag.okMask;
+        _diag = nextDiag;
         xSemaphoreGive(_mutex);
     }
 }
 
+/** @brief 在互斥保护下复制最新触觉快照。 */
 TactileData HalTactile::getData() {
     static TactileData ret;
 
@@ -478,6 +522,7 @@ TactileData HalTactile::getData() {
     return ret;
 }
 
+/** @brief 在互斥保护下复制诊断统计。 */
 TactileReadDiag HalTactile::getDiagnostics() {
     TactileReadDiag ret{};
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(10))) {

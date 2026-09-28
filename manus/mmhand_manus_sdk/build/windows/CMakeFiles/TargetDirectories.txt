@@ -1,0 +1,3 @@
+D:/hand/main/mmhand/manus/mmhand_manus_sdk/build/windows/CMakeFiles/mmhand_manus_sdk.dir
+D:/hand/main/mmhand/manus/mmhand_manus_sdk/build/windows/CMakeFiles/ALL_BUILD.dir
+D:/hand/main/mmhand/manus/mmhand_manus_sdk/build/windows/CMakeFiles/ZERO_CHECK.dir

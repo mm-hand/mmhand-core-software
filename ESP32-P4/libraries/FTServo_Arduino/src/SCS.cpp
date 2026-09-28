@@ -331,6 +331,22 @@ int	SCS::Ack(u8 ID)
 
 int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 {
+	const int txResult = syncReadPacketTxOnly(ID, IDN, MemAddr, nLen);
+	if(txResult <= 0){
+		return txResult;
+	}
+	// 保留厂商同步接口供示例使用；P4正式链路使用TxOnly+CollectAvailable。
+	syncReadRxBuffLen = readSCS(syncReadRxBuff, syncReadRxBuffMax, syncTimeOut);
+	return syncReadRxBuffLen;
+}
+
+int SCS::syncReadPacketTxOnly(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
+{
+	// syncReadBegin 已发现容量不足时，不发送必然无法完整接收的广播请求。
+	if(!ID || IDN == 0 || syncReadRxBuffMax == 0){
+		u8Error = ERR_BUFF_LEN;
+		return 0;
+	}
 	rFlushSCS();
 	syncReadRxPacketLen = nLen;
 	u8 checkSum = (4+0xfe) + IDN + MemAddr + nLen + INST_SYNC_READ;
@@ -349,24 +365,38 @@ int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 	checkSum = ~checkSum;
 	writeSCS(checkSum);
 	wFlushSCS();
-	
-	syncReadRxBuffLen = readSCS(syncReadRxBuff, syncReadRxBuffMax, syncTimeOut);
-	return syncReadRxBuffLen;
+	return IDN + 8;
+}
+
+int SCS::syncReadCollectAvailable()
+{
+	if(syncReadRxBuffMax == 0 || syncReadRxBuffLen >= syncReadRxBuffMax){
+		return 0;
+	}
+	const u16 remaining = syncReadRxBuffMax - syncReadRxBuffLen;
+	const int received = readSCSAvailable(
+		syncReadRxBuff + syncReadRxBuffLen, remaining);
+	if(received > 0){
+		syncReadRxBuffLen += (u16)received;
+	}
+	return received;
 }
 
 void SCS::syncReadBegin(u8 IDN, u8 rxLen, u32 TimeOut)
 {
-	syncReadRxBuffMax = IDN*(rxLen+6);
-	syncReadRxBuff = new u8[syncReadRxBuffMax];
+	const u16 requestedBytes = (u16)IDN * ((u16)rxLen + 6U);
+	syncReadRxBuffMax =
+		(requestedBytes <= kSyncReadRxBufferCapacity) ? requestedBytes : 0;
+	syncReadRxBuffLen = 0;
 	syncTimeOut = TimeOut;
 }
 
 void SCS::syncReadEnd()
 {
-	if(syncReadRxBuff){
-		delete syncReadRxBuff;
-		syncReadRxBuff = NULL;
-	}
+	syncReadRxBuffLen = 0;
+	syncReadRxBuffMax = 0;
+	syncReadRxPacket = NULL;
+	syncReadRxPacketIndex = 0;
 }
 
 int SCS::syncReadPacketRx(u8 ID, u8 *nDat)

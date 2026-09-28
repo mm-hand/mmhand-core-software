@@ -1,6 +1,11 @@
-# Calib Load 标定快照恢复说明
+# Load Calibration 标定快照恢复说明
 
-本文说明上位机 `Calib Load` 按钮的使用场景、用户操作方法，以及后续开发者维护该功能时需要理解的数据流和协议。
+> 当前专项文档，最后核对：2026-08-20。Load Calibration 从便携 V6 JSON
+> 恢复 Manual、Auto/LUT 与 ABS Limit 到 P4 RAM；飞特舵机 logical ABS 由独立的
+> `multiturn_runtime.json` 恢复，详见[多圈与标定 JSON 恢复](多圈与标定_JSON_恢复.md)。
+> P4 仅保存会话内 RAM；跨重启数据由上位机 JSON 恢复。
+
+本文说明上位机 `Load Calibration…` 按钮的使用场景、用户操作方法，以及后续开发者维护该功能时需要理解的数据流和协议。
 
 ## 1. 功能目的
 
@@ -13,10 +18,10 @@
 
 问题是：这些标定结果目前主要保存在下位机运行时内存里。下位机断电重启后，运行时标定结果会丢失。如果机械结构、绳长、舵机安装和磁编码器安装都没有变化，重新完整自动标定会浪费时间。
 
-`Calib Load` 的作用就是：
+`Load Calibration…` 的作用就是：
 
 1. 自动标定成功后，上位机保存一份标定快照 JSON。
-2. 下位机重启但机械未变化时，用户点击 `Calib Load`。
+2. 下位机重启但机械未变化时，用户点击 `Load Calibration…` 并选择快照 JSON。
 3. 上位机把上次快照恢复给下位机，让系统快速回到已标定状态。
 
 ## 2. 用户使用方法
@@ -31,13 +36,13 @@
 6. 状态栏出现类似信息：
 
 ```text
-Calib snapshot saved to calib_load_snapshot.json
+Calib snapshot saved to calibration_bundle.mmcal.json
 ```
 
 快照文件位置：
 
 ```text
-desktop/config/calib_load_snapshot.json
+desktop/resources/config/calibration_bundle.mmcal.json
 ```
 
 ### 下位机重启后恢复标定
@@ -55,12 +60,12 @@ desktop/config/calib_load_snapshot.json
 1. 上电下位机。
 2. 打开上位机并连接串口。
 3. 确认当前没有运行直控或负反馈。
-4. 点击 `Calib Load`。
-5. 弹出确认框后，确认机械没有变化。
+4. 点击 `Load Calibration…`；文件选择框默认打开上面的本机快照目录，也可选择其他位置的 `.mmcal.json` 或 `.json`。
+5. 上位机先校验 JSON，弹出确认框后确认机械没有变化。
 6. 加载成功后，状态栏会显示：
 
 ```text
-Calib Load success: loaded N joints
+Load Calibration success: loaded N joints
 ```
 
 随后系统会重新基于恢复后的标定结果判断 `READY`。
@@ -76,7 +81,7 @@ Calib Load success: loaded N joints
 
 上位机重连后，会重新收到下位机周期上报的 ABS limit 和关节标定快照，并再次保存/刷新 JSON。
 
-这种情况通常不需要点击 `Calib Load`。
+这种情况通常不需要点击 `Load Calibration…`。
 
 ### 下位机重启，上位机不断电或重新打开
 
@@ -86,11 +91,11 @@ Calib Load success: loaded N joints
 - `motor_abs_limit_valid_bitmap` 清零。
 - ABS limit min/max 清空。
 
-这时需要点击 `Calib Load`，让上位机从 JSON 恢复标定结果到下位机。
+这时需要点击 `Load Calibration…`，让上位机从 JSON 恢复标定结果到下位机。
 
-## 4. 不能使用 Calib Load 的情况
+## 4. 不能使用 Load Calibration 的情况
 
-以下情况必须重新 `Calibrate`，不要使用 `Calib Load`：
+以下情况必须重新 `Calibrate`，不要使用 `Load Calibration…`：
 
 - 换了绳或重新绕线。
 - 调整了绳长、预紧位置或机械限位。
@@ -127,14 +132,14 @@ _maybe_save_calibration_snapshot()
 保存文件：
 
 ```text
-desktop/config/calib_load_snapshot.json
+desktop/resources/config/calibration_bundle.mmcal.json
 ```
 
 主要字段：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 6,
   "hand_profile": "v2",
   "active_joint_mask": "0x0000000F",
   "active_motor_mask": "0x0000001F",
@@ -142,6 +147,9 @@ desktop/config/calib_load_snapshot.json
   "motor_abs_limit_locked_bitmap": "0x0000001F",
   "motor_abs_limit_min": [],
   "motor_abs_limit_max": [],
+  "manual_reference_valid_bitmap": "0x0000000F",
+  "manual_reference_min_raw": [],
+  "manual_reference_max_raw": [],
   "joint_calib_results": []
 }
 ```
@@ -172,15 +180,15 @@ desktop/config/calib_load_snapshot.json
 
 ```text
 desktop/ui/ui_control_panels.py
-desktop/core_logic.py
-desktop/comm_layer.py
-desktop/protocol.py
+desktop/core/core_logic.py
+desktop/core/comm_layer.py
+desktop/core/protocol.py
 ```
 
 UI 入口：
 
 ```text
-load_calibration_snapshot()
+load_calibration_from_file()
 ```
 
 控制器入口：
@@ -191,13 +199,13 @@ HandController.load_calibration_snapshot()
 
 加载顺序：
 
-1. 读取 `desktop/config/calib_load_snapshot.json`。
-2. 校验 `hand_profile`。
-3. 弹出中文确认框，要求用户确认机械未变化。
-4. 下发 `CMD_CALIB_LOAD_LIMITS`，恢复舵机 ABS limit。
-5. 逐个下发 `CMD_CALIB_LOAD_JOINT`，恢复每个成功关节的标定结果。
-6. 每帧等待下位机 ACK。
-7. 任一帧失败则显示失败原因。
+1. 打开文件选择框，默认目录为 `desktop/resources/config/`，但允许选择任意位置的 JSON。
+2. 读取并校验 `hand_profile`、快照结构、Manual CRC、URDF CRC、mapping version 和 active scope。
+3. 弹出中文确认框；取消时不修改本机快照，也不向 P4 发包。
+4. 使用原子写入将通过校验的文件激活为 `calibration_bundle.mmcal.json`，自动保留旧快照备份。
+5. 下发 `CMD_CALIB_LOAD_LIMITS`，恢复舵机 ABS limit。
+6. 逐个下发 `CMD_CALIB_LOAD_JOINT`，恢复每个成功关节的标定结果。
+7. 每帧等待下位机 ACK；任一帧失败则显示失败原因。
 
 ## 7. 下位机恢复逻辑
 
@@ -264,7 +272,7 @@ g_calibrationStatus = CALIB_STATUS_SUCCESS
 
 - 修改关节/舵机/磁编映射后，应重新 `Calibrate`，不要复用旧快照。
 - 如果未来支持多套手型，应把更明确的 mapping version 写入 JSON 并参与校验。
-- 如果未来把标定结果写入下位机 NVS，`Calib Load` 可以作为备用恢复路径保留。
+- 如果未来把标定结果写入下位机 NVS，`Load Calibration…` 可以作为备用恢复路径保留。
 - 如果要扩展快照字段，必须同步修改：
   - 上位机 `parse_joint_calib_snapshot_packet()`
   - 上位机 `build_calib_load_joint_cmd()`
@@ -275,11 +283,10 @@ g_calibrationStatus = CALIB_STATUS_SUCCESS
 ## 10. 推荐测试流程
 
 1. 单关节标定。
-2. 等待上位机保存 `calib_load_snapshot.json`。
+2. 等待上位机保存 `calibration_bundle.mmcal.json`。
 3. 关闭下位机再重启。
 4. 打开上位机或保持上位机连接。
-5. 点击 `Calib Load`。
+5. 点击 `Load Calibration…` 并选择该 JSON。
 6. 确认状态栏显示加载成功。
 7. 检查对应关节能进入 `READY`。
 8. 执行小幅度 `Open Pose` 或单关节目标，确认反馈正常。
-

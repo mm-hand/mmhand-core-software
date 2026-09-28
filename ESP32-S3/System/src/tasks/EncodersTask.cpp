@@ -3,47 +3,47 @@
 #include "../hal/HalEncoders.h"
 
 namespace {
-constexpr bool kEnableEncoderDebugDump = false;
+// [待确认是否关闭] 当前每约200ms打印一次21路角度，会占用921600波特率串口和CPU。
+constexpr bool kEnableEncoderDebugDump = true;
 constexpr int kEncoderDebugDumpDecimation = 100;
+// 2ms周期对应理论500Hz；实际周期还受5组SPI传输和互斥等待影响。
 constexpr uint32_t kEncoderTaskPeriodMs = 2;
 }
 
-// 任务句柄
+// 任务句柄由SystemTasks::startSystemTasks写入。
 TaskHandle_t xEncTask = NULL;
 
-// 队列（外部声明，在SystemTasks中定义）
+// 长度为1的覆盖队列，由SystemTasks创建，CanTask读取。
 extern QueueHandle_t xQueueEncoderData;
 
-// 测试计数器
+// [待确认是否简化] 该计数器仅服务串口抽样打印，可改为函数内static或毫秒节拍。
 static int g_testCounter = 0;
 
 /**
- * 编码器任务 (200Hz)
- * 负责读取编码器原始数据并发送到队列
+ * @brief 周期采集21路AS5047P，并把最新有效性快照交给CAN任务。
+ * @param pvParameters FreeRTOS预留任务参数，当前未使用。
+ * @note 错误通道统一写成0xFFFF，使P4不会把旧值或0误认为有效角度。
  */
 void Task_Encoders(void* pvParameters) {
+    (void)pvParameters;
     const TickType_t xFrequency = pdMS_TO_TICKS(kEncoderTaskPeriodMs);
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    
-    // 本地数据缓冲
+
+    // localData是提交给队列的一致快照，避免采集对象在发送过程中变化。
     EncoderData localData{};
 
     Serial.println("[Task_Encoders] Started!");
 
     for (;;) {
-        // 1. 读取编码器原始数据
+        // [待确认是否简化] rawData到localData发生一次完整结构体复制，可直接调用getData(localData)。
         EncoderData rawData = encoders.getData();
-        
-        // 复制原始数据到本地结构
         localData = rawData;
 
-        // 打印测试结果 (每100次循环打印一次)
+        // 抽样输出Raw值；用于排查链序和FPC，不参与控制。
         if (kEnableEncoderDebugDump && (g_testCounter % kEncoderDebugDumpDecimation) == 1) {
             Serial.println(">>> Encoders (raw Angle: 0~16383)");
             for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
-                // [ID:数据] 格式优化
                 Serial.printf("[%02d:%05d] ", i, localData.rawAngles[i]);
-                // 每 5 个换行
                 if ((i + 1) % 5 == 0) {
                     Serial.println();
                 }
@@ -53,32 +53,25 @@ void Task_Encoders(void* pvParameters) {
             }
         }
 
-        // 2. 处理错误标记
+        // CAN原始角度协议用0xFFFF表示该通道不可用。
         for (int i = 0; i < ENCODER_TOTAL_NUM; i++) {
             if (localData.errorFlags[i]) {
-                localData.rawAngles[i] = 0xFFFF;  // 错误标记
+                localData.rawAngles[i] = 0xFFFF;
             }
         }
 
-        // 3. 发送到队列
         if (xQueueEncoderData != NULL) {
+            // 队列长度为1，覆盖写保证CanTask永远拿到最新数据，不积压旧采样。
             xQueueOverwrite(xQueueEncoderData, &localData);
-            
-            // 调试打印 (每秒一次，避免刷屏)
-            static uint32_t lastPrint = 0;
-            if (millis() - lastPrint > 1000) {
-                // Serial.println("[Task_Encoders] Queue filled OK.");
-                lastPrint = millis();
-            }
         } else {
-            // 错误：队列未创建
+            // 队列异常时限频打印，避免故障日志淹没串口。
             static uint32_t lastErr = 0;
             if (millis() - lastErr > 2000) {
                 Serial.println("[FATAL] xQueueEncoderData is NULL!");
                 lastErr = millis();
             }
         }
-        
+
         g_testCounter++;
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }

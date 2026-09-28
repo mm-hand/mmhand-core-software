@@ -1,65 +1,48 @@
 #include "SystemTasks.h"
 #include "../config/Config.h"
-// 包含所有任务的头文件
+// 各任务头文件提供任务入口和全局任务句柄声明。
 #include "../tasks/EncodersTask.h"
 #include "../tasks/TactileTask.h"
 #include "../tasks/CanTask.h"
-#include "../tasks/SysMgrTask.h"
 
-// 队列定义
+// EncTask生产、CanTask消费；长度1配合xQueueOverwrite避免历史数据积压。
 QueueHandle_t xQueueEncoderData = NULL;
-SemaphoreHandle_t g_sensorSelectMutex = NULL;
 
 /**
- * 启动系统任务
- * 负责创建队列和所有任务
+ * @brief 创建磁编覆盖队列，并按统一配置启动采集与通信任务。
+ * @note 队列创建失败时停在低频循环，防止任务带病运行。
  */
 void startSystemTasks() {
-    // 1. 创建队列
+    // 只传最新磁编快照，不需要排队保存旧采样。
     xQueueEncoderData = xQueueCreate(1, sizeof(EncoderData));
     if (xQueueEncoderData == NULL) {
         Serial.println("[FATAL] Queue creation failed!");
-        while(1) {
+        while (1) {
             vTaskDelay(1000);
         }
     }
 
     Serial.println("[SystemTasks] Queue created successfully!");
 
-    if (g_sensorSelectMutex == NULL) {
-        g_sensorSelectMutex = xSemaphoreCreateMutex();
-        if (g_sensorSelectMutex == NULL) {
-            Serial.println("[FATAL] Sensor selector mutex creation failed!");
-            while(1) {
-                vTaskDelay(1000);
-            }
-        }
-    }
-    
-    // 2. 创建编码器任务 - Core 1, 高优先级
+    // 磁编2ms采样，优先级最高，固定在Core1。
     xTaskCreatePinnedToCore(
-        Task_Encoders, "EncTask", 4096, NULL, 10, &xEncTask, 1
+        Task_Encoders, "EncTask", 4096, NULL, TASK_ENC_PRIO, &xEncTask, TASK_ENC_CORE
     );
 
-    // 3. 创建触觉任务 - Core 0, 中优先级
+    // 触觉约33ms采样，固定在Core0；可通过编译开关关闭。
 #if ENABLE_TACTILE_TASK
     xTaskCreatePinnedToCore(
-        Task_Tactile, "TacTask", 8192, NULL, 5, &xTacTask, 0
+        Task_Tactile, "TacTask", 8192, NULL, TASK_TAC_PRIO, &xTacTask, TASK_TAC_CORE
     );
 #else
     xTacTask = NULL;
     Serial.println("[SystemTasks] Tactile task disabled (encoder-only test).");
 #endif
 
-    // 4. 创建 CAN 任务 - Core 0, 中优先级
+    // CAN每4ms发送最新磁编快照，与触觉任务同在Core0。
     xTaskCreatePinnedToCore(
-        Task_CanBus, "CanTask", 4096, NULL, 5, &xCanTask, 0
+        Task_CanBus, "CanTask", 4096, NULL, TASK_CAN_PRIO, &xCanTask, TASK_CAN_CORE
     );
 
-    // 5. 创建系统管理任务 - Core 1, 低优先级
-    xTaskCreatePinnedToCore(
-        Task_SysMgr, "SysMgr", 6144, NULL, 1, &xSysMgrTask, 1 
-    );
-    
     Serial.println("[SystemTasks] All tasks created successfully!");
 }
