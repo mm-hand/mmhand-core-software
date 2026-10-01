@@ -1,0 +1,1004 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "safety_system",
+  "bundle_hash": "ae4d9224a9088f996bce63c7ab71cfa9438cdf21e9bdbcf7561d093b7b0afe9f",
+  "overview": {
+    "zh": "本图覆盖系统级状态、主机控制租约和模式准入规则。节点列出集中目录的编号、级别与动作，并关联策略、调用、事件及恢复入口；规则闭环索引不单独证明每个谓词在运行时成立。",
+    "en": "This graph covers system-state, host-control-lease and mode-admission rules. Nodes show catalog IDs, severity and actions, linked to policy, caller, event and recovery entries. A complete rule index does not by itself prove that each runtime predicate is satisfied.",
+    "evidence_ids": [
+      "src_ce9ed7d30ef40f0b1db215d9"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:safety_system:node:layer",
+      "zh": {
+        "plain": "「System」是 系统安全规则 中可定位的源码节点。它的职责由附带的状态、配置、周期和调用证据界定；请结合细节判断它读取/写入的数据以及对上下游节点的影响。",
+        "condition": "此节点没有单独列出布尔准入式；其运行时机由任务调度、调用方或关联数据通道决定，引用源码可核对真实入口。",
+        "effect": "节点 `System` 的具体副作用应从引用的函数体和调用者确认；图只展示静态结构关系。",
+        "failure": "缺少输入、配置不匹配、通信超时或下游拒绝时可能使本步骤无法完成；应依照本节点的源码错误处理及对应连线查看实际分支，不推断未出现的结果。",
+        "recovery": "从证据链接打开此节点实现，检查入口调用、输入有效性、配置键和错误返回，再沿出边确认哪个消费者继续处理。",
+        "unknown": "若源码证据没有给出数值、优先级、队列策略或外部响应，本节点不会补猜这些细节；应标为未核实并检查调用者/运行配置。",
+        "difference": "本节点单独对应 `System`；其可证职责来自所列源码位置及本节点特有的周期/配置/数据关系。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "“System” is a source-locatable node in safety_system. Its role is bounded by the attached state, configuration, period and call evidence; use those details to see what it reads/writes and how it affects neighbors.",
+        "condition": "No standalone Boolean admission expression is listed. Timing follows task scheduling, caller invocation or the linked data channel; cited source shows the concrete entry.",
+        "effect": "Confirm `System`'s side effects in its cited function and callers; the graph only records static relationships.",
+        "failure": "Missing input, mismatched configuration, communication timeout or downstream rejection can prevent completion. Follow this node's source error handling and outgoing edges; do not infer outcomes that are not shown.",
+        "recovery": "Open the implementation through its evidence link, inspect the caller, input validity, configuration keys and error return, then follow the outgoing edge to the next consumer.",
+        "unknown": "If the evidence does not provide a numeric value, priority, queue policy or external response, this node does not guess it; mark it unverified and inspect its caller/runtime configuration.",
+        "difference": "This node specifically represents `System`; its source-supported role comes from its cited location and its own period/configuration/data relationships.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ce9ed7d30ef40f0b1db215d9"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:SystemHostLeaseExpired",
+      "zh": {
+        "plain": "安全目录规则「SYS-3001 Host control lease expired」编号为 3001，级别 `Emergency`，动作 `HoldActualPosition`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.cpp) → caller `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → recovery `resetHostControlLeaseRuntime` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Emergency`；调用链为 policy `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.cpp) → caller `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → recovery `resetHostControlLeaseRuntime` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Check the desktop process, serial connection, and blocked tasks.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3001、级别 `Emergency`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “SYS-3001 Host control lease expired” has ID 3001, severity `Emergency`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.cpp) → caller `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → recovery `resetHostControlLeaseRuntime` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Emergency`. The chain is policy `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.cpp) → caller `isHostControlLeaseFresh` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp) → recovery `resetHostControlLeaseRuntime` (ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Check the desktop process, serial connection, and blocked tasks.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3001, severity `Emergency`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ce9ed7d30ef40f0b1db215d9",
+        "src_e01cbc35527dd03f20b460a8",
+        "src_b4fc44f514fbd3422e98b68f",
+        "src_5e04b1c66078ba6f93a2b0ae",
+        "src_1252068652a14bc6ff7bd5ba",
+        "src_f0ac514c917505a981508beb",
+        "src_8b459460ddccef89bd1f4dcf"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:SystemStartStateRejected",
+      "zh": {
+        "plain": "安全目录规则「SYS-3002 Current state rejected START」编号为 3002，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Resolve the active task or fault before retrying.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3002、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “SYS-3002 Current state rejected START” has ID 3002, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Resolve the active task or fault before retrying.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3002, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_8283966568fe1ca4cd7a3813",
+        "src_1851177f0f1fcf7b924e48f2",
+        "src_f0e944855e5e48f75f845bc1",
+        "src_7008e34e614c858aeba22b4d",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:SystemDirectStateRejected",
+      "zh": {
+        "plain": "安全目录规则「SYS-3003 Current state rejected direct control」编号为 3003，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Switch to a state that permits DIRECT control.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3003、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “SYS-3003 Current state rejected direct control” has ID 3003, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Switch to a state that permits DIRECT control.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3003, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_09b57bc85415e90d9d204564",
+        "src_36bb1d09ede32b6556e089ae",
+        "src_f0e944855e5e48f75f845bc1",
+        "src_7008e34e614c858aeba22b4d",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:SystemFeedbackStateRejected",
+      "zh": {
+        "plain": "安全目录规则「SYS-3004 Current state rejected feedback control」编号为 3004，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Complete Rope Init and wait for READY.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3004、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “SYS-3004 Current state rejected feedback control” has ID 3004, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Complete Rope Init and wait for READY.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3004, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_9daf2501e1a545fe9df38e3a",
+        "src_848d7ddda27c7c070c43e626",
+        "src_f0e944855e5e48f75f845bc1",
+        "src_7008e34e614c858aeba22b4d",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:SystemCalibrationStateRejected",
+      "zh": {
+        "plain": "安全目录规则「SYS-3005 Current state rejected automatic calibration」编号为 3005，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Stop other motion tasks before retrying.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3005、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “SYS-3005 Current state rejected automatic calibration” has ID 3005, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `canAcceptStart` (ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp) → caller `canAcceptStart` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Stop other motion tasks before retrying.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3005, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d391399326e1182a319d6273",
+        "src_45f98c7fe2362c23afdc48bf",
+        "src_f0e944855e5e48f75f845bc1",
+        "src_7008e34e614c858aeba22b4d",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectStateRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3101 Direct-control state admission failed」编号为 3101，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Stop the current task, then enable direct control again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3101、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3101 Direct-control state admission failed” has ID 3101, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Stop the current task, then enable direct control again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3101, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_8a7c1a35977077bc7640bd6a",
+        "src_56122324e7034b3b338c3f62",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectHardwareRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3102 Selected direct-control servo is unavailable」编号为 3102，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check selected servo online state and bus routing.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3102、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3102 Selected direct-control servo is unavailable” has ID 3102, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check selected servo online state and bus routing.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3102, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_b5850c8cd5adedc1263a2b2b",
+        "src_14fddd3213677804f405599d",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectMultiTurnRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3103 Selected direct-control servo has unknown multi-turn state」编号为 3103，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3103、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3103 Selected direct-control servo has unknown multi-turn state” has ID 3103, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3103, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_30dccdb7ef4c9fe2db54e018",
+        "src_02a05765abf6057e2f76a05e",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectEventQueueRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3104 Direct-control state event queue is full」编号为 3104，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check for a blocked state machine and retry later.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3104、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3104 Direct-control state event queue is full” has ID 3104, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check for a blocked state machine and retry later.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3104, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_79cd61aa1b1a1d7ca05fa56f",
+        "src_666939a1f82a3ebbd953b6c2",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectStaleRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3105 Direct-control command generation is stale」编号为 3105，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Wait for mode switching to complete, then send the command again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3105、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3105 Direct-control command generation is stale” has ID 3105, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Wait for mode switching to complete, then send the command again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3105, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_6c5b2c78659105495f0eee02",
+        "src_94a40ccb74002e8792fd466d",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:DirectFaultRejected",
+      "zh": {
+        "plain": "安全目录规则「DIR-3106 System fault blocks direct control」编号为 3106，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Resolve the status-bar fault, then press ENABLE again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3106、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “DIR-3106 System fault blocks direct control” has ID 3106, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `directMotorMaskReady` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp) → recovery `DIRECT_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Resolve the status-bar fault, then press ENABLE again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3106, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_5dea5bc94d6a6a5e3413dd53",
+        "src_9172f2c36465b2ffbf0a52b3",
+        "src_c4d4fe7154cc2f18c0880cc7",
+        "src_6c54caaff5334e74b1565061",
+        "src_dda0180e7c0feb8b80ea1acc",
+        "src_80d6a3773af44c984e51dc0d"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackManualMissing",
+      "zh": {
+        "plain": "安全目录规则「FBK-3201 Feedback control is missing Manual references」编号为 3201，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Enter Manual Min and Max for the selected joints in Device Check.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3201、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3201 Feedback control is missing Manual references” has ID 3201, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Enter Manual Min and Max for the selected joints in Device Check.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3201, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ad8693e89a30743d1e2db53b",
+        "src_4f072f96f3992a0a1684f318",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackStateRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3202 Feedback-control state admission failed」编号为 3202，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Wait for READY, then retry.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3202、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3202 Feedback-control state admission failed” has ID 3202, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Wait for READY, then retry.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3202, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_7c336834b6b6d38906dbf243",
+        "src_6a1ab16b8dcb29ead9f62bcb",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackWorkspaceRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3203 Joint is outside the dynamic workspace」编号为 3203，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Run Rope Init to move the selected joints into READY.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3203、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3203 Joint is outside the dynamic workspace” has ID 3203, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Run Rope Init to move the selected joints into READY.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3203, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_f5f5cc7316a85ca976981989",
+        "src_ee5b116df30dfb516902fa23",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackMultiTurnRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3204 Selected feedback-control servo has unknown multi-turn state」编号为 3204，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3204、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3204 Selected feedback-control servo has unknown multi-turn state” has ID 3204, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3204, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_516148d9c87731aaa7c118d9",
+        "src_64bae5ace93277d3f44b498d",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackAbsLimitRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3205 Feedback control is missing valid ABS or LUT limits」编号为 3205，级别 `Blocking`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Run automatic calibration again or load a matching snapshot.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3205、级别 `Blocking`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3205 Feedback control is missing valid ABS or LUT limits” has ID 3205, severity `Blocking`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Run automatic calibration again or load a matching snapshot.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3205, severity `Blocking`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d44fa9b25c0a2380bc37f224",
+        "src_19a3b2fe85534adbdf4852d8",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackModeSwitchRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3206 Control mode switch is not complete」编号为 3206，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Wait for owner release, then send the target again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3206、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3206 Control mode switch is not complete” has ID 3206, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Wait for owner release, then send the target again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3206, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_391df9550c4baa6475c30339",
+        "src_2a6263426624ecc083223b63",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FeedbackEventQueueRejected",
+      "zh": {
+        "plain": "安全目录规则「FBK-3207 Feedback-control state event queue is full」编号为 3207，级别 `Warning`，动作 `RejectCommand`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `RejectCommand`，级别是 `Warning`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `RejectCommand` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check for a blocked state machine and retry later.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3207、级别 `Warning`、动作 `RejectCommand` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FBK-3207 Feedback-control state event queue is full” has ID 3207, severity `Warning`, and action `RejectCommand`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `RejectCommand` at severity `Warning`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `FEEDBACK_REJECT_NONE` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `RejectCommand`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check for a blocked state machine and retry later.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3207, severity `Warning`, action `RejectCommand`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_280228b051ac45fafe48e4f9",
+        "src_3660db5294a666a8ef0b0286",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_406ee3bc5424beca112f1a85"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyCanGate",
+      "zh": {
+        "plain": "安全目录规则「RDY-3301 CAN readiness gate failed」编号为 3301，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check S3, CAN wiring, and magnetic encoder feedback.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3301、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3301 CAN readiness gate failed” has ID 3301, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check S3, CAN wiring, and magnetic encoder feedback.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3301, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_a5e3768f7bf17328fbae800c",
+        "src_d0957900baa082199cbb7d06",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyMultiTurnGate",
+      "zh": {
+        "plain": "安全目录规则「RDY-3302 READY multi-turn gate failed」编号为 3302，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Wait for JSON nearest-turn recovery or recalibrate.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3302、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3302 READY multi-turn gate failed” has ID 3302, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Wait for JSON nearest-turn recovery or recalibrate.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3302, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d9b98516be68c56506e82450",
+        "src_ccc987eb20032cbf71764719",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyEmptyScope",
+      "zh": {
+        "plain": "安全目录规则「RDY-3303 READY active scope is empty」编号为 3303，级别 `Warning`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Warning`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Select at least one joint in Joint Channels.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3303、级别 `Warning`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3303 READY active scope is empty” has ID 3303, severity `Warning`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Warning`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Select at least one joint in Joint Channels.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3303, severity `Warning`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_f968b9aeb3b9bc36f3935f4f",
+        "src_1396a986fbf6239f6beb9abc",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyMappedUnavailable",
+      "zh": {
+        "plain": "安全目录规则「RDY-3304 READY is missing a mapped-angle snapshot」编号为 3304，级别 `Blocking`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check CAN feedback and mapped-angle publishing.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3304、级别 `Blocking`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3304 READY is missing a mapped-angle snapshot” has ID 3304, severity `Blocking`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check CAN feedback and mapped-angle publishing.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3304, severity `Blocking`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_6cb162394600399016ccf87d",
+        "src_32bf650f4c96ab2b30e664b7",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyCalibrationMissing",
+      "zh": {
+        "plain": "安全目录规则「RDY-3305 READY is missing Auto calibration」编号为 3305，级别 `Blocking`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Run automatic calibration for the selected joints.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3305、级别 `Blocking`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3305 READY is missing Auto calibration” has ID 3305, severity `Blocking`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Run automatic calibration for the selected joints.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3305, severity `Blocking`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_39d634653e2e3a0a823b59c2",
+        "src_e66b386e77ff39debbd12a44",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyMappedInvalid",
+      "zh": {
+        "plain": "安全目录规则「RDY-3306 READY mapped angle is invalid」编号为 3306，级别 `Blocking`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check Manual/Auto direction and span.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3306、级别 `Blocking`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3306 READY mapped angle is invalid” has ID 3306, severity `Blocking`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check Manual/Auto direction and span.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3306, severity `Blocking`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ebe14aa0b4a748b638f92595",
+        "src_8d7bf947d086767f6d1614ab",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyBelowWorkspace",
+      "zh": {
+        "plain": "安全目录规则「RDY-3307 Joint is below the dynamic workspace」编号为 3307，级别 `Warning`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Warning`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Run Rope Init.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3307、级别 `Warning`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3307 Joint is below the dynamic workspace” has ID 3307, severity `Warning`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Warning`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Run Rope Init.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3307, severity `Warning`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_96e2bea712d7199534cf1a19",
+        "src_cfbeeeb8292583217aacdd3f",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyCalibrationMismatch",
+      "zh": {
+        "plain": "安全目录规则「RDY-3308 Manual and Auto calibration versions do not match」编号为 3308，级别 `Blocking`，动作 `MarkIdle`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkIdle`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkIdle` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Run automatic calibration again for the affected joint.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3308、级别 `Blocking`、动作 `MarkIdle` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3308 Manual and Auto calibration versions do not match” has ID 3308, severity `Blocking`, and action `MarkIdle`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkIdle` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkIdle`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Run automatic calibration again for the affected joint.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3308, severity `Blocking`, action `MarkIdle`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_edbf98a7e19fcd53178edb69",
+        "src_2764febe5931ad0ef435f47d",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyEncoderCanFault",
+      "zh": {
+        "plain": "安全目录规则「RDY-3309 Active joint has an encoder or CAN fault」编号为 3309，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check the affected encoder and CAN link.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3309、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3309 Active joint has an encoder or CAN fault” has ID 3309, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check the affected encoder and CAN link.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3309, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_2b154537e6e646ad0db526d9",
+        "src_f943013c06a463eb9bf585ff",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadySystemFault",
+      "zh": {
+        "plain": "安全目录规则「RDY-3310 System fault blocks READY」编号为 3310，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Resolve the fault bits, then evaluate READY again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3310、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3310 System fault blocks READY” has ID 3310, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Resolve the fault bits, then evaluate READY again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3310, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_f1a868a51650f162aea20b47",
+        "src_f18e2ce6b821d637875bc874",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:ReadyTurnOverflow",
+      "zh": {
+        "plain": "安全目录规则「RDY-3311 Servo turn overflow blocks READY」编号为 3311，级别 `Emergency`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Emergency`；调用链为 policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Select the affected joint and recalibrate.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3311、级别 `Emergency`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RDY-3311 Servo turn overflow blocks READY” has ID 3311, severity `Emergency`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Emergency`. The chain is policy `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp) → caller `evaluateFeedbackReadiness` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp) → recovery `SYSTEM_EVENT_REEVALUATE_READY` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Select the affected joint and recalibrate.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3311, severity `Emergency`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_c298c1ee145eb5191210f008",
+        "src_4629afae26e970cbc35e0817",
+        "src_c8b15b95d599ddfcfd4c9e33",
+        "src_63bd8f744e90e84d14dd54b7",
+        "src_67de8eb5c1f01d42361c2eab",
+        "src_3001c48ed5e5541736392c2c"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FaultCanOffline",
+      "zh": {
+        "plain": "安全目录规则「FLT-3501 CAN link offline fault」编号为 3501，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Restore S3 and CAN communication.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3501、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FLT-3501 CAN link offline fault” has ID 3501, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Restore S3 and CAN communication.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3501, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_868a75582a62e35bdaac042d",
+        "src_70dea9cb14e0ae0d9008a1b8",
+        "src_66db909becafb0a81600ab46",
+        "src_01af4e67d4454c2036009c0f",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_system:node:FaultServoOffline",
+      "zh": {
+        "plain": "安全目录规则「FLT-3503 Active servo offline fault」编号为 3503，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把系统安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Restore power and routing for the affected servo.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3503、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FLT-3503 Active servo offline fault” has ID 3503, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_system; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Restore power and routing for the affected servo.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3503, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_9de943a9570a7a59316b453f",
+        "src_7cf80731b74ce6b206858a12",
+        "src_66db909becafb0a81600ab46",
+        "src_01af4e67d4454c2036009c0f",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    }
+  ]
+}

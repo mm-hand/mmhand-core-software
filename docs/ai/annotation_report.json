@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "branch": "main",
+  "mmhand_commit": "65e8e63f8b570c6b099c8b65dd37d796dcb66bb9",
+  "teleop_commit": "45eb698ba97c2559cad93db159a15877f93e8851",
+  "baseline": "65e8e63f8b570c6b099c8b65dd37d796dcb66bb9",
+  "annotation_files": 42,
+  "expected_files": 42,
+  "completed_items": 877,
+  "required_items": 877,
+  "missing_ids": [],
+  "issues": []
+}

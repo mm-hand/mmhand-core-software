@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "safety_control",
+  "bundle_hash": "beddcc231c8c0dce4b8d5f92147de0b6f5ce32ac01f01e779eeebff1b6f05f2c",
+  "overview": {
+    "zh": "本图列出控制路径中的准入、目标和运动规则，并展示规则目录到控制策略、业务调用与恢复入口的关联。请先读节点列出的条件和动作，再沿源码链接确认状态写入或运动停止点。",
+    "en": "This graph lists control-path admission, target and motion rules and connects catalog entries to policy code, business callers and recovery entries. Read each node's conditions and action first, then follow the source links to confirm state writes or motion-stop points.",
+    "evidence_ids": [
+      "src_057b2727d652b873b5abfeb5"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:safety_control:node:layer",
+      "zh": {
+        "plain": "「Control」是 控制安全规则 中可定位的源码节点。它的职责由附带的状态、配置、周期和调用证据界定；请结合细节判断它读取/写入的数据以及对上下游节点的影响。",
+        "condition": "此节点没有单独列出布尔准入式；其运行时机由任务调度、调用方或关联数据通道决定，引用源码可核对真实入口。",
+        "effect": "节点 `Control` 的具体副作用应从引用的函数体和调用者确认；图只展示静态结构关系。",
+        "failure": "缺少输入、配置不匹配、通信超时或下游拒绝时可能使本步骤无法完成；应依照本节点的源码错误处理及对应连线查看实际分支，不推断未出现的结果。",
+        "recovery": "从证据链接打开此节点实现，检查入口调用、输入有效性、配置键和错误返回，再沿出边确认哪个消费者继续处理。",
+        "unknown": "若源码证据没有给出数值、优先级、队列策略或外部响应，本节点不会补猜这些细节；应标为未核实并检查调用者/运行配置。",
+        "difference": "本节点单独对应 `Control`；其可证职责来自所列源码位置及本节点特有的周期/配置/数据关系。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "“Control” is a source-locatable node in safety_control. Its role is bounded by the attached state, configuration, period and call evidence; use those details to see what it reads/writes and how it affects neighbors.",
+        "condition": "No standalone Boolean admission expression is listed. Timing follows task scheduling, caller invocation or the linked data channel; cited source shows the concrete entry.",
+        "effect": "Confirm `Control`'s side effects in its cited function and callers; the graph only records static relationships.",
+        "failure": "Missing input, mismatched configuration, communication timeout or downstream rejection can prevent completion. Follow this node's source error handling and outgoing edges; do not infer outcomes that are not shown.",
+        "recovery": "Open the implementation through its evidence link, inspect the caller, input validity, configuration keys and error return, then follow the outgoing edge to the next consumer.",
+        "unknown": "If the evidence does not provide a numeric value, priority, queue policy or external response, this node does not guess it; mark it unverified and inspect its caller/runtime configuration.",
+        "difference": "This node specifically represents `Control`; its source-supported role comes from its cited location and its own period/configuration/data relationships.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_057b2727d652b873b5abfeb5"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlCanFeedbackInvalid",
+      "zh": {
+        "plain": "安全目录规则「CTL-2001 CAN or magnetic encoder feedback unavailable」编号为 2001，级别 `Blocking`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Blocking`；调用链为 policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check S3, CAN wiring, and feedback freshness.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2001、级别 `Blocking`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2001 CAN or magnetic encoder feedback unavailable” has ID 2001, severity `Blocking`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Blocking`. The chain is policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check S3, CAN wiring, and feedback freshness.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2001, severity `Blocking`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_057b2727d652b873b5abfeb5",
+        "src_55a62e289f34c942b70384a4",
+        "src_52a95e001ebd9ddc4f82ac3a",
+        "src_92e837b88eeedfd951ae14a7",
+        "src_e348b398cbc0d5ae6f98b071",
+        "src_10d3a2dab336211ae40f28d9",
+        "src_ee86edf8fd1ad0ba1d7642f4"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlJointIndexInvalid",
+      "zh": {
+        "plain": "安全目录规则「CTL-2002 Invalid control joint index」编号为 2002，级别 `Emergency`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Emergency`；调用链为 policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Check HardwareMap and joint loop bounds.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2002、级别 `Emergency`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2002 Invalid control joint index” has ID 2002, severity `Emergency`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Emergency`. The chain is policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Check HardwareMap and joint loop bounds.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2002, severity `Emergency`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_df0c5b687b15904f43911f3e",
+        "src_6176b839b7438c141ca7a487",
+        "src_d566ebe0298f50ba0968a9e1",
+        "src_92e837b88eeedfd951ae14a7",
+        "src_e348b398cbc0d5ae6f98b071",
+        "src_10d3a2dab336211ae40f28d9",
+        "src_ee86edf8fd1ad0ba1d7642f4"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlEncoderFault",
+      "zh": {
+        "plain": "安全目录规则「CTL-2003 Target joint encoder fault」编号为 2003，级别 `Blocking`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Blocking`；调用链为 policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check the affected encoder and S3 sensor state.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2003、级别 `Blocking`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2003 Target joint encoder fault” has ID 2003, severity `Blocking`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Blocking`. The chain is policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check the affected encoder and S3 sensor state.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2003, severity `Blocking`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_5690bde860b0eb4d45098612",
+        "src_f627d2869218f9c817204bda",
+        "src_aa7dfc3e566eb963aeabb306",
+        "src_92e837b88eeedfd951ae14a7",
+        "src_e348b398cbc0d5ae6f98b071",
+        "src_10d3a2dab336211ae40f28d9",
+        "src_ee86edf8fd1ad0ba1d7642f4"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlMappedAngleInvalid",
+      "zh": {
+        "plain": "安全目录规则「CTL-2004 Invalid mapped joint angle」编号为 2004，级别 `Blocking`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Blocking`；调用链为 policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check Manual/Auto calibration and angle mapping.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2004、级别 `Blocking`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2004 Invalid mapped joint angle” has ID 2004, severity `Blocking`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Blocking`. The chain is policy `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp) → caller `evaluateControlSafety` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `clearRecoveredControlRule` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check Manual/Auto calibration and angle mapping.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2004, severity `Blocking`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_20361bbc656e58019dc5782f",
+        "src_c532257409f45ec301066da6",
+        "src_57c23c514cd61dfa202b585f",
+        "src_92e837b88eeedfd951ae14a7",
+        "src_e348b398cbc0d5ae6f98b071",
+        "src_10d3a2dab336211ae40f28d9",
+        "src_ee86edf8fd1ad0ba1d7642f4"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlCollisionHold",
+      "zh": {
+        "plain": "安全目录规则「CTL-2005 Insufficient joint motion triggered collision hold」编号为 2005，级别 `Warning`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `FeedbackCollisionGuard::update` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp) → caller `g_feedbackCollisionGuard.update` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlCollisionHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `holdReleased = true` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Warning`；调用链为 policy `FeedbackCollisionGuard::update` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp) → caller `g_feedbackCollisionGuard.update` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlCollisionHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `holdReleased = true` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Confirm whether the hand contacted an object; a reverse target releases the hold.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2005、级别 `Warning`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2005 Insufficient joint motion triggered collision hold” has ID 2005, severity `Warning`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `FeedbackCollisionGuard::update` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp) → caller `g_feedbackCollisionGuard.update` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlCollisionHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `holdReleased = true` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Warning`. The chain is policy `FeedbackCollisionGuard::update` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp) → caller `g_feedbackCollisionGuard.update` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlCollisionHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `holdReleased = true` (ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Confirm whether the hand contacted an object; a reverse target releases the hold.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2005, severity `Warning`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d1473090ab6f0dd26dc00ac4",
+        "src_a5e1e1f0b3136aa8e1124266",
+        "src_4f541c0254774695ce9d2a95",
+        "src_f7b858e41ffdf910b27023a4",
+        "src_897e6be0f88b034e3c54d2e7",
+        "src_1dfea3c20c8edf315c4f4d16"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlLutBoundaryClamp",
+      "zh": {
+        "plain": "安全目录规则「CTL-2006 Dual-tendon PID output reached the LUT extension limit」编号为 2006，级别 `Warning`，动作 `ClampToBoundary`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.cpp) → event `ControlLutBoundaryClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `lutClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `ClampToBoundary`，级别是 `Warning`；调用链为 policy `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.cpp) → event `ControlLutBoundaryClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `lutClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `ClampToBoundary` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check target angle, dual-tendon LUT calibration, and the 500-count runtime margin.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2006、级别 `Warning`、动作 `ClampToBoundary` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2006 Dual-tendon PID output reached the LUT extension limit” has ID 2006, severity `Warning`, and action `ClampToBoundary`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.cpp) → event `ControlLutBoundaryClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `lutClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `ClampToBoundary` at severity `Warning`. The chain is policy `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampAbsToBoundary` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.cpp) → event `ControlLutBoundaryClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `lutClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `ClampToBoundary`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check target angle, dual-tendon LUT calibration, and the 500-count runtime margin.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2006, severity `Warning`, action `ClampToBoundary`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_b0490684a3d2c0f8916d9c19",
+        "src_989f11cfdf001d3088b8012a",
+        "src_177dbaf282e9ccfa596462ff",
+        "src_b60b6680d6664c139e3ba3ae",
+        "src_0bc25497534965f38c5e0a33",
+        "src_adbafa73be0462ac7de4ed60"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlJointTargetClamp",
+      "zh": {
+        "plain": "安全目录规则「CTL-2007 Joint target exceeds the current dynamic range」编号为 2007，级别 `Warning`，动作 `ClampToBoundary`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `clampFloatToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampJointTargetDeg` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlJointTargetClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `targetClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `ClampToBoundary`，级别是 `Warning`；调用链为 policy `clampFloatToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampJointTargetDeg` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlJointTargetClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `targetClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 3 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `ClampToBoundary` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check the requested target and current calibration range; recovery is automatic when the target returns in range.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2007、级别 `Warning`、动作 `ClampToBoundary` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2007 Joint target exceeds the current dynamic range” has ID 2007, severity `Warning`, and action `ClampToBoundary`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `clampFloatToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampJointTargetDeg` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlJointTargetClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `targetClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `ClampToBoundary` at severity `Warning`. The chain is policy `clampFloatToBoundary` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `clampJointTargetDeg` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlJointTargetClamp` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `targetClampEventLatchedBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 3 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `ClampToBoundary`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check the requested target and current calibration range; recovery is automatic when the target returns in range.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2007, severity `Warning`, action `ClampToBoundary`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_04de227f751a04544f6b3ec7",
+        "src_20d5d427ec29c0760e297886",
+        "src_e824629eae3ce7c2bf426f35",
+        "src_5a274655c5a7b345cf4b888f",
+        "src_8eaa1fbd3c259bdb0dd977d8",
+        "src_dee58ed1df97e415a3c64326",
+        "src_a5abe0e401f65c3f73fd1ee0"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlUpperWorkspaceWarning",
+      "zh": {
+        "plain": "安全目录规则「CTL-2008 Joint feedback exceeded the Current Max warning boundary」编号为 2008，级别 `Warning`，动作 `WarnOnly`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `upperWorkspaceWarningBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `WarnOnly`，级别是 `Warning`；调用链为 policy `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `upperWorkspaceWarningBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `WarnOnly` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check mechanical assembly, encoder direction, and Auto Max; recovery is automatic when feedback returns in range.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2008、级别 `Warning`、动作 `WarnOnly` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2008 Joint feedback exceeded the Current Max warning boundary” has ID 2008, severity `Warning`, and action `WarnOnly`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `upperWorkspaceWarningBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `WarnOnly` at severity `Warning`. The chain is policy `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `evaluateUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlUpperWorkspaceWarning` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `upperWorkspaceWarningBitmap` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `WarnOnly`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check mechanical assembly, encoder direction, and Auto Max; recovery is automatic when feedback returns in range.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2008, severity `Warning`, action `WarnOnly`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_99c0761745a1d69b96e76900",
+        "src_bad1dc8237e0a19c1fe4356a",
+        "src_4f18238e718a1bddfb03157e",
+        "src_2dac2af03158c3f5af289a7a",
+        "src_2fe21b66f068c5141f8f52c4"
+      ]
+    },
+    {
+      "id": "graph:safety_control:node:ControlHotplugHold",
+      "zh": {
+        "plain": "安全目录规则「CTL-2009 Servo held at current ABS after hot-plug recovery」编号为 2009，级别 `Warning`，动作 `HoldActualPosition`。规则用于把控制安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `hotplugHoldMotor` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `HoldActualPosition`，级别是 `Warning`；调用链为 policy `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `hotplugHoldMotor` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `HoldActualPosition` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Confirm trusted multi-turn state, then send an explicit target to release the hold.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 2009、级别 `Warning`、动作 `HoldActualPosition` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CTL-2009 Servo held at current ABS after hot-plug recovery” has ID 2009, severity `Warning`, and action `HoldActualPosition`. It makes the risk name, response level and handling auditable within safety_control; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `hotplugHoldMotor` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `HoldActualPosition` at severity `Warning`. The chain is policy `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp) → caller `shouldEnterHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → event `ControlHotplugHold` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp) → recovery `hotplugHoldMotor` (ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `HoldActualPosition`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Confirm trusted multi-turn state, then send an explicit target to release the hold.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 2009, severity `Warning`, action `HoldActualPosition`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_796edf5deee65c31a0d7a3c0",
+        "src_0b7a0685ba142fbac8dbffc6",
+        "src_2a6f376997ab760f5be8bc3c",
+        "src_ae6a7568157711c83425bdca",
+        "src_ad4c7c779c86e989f37faa88"
+      ]
+    }
+  ]
+}

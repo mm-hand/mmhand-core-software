@@ -1,0 +1,801 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "calibration",
+  "bundle_hash": "5eee1f3ea467ead1d33cb57e722ae5f40a6f3233b8017259b0aeb2d5f7294930",
+  "overview": {
+    "zh": "自动标定有两层准入：桌面先检查模式、连接、手动参考、映射和当前状态；P4 收到 CMD_CALIBRATE 后再检查急停、控制租约、参考完整性、系统状态和任务创建。通过按钮不代表校准完成。",
+    "en": "Automatic calibration has two admission layers: the desktop checks mode, connection, manual references, mapping, and current state; after CMD_CALIBRATE, P4 checks E-stop, control lease, reference integrity, system state, and task creation. Passing the button path does not mean calibration is complete.",
+    "evidence_ids": [
+      "src_3293974f421748cf40dace3f"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:calibration:node:workflow",
+      "zh": {
+        "plain": "自动标定从 Joint Channels 的 Calibrate 按钮开始。上位机先校验手动参考与状态，P4 再执行独立的固件准入。",
+        "condition": "入口为 Joint Channels 的 Calibrate 操作；具体前置门禁在 calibrate() 中逐项执行。",
+        "effect": "桌面入口先检查 mode、通信、scope/reference 和 P4 state，再调用 backend 工作流并发送 CMD_CALIBRATE。",
+        "failure": "任何桌面守卫或固件门禁拒绝都会阻止任务开始；按钮点击不代表标定完成。",
+        "recovery": "按状态栏提示补齐 Device Check 参考、连接或 P4 状态后重试。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 workflow 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "Automatic calibration begins at Calibrate in Joint Channels. The desktop checks references/state first; P4 then applies its own firmware admission.",
+        "condition": "Entered from Calibrate in Joint Channels; calibrate() evaluates its prerequisites in sequence.",
+        "effect": "The desktop checks mode, communication, scope/references, and P4 state, then calls the backend workflow and sends CMD_CALIBRATE.",
+        "failure": "A desktop guard or firmware gate can reject startup; clicking the button does not mean calibration completed.",
+        "recovery": "Follow the status message, restore Device Check references, connection, or P4 state, and retry.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the workflow node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1",
+      "zh": {
+        "plain": "calibrate() 汇总当前活动 scope 的前置条件：Joint 模式、连接、状态快照、手动参考、映射完整性和 P4 可接受状态。",
+        "condition": "源码原始判断：`self._manual_submode() != \"joint\"`；`not bool(self.context.is_comm_connected())`；`latest_state is not None`；`missing_manual`；`system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`；`partial_helper_motor_mask`；`not accepted`；`refreshed`；`0 <= joint_idx < len(self._joint_target_user_set)`；`self.device_check_view is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "它可请求手动编码器参考并刷新状态，随后调用 begin_calibration_workflow；具体调用顺序可沿此函数证据查看。",
+        "failure": "多个早退分支会分别拒绝；通过桌面检查后，P4 CALIBRATE 事件仍能独立拒绝。",
+        "recovery": "根据提示修复每个缺失 joint reference 或状态阻挡，不要跳过 scope 门禁。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "calibrate() checks prerequisites for the active scope: Joint mode, connection, state snapshot, manual references, complete mapping, and P4 admission state.",
+        "condition": "Raw source predicates: `self._manual_submode() != \"joint\"`; `not bool(self.context.is_comm_connected())`; `latest_state is not None`; `missing_manual`; `system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`; `partial_helper_motor_mask`; `not accepted`; `refreshed`; `0 <= joint_idx < len(self._joint_target_user_set)`; `self.device_check_view is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "It may request manual encoder references and refresh state, then call begin_calibration_workflow; follow the linked function evidence for exact order.",
+        "failure": "Several early-return branches can reject; even after host checks, P4 CALIBRATE can independently reject.",
+        "recovery": "Resolve each missing joint reference or state blocker shown; do not bypass scope gates.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_3293974f421748cf40dace3f",
+        "src_d28f49a4ff04a7389c536dae",
+        "src_2b37a382d2dec4a126ddba60",
+        "src_465b7ab67945aba7fa3db723",
+        "src_dabffb8426a9028131fba15a",
+        "src_49c863c2e8a71c3be85ce8af",
+        "src_378535bfe24e3cef501a7de4",
+        "src_31da265facf550f7a3176884",
+        "src_c01cca0d487f5542477f650b",
+        "src_aab3f729b1dc67f2c751c36f",
+        "src_02458c95c9668dee6d35bd2f",
+        "src_4c2b7844449e8c09b8f32c17",
+        "src_94774d45d654321de1b6db42"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_1",
+      "zh": {
+        "plain": "只允许在 Joint Channels 子模式发起自动标定。",
+        "condition": "源码原始判断：`self._manual_submode() != \"joint\"`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "该条件检查当前 manual submode；模式不符时停止，不进入通信和参考查询。",
+        "failure": "条件为真时拒绝并提示切换 Joint Channels；为假时继续下一项连接检查。",
+        "recovery": "切到 Joint Channels 后重试。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_1 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "Automatic calibration can be requested only from Joint Channels.",
+        "condition": "Raw source predicates: `self._manual_submode() != \"joint\"`. These expressions gate entry or subsequent data updates.",
+        "effect": "This checks the current manual submode; a mismatch stops before communication/reference work.",
+        "failure": "When true, reject and request Joint Channels; when false, continue to the connection check.",
+        "recovery": "Switch to Joint Channels and retry.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_1 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_d28f49a4ff04a7389c536dae"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_2",
+      "zh": {
+        "plain": "确认上位机仍连着 P4 串口，避免离线状态下发起请求。",
+        "condition": "源码原始判断：`not bool(self.context.is_comm_connected())`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "连接正常才获取最新 state 并继续检查。",
+        "failure": "条件为真时提示 P4 未连接并返回；为假时继续。",
+        "recovery": "连接串口并等待状态同步。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_2 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "Confirms the desktop still has a P4 serial connection before requesting calibration.",
+        "condition": "Raw source predicates: `not bool(self.context.is_comm_connected())`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only a live connection proceeds to the latest-state check.",
+        "failure": "When true, report P4 disconnected and return; when false, continue.",
+        "recovery": "Connect the serial port and wait for state synchronization.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_2 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_2b37a382d2dec4a126ddba60"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_3",
+      "zh": {
+        "plain": "必须拿到 state snapshot 才能判断 P4 是否处于允许标定的状态。",
+        "condition": "源码原始判断：`latest_state is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "snapshot 存在时读取 system_state 和反馈字段；None 不能作为放行依据。",
+        "failure": "条件为真时没有状态对象，停止后续准入；为假时继续。",
+        "recovery": "检查通信回传并等待新状态包。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_3 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "A state snapshot is required to determine whether P4 permits calibration.",
+        "condition": "Raw source predicates: `latest_state is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "With a snapshot, system_state and feedback fields can be checked; None cannot authorize startup.",
+        "failure": "When true, no state object is available and admission stops; when false, continue.",
+        "recovery": "Check communication feedback and wait for a new state packet.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_3 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_465b7ab67945aba7fa3db723"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_4",
+      "zh": {
+        "plain": "missing_manual 表示活动 joint scope 有编码器缺少手动参考，自动标定前需先补齐。",
+        "condition": "源码原始判断：`missing_manual`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "该值由 _active_scope_manual_missing_indices 依据所选关节计算。",
+        "failure": "条件为真时阻止自动标定并引导手动参考；为假时继续。",
+        "recovery": "在 Device Check 按提示逐关节完成手动参考，再返回重试。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_4 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "missing_manual means an encoder in the active joint scope lacks a manual reference that must be supplied first.",
+        "condition": "Raw source predicates: `missing_manual`. These expressions gate entry or subsequent data updates.",
+        "effect": "The value is computed from the selected joints by _active_scope_manual_missing_indices.",
+        "failure": "When true, block automatic calibration and request manual references; when false, continue.",
+        "recovery": "Complete manual references per joint in Device Check, then return and retry.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_4 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_dabffb8426a9028131fba15a"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_5",
+      "zh": {
+        "plain": "手动参考查询/刷新后再次计算 missing_manual，确认缺项确实消失。",
+        "condition": "源码原始判断：`missing_manual`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "新结果为真仍阻止启动；为假才允许进入后续状态检查。",
+        "failure": "条件为真时提示仍有缺失参考；为假时继续。",
+        "recovery": "检查参考查询 ACK 和刷新后的缺失 joint 列表。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_5 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "After manual-reference query/refresh, missing_manual is checked again to ensure the gaps were actually cleared.",
+        "condition": "Raw source predicates: `missing_manual`. These expressions gate entry or subsequent data updates.",
+        "effect": "A true refreshed result still blocks startup; false proceeds to later state checks.",
+        "failure": "When true, report references still missing; when false, continue.",
+        "recovery": "Check the reference-query ACK and refreshed list of missing joints.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_5 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_49c863c2e8a71c3be85ce8af"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_6",
+      "zh": {
+        "plain": "只有 UNCONTROLLABLE、IDLE、READY 或 RECOVERY_REQUIRED 被该桌面白名单接受；其它状态不开始标定。",
+        "condition": "源码原始判断：`system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "system_state 需属于四个列出的状态之一。",
+        "failure": "条件为真表示不在白名单，拒绝；为假则通过桌面状态检查。",
+        "recovery": "先停止其它动作或处理故障，等状态进入允许集合。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_6 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "The desktop whitelist accepts UNCONTROLLABLE, IDLE, READY, or RECOVERY_REQUIRED; other states do not start calibration.",
+        "condition": "Raw source predicates: `system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`. These expressions gate entry or subsequent data updates.",
+        "effect": "system_state must be one of the four listed values.",
+        "failure": "True means outside the whitelist and rejects; false passes this desktop state check.",
+        "recovery": "Stop other actions or address the fault, then wait for an allowed state.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_6 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_378535bfe24e3cef501a7de4"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_7",
+      "zh": {
+        "plain": "partial_helper_motor_mask 标记当前 joint 到 helper motor 的对应范围不完整，不能用部分电机启动整组标定。",
+        "condition": "源码原始判断：`partial_helper_motor_mask`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "映射完整性基于活动 scope 的 joint/motor mask 计算。",
+        "failure": "条件为真时阻止请求；为假时继续向 P4 提交。",
+        "recovery": "检查 URDF/通道映射与选中范围，补齐缺失对应。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_7 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "partial_helper_motor_mask indicates the joint-to-helper-motor mapping is incomplete, so a partial motor set cannot start group calibration.",
+        "condition": "Raw source predicates: `partial_helper_motor_mask`. These expressions gate entry or subsequent data updates.",
+        "effect": "Mapping completeness is calculated from the active joint/motor masks.",
+        "failure": "When true, block the request; when false, continue to submit to P4.",
+        "recovery": "Check the URDF/channel mapping and selected scope; add the missing associations.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_7 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_31da265facf550f7a3176884"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_8",
+      "zh": {
+        "plain": "accepted 反映下游是否接纳了参考查询或相关命令，而非仅仅写入发送队列。",
+        "condition": "源码原始判断：`not accepted`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "被接纳后才继续等刷新状态。",
+        "failure": "条件为真时拒绝并停止；为假时继续检查刷新结果。",
+        "recovery": "读取 P4 ACK 和拒绝原因，先满足其门禁。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_8 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "accepted reports whether the downstream reference request was admitted, not merely queued for sending.",
+        "condition": "Raw source predicates: `not accepted`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only an admitted request proceeds to wait for refreshed state.",
+        "failure": "When true, reject and stop; when false, check the refresh result.",
+        "recovery": "Read the P4 ACK and rejection reason, then satisfy its gate.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_8 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_c01cca0d487f5542477f650b"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_9",
+      "zh": {
+        "plain": "refreshed 用于确认参考查询之后已拿到更新数据，而不是继续使用旧快照。",
+        "condition": "源码原始判断：`refreshed`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "刷新成功后才使用新状态重新核对缺失参考。",
+        "failure": "条件为真时继续；为假时不能宣称数据已刷新或进入下一步。",
+        "recovery": "检查接收状态包、query ACK 与刷新超时。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_9 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "refreshed confirms that new data arrived after the reference query instead of reusing an old snapshot.",
+        "condition": "Raw source predicates: `refreshed`. These expressions gate entry or subsequent data updates.",
+        "effect": "After refresh succeeds, the new state is used to recheck missing references.",
+        "failure": "When true, continue; when false, do not claim data refreshed or advance.",
+        "recovery": "Check incoming state packets, query ACK, and refresh timeout.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_9 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_aab3f729b1dc67f2c751c36f"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_10",
+      "zh": {
+        "plain": "joint_idx 必须落在用户目标标记数组范围内，避免 UI 行号越界。",
+        "condition": "源码原始判断：`0 <= joint_idx < len(self._joint_target_user_set)`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "有效下标才会读写该 joint 的用户目标标志。",
+        "failure": "条件为真时允许该索引操作；为假时跳过以保护数组。",
+        "recovery": "核对 joint 列表长度和 UI 行索引绑定。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_10 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "joint_idx must be within the user-target marker array to prevent an out-of-range UI row.",
+        "condition": "Raw source predicates: `0 <= joint_idx < len(self._joint_target_user_set)`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only a valid index can access that joint’s user-target flag.",
+        "failure": "When true, allow the indexed operation; when false, skip it to protect the array.",
+        "recovery": "Check joint-list length and UI row-index binding.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_10 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_02458c95c9668dee6d35bd2f"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_11",
+      "zh": {
+        "plain": "状态刷新后必须仍有 latest_state，Device Check 才能安全更新展示。",
+        "condition": "源码原始判断：`latest_state is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "有状态时调用视图 update_state；None 时跳过显示更新。",
+        "failure": "条件为真时刷新视图；为假时保留界面现值。",
+        "recovery": "等待下一个有效状态快照。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_11 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "latest_state must still exist after refresh before Device Check can update its display.",
+        "condition": "Raw source predicates: `latest_state is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "When state exists, call the view update_state; when None, skip the display update.",
+        "failure": "When true, refresh the view; when false, retain its current display.",
+        "recovery": "Wait for the next valid state snapshot.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_11 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_4c2b7844449e8c09b8f32c17"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_1_guard_12",
+      "zh": {
+        "plain": "Device Check widget 可能尚未创建；该判断避免对空组件调用更新方法。",
+        "condition": "源码原始判断：`self.device_check_view is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "视图存在才刷新展示，不改变 P4 的运行状态。",
+        "failure": "条件为真时执行 UI 更新；为假时安全跳过。",
+        "recovery": "切到 Device Check 检视状态；若应存在却为空，检查 UI 生命周期。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_1_guard_12 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "The Device Check widget may not exist yet; this check avoids calling an update method on a missing component.",
+        "condition": "Raw source predicates: `self.device_check_view is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "Refresh the display only if the view exists; this does not change P4 runtime state.",
+        "failure": "When true, perform the UI update; when false, safely skip it.",
+        "recovery": "Open Device Check to inspect state; if it should exist but is missing, inspect UI lifecycle.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_1_guard_12 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_94774d45d654321de1b6db42"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:step_2",
+      "zh": {
+        "plain": "begin_calibration_workflow 把通过桌面检查的活动 scope 交给 backend/CalibrationWorkflowService。",
+        "condition": "入口为 Joint Channels 的 Calibrate 操作；具体前置门禁在 calibrate() 中逐项执行。",
+        "effect": "它读取状态快照并通过 lower controller 请求 P4 校准事件。",
+        "failure": "调用返回不等于任务完成；backend/P4 admission 或运行期都可能失败。",
+        "recovery": "查看 ACK、校准 phase 和安全规则，确认任务进入与结束状态。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 step_2 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "begin_calibration_workflow hands the host-approved active scope to backend/CalibrationWorkflowService.",
+        "condition": "Entered from Calibrate in Joint Channels; calibrate() evaluates its prerequisites in sequence.",
+        "effect": "It reads a state snapshot and asks the lower controller to send the P4 calibration event.",
+        "failure": "Returning from the call does not mean completion; backend/P4 admission or runtime may still fail.",
+        "recovery": "Inspect ACK, calibration phase, and safety rules for task start and completion.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the step_2 node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_d34d866ee1313d091659dc05"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:CMD_CALIBRATE",
+      "zh": {
+        "plain": "CMD_CALIBRATE 是串口协议中的校准命令 ID，把上位机意图传给 P4。",
+        "condition": "入口为 Joint Channels 的 Calibrate 操作；具体前置门禁在 calibrate() 中逐项执行。",
+        "effect": "P4 dispatcher 收到该命令后转入 CALIBRATE system event。",
+        "failure": "帧无效、ACK 拒绝或事件门禁失败时不会启动工作流。",
+        "recovery": "检查协议生成表与 ACK 状态。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 CMD_CALIBRATE 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "CMD_CALIBRATE is the serial-protocol command ID that carries the desktop request to P4.",
+        "condition": "Entered from Calibrate in Joint Channels; calibrate() evaluates its prerequisites in sequence.",
+        "effect": "After the P4 dispatcher receives it, it routes to the CALIBRATE system event.",
+        "failure": "Invalid frame, rejected ACK, or event gate prevents workflow startup.",
+        "recovery": "Check generated protocol tables and ACK status.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the CMD_CALIBRATE node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_445a551d94836f93e44c090d",
+        "src_580f7dea4f650529d5ec4a26"
+      ]
+    },
+    {
+      "id": "graph:calibration:node:SYSTEM_EVENT_CALIBRATE",
+      "zh": {
+        "plain": "P4 的 CALIBRATE 事件再做固件侧检查：E-stop、host command admission、manual reference、系统状态和任务启动。",
+        "condition": "源码原始判断：`rejectMotionWhenEmergencyStopLatched(sharedData,\n\"CALIBRATE\")`；`!p4::state::prepareHostControlCommandAdmission(sharedData)`；`!manualReferenceGateReady(sharedData)`；`!p4::system::canAcceptCalibration(sharedData->system_state)`；`!startAutoCalibrationTaskRuntime(sharedData)`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "全部通过后调用 startAutoCalibrationTaskRuntime 启动异步 worker。",
+        "failure": "任何拒绝谓词成立或 runtime 启动失败都会留下拒绝/失败结果。",
+        "recovery": "按 Rule/ACK 指示修复固件门禁，再确认 worker 状态。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "这是 calibration 子图的 SYSTEM_EVENT_CALIBRATE 节点；桌面检查和固件检查彼此独立。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "P4’s CALIBRATE event repeats firmware-side checks for E-stop, host-command admission, manual references, system state, and task startup.",
+        "condition": "Raw source predicates: `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"CALIBRATE\")`; `!p4::state::prepareHostControlCommandAdmission(sharedData)`; `!manualReferenceGateReady(sharedData)`; `!p4::system::canAcceptCalibration(sharedData->system_state)`; `!startAutoCalibrationTaskRuntime(sharedData)`. These expressions gate entry or subsequent data updates.",
+        "effect": "After these checks pass, startAutoCalibrationTaskRuntime launches the asynchronous worker.",
+        "failure": "Any rejecting predicate or runtime-start failure produces a rejection/failure result.",
+        "recovery": "Use Rule/ACK feedback to fix firmware gates and verify worker state.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "This is the SYSTEM_EVENT_CALIBRATE node in the calibration graph; desktop and firmware checks are independent.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_80d6bd396d63aa7ccedd0207",
+        "src_82154bade1796bb059e33f6e",
+        "src_817cc6d0e38004588b9e8f0c",
+        "src_6acefd99c7fe3e5a3898b94d",
+        "src_a84e53321e1e58666fcba82f",
+        "src_35f3a5f7f294f0867216e891",
+        "src_7238dbfa7ddd9774f5628e18"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:1:step_1:step_1_guard_1",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`self._manual_submode() != \"joint\"`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "该条件检查当前 manual submode；模式不符时停止，不进入通信和参考查询。",
+        "failure": "条件为真时拒绝并提示切换 Joint Channels；为假时继续下一项连接检查。",
+        "recovery": "切到 Joint Channels 后重试。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `self._manual_submode() != \"joint\"`. These expressions gate entry or subsequent data updates.",
+        "effect": "This checks the current manual submode; a mismatch stops before communication/reference work.",
+        "failure": "When true, reject and request Joint Channels; when false, continue to the connection check.",
+        "recovery": "Switch to Joint Channels and retry.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_d28f49a4ff04a7389c536dae",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:2:step_1:step_1_guard_2",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`not bool(self.context.is_comm_connected())`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "连接正常才获取最新 state 并继续检查。",
+        "failure": "条件为真时提示 P4 未连接并返回；为假时继续。",
+        "recovery": "连接串口并等待状态同步。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `not bool(self.context.is_comm_connected())`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only a live connection proceeds to the latest-state check.",
+        "failure": "When true, report P4 disconnected and return; when false, continue.",
+        "recovery": "Connect the serial port and wait for state synchronization.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_2b37a382d2dec4a126ddba60",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:3:step_1:step_1_guard_3",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`latest_state is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "snapshot 存在时读取 system_state 和反馈字段；None 不能作为放行依据。",
+        "failure": "条件为真时没有状态对象，停止后续准入；为假时继续。",
+        "recovery": "检查通信回传并等待新状态包。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `latest_state is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "With a snapshot, system_state and feedback fields can be checked; None cannot authorize startup.",
+        "failure": "When true, no state object is available and admission stops; when false, continue.",
+        "recovery": "Check communication feedback and wait for a new state packet.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_465b7ab67945aba7fa3db723",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:4:step_1:step_1_guard_4",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`missing_manual`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "该值由 _active_scope_manual_missing_indices 依据所选关节计算。",
+        "failure": "条件为真时阻止自动标定并引导手动参考；为假时继续。",
+        "recovery": "在 Device Check 按提示逐关节完成手动参考，再返回重试。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `missing_manual`. These expressions gate entry or subsequent data updates.",
+        "effect": "The value is computed from the selected joints by _active_scope_manual_missing_indices.",
+        "failure": "When true, block automatic calibration and request manual references; when false, continue.",
+        "recovery": "Complete manual references per joint in Device Check, then return and retry.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_dabffb8426a9028131fba15a",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:5:step_1:step_1_guard_5",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`missing_manual`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "新结果为真仍阻止启动；为假才允许进入后续状态检查。",
+        "failure": "条件为真时提示仍有缺失参考；为假时继续。",
+        "recovery": "检查参考查询 ACK 和刷新后的缺失 joint 列表。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `missing_manual`. These expressions gate entry or subsequent data updates.",
+        "effect": "A true refreshed result still blocks startup; false proceeds to later state checks.",
+        "failure": "When true, report references still missing; when false, continue.",
+        "recovery": "Check the reference-query ACK and refreshed list of missing joints.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_49c863c2e8a71c3be85ce8af",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:6:step_1:step_1_guard_6",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "system_state 需属于四个列出的状态之一。",
+        "failure": "条件为真表示不在白名单，拒绝；为假则通过桌面状态检查。",
+        "recovery": "先停止其它动作或处理故障，等状态进入允许集合。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `system_state not in (\n            SYSTEM_STATE_UNCONTROLLABLE,\n            SYSTEM_STATE_IDLE,\n            SYSTEM_STATE_READY,\n            SYSTEM_STATE_RECOVERY_REQUIRED,\n        )`. These expressions gate entry or subsequent data updates.",
+        "effect": "system_state must be one of the four listed values.",
+        "failure": "True means outside the whitelist and rejects; false passes this desktop state check.",
+        "recovery": "Stop other actions or address the fault, then wait for an allowed state.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_378535bfe24e3cef501a7de4",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:7:step_1:step_1_guard_7",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`partial_helper_motor_mask`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "映射完整性基于活动 scope 的 joint/motor mask 计算。",
+        "failure": "条件为真时阻止请求；为假时继续向 P4 提交。",
+        "recovery": "检查 URDF/通道映射与选中范围，补齐缺失对应。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `partial_helper_motor_mask`. These expressions gate entry or subsequent data updates.",
+        "effect": "Mapping completeness is calculated from the active joint/motor masks.",
+        "failure": "When true, block the request; when false, continue to submit to P4.",
+        "recovery": "Check the URDF/channel mapping and selected scope; add the missing associations.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_31da265facf550f7a3176884",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:8:step_1:step_1_guard_8",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`not accepted`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "被接纳后才继续等刷新状态。",
+        "failure": "条件为真时拒绝并停止；为假时继续检查刷新结果。",
+        "recovery": "读取 P4 ACK 和拒绝原因，先满足其门禁。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `not accepted`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only an admitted request proceeds to wait for refreshed state.",
+        "failure": "When true, reject and stop; when false, check the refresh result.",
+        "recovery": "Read the P4 ACK and rejection reason, then satisfy its gate.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_c01cca0d487f5542477f650b",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:9:step_1:step_1_guard_9",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`refreshed`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "刷新成功后才使用新状态重新核对缺失参考。",
+        "failure": "条件为真时继续；为假时不能宣称数据已刷新或进入下一步。",
+        "recovery": "检查接收状态包、query ACK 与刷新超时。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `refreshed`. These expressions gate entry or subsequent data updates.",
+        "effect": "After refresh succeeds, the new state is used to recheck missing references.",
+        "failure": "When true, continue; when false, do not claim data refreshed or advance.",
+        "recovery": "Check incoming state packets, query ACK, and refresh timeout.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_aab3f729b1dc67f2c751c36f",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:10:step_1:step_1_guard_10",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`0 <= joint_idx < len(self._joint_target_user_set)`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "有效下标才会读写该 joint 的用户目标标志。",
+        "failure": "条件为真时允许该索引操作；为假时跳过以保护数组。",
+        "recovery": "核对 joint 列表长度和 UI 行索引绑定。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `0 <= joint_idx < len(self._joint_target_user_set)`. These expressions gate entry or subsequent data updates.",
+        "effect": "Only a valid index can access that joint’s user-target flag.",
+        "failure": "When true, allow the indexed operation; when false, skip it to protect the array.",
+        "recovery": "Check joint-list length and UI row-index binding.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_02458c95c9668dee6d35bd2f",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:11:step_1:step_1_guard_11",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`latest_state is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "有状态时调用视图 update_state；None 时跳过显示更新。",
+        "failure": "条件为真时刷新视图；为假时保留界面现值。",
+        "recovery": "等待下一个有效状态快照。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `latest_state is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "When state exists, call the view update_state; when None, skip the display update.",
+        "failure": "When true, refresh the view; when false, retain its current display.",
+        "recovery": "Wait for the next valid state snapshot.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_4c2b7844449e8c09b8f32c17",
+        "src_3293974f421748cf40dace3f"
+      ]
+    },
+    {
+      "id": "graph:calibration:edge:12:step_1:step_1_guard_12",
+      "zh": {
+        "plain": "该连线把 calibrate 请求路由到这个具体守卫；边保留同一条件与进入下一分支的顺序。",
+        "condition": "源码原始判断：`self.device_check_view is not None`。这些表达式控制节点的准入或后续数据操作。",
+        "effect": "视图存在才刷新展示，不改变 P4 的运行状态。",
+        "failure": "条件为真时执行 UI 更新；为假时安全跳过。",
+        "recovery": "切到 Device Check 检视状态；若应存在却为空，检查 UI 生命周期。",
+        "unknown": "源码能证明桌面门禁和 P4 请求链，不能证明电机实机运动、标定精度或成功写回。",
+        "difference": "沿边可看到该校验在标定调用链中的位置；节点说明拒绝后的用户动作。",
+        "change": "基线未把该节点标记为本次变更。"
+      },
+      "en": {
+        "plain": "This edge routes the calibrate request to this guard and preserves the predicate and branch order.",
+        "condition": "Raw source predicates: `self.device_check_view is not None`. These expressions gate entry or subsequent data updates.",
+        "effect": "Refresh the display only if the view exists; this does not change P4 runtime state.",
+        "failure": "When true, perform the UI update; when false, safely skip it.",
+        "recovery": "Open Device Check to inspect state; if it should exist but is missing, inspect UI lifecycle.",
+        "unknown": "The source proves host gates and the P4 request path, not physical motion, calibration accuracy, or successful persistence.",
+        "difference": "The edge shows where this check sits in calibration flow; the guard explains the recovery action.",
+        "change": "The baseline does not mark this node as changed."
+      },
+      "evidence_ids": [
+        "src_94774d45d654321de1b6db42",
+        "src_3293974f421748cf40dace3f"
+      ]
+    }
+  ]
+}

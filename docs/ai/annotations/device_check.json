@@ -1,0 +1,662 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "device_check",
+  "bundle_hash": "0dc4d4ca9ee73d153a85d4b923b0a9ba4dee260a3b61014fb8a81f6778f00f4a",
+  "overview": {
+    "zh": "Device Check 页面维护人工编码器端点，并展示 P4 当前 Manual/Auto/RAM 状态。图覆盖 raw 捕获、Release Rope 的破坏性机械准备、逐行写入及验证、全量清除和启动时恢复事务。Manual 数据是后续 Auto 标定与 feedback 控制的前置条件；“UI 显示 Saved/queued”分别只说明提交验证或事务受理，不证明后续控制已 READY。",
+    "en": "The Device Check page maintains manual encoder endpoints and displays current P4 Manual/Auto/RAM status. This graph covers raw capture, the destructive mechanical preparation in Release Rope, per-row write and verification, global clearing, and startup restore transactions. Manual data is a prerequisite for Auto calibration and feedback control; “Saved” or “queued” in the UI means verification or transaction acceptance, not that later control is READY.",
+    "evidence_ids": [
+      "src_24a398f3ece4500894b95a84",
+      "src_fc710954a6c3ac0612c3d1ff",
+      "src_95b1f27f3b288b728c3d8674",
+      "src_c762d595b2d9b1a4f95bd494",
+      "src_74d3d114d59704671068d7df"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:device_check:node:workflow",
+      "zh": {
+        "plain": "Device Check 页围绕 21 个关节维护 Manual Min/Max 编码器端点。表格同时显示当前 raw、方向、Manual span、Auto 标定值、URDF 范围和 P4 RAM/JSON 提交状态；用户可捕获端点、逐行写入、清除或执行 Release Rope。",
+        "condition": "手动端点编辑要求有可用编码器读数；写入只处理 dirty 行。Release Rope 和 Clear Manual 都要求用户在默认选中的 No 对话框中明确确认 Yes。",
+        "effect": "每行把 raw encoder 值转换为 Manual Min/Max 输入；后台动作通过 backend 读写 P4 并回查结果。Release Rope 会单独在 worker thread 执行，完成信号再回到 UI。",
+        "failure": "raw 缺失时捕获按钮不写入；串口断开时 Release Rope 被阻止；写入的 ACK/readback/CRC/JSON 任一验证失败会显示失败结果。清除或释放操作有明确设备状态副作用。",
+        "recovery": "先恢复有效的编码器反馈和 P4 串口。Manual 写入失败时确认哪些关节已完成再处理剩余项；Release Rope 后按提示重新做自动标定。",
+        "difference": "Device Check 是人工提供端点的设置流程；自动标定负责从运动/反馈建立 Auto 结果，Joint Channels 则选择控制范围。",
+        "unknown": "GUI 代码说明命令及返回校验，不证明当前硬件 raw、端点是否机械安全或最终标定质量。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "Device Check maintains Manual Min/Max encoder endpoints for 21 joints. Its table shows current raw value, direction, Manual span, Auto calibration values, URDF range, and P4 RAM/JSON commit state. Operators can capture endpoints, write dirty rows, clear them, or run Release Rope.",
+        "condition": "Capturing an endpoint requires a usable encoder reading; writes apply only to dirty rows. Release Rope and Clear Manual both require explicit Yes in dialogs that default to No.",
+        "effect": "Each row maps raw encoder readings to Manual Min/Max inputs. Background operations use backend to read/write P4 and verify the result. Release Rope runs on a worker thread and returns to the UI through a completion signal.",
+        "failure": "Missing raw data blocks capture; a disconnected serial port blocks Release Rope; failed ACK/readback/CRC/JSON verification reports a failed write. Release and clear operations have real device-state side effects.",
+        "recovery": "Restore valid encoder feedback and the P4 serial link first. After a failed write, check which joints completed before retrying; after Release Rope, perform automatic calibration as instructed.",
+        "difference": "Device Check is for manually entered endpoints; automatic calibration derives Auto results from motion/feedback, while Joint Channels selects the control scope.",
+        "unknown": "The GUI code describes commands and verification, not current hardware readings, mechanical safety of endpoints, or calibration quality.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_24a398f3ece4500894b95a84"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_1",
+      "zh": {
+        "plain": "`_capture_raw(joint, is_min)` copies the selected joint’s current raw sensor count into either Manual Min or Manual Max, then marks that row dirty so it can be written to P4.",
+        "condition": "`raw is None` means the cached reading is unavailable; otherwise the integer raw count can be captured. `is_min` chooses which endpoint field receives it.",
+        "effect": "The handler selects `_manual_min_spins[joint]` or `_manual_max_spins[joint]`, calls `setValue(int(raw))`, and `_mark_dirty(joint)` updates pending-edit tracking.",
+        "failure": "When `raw is None`, status says capture is blocked and the function returns without changing the endpoint. A valid capture changes the UI draft only; it is not yet persisted to P4.",
+        "recovery": "Wait for valid encoder telemetry and capture again. Then use Write Modified to send the edited endpoint and verify ACK/readback.",
+        "difference": "This is a local UI capture step, distinct from querying or committing Manual references to device storage.",
+        "unknown": "Whether the sampled pose is a safe or correct physical endpoint is an operator/hardware decision not proved by this method.",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "`_capture_raw(joint, is_min)` copies the selected joint’s current raw sensor count into Manual Min or Manual Max, then marks the row dirty for later P4 write.",
+        "condition": "`raw is None` means the cached reading is unavailable; otherwise the integer count can be captured. `is_min` selects which endpoint field receives it.",
+        "effect": "The handler selects `_manual_min_spins[joint]` or `_manual_max_spins[joint]`, calls `setValue(int(raw))`, and `_mark_dirty(joint)` tracks the pending edit.",
+        "failure": "If `raw is None`, status reports that capture is blocked and the function returns without changing the endpoint. A valid capture changes only the UI draft; it is not persisted to P4 yet.",
+        "recovery": "Wait for valid encoder telemetry and capture again. Then use Write Modified to send the endpoint and verify ACK/readback.",
+        "difference": "This is a local UI capture step, unlike querying or committing Manual references in device storage.",
+        "unknown": "Whether the sampled pose is a mechanically safe or correct endpoint is an operator/hardware decision not proved by this method.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_24a398f3ece4500894b95a84",
+        "src_34a5edbe2dc245d8b03129b6"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_1_guard_1",
+      "zh": {
+        "plain": "该图中的守卫检查 `raw is None`，决定操作是否进入下一步。",
+        "condition": "原始条件 `raw is None`。`raw` 是 `update_state()` 缓存的健康编码器计数；None 表示没有可安全显示/捕获的当前值。",
+        "effect": "条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "failure": "为真：条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 为假：真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "recovery": "确认 P4/S3 有效反馈后再次捕获；若 raw 一直缺失，检查 raw_error 与 encoder_online_bitmap。",
+        "difference": "这是遥测可用性检查，不是端点大小或控制状态检查。",
+        "unknown": "代码从健康状态/错误位筛选 raw，但没有证明传感器硬件校准准确。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `raw is None` to decide whether the operation proceeds.",
+        "condition": "Raw condition `raw is None`. `raw` 是 `update_state()` 缓存的健康编码器计数；None 表示没有可安全显示/捕获的当前值。",
+        "effect": "条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "failure": "True: 条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 False: 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是遥测可用性检查，不是端点大小或控制状态检查。",
+        "unknown": "代码从健康状态/错误位筛选 raw，但没有证明传感器硬件校准准确。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_34a5edbe2dc245d8b03129b6"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_2",
+      "zh": {
+        "plain": "`manual_prepare()` 执行 Release Rope：确认后在 worker 中调用 `manual_prepare_all_motors()`。弹窗列明会重置 turn count、删除多圈 JSON 锚点、保留 Manual 但作废 Auto/LUT/ABS Limit，并向放绳方向移动 1500 counts。",
+        "condition": "按顺序判断 `self._busy`、`not self.context.is_comm_connected()`、`reply != QtWidgets.QMessageBox.Yes`；只有忙碌为假、串口已连接且用户点 Yes 才开始。",
+        "effect": "先禁用相关按钮并显示检查状态，再用 daemon thread 调 backend；异常被转换为 `ok=False` 结果，完成后发 signal 更新 UI。",
+        "failure": "忙碌或未连接时提前返回；点 No 时不动作；backend 异常则构造失败结果。动作即使完成也只表示释放流程完成，Auto/LUT 需要后续重建。",
+        "recovery": "只在设备机械状态允许时确认；完成后读取返回的电机 mask/消息，按流程自动标定并验证结果。",
+        "difference": "Release Rope 是机械/状态准备，会运动并使标定派生数据无效；普通 Manual endpoint 写入只保存人工端点。",
+        "unknown": "GUI 显示 1500 counts 和影响范围，但实际触达电机及恢复成功必须由 backend 结果和 P4 状态确认。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "`manual_prepare()` performs Release Rope: after confirmation it calls `manual_prepare_all_motors()` on a worker. The dialog warns that it resets turn counts, removes multi-turn JSON anchors, preserves Manual but invalidates Auto/LUT/ABS Limit, and moves 1500 counts in the rope-release direction.",
+        "condition": "It checks `self._busy`, `not self.context.is_comm_connected()`, and `reply != QtWidgets.QMessageBox.Yes` in order. It starts only when idle, connected, and explicitly confirmed.",
+        "effect": "The UI disables relevant buttons and shows progress, then calls the backend on a daemon thread. Exceptions are converted into an `ok=False` result; completion is returned through a signal.",
+        "failure": "Busy/disconnected paths return early; No cancels; backend exceptions produce a failure result. Completion does not restore Auto/LUT: those derived values must be recalculated later.",
+        "recovery": "Confirm only when the mechanical situation is safe. After completion, inspect returned motor masks/message, run automatic calibration, and verify its result.",
+        "difference": "Release Rope prepares mechanical/state conditions and moves hardware while invalidating derived calibration; an ordinary Manual write only saves human-entered endpoints.",
+        "unknown": "The UI states the 1500-count motion and affected classes, but actual motors reached and successful recovery require backend results and P4 state.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_fc710954a6c3ac0612c3d1ff",
+        "src_20ce9824217c486f38293bb7",
+        "src_3389bded5662651b524f4557",
+        "src_6671eaeebac55ad44220adaa"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_2_guard_1",
+      "zh": {
+        "plain": "该图中的守卫检查 `self._busy`，决定操作是否进入下一步。",
+        "condition": "原始条件 `self._busy`。`_busy` 表示 Release Rope 操作已在后台执行；该锁避免重复触发会重置多圈锚点并驱动电机的动作。",
+        "effect": "为真时直接返回，不再开线程；为假时继续检查串口连接。 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "failure": "为真：为真时直接返回，不再开线程；为假时继续检查串口连接。 为假：真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "recovery": "等待现有 worker 完成，通过完成状态确认结果后再启动下一次。",
+        "difference": "这是防止重复危险操作的 UI 忙碌门控。",
+        "unknown": "它只反映本控件操作状态，不代表所有 P4 任务均空闲。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `self._busy` to decide whether the operation proceeds.",
+        "condition": "Raw condition `self._busy`. `_busy` 表示 Release Rope 操作已在后台执行；该锁避免重复触发会重置多圈锚点并驱动电机的动作。",
+        "effect": "为真时直接返回，不再开线程；为假时继续检查串口连接。 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "failure": "True: 为真时直接返回，不再开线程；为假时继续检查串口连接。 False: 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是防止重复危险操作的 UI 忙碌门控。",
+        "unknown": "它只反映本控件操作状态，不代表所有 P4 任务均空闲。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_20ce9824217c486f38293bb7"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_2_guard_2",
+      "zh": {
+        "plain": "该图中的守卫检查 `not self.context.is_comm_connected()`，决定操作是否进入下一步。",
+        "condition": "原始条件 `not self.context.is_comm_connected()`。`is_comm_connected()` 是桌面到 P4 主串口的连接状态；前面的 `not` 表示目前未连接。",
+        "effect": "为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "failure": "为真：为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 为假：真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "recovery": "连接 P4 后检查有效舵机和唯一 bus route，再重新执行并阅读确认提示。",
+        "difference": "这是串口可达性门控，与后续用户确认和 servo route 筛选是不同层次。",
+        "unknown": "此处没有证明串口上控制板已完成同步或全部舵机在线。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `not self.context.is_comm_connected()` to decide whether the operation proceeds.",
+        "condition": "Raw condition `not self.context.is_comm_connected()`. `is_comm_connected()` 是桌面到 P4 主串口的连接状态；前面的 `not` 表示目前未连接。",
+        "effect": "为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "failure": "True: 为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 False: 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是串口可达性门控，与后续用户确认和 servo route 筛选是不同层次。",
+        "unknown": "此处没有证明串口上控制板已完成同步或全部舵机在线。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_3389bded5662651b524f4557"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_2_guard_3",
+      "zh": {
+        "plain": "该图中的守卫检查 `reply != QtWidgets.QMessageBox.Yes`，决定操作是否进入下一步。",
+        "condition": "原始条件 `reply != QtWidgets.QMessageBox.Yes`。弹窗默认选择 No；只有用户明确点 Yes 才执行 Release Rope。表达式为真表示取消/关闭或选择了 No。",
+        "effect": "为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "failure": "为真：为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 为假：取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "recovery": "仅在确认机械安全、理解会失效 Auto 数据且已准备后再点 Yes；结束后必须重新自动标定。",
+        "difference": "这是有明确用户确认的破坏性动作门槛，不是一般保存确认。",
+        "unknown": "受影响电机集合由 backend 的 online/route 检查决定，GUI 文本本身不证明具体哪些电机实际改变。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `reply != QtWidgets.QMessageBox.Yes` to decide whether the operation proceeds.",
+        "condition": "Raw condition `reply != QtWidgets.QMessageBox.Yes`. 弹窗默认选择 No；只有用户明确点 Yes 才执行 Release Rope。表达式为真表示取消/关闭或选择了 No。",
+        "effect": "为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "failure": "True: 为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 False: 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是有明确用户确认的破坏性动作门槛，不是一般保存确认。",
+        "unknown": "受影响电机集合由 backend 的 online/route 检查决定，GUI 文本本身不证明具体哪些电机实际改变。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_6671eaeebac55ad44220adaa"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_3",
+      "zh": {
+        "plain": "`write_modified()` writes only sorted `_dirty_rows`。它收集每行 Manual Min/Max，逐关节调用 backend；失败即停止后续写入并显示已完成集合，全部成功后再查询回读。",
+        "condition": "操作先判断 `not rows`：没有被标脏的行就跳过。若有行，每个 `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)` 为真表示该关节写入/验证失败并短路停止；为假表示成功并继续下一行。",
+        "effect": "成功结果要求 ACK、readback、CRC 和 desktop JSON 均验证通过；操作状态明确提示还需自动标定。",
+        "failure": "没有改动时不发命令；单个关节写失败时之前完成的关节保留，不自动回滚，报告含失败关节 min/max 与完成列表。",
+        "recovery": "按 completed 列表核对 P4 与桌面 JSON，修复失败后只重新提交需要处理的行，再运行校验。",
+        "difference": "这是持久化 Manual 原始端点，不是 Auto 校准，也不表示 READY workspace 已建立。",
+        "unknown": "UI 调用展示验证项目，但持久化介质和事务原子性需看 backend；源代码明确不是整批回滚事务。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "`write_modified()` writes only sorted `_dirty_rows`. It collects each row’s Manual Min/Max, calls the backend per joint, stops on the first failure with a completed list, and queries readback after all succeed.",
+        "condition": "First `not rows` skips when no row is dirty. For each row, `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)` is true on a failed write/verification and stops the loop; false means success and continues to the next joint.",
+        "effect": "Success requires ACK, readback, CRC, and desktop JSON verification. The status explicitly says automatic calibration is still required.",
+        "failure": "No edits means no command is sent. If one joint fails, earlier completed joints remain committed; there is no automatic rollback, and the report names the failed joint and completed set.",
+        "recovery": "Use the completed list to compare P4 and desktop JSON, fix the failed item, resubmit only what needs handling, and verify again.",
+        "difference": "This persists raw Manual endpoints; it is not Auto calibration and does not establish a READY workspace.",
+        "unknown": "The UI names verification steps; inspect the backend for storage/transaction details. The shown loop is explicitly not an all-or-nothing transaction.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_95b1f27f3b288b728c3d8674",
+        "src_1d7934445501ce77b429db4a",
+        "src_52a022683710085e943b8710"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_3_guard_1",
+      "zh": {
+        "plain": "该图中的守卫检查 `not rows`，决定操作是否进入下一步。",
+        "condition": "原始条件 `not rows`。`rows` 是按序排列的 dirty joint 索引；空列表表示用户没有修改任何 Manual Min/Max。",
+        "effect": "为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "failure": "为真：为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 为假：真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "recovery": "编辑端点或捕获 raw 让行变 dirty 后再点 Write Modified。",
+        "difference": "该条件只判断有没有待保存改动，不检查端点合理性。",
+        "unknown": "空行判断之外的值域约束由 spinbox/backend 协议实现决定。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `not rows` to decide whether the operation proceeds.",
+        "condition": "Raw condition `not rows`. `rows` 是按序排列的 dirty joint 索引；空列表表示用户没有修改任何 Manual Min/Max。",
+        "effect": "为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "failure": "True: 为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 False: 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "该条件只判断有没有待保存改动，不检查端点合理性。",
+        "unknown": "空行判断之外的值域约束由 spinbox/backend 协议实现决定。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_1d7934445501ce77b429db4a"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_3_guard_2",
+      "zh": {
+        "plain": "该图中的守卫检查 `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`，决定操作是否进入下一步。",
+        "condition": "原始条件 `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`。`set_manual_encoder_reference` 对单个关节发送并验证 Manual 端点；外层 `not` 把失败返回值变为分支条件。",
+        "effect": "为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "failure": "为真：为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 为假：真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "recovery": "根据状态检查已完成关节和失败关节，修复通信/数据问题后仅重试未完成项目，并复查设备与本地 JSON。",
+        "difference": "这是逐关节提交中的失败短路；和“没改任何行”不同，它可能发生在部分成功之后。",
+        "unknown": "后端调用的具体帧重试次数不在此 UI 函数中说明。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)` to decide whether the operation proceeds.",
+        "condition": "Raw condition `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`. `set_manual_encoder_reference` 对单个关节发送并验证 Manual 端点；外层 `not` 把失败返回值变为分支条件。",
+        "effect": "为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "failure": "True: 为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 False: 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是逐关节提交中的失败短路；和“没改任何行”不同，它可能发生在部分成功之后。",
+        "unknown": "后端调用的具体帧重试次数不在此 UI 函数中说明。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_52a022683710085e943b8710"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_4",
+      "zh": {
+        "plain": "`clear_manual()` 提示并清除全部 21 个 Manual endpoint pair，不限于当前 dirty/选中行。确认后调用 backend，并报告 ACK、回读与 desktop JSON 校验。",
+        "condition": "`reply != QtWidgets.QMessageBox.Yes` 为真时取消；只有明确 Yes 才调用清除操作。",
+        "effect": "backend 返回真时显示 endpoints cleared、ACK/readback ok、JSON empty；返回假时报告清除验证失败。",
+        "failure": "取消不清除；确认后 P4 RAM 和桌面 JSON 被清空，Manual 不完整会阻止校准及 feedback control。",
+        "recovery": "要继续使用系统，需要重新输入并写入有效 Manual Min/Max，再完成 Auto calibration 和 workspace 准入。",
+        "difference": "它是全局清空动作；与逐行 Write Modified 相反，也不是仅重置 Auto 标定。",
+        "unknown": "底层清理失败时哪一端已改变需由 backend 的回读结果确定，不能假定部分成功或自动回滚。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "`clear_manual()` prompts to clear all 21 Manual endpoint pairs, not only the selected or dirty rows. After confirmation it calls the backend and reports ACK, readback, and desktop-JSON checks.",
+        "condition": "If `reply != QtWidgets.QMessageBox.Yes` is true, the operation is cancelled. Only explicit Yes calls the clear operation.",
+        "effect": "A true backend result reports endpoints cleared with ACK/readback ok and empty JSON; false reports verification failure.",
+        "failure": "Cancel leaves data unchanged. Confirmation clears P4 RAM and desktop JSON; incomplete Manual references block calibration and feedback control.",
+        "recovery": "To resume, enter and write valid Manual Min/Max values, then complete Auto calibration and workspace admission.",
+        "difference": "This clears all joints, unlike per-row Write Modified, and is not merely an Auto-calibration reset.",
+        "unknown": "If low-level clearing fails, inspect backend readback to determine which side changed; do not assume partial success or rollback.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_c762d595b2d9b1a4f95bd494",
+        "src_ae6b3d322320de1641e179f4"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_4_guard_1",
+      "zh": {
+        "plain": "该图中的守卫检查 `reply != QtWidgets.QMessageBox.Yes`，决定操作是否进入下一步。",
+        "condition": "原始条件 `reply != QtWidgets.QMessageBox.Yes`。清除操作的 Yes/No 确认；表达式为真表示用户没有明确确认清空全部 21 对端点。",
+        "effect": "真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "failure": "为真：真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 为假：取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "recovery": "只有在准备重新录入端点时确认；意外清除后需恢复有效 Manual Min/Max 并验证提交状态。",
+        "difference": "它清空全体关节 Manual 引用，不是只清理当前选中行。",
+        "unknown": "函数提示涵盖全部 21 对引用；其他持久化副作用应通过 backend 实现核实。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `reply != QtWidgets.QMessageBox.Yes` to decide whether the operation proceeds.",
+        "condition": "Raw condition `reply != QtWidgets.QMessageBox.Yes`. 清除操作的 Yes/No 确认；表达式为真表示用户没有明确确认清空全部 21 对端点。",
+        "effect": "真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "failure": "True: 真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 False: 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "它清空全体关节 Manual 引用，不是只清理当前选中行。",
+        "unknown": "函数提示涵盖全部 21 对引用；其他持久化副作用应通过 backend 实现核实。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_ae6b3d322320de1641e179f4"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_5",
+      "zh": {
+        "plain": "`begin_startup_device_check()` 启动上位机启动时的 calibration restore 事务，为当前 active joints 恢复 Auto/LUT 等数据。它把“已受理”标志与最终恢复成功分开。",
+        "condition": "原始门控 `self._startup_device_check_running or not self.context.is_comm_connected()`：已有事务或串口断开都提前退出；之后的 `not self.backend.begin_startup_calibration_restore(active_joint_mask)` 判断 backend 是否接受恢复事务。",
+        "effect": "请求受理后保持 running 标记，由后续 transaction 流程完成恢复；backend 拒绝时清除标记并显示另一个事务正在运行。",
+        "failure": "重复启动或串口离线会静默返回；backend 拒绝则明确提示 blocked。受理成功不代表 JSON/Auto 数据已全部恢复有效。",
+        "recovery": "检查后续事务完成事件和每关节 validity；若无响应，检查串口连接及 backend 事务占用。",
+        "difference": "这是加载启动恢复数据，不等同于用户点击 Calibrate 重新测量端点。",
+        "unknown": "任务包只展示请求和拒绝入口，没有证明恢复事务的完整结束/超时状态机。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "`begin_startup_device_check()` starts a startup calibration-restore transaction for the active joints, restoring data such as Auto/LUT. Acceptance is separate from final restore success.",
+        "condition": "Raw gate `self._startup_device_check_running or not self.context.is_comm_connected()` returns early if a restore is already running or serial is disconnected. Then `not self.backend.begin_startup_calibration_restore(active_joint_mask)` tests whether the backend accepted the restore transaction.",
+        "effect": "If accepted, the running flag stays set while the later transaction completes. If refused, the flag is cleared and status says another calibration transaction is running.",
+        "failure": "Duplicate starts or a disconnected serial link return silently; backend refusal reports blocked. Acceptance does not prove all JSON/Auto data became valid.",
+        "recovery": "Inspect the later completion event and per-joint validity. If it does not finish, check the serial connection and whether another backend transaction owns the operation.",
+        "difference": "This loads startup recovery data; it is not the user-triggered Calibrate operation that measures endpoints again.",
+        "unknown": "The packet shows the request and refusal path, not the full completion/timeout state machine.",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_74d3d114d59704671068d7df",
+        "src_1f85029b2921df9a4cfb916f",
+        "src_6504c8813475d9f437ebf241"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_5_guard_1",
+      "zh": {
+        "plain": "该图中的守卫检查 `self._startup_device_check_running or not self.context.is_comm_connected()`，决定操作是否进入下一步。",
+        "condition": "原始条件 `self._startup_device_check_running or not self.context.is_comm_connected()`。任一条件为真都会拒绝启动：启动恢复已在运行，或 P4 主串口未连接。`or` 短路组合两个独立门控。",
+        "effect": "真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "failure": "为真：真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 为假：此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "recovery": "确认串口在线且上次 startup transaction 已完成后再尝试。",
+        "difference": "这是一段防并发/连接门控，区别于后续 backend 拒绝启动的错误处理。",
+        "unknown": "运行标记何时被所有失败路径清除需查看 startup 完成回调。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `self._startup_device_check_running or not self.context.is_comm_connected()` to decide whether the operation proceeds.",
+        "condition": "Raw condition `self._startup_device_check_running or not self.context.is_comm_connected()`. 任一条件为真都会拒绝启动：启动恢复已在运行，或 P4 主串口未连接。`or` 短路组合两个独立门控。",
+        "effect": "真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "failure": "True: 真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 False: 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是一段防并发/连接门控，区别于后续 backend 拒绝启动的错误处理。",
+        "unknown": "运行标记何时被所有失败路径清除需查看 startup 完成回调。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_1f85029b2921df9a4cfb916f"
+      ]
+    },
+    {
+      "id": "graph:device_check:node:step_5_guard_2",
+      "zh": {
+        "plain": "该图中的守卫检查 `not self.backend.begin_startup_calibration_restore(active_joint_mask)`，决定操作是否进入下一步。",
+        "condition": "原始条件 `not self.backend.begin_startup_calibration_restore(active_joint_mask)`。backend 负责提交一次 startup Auto/LUT 恢复事务。该函数返回 false 表示另一笔标定事务正在运行或 backend 没有接受请求。",
+        "effect": "条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "failure": "为真：条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 为假：真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "recovery": "等待既有事务完成后重试；受理后检查后续完成事件与状态结果，不把“queued”当作标定成功。",
+        "difference": "这是事务受理结果，不是实际 calibration validity。",
+        "unknown": "该调用片段未展示完成条件、超时和失败时如何同步 UI。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This graph guard evaluates `not self.backend.begin_startup_calibration_restore(active_joint_mask)` to decide whether the operation proceeds.",
+        "condition": "Raw condition `not self.backend.begin_startup_calibration_restore(active_joint_mask)`. backend 负责提交一次 startup Auto/LUT 恢复事务。该函数返回 false 表示另一笔标定事务正在运行或 backend 没有接受请求。",
+        "effect": "条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "failure": "True: 条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 False: 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "这是事务受理结果，不是实际 calibration validity。",
+        "unknown": "该调用片段未展示完成条件、超时和失败时如何同步 UI。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_6504c8813475d9f437ebf241"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:1:step_1:step_1_guard_1",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `raw is None` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `raw is None`。`raw` 是 `update_state()` 缓存的健康编码器计数；None 表示没有可安全显示/捕获的当前值。",
+        "effect": "条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "failure": "为真：条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 为假：真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "recovery": "确认 P4/S3 有效反馈后再次捕获；若 raw 一直缺失，检查 raw_error 与 encoder_online_bitmap。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "代码从健康状态/错误位筛选 raw，但没有证明传感器硬件校准准确。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `raw is None`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `raw is None`. `raw` 是 `update_state()` 缓存的健康编码器计数；None 表示没有可安全显示/捕获的当前值。",
+        "effect": "条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "failure": "True: 条件为真时更新状态并提前返回，不改 spinbox；为假时把该计数放入 min 或 max spinbox 并标记 dirty。 False: 真分支只拒绝本次捕获；它不会清除旧 Manual 值。假分支也只是草稿变更，尚未写 P4。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "代码从健康状态/错误位筛选 raw，但没有证明传感器硬件校准准确。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_34a5edbe2dc245d8b03129b6",
+        "src_24a398f3ece4500894b95a84"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:3:step_2:step_2_guard_1",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `self._busy` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `self._busy`。`_busy` 表示 Release Rope 操作已在后台执行；该锁避免重复触发会重置多圈锚点并驱动电机的动作。",
+        "effect": "为真时直接返回，不再开线程；为假时继续检查串口连接。 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "failure": "为真：为真时直接返回，不再开线程；为假时继续检查串口连接。 为假：真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "recovery": "等待现有 worker 完成，通过完成状态确认结果后再启动下一次。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "它只反映本控件操作状态，不代表所有 P4 任务均空闲。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `self._busy`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `self._busy`. `_busy` 表示 Release Rope 操作已在后台执行；该锁避免重复触发会重置多圈锚点并驱动电机的动作。",
+        "effect": "为真时直接返回，不再开线程；为假时继续检查串口连接。 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "failure": "True: 为真时直接返回，不再开线程；为假时继续检查串口连接。 False: 真分支不改设备；假分支仍须连接 P4 并通过人工确认。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "它只反映本控件操作状态，不代表所有 P4 任务均空闲。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_20ce9824217c486f38293bb7",
+        "src_fc710954a6c3ac0612c3d1ff"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:4:step_2:step_2_guard_2",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `not self.context.is_comm_connected()` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `not self.context.is_comm_connected()`。`is_comm_connected()` 是桌面到 P4 主串口的连接状态；前面的 `not` 表示目前未连接。",
+        "effect": "为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "failure": "为真：为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 为假：真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "recovery": "连接 P4 后检查有效舵机和唯一 bus route，再重新执行并阅读确认提示。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "此处没有证明串口上控制板已完成同步或全部舵机在线。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `not self.context.is_comm_connected()`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `not self.context.is_comm_connected()`. `is_comm_connected()` 是桌面到 P4 主串口的连接状态；前面的 `not` 表示目前未连接。",
+        "effect": "为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "failure": "True: 为真时显示 `Release Rope blocked: serial port is not connected` 并返回；为假时继续弹确认对话框。 False: 真分支阻止后台操作发出 Reset/运动命令；假分支只允许继续，不代表硬件路由/反馈均正常。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "此处没有证明串口上控制板已完成同步或全部舵机在线。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_3389bded5662651b524f4557",
+        "src_fc710954a6c3ac0612c3d1ff"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:5:step_2:step_2_guard_3",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `reply != QtWidgets.QMessageBox.Yes` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `reply != QtWidgets.QMessageBox.Yes`。弹窗默认选择 No；只有用户明确点 Yes 才执行 Release Rope。表达式为真表示取消/关闭或选择了 No。",
+        "effect": "为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "failure": "为真：为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 为假：取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "recovery": "仅在确认机械安全、理解会失效 Auto 数据且已准备后再点 Yes；结束后必须重新自动标定。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "受影响电机集合由 backend 的 online/route 检查决定，GUI 文本本身不证明具体哪些电机实际改变。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `reply != QtWidgets.QMessageBox.Yes`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `reply != QtWidgets.QMessageBox.Yes`. 弹窗默认选择 No；只有用户明确点 Yes 才执行 Release Rope。表达式为真表示取消/关闭或选择了 No。",
+        "effect": "为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "failure": "True: 为真时返回且不启动 worker；为假时设置 `_busy`、刷新按钮、显示进度并在线程中调用 `manual_prepare_all_motors()`。 False: 取消不会触碰电机；确认后动作会重置舵机 turn count/JSON anchor，作废 Auto/LUT/ABS limit，并朝放绳方向移动 1500 counts。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "受影响电机集合由 backend 的 online/route 检查决定，GUI 文本本身不证明具体哪些电机实际改变。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_6671eaeebac55ad44220adaa",
+        "src_fc710954a6c3ac0612c3d1ff"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:7:step_3:step_3_guard_1",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `not rows` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `not rows`。`rows` 是按序排列的 dirty joint 索引；空列表表示用户没有修改任何 Manual Min/Max。",
+        "effect": "为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "failure": "为真：为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 为假：真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "recovery": "编辑端点或捕获 raw 让行变 dirty 后再点 Write Modified。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "空行判断之外的值域约束由 spinbox/backend 协议实现决定。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `not rows`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `not rows`. `rows` 是按序排列的 dirty joint 索引；空列表表示用户没有修改任何 Manual Min/Max。",
+        "effect": "为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "failure": "True: 为真时设置 `Manual write skipped: no modified row` 并返回；为假时读取每个 dirty row 的 min/max 数值并准备后台写入。 False: 真分支不会发协议命令；假分支开始逐行写入，可能出现已完成部分与失败关节。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "空行判断之外的值域约束由 spinbox/backend 协议实现决定。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_1d7934445501ce77b429db4a",
+        "src_95b1f27f3b288b728c3d8674"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:8:step_3:step_3_guard_2",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`。`set_manual_encoder_reference` 对单个关节发送并验证 Manual 端点；外层 `not` 把失败返回值变为分支条件。",
+        "effect": "为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "failure": "为真：为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 为假：真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "recovery": "根据状态检查已完成关节和失败关节，修复通信/数据问题后仅重试未完成项目，并复查设备与本地 JSON。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "后端调用的具体帧重试次数不在此 UI 函数中说明。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw)`. `set_manual_encoder_reference` 对单个关节发送并验证 Manual 端点；外层 `not` 把失败返回值变为分支条件。",
+        "effect": "为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "failure": "True: 为真表示本关节 ACK/readback/CRC/桌面 JSON 验证失败：停止后续关节并回报 completed 列表；为假表示本关节完成，循环继续。 False: 真分支不会把失败项加入 completed；此前成功项不自动回滚。假分支成功后最终再次 query 读取所有引用。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "后端调用的具体帧重试次数不在此 UI 函数中说明。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_52a022683710085e943b8710",
+        "src_95b1f27f3b288b728c3d8674"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:10:step_4:step_4_guard_1",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `reply != QtWidgets.QMessageBox.Yes` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `reply != QtWidgets.QMessageBox.Yes`。清除操作的 Yes/No 确认；表达式为真表示用户没有明确确认清空全部 21 对端点。",
+        "effect": "真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "failure": "为真：真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 为假：取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "recovery": "只有在准备重新录入端点时确认；意外清除后需恢复有效 Manual Min/Max 并验证提交状态。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "函数提示涵盖全部 21 对引用；其他持久化副作用应通过 backend 实现核实。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `reply != QtWidgets.QMessageBox.Yes`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `reply != QtWidgets.QMessageBox.Yes`. 清除操作的 Yes/No 确认；表达式为真表示用户没有明确确认清空全部 21 对端点。",
+        "effect": "真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "failure": "True: 真时直接返回；假时在 `_run_operation` 中调用 `clear_manual_encoder_references()`，并根据 ACK/readback/desktop JSON 验证显示结果。 False: 取消分支没有清除；确认分支会移除 P4 RAM 与桌面 JSON 的所有 Manual endpoint，使后续标定/feedback 被阻止，直到重新录入。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "函数提示涵盖全部 21 对引用；其他持久化副作用应通过 backend 实现核实。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_ae6b3d322320de1641e179f4",
+        "src_c762d595b2d9b1a4f95bd494"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:12:step_5:step_5_guard_1",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `self._startup_device_check_running or not self.context.is_comm_connected()` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `self._startup_device_check_running or not self.context.is_comm_connected()`。任一条件为真都会拒绝启动：启动恢复已在运行，或 P4 主串口未连接。`or` 短路组合两个独立门控。",
+        "effect": "真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "failure": "为真：真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 为假：此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "recovery": "确认串口在线且上次 startup transaction 已完成后再尝试。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "运行标记何时被所有失败路径清除需查看 startup 完成回调。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `self._startup_device_check_running or not self.context.is_comm_connected()`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `self._startup_device_check_running or not self.context.is_comm_connected()`. 任一条件为真都会拒绝启动：启动恢复已在运行，或 P4 主串口未连接。`or` 短路组合两个独立门控。",
+        "effect": "真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "failure": "True: 真时函数立即返回；两者均为假时设置运行标记、从 UI 得到 active joint mask 并调用 backend 启动 calib restore。 False: 此 guard 不显示错误消息，因此重复点击或离线时可能只表现为没有开始；它不会覆盖现有任务。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "运行标记何时被所有失败路径清除需查看 startup 完成回调。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_1f85029b2921df9a4cfb916f",
+        "src_74d3d114d59704671068d7df"
+      ]
+    },
+    {
+      "id": "graph:device_check:edge:13:step_5:step_5_guard_2",
+      "zh": {
+        "plain": "这条条件连线把操作流程导向 `not self.backend.begin_startup_calibration_restore(active_joint_mask)` 对应的守卫节点；目标节点解释变量含义，下面按该判断分流。",
+        "condition": "原始条件 `not self.backend.begin_startup_calibration_restore(active_joint_mask)`。backend 负责提交一次 startup Auto/LUT 恢复事务。该函数返回 false 表示另一笔标定事务正在运行或 backend 没有接受请求。",
+        "effect": "条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "failure": "为真：条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 为假：真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "recovery": "等待既有事务完成后重试；受理后检查后续完成事件与状态结果，不把“queued”当作标定成功。",
+        "difference": "该连线表示当前控制分支；是否发生分支由源码条件决定，不是节点之间无条件的结构连接。",
+        "unknown": "该调用片段未展示完成条件、超时和失败时如何同步 UI。",
+        "change": "基线未标记本节点或连线相关源码为本次变更；此处只描述当前代码路径。"
+      },
+      "en": {
+        "plain": "This conditional edge routes the operation into the guard for `not self.backend.begin_startup_calibration_restore(active_joint_mask)`. The target node explains the operands and branch consequences.",
+        "condition": "Raw condition `not self.backend.begin_startup_calibration_restore(active_joint_mask)`. backend 负责提交一次 startup Auto/LUT 恢复事务。该函数返回 false 表示另一笔标定事务正在运行或 backend 没有接受请求。",
+        "effect": "条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "failure": "True: 条件为真时立即清除 `_startup_device_check_running` 并显示 blocked 状态；条件为假时保持 running，等待异步 transaction 完成。 False: 真分支不开始恢复；假分支也不代表 Auto/LUT 已成功恢复，只代表事务已入队/受理。",
+        "recovery": "Retry only after the stated prerequisite is restored; inspect the operation status before repeating a side-effecting action.",
+        "difference": "This edge represents a source-controlled branch, not an unconditional structural link between nodes.",
+        "unknown": "该调用片段未展示完成条件、超时和失败时如何同步 UI。",
+        "change": "The baseline does not mark this item’s source path as changed; this explanation describes the current code."
+      },
+      "evidence_ids": [
+        "src_6504c8813475d9f437ebf241",
+        "src_74d3d114d59704671068d7df"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "architecture_overview",
+  "bundle_hash": "2b1b687a59c36ee140baae491d8fdd08b305833ea6f00f3172f5e1b52cef8e30",
+  "overview": {
+    "zh": "本图「整机架构与数据流」汇总与该主题相关的代码节点及其关系。说明仅依据此任务包内的源码片段与图清单；包中没有展示的运行时行为均标为未核实。",
+    "en": "This “System architecture and data flow” graph summarizes code nodes and relationships for the topic. The explanation uses only this task packet’s source excerpts and manifest; runtime behavior not shown is marked unverified.",
+    "evidence_ids": [
+      "src_be82f9c1d7ecda457ac2a7a2"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:architecture_overview:node:desktop",
+      "zh": {
+        "plain": "桌面上位机是操作入口：解析 `ui` 参数，启动 Qt 界面，连接 P4 主串口；也可按参数启动 ROS2 输入桥和 S3 触觉串口。它把人的选择和外部目标转换成控制端能消费的命令。",
+        "condition": "是否启用 ROS2 由 `--ros2` / `--no-ros2` 决定，二者互斥，默认启用；`--ros2-input` 再区分 `joint_target` 和 `raw_ik`。主端口与可选触觉端口是不同连接。",
+        "effect": "`entry.py` 把端口、UI 模式、ROS 输入类型及 topic 传给 `run_ui`；桌面节点因此连接到 P4 串口、可选 S3 串口和 ROS publisher/subscriber。",
+        "failure": "P4 串口或触觉串口打开失败会导致对应数据路径不可用；ROS2 没有匹配 publisher 时也不会有有效输入。源码不保证任一电脑的端口或节点发现成功。",
+        "recovery": "核对 `--port`、`--tactile-port`、ROS topic/type 和 ROS domain；重连后查看状态栏。ROS 输入还需在 UI 中明确授权。",
+        "difference": "桌面负责协议接入和 UI/业务协调；P4 才是运行 FreeRTOS 控制任务并直接下发舵机命令的一端。",
+        "unknown": "线程周期、具体解析/队列路径和 ROS 输入门控需在 `arch_desktop` 与 `arch_ros` 子图查看；总览不证明实机运行。",
+        "change": "基线未标记桌面架构节点的对应源码为本次变更；这里不据此声称运行逻辑变化。"
+      },
+      "en": {
+        "plain": "The desktop is the operator entry point: it parses `ui` arguments, starts the Qt interface, and connects to the P4 main serial port. Options can also start the ROS2 input bridge and the separate S3 tactile serial port. It turns operator choices and external targets into commands the controller can consume.",
+        "condition": "`--ros2` and `--no-ros2` are mutually exclusive; the default is enabled. `--ros2-input` then selects `joint_target` or `raw_ik`. The main port and optional tactile port are separate connections.",
+        "effect": "`entry.py` passes port, UI mode, ROS input type, and topic to `run_ui`; the desktop node therefore connects to P4 serial, optional S3 serial, and ROS publishers/subscribers.",
+        "failure": "Failure to open P4 or tactile serial makes that data path unavailable; ROS input is also absent without a matching publisher. Source cannot guarantee a port or node-discovery success on a particular PC.",
+        "recovery": "Check `--port`, `--tactile-port`, ROS topic/type, and ROS domain, then reconnect and inspect the status bar. ROS input also requires explicit authorization in the UI.",
+        "difference": "The desktop handles protocol ingress and UI/business coordination; P4 runs the FreeRTOS control tasks and directly issues servo commands.",
+        "unknown": "Thread periods, concrete parsing/queue paths, and ROS input gates are in `arch_desktop` and `arch_ros`; this overview does not prove runtime operation.",
+        "change": "The baseline does not mark the desktop architecture source as changed; no runtime behavior change is claimed here."
+      },
+      "evidence_ids": [
+        "src_be82f9c1d7ecda457ac2a7a2"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:p4",
+      "zh": {
+        "plain": "ESP32-P4 是控制主板。启动时创建共享队列与互斥量、初始化系统为不可控状态，然后启动 host 通信、状态机、S3 CAN 接收、舵机总线、运动控制和运行时监测任务。",
+        "condition": "它不是由单一布尔条件进入的节点。系统启动会先把 `system_state` 设为 `UNCONTROLLABLE`，且 `servo_target_owner` 设为 NONE；必须通过状态机和安全门控才可控制。",
+        "effect": "P4 从主串口接收桌面命令、从 CAN 接收 S3 传感数据，再由状态与运动任务决定目标是否可接受；servoBusTask 执行获准的舵机输出。",
+        "failure": "共享队列、互斥量或关键任务创建失败会记录资源规则并使系统装配失败。CAN/串口/伺服故障由对应安全规则处理，不能假设仍可控。",
+        "recovery": "先检查启动装配日志、事件/故障位及对应 COM、RUN、SYS 规则；清故障后仍要重新通过状态准入。具体复位动作按单条规则核实。",
+        "difference": "P4 拥有状态机和舵机输出；S3 采集并发送传感器数据，桌面端负责操作和协议接入。",
+        "unknown": "本节点总览未展示各任务精确周期、优先级、栈字节数及全部共享变量；要查看 `arch_p4` 子图。",
+        "change": "基线未标记 P4 架构节点的对应源码为本次变更；这里不据此声称运行逻辑变化。"
+      },
+      "en": {
+        "plain": "The ESP32-P4 is the controller board. Startup creates shared queues and a mutex, initializes the system as uncontrollable, then starts host communication, state-machine, S3 CAN receive, servo-bus, motion-control, and runtime-monitor tasks.",
+        "condition": "This node is not entered by one boolean predicate. Startup sets `system_state` to `UNCONTROLLABLE` and `servo_target_owner` to NONE; control requires later state-machine and safety admission.",
+        "effect": "P4 receives desktop commands over the main serial link and S3 sensor data over CAN. State and motion tasks decide whether targets are admissible; `servoBusTask` executes authorized servo output.",
+        "failure": "Failure to create shared queues, the mutex, or critical tasks records a resource rule and fails system assembly. CAN, serial, or servo faults use their respective safety rules; controllability must not be assumed.",
+        "recovery": "Inspect startup assembly logs, event/fault bits, and the relevant COM, RUN, or SYS rule. Clearing a fault still requires state admission; verify the reset action per rule.",
+        "difference": "P4 owns the state machine and servo output; S3 acquires and sends sensor data, while the desktop handles operation and protocol ingress.",
+        "unknown": "This overview omits exact task periods, priorities, stack sizes, and all shared variables; inspect `arch_p4`.",
+        "change": "The baseline does not mark P4 architecture source as changed; no runtime behavior change is claimed here."
+      },
+      "evidence_ids": [
+        "src_8a526c691c1fba62a3ba9293"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:s3",
+      "zh": {
+        "plain": "ESP32-S3 是传感采集端：建立编码器队列，启动编码器、可选触觉和 CAN 任务。编码器任务按配置约 2 ms 采样；CAN 任务把传感数据发送到 P4。",
+        "condition": "触觉任务是否存在由 `ENABLE_TACTILE_TASK` 编译开关决定；编码器队列必须成功创建才能继续启动。",
+        "effect": "编码器任务向队列写最新采样，CAN 任务读取并组帧发送；触觉任务启用时采集触觉数据并按相应协议发送。",
+        "failure": "编码器队列创建失败时打印 FATAL 并无限等待；此时正常传感采集不会开始。CAN 接收完整性问题会在 P4 侧成为无效快照/通信告警。",
+        "recovery": "检查 S3 启动串口日志、编译开关、CAN 接线和 P4 收包诊断；队列失败需修正资源配置后重新启动。",
+        "difference": "S3 产生传感数据，P4 消费数据并控制舵机；它不是控制命令的最终执行端。",
+        "unknown": "该总览未列出所有任务优先级、核绑定常量、CAN 发送周期和具体数据分片；详见 `arch_s3` 与 `arch_can`。",
+        "change": "基线未标记 S3 架构节点的对应源码为本次变更；这里不据此声称运行逻辑变化。"
+      },
+      "en": {
+        "plain": "The ESP32-S3 is the sensor-acquisition endpoint: it creates an encoder queue and starts encoder, optional tactile, and CAN tasks. The encoder task samples at a configured roughly 2 ms interval; CAN sends sensor data to P4.",
+        "condition": "The `ENABLE_TACTILE_TASK` build switch determines whether the tactile task exists. The encoder queue must be created successfully before startup continues.",
+        "effect": "The encoder task writes the latest sample to a queue; the CAN task reads, frames, and transmits it. When enabled, the tactile task acquires tactile data and sends it through its protocol path.",
+        "failure": "If encoder-queue creation fails, the code prints FATAL and waits indefinitely; normal acquisition does not begin. Incomplete CAN data becomes an invalid snapshot/communication diagnostic on P4.",
+        "recovery": "Check S3 startup logs, the build switch, CAN wiring, and P4 receive diagnostics. Fix resource configuration and restart after queue failure.",
+        "difference": "S3 produces sensor data; P4 consumes it and controls servos. S3 is not the final actuator-command endpoint.",
+        "unknown": "This overview omits task priorities, core-binding constants, CAN period, and fragment layout; see `arch_s3` and `arch_can`.",
+        "change": "The baseline does not mark S3 architecture source as changed; no runtime behavior change is claimed here."
+      },
+      "evidence_ids": [
+        "src_53ebf6c5393b0e28cc4069ce"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:servos",
+      "zh": {
+        "plain": "“27 个舵机”是 P4 输出链路的物理执行对象。P4 按电机映射与总线路由发送目标，并读取反馈；动作受状态机、输出所有权和安全策略共同约束。",
+        "condition": "舵机并不会因为被列在架构图中就自动运动；只有有效目标通过当前状态、范围、在线状态和 owner 检查，才可由总线任务执行。",
+        "effect": "servoBusTask 从目标队列取值，按 bus/servo ID 发送命令，再把舵机反馈交给控制/状态处理。",
+        "failure": "舵机离线、路由未知/冲突、目标越界、owner 不匹配或 E-STOP 都可拒绝目标；部分 Emergency 规则会禁用扭矩。",
+        "recovery": "按 ACT 规则检查供电、总线路由、多圈状态和目标转换；机械卡滞或急停后的恢复必须遵循对应规则，不能直接重复下发目标。",
+        "difference": "舵机是执行端；P4 是总线控制器，S3 提供编码器/触觉输入。",
+        "unknown": "总览中的 27 是系统配置规模，不代表每个设备都在线、已映射或已经通过检查；具体映射见 actuator/P4 子图。",
+        "change": "基线未标记舵机架构节点的对应源码为本次变更；这里不据此声称硬件状态变化。"
+      },
+      "en": {
+        "plain": "The “27 servos” are the physical endpoints of P4’s output path. P4 sends targets using motor mappings and bus routing, then reads feedback; state-machine admission, output ownership, and safety policies all constrain motion.",
+        "condition": "A servo does not move merely because it appears in the architecture graph. A valid target must pass current-state, range, online, and owner checks before a bus task executes it.",
+        "effect": "`servoBusTask` reads targets from a queue, sends commands by bus/servo ID, and forwards servo feedback to control/state processing.",
+        "failure": "Offline servos, unknown/conflicting routes, out-of-range targets, owner mismatch, or E-STOP can reject a target; some Emergency rules disable torque.",
+        "recovery": "Use the ACT rule to check power, routing, multi-turn trust, and target conversion. Recovery from binding or E-STOP must follow the relevant rule; do not blindly resend a target.",
+        "difference": "Servos are actuators; P4 controls their buses, while S3 supplies encoder/tactile input.",
+        "unknown": "The count 27 is configured system scale, not proof every device is online, mapped, or checked; inspect the actuator/P4 subgraph for mappings.",
+        "change": "The baseline does not mark servo architecture source as changed; no hardware-state change is claimed here."
+      },
+      "evidence_ids": [
+        "src_be82f9c1d7ecda457ac2a7a2"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:protocol",
+      "zh": {
+        "plain": "桌面—P4 串口协议是命令下发和状态回传的边界。桌面端把 UI 操作编码为帧；P4 校验并分派命令，再通过状态帧/反馈帧回报。",
+        "condition": "每帧必须满足协议版本、命令长度、帧尾和校验等解析约束；具体约束在 `arch_serial` 子图中列出。",
+        "effect": "生成协议定义提供命令码/字段布局；两端生成或手写的 encoder/decoder 负责把帧与内部对象互相转换。",
+        "failure": "帧长度、协议版本、帧尾或噪声导致解析拒绝时，该命令不应被当作已执行；帧拒绝与物理串口断开是不同故障。",
+        "recovery": "对照生成协议和两端解析代码确认版本；根据 COM-6005 诊断检查长度、帧尾、串口噪声和协议生成物。",
+        "difference": "这是桌面到 P4 的主串口应用协议，与 P4–S3 CAN 帧不是同一种格式。",
+        "unknown": "本总览不展开 byte offset、CRC 算法、超时及各命令响应码；点击节点进入 `arch_serial`。",
+        "change": "基线未标记串口协议总览节点为本次变更；帧兼容性须以具体协议定义为准。"
+      },
+      "en": {
+        "plain": "The desktop–P4 serial protocol is the boundary for commands and returned state. The desktop encodes UI actions as frames; P4 validates and dispatches commands, then reports state/feedback frames.",
+        "condition": "Each frame must satisfy parser constraints such as protocol version, command length, tail, and checksum; inspect `arch_serial` for exact rules.",
+        "effect": "Generated protocol definitions supply command IDs/field layouts; each endpoint’s encoder/decoder converts frames to and from internal objects.",
+        "failure": "If length, version, tail, or noise causes rejection, the command must not be treated as executed. A rejected frame differs from a physically disconnected serial link.",
+        "recovery": "Compare the generated protocol and both parsers. Use COM-6005 diagnostics to inspect length, tail, serial noise, and generated outputs.",
+        "difference": "This is the desktop-to-P4 main-serial application protocol, not the P4–S3 CAN frame format.",
+        "unknown": "This overview omits byte offsets, CRC algorithm, timeouts, and per-command response codes; drill into `arch_serial`.",
+        "change": "The baseline does not mark the serial-protocol overview node as changed; verify compatibility against the exact protocol definition."
+      },
+      "evidence_ids": [
+        "src_73ba81ba29df72cb71321759"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:can",
+      "zh": {
+        "plain": "S3—P4 CAN 链路输送编码器批次、错误详情和触觉摘要。编码器原始值共 21 路，每帧最多携带 4 路，另有 CRC 帧；P4 必须按序号重组并检查完整性。",
+        "condition": "接收端根据 CAN ID、分片序号、CRC 和重组超时决定快照有效性；片段不齐或校验失败时不能把部分值当成新鲜完整数据。",
+        "effect": "S3 周期发送 CAN 帧；P4 的 CAN 接收任务按协议组装 encoder/tactile/error snapshot，再提供给状态和控制任务。",
+        "failure": "非法帧、CRC 错误、缺片或重组超时会拒绝当前批次并触发通信诊断；连续反馈失效可能进一步触发控制安全策略。",
+        "recovery": "检查 S3/P4 协议版本、CAN 物理连接、发布任务和 COM 规则；确认新鲜完整快照恢复后再恢复依赖它的控制模式。",
+        "difference": "CAN 是 S3 到 P4 的传感通道；桌面主串口传控制命令，独立触觉串口则是另一条数据路径。",
+        "unknown": "ID 范围、DLC、每类超时和 CRC 细节在 `arch_can` 子图中，不能从总览边推断总线实时性能。",
+        "change": "基线未标记 CAN 总览节点为本次变更；不据静态协议结构声称本机收包正常。"
+      },
+      "en": {
+        "plain": "The S3–P4 CAN link carries encoder batches, error details, and tactile summaries. There are 21 raw encoder values, at most four per frame, plus a CRC frame; P4 must reassemble by sequence and check integrity.",
+        "condition": "The receiver uses CAN ID, fragment sequence, CRC, and reassembly deadlines to decide whether a snapshot is valid. Incomplete or invalid fragments must not be treated as a fresh complete sample.",
+        "effect": "S3 sends CAN frames periodically. P4’s CAN receive task assembles encoder/tactile/error snapshots and makes them available to state and control tasks.",
+        "failure": "Invalid frames, CRC errors, missing fragments, or reassembly timeout reject the current batch and trigger communication diagnostics; prolonged feedback loss may invoke further control-safety handling.",
+        "recovery": "Check S3/P4 protocol versions, physical CAN link, sender task, and COM rule. Resume dependent control only after complete fresh snapshots return.",
+        "difference": "CAN is S3-to-P4 sensor transport; desktop serial carries control commands, while separate tactile serial is another data path.",
+        "unknown": "Inspect `arch_can` for ID ranges, DLC, per-type deadlines, and CRC details. The overview cannot prove real-time bus performance.",
+        "change": "The baseline does not mark the CAN overview node as changed; static protocol structure does not prove this machine receives frames correctly."
+      },
+      "evidence_ids": [
+        "src_f0ba28d7c8fb7ba5d4982b99"
+      ]
+    },
+    {
+      "id": "graph:architecture_overview:node:ros",
+      "zh": {
+        "plain": "ROS2 遥操把外部 raw-IK 角度数组送给桌面端。teleop 源码发布 `/raw_ik_target`，类型为 `Float32MultiArray`；桌面订阅后再走内部目标转换和安全授权路径。",
+        "condition": "发布端和桌面需使用相同 topic 和消息类型；桌面选择 `--ros2-input raw_ik`。ROS 消息可见不代表输出已 armed，也不代表 P4 已执行目标。",
+        "effect": "订阅回调把消息交给 raw-IK handler；backend 只有在串口连接且 active joint scope 非空时才接受 arm 请求，并记录当前 scope。",
+        "failure": "无 publisher、domain 不同或 topic/type 不匹配会无有效输入；P4 未连接或活动关节为空时授权请求被拒绝。数值格式或映射错误由 handler 检查。",
+        "recovery": "先用 ROS topic echo 确认数据和类型，再检查 desktop topic/坐标空间、P4 状态及 UI 授权反馈。逐索引映射需查 raw-IK 子图。",
+        "difference": "ROS 是外部输入边；桌面到 P4 的串口仍负责下游命令/状态，P4 状态机和安全策略仍决定是否执行。",
+        "unknown": "发布频率、数组每项与关节的对应关系、坐标转换和限幅行为需读 teleop/raw-IK 子图；总览不证明实机运动。",
+        "change": "基线未标记 ROS2 总览节点为本次变更；不据此声称发布端或硬件当前在线。"
+      },
+      "en": {
+        "plain": "ROS2 teleoperation sends an external raw-IK angle array to the desktop. The teleop source publishes `/raw_ik_target` as `Float32MultiArray`; the desktop subscriber then uses internal target conversion and safety authorization.",
+        "condition": "Publisher and desktop must use the same topic and message type, and the desktop selects `--ros2-input raw_ik`. Seeing a ROS message does not mean output is armed or that P4 executed the target.",
+        "effect": "The subscription callback passes messages to the raw-IK handler. The backend accepts an arm request only with serial connected and a non-empty active joint scope, and records that scope.",
+        "failure": "No publisher, different ROS domain, or topic/type mismatch means no valid input. Authorization is refused if P4 is disconnected or the active joint set is empty. The handler checks numeric format/mapping.",
+        "recovery": "Use topic echo to confirm data/type, then inspect desktop topic/coordinate-space options, P4 status, and UI authorization feedback. See the raw-IK graph for per-index mapping.",
+        "difference": "ROS is an external input edge; desktop-to-P4 serial remains the downstream command/status path, and P4 state/safety logic still controls execution.",
+        "unknown": "Publish rate, array-index-to-joint mapping, coordinate conversion, and clamping require the teleop/raw-IK subgraphs; this overview does not prove physical motion.",
+        "change": "The baseline does not mark the ROS2 overview node as changed; it does not prove the publisher or hardware is currently online."
+      },
+      "evidence_ids": [
+        "src_8f056df225572dcfa3473b0f"
+      ]
+    }
+  ]
+}

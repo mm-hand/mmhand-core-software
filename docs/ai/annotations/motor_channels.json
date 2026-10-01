@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "motor_channels",
+  "bundle_hash": "87a039420f9c46d9c311d0d4aa92b4a948f6b915be01e85c9281bc3ca204bb3f",
+  "overview": {
+    "zh": "Motor Channels 按 M 索引发送绝对位置，并独立维护 active motor mask。不要把发送成功提示当成反馈到位；unknown 多圈状态、P4 准入和实际反馈是不同阶段。",
+    "en": "Motor Channels sends absolute position by M index and maintains an independent active motor mask. Do not treat a send-status message as arrival; multi-turn trust, P4 admission, and physical feedback are distinct stages.",
+    "evidence_ids": [
+      "src_7a6c74cf79edaf5a41610ad5"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:motor_channels:node:workflow",
+      "zh": {
+        "plain": "Motor Channels 按电机通道直接设置/发送 ABS 位置，并可独立勾选活动电机范围。该模式面向 M 通道，不先经过 Joint Channels 的关节角反馈目标映射。",
+        "condition": "发送按钮要求 controller ready；电机范围选择受 `_scope_update_guard` 与 motor index 有效性约束。多圈 unknown 检查影响发送辅助逻辑/状态提示。",
+        "effect": "单行命令读取 slider 对应的 ABS 值，走 `_send_single_motor_abs_from_ui`；选择变化则改 motor mask 并应用 scope。",
+        "failure": "控制器未就绪则不发送；ABS 不可用时不标记运行；多圈位置不可信时不得把该状态误读为普通目标。P4 安全策略仍可拒绝命令。",
+        "recovery": "确认所选电机在线、路由有效且多圈状态可信；观察 P4 返回状态和安全事件后再继续。",
+        "difference": "这里直接控制电机 ABS 计数；Joint Channels 用关节目标和关节 mask，Device Check 用原始 encoder endpoints。",
+        "unknown": "UI 入参和 mask 不证明绝对位置正确或机械方向安全；须结合校准、多圈恢复及电机映射。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "Motor Channels directly sets/sends ABS positions by motor channel and can independently select the active motor scope. It operates on M channels rather than first mapping a Joint Channels feedback-angle target.",
+        "condition": "Sending requires controller readiness; motor-scope changes are guarded by `_scope_update_guard` and motor-index validity. The multi-turn-unknown check affects send support/status handling.",
+        "effect": "A row command reads the slider’s ABS value and calls `_send_single_motor_abs_from_ui`; selection changes update the motor mask and apply the scope.",
+        "failure": "Not-ready blocks sending; unavailable ABS does not mark the row running. An untrusted multi-turn position must not be treated as an ordinary target. P4 safety rules may still reject a command.",
+        "recovery": "Confirm the selected motor is online, routed, and has trusted multi-turn state; inspect P4 status/safety events before continuing.",
+        "difference": "This sends motor ABS counts; Joint Channels uses joint targets/masks, while Device Check edits raw encoder endpoints.",
+        "unknown": "UI input and masks do not prove the absolute position or direction is mechanically safe; verify calibration, multi-turn recovery, and motor mapping.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_7a6c74cf79edaf5a41610ad5"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_1",
+      "zh": {
+        "plain": "`send_motor_row(idx)` 读取并同步 M 行 slider 的 ABS 目标，然后发送该单电机绝对命令。发送成功后标记行状态、清除已发送目标，只有活动 scope 的多圈 unknown mask 为零时才显示“absolute command sent”。",
+        "condition": "顺序条件为 `not self._controller_interaction_ready()`、`sent_abs is not None` 和 `self._active_scope_multiturn_unknown_mask() == 0`；第三个条件控制成功状态提示，不是 `sent_abs` 调用的前置门。",
+        "effect": "调用 `_mark_motor_target_user_set`、`_sync_motor_abs_from_slider_before_send` 和 `_send_single_motor_abs_from_ui`；返回的 `sent_abs` 非 None 后更新行状态并清理该行目标。",
+        "failure": "控制器不就绪则立即返回；发送 helper 返回 None 时不执行成功后处理；unknown mask 非零时不会显示最终成功状态。",
+        "recovery": "确认控制器交互就绪、ABS 值有效且范围内电机多圈已知；若无成功提示，查发送 helper/安全事件而非重复盲发。",
+        "difference": "一条 M 通道 ABS 指令，与 joint mode 的角度/反馈命令不同；unknown 检查在这里还用于状态/辅助清理判断。",
+        "unknown": "底层命令 ACK、ABS 单位、发送 helper 的拒绝细节未在本函数片段完全展开。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "`send_motor_row(idx)` synchronizes the M-row slider’s ABS target and sends a single-motor absolute command. On success it marks the row, clears the sent target, and shows “absolute command sent” only if the active scope’s multi-turn-unknown mask is zero.",
+        "condition": "The conditions are `not self._controller_interaction_ready()`, `sent_abs is not None`, and `self._active_scope_multiturn_unknown_mask() == 0`. The third condition gates the success status, not the call that produces `sent_abs`.",
+        "effect": "Calls `_mark_motor_target_user_set`, `_sync_motor_abs_from_slider_before_send`, and `_send_single_motor_abs_from_ui`. A non-None `sent_abs` updates row state and clears the row target.",
+        "failure": "Not-ready returns immediately; a None result skips success handling; a nonzero unknown mask suppresses the final success status.",
+        "recovery": "Confirm interaction readiness, a valid ABS value, and known multi-turn state for motors in scope. If no success status appears, inspect the send helper and safety events instead of blindly resending.",
+        "difference": "This is one M-channel ABS command, unlike joint-mode angle/feedback commands; the unknown check also affects status/cleanup handling here.",
+        "unknown": "ACK behavior, ABS units, and all send-helper rejection details are not fully shown in this function excerpt.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_7a6c74cf79edaf5a41610ad5",
+        "src_c64e06634e0a9a80c9bbfbc2",
+        "src_cbaa83dc4dafab6941b11295",
+        "src_8229433567c32c92b4b36263"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_1_guard_1",
+      "zh": {
+        "plain": "该检查在电机目标发送前确认 UI 当前可与控制器交互。",
+        "condition": "`not self._controller_interaction_ready()` 为真时 controller 不 ready；为假才继续标记目标并生成 ABS 命令。",
+        "effect": "真时立即返回；假时调用 send helper。",
+        "failure": "条件为真时控制器未就绪，函数直接返回；为假时继续同步 slider 并尝试发送 ABS 目标。",
+        "recovery": "检查 P4 连接、当前模式和状态栏/拒绝事件后再点 Run。",
+        "difference": "全局交互门控，区别于 motor channel validity 和 multi-turn 检查。",
+        "unknown": "具体 readiness 谓词未在本包列出。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "The pre-send guard asks whether the controller permits UI interaction.",
+        "condition": "True for `not self._controller_interaction_ready()` means the controller is not ready; false allows target marking and ABS command construction.",
+        "effect": "True returns immediately; false invokes the send helper.",
+        "failure": "When true the controller is not ready and the function returns; when false it synchronizes the slider and attempts to send the ABS target.",
+        "recovery": "Check P4 connection, current mode, status bar, and rejection events before pressing Run again.",
+        "difference": "This is a global interaction gate, distinct from motor-index validity and multi-turn checks.",
+        "unknown": "The exact readiness predicate is not included in this packet.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_c64e06634e0a9a80c9bbfbc2"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_1_guard_2",
+      "zh": {
+        "plain": "`sent_abs` 表示单电机 ABS send helper 是否返回了可确认的发送值。",
+        "condition": "`sent_abs is not None` 为真表示 helper 给出具体 sent value；为假表示没有可确认发送结果。",
+        "effect": "真时设置 running 状态并清掉刚发出的 slider 目标；假时跳过这两步，后续也不宣告成功发送。",
+        "failure": "条件为真时 helper 返回了 ABS 目标，行状态和目标缓存会更新；为假时不执行成功后的行更新。",
+        "recovery": "针对 helper 返回原因检查数值、模式、设备状态后重新操作。",
+        "difference": "它验证发送结果是否可用，不检查请求 slider 的 UI 显示本身。",
+        "unknown": "成功 ACK 与物理电机执行完成仍需后续反馈证据。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "`sent_abs` indicates whether the single-motor ABS send helper returned a confirmable sent value.",
+        "condition": "True for `sent_abs is not None` means the helper returned a concrete value; false means there is no confirmable send result.",
+        "effect": "True marks the row running and clears the just-sent slider target; false skips both steps and does not announce a successful send.",
+        "failure": "When true the helper returned an ABS target and row/target state is updated; when false the success-path row update is skipped.",
+        "recovery": "Use the helper’s refusal reason to check value, mode, and device state before retrying.",
+        "difference": "This validates whether the send result is usable, not the slider’s displayed request itself.",
+        "unknown": "A successful helper result still needs later feedback to prove physical execution.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_cbaa83dc4dafab6941b11295"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_1_guard_3",
+      "zh": {
+        "plain": "此判断读取活动电机范围内是否仍有 unknown multi-turn position。",
+        "condition": "`self._active_scope_multiturn_unknown_mask() == 0` 为真表示 active scope 全部多圈位置可信；非零表示至少一台仍未知。",
+        "effect": "为真时显示 ABS 命令发送状态；为假时不显示该成功状态，以免掩盖位置可信问题。",
+        "failure": "条件为真时 scope 内没有未知多圈位置，状态可显示命令已发送；为假时不能确认绝对位置安全，成功状态不显示。",
+        "recovery": "完成 JSON nearest-turn recovery；仍未知时检查对应电机并做关节标定。",
+        "difference": "该条件位于发送返回后的 UI 状态更新处，和命令是否进入底层的 helper 判断区分开。",
+        "unknown": "更深层 helper 是否同样拒绝命令需阅读其实现；本片段仅证明状态提示条件。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This check asks whether any motor in the active scope still has an unknown multi-turn position.",
+        "condition": "True for `self._active_scope_multiturn_unknown_mask() == 0` means all scoped multi-turn positions are trusted; nonzero means at least one is unknown.",
+        "effect": "True shows the ABS-command-sent status. False suppresses that success status so the untrusted-position issue is not hidden.",
+        "failure": "When true no unknown multi-turn position remains in scope and sent status can be shown; when false absolute-position safety is unconfirmed and success status is withheld.",
+        "recovery": "Complete JSON nearest-turn recovery; if still unknown, inspect the affected motor and recalibrate its joint.",
+        "difference": "This check occurs in post-send UI status handling; it is distinct from any helper gate that determines whether a command enters the lower layer.",
+        "unknown": "Whether the lower send helper also refuses the command requires its implementation; this excerpt proves only the status condition.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_8229433567c32c92b4b36263"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_2",
+      "zh": {
+        "plain": "`_on_motor_use_changed(motor_idx, checked)` 响应电机通道勾选。忽略程序同步信号，仅在 `_motor_channel_valid` 时设置/清除 selected motor mask，然后同步分组勾选、应用当前模式活动范围并刷新按钮。",
+        "condition": "原始条件 `bool(getattr(self, \"_scope_update_guard\", False))` 为真时忽略程序同步；否则由 `_motor_channel_valid(int(motor_idx))` 校验通道，并依据 `checked` 设置或清除 mask bit。",
+        "effect": "更新 `_selected_motor_mask` bit，并调用 `_sync_scope_group_checks`、`_apply_active_scope_for_current_mode`、`_update_manual_action_buttons`。",
+        "failure": "无效 motor index 不改 mask；同步 guard 为真时整个回调返回。它没有直接发送 ABS 命令。",
+        "recovery": "选中有效在线通道后检查当前活动 scope 与 P4 显示；需要动作时再单独用 Run M 行发送。",
+        "difference": "这是范围勾选，不是 Motor Channels 的电机运动命令；与 joint checkbox 的 joint→motor 映射不同。",
+        "unknown": "应用 scope 的具体 P4 命令及设备接受结果未在这段回调中展示。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "`_on_motor_use_changed(motor_idx, checked)` handles a motor-channel checkbox. It ignores programmatic sync signals, changes the selected-motor mask only for a valid M index, then syncs group checks, applies the current-mode scope, and refreshes buttons.",
+        "condition": "Raw condition `bool(getattr(self, \"_scope_update_guard\", False))` true ignores programmatic sync; otherwise `_motor_channel_valid(int(motor_idx))` validates the channel and `checked` sets or clears its mask bit.",
+        "effect": "Updates the `_selected_motor_mask` bit, then calls `_sync_scope_group_checks`, `_apply_active_scope_for_current_mode`, and `_update_manual_action_buttons`.",
+        "failure": "An invalid motor index leaves the mask unchanged; a true sync guard returns from the whole callback. It does not send an ABS command.",
+        "recovery": "Select a valid online channel and inspect the active scope/P4 display. Use Run M separately when a motion command is intended.",
+        "difference": "This changes scope, not motor motion; unlike joint selection it does not derive motor selection from a joint mask.",
+        "unknown": "The actual P4 scope command and device acceptance are not shown in this callback.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_de05fd2776b6e9de7054aa43",
+        "src_90f2decc6f5628de8880ca15",
+        "src_4a955be964130ce2eabd5c3c",
+        "src_6a408c1248381383d92db617"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_2_guard_1",
+      "zh": {
+        "plain": "该守卫忽略由代码同步触发的 checkbox 改变。",
+        "condition": "`bool(getattr(self, \"_scope_update_guard\", False))` 为真表示程序正在更新控件；为假才处理用户输入。",
+        "effect": "真时返回避免组勾选/电机勾选重复触发；假时继续验证 motor index。",
+        "failure": "条件为真时忽略程序内部的 checkbox 回写；为假时继续处理用户对 motor 范围的勾选。",
+        "recovery": "同步完成后用户操作按正常路径更新；若一直返回，检查同步保护释放。",
+        "difference": "它只管理 UI 信号，不代表控制器 busy 或 motor online。",
+        "unknown": "`finally` 清理保护状态的实现位于同步函数代码中。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This guard ignores checkbox changes caused by programmatic synchronization.",
+        "condition": "True for `bool(getattr(self, \"_scope_update_guard\", False))` means code is updating controls; false means process the user input.",
+        "effect": "True returns to avoid group/motor checkboxes triggering each other recursively; false proceeds to validate the motor index.",
+        "failure": "When true the callback ignores an internal checkbox write; when false it processes the user’s motor-scope change.",
+        "recovery": "User changes follow the normal path after synchronization completes; if the callback always returns, inspect guard release.",
+        "difference": "This manages UI signals, not controller busy state or motor-online status.",
+        "unknown": "The synchronization code releases the flag in `finally`.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_90f2decc6f5628de8880ca15"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_2_guard_2",
+      "zh": {
+        "plain": "此条件验证事件提供的 M 索引属于系统有效电机通道。",
+        "condition": "`_motor_channel_valid(int(motor_idx))` 为真才设置或清除对应 bit；假时保留原 mask。",
+        "effect": "有效索引按 checked 状态设置/清除 `_selected_motor_mask`；之后仍同步 group checks 和 active scope。",
+        "failure": "条件为真时 motor_idx 是有效通道并可更新 mask；为假时不修改该 motor 的所选位。",
+        "recovery": "检查 motor row 到 M 编号的映射，保证控件只产生合法通道索引。",
+        "difference": "它验证电机编号，不验证舵机在线、路由和多圈可信性。",
+        "unknown": "valid helper 的全部边界配置需看硬件 map 定义。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "Validates the M-channel index carried by the event.",
+        "condition": "True for `_motor_channel_valid(int(motor_idx))` allows setting or clearing its bit; false preserves the current mask.",
+        "effect": "A valid index sets/clears `_selected_motor_mask` according to `checked`; group checks and active scope are synchronized afterward.",
+        "failure": "When true motor_idx is a valid channel and its mask bit can change; when false the selected bit is left untouched.",
+        "recovery": "Check the motor-row-to-M mapping so the widget emits only valid indices.",
+        "difference": "This validates the motor index, not online status, route, or multi-turn trust.",
+        "unknown": "Inspect the hardware-map definition for the full valid-index set.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_4a955be964130ce2eabd5c3c"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:node:step_2_guard_3",
+      "zh": {
+        "plain": "`checked` 是电机 checkbox 的新状态，决定该 motor 是否属于 selected scope。",
+        "condition": "原始布尔量 `checked` 表示电机 checkbox 的新状态：为真加入 selected scope，为假清除对应电机 bit。",
+        "effect": "真时 OR 入该 motor bit；假时清除 bit。接着同步组勾选并应用活动 scope。",
+        "failure": "条件为真时设置该 motor 的 scope 位；为假时清除该位。两者均表示选择编辑，不会直接发送 STOP 或 ABS 命令。",
+        "recovery": "要控制该电机，重新选中有效行后再单独执行 Run M；核对 P4 回报范围。",
+        "difference": "范围变化和 `send_motor_row` 的绝对位置命令是两个不同动作。",
+        "unknown": "P4 接受/拒绝范围的协议结果不在 checkbox 回调中体现。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "`checked` is the motor checkbox’s new state and determines whether that motor belongs to selected scope.",
+        "condition": "Raw boolean `checked` is the motor checkbox’s new state: true adds the motor to selected scope; false clears its bit.",
+        "effect": "True ORs the motor bit into the mask; false clears it. Group checks are then synced and active scope applied.",
+        "failure": "When true the motor’s scope bit is set; when false it is cleared. Both outcomes edit selection and send neither STOP nor an ABS command.",
+        "recovery": "To control it, select a valid row and separately run Run M; confirm the scope reported by P4.",
+        "difference": "Scope change and `send_motor_row` absolute-position command are separate actions.",
+        "unknown": "The checkbox callback does not show the protocol result of P4 accepting/rejecting scope.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_6a408c1248381383d92db617"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:1:step_1:step_1_guard_1",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "`not self._controller_interaction_ready()` 为真时 controller 不 ready；为假才继续标记目标并生成 ABS 命令。",
+        "effect": "真时立即返回；假时调用 send helper。",
+        "failure": "条件为真时控制器未就绪，函数直接返回；为假时继续同步 slider 并尝试发送 ABS 目标。",
+        "recovery": "检查 P4 连接、当前模式和状态栏/拒绝事件后再点 Run。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "具体 readiness 谓词未在本包列出。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "True for `not self._controller_interaction_ready()` means the controller is not ready; false allows target marking and ABS command construction.",
+        "effect": "True returns immediately; false invokes the send helper.",
+        "failure": "When true the controller is not ready and the function returns; when false it synchronizes the slider and attempts to send the ABS target.",
+        "recovery": "Check P4 connection, current mode, status bar, and rejection events before pressing Run again.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "The exact readiness predicate is not included in this packet.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_c64e06634e0a9a80c9bbfbc2",
+        "src_7a6c74cf79edaf5a41610ad5"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:2:step_1:step_1_guard_2",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "`sent_abs is not None` 为真表示 helper 给出具体 sent value；为假表示没有可确认发送结果。",
+        "effect": "真时设置 running 状态并清掉刚发出的 slider 目标；假时跳过这两步，后续也不宣告成功发送。",
+        "failure": "条件为真时 helper 返回了 ABS 目标，行状态和目标缓存会更新；为假时不执行成功后的行更新。",
+        "recovery": "针对 helper 返回原因检查数值、模式、设备状态后重新操作。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "成功 ACK 与物理电机执行完成仍需后续反馈证据。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "True for `sent_abs is not None` means the helper returned a concrete value; false means there is no confirmable send result.",
+        "effect": "True marks the row running and clears the just-sent slider target; false skips both steps and does not announce a successful send.",
+        "failure": "When true the helper returned an ABS target and row/target state is updated; when false the success-path row update is skipped.",
+        "recovery": "Use the helper’s refusal reason to check value, mode, and device state before retrying.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "A successful helper result still needs later feedback to prove physical execution.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_cbaa83dc4dafab6941b11295",
+        "src_7a6c74cf79edaf5a41610ad5"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:3:step_1:step_1_guard_3",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "`self._active_scope_multiturn_unknown_mask() == 0` 为真表示 active scope 全部多圈位置可信；非零表示至少一台仍未知。",
+        "effect": "为真时显示 ABS 命令发送状态；为假时不显示该成功状态，以免掩盖位置可信问题。",
+        "failure": "条件为真时 scope 内没有未知多圈位置，状态可显示命令已发送；为假时不能确认绝对位置安全，成功状态不显示。",
+        "recovery": "完成 JSON nearest-turn recovery；仍未知时检查对应电机并做关节标定。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "更深层 helper 是否同样拒绝命令需阅读其实现；本片段仅证明状态提示条件。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "True for `self._active_scope_multiturn_unknown_mask() == 0` means all scoped multi-turn positions are trusted; nonzero means at least one is unknown.",
+        "effect": "True shows the ABS-command-sent status. False suppresses that success status so the untrusted-position issue is not hidden.",
+        "failure": "When true no unknown multi-turn position remains in scope and sent status can be shown; when false absolute-position safety is unconfirmed and success status is withheld.",
+        "recovery": "Complete JSON nearest-turn recovery; if still unknown, inspect the affected motor and recalibrate its joint.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "Whether the lower send helper also refuses the command requires its implementation; this excerpt proves only the status condition.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_8229433567c32c92b4b36263",
+        "src_7a6c74cf79edaf5a41610ad5"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:5:step_2:step_2_guard_1",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "`bool(getattr(self, \"_scope_update_guard\", False))` 为真表示程序正在更新控件；为假才处理用户输入。",
+        "effect": "真时返回避免组勾选/电机勾选重复触发；假时继续验证 motor index。",
+        "failure": "条件为真时忽略程序内部的 checkbox 回写；为假时继续处理用户对 motor 范围的勾选。",
+        "recovery": "同步完成后用户操作按正常路径更新；若一直返回，检查同步保护释放。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "`finally` 清理保护状态的实现位于同步函数代码中。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "True for `bool(getattr(self, \"_scope_update_guard\", False))` means code is updating controls; false means process the user input.",
+        "effect": "True returns to avoid group/motor checkboxes triggering each other recursively; false proceeds to validate the motor index.",
+        "failure": "When true the callback ignores an internal checkbox write; when false it processes the user’s motor-scope change.",
+        "recovery": "User changes follow the normal path after synchronization completes; if the callback always returns, inspect guard release.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "The synchronization code releases the flag in `finally`.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_90f2decc6f5628de8880ca15",
+        "src_de05fd2776b6e9de7054aa43"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:6:step_2:step_2_guard_2",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "`_motor_channel_valid(int(motor_idx))` 为真才设置或清除对应 bit；假时保留原 mask。",
+        "effect": "有效索引按 checked 状态设置/清除 `_selected_motor_mask`；之后仍同步 group checks 和 active scope。",
+        "failure": "条件为真时 motor_idx 是有效通道并可更新 mask；为假时不修改该 motor 的所选位。",
+        "recovery": "检查 motor row 到 M 编号的映射，保证控件只产生合法通道索引。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "valid helper 的全部边界配置需看硬件 map 定义。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "True for `_motor_channel_valid(int(motor_idx))` allows setting or clearing its bit; false preserves the current mask.",
+        "effect": "A valid index sets/clears `_selected_motor_mask` according to `checked`; group checks and active scope are synchronized afterward.",
+        "failure": "When true motor_idx is a valid channel and its mask bit can change; when false the selected bit is left untouched.",
+        "recovery": "Check the motor-row-to-M mapping so the widget emits only valid indices.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "Inspect the hardware-map definition for the full valid-index set.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_4a955be964130ce2eabd5c3c",
+        "src_de05fd2776b6e9de7054aa43"
+      ]
+    },
+    {
+      "id": "graph:motor_channels:edge:7:step_2:step_2_guard_3",
+      "zh": {
+        "plain": "此条件边把操作送到相应守卫；边详情保留判断式，节点说明真、假分支的实际去向。",
+        "condition": "原始布尔量 `checked` 表示电机 checkbox 的新状态：为真加入 selected scope，为假清除对应电机 bit。",
+        "effect": "真时 OR 入该 motor bit；假时清除 bit。接着同步组勾选并应用活动 scope。",
+        "failure": "条件为真时设置该 motor 的 scope 位；为假时清除该位。两者均表示选择编辑，不会直接发送 STOP 或 ABS 命令。",
+        "recovery": "要控制该电机，重新选中有效行后再单独执行 Run M；核对 P4 回报范围。",
+        "difference": "这里判断的是命令准入或选择更新；它不能证明底层设备已经执行。",
+        "unknown": "P4 接受/拒绝范围的协议结果不在 checkbox 回调中体现。",
+        "change": "基线未标记此控制流程或 scope 处理为本次变更。"
+      },
+      "en": {
+        "plain": "This predicate edge routes the action to its guard; the detail preserves the expression and explains each branch outcome.",
+        "condition": "Raw boolean `checked` is the motor checkbox’s new state: true adds the motor to selected scope; false clears its bit.",
+        "effect": "True ORs the motor bit into the mask; false clears it. Group checks are then synced and active scope applied.",
+        "failure": "When true the motor’s scope bit is set; when false it is cleared. Both outcomes edit selection and send neither STOP nor an ABS command.",
+        "recovery": "To control it, select a valid row and separately run Run M; confirm the scope reported by P4.",
+        "difference": "This checks command admission or selection updates; it does not prove that the device executed the request.",
+        "unknown": "The checkbox callback does not show the protocol result of P4 accepting/rejecting scope.",
+        "change": "The baseline does not mark this control or scope path as changed."
+      },
+      "evidence_ids": [
+        "src_6a408c1248381383d92db617",
+        "src_de05fd2776b6e9de7054aa43"
+      ]
+    }
+  ]
+}

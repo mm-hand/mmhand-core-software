@@ -1,0 +1,740 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "ros2",
+  "bundle_hash": "ecfd4c540db495c2febf5a2f3b92aae3a3ce12c6a53cc7dab468711d1321224b",
+  "overview": {
+    "zh": "ROS2 raw_ik bridge 接收消息与 ROS2 output 授权分开。用户启用后 backend 绑定非空 joint scope；每帧再检查 armed、串口、controller started 和 scope 一致性。任何失败均丢弃目标并记录原因。",
+    "en": "ROS2 raw_ik message reception is separate from output authorization. On enable, the backend binds a non-empty joint scope; each frame rechecks armed state, serial, controller startup, and scope equality. Any failure drops the target with a reason.",
+    "evidence_ids": [
+      "src_04971a5fb2d73a0b9773d2e7"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:ros2:node:workflow",
+      "zh": {
+        "plain": "ROS2 输入接收外部 joint targets，但只有明确 armed 才能由 backend 输出；输入桥启动、topic 收消息和电机控制授权是三个不同状态。",
+        "condition": "由 ROS2 INPUT 开关或 bridge 生命周期调用。",
+        "effect": "toggle_ros2_output 调用 backend enable；成功后绑定当前 active scope。消息进入 send_ros2_joint_targets 时再次检查 armed、通信、controller 和 scope。",
+        "failure": "先连接并 ENABLE，选定非空 scope，再开启 ROS2 INPUT；查看 status/drop reason。",
+        "recovery": "此链从 enable authorization 到受约束目标下发；点击按钮不会自动 arm。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "toggle_ros2_output asks the backend to enable output; successful enable binds the current active scope. Incoming messages are checked again for arming, communication, controller readiness, and scope.",
+        "change": "Connect and ENABLE, select a non-empty scope, then turn on ROS2 INPUT; inspect status/drop reason."
+      },
+      "en": {
+        "plain": "ROS2 input receives external joint targets, but backend output requires explicit arming; bridge startup, topic reception, and motor-control authorization are separate states.",
+        "condition": "Entered from the ROS2 INPUT switch or bridge lifecycle.",
+        "effect": "任一门禁不满足都会 drop target；关闭授权或停止 bridge 会撤销 armed。",
+        "failure": "源码证明 host-side gates，不证明 topic publisher 正确或硬件输出安全。",
+        "recovery": "基线未标记该流程为变更。",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "Any failed gate drops the target; disabling authorization or stopping the bridge disarms output.",
+        "change": "The source proves host-side gates, not publisher correctness or safe hardware output."
+      },
+      "evidence_ids": [
+        "src_04971a5fb2d73a0b9773d2e7"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_1",
+      "zh": {
+        "plain": "toggle_ros2_output 更新 UI 开关并调用 backend.set_ros2_output_enabled；它报告门禁结果，不自行发送关节目标。",
+        "condition": "源码原条件：`not actual`。它检查当前输入授权、连接或状态。",
+        "effect": "关闭时清空 ROS2 target UI；开启时 backend 先判断是否具备 armed 条件。",
+        "failure": "确认 serial/controller 状态及所选 joint scope 后重试；查看实际按钮状态和 status message。",
+        "recovery": "这是授权开关路径，和 ROS subscriber 生命周期分离。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "When disabled it clears ROS2 target UI; when enabled the backend checks whether arming conditions are satisfied.",
+        "change": "Verify serial/controller state and selected joint scope, then retry; read actual button state and status."
+      },
+      "en": {
+        "plain": "toggle_ros2_output updates the UI switch and calls backend.set_ros2_output_enabled; it reports gate results and does not itself send joint targets.",
+        "condition": "Raw source condition: `not actual`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "backend 拒绝时 UI 复位按钮状态并显示 blocked reason。",
+        "failure": "按钮显示 ON 应结合 backend actual armed 状态读取。",
+        "recovery": "基线未标记该处理器为变更。",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "If rejected, the UI resets the button and shows the blocked reason.",
+        "change": "An ON label should be checked against the backend’s actual armed state."
+      },
+      "evidence_ids": [
+        "src_04971a5fb2d73a0b9773d2e7",
+        "src_6410377395949877d82b4f38"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_1_guard_1",
+      "zh": {
+        "plain": "actual 表示 backend 操作后的真实开关状态；若请求被拒绝，实际值可能与用户刚点选的值不同。",
+        "condition": "源码原条件：`not actual`。它检查当前输入授权、连接或状态。",
+        "effect": "UI 阻止信号后按 actual 设置按钮 checked/text，避免显示“已开启”但后端未 armed。",
+        "failure": "条件为真时 backend 未启用，按钮复位到 OFF；为假时 UI 显示 ON。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "The UI blocks signals and sets checked/text from actual, avoiding an ON display when the backend is not armed.",
+        "change": "Trust the status message and backend.ros2_output_enabled() result."
+      },
+      "en": {
+        "plain": "actual is the backend’s real enabled state after the request; if rejected, it can differ from the checkbox value the user just selected.",
+        "condition": "Raw source condition: `not actual`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时按钮还原为 OFF/disabled path；条件为假时显示 ON 并继续保持授权。",
+        "failure": "When true, backend is not enabled and the button returns OFF; when false, the UI shows ON.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "When true the button returns to the disabled/OFF state; when false it displays ON and retains authorization.",
+        "change": "UI synchronization does not prove a ROS2 message or P4 command arrived."
+      },
+      "evidence_ids": [
+        "src_6410377395949877d82b4f38"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_2",
+      "zh": {
+        "plain": "backend 的 _set_ros2_output_armed_locked 是最终 arm/disarm 决策点；它在锁内验证通信、活动 scope，并记录授权 scope。",
+        "condition": "源码原条件：`not armed`；`not self.is_comm_connected()`；`int(scope[1]) == 0`；`was_armed`。它检查当前输入授权、连接或状态。",
+        "effect": "成功时将 _ros2_output_armed 设 True、保存 _ros2_armed_scope 并清掉 last drop reason；拒绝或撤销时解除授权。",
+        "failure": "连通 P4，选好非空 joint scope，再 enable；scope 改动后重新授权。",
+        "recovery": "本节点设置发送许可；step_3 对每帧仍再次验证。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "A successful request sets _ros2_output_armed, saves _ros2_armed_scope, and clears the last drop reason; rejection/disarm revokes authorization.",
+        "change": "Connect P4, select a non-empty joint scope, and enable; re-arm after changing scope."
+      },
+      "en": {
+        "plain": "backend _set_ros2_output_armed_locked is the final arm/disarm decision under a lock; it validates communication and active scope and records the armed scope.",
+        "condition": "Raw source condition: `not armed`; `not self.is_comm_connected()`; `int(scope[1]) == 0`; `was_armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "离线、scope 空或状态变化可阻止 enable；重新 enable 可能先撤销旧 scope 授权。",
+        "failure": "armed 表示主机许可输入，不表示 P4 当前 READY 或物理电机运动。",
+        "recovery": "基线未标记该方法为变更。",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "Offline communication, empty scope, or state change can block enable; re-enabling may revoke a previous scope first.",
+        "change": "Armed means the host permits input, not that P4 is READY or a motor is moving."
+      },
+      "evidence_ids": [
+        "src_81811f8648421deb20c4b0de",
+        "src_485a8f67e711e10786e7ad0a",
+        "src_23cf7c2b31f75ada033d445e",
+        "src_c086a9cb0c668e14435b5806",
+        "src_8bc2cd24fa52d158c411cd70"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_2_guard_1",
+      "zh": {
+        "plain": "not armed 表示调用方要求关闭授权；关闭必须取消保存的 armed scope。",
+        "condition": "源码原条件：`not armed`。它检查当前输入授权、连接或状态。",
+        "effect": "将 ROS2 output 设为 false，停止后续 ROS targets 进入输出路径。",
+        "failure": "条件为真时请求关闭，撤销 armed 与已绑定 scope；为假时继续尝试授权。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "The handler sets ROS2 output false so later targets cannot enter the output path.",
+        "change": "If the UI still shows ON, inspect actual-state synchronization and bridge-stop handling."
+      },
+      "en": {
+        "plain": "not armed means the caller requested output disable; disarming must clear the saved scope.",
+        "condition": "Raw source condition: `not armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时不可能接受后续 ROS2 控制帧；为假时继续 enable 检查。",
+        "failure": "When true, disarm and clear the bound scope; when false, continue the enable path.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "When true no later ROS2 target can be accepted; when false continue enable checks.",
+        "change": "Software disarm does not replace P4 STOP."
+      },
+      "evidence_ids": [
+        "src_485a8f67e711e10786e7ad0a"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_2_guard_2",
+      "zh": {
+        "plain": "授权前必须已有串口连接；ROS2 topic 正常不代表 P4 通路在线。",
+        "condition": "源码原条件：`not self.is_comm_connected()`。它检查当前输入授权、连接或状态。",
+        "effect": "连接成立时才会继续计算并绑定 active scope。",
+        "failure": "条件为真时串口断开，enable 被拒绝；为假时继续检查 scope。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "Only a connected link proceeds to calculate and bind the active scope.",
+        "change": "Connect to P4 and wait for a state snapshot first."
+      },
+      "en": {
+        "plain": "Serial connection must exist before arming; a healthy ROS2 topic does not mean the P4 path is online.",
+        "condition": "Raw source condition: `not self.is_comm_connected()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时返回 blocked/offline；为假时继续 scope 检查。",
+        "failure": "When true, serial is disconnected and enable is rejected; when false, check scope.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "When true, return blocked/offline; when false, continue scope checks.",
+        "change": "Serial connectivity still does not prove CAN and servos are healthy."
+      },
+      "evidence_ids": [
+        "src_23cf7c2b31f75ada033d445e"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_2_guard_3",
+      "zh": {
+        "plain": "active joint mask 为零时没有获准控制的关节；不允许 arm 一个空 scope。",
+        "condition": "源码原条件：`int(scope[1]) == 0`。它检查当前输入授权、连接或状态。",
+        "effect": "scope[1] 非零才会复制 motor/joint scope 到 armed scope。",
+        "failure": "条件为真时 active joint scope 为空，拒绝 enable；为假时可保存 scope 并 armed。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "A nonzero scope[1] allows the joint/motor scope to be copied into the armed scope.",
+        "change": "Select the intended joints in Joint Channels before enabling ROS2 INPUT."
+      },
+      "en": {
+        "plain": "A zero active joint mask means no joints are authorized; an empty scope cannot be armed.",
+        "condition": "Raw source condition: `int(scope[1]) == 0`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时提示 scope 为空并拒绝；为假时保存 scope 并启用。",
+        "failure": "When true, active joint scope is empty and enable is rejected; when false, save scope and arm.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "When true, report empty scope and reject; when false, save scope and enable.",
+        "change": "A non-empty mask proves selection, not healthy feedback."
+      },
+      "evidence_ids": [
+        "src_c086a9cb0c668e14435b5806"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_2_guard_4",
+      "zh": {
+        "plain": "was_armed 记录此前已有授权；重新调用 enable 时先处理旧授权和 scope 变化。",
+        "condition": "源码原条件：`was_armed`。它检查当前输入授权、连接或状态。",
+        "effect": "为真时撤销旧 arm 状态并重新绑定当前 scope，避免旧 scope 沿用。",
+        "failure": "条件为真时先撤销旧授权并重新绑定 scope；为假时直接建立首次授权。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "When true, clear the prior arm and bind the current scope so an old scope is not reused.",
+        "change": "After changing scope, verify the new authorization before sending a stream."
+      },
+      "en": {
+        "plain": "was_armed records whether authorization existed before; a new enable request handles prior authorization/scope change first.",
+        "condition": "Raw source condition: `was_armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时旧授权会被清除；为假时直接进行新授权。",
+        "failure": "When true, revoke old authorization and bind scope again; when false, create the first authorization.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "When true the old authorization is revoked; when false the new arm proceeds directly.",
+        "change": "This is host authorization history, not proof the previous command executed."
+      },
+      "evidence_ids": [
+        "src_8bc2cd24fa52d158c411cd70"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_3",
+      "zh": {
+        "plain": "send_ros2_joint_targets 对每帧执行最终授权检查，再把值交给 send_joint_targets，并限制在启用时绑定的 joint mask。",
+        "condition": "源码原条件：`not self._ros2_output_armed`；`not self.is_comm_connected()`；`not self.is_started()`；`self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`。它检查当前输入授权、连接或状态。",
+        "effect": "需 armed、串口连接、controller started 且当前 state scope 与 armed scope 完全一致；通过后切到 JOINT_ANGLE 并按 mask 发送。",
+        "failure": "查 _ros2_last_drop_reason；恢复连接/ENABLE 或重新 arm 匹配 scope。",
+        "recovery": "逐帧验证抵御 enable 后 UI scope 被修改的竞态。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "It requires armed, connected, controller-started, and exact equality between current state scope and armed scope. It then selects JOINT_ANGLE and sends using the bound mask.",
+        "change": "Read _ros2_last_drop_reason; restore connection/ENABLE or re-arm the matching scope."
+      },
+      "en": {
+        "plain": "send_ros2_joint_targets performs final authorization checks for every frame, then calls send_joint_targets limited to the joint mask bound at enable time.",
+        "condition": "Raw source condition: `not self._ros2_output_armed`; `not self.is_comm_connected()`; `not self.is_started()`; `self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "任一门禁失败时记录 drop reason 并返回 sent=False；不会静默发送到新 scope。",
+        "failure": "sent=True 说明 host command path 认为已提交，不证明 P4 最终接受或关节到位。",
+        "recovery": "基线未标记该发送方法为变更。",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "Any failed gate records a drop reason and returns sent=False; it does not silently send to a new scope.",
+        "change": "sent=True means the host command path considers it submitted, not that P4 accepted it or a joint reached its target."
+      },
+      "evidence_ids": [
+        "src_98b5b71815ef923bb9317544",
+        "src_21feeb10844ffe3a82c10d08",
+        "src_9f2ecc45a2c9cc7b947c7d51",
+        "src_3f8bbd768d732a84eba1eae4",
+        "src_71dd025e34cdbdcbc8655994"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_3_guard_1",
+      "zh": {
+        "plain": "每帧先确认 ROS2 output 当前 armed；桥接运行本身不能代替授权。",
+        "condition": "源码原条件：`not self._ros2_output_armed`。它检查当前输入授权、连接或状态。",
+        "effect": "armed 为真才继续串口和 controller 检查。",
+        "failure": "条件为真时未 armed，记录 drop reason 并丢弃消息；为假时继续检查通信。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "Only armed proceeds to serial and controller checks.",
+        "change": "Explicitly enable ROS2 INPUT in UI and inspect the blocked reason."
+      },
+      "en": {
+        "plain": "Each frame first verifies ROS2 output remains armed; a running bridge is not authorization.",
+        "condition": "Raw source condition: `not self._ros2_output_armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真表示 not armed，记录 drop 并丢弃该帧；为假继续。",
+        "failure": "When true, the message is dropped with a reason; when false, check communication.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "True means not armed: record a drop and discard the frame; false continues.",
+        "change": "This is host authorization, not a P4 command ACK."
+      },
+      "evidence_ids": [
+        "src_21feeb10844ffe3a82c10d08"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_3_guard_2",
+      "zh": {
+        "plain": "发送每帧时再次确认串口仍在线，覆盖 arm 之后掉线的情况。",
+        "condition": "源码原条件：`not self.is_comm_connected()`。它检查当前输入授权、连接或状态。",
+        "effect": "在线时才继续 controller 状态检查。",
+        "failure": "条件为真时 serial offline，消息被丢弃；为假时继续检查 controller。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "Only a connected link proceeds to controller-state checking.",
+        "change": "Reconnect, then verify authorization/scope before resuming input."
+      },
+      "en": {
+        "plain": "Each frame rechecks serial connectivity to catch disconnection after arming.",
+        "condition": "Raw source condition: `not self.is_comm_connected()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop 为 serial_offline；为假继续。",
+        "failure": "When true, serial is offline and the message is dropped; when false, check the controller.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "True drops the frame as serial_offline; false continues.",
+        "change": "Reconnect does not guarantee the previous authorization remains valid."
+      },
+      "evidence_ids": [
+        "src_9f2ecc45a2c9cc7b947c7d51"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_3_guard_3",
+      "zh": {
+        "plain": "backend 还要求控制器 started；serial 在线不足以发送运动目标。",
+        "condition": "源码原条件：`not self.is_started()`。它检查当前输入授权、连接或状态。",
+        "effect": "started 为真才会计算 state active scope。",
+        "failure": "条件为真时 controller 未启动，拒绝目标；为假时继续比较 active scope。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "When started is true, the backend checks the active state scope.",
+        "change": "Use the normal ENABLE flow and wait for READY."
+      },
+      "en": {
+        "plain": "The backend also requires the controller to be started; serial online alone is insufficient.",
+        "condition": "Raw source condition: `not self.is_started()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop 为 controller_not_ready；为假继续 scope 比较。",
+        "failure": "When true, the controller is not started and the target is rejected; when false, compare active scope.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "True drops as controller_not_ready; false continues to scope comparison.",
+        "change": "started is host controller state, not proof every servo responded."
+      },
+      "evidence_ids": [
+        "src_3f8bbd768d732a84eba1eae4"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_3_guard_4",
+      "zh": {
+        "plain": "armed scope 为空或当前状态 scope 与启用时绑定的 scope 不同，说明授权上下文已失配。",
+        "condition": "源码原条件：`self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`。它检查当前输入授权、连接或状态。",
+        "effect": "只有二者相等才取 _ros2_armed_scope[1] 作为本帧 command_joint_mask。",
+        "failure": "条件为真时 armed scope 为空或不匹配，drop 目标；为假时按绑定 mask 发送。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "Only equal scopes permit _ros2_armed_scope[1] to become this frame’s command_joint_mask.",
+        "change": "Select the intended range in Joint Channels and enable/arm again."
+      },
+      "en": {
+        "plain": "An empty armed scope or a mismatch with the current state scope means the authorization context changed.",
+        "condition": "Raw source condition: `self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop active_scope_mismatch；为假才允许发送。",
+        "failure": "When true, armed scope is absent or mismatched and the target is dropped; when false, send using the bound mask.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "True drops as active_scope_mismatch; false permits the send.",
+        "change": "The comparison uses the current state snapshot; freshness is managed by state synchronization."
+      },
+      "evidence_ids": [
+        "src_71dd025e34cdbdcbc8655994"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_4",
+      "zh": {
+        "plain": "Raw IK bridge start 创建 rclpy node 与 Float32MultiArray subscription，并在后台线程 spin。",
+        "condition": "源码原条件：`self._started`；`not rclpy.ok()`。它检查当前输入授权、连接或状态。",
+        "effect": "启动前导入 rclpy/std_msgs；subscription callback 进入 raw IK handler。",
+        "failure": "在支持 ROS2 的 Python 环境安装 rclpy/std_msgs 并重新启动 bridge。",
+        "recovery": "这是消息接收生命周期，不会自动打开 ROS2 output 授权。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "It imports rclpy/std_msgs, creates the subscription, and routes callbacks to the raw IK handler.",
+        "change": "Run in a Python environment with ROS2 rclpy/std_msgs installed and restart the bridge."
+      },
+      "en": {
+        "plain": "Raw IK bridge start creates an rclpy node and Float32MultiArray subscription, then spins it on a background thread.",
+        "condition": "Raw source condition: `self._started`; `not rclpy.ok()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "依赖不可用会抛 RuntimeError；重复 start 不重复创建节点。",
+        "failure": "bridge start 成功只证明订阅线程已启动。",
+        "recovery": "基线未标记该启动方法为变更。",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "Missing dependencies raise RuntimeError; repeated start does not recreate the node.",
+        "change": "Successful bridge startup only proves that the subscription thread started."
+      },
+      "evidence_ids": [
+        "src_812bc498970189bd75bf90f9",
+        "src_2325966a253bd6bb3dbcae04",
+        "src_eaf37de3b3aadbf0c7649c12"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_4_guard_1",
+      "zh": {
+        "plain": "self._started 为真表示 bridge 已运行；重复调用 start 直接返回以避免双重 subscription。",
+        "condition": "源码原条件：`self._started`。它检查当前输入授权、连接或状态。",
+        "effect": "条件为真时保持现有 node/thread；为假才执行依赖导入和节点创建。",
+        "failure": "条件为真时 bridge 已运行，直接返回；为假时创建 ROS2 node 和 subscription。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "When true, retain the existing node/thread; when false, import dependencies and create them.",
+        "change": "Call stop before start when a restart is needed."
+      },
+      "en": {
+        "plain": "self._started true means the bridge is running; repeated start returns to avoid a duplicate subscription.",
+        "condition": "Raw source condition: `self._started`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "真分支 no-op，不会重新创建订阅。",
+        "failure": "When true, the bridge is already running and returns; when false, create the ROS2 node/subscription.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The true branch is a no-op and does not create another subscription.",
+        "change": "The local flag does not verify that the executor thread is still healthy."
+      },
+      "evidence_ids": [
+        "src_2325966a253bd6bb3dbcae04"
+      ]
+    },
+    {
+      "id": "graph:ros2:node:step_4_guard_2",
+      "zh": {
+        "plain": "如果 rclpy 尚未初始化，bridge 会先调用 rclpy.init；已初始化则复用现有 context。",
+        "condition": "源码原条件：`not rclpy.ok()`。它检查当前输入授权、连接或状态。",
+        "effect": "初始化成功后继续创建 node 和 subscription。",
+        "failure": "条件为真时先 rclpy.init；为假时复用已初始化的 ROS context 后创建订阅。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "After initialization it continues to create the node and subscription.",
+        "change": "Check ROS2 environment sourcing and the active Python interpreter."
+      },
+      "en": {
+        "plain": "If rclpy is not initialized, the bridge calls rclpy.init; otherwise it reuses the existing context.",
+        "condition": "Raw source condition: `not rclpy.ok()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "依赖导入或 init 异常会阻止 bridge 启动。",
+        "failure": "When true, call rclpy.init; when false, reuse the ROS context and create the subscription.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "An import or initialization exception prevents bridge startup.",
+        "change": "_shutdown_rclpy tracks whether the bridge owns shutdown responsibility."
+      },
+      "evidence_ids": [
+        "src_eaf37de3b3aadbf0c7649c12"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:1:step_1:step_1_guard_1",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not actual`。它检查当前输入授权、连接或状态。",
+        "effect": "UI 阻止信号后按 actual 设置按钮 checked/text，避免显示“已开启”但后端未 armed。",
+        "failure": "条件为真时 backend 未启用，按钮复位到 OFF；为假时 UI 显示 ON。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Trust the status message and backend.ros2_output_enabled() result."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not actual`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时按钮还原为 OFF/disabled path；条件为假时显示 ON 并继续保持授权。",
+        "failure": "When true, backend is not enabled and the button returns OFF; when false, the UI shows ON.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "UI synchronization does not prove a ROS2 message or P4 command arrived."
+      },
+      "evidence_ids": [
+        "src_6410377395949877d82b4f38",
+        "src_04971a5fb2d73a0b9773d2e7"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:3:step_2:step_2_guard_1",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not armed`。它检查当前输入授权、连接或状态。",
+        "effect": "将 ROS2 output 设为 false，停止后续 ROS targets 进入输出路径。",
+        "failure": "条件为真时请求关闭，撤销 armed 与已绑定 scope；为假时继续尝试授权。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "If the UI still shows ON, inspect actual-state synchronization and bridge-stop handling."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时不可能接受后续 ROS2 控制帧；为假时继续 enable 检查。",
+        "failure": "When true, disarm and clear the bound scope; when false, continue the enable path.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "Software disarm does not replace P4 STOP."
+      },
+      "evidence_ids": [
+        "src_485a8f67e711e10786e7ad0a",
+        "src_81811f8648421deb20c4b0de"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:4:step_2:step_2_guard_2",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not self.is_comm_connected()`。它检查当前输入授权、连接或状态。",
+        "effect": "连接成立时才会继续计算并绑定 active scope。",
+        "failure": "条件为真时串口断开，enable 被拒绝；为假时继续检查 scope。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Connect to P4 and wait for a state snapshot first."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not self.is_comm_connected()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时返回 blocked/offline；为假时继续 scope 检查。",
+        "failure": "When true, serial is disconnected and enable is rejected; when false, check scope.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "Serial connectivity still does not prove CAN and servos are healthy."
+      },
+      "evidence_ids": [
+        "src_23cf7c2b31f75ada033d445e",
+        "src_81811f8648421deb20c4b0de"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:5:step_2:step_2_guard_3",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`int(scope[1]) == 0`。它检查当前输入授权、连接或状态。",
+        "effect": "scope[1] 非零才会复制 motor/joint scope 到 armed scope。",
+        "failure": "条件为真时 active joint scope 为空，拒绝 enable；为假时可保存 scope 并 armed。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Select the intended joints in Joint Channels before enabling ROS2 INPUT."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `int(scope[1]) == 0`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时提示 scope 为空并拒绝；为假时保存 scope 并启用。",
+        "failure": "When true, active joint scope is empty and enable is rejected; when false, save scope and arm.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "A non-empty mask proves selection, not healthy feedback."
+      },
+      "evidence_ids": [
+        "src_c086a9cb0c668e14435b5806",
+        "src_81811f8648421deb20c4b0de"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:6:step_2:step_2_guard_4",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`was_armed`。它检查当前输入授权、连接或状态。",
+        "effect": "为真时撤销旧 arm 状态并重新绑定当前 scope，避免旧 scope 沿用。",
+        "failure": "条件为真时先撤销旧授权并重新绑定 scope；为假时直接建立首次授权。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "After changing scope, verify the new authorization before sending a stream."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `was_armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时旧授权会被清除；为假时直接进行新授权。",
+        "failure": "When true, revoke old authorization and bind scope again; when false, create the first authorization.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "This is host authorization history, not proof the previous command executed."
+      },
+      "evidence_ids": [
+        "src_8bc2cd24fa52d158c411cd70",
+        "src_81811f8648421deb20c4b0de"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:8:step_3:step_3_guard_1",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not self._ros2_output_armed`。它检查当前输入授权、连接或状态。",
+        "effect": "armed 为真才继续串口和 controller 检查。",
+        "failure": "条件为真时未 armed，记录 drop reason 并丢弃消息；为假时继续检查通信。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Explicitly enable ROS2 INPUT in UI and inspect the blocked reason."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not self._ros2_output_armed`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真表示 not armed，记录 drop 并丢弃该帧；为假继续。",
+        "failure": "When true, the message is dropped with a reason; when false, check communication.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "This is host authorization, not a P4 command ACK."
+      },
+      "evidence_ids": [
+        "src_21feeb10844ffe3a82c10d08",
+        "src_98b5b71815ef923bb9317544"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:9:step_3:step_3_guard_2",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not self.is_comm_connected()`。它检查当前输入授权、连接或状态。",
+        "effect": "在线时才继续 controller 状态检查。",
+        "failure": "条件为真时 serial offline，消息被丢弃；为假时继续检查 controller。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Reconnect, then verify authorization/scope before resuming input."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not self.is_comm_connected()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop 为 serial_offline；为假继续。",
+        "failure": "When true, serial is offline and the message is dropped; when false, check the controller.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "Reconnect does not guarantee the previous authorization remains valid."
+      },
+      "evidence_ids": [
+        "src_9f2ecc45a2c9cc7b947c7d51",
+        "src_98b5b71815ef923bb9317544"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:10:step_3:step_3_guard_3",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not self.is_started()`。它检查当前输入授权、连接或状态。",
+        "effect": "started 为真才会计算 state active scope。",
+        "failure": "条件为真时 controller 未启动，拒绝目标；为假时继续比较 active scope。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Use the normal ENABLE flow and wait for READY."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not self.is_started()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop 为 controller_not_ready；为假继续 scope 比较。",
+        "failure": "When true, the controller is not started and the target is rejected; when false, compare active scope.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "started is host controller state, not proof every servo responded."
+      },
+      "evidence_ids": [
+        "src_3f8bbd768d732a84eba1eae4",
+        "src_98b5b71815ef923bb9317544"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:11:step_3:step_3_guard_4",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`。它检查当前输入授权、连接或状态。",
+        "effect": "只有二者相等才取 _ros2_armed_scope[1] 作为本帧 command_joint_mask。",
+        "failure": "条件为真时 armed scope 为空或不匹配，drop 目标；为假时按绑定 mask 发送。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Select the intended range in Joint Channels and enable/arm again."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "条件为真时 drop active_scope_mismatch；为假才允许发送。",
+        "failure": "When true, armed scope is absent or mismatched and the target is dropped; when false, send using the bound mask.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "The comparison uses the current state snapshot; freshness is managed by state synchronization."
+      },
+      "evidence_ids": [
+        "src_71dd025e34cdbdcbc8655994",
+        "src_98b5b71815ef923bb9317544"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:13:step_4:step_4_guard_1",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`self._started`。它检查当前输入授权、连接或状态。",
+        "effect": "条件为真时保持现有 node/thread；为假才执行依赖导入和节点创建。",
+        "failure": "条件为真时 bridge 已运行，直接返回；为假时创建 ROS2 node 和 subscription。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Call stop before start when a restart is needed."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `self._started`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "真分支 no-op，不会重新创建订阅。",
+        "failure": "When true, the bridge is already running and returns; when false, create the ROS2 node/subscription.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "The local flag does not verify that the executor thread is still healthy."
+      },
+      "evidence_ids": [
+        "src_2325966a253bd6bb3dbcae04",
+        "src_812bc498970189bd75bf90f9"
+      ]
+    },
+    {
+      "id": "graph:ros2:edge:14:step_4:step_4_guard_2",
+      "zh": {
+        "plain": "该条件边引导消息/授权到具体守卫；真假结果对应继续、撤权或丢弃。",
+        "condition": "源码原条件：`not rclpy.ok()`。它检查当前输入授权、连接或状态。",
+        "effect": "初始化成功后继续创建 node 和 subscription。",
+        "failure": "条件为真时先 rclpy.init；为假时复用已初始化的 ROS context 后创建订阅。",
+        "recovery": "先查看状态栏、armed 实值与对应 drop reason，再按缺失条件恢复连接或 scope。",
+        "unknown": "静态主机逻辑不证明 ROS2 发布端有效或 P4 实机执行成功。",
+        "difference": "边显示检查顺序；节点说明拒绝时状态和恢复方式。",
+        "change": "Check ROS2 environment sourcing and the active Python interpreter."
+      },
+      "en": {
+        "plain": "This predicate edge routes authorization/message to its guard; true/false selects continuation, disarm, or drop.",
+        "condition": "Raw source condition: `not rclpy.ok()`. It checks authorization, connectivity, or lifecycle state.",
+        "effect": "依赖导入或 init 异常会阻止 bridge 启动。",
+        "failure": "When true, call rclpy.init; when false, reuse the ROS context and create the subscription.",
+        "recovery": "Read status, actual armed state, and drop reason, then restore the missing connection or scope condition.",
+        "unknown": "Static host logic does not prove a valid ROS2 publisher or successful P4 execution.",
+        "difference": "The edge shows check order; the node explains rejection state and recovery.",
+        "change": "_shutdown_rclpy tracks whether the bridge owns shutdown responsibility."
+      },
+      "evidence_ids": [
+        "src_eaf37de3b3aadbf0c7649c12",
+        "src_812bc498970189bd75bf90f9"
+      ]
+    }
+  ]
+}

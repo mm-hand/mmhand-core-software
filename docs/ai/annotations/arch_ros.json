@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "arch_ros",
+  "bundle_hash": "ccfec6463bf6aba64799caf12ae3aa90715909761fc1d433a8d9881d88dbbc7a",
+  "overview": {
+    "zh": "ROS2 遥操链为：mmhand_teleop 发布 21 个有序角度 → /raw_ik_target → 桌面 Float32MultiArray 订阅 → 目标校验与 scope/授权门禁 → 后端控制。topic 连通不等于输出已授权。",
+    "en": "The ROS2 teleop path is: mmhand_teleop publishes 21 ordered angles → /raw_ik_target → desktop Float32MultiArray subscription → target validation and scope/authorization gates → backend control. Topic connectivity does not mean output is authorized.",
+    "evidence_ids": [
+      "src_360e808a201a49e235e451e4"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:arch_ros:node:teleop",
+      "zh": {
+        "plain": "mmhand_teleop 的 ROS2 节点创建三个 Float32MultiArray publisher；其中 robot publisher 向 ROBOT_TOPIC 发布 MMHand 原始 IK 关节目标。",
+        "condition": "publisher 在 ROS2 启动并创建该节点后可发布；当前配置将 ROBOT_TOPIC 设为 /raw_ik_target。",
+        "effect": "RosOutput.joints 生成 21 个关节值，按 J00–J20 顺序、urdf_deg 单位填入消息后发布。",
+        "failure": "若 teleop 端未运行、ROS domain/topic 配置不匹配或消息值无效，桌面订阅端收不到可处理目标。",
+        "recovery": "确认 ROS2 环境、节点与 topic 名称一致，再用 topic echo 检查消息数组和顺序。",
+        "unknown": "发布一条 ROS 消息不证明桌面已授权输出或 P4 接受目标。",
+        "difference": "该进程是 /raw_ik_target 的生产者；桌面 subscriber 是消费者。",
+        "change": "基线未标记该 publisher 为本次变更。"
+      },
+      "en": {
+        "plain": "The mmhand_teleop ROS2 node creates three Float32MultiArray publishers. Its robot publisher sends MMHand raw IK joint targets to ROBOT_TOPIC.",
+        "condition": "It can publish after the ROS2 node is initialized; current configuration sets ROBOT_TOPIC to /raw_ik_target.",
+        "effect": "RosOutput.joints produces 21 joint values ordered J00–J20 in urdf_deg and publishes them in the message array.",
+        "failure": "If teleop is not running, ROS domain/topic settings differ, or values are invalid, the desktop subscriber receives no usable target.",
+        "recovery": "Check the ROS2 environment and matching topic names; use topic echo to inspect array values and order.",
+        "unknown": "Publishing a ROS message does not prove the desktop is armed or P4 accepts the target.",
+        "difference": "This process produces /raw_ik_target; the desktop subscriber consumes it.",
+        "change": "The baseline does not mark this publisher as changed."
+      },
+      "evidence_ids": [
+        "src_360e808a201a49e235e451e4"
+      ]
+    },
+    {
+      "id": "graph:arch_ros:node:raw",
+      "zh": {
+        "plain": "这是跨仓库 ROS2 接口：`/raw_ik_target` 使用 `std_msgs/msg/Float32MultiArray`，数组包含 21 个 J00–J20 角度，单位为 degree，layout 标识为 `mmhand:J00-J20:urdf_deg`。",
+        "condition": "teleop publisher 和桌面订阅者需使用同一 topic 与 ROS domain；消息应含 21 个按约定排序的值。",
+        "effect": "topic 将 teleop 的 IK 结果传到桌面 raw-IK handler；后端还会检查授权、通信连接、controller ready 与 armed scope。",
+        "failure": "值数量/顺序/单位不符合约定会导致错误目标；即使 topic 收到消息，授权关闭时仍会被桌面后端丢弃。",
+        "recovery": "先用 `ros2 topic echo --once /raw_ik_target` 检查 21 值，再按 README 开启 raw_ik 输入并显式授权。",
+        "unknown": "静态消息定义不证明单位换算与真实机械角完全吻合，需核对 URDF 和部署版本。",
+        "difference": "此接口传的是 raw IK joint targets，不是 `/hand/keypoints` 关键点，也不是直接电机通道命令。",
+        "change": "基线未标记该 topic 为本次变更。"
+      },
+      "en": {
+        "plain": "This is the cross-repository ROS2 interface: `/raw_ik_target` uses `std_msgs/msg/Float32MultiArray` with 21 J00–J20 angles in degrees and layout label `mmhand:J00-J20:urdf_deg`.",
+        "condition": "The teleop publisher and desktop subscriber must share the topic and ROS domain; the array must contain 21 values in the agreed order.",
+        "effect": "The topic carries teleop IK results to the desktop raw-IK handler; the backend still checks authorization, serial connectivity, controller readiness, and the armed scope.",
+        "failure": "A wrong count/order/unit can produce incorrect targets; receiving a topic message does not bypass desktop authorization.",
+        "recovery": "First inspect 21 values with `ros2 topic echo --once /raw_ik_target`, then start raw_ik input and explicitly authorize output as described in the README.",
+        "unknown": "The static message contract does not prove that units match the physical hand; verify the URDF and deployed revision.",
+        "difference": "This carries raw IK joint targets, not `/hand/keypoints` and not direct motor-channel commands.",
+        "change": "The baseline does not mark this topic as changed."
+      },
+      "evidence_ids": [
+        "src_99c8de44bf34b0ac4977ecc4"
+      ]
+    },
+    {
+      "id": "graph:arch_ros:node:desktop",
+      "zh": {
+        "plain": "桌面 ROS2 bridge 订阅同一 Float32MultiArray topic，并将消息交给 JointTargetCommandHandler；handler 校验后再请求 HandBackend。",
+        "condition": "启动桌面 UI 时启用 ROS2 raw_ik input，并保证 ROS domain 与发布端一致。",
+        "effect": "subscription depth 为 10；回调接收消息后走统一目标处理，再由 backend 的 arm gate 决定是否输出。",
+        "failure": "rclpy/std_msgs 不可用、topic 不匹配或授权未打开时，消息无法成为有效输出命令。",
+        "recovery": "检查启动参数、ROS2 Python 环境和 topic echo；输出被拒绝时查看 backend drop reason。",
+        "unknown": "订阅成功仅表示节点建立，不表示每条消息都通过门禁。",
+        "difference": "订阅端与 publisher 使用同一消息类型，但桌面增加了独立安全授权层。",
+        "change": "基线未标记该订阅端为本次变更。"
+      },
+      "en": {
+        "plain": "The desktop ROS2 bridge subscribes to the same Float32MultiArray topic and passes messages to JointTargetCommandHandler, which validates before requesting HandBackend.",
+        "condition": "Start the desktop UI with ROS2 raw_ik input enabled and match the publisher’s ROS domain.",
+        "effect": "The subscription depth is 10; each callback enters the shared target handler, then the backend arm gate decides whether output is allowed.",
+        "failure": "Missing rclpy/std_msgs, a topic mismatch, or disabled authorization prevents a message from becoming an output command.",
+        "recovery": "Check launch arguments, the ROS2 Python environment, and topic echo; inspect the backend drop reason if output is rejected.",
+        "unknown": "A successful subscription only proves that the node was created, not that each message passed the gates.",
+        "difference": "The subscriber shares the publisher’s message type but adds a separate desktop authorization layer.",
+        "change": "The baseline does not mark this subscriber as changed."
+      },
+      "evidence_ids": [
+        "src_3cb93a10f7a84c4e6834263c"
+      ]
+    }
+  ]
+}

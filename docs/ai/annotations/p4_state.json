@@ -1,0 +1,731 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "p4_state",
+  "bundle_hash": "e38ddbee45a6d5e09209d403866846b75c5a4dd5ee8267e81922d9a1e5d33c69",
+  "overview": {
+    "zh": "本图把 P4 的正式状态枚举与 SystemEventDispatcher 事件分开显示：事件携带的状态、令牌和安全准入条件决定是否更新正式状态。读图时要区分“收到事件”与“状态已经切换”；拒绝和过期事件会走各自的忽略或错误路径。",
+    "en": "This graph separates P4's formal state enum from SystemEventDispatcher events. State, token and safety-admission checks determine whether an event changes the formal state. Receiving an event does not itself mean the state changed; rejected and stale events follow their own ignore or error paths.",
+    "evidence_ids": [
+      "src_fa9954d5a1c30a9fd747fce2"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_UNCONTROLLABLE",
+      "zh": {
+        "plain": "`UNCONTROLLABLE` 是 P4 正式系统状态枚举，数值为 0。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `0` 供 P4 状态机识别 `UNCONTROLLABLE`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `UNCONTROLLABLE`，枚举值 0；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`UNCONTROLLABLE` is a formal P4 system-state enum with value 0. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `0` identifies `UNCONTROLLABLE` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `UNCONTROLLABLE` with enum value 0; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_fa9954d5a1c30a9fd747fce2"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_IDLE",
+      "zh": {
+        "plain": "`IDLE` 是 P4 正式系统状态枚举，数值为 1。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `1` 供 P4 状态机识别 `IDLE`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `IDLE`，枚举值 1；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`IDLE` is a formal P4 system-state enum with value 1. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `1` identifies `IDLE` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `IDLE` with enum value 1; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_57998f5c7ea93882979a7c97"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_RUN_FEEDBACK",
+      "zh": {
+        "plain": "`RUN_FEEDBACK` 是 P4 正式系统状态枚举，数值为 2。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `2` 供 P4 状态机识别 `RUN_FEEDBACK`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_FEEDBACK`，枚举值 2；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_FEEDBACK` is a formal P4 system-state enum with value 2. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `2` identifies `RUN_FEEDBACK` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_FEEDBACK` with enum value 2; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_71ab80020f213dc7a0a9f4a5"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_CALIBRATION_RUNNING",
+      "zh": {
+        "plain": "`CALIBRATION_RUNNING` 是 P4 正式系统状态枚举，数值为 4。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `4` 供 P4 状态机识别 `CALIBRATION_RUNNING`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `CALIBRATION_RUNNING`，枚举值 4；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`CALIBRATION_RUNNING` is a formal P4 system-state enum with value 4. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `4` identifies `CALIBRATION_RUNNING` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `CALIBRATION_RUNNING` with enum value 4; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_2f687bfc7c73f6610dfaca30"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_READY",
+      "zh": {
+        "plain": "`READY` 是 P4 正式系统状态枚举，数值为 5。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `5` 供 P4 状态机识别 `READY`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `READY`，枚举值 5；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`READY` is a formal P4 system-state enum with value 5. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `5` identifies `READY` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `READY` with enum value 5; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_8238e1c5ed60dc0dc71847dd"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_RUN_DIRECT",
+      "zh": {
+        "plain": "`RUN_DIRECT` 是 P4 正式系统状态枚举，数值为 6。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `6` 供 P4 状态机识别 `RUN_DIRECT`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_DIRECT`，枚举值 6；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_DIRECT` is a formal P4 system-state enum with value 6. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `6` identifies `RUN_DIRECT` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_DIRECT` with enum value 6; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_dec6b087490278494e81e6d8"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_PAUSED",
+      "zh": {
+        "plain": "`PAUSED` 是 P4 正式系统状态枚举，数值为 7。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `7` 供 P4 状态机识别 `PAUSED`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `PAUSED`，枚举值 7；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`PAUSED` is a formal P4 system-state enum with value 7. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `7` identifies `PAUSED` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `PAUSED` with enum value 7; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_a957420c55c49e26ecaf2f26"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_ROPE_INIT_RUNNING",
+      "zh": {
+        "plain": "`ROPE_INIT_RUNNING` 是 P4 正式系统状态枚举，数值为 8。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `8` 供 P4 状态机识别 `ROPE_INIT_RUNNING`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `ROPE_INIT_RUNNING`，枚举值 8；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`ROPE_INIT_RUNNING` is a formal P4 system-state enum with value 8. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `8` identifies `ROPE_INIT_RUNNING` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `ROPE_INIT_RUNNING` with enum value 8; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_4bc44d51b85cffd15ff97509"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_STATE_RECOVERY_REQUIRED",
+      "zh": {
+        "plain": "`RECOVERY_REQUIRED` 是 P4 正式系统状态枚举，数值为 9。它是 dispatcher 和任务共享的状态标识；收到事件不自动等于进入该状态，必须确认事件分支通过准入并实际调用状态写入函数。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "状态枚举值 `9` 供 P4 状态机识别 `RECOVERY_REQUIRED`。读取该值的任务会据此决定允许的控制、停止或恢复路径；具体后续任务动作以状态消费者源码为准。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RECOVERY_REQUIRED`，枚举值 9；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RECOVERY_REQUIRED` is a formal P4 system-state enum with value 9. It is a state-machine identifier shared by dispatchers and tasks; receiving an event does not enter this state unless admission passes and the state-write function runs.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "The enum value `9` identifies `RECOVERY_REQUIRED` to the P4 state machine. Consumers use it to choose control, stop or recovery paths; inspect each consumer for its exact follow-on work.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RECOVERY_REQUIRED` with enum value 9; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_1d90a344fcc2caac949bc17e"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_START",
+      "zh": {
+        "plain": "`START` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `!p4::system::canAcceptStart(sharedData->system_state)`；其中`p4` 是源码中的“p4”标记；`system` 是源码中的“system”标记；`canAcceptStart` 是源码中的“canAcceptStart”标记；`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记。逻辑关系按运算符解释：>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state == SYSTEM_STATE_PAUSED`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_PAUSED` 是源码中的“SYSTEM STATE PAUSED”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!resumeReady`；其中`resumeReady` 是源码中的“resumeReady”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `resumeState == SYSTEM_STATE_RUN_DIRECT`；其中`resumeState` 是源码中的“resumeState”标记；`SYSTEM_STATE_RUN_DIRECT` 是源码中的“SYSTEM STATE RUN DIRECT”标记。逻辑关系按运算符解释：==表示等于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `START`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`START` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `!p4::system::canAcceptStart(sharedData->system_state)`; `p4` is the source-level “p4” value/flag; `system` is the source-level “system” value/flag; `canAcceptStart` is the source-level “canAcceptStart” value/flag; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag. Read the operator as NOT p4::system::canAcceptStart(sharedData- is greater than system_state). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state == SYSTEM_STATE_PAUSED`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_PAUSED` is the source-level “SYSTEM STATE PAUSED” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_PAUSED. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!resumeReady`; `resumeReady` is the source-level “resumeReady” value/flag. Read the operator as NOT resumeReady. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `resumeState == SYSTEM_STATE_RUN_DIRECT`; `resumeState` is the source-level “resumeState” value/flag; `SYSTEM_STATE_RUN_DIRECT` is the source-level “SYSTEM STATE RUN DIRECT” value/flag. Read the operator as resumeState  equals  SYSTEM_STATE_RUN_DIRECT. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `START`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_75f5623ef168d23e73ad2051",
+        "src_7008e34e614c858aeba22b4d",
+        "src_2143773886ffc98731e946e1",
+        "src_d9fefdba414bb1f7fa5328ea",
+        "src_e7e2cbb21a4078b3385f3ba6"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_STOP",
+      "zh": {
+        "plain": "`STOP` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_ROPE_INIT_RUNNING` 是源码中的“SYSTEM STATE ROPE INIT RUNNING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedAtomicLoad(\n&sharedData->calibration_rope_init_pending) != 0`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`calibration_rope_init_pending` 是源码中的“calibration rope init pending”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_CALIBRATION_RUNNING` 是源码中的“SYSTEM STATE CALIBRATION RUNNING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `STOP`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`STOP` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_ROPE_INIT_RUNNING` is the source-level “SYSTEM STATE ROPE INIT RUNNING” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_ROPE_INIT_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedAtomicLoad(\n&sharedData->calibration_rope_init_pending) != 0`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `calibration_rope_init_pending` is the source-level “calibration rope init pending” value/flag. Read the operator as sharedAtomicLoad(\n&sharedData- is greater than calibration_rope_init_pending) NOT = 0. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_CALIBRATION_RUNNING` is the source-level “SYSTEM STATE CALIBRATION RUNNING” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_CALIBRATION_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `STOP`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_0a8be81fb278b12d8b8aa1d5",
+        "src_db7edfd31a9716ad214506f4",
+        "src_e7b4839db25cba0b2229551b",
+        "src_c6577cb87aa6a883e5c6ddf1"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RESET",
+      "zh": {
+        "plain": "`RESET` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "节点没有独立入口谓词；正式状态由上游事件处理分支写入，需查看入边条件和 dispatcher 的状态赋值。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RESET`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RESET` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "This node has no standalone entry predicate; upstream event branches write the formal state. Inspect incoming guards and the dispatcher's state assignment.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RESET`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RUN_DIRECT",
+      "zh": {
+        "plain": "`RUN_DIRECT` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `!pendingDirectCommandMatches(sharedData, event.token)`；其中`pendingDirectCommandMatches` 是源码中的“pendingDirectCommandMatches”标记；`sharedData` 是源码中的“sharedData”标记；`event` 是源码中的“event”标记；`token` 是源码中的“token”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_DIRECT\")`；其中`rejectMotionWhenEmergencyStopLatched` 是源码中的“rejectMotionWhenEmergencyStopLatched”标记；`sharedData` 是源码中的“sharedData”标记；`RUN_DIRECT` 是源码中的“RUN DIRECT”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::state::prepareHostControlCommandAdmission(sharedData)`；其中`p4` 是源码中的“p4”标记；`state` 是源码中的“state”标记；`prepareHostControlCommandAdmission` 是源码中的“prepareHostControlCommandAdmission”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::system::canAcceptRunDirect(sharedData->system_state)`；其中`p4` 是源码中的“p4”标记；`system` 是源码中的“system”标记；`canAcceptRunDirect` 是源码中的“canAcceptRunDirect”标记；`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记。逻辑关系按运算符解释：>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `(sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &\npendingMotorMask) != 0`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`multi_turn_unknown_bitmap` 是源码中的“multi turn unknown bitmap”标记；`pendingMotorMask` 是源码中的“pendingMotorMask”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::state::directMotorMaskReady(sharedData,\npendingMotorMask)`；其中`p4` 是源码中的“p4”标记；`state` 是源码中的“state”标记；`directMotorMaskReady` 是源码中的“directMotorMaskReady”标记；`sharedData` 是源码中的“sharedData”标记；`pendingMotorMask` 是源码中的“pendingMotorMask”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!promotePendingDirectCommand(sharedData, event.token)`；其中`promotePendingDirectCommand` 是源码中的“promotePendingDirectCommand”标记；`sharedData` 是源码中的“sharedData”标记；`event` 是源码中的“event”标记；`token` 是源码中的“token”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_DIRECT` 是源码中的“SYSTEM STATE RUN DIRECT”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_DIRECT`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_DIRECT` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `!pendingDirectCommandMatches(sharedData, event.token)`; `pendingDirectCommandMatches` is the source-level “pendingDirectCommandMatches” value/flag; `sharedData` is the source-level “sharedData” value/flag; `event` is the source-level “event” value/flag; `token` is the source-level “token” value/flag. Read the operator as NOT pendingDirectCommandMatches(sharedData, event.token). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_DIRECT\")`; `rejectMotionWhenEmergencyStopLatched` is the source-level “rejectMotionWhenEmergencyStopLatched” value/flag; `sharedData` is the source-level “sharedData” value/flag; `RUN_DIRECT` is the source-level “RUN DIRECT” value/flag. Read the operator as rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_DIRECT\"). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::state::prepareHostControlCommandAdmission(sharedData)`; `p4` is the source-level “p4” value/flag; `state` is the source-level “state” value/flag; `prepareHostControlCommandAdmission` is the source-level “prepareHostControlCommandAdmission” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT p4::state::prepareHostControlCommandAdmission(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::system::canAcceptRunDirect(sharedData->system_state)`; `p4` is the source-level “p4” value/flag; `system` is the source-level “system” value/flag; `canAcceptRunDirect` is the source-level “canAcceptRunDirect” value/flag; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag. Read the operator as NOT p4::system::canAcceptRunDirect(sharedData- is greater than system_state). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `(sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &\npendingMotorMask) != 0`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `multi_turn_unknown_bitmap` is the source-level “multi turn unknown bitmap” value/flag; `pendingMotorMask` is the source-level “pendingMotorMask” value/flag. Read the operator as (sharedAtomicLoad(&sharedData- is greater than multi_turn_unknown_bitmap) &\npendingMotorMask) NOT = 0. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::state::directMotorMaskReady(sharedData,\npendingMotorMask)`; `p4` is the source-level “p4” value/flag; `state` is the source-level “state” value/flag; `directMotorMaskReady` is the source-level “directMotorMaskReady” value/flag; `sharedData` is the source-level “sharedData” value/flag; `pendingMotorMask` is the source-level “pendingMotorMask” value/flag. Read the operator as NOT p4::state::directMotorMaskReady(sharedData,\npendingMotorMask). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!promotePendingDirectCommand(sharedData, event.token)`; `promotePendingDirectCommand` is the source-level “promotePendingDirectCommand” value/flag; `sharedData` is the source-level “sharedData” value/flag; `event` is the source-level “event” value/flag; `token` is the source-level “token” value/flag. Read the operator as NOT promotePendingDirectCommand(sharedData, event.token). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_DIRECT` is the source-level “SYSTEM STATE RUN DIRECT” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_DIRECT. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_DIRECT`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_967e171edf533b58a8614803",
+        "src_4858a77bec41252a541d577e",
+        "src_8f623d8e2e6b369134f1520a",
+        "src_fe87797b8c531a94801e1d36",
+        "src_31b8d318a3a4a9d4272af444",
+        "src_520168568de93bd9a65f5c51",
+        "src_4ff57f3fa07dafa374b02414",
+        "src_3915956520f231c4be9a822f",
+        "src_fb9b34064269094d9cc5b8c2"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RUN_FEEDBACK",
+      "zh": {
+        "plain": "`RUN_FEEDBACK` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_FEEDBACK\")`；其中`rejectMotionWhenEmergencyStopLatched` 是源码中的“rejectMotionWhenEmergencyStopLatched”标记；`sharedData` 是源码中的“sharedData”标记；`RUN_FEEDBACK` 是源码中的“RUN FEEDBACK”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::state::prepareHostControlCommandAdmission(sharedData)`；其中`p4` 是源码中的“p4”标记；`state` 是源码中的“state”标记；`prepareHostControlCommandAdmission` 是源码中的“prepareHostControlCommandAdmission”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!manualReferenceGateReady(sharedData)`；其中`manualReferenceGateReady` 是源码中的“manualReferenceGateReady”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING &&\nsharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_ROPE_INIT_RUNNING` 是源码中的“SYSTEM STATE ROPE INIT RUNNING”标记；`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`feedback_recovery_pending` 是源码中的“feedback recovery pending”标记。逻辑关系按运算符解释：==表示等于、!=表示不等于、>表示大于、&&表示并且、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!feedbackTargetsPointIntoWorkspace(sharedData)`；其中`feedbackTargetsPointIntoWorkspace` 是源码中的“feedbackTargetsPointIntoWorkspace”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_FEEDBACK` 是源码中的“SYSTEM STATE RUN FEEDBACK”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RECOVERY_REQUIRED` 是源码中的“SYSTEM STATE RECOVERY REQUIRED”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `workspaceReady`；其中`workspaceReady` 是源码中的“workspaceReady”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `preflightReason != ROPE_INIT_REASON_NONE ||\n!multiTurnKnown`；其中`preflightReason` 是源码中的“preflightReason”标记；`ROPE_INIT_REASON_NONE` 是源码中的“ROPE INIT REASON NONE”标记；`multiTurnKnown` 是源码中的“multiTurnKnown”标记。逻辑关系按运算符解释：!=表示不等于、||表示或者、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!beginRopeInitMotion(sharedData, true, event.token)`；其中`beginRopeInitMotion` 是源码中的“beginRopeInitMotion”标记；`sharedData` 是源码中的“sharedData”标记；`event` 是源码中的“event”标记；`token` 是源码中的“token”标记。逻辑关系按运算符解释：!表示取反、true表示真。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::system::canAcceptRunFeedback(sharedData->system_state)`；其中`p4` 是源码中的“p4”标记；`system` 是源码中的“system”标记；`canAcceptRunFeedback` 是源码中的“canAcceptRunFeedback”标记；`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记。逻辑关系按运算符解释：>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!activeJointsInControlWorkspace(sharedData)`；其中`activeJointsInControlWorkspace` 是源码中的“activeJointsInControlWorkspace”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!activeMotorsMultiTurnKnown(sharedData)`；其中`activeMotorsMultiTurnKnown` 是源码中的“activeMotorsMultiTurnKnown”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!activeMotorsAbsLimitsCalibrated(sharedData)`；其中`activeMotorsAbsLimitsCalibrated` 是源码中的“activeMotorsAbsLimitsCalibrated”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!setCommandModeJoint(sharedData)`；其中`setCommandModeJoint` 是源码中的“setCommandModeJoint”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_FEEDBACK`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_FEEDBACK` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_FEEDBACK\")`; `rejectMotionWhenEmergencyStopLatched` is the source-level “rejectMotionWhenEmergencyStopLatched” value/flag; `sharedData` is the source-level “sharedData” value/flag; `RUN_FEEDBACK` is the source-level “RUN FEEDBACK” value/flag. Read the operator as rejectMotionWhenEmergencyStopLatched(sharedData,\n\"RUN_FEEDBACK\"). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::state::prepareHostControlCommandAdmission(sharedData)`; `p4` is the source-level “p4” value/flag; `state` is the source-level “state” value/flag; `prepareHostControlCommandAdmission` is the source-level “prepareHostControlCommandAdmission” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT p4::state::prepareHostControlCommandAdmission(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!manualReferenceGateReady(sharedData)`; `manualReferenceGateReady` is the source-level “manualReferenceGateReady” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT manualReferenceGateReady(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING &&\nsharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_ROPE_INIT_RUNNING` is the source-level “SYSTEM STATE ROPE INIT RUNNING” value/flag; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `feedback_recovery_pending` is the source-level “feedback recovery pending” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_ROPE_INIT_RUNNING  AND \nsharedAtomicLoad(&sharedData- is greater than feedback_recovery_pending) NOT = 0. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!feedbackTargetsPointIntoWorkspace(sharedData)`; `feedbackTargetsPointIntoWorkspace` is the source-level “feedbackTargetsPointIntoWorkspace” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT feedbackTargetsPointIntoWorkspace(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_FEEDBACK` is the source-level “SYSTEM STATE RUN FEEDBACK” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_RUN_FEEDBACK. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RECOVERY_REQUIRED` is the source-level “SYSTEM STATE RECOVERY REQUIRED” value/flag. Read the operator as sharedData- is greater than system_state  equals  SYSTEM_STATE_RECOVERY_REQUIRED. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `workspaceReady`; `workspaceReady` is the source-level “workspaceReady” value/flag. Read the operator as workspaceReady. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `preflightReason != ROPE_INIT_REASON_NONE ||\n!multiTurnKnown`; `preflightReason` is the source-level “preflightReason” value/flag; `ROPE_INIT_REASON_NONE` is the source-level “ROPE INIT REASON NONE” value/flag; `multiTurnKnown` is the source-level “multiTurnKnown” value/flag. Read the operator as preflightReason NOT = ROPE_INIT_REASON_NONE  OR \nNOT multiTurnKnown. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!beginRopeInitMotion(sharedData, true, event.token)`; `beginRopeInitMotion` is the source-level “beginRopeInitMotion” value/flag; `sharedData` is the source-level “sharedData” value/flag; `event` is the source-level “event” value/flag; `token` is the source-level “token” value/flag. Read the operator as NOT beginRopeInitMotion(sharedData, true, event.token). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::system::canAcceptRunFeedback(sharedData->system_state)`; `p4` is the source-level “p4” value/flag; `system` is the source-level “system” value/flag; `canAcceptRunFeedback` is the source-level “canAcceptRunFeedback” value/flag; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag. Read the operator as NOT p4::system::canAcceptRunFeedback(sharedData- is greater than system_state). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!activeJointsInControlWorkspace(sharedData)`; `activeJointsInControlWorkspace` is the source-level “activeJointsInControlWorkspace” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT activeJointsInControlWorkspace(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!activeMotorsMultiTurnKnown(sharedData)`; `activeMotorsMultiTurnKnown` is the source-level “activeMotorsMultiTurnKnown” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT activeMotorsMultiTurnKnown(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!activeMotorsAbsLimitsCalibrated(sharedData)`; `activeMotorsAbsLimitsCalibrated` is the source-level “activeMotorsAbsLimitsCalibrated” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT activeMotorsAbsLimitsCalibrated(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!setCommandModeJoint(sharedData)`; `setCommandModeJoint` is the source-level “setCommandModeJoint” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT setCommandModeJoint(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_FEEDBACK`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_5e3edb1fd1dcb71c871b01e6",
+        "src_95285570b67267d2bc58bc4a",
+        "src_438e31176e84ad687f42f29d",
+        "src_c6e3cf2a1bbb59dad6dcf4a3",
+        "src_e6234913ca0f3b2e2adcb59a",
+        "src_5499bf86695799c8015b11ce",
+        "src_ce697a60b959689497a3c9b5",
+        "src_2ee65ce36ee58ce6c9fe8d3a",
+        "src_88a7c2f642c67bc20fa035ab",
+        "src_5e490c2095489c9e496f51f2",
+        "src_e1402c875aef92a897a59bc6",
+        "src_16dd351c7becee6a1f178f76",
+        "src_757a4bc60085609a55e562be",
+        "src_c8b3f5cb2a5e9d99ba183133",
+        "src_e122cdd00070986d1f5e7d54",
+        "src_f2c038361839c34870615f05"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RUN_DIRECT_DONE",
+      "zh": {
+        "plain": "`RUN_DIRECT_DONE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_DIRECT` 是源码中的“SYSTEM STATE RUN DIRECT”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `event.token != sharedData->applied_direct_generation`；其中`event` 是源码中的“event”标记；`token` 是源码中的“token”标记；`sharedData` 是源码中的“sharedData”标记；`applied_direct_generation` 是源码中的“applied direct generation”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_DIRECT_DONE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_DIRECT_DONE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_DIRECT` is the source-level “SYSTEM STATE RUN DIRECT” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_DIRECT. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `event.token != sharedData->applied_direct_generation`; `event` is the source-level “event” value/flag; `token` is the source-level “token” value/flag; `sharedData` is the source-level “sharedData” value/flag; `applied_direct_generation` is the source-level “applied direct generation” value/flag. Read the operator as event.token NOT = sharedData- is greater than applied_direct_generation. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_DIRECT_DONE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_4c7f93ecfbe774bd647f7ec2",
+        "src_f42990ba5babe46c074021d6",
+        "src_37c330edd7e3ab2fd5cb9d14"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RUN_FEEDBACK_DONE",
+      "zh": {
+        "plain": "`RUN_FEEDBACK_DONE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_FEEDBACK` 是源码中的“SYSTEM STATE RUN FEEDBACK”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!feedbackCompletionMatchesCurrentCommand(sharedData, event)`；其中`feedbackCompletionMatchesCurrentCommand` 是源码中的“feedbackCompletionMatchesCurrentCommand”标记；`sharedData` 是源码中的“sharedData”标记；`event` 是源码中的“event”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_FEEDBACK_DONE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_FEEDBACK_DONE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_FEEDBACK` is the source-level “SYSTEM STATE RUN FEEDBACK” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_FEEDBACK. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!feedbackCompletionMatchesCurrentCommand(sharedData, event)`; `feedbackCompletionMatchesCurrentCommand` is the source-level “feedbackCompletionMatchesCurrentCommand” value/flag; `sharedData` is the source-level “sharedData” value/flag; `event` is the source-level “event” value/flag. Read the operator as NOT feedbackCompletionMatchesCurrentCommand(sharedData, event). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_FEEDBACK_DONE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_40bc37756aad0d6aab6454c7",
+        "src_70698121d918e6ebdaf156db",
+        "src_f1eca8cbcfb93b3e59bcd296"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT",
+      "zh": {
+        "plain": "`RUN_FEEDBACK_TIMEOUT` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_FEEDBACK` 是源码中的“SYSTEM STATE RUN FEEDBACK”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!feedbackCompletionMatchesCurrentCommand(sharedData, event)`；其中`feedbackCompletionMatchesCurrentCommand` 是源码中的“feedbackCompletionMatchesCurrentCommand”标记；`sharedData` 是源码中的“sharedData”标记；`event` 是源码中的“event”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `RUN_FEEDBACK_TIMEOUT`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`RUN_FEEDBACK_TIMEOUT` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_FEEDBACK` is the source-level “SYSTEM STATE RUN FEEDBACK” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_FEEDBACK. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!feedbackCompletionMatchesCurrentCommand(sharedData, event)`; `feedbackCompletionMatchesCurrentCommand` is the source-level “feedbackCompletionMatchesCurrentCommand” value/flag; `sharedData` is the source-level “sharedData” value/flag; `event` is the source-level “event” value/flag. Read the operator as NOT feedbackCompletionMatchesCurrentCommand(sharedData, event). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `RUN_FEEDBACK_TIMEOUT`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_1f90eb714dc7b92f27d27cf3",
+        "src_28a815d260d40918e24eb87d",
+        "src_899e1c41ea4ad6d283ee264b"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_PAUSE",
+      "zh": {
+        "plain": "`PAUSE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT &&\nsharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_RUN_DIRECT` 是源码中的“SYSTEM STATE RUN DIRECT”标记；`SYSTEM_STATE_RUN_FEEDBACK` 是源码中的“SYSTEM STATE RUN FEEDBACK”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、&&表示并且、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `PAUSE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`PAUSE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->system_state != SYSTEM_STATE_RUN_DIRECT &&\nsharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_RUN_DIRECT` is the source-level “SYSTEM STATE RUN DIRECT” value/flag; `SYSTEM_STATE_RUN_FEEDBACK` is the source-level “SYSTEM STATE RUN FEEDBACK” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_DIRECT  AND \nsharedData- is greater than system_state NOT = SYSTEM_STATE_RUN_FEEDBACK. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `PAUSE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_261fd2eb69bdbed23d77dc3b",
+        "src_fb00c20e1967920bfc3ade36"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_CALIBRATE",
+      "zh": {
+        "plain": "`CALIBRATE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"CALIBRATE\")`；其中`rejectMotionWhenEmergencyStopLatched` 是源码中的“rejectMotionWhenEmergencyStopLatched”标记；`sharedData` 是源码中的“sharedData”标记；`CALIBRATE` 是源码中的“CALIBRATE”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::state::prepareHostControlCommandAdmission(sharedData)`；其中`p4` 是源码中的“p4”标记；`state` 是源码中的“state”标记；`prepareHostControlCommandAdmission` 是源码中的“prepareHostControlCommandAdmission”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!manualReferenceGateReady(sharedData)`；其中`manualReferenceGateReady` 是源码中的“manualReferenceGateReady”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::system::canAcceptCalibration(sharedData->system_state)`；其中`p4` 是源码中的“p4”标记；`system` 是源码中的“system”标记；`canAcceptCalibration` 是源码中的“canAcceptCalibration”标记；`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记。逻辑关系按运算符解释：>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!startAutoCalibrationTaskRuntime(sharedData)`；其中`startAutoCalibrationTaskRuntime` 是源码中的“startAutoCalibrationTaskRuntime”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `CALIBRATE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`CALIBRATE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"CALIBRATE\")`; `rejectMotionWhenEmergencyStopLatched` is the source-level “rejectMotionWhenEmergencyStopLatched” value/flag; `sharedData` is the source-level “sharedData” value/flag; `CALIBRATE` is the source-level “CALIBRATE” value/flag. Read the operator as rejectMotionWhenEmergencyStopLatched(sharedData,\n\"CALIBRATE\"). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::state::prepareHostControlCommandAdmission(sharedData)`; `p4` is the source-level “p4” value/flag; `state` is the source-level “state” value/flag; `prepareHostControlCommandAdmission` is the source-level “prepareHostControlCommandAdmission” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT p4::state::prepareHostControlCommandAdmission(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!manualReferenceGateReady(sharedData)`; `manualReferenceGateReady` is the source-level “manualReferenceGateReady” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT manualReferenceGateReady(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::system::canAcceptCalibration(sharedData->system_state)`; `p4` is the source-level “p4” value/flag; `system` is the source-level “system” value/flag; `canAcceptCalibration` is the source-level “canAcceptCalibration” value/flag; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag. Read the operator as NOT p4::system::canAcceptCalibration(sharedData- is greater than system_state). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!startAutoCalibrationTaskRuntime(sharedData)`; `startAutoCalibrationTaskRuntime` is the source-level “startAutoCalibrationTaskRuntime” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT startAutoCalibrationTaskRuntime(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `CALIBRATE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_82154bade1796bb059e33f6e",
+        "src_817cc6d0e38004588b9e8f0c",
+        "src_6acefd99c7fe3e5a3898b94d",
+        "src_a84e53321e1e58666fcba82f",
+        "src_35f3a5f7f294f0867216e891",
+        "src_7238dbfa7ddd9774f5628e18"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_ROPE_INIT",
+      "zh": {
+        "plain": "`ROPE_INIT` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"ROPE_INIT\")`；其中`rejectMotionWhenEmergencyStopLatched` 是源码中的“rejectMotionWhenEmergencyStopLatched”标记；`sharedData` 是源码中的“sharedData”标记；`ROPE_INIT` 是源码中的“ROPE INIT”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!p4::state::prepareHostControlCommandAdmission(sharedData)`；其中`p4` 是源码中的“p4”标记；`state` 是源码中的“state”标记；`prepareHostControlCommandAdmission` 是源码中的“prepareHostControlCommandAdmission”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `preflightReason != ROPE_INIT_REASON_NONE`；其中`preflightReason` 是源码中的“preflightReason”标记；`ROPE_INIT_REASON_NONE` 是源码中的“ROPE INIT REASON NONE”标记。逻辑关系按运算符解释：!=表示不等于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `preflightReason == ROPE_INIT_REASON_MANUAL_REQUIRED`；其中`preflightReason` 是源码中的“preflightReason”标记；`ROPE_INIT_REASON_MANUAL_REQUIRED` 是源码中的“ROPE INIT REASON MANUAL REQUIRED”标记。逻辑关系按运算符解释：==表示等于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_IDLE &&\nsharedData->system_state != SYSTEM_STATE_READY &&\nsharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_IDLE` 是源码中的“SYSTEM STATE IDLE”标记；`SYSTEM_STATE_READY` 是源码中的“SYSTEM STATE READY”标记；`SYSTEM_STATE_RECOVERY_REQUIRED` 是源码中的“SYSTEM STATE RECOVERY REQUIRED”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、&&表示并且、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `!activeMotorsMultiTurnKnown(sharedData)`；其中`activeMotorsMultiTurnKnown` 是源码中的“activeMotorsMultiTurnKnown”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `ROPE_INIT`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`ROPE_INIT` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `rejectMotionWhenEmergencyStopLatched(sharedData,\n\"ROPE_INIT\")`; `rejectMotionWhenEmergencyStopLatched` is the source-level “rejectMotionWhenEmergencyStopLatched” value/flag; `sharedData` is the source-level “sharedData” value/flag; `ROPE_INIT` is the source-level “ROPE INIT” value/flag. Read the operator as rejectMotionWhenEmergencyStopLatched(sharedData,\n\"ROPE_INIT\"). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!p4::state::prepareHostControlCommandAdmission(sharedData)`; `p4` is the source-level “p4” value/flag; `state` is the source-level “state” value/flag; `prepareHostControlCommandAdmission` is the source-level “prepareHostControlCommandAdmission” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT p4::state::prepareHostControlCommandAdmission(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `preflightReason != ROPE_INIT_REASON_NONE`; `preflightReason` is the source-level “preflightReason” value/flag; `ROPE_INIT_REASON_NONE` is the source-level “ROPE INIT REASON NONE” value/flag. Read the operator as preflightReason NOT = ROPE_INIT_REASON_NONE. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `preflightReason == ROPE_INIT_REASON_MANUAL_REQUIRED`; `preflightReason` is the source-level “preflightReason” value/flag; `ROPE_INIT_REASON_MANUAL_REQUIRED` is the source-level “ROPE INIT REASON MANUAL REQUIRED” value/flag. Read the operator as preflightReason  equals  ROPE_INIT_REASON_MANUAL_REQUIRED. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_IDLE &&\nsharedData->system_state != SYSTEM_STATE_READY &&\nsharedData->system_state != SYSTEM_STATE_RECOVERY_REQUIRED`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_IDLE` is the source-level “SYSTEM STATE IDLE” value/flag; `SYSTEM_STATE_READY` is the source-level “SYSTEM STATE READY” value/flag; `SYSTEM_STATE_RECOVERY_REQUIRED` is the source-level “SYSTEM STATE RECOVERY REQUIRED” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_IDLE  AND \nsharedData- is greater than system_state NOT = SYSTEM_STATE_READY  AND \nsharedData- is greater than system_state NOT = SYSTEM_STATE_RECOVERY_REQUIRED. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `!activeMotorsMultiTurnKnown(sharedData)`; `activeMotorsMultiTurnKnown` is the source-level “activeMotorsMultiTurnKnown” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as NOT activeMotorsMultiTurnKnown(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `ROPE_INIT`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_8f1259d328df65ca5097efc5",
+        "src_837a12e840feab0db093c679",
+        "src_6ad2ad318c7024cb9975b35f",
+        "src_ab3804c7b106da57b4d92f90",
+        "src_24942cd628f16011377aa7ef",
+        "src_666a18d790385b61870bae3f",
+        "src_37eabf71c61ad63df796423c"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_ROPE_INIT_DONE",
+      "zh": {
+        "plain": "`ROPE_INIT_DONE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`host_control_hold_status` 是源码中的“host control hold status”标记；`HOST_CONTROL_HOLD_PENDING` 是源码中的“HOST CONTROL HOLD PENDING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_ROPE_INIT_RUNNING` 是源码中的“SYSTEM STATE ROPE INIT RUNNING”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `completesCalibration`；其中`completesCalibration` 是源码中的“completesCalibration”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `resumeFeedback && commandModeJoint &&\nfeedbackTargetsPointIntoWorkspace(sharedData) &&\nactiveJointsInControlWorkspace(sharedData)`；其中`resumeFeedback` 是源码中的“resumeFeedback”标记；`commandModeJoint` 是源码中的“commandModeJoint”标记；`feedbackTargetsPointIntoWorkspace` 是源码中的“feedbackTargetsPointIntoWorkspace”标记；`sharedData` 是源码中的“sharedData”标记；`activeJointsInControlWorkspace` 是源码中的“activeJointsInControlWorkspace”标记。逻辑关系按运算符解释：&&表示并且。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `resumeFeedback`；其中`resumeFeedback` 是源码中的“resumeFeedback”标记。逻辑关系按运算符解释：按源码中的比较结果。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `ROPE_INIT_DONE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`ROPE_INIT_DONE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `host_control_hold_status` is the source-level “host control hold status” value/flag; `HOST_CONTROL_HOLD_PENDING` is the source-level “HOST CONTROL HOLD PENDING” value/flag. Read the operator as sharedAtomicLoad(&sharedData- is greater than host_control_hold_status)  equals \nHOST_CONTROL_HOLD_PENDING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_ROPE_INIT_RUNNING` is the source-level “SYSTEM STATE ROPE INIT RUNNING” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_ROPE_INIT_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `completesCalibration`; `completesCalibration` is the source-level “completesCalibration” value/flag. Read the operator as completesCalibration. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `resumeFeedback && commandModeJoint &&\nfeedbackTargetsPointIntoWorkspace(sharedData) &&\nactiveJointsInControlWorkspace(sharedData)`; `resumeFeedback` is the source-level “resumeFeedback” value/flag; `commandModeJoint` is the source-level “commandModeJoint” value/flag; `feedbackTargetsPointIntoWorkspace` is the source-level “feedbackTargetsPointIntoWorkspace” value/flag; `sharedData` is the source-level “sharedData” value/flag; `activeJointsInControlWorkspace` is the source-level “activeJointsInControlWorkspace” value/flag. Read the operator as resumeFeedback  AND  commandModeJoint  AND \nfeedbackTargetsPointIntoWorkspace(sharedData)  AND \nactiveJointsInControlWorkspace(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `resumeFeedback`; `resumeFeedback` is the source-level “resumeFeedback” value/flag. Read the operator as resumeFeedback. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `ROPE_INIT_DONE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_90014675adc4721891cc95ff",
+        "src_daeaa7068c985b0ae62611f7",
+        "src_319a45955cd613718b805a04",
+        "src_113834bed3e044c7193e5acf",
+        "src_d5046304b6ebc154e603664b",
+        "src_4da504fd880912527b01c815"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_ROPE_INIT_FAILED",
+      "zh": {
+        "plain": "`ROPE_INIT_FAILED` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`host_control_hold_status` 是源码中的“host control hold status”标记；`HOST_CONTROL_HOLD_PENDING` 是源码中的“HOST CONTROL HOLD PENDING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_ROPE_INIT_RUNNING` 是源码中的“SYSTEM STATE ROPE INIT RUNNING”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->rope_init_status != ROPE_INIT_STATUS_FAILED`；其中`sharedData` 是源码中的“sharedData”标记；`rope_init_status` 是源码中的“rope init status”标记；`ROPE_INIT_STATUS_FAILED` 是源码中的“ROPE INIT STATUS FAILED”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`feedback_recovery_pending` 是源码中的“feedback recovery pending”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedAtomicLoad(\n&sharedData->calibration_rope_init_pending) != 0`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`calibration_rope_init_pending` 是源码中的“calibration rope init pending”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `ROPE_INIT_FAILED`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`ROPE_INIT_FAILED` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `host_control_hold_status` is the source-level “host control hold status” value/flag; `HOST_CONTROL_HOLD_PENDING` is the source-level “HOST CONTROL HOLD PENDING” value/flag. Read the operator as sharedAtomicLoad(&sharedData- is greater than host_control_hold_status)  equals \nHOST_CONTROL_HOLD_PENDING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_ROPE_INIT_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_ROPE_INIT_RUNNING` is the source-level “SYSTEM STATE ROPE INIT RUNNING” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_ROPE_INIT_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->rope_init_status != ROPE_INIT_STATUS_FAILED`; `sharedData` is the source-level “sharedData” value/flag; `rope_init_status` is the source-level “rope init status” value/flag; `ROPE_INIT_STATUS_FAILED` is the source-level “ROPE INIT STATUS FAILED” value/flag. Read the operator as sharedData- is greater than rope_init_status NOT = ROPE_INIT_STATUS_FAILED. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `feedback_recovery_pending` is the source-level “feedback recovery pending” value/flag. Read the operator as sharedAtomicLoad(&sharedData- is greater than feedback_recovery_pending) NOT = 0. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedAtomicLoad(\n&sharedData->calibration_rope_init_pending) != 0`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `calibration_rope_init_pending` is the source-level “calibration rope init pending” value/flag. Read the operator as sharedAtomicLoad(\n&sharedData- is greater than calibration_rope_init_pending) NOT = 0. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `ROPE_INIT_FAILED`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d63c2b2af1dd5c53b98e1610",
+        "src_cc33d48eab5424b4e2a9e65b",
+        "src_87d015d0673c4f433a4d05f8",
+        "src_5f5c110d173fe610231ecd16",
+        "src_52825944528b2ec37810cb31",
+        "src_f9ebd5e2943bab7417ac94af"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_CALIBRATION_DONE",
+      "zh": {
+        "plain": "`CALIBRATION_DONE` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`host_control_hold_status` 是源码中的“host control hold status”标记；`HOST_CONTROL_HOLD_PENDING` 是源码中的“HOST CONTROL HOLD PENDING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_CALIBRATION_RUNNING` 是源码中的“SYSTEM STATE CALIBRATION RUNNING”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `ropeReason == ROPE_INIT_REASON_NONE &&\n!activeMotorsMultiTurnKnown(sharedData)`；其中`ropeReason` 是源码中的“ropeReason”标记；`ROPE_INIT_REASON_NONE` 是源码中的“ROPE INIT REASON NONE”标记；`activeMotorsMultiTurnKnown` 是源码中的“activeMotorsMultiTurnKnown”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：==表示等于、&&表示并且、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `ropeReason == ROPE_INIT_REASON_NONE &&\nbeginRopeInitMotion(sharedData, false, 0)`；其中`ropeReason` 是源码中的“ropeReason”标记；`ROPE_INIT_REASON_NONE` 是源码中的“ROPE INIT REASON NONE”标记；`beginRopeInitMotion` 是源码中的“beginRopeInitMotion”标记；`sharedData` 是源码中的“sharedData”标记。逻辑关系按运算符解释：==表示等于、&&表示并且、false表示假。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `CALIBRATION_DONE`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`CALIBRATION_DONE` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `host_control_hold_status` is the source-level “host control hold status” value/flag; `HOST_CONTROL_HOLD_PENDING` is the source-level “HOST CONTROL HOLD PENDING” value/flag. Read the operator as sharedAtomicLoad(&sharedData- is greater than host_control_hold_status)  equals \nHOST_CONTROL_HOLD_PENDING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_CALIBRATION_RUNNING` is the source-level “SYSTEM STATE CALIBRATION RUNNING” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_CALIBRATION_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `ropeReason == ROPE_INIT_REASON_NONE &&\n!activeMotorsMultiTurnKnown(sharedData)`; `ropeReason` is the source-level “ropeReason” value/flag; `ROPE_INIT_REASON_NONE` is the source-level “ROPE INIT REASON NONE” value/flag; `activeMotorsMultiTurnKnown` is the source-level “activeMotorsMultiTurnKnown” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as ropeReason  equals  ROPE_INIT_REASON_NONE  AND \nNOT activeMotorsMultiTurnKnown(sharedData). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `ropeReason == ROPE_INIT_REASON_NONE &&\nbeginRopeInitMotion(sharedData, false, 0)`; `ropeReason` is the source-level “ropeReason” value/flag; `ROPE_INIT_REASON_NONE` is the source-level “ROPE INIT REASON NONE” value/flag; `beginRopeInitMotion` is the source-level “beginRopeInitMotion” value/flag; `sharedData` is the source-level “sharedData” value/flag. Read the operator as ropeReason  equals  ROPE_INIT_REASON_NONE  AND \nbeginRopeInitMotion(sharedData, false, 0). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `CALIBRATION_DONE`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_4e510914848ae3c4a86595dc",
+        "src_5143a83f254653e13c26ee8f",
+        "src_7e3fbaaf1522a90725284265",
+        "src_701173fe9f0fdb43247d273c",
+        "src_6d5108d87e0b3e506b5c203f"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_REEVALUATE_READY",
+      "zh": {
+        "plain": "`REEVALUATE_READY` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedData->control_enabled == 0 &&\nsharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE &&\n(sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||\nsharedData->system_state == SYSTEM_STATE_IDLE ||\nsharedData->system_state == SYSTEM_STATE_READY ||\nsharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED)`；其中`sharedData` 是源码中的“sharedData”标记；`control_enabled` 是源码中的“control enabled”标记；`servo_target_owner` 是源码中的“servo target owner”标记；`SERVO_TARGET_OWNER_NONE` 是源码中的“SERVO TARGET OWNER NONE”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_UNCONTROLLABLE` 是源码中的“SYSTEM STATE UNCONTROLLABLE”标记；`SYSTEM_STATE_IDLE` 是源码中的“SYSTEM STATE IDLE”标记；`SYSTEM_STATE_READY` 是源码中的“SYSTEM STATE READY”标记。逻辑关系按运算符解释：==表示等于、>表示大于、&&表示并且、||表示或者。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `REEVALUATE_READY`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`REEVALUATE_READY` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedData->control_enabled == 0 &&\nsharedData->servo_target_owner == SERVO_TARGET_OWNER_NONE &&\n(sharedData->system_state == SYSTEM_STATE_UNCONTROLLABLE ||\nsharedData->system_state == SYSTEM_STATE_IDLE ||\nsharedData->system_state == SYSTEM_STATE_READY ||\nsharedData->system_state == SYSTEM_STATE_RECOVERY_REQUIRED)`; `sharedData` is the source-level “sharedData” value/flag; `control_enabled` is the source-level “control enabled” value/flag; `servo_target_owner` is the source-level “servo target owner” value/flag; `SERVO_TARGET_OWNER_NONE` is the source-level “SERVO TARGET OWNER NONE” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_UNCONTROLLABLE` is the source-level “SYSTEM STATE UNCONTROLLABLE” value/flag; `SYSTEM_STATE_IDLE` is the source-level “SYSTEM STATE IDLE” value/flag; `SYSTEM_STATE_READY` is the source-level “SYSTEM STATE READY” value/flag. Read the operator as sharedData- is greater than control_enabled  equals  0  AND \nsharedData- is greater than servo_target_owner  equals  SERVO_TARGET_OWNER_NONE  AND \n(sharedData- is greater than system_state  equals  SYSTEM_STATE_UNCONTROLLABLE  OR \nsharedData- is greater than system_state  equals  SYSTEM_STATE_IDLE  OR \nsharedData- is greater than system_state  equals  SYSTEM_STATE_READY  OR \nsharedData- is greater than system_state  equals  SYSTEM_STATE_RECOVERY_REQUIRED). When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `REEVALUATE_READY`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_3001c48ed5e5541736392c2c",
+        "src_f76109eea069553ec072ca7d"
+      ]
+    },
+    {
+      "id": "graph:p4_state:node:SYSTEM_EVENT_CALIBRATION_FAILED",
+      "zh": {
+        "plain": "`CALIBRATION_FAILED` 是 P4 状态事件/转换节点。事件要经过相应 state、token、急停或主机准入检查；只有正式状态写入发生后，系统状态才改变。",
+        "condition": "源码条件 `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`；其中`sharedAtomicLoad` 是源码中的“sharedAtomicLoad”标记；`sharedData` 是源码中的“sharedData”标记；`host_control_hold_status` 是源码中的“host control hold status”标记；`HOST_CONTROL_HOLD_PENDING` 是源码中的“HOST CONTROL HOLD PENDING”标记。逻辑关系按运算符解释：==表示等于、>表示大于。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。；源码条件 `sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING`；其中`sharedData` 是源码中的“sharedData”标记；`system_state` 是源码中的“system state”标记；`SYSTEM_STATE_CALIBRATION_RUNNING` 是源码中的“SYSTEM STATE CALIBRATION RUNNING”标记。逻辑关系按运算符解释：!=表示不等于、>表示大于、!表示取反。条件成立时沿该分支继续；不成立时走对应拒绝、忽略或其他分支。",
+        "effect": "该事件把请求交给 P4 状态分派逻辑；若前置条件通过，dispatcher 才可能更新正式状态或设置相关运行标志。",
+        "failure": "事件若过期、令牌不匹配、状态不在允许集合、急停有效或主机控制权无效，分支会拒绝/忽略事件；需看具体 guard 的结果，不能因事件节点存在就假定转换成功。",
+        "recovery": "查看对应事件处理分支的拒绝条件和状态写入；先解除急停、租约、未知多圈或运动任务等明确阻塞项，再发送允许的后续事件。",
+        "unknown": "静态图描述状态机代码路径，不含现场事件顺序和设备观测；间接状态写入及运行时是否达到该枚举仍需按引用追踪。",
+        "difference": "该节点对应正式状态/事件 `CALIBRATION_FAILED`；它与其他状态的区别是其允许事件集合和消费者逻辑。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "`CALIBRATION_FAILED` is a P4 state event/transition node. It must pass the relevant state, token, E-stop or host-admission checks; the formal state changes only after a state write.",
+        "condition": "Source predicate `sharedAtomicLoad(&sharedData->host_control_hold_status) ==\nHOST_CONTROL_HOLD_PENDING`; `sharedAtomicLoad` is the source-level “sharedAtomicLoad” value/flag; `sharedData` is the source-level “sharedData” value/flag; `host_control_hold_status` is the source-level “host control hold status” value/flag; `HOST_CONTROL_HOLD_PENDING` is the source-level “HOST CONTROL HOLD PENDING” value/flag. Read the operator as sharedAtomicLoad(&sharedData- is greater than host_control_hold_status)  equals \nHOST_CONTROL_HOLD_PENDING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.；Source predicate `sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING`; `sharedData` is the source-level “sharedData” value/flag; `system_state` is the source-level “system state” value/flag; `SYSTEM_STATE_CALIBRATION_RUNNING` is the source-level “SYSTEM STATE CALIBRATION RUNNING” value/flag. Read the operator as sharedData- is greater than system_state NOT = SYSTEM_STATE_CALIBRATION_RUNNING. When true, execution follows this branch; when false, it follows the paired reject, ignore, or alternate branch.",
+        "effect": "This event enters P4 dispatch logic; after admission, the dispatcher may update the formal state or related runtime flags.",
+        "failure": "A stale event, mismatched token, disallowed current state, active E-stop or invalid host lease can reject/ignore the event. Read the specific guard; the event node alone does not mean the transition succeeded.",
+        "recovery": "Inspect the event handler's rejection conditions and state write. Clear explicit blockers such as E-stop, lease, unknown multiturn state or an active motion task before issuing an allowed event.",
+        "unknown": "The static graph describes code paths, not field event order or device measurements; indirect state writes and runtime arrival at this enum still need source tracing.",
+        "difference": "This node represents formal state/event `CALIBRATION_FAILED`; its distinction is the set of admitted events and its consumers.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_b0347b15d852c370d59ea4b8",
+        "src_dece4d8e99348e059026de21",
+        "src_1f7645344d10ee9cdbe94b4a"
+      ]
+    }
+  ]
+}

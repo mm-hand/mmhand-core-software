@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "ui_ui_joint_plot_view",
+  "bundle_hash": "ec415b7539f9104555c76f80ade6e5ef02430e95d1a92c270d9ad585cc0cec7b",
+  "overview": {
+    "zh": "本图聚焦关节曲线视图的清除操作及其处理器。清除图表数据属于可视化状态变化，不等价于清除设备状态或重置控制器。",
+    "en": "This graph focuses on the joint-plot view's clear action and handler. Clearing chart data changes visualization state; it does not clear device state or reset the controller.",
+    "evidence_ids": [
+      "src_e110e9825cd564f94e9df07c"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:ui_ui_joint_plot_view:node:file",
+      "zh": {
+        "plain": "文件节点 `ui_joint_plot_view.py` 汇集此视图的控件创建、信号绑定和回调实现；从这里可逐个跳到按钮，再顺着 handler 检查状态写入与错误反馈。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "该节点提供页面/控件定位；具体状态变化以对应回调中的赋值、信号发射和命令调用为准。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `ui_joint_plot_view.py`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "File node `ui_joint_plot_view.py` gathers this view's widget creation, signal bindings and callbacks. Use it to follow each control into the handler and inspect state writes and error feedback.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "This node locates a page/control; actual state changes are determined by assignments, emitted signals and command calls in its callback.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `ui_joint_plot_view.py`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_e110e9825cd564f94e9df07c"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_joint_plot_view:node:control_1",
+      "zh": {
+        "plain": "控件/界面节点「clear」是 ui_ui_joint_plot_view 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`clear.clicked → self.clear)`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `clear`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “clear” is a concrete entry in ui_ui_joint_plot_view. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `clear.clicked → self.clear)`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `clear`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_d4024646ba6075a68a766079"
+      ]
+    }
+  ]
+}

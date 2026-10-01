@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "readme_commands",
+  "bundle_hash": "3db173cf74bfa2f906287585b76926b08abad2489faa677265d75532e0e4535a",
+  "overview": {
+    "zh": "",
+    "en": "",
+    "evidence_ids": []
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "command:install",
+      "zh": {
+        "plain": "从 mmhand 仓库根目录安装上位机 Python 依赖。`-r` 让 pip 逐行读取 `desktop/requirements.txt`；其中列出串口、数值计算、绘图和 Qt 界面等运行库。",
+        "condition": "在仓库根目录执行，并使用能运行项目 Python 的环境。安装失败通常意味着网络、Python 环境或某个包版本约束未满足；静态源码不能证明特定电脑上的安装结果。",
+        "effect": "pip 读取依赖清单并安装/升级满足约束的包；这一步不启动上位机、不连接 P4，也不写入固件。",
+        "failure": "命令返回非零时，后续 `python -m desktop ...` 可能因模块缺失而无法启动。逐项检查 pip 输出和 Python 环境；具体网络或系统依赖问题未核实。",
+        "recovery": "激活正确的 Python 环境后重试；若失败来自环境或网络，先修复原因，再重跑安装。",
+        "unknown": "源码仅列出包名和最低版本，未证明所有操作系统/硬件的安装兼容性。",
+        "difference": "这是运行前的依赖准备；它不同于启动 `ui` 或 `cli`，不会建立设备连接。",
+        "change": "本次比较基线未标记此命令所依赖内容发生变化。"
+      },
+      "en": {
+        "plain": "Install the desktop application dependencies from the MMHand repository root. `-r` tells pip to read `desktop/requirements.txt`, which lists serial, numerical, plotting, and Qt UI libraries.",
+        "condition": "Run it at the repository root with the Python environment intended for the application. A failure usually means a network, environment, or package-version constraint was not met; source code cannot prove installation on a particular machine.",
+        "effect": "pip reads the requirements file and installs packages that satisfy its constraints. This does not launch the UI, connect to P4, or write firmware.",
+        "failure": "A non-zero exit can leave later `python -m desktop ...` commands unable to import a required module. Check pip output and the selected Python environment; machine-specific network or OS issues are unverified.",
+        "recovery": "Activate the intended Python environment, fix the reported cause, and rerun the installation.",
+        "unknown": "The source lists package names and minimum versions, but does not prove compatibility on every OS or hardware setup.",
+        "difference": "This prepares runtime dependencies; unlike `ui` or `cli`, it does not establish a device connection.",
+        "change": "The comparison baseline does not mark this command’s dependencies as changed."
+      },
+      "evidence_ids": [
+        "src_220c36072a947b876b47dcf8"
+      ]
+    },
+    {
+      "id": "command:monitor",
+      "zh": {
+        "plain": "从仓库根目录启动 Qt 上位机的 monitor 模式，并明确关闭 ROS2 输入桥。`--mode monitor` 选择实时监控/控制 UI；`--no-ros2` 覆盖入口默认开启 ROS2 的设置。",
+        "condition": "需要已安装 `desktop/requirements.txt` 中依赖。可用 `--port` 指定 P4 串口、`--tactile-port` 指定可选 S3 触觉串口；本命令未显式传入端口，实际自动选择或连接结果未核实。",
+        "effect": "`entry.py` 将参数交给 `run_ui(mode=\"monitor\", ros2_enabled=False, ...)`。这启动 UI 路径而非回放文件路径；不会因 `--no-ros2` 自动建立或验证硬件连接。",
+        "failure": "端口打不开、设备未连接或 UI 依赖缺失时的具体提示由运行环境决定；源码静态分析不能证明该机器上的连接成功。",
+        "recovery": "先确认 P4/S3 端口和依赖，再按需加 `--port COM...` 或 `--tactile-port COM...` 重启。若要使用 ROS 输入，去掉 `--no-ros2` 并配置匹配的输入参数。",
+        "unknown": "未传串口参数时设备选择规则以及实机状态未核实。",
+        "difference": "与 replay 模式相比，它进入实时设备工作流；与 ROS2 命令相比，它明确禁用 ROS2 bridge。",
+        "change": "本次比较基线未标记入口参数路径变化。"
+      },
+      "en": {
+        "plain": "Launch the Qt desktop application in monitor mode and explicitly disable the ROS2 input bridge. `--mode monitor` selects the live monitoring/control UI; `--no-ros2` overrides the entry point’s default of enabling ROS2.",
+        "condition": "Install the requirements first. Use `--port` for the P4 serial port and optional `--tactile-port` for the S3 tactile port. This command supplies neither, so actual port selection or connection is unverified.",
+        "effect": "`entry.py` passes `mode=\"monitor\"` and `ros2_enabled=False` to `run_ui`. This selects the live UI path rather than replay; it does not itself prove a hardware connection.",
+        "failure": "Port, device, or UI dependency failures depend on the runtime environment; static source cannot prove this machine connects successfully.",
+        "recovery": "Check the ports and dependencies, then add `--port COM...` or `--tactile-port COM...` as needed. For ROS input, remove `--no-ros2` and configure the matching input options.",
+        "unknown": "Port-selection behavior when no serial argument is supplied and real-device status are unverified.",
+        "difference": "Unlike replay mode, this enters the live-device workflow; unlike the ROS2 example, it explicitly disables the ROS2 bridge.",
+        "change": "The comparison baseline does not mark this entry-point argument path as changed."
+      },
+      "evidence_ids": [
+        "src_caa11dc64fde14cbcd861e0c",
+        "src_28b9c1af36b714377dcdaf3b",
+        "src_4895622cb48968e7694e0ee5"
+      ]
+    },
+    {
+      "id": "command:replay",
+      "zh": {
+        "plain": "启动 Qt 上位机的 replay 模式。这里的 `--no-ros2` 避免把实时 ROS2 输入桥带入回放流程；回放控制器维护帧索引、时间、目标值及关节掩码等状态。",
+        "condition": "在仓库根目录且依赖已安装时运行。回放数据文件的选择方式不由此命令行参数表达；请在 UI/回放配置中提供有效记录，具体文件位置未由此证据确定。",
+        "effect": "`entry.py` 将 `mode=\"replay\"` 交给 `run_ui`；与 monitor 不同，后端采用 replay 状态/帧流程，而不是把命令解释为实时串口监控。",
+        "failure": "无可读回放记录、数据格式错误或 UI 初始化失败时的表现取决于对应控制器和环境；此任务包没有证明某条具体错误消息。",
+        "recovery": "先在 UI 选择有效记录并确认状态；若要实时设备监控，改用 `--mode monitor`。",
+        "unknown": "支持的记录文件格式、当前默认文件及硬件回放安全性未核实。",
+        "difference": "与 monitor 的区别是回放时间轴和录制目标驱动显示/控制；此命令同样显式关闭 ROS2 bridge。",
+        "change": "本次比较基线未标记入口参数路径变化。"
+      },
+      "en": {
+        "plain": "Launch the Qt desktop application in replay mode. `--no-ros2` keeps the live ROS2 input bridge out of the replay workflow; the replay controller tracks frame index, time, targets, and joint masks.",
+        "condition": "Run from the repository root after installing dependencies. This command does not specify a replay file; provide a valid recording through the UI or replay configuration. The exact file location is not established by this evidence.",
+        "effect": "`entry.py` passes `mode=\"replay\"` to `run_ui`. The backend follows replay frame/state handling rather than treating the command as live serial monitoring.",
+        "failure": "The exact response to a missing/unreadable recording, malformed data, or UI initialization failure depends on the controller and runtime; this packet does not establish a specific message.",
+        "recovery": "Select a valid recording and check replay status. For live device monitoring, use `--mode monitor` instead.",
+        "unknown": "Recording formats, the default recording, and hardware replay safety are unverified.",
+        "difference": "Replay is driven by a recording timeline and its targets; monitor is the live-device workflow. This command also explicitly disables the ROS2 bridge.",
+        "change": "The comparison baseline does not mark this entry-point argument path as changed."
+      },
+      "evidence_ids": [
+        "src_caa11dc64fde14cbcd861e0c",
+        "src_28b9c1af36b714377dcdaf3b",
+        "src_044a6c88e35fb4066292003d"
+      ]
+    },
+    {
+      "id": "command:cli",
+      "zh": {
+        "plain": "运行终端版 monitor/control CLI 的帮助入口。`cli` 是 `desktop` 子命令；`--help` 由 argparse 显示该子命令可用参数，正常使用时可去掉 `--help` 并按需传串口、ROS2 等选项。",
+        "condition": "从仓库根目录执行。帮助调用不要求先连接设备；实际 CLI 运行则需要对应 Python 依赖及所选设备/输入环境。",
+        "effect": "入口解析到 `command == \"cli\"` 后调用 `run_cli_monitor`；不是 Qt UI。`--no-plot` 是 CLI 的独有可选项。",
+        "failure": "若误把参数放到子命令之前或参数名不合法，argparse 会显示错误/帮助；运行期设备错误由 CLI/backend 处理。",
+        "recovery": "先用 `python -m desktop cli --help` 查看参数；再运行 `python -m desktop cli`，使用 `--port` 等选项指定设备。",
+        "unknown": "帮助文本不证明特定设备连接、控制权限或动作执行成功。",
+        "difference": "与 `ui` 相比这是终端界面，可选关闭绘图；两者共用串口和 ROS2 参数解析。",
+        "change": "本次比较基线未标记 CLI 分发路径变化。"
+      },
+      "en": {
+        "plain": "Show the terminal monitor/control CLI help. `cli` is a `desktop` subcommand; argparse prints its accepted options. For an actual run, omit `--help` and add serial or ROS2 options as needed.",
+        "condition": "Run from the repository root. Showing help does not require a device connection; running the CLI needs the Python dependencies and the selected device/input environment.",
+        "effect": "When `command == \"cli\"`, the entry point calls `run_cli_monitor`; it does not launch the Qt UI. `--no-plot` is an optional CLI-specific flag.",
+        "failure": "argparse reports misplaced or invalid options. Runtime device errors are handled by the CLI/backend.",
+        "recovery": "Inspect options with `python -m desktop cli --help`, then run `python -m desktop cli` and specify the device with options such as `--port`.",
+        "unknown": "Help output does not prove a device connection, control authorization, or successful motion.",
+        "difference": "Compared with `ui`, this is a terminal interface with an optional plotting window; both share serial and ROS2 argument parsing.",
+        "change": "The comparison baseline does not mark the CLI dispatch path as changed."
+      },
+      "evidence_ids": [
+        "src_5d03e8817d85ff37f9464883",
+        "src_d4adc6efd3a7a7711b9adc6f"
+      ]
+    },
+    {
+      "id": "command:teleop",
+      "zh": {
+        "plain": "在 `mmhand_teleop` 仓库运行手部跟踪程序并开启 ROS 发布路径。`--ros` 是布尔开关；源码把发布器类型设为 `Float32MultiArray`，默认机器人目标话题为 `/raw_ik_target`。",
+        "condition": "先进入遥操仓库并具备其 ROS2 Python 依赖、ROS 环境及输入设备。若未加 `--ros`，这个参数路径不会要求 ROS 发布。",
+        "effect": "跟踪程序启动 ROS 发布器，把该仓库生成的目标数组发布到 `ROBOT_TOPIC`。上位机必须同时订阅同一 topic，并选择兼容的 `raw_ik` 输入模式。",
+        "failure": "节点启动、摄像头/输入设备可用性、数组长度和实时发布频率不能仅由这三处源码引用保证；启动失败或消息无效时的实机表现未核实。",
+        "recovery": "先检查 ROS 环境与 topic，再用 `ros2 topic echo --once /raw_ik_target` 确认是否出现消息；无消息时检查节点与 ROS domain 配置。",
+        "unknown": "此静态证据没有证明摄像头、IK 算法精度、实际消息值或硬件运动结果。",
+        "difference": "与上位机的 `--ros2-input raw_ik` 配套；它负责生产消息，上位机命令负责订阅并在用户授权后接收控制输入。",
+        "change": "本次比较基线未标记该 teleop 参数/发布定义变化。"
+      },
+      "en": {
+        "plain": "Run the hand-tracking program in `mmhand_teleop` with its ROS publishing path enabled. `--ros` is a boolean switch; the cited code creates a `Float32MultiArray` publisher and configures `/raw_ik_target` as the robot target topic.",
+        "condition": "Run inside the teleop repository with its ROS 2 Python dependencies, ROS environment, and input device available. Without `--ros`, this argument path does not request ROS publishing.",
+        "effect": "The tracking program publishes its target array to `ROBOT_TOPIC`. The desktop must subscribe to the same topic and select the compatible `raw_ik` input mode.",
+        "failure": "These source lines do not guarantee node startup, camera/input availability, array contents, or publish rate; runtime failure and physical behavior are unverified.",
+        "recovery": "Check the ROS environment and topic, then use `ros2 topic echo --once /raw_ik_target` to see whether a message arrives. If none appears, inspect node startup and ROS domain configuration.",
+        "unknown": "The evidence does not prove camera operation, IK accuracy, actual values, or hardware motion.",
+        "difference": "This is paired with desktop `--ros2-input raw_ik`: teleop produces messages, while the desktop subscribes and accepts control input only after authorization.",
+        "change": "The comparison baseline does not mark the teleop flag or publisher definition as changed."
+      },
+      "evidence_ids": [
+        "src_26b40ffb9c7496ece2180cf2",
+        "src_8f056df225572dcfa3473b0f",
+        "src_99c8de44bf34b0ac4977ecc4"
+      ]
+    },
+    {
+      "id": "command:ros_ui",
+      "zh": {
+        "plain": "启动上位机实时 UI，订阅原始 IK 目标话题 `/raw_ik_target`。`--ros2` 开启桥接；`--ros2-input raw_ik` 选择原始 IK 路径；`--ros2-raw-ik-topic` 指定订阅 topic。",
+        "condition": "先运行遥操发布节点并保证 ROS2 节点互相可发现。上位机入口默认也启用 ROS2，但命令显式写出该意图；另需连接 P4。原始 IK 输出需由上位机授权门控，不能把“收到 topic”误认为“已驱动电机”。",
+        "effect": "上位机创建 `Float32MultiArray` 订阅并把消息交给 raw-IK handler。授权函数在串口未连通或活动关节范围为空时拒绝 armed；通过检查后记录 scope 并等待有效 P4 状态。",
+        "failure": "topic/类型不匹配会导致没有可用输入；P4 未连接或 scope 为空时授权失败。数据校验、丢弃策略和实机执行效果需看各自处理函数/日志，不能仅凭启动命令断言成功。",
+        "recovery": "确认遥操发布端话题与类型一致，连接 P4，在 UI 执行明确的 ROS2 输入授权；被拒绝时按返回原因检查串口状态和活动关节范围。",
+        "unknown": "命令未显式指定 `--ros2-raw-ik-space`，因此使用入口默认 `urdf_deg`；不同来源数据是否符合该坐标定义未核实。",
+        "difference": "与 `--no-ros2` monitor 命令相比，它添加 ROS订阅和 raw-IK 路径；与 `joint_target` 输入相比，选择的是外部原始 IK 角度路径。",
+        "change": "本次比较基线未标记这些入口和授权路径变化。"
+      },
+      "en": {
+        "plain": "Launch the live desktop UI subscribed to raw IK targets on `/raw_ik_target`. `--ros2` enables the bridge, `--ros2-input raw_ik` selects the raw-IK path, and `--ros2-raw-ik-topic` sets the subscription topic.",
+        "condition": "Start the teleop publisher and ensure the ROS 2 nodes can discover each other. The desktop defaults to ROS 2 enabled, but the command makes that intent explicit; P4 must also be connected. Raw IK is gated by explicit authorization: receiving a topic does not mean motors are being driven.",
+        "effect": "The desktop creates a `Float32MultiArray` subscription and passes messages to the raw-IK handler. The authorization method refuses arming if serial is disconnected or the active joint scope is empty; otherwise it records the scope and waits for a valid P4 state.",
+        "failure": "A topic/type mismatch yields no usable input. Missing P4 connection or an empty scope blocks authorization. Validation/drop behavior and physical execution require their specific handlers/logs; the launch command alone cannot prove success.",
+        "recovery": "Match publisher topic and type, connect P4, and explicitly authorize ROS2 input in the UI. If refused, use the returned reason to check serial state and active joint scope.",
+        "unknown": "No `--ros2-raw-ik-space` is supplied, so the entry-point default is `urdf_deg`; whether the publisher’s values use that coordinate convention is unverified.",
+        "difference": "Compared with monitor using `--no-ros2`, this enables ROS subscription and raw-IK routing. Compared with `joint_target`, it selects external raw IK angles.",
+        "change": "The comparison baseline does not mark these entry and authorization paths as changed."
+      },
+      "evidence_ids": [
+        "src_6926b515c242b5b233439efb",
+        "src_3cb93a10f7a84c4e6834263c",
+        "src_81811f8648421deb20c4b0de"
+      ]
+    },
+    {
+      "id": "command:ros_echo",
+      "zh": {
+        "plain": "在遥操仓库的 ROS 环境中读取 `/raw_ik_target` 上一条消息后退出。`--once` 适合快速确认订阅端是否看见发布数据；它只是观察命令，不会向电机发命令。",
+        "condition": "先启动 `python track.py --ros`，并让 CLI 与发布节点使用可互相发现的 ROS domain。topic 名必须与 `ROBOT_TOPIC` 一致。",
+        "effect": "ROS2 CLI 创建一次性订阅并打印收到的 `Float32MultiArray`。源码指出发布器使用 `/raw_ik_target`，类型为数组。",
+        "failure": "命令等待/无输出通常说明没有匹配发布者、节点发现不通或尚无消息；确切超时行为由 ROS CLI 版本决定，未核实。",
+        "recovery": "检查发布进程、ROS domain、topic 名和消息类型；再运行一次 echo。",
+        "unknown": "静态证据不确定消息频率和数组每一索引的关节含义。",
+        "difference": "用于诊断 publisher 到 topic 的链路；不验证上位机授权、P4 状态、关节映射或机械臂运动。",
+        "change": "本次比较基线未标记遥操 topic 定义变化。"
+      },
+      "en": {
+        "plain": "In the teleop ROS environment, print the next `/raw_ik_target` message and exit. `--once` is a quick check that a subscriber can see published data; it does not command a motor.",
+        "condition": "Start `python track.py --ros` first and ensure the CLI and publisher use a mutually discoverable ROS domain. The topic must match `ROBOT_TOPIC`.",
+        "effect": "The ROS 2 CLI creates a one-shot subscription and prints the received `Float32MultiArray`. The cited publisher uses `/raw_ik_target` and an array message type.",
+        "failure": "Waiting without output usually means no matching publisher, broken discovery, or no message yet. Exact timeout behavior depends on the ROS CLI version and is unverified.",
+        "recovery": "Check the publisher process, ROS domain, topic name, and message type, then run echo again.",
+        "unknown": "The evidence does not establish publish frequency or the joint meaning of each array index.",
+        "difference": "This diagnoses publisher-to-topic delivery; it does not validate desktop authorization, P4 state, joint mapping, or physical motion.",
+        "change": "The comparison baseline does not mark the teleop topic definition as changed."
+      },
+      "evidence_ids": [
+        "src_99c8de44bf34b0ac4977ecc4",
+        "src_8f056df225572dcfa3473b0f"
+      ]
+    },
+    {
+      "id": "command:urdf",
+      "zh": {
+        "plain": "从结构描述仓库同步 URDF 到当前项目，并用开关控制同步副作用。`-StructureRepo <path>` 指定结构仓库；`-NoPull` 跳过 git pull；`-SkipP4Build` 跳过 P4 固件构建。",
+        "condition": "在 mmhand 根目录运行，并把 `<path>` 替换为含 `.git` 的结构仓库路径。脚本期望其中存在 `mmhand_description` 和 `desktop_urdf_adapter`。去掉 `-NoPull` 会尝试快进拉取和 LFS 拉取；因此执行前确认本地分支状态。",
+        "effect": "脚本同步结构源与 adapter，随后调用机器人模型生成器 `--check` 校验生成物；默认还会执行架构检查及 P4 构建，`-SkipP4Build` 只跳过构建阶段。",
+        "failure": "仓库目录缺失、同步命令失败、模型校验或架构检查失败都会中止流程。跳过构建不等于验证了固件编译。",
+        "recovery": "核对结构仓库路径与 Git/LFS 状态，再重跑；若跳过构建，仅把结果当作同步/静态检查，之后仍需在适当环境编译 P4。",
+        "unknown": "脚本的完整文件复制清单和此次本机同步效果未核实。",
+        "difference": "与直接运行 `generate_robot_model.py` 相比，此脚本处理上游 URDF 仓库同步及后续集成检查；`-NoPull` 控制是否更新上游，`-SkipP4Build` 控制是否编译。",
+        "change": "本次比较基线未标记脚本参数变化。"
+      },
+      "en": {
+        "plain": "Synchronize URDF assets from the structure repository into this project, with switches for side effects. `-StructureRepo <path>` selects the repository; `-NoPull` skips `git pull`; `-SkipP4Build` skips the P4 firmware build.",
+        "condition": "Run from the MMHand root and replace `<path>` with a structure repository containing `.git`, `mmhand_description`, and `desktop_urdf_adapter`. Without `-NoPull`, the script attempts a fast-forward pull and LFS pull, so check the repository state first.",
+        "effect": "The script syncs structure and adapter assets, then runs the robot-model generator in `--check` mode. By default it also runs architecture checks and a P4 build; `-SkipP4Build` skips only the build stage.",
+        "failure": "A missing repository, failed synchronization, model check, or architecture check stops the workflow. Skipping the build does not verify firmware compilation.",
+        "recovery": "Check the repository path and Git/LFS state, then rerun. If the build is skipped, treat the result as synchronization/static checking only and compile P4 later in an appropriate environment.",
+        "unknown": "The full copy manifest and this machine’s synchronization result are unverified.",
+        "difference": "Unlike calling `generate_robot_model.py` directly, this script coordinates upstream URDF synchronization and integration checks. `-NoPull` controls upstream update; `-SkipP4Build` controls compilation.",
+        "change": "The comparison baseline does not mark this script’s arguments as changed."
+      },
+      "evidence_ids": [
+        "src_f09b8ad458fef8dd308105ea"
+      ]
+    },
+    {
+      "id": "command:robot_generate",
+      "zh": {
+        "plain": "从机器人模型源文件重新生成项目使用的模型文件。它是生成动作：如果生成器计算出的内容与当前文件不同，会更新输出文件。",
+        "condition": "从仓库根目录运行，并确保生成器所需输入文件存在。具体哪些文件会变更应检查 `tools/generate_robot_model.py` 中的输出清单及 Git diff。",
+        "effect": "`main()` 不带 `--check` 时执行生成逻辑，写入机器人模型生成物；不等同于从上游下载 URDF，也不构建固件。",
+        "failure": "缺少输入、解析失败或输出不可写会返回错误；源代码片段未列出具体机器相关依赖。",
+        "recovery": "先修复输入/格式问题，重跑生成，再审核 Git diff，确认生成输出可由预期源数据解释。",
+        "unknown": "命令本身不证明生成模型在实机或仿真中的正确性。",
+        "difference": "与 `--check` 相比会写文件；与 URDF 同步脚本相比只负责本仓库模型生成，不负责拉取结构仓库或构建 P4。",
+        "change": "本次比较基线未标记生成器入口变化。"
+      },
+      "en": {
+        "plain": "Regenerate the model files used by the project from the robot-model source inputs. This is a write operation: changed generated outputs are updated.",
+        "condition": "Run from the repository root with the generator’s input files present. Inspect the output manifest in `tools/generate_robot_model.py` and review Git diff to see exactly what changed.",
+        "effect": "Without `--check`, `main()` runs generation and writes robot-model artifacts. It does not download upstream URDF assets or build firmware.",
+        "failure": "Missing inputs, parse errors, or unwritable outputs return an error; the cited source does not establish machine-specific prerequisites.",
+        "recovery": "Fix input/format issues, rerun generation, then review the Git diff to ensure outputs match the intended source data.",
+        "unknown": "This command does not prove model correctness in simulation or on hardware.",
+        "difference": "Unlike `--check`, this writes files. Unlike the URDF synchronization script, it only generates models in this repository; it does not pull the structure repository or build P4.",
+        "change": "The comparison baseline does not mark the generator entry point as changed."
+      },
+      "evidence_ids": [
+        "src_a5995cab7fa9f21cf1af8070",
+        "src_6b9ad0f2f4374e9dd2073464"
+      ]
+    },
+    {
+      "id": "command:robot_check",
+      "zh": {
+        "plain": "只检查机器人模型生成物是否过期，不执行更新。`--check` 让生成器比较当前文件与按源数据计算出的期望内容，并以退出状态供开发者/CI 判断。",
+        "condition": "与生成命令相同的仓库根目录和输入文件条件。适合提交前检查；若检查失败，先确认是否因为源模型更新后忘记生成。",
+        "effect": "脚本计算期望输出并报告是否陈旧；按参数帮助说明，它只检查，不写生成文件。",
+        "failure": "检查失败表示至少有生成物与预期不一致，不代表源文件一定错误；也可能只是尚未运行普通生成命令。",
+        "recovery": "先运行 `python tools/generate_robot_model.py` 更新，再查看 diff 并重跑 `--check`。",
+        "unknown": "退出码细节之外的本机运行结果未核实。",
+        "difference": "与普通生成命令的核心区别是只读校验，不修改文件；它不做固件构建。",
+        "change": "本次比较基线未标记检查逻辑变化。"
+      },
+      "en": {
+        "plain": "Check whether generated robot-model files are stale without updating them. `--check` compares current files with expected content derived from source inputs and returns a status for developers or CI.",
+        "condition": "Use the same repository-root and input-file prerequisites as generation. It is useful before commit; a failure can indicate that model inputs changed but generation was not rerun.",
+        "effect": "The script computes expected outputs and reports whether files are stale. Its argument help states that this mode checks only and does not write artifacts.",
+        "failure": "A failed check means at least one generated artifact differs from expectation; the source may be valid and simply need regeneration.",
+        "recovery": "Run `python tools/generate_robot_model.py`, inspect the diff, then rerun `--check`.",
+        "unknown": "The result on this machine is unverified.",
+        "difference": "Unlike the normal generator, this is a read-only consistency check; it does not build firmware.",
+        "change": "The comparison baseline does not mark the check logic as changed."
+      },
+      "evidence_ids": [
+        "src_a5995cab7fa9f21cf1af8070",
+        "src_6b9ad0f2f4374e9dd2073464"
+      ]
+    },
+    {
+      "id": "command:protocol_generate",
+      "zh": {
+        "plain": "从上位机通信协议定义重新生成协议相关代码或清单。普通模式是写入模式，适用于协议定义变更后更新衍生文件。",
+        "condition": "在仓库根目录执行。运行后审阅生成文件的 Git diff，确认命令 ID、字段布局和对应代码变化都来自协议定义。",
+        "effect": "`main()` 不带 `--check` 执行生成逻辑；具体输出由脚本中的生成目标确定。此命令不自动证明 P4 与桌面端版本已经同时部署。",
+        "failure": "协议定义错误、生成器校验失败或写文件失败会返回错误；不能仅凭成功退出推断固件和上位机互通。",
+        "recovery": "修正定义或生成错误后重跑，并运行 `--check`；变更通信帧后还需审查两端解析/编码路径。",
+        "unknown": "实际设备兼容性和双方部署版本未核实。",
+        "difference": "与 `--check` 相比普通模式会更新生成物；与安全目录生成器相比它处理通信协议产物。",
+        "change": "本次比较基线未标记此入口变化。"
+      },
+      "en": {
+        "plain": "Regenerate protocol-related code or manifests from the upper-computer communication protocol definitions. Normal mode writes derived files after a protocol-definition change.",
+        "condition": "Run from the repository root. Review generated-file diffs and confirm command IDs, field layouts, and code changes follow the protocol definition.",
+        "effect": "Without `--check`, `main()` executes generation; exact outputs are defined by the generator targets. The command does not prove that P4 and desktop versions are deployed together.",
+        "failure": "Invalid protocol definitions, generator validation failures, or write errors return failure. A successful exit alone does not prove firmware/desktop interoperability.",
+        "recovery": "Fix the definition or generation error, rerun, and use `--check`; after frame changes, review both encoder and decoder paths.",
+        "unknown": "Compatibility on hardware and deployed versions are unverified.",
+        "difference": "Unlike `--check`, normal mode updates generated files. Unlike the safety catalog generator, it handles communication-protocol artifacts.",
+        "change": "The comparison baseline does not mark this entry point as changed."
+      },
+      "evidence_ids": [
+        "src_74bc22044e8ee710a98006c3",
+        "src_b8457e6142a7c58f3e64fcec"
+      ]
+    },
+    {
+      "id": "command:protocol_check",
+      "zh": {
+        "plain": "只检查通信协议生成物是否与协议定义一致/陈旧，不重写生成文件。用于确认提交前没有漏掉协议生成步骤。",
+        "condition": "在仓库根目录运行，确保协议源定义可读取。",
+        "effect": "生成器 `--check` 分支仅报告文件是否最新，并通过退出码表达检查结果。",
+        "failure": "若检查失败，生成物可能陈旧或缺失；不能直接判断协议定义本身有错。",
+        "recovery": "先运行 `python tools/generate_upper_protocol.py`，审查 Git diff，再执行本命令确认。",
+        "unknown": "此检查的本机结果未核实。",
+        "difference": "与普通协议生成相比只读、不写文件；不测试串口链路或真实设备协议兼容性。",
+        "change": "本次比较基线未标记此检查逻辑变化。"
+      },
+      "en": {
+        "plain": "Check that protocol-generated files match their definitions without rewriting them. Use this before commit to catch a missed generation step.",
+        "condition": "Run from the repository root with protocol source definitions available.",
+        "effect": "The generator’s `--check` branch only reports whether files are current and communicates the result through its exit status.",
+        "failure": "A failed check means generated files may be stale or missing; it does not by itself mean the protocol definition is wrong.",
+        "recovery": "Run `python tools/generate_upper_protocol.py`, review the Git diff, and execute this check again.",
+        "unknown": "The result on this machine is unverified.",
+        "difference": "Unlike normal protocol generation, this is read-only; it does not test serial communication or real-device compatibility.",
+        "change": "The comparison baseline does not mark this check logic as changed."
+      },
+      "evidence_ids": [
+        "src_74bc22044e8ee710a98006c3",
+        "src_b8457e6142a7c58f3e64fcec"
+      ]
+    },
+    {
+      "id": "command:safety_generate",
+      "zh": {
+        "plain": "根据唯一维护源安全规则目录生成桌面端和 P4 固件使用的规则文件及集中索引。安全策略源变更后运行普通模式同步衍生文件。",
+        "condition": "从仓库根目录运行。生成后检查 `safety/policies`、固件 generated 文件和 SafetyRuleIndex 的 diff；不要手改生成文件，修改维护源再重生成。",
+        "effect": "普通模式生成/写入规则目录、固件头文件和集中审计索引；这是代码生成，不是安全谓词的正确性证明。",
+        "failure": "解析或一致性校验失败应阻止可信发布；具体错误由脚本打印。即使生成成功，也需在调用点独立核实触发条件。",
+        "recovery": "修正 `SafetyRuleCatalog.def` 等维护源后重跑，再运行 `--check` 和安全闭环 JSON 审计。",
+        "unknown": "索引闭环完整不代表每条运行时保护条件都正确或覆盖所有故障。",
+        "difference": "与 `--check` 相比会写产物；与闭环审计相比负责生成文件，不负责完整性审计本身。",
+        "change": "本次比较基线未标记该生成入口变化。"
+      },
+      "en": {
+        "plain": "Generate the rule files used by desktop and P4 firmware plus the centralized index from the maintained safety catalog. Run normal mode after changing the safety source.",
+        "condition": "Run from the repository root. Review diffs in the safety policy directory, generated firmware files, and SafetyRuleIndex. Do not hand-edit generated outputs; change the maintained source and regenerate.",
+        "effect": "Normal mode generates/writes the rule catalog, firmware header, and centralized audit index. Generation is not proof that runtime predicates are correct.",
+        "failure": "Parse or consistency failures should prevent trusting the outputs; the script prints the specific error. Even successful generation requires independent review of trigger conditions at call sites.",
+        "recovery": "Fix the maintained source such as `SafetyRuleCatalog.def`, regenerate, then run `--check` and the safety-closure JSON audit.",
+        "unknown": "A complete index does not prove each runtime protection condition is correct or covers every fault.",
+        "difference": "Unlike `--check`, this writes artifacts. Unlike the closure audit, it generates files rather than auditing end-to-end references.",
+        "change": "The comparison baseline does not mark this generator entry point as changed."
+      },
+      "evidence_ids": [
+        "src_a8382a77da0348ce997b872f",
+        "src_c2b0008fd0ac003fac6896a8"
+      ]
+    },
+    {
+      "id": "command:safety_check",
+      "zh": {
+        "plain": "只检查安全规则生成文件是否与维护源同步，不修改文件。适合确认规则目录、固件头文件及索引没有落后于 `SafetyRuleCatalog.def`。",
+        "condition": "从仓库根目录执行；适用于提交前检查。",
+        "effect": "脚本在 `--check` 模式比较期望内容与生成文件并报告陈旧项。",
+        "failure": "发现不一致说明需要审查并重新生成，不等价于安全规则运行行为检查。",
+        "recovery": "运行 `python tools/generate_p4_safety_catalog.py`，查看受影响生成文件的 diff，再复查 `--check`。",
+        "unknown": "不包含实机故障注入或覆盖率证据。",
+        "difference": "只读文件一致性检查，不做规则调用闭环审计，也不验证谓词在运行中会否触发。",
+        "change": "本次比较基线未标记检查逻辑变化。"
+      },
+      "en": {
+        "plain": "Check that generated safety-rule files match the maintained source without modifying them. This catches stale rule directories, firmware headers, or indexes relative to `SafetyRuleCatalog.def`.",
+        "condition": "Run from the repository root, typically before committing.",
+        "effect": "In `--check` mode, the script compares expected content with generated files and reports stale outputs.",
+        "failure": "A mismatch means outputs need review and regeneration; it is not a runtime behavior test of the rules.",
+        "recovery": "Run `python tools/generate_p4_safety_catalog.py`, inspect affected generated-file diffs, then check again.",
+        "unknown": "No hardware fault-injection or runtime coverage evidence is included.",
+        "difference": "This read-only consistency check does not audit call closure or prove that runtime predicates trigger as intended.",
+        "change": "The comparison baseline does not mark the check logic as changed."
+      },
+      "evidence_ids": [
+        "src_a8382a77da0348ce997b872f",
+        "src_c2b0008fd0ac003fac6896a8"
+      ]
+    },
+    {
+      "id": "command:safety_audit",
+      "zh": {
+        "plain": "导出安全规则闭环审计 JSON。脚本从生成索引核对每条规则是否能关联策略实现、业务调用方、事件上报及恢复入口；`--json` 选择机器可读输出。",
+        "condition": "在仓库根目录运行。需先有最新安全索引；若源规则刚变更，先运行安全目录生成器。",
+        "effect": "`audit()` 读取集中索引并检查各引用目标/符号，输出 JSON；当前静态检查曾记录 103/103 条闭环入口齐全，但该数字须与本次 commit 的输出对应，不能沿用为永恒事实。",
+        "failure": "不完整映射会输出失败条目并以非零状态结束；通过只说明索引链路齐全，不证明触发谓词、调用覆盖和恢复动作在运行时正确。",
+        "recovery": "查看 JSON 中失败规则，补齐策略、调用、事件或恢复引用；重生成索引后重新导出并复核。",
+        "unknown": "闭环审计不进行硬件试验，也不证明规则没有误报或漏报。",
+        "difference": "与安全生成器相比这是只读审计/导出；与 `--check` 相比它关注跨文件闭环关系，而非仅比对文件新旧。",
+        "change": "本次比较基线未标记审计入口变化。"
+      },
+      "en": {
+        "plain": "Export the safety-rule closure audit as JSON. The script checks whether each indexed rule links to a policy implementation, business caller, event report, and recovery entry; `--json` requests machine-readable output.",
+        "condition": "Run from the repository root with a current safety index. If safety sources changed, run the safety catalog generator first.",
+        "effect": "`audit()` reads the centralized index and checks referenced files/symbols before printing JSON. A previous static audit reported 103/103 closure entries, but that count must be tied to the current commit’s output rather than treated as permanent.",
+        "failure": "Incomplete mappings produce failing entries and a non-zero exit. Passing means the indexed links are present; it does not prove runtime predicates, full call coverage, or recovery behavior.",
+        "recovery": "Inspect failed rules in the JSON, repair policy/caller/event/recovery references, regenerate the index, then export and review again.",
+        "unknown": "The closure audit does not perform hardware tests or prove absence of false positives/negatives.",
+        "difference": "Unlike the catalog generator, this is a read-only audit/export. Unlike generator `--check`, it checks cross-file closure relationships rather than only file freshness.",
+        "change": "The comparison baseline does not mark the audit entry point as changed."
+      },
+      "evidence_ids": [
+        "src_c1c9cea9d82723094e54c0a8",
+        "src_ed346381dab5ae167d93192b",
+        "src_5e76bf89cc825e67a428a7b1"
+      ]
+    }
+  ]
+}

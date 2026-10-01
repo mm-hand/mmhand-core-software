@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "safety_runtime",
+  "bundle_hash": "beee3e9ef5ef61ba3889ae679016c993226839c5f8666bfd82f89cd17442df1e",
+  "overview": {
+    "zh": "本图展示运行期监控、超时和数据有效性规则。目录中的严重级别及动作说明违规后的预期响应；策略判断、事件记录和恢复函数是追查完整执行路径的入口。",
+    "en": "This graph shows runtime-monitoring, timeout and data-validity rules. Catalog severity and action describe the intended response. Policy predicates, event records and recovery functions are the entry points for tracing execution.",
+    "evidence_ids": [
+      "src_5d87917be5074709c684b591"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:safety_runtime:node:layer",
+      "zh": {
+        "plain": "「Runtime」是 运行期安全规则 中可定位的源码节点。它的职责由附带的状态、配置、周期和调用证据界定；请结合细节判断它读取/写入的数据以及对上下游节点的影响。",
+        "condition": "此节点没有单独列出布尔准入式；其运行时机由任务调度、调用方或关联数据通道决定，引用源码可核对真实入口。",
+        "effect": "节点 `Runtime` 的具体副作用应从引用的函数体和调用者确认；图只展示静态结构关系。",
+        "failure": "缺少输入、配置不匹配、通信超时或下游拒绝时可能使本步骤无法完成；应依照本节点的源码错误处理及对应连线查看实际分支，不推断未出现的结果。",
+        "recovery": "从证据链接打开此节点实现，检查入口调用、输入有效性、配置键和错误返回，再沿出边确认哪个消费者继续处理。",
+        "unknown": "若源码证据没有给出数值、优先级、队列策略或外部响应，本节点不会补猜这些细节；应标为未核实并检查调用者/运行配置。",
+        "difference": "本节点单独对应 `Runtime`；其可证职责来自所列源码位置及本节点特有的周期/配置/数据关系。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "“Runtime” is a source-locatable node in safety_runtime. Its role is bounded by the attached state, configuration, period and call evidence; use those details to see what it reads/writes and how it affects neighbors.",
+        "condition": "No standalone Boolean admission expression is listed. Timing follows task scheduling, caller invocation or the linked data channel; cited source shows the concrete entry.",
+        "effect": "Confirm `Runtime`'s side effects in its cited function and callers; the graph only records static relationships.",
+        "failure": "Missing input, mismatched configuration, communication timeout or downstream rejection can prevent completion. Follow this node's source error handling and outgoing edges; do not infer outcomes that are not shown.",
+        "recovery": "Open the implementation through its evidence link, inspect the caller, input validity, configuration keys and error return, then follow the outgoing edge to the next consumer.",
+        "unknown": "If the evidence does not provide a numeric value, priority, queue policy or external response, this node does not guess it; mark it unverified and inspect its caller/runtime configuration.",
+        "difference": "This node specifically represents `Runtime`; its source-supported role comes from its cited location and its own period/configuration/data relationships.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_5d87917be5074709c684b591"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeSafetyEventCacheOverflow",
+      "zh": {
+        "plain": "安全目录规则「RUN-8001 Safety event cache overflow」编号为 8001，级别 `Warning`，动作 `WarnOnly`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → event `RuntimeSafetyEventCacheOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → recovery `s_overflowEvidenceRecorded` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `WarnOnly`，级别是 `Warning`；调用链为 policy `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → event `RuntimeSafetyEventCacheOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → recovery `s_overflowEvidenceRecorded` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `WarnOnly` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Export recent safety events and check for a high-frequency repeated rule.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8001、级别 `Warning`、动作 `WarnOnly` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8001 Safety event cache overflow” has ID 8001, severity `Warning`, and action `WarnOnly`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → event `RuntimeSafetyEventCacheOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → recovery `s_overflowEvidenceRecorded` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `WarnOnly` at severity `Warning`. The chain is policy `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `runtimeEventCacheWillOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → event `RuntimeSafetyEventCacheOverflow` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp) → recovery `s_overflowEvidenceRecorded` (ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `WarnOnly`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Export recent safety events and check for a high-frequency repeated rule.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8001, severity `Warning`, action `WarnOnly`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_5d87917be5074709c684b591",
+        "src_5d13ce3882f9a36722413b07",
+        "src_d3d100f080c339eef9c3452d",
+        "src_227c319b37a92762faa6396d",
+        "src_1afbc8e8c56e19b606068fca"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeQueueCreateFailed",
+      "zh": {
+        "plain": "安全目录规则「RUN-8002 System queue creation failed」编号为 8002，级别 `Emergency`，动作 `EnterFault`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Queue` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `queuesCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `EnterFault`，级别是 `Emergency`；调用链为 policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Queue` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `queuesCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `EnterFault` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Check heap memory and queue capacity, then restart P4.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8002、级别 `Emergency`、动作 `EnterFault` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8002 System queue creation failed” has ID 8002, severity `Emergency`, and action `EnterFault`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Queue` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `queuesCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `EnterFault` at severity `Emergency`. The chain is policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Queue` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `queuesCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `EnterFault`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Check heap memory and queue capacity, then restart P4.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8002, severity `Emergency`, action `EnterFault`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_fbb973cedfc27b0daf2aedeb",
+        "src_153a1ca483d48af467e09cf4",
+        "src_122dc65fedd208a7e7a09d9b",
+        "src_bba52e683f14f291926c6653",
+        "src_72658fac2b3abf28c2712790",
+        "src_7016d65576bc15ae10c0b4fd"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeMutexCreateFailed",
+      "zh": {
+        "plain": "安全目录规则「RUN-8003 System mutex creation failed」编号为 8003，级别 `Emergency`，动作 `EnterFault`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Mutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `commandStateMutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `EnterFault`，级别是 `Emergency`；调用链为 policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Mutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `commandStateMutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `EnterFault` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Check heap memory and do not start business tasks.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8003、级别 `Emergency`、动作 `EnterFault` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8003 System mutex creation failed” has ID 8003, severity `Emergency`, and action `EnterFault`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Mutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `commandStateMutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `EnterFault` at severity `Emergency`. The chain is policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Mutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `commandStateMutex` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `EnterFault`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Check heap memory and do not start business tasks.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8003, severity `Emergency`, action `EnterFault`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_0c2793d1e10fc35183e44a38",
+        "src_6942c4c4caec2a5167ea7813",
+        "src_122dc65fedd208a7e7a09d9b",
+        "src_fd94658d96f640f3e7d93897",
+        "src_72658fac2b3abf28c2712790",
+        "src_f783e16f2a126c55a3467b0c"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeTaskCreateFailed",
+      "zh": {
+        "plain": "安全目录规则「RUN-8004 Critical task creation failed」编号为 8004，级别 `Emergency`，动作 `EnterFault`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Task` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `tasksCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `EnterFault`，级别是 `Emergency`；调用链为 policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Task` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `tasksCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)。索引记录 2 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `EnterFault` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Check task stack, priority, and available memory.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8004、级别 `Emergency`、动作 `EnterFault` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8004 Critical task creation failed” has ID 8004, severity `Emergency`, and action `EnterFault`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Task` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `tasksCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `EnterFault` at severity `Emergency`. The chain is policy `runtimeResourceCreationRule` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `RuntimeResourceKind::Task` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → event `recordAssemblyFailure` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp) → recovery `tasksCreated` (ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp). The index records 2 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `EnterFault`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Check task stack, priority, and available memory.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8004, severity `Emergency`, action `EnterFault`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_f81f6044b422f847197ab4da",
+        "src_4f2331c719f6a160b026d865",
+        "src_42b34c053a7670dbbb1ba2d5",
+        "src_122dc65fedd208a7e7a09d9b",
+        "src_04b75e7349aff26917bca600",
+        "src_72658fac2b3abf28c2712790",
+        "src_8a526c691c1fba62a3ba9293"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeTaskPeriodOverrun",
+      "zh": {
+        "plain": "安全目录规则「RUN-8005 Real-time task repeatedly exceeded its period」编号为 8005，级别 `Warning`，动作 `WarnOnly`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `overrunEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `WarnOnly`，级别是 `Warning`；调用链为 policy `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `overrunEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `WarnOnly` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Warning。",
+        "recovery": "目录恢复建议：Check blocking calls, serial output, and task priority.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8005、级别 `Warning`、动作 `WarnOnly` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8005 Real-time task repeatedly exceeded its period” has ID 8005, severity `Warning`, and action `WarnOnly`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `overrunEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `WarnOnly` at severity `Warning`. The chain is policy `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeOverrun` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `overrunEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `WarnOnly`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Warning.",
+        "recovery": "Catalog recovery guidance: Check blocking calls, serial output, and task priority.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8005, severity `Warning`, action `WarnOnly`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_854c802ef01f6b79fb805c6f",
+        "src_4779d93d4221a819f830ae38",
+        "src_113d4f9127862d0308c9f46e",
+        "src_4c179bccf34edda603497d2f",
+        "src_64b84b6f46e3c26ab9fe81ef",
+        "src_2fd22747211dd5f634d7c83c"
+      ]
+    },
+    {
+      "id": "graph:safety_runtime:node:RuntimeTaskStackLow",
+      "zh": {
+        "plain": "安全目录规则「RUN-8006 Real-time task stack is low」编号为 8006，级别 `Emergency`，动作 `EnterFault`。规则用于把运行期安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `RuntimeTaskStackLow` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `stackEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `EnterFault`，级别是 `Emergency`；调用链为 policy `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `RuntimeTaskStackLow` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `stackEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `EnterFault` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Emergency。",
+        "recovery": "目录恢复建议：Increase task stack or reduce large local objects, then validate again.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 8006、级别 `Emergency`、动作 `EnterFault` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “RUN-8006 Real-time task stack is low” has ID 8006, severity `Emergency`, and action `EnterFault`. It makes the risk name, response level and handling auditable within safety_runtime; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `RuntimeTaskStackLow` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `stackEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `EnterFault` at severity `Emergency`. The chain is policy `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp) → caller `evaluateRuntimeStack` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → event `RuntimeTaskStackLow` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp) → recovery `stackEventLatched` (ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `EnterFault`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Emergency.",
+        "recovery": "Catalog recovery guidance: Increase task stack or reduce large local objects, then validate again.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 8006, severity `Emergency`, action `EnterFault`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_bd39ca8423c9b7155a8a177e",
+        "src_a3b51fd97fd5189d620decb7",
+        "src_7ba5be963ded2d8a52996d50",
+        "src_93cebee632f5bb028c64b55e",
+        "src_556f2a8e2c18938f04f86741"
+      ]
+    }
+  ]
+}

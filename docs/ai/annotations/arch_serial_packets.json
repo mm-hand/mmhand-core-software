@@ -1,0 +1,588 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "arch_serial_packets",
+  "bundle_hash": "6c70c4003531bad73f3f278e1441b922dba483728870cd2faac76eae6bf094dd",
+  "overview": {
+    "zh": "桌面按 packet type 接收 P4 上行状态、反馈、故障、安全、标定和诊断包。schema 为多数包规定 4 字节时间戳，CALIB_DIAG/TASK_DIAG 除外；解码端仍需核对长度、字段范围及新鲜度。",
+    "en": "The desktop dispatches P4 uplink state, feedback, fault, safety, calibration, and diagnostic packets by type. The schema assigns a 4-byte timestamp to most types except CALIB_DIAG/TASK_DIAG; decoders must still check size, field ranges, and freshness.",
+    "evidence_ids": [
+      "src_73ba81ba29df72cb71321759"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:arch_serial_packets:node:items",
+      "zh": {
+        "plain": "上行 packet 目录定义桌面如何识别 P4 回包、读取状态/遥测/故障/诊断，并将有效字段交给对应模型。",
+        "condition": "进入条件是串口接收器读到帧并识别 type；字段布局由共享 schema 与 decoder 决定。",
+        "effect": "按 packet type 选择 decoder；大多数类型含 P4 timestamp，CALIB_DIAG/TASK_DIAG 是协议注明的例外。",
+        "failure": "未知 type、错误长度或无效字段不能成为可信状态更新。",
+        "recovery": "核对 packet type、decoder、timestamp 与协议 schema 版本。",
+        "unknown": "目录结构不能证明串口上有实时回包或反馈足够新鲜。",
+        "difference": "上行方向是 P4 发给桌面；下行 commands 是桌面发给 P4。",
+        "change": "基线未标记该 packet 目录为本次变更。"
+      },
+      "en": {
+        "plain": "Uplink packet catalog defining how the desktop identifies P4 replies and routes state, telemetry, fault, and diagnostic fields to their models.",
+        "condition": "Entered when the serial receiver reads a frame and recognizes its type; shared schema and decoder define field layout.",
+        "effect": "Dispatches by packet type; most types include a P4 timestamp, while CALIB_DIAG/TASK_DIAG are schema-defined exceptions.",
+        "failure": "Unknown type, wrong length, or invalid fields cannot become a trusted state update.",
+        "recovery": "Check packet type, decoder, timestamp, and protocol schema revision.",
+        "unknown": "The catalog does not prove live replies or fresh feedback on the serial link.",
+        "difference": "Uplink travels from P4 to desktop; downlink commands travel from desktop to P4.",
+        "change": "The baseline does not mark this packet catalog as changed."
+      },
+      "evidence_ids": [
+        "src_73ba81ba29df72cb71321759"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_0",
+      "zh": {
+        "plain": "PACKET_TYPE_SENSOR (type 1) 携带sensor数据；协议描述：21 关节映射角。",
+        "condition": "共享 schema 定义 type=1；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=1 分流到 PACKET_TYPE_SENSOR parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SENSOR 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SENSOR (type 1) carries sensor data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=1; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=1 to the PACKET_TYPE_SENSOR parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SENSOR has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_039ddeebbc4490d1e9232b8c"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_1",
+      "zh": {
+        "plain": "PACKET_TYPE_SERVO_ANGLE (type 3) 携带servo angle数据；协议描述：27 路 logical ABS。",
+        "condition": "共享 schema 定义 type=3；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=3 分流到 PACKET_TYPE_SERVO_ANGLE parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SERVO_ANGLE 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SERVO_ANGLE (type 3) carries servo angle data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=3; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=3 to the PACKET_TYPE_SERVO_ANGLE parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SERVO_ANGLE has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_0f552399f5d74f65421c2de5"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_2",
+      "zh": {
+        "plain": "PACKET_TYPE_SERVO_TELEM (type 5) 携带servo telem数据；协议描述：舵机遥测。",
+        "condition": "共享 schema 定义 type=5；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=5 分流到 PACKET_TYPE_SERVO_TELEM parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SERVO_TELEM 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SERVO_TELEM (type 5) carries servo telem data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=5; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=5 to the PACKET_TYPE_SERVO_TELEM parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SERVO_TELEM has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_3b8f0d55b1152ea0810835e5"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_3",
+      "zh": {
+        "plain": "PACKET_TYPE_PROTO_ACK (type 6) 携带proto ack数据；协议描述：命令 ACK。",
+        "condition": "共享 schema 定义 type=6；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=6 分流到 PACKET_TYPE_PROTO_ACK parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_PROTO_ACK 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_PROTO_ACK (type 6) carries proto ack data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=6; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=6 to the PACKET_TYPE_PROTO_ACK parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_PROTO_ACK has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_8b0df9ad10c7f397f2320d3f"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_4",
+      "zh": {
+        "plain": "PACKET_TYPE_FAULT_STATUS (type 7) 携带fault status数据；协议描述：故障与在线位图。",
+        "condition": "共享 schema 定义 type=7；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=7 分流到 PACKET_TYPE_FAULT_STATUS parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_FAULT_STATUS 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_FAULT_STATUS (type 7) carries fault status data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=7; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=7 to the PACKET_TYPE_FAULT_STATUS parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_FAULT_STATUS has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_02e6feee980ea2fbb1aac366"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_5",
+      "zh": {
+        "plain": "PACKET_TYPE_SERVO_RAW (type 9) 携带servo raw数据；协议描述：27 路单圈 raw。",
+        "condition": "共享 schema 定义 type=9；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=9 分流到 PACKET_TYPE_SERVO_RAW parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SERVO_RAW 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SERVO_RAW (type 9) carries servo raw data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=9; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=9 to the PACKET_TYPE_SERVO_RAW parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SERVO_RAW has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_1d19c7c0108194efe01b1a92"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_6",
+      "zh": {
+        "plain": "PACKET_TYPE_TACTILE (type 10) 携带tactile数据；协议描述：五指触觉摘要。",
+        "condition": "共享 schema 定义 type=10；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=10 分流到 PACKET_TYPE_TACTILE parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_TACTILE 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_TACTILE (type 10) carries tactile data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=10; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=10 to the PACKET_TYPE_TACTILE parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_TACTILE has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_b85a3abf69daa76a31a0472c"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_7",
+      "zh": {
+        "plain": "PACKET_TYPE_ENCODER_RAW (type 11) 携带encoder raw数据；协议描述：21 路磁编 raw。",
+        "condition": "共享 schema 定义 type=11；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=11 分流到 PACKET_TYPE_ENCODER_RAW parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_ENCODER_RAW 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_ENCODER_RAW (type 11) carries encoder raw data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=11; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=11 to the PACKET_TYPE_ENCODER_RAW parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_ENCODER_RAW has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_1b1d138a3435ebda11e3c138"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_8",
+      "zh": {
+        "plain": "PACKET_TYPE_SYSTEM_STATUS (type 12) 携带system status数据；协议描述：状态机与 owner。",
+        "condition": "共享 schema 定义 type=12；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=12 分流到 PACKET_TYPE_SYSTEM_STATUS parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SYSTEM_STATUS 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SYSTEM_STATUS (type 12) carries system status data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=12; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=12 to the PACKET_TYPE_SYSTEM_STATUS parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SYSTEM_STATUS has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_666b89f8deab31d2618a0964"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_9",
+      "zh": {
+        "plain": "PACKET_TYPE_MOTOR_ABS_LIMIT (type 13) 携带motor abs limit数据；协议描述：标定 ABS 边界。",
+        "condition": "共享 schema 定义 type=13；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=13 分流到 PACKET_TYPE_MOTOR_ABS_LIMIT parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_MOTOR_ABS_LIMIT 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_MOTOR_ABS_LIMIT (type 13) carries motor abs limit data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=13; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=13 to the PACKET_TYPE_MOTOR_ABS_LIMIT parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_MOTOR_ABS_LIMIT has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_9322d24df3b1a1518267d8b7"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_10",
+      "zh": {
+        "plain": "PACKET_TYPE_JOINT_CALIB_SNAPSHOT (type 14) 携带joint calib snapshot数据；协议描述：Auto/LUT 快照。",
+        "condition": "共享 schema 定义 type=14；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=14 分流到 PACKET_TYPE_JOINT_CALIB_SNAPSHOT parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_JOINT_CALIB_SNAPSHOT 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_JOINT_CALIB_SNAPSHOT (type 14) carries joint calib snapshot data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=14; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=14 to the PACKET_TYPE_JOINT_CALIB_SNAPSHOT parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_JOINT_CALIB_SNAPSHOT has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_db77c207d9fcd84cd711ca15"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_11",
+      "zh": {
+        "plain": "PACKET_TYPE_TACTILE_FULL (type 15) 携带tactile full数据；协议描述：全量触觉阵列。",
+        "condition": "共享 schema 定义 type=15；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=15 分流到 PACKET_TYPE_TACTILE_FULL parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_TACTILE_FULL 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_TACTILE_FULL (type 15) carries tactile full data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=15; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=15 to the PACKET_TYPE_TACTILE_FULL parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_TACTILE_FULL has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_9c81bfb12d57c7f72a1c38f5"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_12",
+      "zh": {
+        "plain": "PACKET_TYPE_CALIB_DIAG (type 16) 携带calib diag数据；协议描述：结构化标定诊断。",
+        "condition": "共享 schema 定义 type=16；该诊断包不含常规 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=16 分流到 PACKET_TYPE_CALIB_DIAG parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_CALIB_DIAG 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_CALIB_DIAG (type 16) carries calib diag data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=16; this diagnostic packet omits the normal 4-byte P4 timestamp.",
+        "effect": "The receiver dispatches type=16 to the PACKET_TYPE_CALIB_DIAG parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_CALIB_DIAG has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_5f22cc5a34b3b2e0e822e5bb"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_13",
+      "zh": {
+        "plain": "PACKET_TYPE_TASK_DIAG (type 17) 携带task diag数据；协议描述：RTOS 任务诊断。",
+        "condition": "共享 schema 定义 type=17；该诊断包不含常规 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=17 分流到 PACKET_TYPE_TASK_DIAG parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_TASK_DIAG 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_TASK_DIAG (type 17) carries task diag data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=17; this diagnostic packet omits the normal 4-byte P4 timestamp.",
+        "effect": "The receiver dispatches type=17 to the PACKET_TYPE_TASK_DIAG parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_TASK_DIAG has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_776ddc7dfaae7d642003a1d2"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_14",
+      "zh": {
+        "plain": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE (type 18) 携带manual encoder reference数据；协议描述：21 路 Manual Min/Max。",
+        "condition": "共享 schema 定义 type=18；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=18 分流到 PACKET_TYPE_MANUAL_ENCODER_REFERENCE parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE (type 18) carries manual encoder reference data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=18; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=18 to the PACKET_TYPE_MANUAL_ENCODER_REFERENCE parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_MANUAL_ENCODER_REFERENCE has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_382b83111552272aa792bbf1"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_15",
+      "zh": {
+        "plain": "PACKET_TYPE_SERVO_LOGICAL_RANGE (type 19) 携带servo logical range数据；协议描述：27 路会话 logical range。",
+        "condition": "共享 schema 定义 type=19；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=19 分流到 PACKET_TYPE_SERVO_LOGICAL_RANGE parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SERVO_LOGICAL_RANGE 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SERVO_LOGICAL_RANGE (type 19) carries servo logical range data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=19; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=19 to the PACKET_TYPE_SERVO_LOGICAL_RANGE parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SERVO_LOGICAL_RANGE has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_996ff29a46c49ed9c44e72b2"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_16",
+      "zh": {
+        "plain": "PACKET_TYPE_PRODUCT_FINGERPRINT (type 20) 携带product fingerprint数据；协议描述：产品配置指纹。",
+        "condition": "共享 schema 定义 type=20；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=20 分流到 PACKET_TYPE_PRODUCT_FINGERPRINT parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_PRODUCT_FINGERPRINT 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_PRODUCT_FINGERPRINT (type 20) carries product fingerprint data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=20; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=20 to the PACKET_TYPE_PRODUCT_FINGERPRINT parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_PRODUCT_FINGERPRINT has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_f1075ec6168cf677e6346ab1"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_17",
+      "zh": {
+        "plain": "PACKET_TYPE_SERVO_ROUTE_STATUS (type 21) 携带servo route status数据；协议描述：动态舵机 BUS 路由、冲突、容量和扫描状态。",
+        "condition": "共享 schema 定义 type=21；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=21 分流到 PACKET_TYPE_SERVO_ROUTE_STATUS parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SERVO_ROUTE_STATUS 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SERVO_ROUTE_STATUS (type 21) carries servo route status data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=21; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=21 to the PACKET_TYPE_SERVO_ROUTE_STATUS parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SERVO_ROUTE_STATUS has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_7dee2939b5f3fe7e7a3eb3dc"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_18",
+      "zh": {
+        "plain": "PACKET_TYPE_SAFETY_EVENT (type 22) 携带safety event数据；协议描述：去重后的结构化安全规则事件。",
+        "condition": "共享 schema 定义 type=22；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=22 分流到 PACKET_TYPE_SAFETY_EVENT parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_SAFETY_EVENT 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_SAFETY_EVENT (type 22) carries safety event data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=22; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=22 to the PACKET_TYPE_SAFETY_EVENT parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_SAFETY_EVENT has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_158e99c4cc6bb848168d8ff4"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_19",
+      "zh": {
+        "plain": "PACKET_TYPE_MULTITURN_RESTORE_RESULT (type 23) 携带multiturn restore result数据；协议描述：桌面 JSON 多圈恢复异步最终结果。",
+        "condition": "共享 schema 定义 type=23；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=23 分流到 PACKET_TYPE_MULTITURN_RESTORE_RESULT parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_MULTITURN_RESTORE_RESULT 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_MULTITURN_RESTORE_RESULT (type 23) carries multiturn restore result data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=23; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=23 to the PACKET_TYPE_MULTITURN_RESTORE_RESULT parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_MULTITURN_RESTORE_RESULT has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_d29310df175f4d1490c0f919"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_packets:node:item_20",
+      "zh": {
+        "plain": "PACKET_TYPE_CONTROL_TRACE (type 24) 携带control trace数据；协议描述：同一控制周期的目标角、反馈角、舵机CMD和下位机时间。",
+        "condition": "共享 schema 定义 type=24；payload 前含 4 字节 P4 timestamp。",
+        "effect": "接收器按 type=24 分流到 PACKET_TYPE_CONTROL_TRACE parser，再把解码字段写入对应状态/显示项。",
+        "failure": "类型命中后仍需通过长度、字段范围和 freshness 检查，否则不应更新当前状态。",
+        "recovery": "跳转该 packet parser 核对解码字段、长度与 state 写入点，再对照 P4 同版 schema。",
+        "unknown": "type 常量不证明包当前正在到达，也不证明传感器值准确。",
+        "difference": "PACKET_TYPE_CONTROL_TRACE 有独立 payload contract，不应按其它 packet type 解读。",
+        "change": "基线未标记该 packet type 为本次变更。"
+      },
+      "en": {
+        "plain": "PACKET_TYPE_CONTROL_TRACE (type 24) carries control trace data in its dedicated uplink decoder.",
+        "condition": "Shared schema defines type=24; payload includes a 4-byte P4 timestamp prefix.",
+        "effect": "The receiver dispatches type=24 to the PACKET_TYPE_CONTROL_TRACE parser and writes decoded fields to the corresponding state/view.",
+        "failure": "A recognized type must still pass length, field-range, and freshness checks before updating current state.",
+        "recovery": "Open the packet parser to inspect fields, length, and state writes, then compare with the matching P4 schema.",
+        "unknown": "The type constant does not prove live arrival or accurate sensor values.",
+        "difference": "PACKET_TYPE_CONTROL_TRACE has a distinct payload contract and must not be interpreted as another packet type.",
+        "change": "The baseline does not mark this packet type as changed."
+      },
+      "evidence_ids": [
+        "src_2a9e76e13e3110c2984ce1c0"
+      ]
+    }
+  ]
+}

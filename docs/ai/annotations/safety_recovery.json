@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "safety_recovery",
+  "bundle_hash": "a5a7c5d275f3410b5096a7c6dd7423dd5446fa5d7cc41d157ae11a6e8d670b4b",
+  "overview": {
+    "zh": "本图集中呈现故障恢复阶段使用的安全规则，包括恢复动作的限制、错误上报与恢复入口。目录给出建议操作，实际能否清除故障仍取决于源码中的状态和确认条件。",
+    "en": "This graph focuses on safety rules used during fault recovery, including limits on recovery actions, error reporting and recovery entry points. The catalog gives operator guidance; whether a fault can actually clear depends on source-level state and confirmation checks.",
+    "evidence_ids": [
+      "src_a1236e94fdbf07127a990f31"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:safety_recovery:node:layer",
+      "zh": {
+        "plain": "「Recovery」是 恢复安全规则 中可定位的源码节点。它的职责由附带的状态、配置、周期和调用证据界定；请结合细节判断它读取/写入的数据以及对上下游节点的影响。",
+        "condition": "此节点没有单独列出布尔准入式；其运行时机由任务调度、调用方或关联数据通道决定，引用源码可核对真实入口。",
+        "effect": "节点 `Recovery` 的具体副作用应从引用的函数体和调用者确认；图只展示静态结构关系。",
+        "failure": "缺少输入、配置不匹配、通信超时或下游拒绝时可能使本步骤无法完成；应依照本节点的源码错误处理及对应连线查看实际分支，不推断未出现的结果。",
+        "recovery": "从证据链接打开此节点实现，检查入口调用、输入有效性、配置键和错误返回，再沿出边确认哪个消费者继续处理。",
+        "unknown": "若源码证据没有给出数值、优先级、队列策略或外部响应，本节点不会补猜这些细节；应标为未核实并检查调用者/运行配置。",
+        "difference": "本节点单独对应 `Recovery`；其可证职责来自所列源码位置及本节点特有的周期/配置/数据关系。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "“Recovery” is a source-locatable node in safety_recovery. Its role is bounded by the attached state, configuration, period and call evidence; use those details to see what it reads/writes and how it affects neighbors.",
+        "condition": "No standalone Boolean admission expression is listed. Timing follows task scheduling, caller invocation or the linked data channel; cited source shows the concrete entry.",
+        "effect": "Confirm `Recovery`'s side effects in its cited function and callers; the graph only records static relationships.",
+        "failure": "Missing input, mismatched configuration, communication timeout or downstream rejection can prevent completion. Follow this node's source error handling and outgoing edges; do not infer outcomes that are not shown.",
+        "recovery": "Open the implementation through its evidence link, inspect the caller, input validity, configuration keys and error return, then follow the outgoing edge to the next consumer.",
+        "unknown": "If the evidence does not provide a numeric value, priority, queue policy or external response, this node does not guess it; mark it unverified and inspect its caller/runtime configuration.",
+        "difference": "This node specifically represents `Recovery`; its source-supported role comes from its cited location and its own period/configuration/data relationships.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_a1236e94fdbf07127a990f31"
+      ]
+    },
+    {
+      "id": "graph:safety_recovery:node:FaultMultiTurnUnknown",
+      "zh": {
+        "plain": "安全目录规则「FLT-3505 Unknown multi-turn position fault」编号为 3505，级别 `Blocking`，动作 `MarkUncontrollable`。规则用于把恢复安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `MarkUncontrollable`，级别是 `Blocking`；调用链为 policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `MarkUncontrollable` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 3505、级别 `Blocking`、动作 `MarkUncontrollable` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “FLT-3505 Unknown multi-turn position fault” has ID 3505, severity `Blocking`, and action `MarkUncontrollable`. It makes the risk name, response level and handling auditable within safety_recovery; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `MarkUncontrollable` at severity `Blocking`. The chain is policy `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp) → caller `collectSystemFaults` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp) → recovery `SYSTEM_EVENT_RESET` (ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `MarkUncontrollable`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Wait for JSON nearest-turn recovery; recalibrate if recovery still fails.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 3505, severity `Blocking`, action `MarkUncontrollable`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_a1236e94fdbf07127a990f31",
+        "src_1a12eb0f98434d30c360bff9",
+        "src_66db909becafb0a81600ab46",
+        "src_01af4e67d4454c2036009c0f",
+        "src_1b0a26a2ec50f1ce92c8f96b",
+        "src_7814063f1d6ec65d1d19a0ca"
+      ]
+    },
+    {
+      "id": "graph:safety_recovery:node:CalibrationServoRecoveryTimeout",
+      "zh": {
+        "plain": "安全目录规则「CAL-4026 Timed out waiting for servo recovery during calibration」编号为 4026，级别 `Blocking`，动作 `StopMotion`。规则用于把恢复安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `StopMotion`，级别是 `Blocking`；调用链为 policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `StopMotion` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check hot-plug recovery and Turn Unknown state.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 4026、级别 `Blocking`、动作 `StopMotion` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CAL-4026 Timed out waiting for servo recovery during calibration” has ID 4026, severity `Blocking`, and action `StopMotion`. It makes the risk name, response level and handling auditable within safety_recovery; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `StopMotion` at severity `Blocking`. The chain is policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `StopMotion`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check hot-plug recovery and Turn Unknown state.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 4026, severity `Blocking`, action `StopMotion`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_64bded124dd2420c26077403",
+        "src_30ad5ec4008391bf47ed72cd",
+        "src_980e2ca22f47283d8b081cd8",
+        "src_78aebe793056ef72b2fb01e3",
+        "src_bb6e0f2075583da6dacfde36",
+        "src_0ea80de2ecb34b5e0f308878"
+      ]
+    },
+    {
+      "id": "graph:safety_recovery:node:CalibrationMultiTurnTrustFailed",
+      "zh": {
+        "plain": "安全目录规则「CAL-4032 Calibration multi-turn trust commit failed」编号为 4032，级别 `Blocking`，动作 `StopMotion`。规则用于把恢复安全规则中的风险名称、响应等级和处置方式固定成可审计条目；不要仅凭名称推断触发阈值。",
+        "condition": "此规则卡片没有提供可直接证明的运行时触发谓词。索引列出策略、调用、事件和恢复链（policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)），但目录闭环不等于谓词已验证；应打开策略函数检查真实 if 条件。",
+        "effect": "目录动作是 `StopMotion`，级别是 `Blocking`；调用链为 policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)。索引记录 1 个业务调用点，可沿事件入口确认故障怎样被记录。",
+        "failure": "若策略谓词成立，源码应按目录动作 `StopMotion` 处理；仅有目录节点无法证明谓词在何时成立。目录将该规则标为 Blocking。",
+        "recovery": "目录恢复建议：Check servo online state, multi-turn configuration, and recovery state.",
+        "unknown": "目录索引证明了规则定义和所列调用/事件/恢复入口的关联，但未自动证明策略谓词、阈值选择或实机触发轨迹；需按策略函数和对应调用者逐行确认。",
+        "difference": "本条与同组其他规则的区别由编号 4032、级别 `Blocking`、动作 `StopMotion` 及恢复建议共同确定；这些字段来自唯一安全规则目录。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "Safety catalog rule “CAL-4032 Calibration multi-turn trust commit failed” has ID 4032, severity `Blocking`, and action `StopMotion`. It makes the risk name, response level and handling auditable within safety_recovery; do not infer trigger thresholds from the label alone.",
+        "condition": "This card contains no runtime predicate that can be proved directly. The index lists a policy, caller, event and recovery chain (policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp)), but a closed index is not predicate validation; inspect the policy function's actual if conditions.",
+        "effect": "The catalog action is `StopMotion` at severity `Blocking`. The chain is policy `validateCalibrationSequence` (ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.cpp) → caller `setCalibrationDiag` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → event `reportSafetyRuleEvent` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp) → recovery `CALIB_DIAG_REASON_NONE` (ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationDiagnostics.cpp). The index records 1 business call site(s); follow the event entry to see how the fault is recorded.",
+        "failure": "If the policy predicate is met, source code should apply catalog action `StopMotion`; the catalog node alone cannot establish when that predicate is true. The catalog classifies it as Blocking.",
+        "recovery": "Catalog recovery guidance: Check servo online state, multi-turn configuration, and recovery state.",
+        "unknown": "The index proves the rule definition and listed links to caller/event/recovery entries, but does not automatically prove the policy predicate, threshold choice, or a hardware-trigger trace. Verify the policy and caller line by line.",
+        "difference": "This rule differs from its peers by catalog ID 4032, severity `Blocking`, action `StopMotion`, and its recovery advice; these fields come from the single safety catalog.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_897a12b6f8a8a2f626f575e5",
+        "src_c8bdf084455859036e21aedc",
+        "src_980e2ca22f47283d8b081cd8",
+        "src_78aebe793056ef72b2fb01e3",
+        "src_bb6e0f2075583da6dacfde36",
+        "src_0ea80de2ecb34b5e0f308878"
+      ]
+    }
+  ]
+}

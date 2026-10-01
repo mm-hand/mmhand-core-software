@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "ui_ui_control_test_panel",
+  "bundle_hash": "133254f20094b8e0f384ef6bf750fb94a0cc48743adc1ca07bd3f425b1df4760",
+  "overview": {
+    "zh": "本图逐项列出测试面板中的张开/握拳姿势、启停测试、前馈和三角波控件。节点以 signal/slot 连接到对应控制器；请沿 handler 检查周期任务、目标写入和停止条件。",
+    "en": "This graph lists the test panel's open/fist poses, test start/stop, feedforward and triangular-wave controls. Nodes connect through signal/slot bindings to controller handlers; follow each handler to inspect periodic work, target writes and stop conditions.",
+    "evidence_ids": [
+      "src_2669b0ec4f41c25524c7d3d8"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:ui_ui_control_test_panel:node:file",
+      "zh": {
+        "plain": "文件节点 `ui_control_test_panel.py` 汇集此视图的控件创建、信号绑定和回调实现；从这里可逐个跳到按钮，再顺着 handler 检查状态写入与错误反馈。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "该节点提供页面/控件定位；具体状态变化以对应回调中的赋值、信号发射和命令调用为准。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `ui_control_test_panel.py`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "File node `ui_control_test_panel.py` gathers this view's widget creation, signal bindings and callbacks. Use it to follow each control into the handler and inspect state writes and error feedback.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "This node locates a page/control; actual state changes are determined by assignments, emitted signals and command calls in its callback.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `ui_control_test_panel.py`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_2669b0ec4f41c25524c7d3d8"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_1",
+      "zh": {
+        "plain": "控件/界面节点「panel.open_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.open_btn.clicked → lambda _checked=False: panel.apply_open_pose())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.open_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.open_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.open_btn.clicked → lambda _checked=False: panel.apply_open_pose())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.open_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_bd3b04a5acfbefab9dac247b"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_2",
+      "zh": {
+        "plain": "控件/界面节点「panel.fist_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.fist_btn.clicked → lambda _checked=False: panel.apply_fist_pose())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.fist_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.fist_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.fist_btn.clicked → lambda _checked=False: panel.apply_fist_pose())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.fist_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_1975eedbbfa297909463d59f"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_3",
+      "zh": {
+        "plain": "控件/界面节点「panel.test_start_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.test_start_btn.clicked → lambda _checked=False: panel._on_start_test())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.test_start_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.test_start_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.test_start_btn.clicked → lambda _checked=False: panel._on_start_test())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.test_start_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_a36fdbf3f316bb2df415bb39"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_4",
+      "zh": {
+        "plain": "控件/界面节点「panel.test_stop_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.test_stop_btn.clicked → lambda _checked=False: panel._on_stop_test())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.test_stop_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.test_stop_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.test_stop_btn.clicked → lambda _checked=False: panel._on_stop_test())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.test_stop_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_1565659c0c36b126760130ab"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_5",
+      "zh": {
+        "plain": "控件/界面节点「panel.ff_start_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.ff_start_btn.clicked → lambda _checked=False: panel._on_start_ff_test())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.ff_start_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.ff_start_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.ff_start_btn.clicked → lambda _checked=False: panel._on_start_ff_test())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.ff_start_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ea46a4afcf80e3b42d03906e"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_6",
+      "zh": {
+        "plain": "控件/界面节点「panel.ff_stop_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.ff_stop_btn.clicked → lambda _checked=False: panel._on_stop_ff_test())`。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.ff_stop_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.ff_stop_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.ff_stop_btn.clicked → lambda _checked=False: panel._on_stop_ff_test())`. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.ff_stop_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_6e8376106447431768eed650"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_7",
+      "zh": {
+        "plain": "控件/界面节点「panel.tri_start_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.tri_start_btn.clicked → `。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.tri_start_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.tri_start_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.tri_start_btn.clicked → `. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.tri_start_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_4f37537b41f3eec6cf2fc0f1"
+      ]
+    },
+    {
+      "id": "graph:ui_ui_control_test_panel:node:control_8",
+      "zh": {
+        "plain": "控件/界面节点「panel.tri_stop_btn」是 ui_ui_control_test_panel 的具体入口。它通过 Qt 信号、槽或所属文件把用户动作送到上位机处理器；UI 点击本身不会越过后端准入条件直接控制电机。",
+        "condition": "该控件记录的是界面事件绑定，没有单独的固件准入谓词；处理器收到信号后还会检查连接、模式和当前状态。",
+        "effect": "关联调用：`panel.tri_stop_btn.clicked → `。这些名称是调用/信号链定位点，是否完成设备动作须继续检查被调用函数。 信号触发后的直接效果是进入该处理器，而不是自动证明硬件已执行。继续打开回调查看请求对象、状态变化和发送函数。",
+        "failure": "若控件不可用、没有发出信号或 handler 的准入判断失败，请查看连接状态、当前页面模式、按钮启用条件和 handler 的拒绝提示；这些情况不能仅由控件名称判断。",
+        "recovery": "先从节点的 signal/slot 源码链接进入 handler，确认控件是否启用、信号是否连接，再按 handler 给出的前置条件修复后重试。",
+        "unknown": "控件绑定证明了本地事件入口；完整固件响应、串口是否送达和实机动作仍要追踪后端命令及设备反馈，图中未提供运行日志。",
+        "difference": "该节点对应控件/文件 `panel.tri_stop_btn`；与其他界面节点的差异是其特定 signal/slot 和回调链，而不是共享的通用按钮行为。",
+        "change": "相对所记录基线，本节点证据范围没有被变更标记；这只说明比较范围内未命中引用，不代表整个功能永远不变。"
+      },
+      "en": {
+        "plain": "UI node “panel.tri_stop_btn” is a concrete entry in ui_ui_control_test_panel. Its Qt signal, slot or owning file routes a user action into a desktop handler; the click itself does not bypass backend admission to control a motor.",
+        "condition": "This node records a UI event binding, not a firmware admission predicate; the handler can still check connection, mode and current state.",
+        "effect": "Linked calls: `panel.tri_stop_btn.clicked → `. These names locate the call/signal chain; inspect the callee to confirm any device action. The immediate effect is entering the handler, not proof that hardware executed the request. Open the callback to inspect request construction, state updates and send functions.",
+        "failure": "If the control is disabled, emits no signal, or fails a handler gate, inspect connection state, current page mode, widget enable conditions and the handler's rejection message; the label alone cannot establish the cause.",
+        "recovery": "Follow the signal/slot source link into the handler, confirm the widget is enabled and connected, then satisfy the handler's stated prerequisites before retrying.",
+        "unknown": "The binding proves the local UI entry. Full firmware response, serial delivery and physical movement require tracing backend commands and device feedback; this graph contains no runtime log.",
+        "difference": "This node represents control/file `panel.tri_stop_btn`; its distinction from other UI nodes is its specific signal/slot and callback chain, not generic button behavior.",
+        "change": "The cited range is not marked changed against the recorded baseline; this only means the comparison did not hit this evidence, not that the feature can never change."
+      },
+      "evidence_ids": [
+        "src_ae109d7bf934505c97a8548e"
+      ]
+    }
+  ]
+}

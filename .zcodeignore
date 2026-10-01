@@ -1,0 +1,80 @@
+*.zip
+*.mp4
+
+.DS_Store
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+desktop/teleop/Posture/.vscode/
+
+# Local run artifacts
+run_data/
+desktop/logs/
+desktop/multiturn_cache.json
+desktop/resources/config/calib_load_snapshot.json
+desktop/resources/config/calibration_bundle.mmcal.json
+desktop/resources/config/calibration_bundle.mmcal.json.bak
+desktop/resources/config/calibration_bundle.mmcal.legacy_v5_*.json
+desktop/resources/config/calibration_bundle.mmcal.before_*.json
+desktop/resources/config/device_state/
+*.mmcal.json
+ESP32-P4ID/
+
+# Local firmware experiments and waveform captures
+ESP32-P4/ServoBoardMain/debug.log
+ESP32-S3/System/build/
+ESP32-P4Test/
+ESP32-P4Test2/
+ESP32-P4Test3/
+ESP32-P4/CanWaveform/
+ESP32-P4/I2cWaveform/
+ESP32-P4/SpiWaveform/
+ESP32-P4/UartLoopback/
+
+# Local analysis/cache artifacts
+.ai-worktrees/
+docs/ai/.explain_cache/
+.understand-anything/
+tmp/
+.debug/
+desktop/resources/config/calib_load_snapshot.before_new_device_*.json
+desktop/resources/hku_hand_v2_urdf_builtin/
+docs/images/磁编码器舵机拟合_*/
+tools/analyze_encoder_servo_linearity.py
+
+# ROSexample/colcon generated artifacts
+ROSexample/**/build/
+ROSexample/**/install/
+ROSexample/**/log/
+*.egg-info/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

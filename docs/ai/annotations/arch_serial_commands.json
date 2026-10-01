@@ -1,0 +1,692 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "arch_serial_commands",
+  "bundle_hash": "95b1c028f96ed2568f18f42aab7aaf67a269892de37e38acf9d7a7b9bbe86b0a",
+  "overview": {
+    "zh": "桌面发送的命令帧包含 CMD ID 和 schema 固定的 payload。payload_bytes 不包含 FE/LEN/CMD/FF 头尾；帧构造器检查 ID 和长度，P4 再按状态、安全规则和字段值决定 ACK。特别区分 START、RUN_FEEDBACK、RUN_DIRECT、STOP 与 RESET。",
+    "en": "Desktop command frames carry a CMD ID and schema-defined payload. payload_bytes excludes FE/LEN/CMD/FF framing; the frame builder checks ID/length and P4 applies state, safety, and value checks before ACK. START, RUN_FEEDBACK, RUN_DIRECT, STOP, and RESET have distinct meanings.",
+    "evidence_ids": [
+      "src_73ba81ba29df72cb71321759"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:arch_serial_commands:node:items",
+      "zh": {
+        "plain": "下行命令目录；每个命令固定编号与 payload 长度，发送端和 P4 dispatcher 共享生成协议表。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`共享协议命令枚举与 payload schema。`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "调用方按命令字段组 payload，再由 frame builder 校验命令编号与长度。",
+        "failure": "未知 ID 或 payload 长度不匹配会在组帧时拒绝；P4 还可按状态/安全策略返回拒绝 ACK。",
+        "recovery": "对照命令定义和生成器 --check，定位调用 handler 的参数组装。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "items 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Downlink command catalog; each command has a fixed ID and payload length shared by the sender and P4 dispatcher. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `共享协议命令枚举与 payload schema。`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "Callers build the payload for each command; the frame builder validates command ID and length.",
+        "failure": "Unknown IDs or wrong payload lengths are rejected during framing; P4 can also return a state/safety rejection ACK.",
+        "recovery": "Compare the command definition and generator --check, then inspect the caller’s payload construction.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of items comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_73ba81ba29df72cb71321759"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_0",
+      "zh": {
+        "plain": "请求 P4 为当前活动 scope 启动自动标定。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CALIBRATE = 202; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 202）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按当前 active scope 启动自动标定。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_0 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Requests automatic calibration on P4 for the active scope. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CALIBRATE = 202; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 202); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 请求 P4 为当前活动 scope 启动自动标定。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_0 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_0e74df38842a08580b78c554"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_1",
+      "zh": {
+        "plain": "发送 21 路 joint angle 目标，按协议使用 degree。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_ANGLE_CTRL = 203; payload = 84 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 84 字节（命令 ID 203）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：下发完整 21 路关节目标角，单位 degree。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_1 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Sends 21 joint-angle targets in degrees. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_ANGLE_CTRL = 203; payload = 84 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 84 bytes (command ID 203); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 发送 21 路 joint angle 目标，按协议使用 degree。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_1 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_6906b61340881aeb9800f303"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_2",
+      "zh": {
+        "plain": "旧式启动事件命令；最终能否进入控制状态由 P4 START 状态门禁决定。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_START = 204; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 204）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：历史启动命令，进入控制申请流程。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_2 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Legacy start-event command; P4 START state gates decide whether control can begin. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_START = 204; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 204); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 旧式启动事件命令；最终能否进入控制状态由 P4 START 状态门禁决定。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_2 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_2873b939487255afc5422172"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_3",
+      "zh": {
+        "plain": "停止当前运动并进入紧急停止优先路径，清 pending 目标和控制权。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_STOP = 205; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 205）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：停止当前运行并撤销待执行目标。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_3 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Stops motion through the priority emergency-stop path and clears pending targets/ownership. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_STOP = 205; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 205); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 停止当前运动并进入紧急停止优先路径，清 pending 目标和控制权。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_3 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_3d8f0379701eed4acd869347"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_4",
+      "zh": {
+        "plain": "复位故障/保护状态并返回不可控态；之后需要重新 ENABLE。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_RESET = 206; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 206）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：清除允许恢复的系统故障锁存。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_4 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Resets fault/protection state to UNCONTROLLABLE; ENABLE is required afterward. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_RESET = 206; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 206); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 复位故障/保护状态并返回不可控态；之后需要重新 ENABLE。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_4 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_19e460a342d675d701728362"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_5",
+      "zh": {
+        "plain": "直接指定 27 个逻辑电机的 ABS 多圈位置，每路 int32 counts。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_MOTOR_POS_ABS = 211; payload = 108 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 108 字节（命令 ID 211）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：27 路 logical ABS 直控目标，每路 int32 counts。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_5 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Directly sets absolute multi-turn positions for 27 logical motors, one int32 count value each. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_MOTOR_POS_ABS = 211; payload = 108 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 108 bytes (command ID 211); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 直接指定 27 个逻辑电机的 ABS 多圈位置，每路 int32 counts。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_5 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_379ed9d22a0410be5ae959ec"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_6",
+      "zh": {
+        "plain": "同步 joint mask、motor mask 与 control-enable 标志，让 P4 知道当前参与通道。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_ACTIVE_SCOPE = 215; payload = 9 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 9 字节（命令 ID 215）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：同步 active joint/motor mask 与 control enable。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_6 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Synchronizes joint mask, motor mask, and control-enable so P4 knows participating channels. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_ACTIVE_SCOPE = 215; payload = 9 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 9 bytes (command ID 215); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 同步 joint mask、motor mask 与 control-enable 标志，让 P4 知道当前参与通道。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_6 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_53f4bc09e299530e0f5d9761"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_7",
+      "zh": {
+        "plain": "请求进入关节反馈闭环模式，是否接受取决于参考、scope 和安全状态。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_RUN_FEEDBACK = 216; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 216）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：申请状态机进入负反馈运行。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_7 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Requests joint-feedback closed-loop mode; acceptance depends on references, scope, and safety state. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_RUN_FEEDBACK = 216; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 216); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 请求进入关节反馈闭环模式，是否接受取决于参考、scope 和安全状态。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_7 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_53650686417d5a9bf33fcb22"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_8",
+      "zh": {
+        "plain": "暂停当前控制并保存可恢复状态；重新 START 时仍需验证恢复条件。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_PAUSE = 217; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 217）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：暂停当前负反馈或直控运行。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_8 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Pauses control and stores resumable state; a later START still validates resume conditions. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_PAUSE = 217; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 217); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 暂停当前控制并保存可恢复状态；重新 START 时仍需验证恢复条件。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_8 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_99edc4b78274b77ae338a081"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_9",
+      "zh": {
+        "plain": "按有效 mask 恢复 27 路 logical ABS 多圈参考。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_RESTORE_MULTITURN = 218; payload = 112 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 112 字节（命令 ID 218）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按位图恢复 27 路 logical ABS 多圈快照。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_9 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Restores logical ABS multi-turn references for 27 motors using a validity mask. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_RESTORE_MULTITURN = 218; payload = 112 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 112 bytes (command ID 218); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 按有效 mask 恢复 27 路 logical ABS 多圈参考。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_9 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_6074da629270f93ae4c421fa"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_10",
+      "zh": {
+        "plain": "刷新主机控制租约，不直接携带运动目标。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_HOST_HEARTBEAT = 220; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 220）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：刷新上位机在线计时器，不携带业务数据。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_10 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Renews the host-control lease and carries no motion target. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_HOST_HEARTBEAT = 220; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 220); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 刷新主机控制租约，不直接携带运动目标。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_10 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_cf7072f0efc300fbea04910e"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_11",
+      "zh": {
+        "plain": "只给一个 Mxx 发送 logical ABS int32 counts。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_MOTOR_POS_ABS_ONE = 222; payload = 5 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 5 字节（命令 ID 222）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：单台 Mxx logical ABS 直控，Mxx 加 int32 counts。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_11 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Sends logical ABS int32 counts for one Mxx motor. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_MOTOR_POS_ABS_ONE = 222; payload = 5 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 5 bytes (command ID 222); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 只给一个 Mxx 发送 logical ABS int32 counts。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_11 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_85b1e121555e2eac6277a3f9"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_12",
+      "zh": {
+        "plain": "加载关节 Auto/LUT v4 标定数据，不包含手动 encoder reference。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CALIB_LOAD_JOINT = 223; payload = 189 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 189 字节（命令 ID 223）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：恢复单关节唯一 Auto/LUT v4 标定快照。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_12 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Loads joint Auto/LUT v4 calibration data, separate from manual encoder references. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CALIB_LOAD_JOINT = 223; payload = 189 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 189 bytes (command ID 223); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 加载关节 Auto/LUT v4 标定数据，不包含手动 encoder reference。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_12 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_a5685085ef262bca6ade6583"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_13",
+      "zh": {
+        "plain": "加载 27 路 ABS 标定范围及有效 mask。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CALIB_LOAD_LIMITS = 224; payload = 224 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 224 字节（命令 ID 224）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：批量恢复 27 路 ABS 标定范围与有效位图。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_13 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Loads ABS calibration limits and validity mask for 27 motors. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CALIB_LOAD_LIMITS = 224; payload = 224 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 224 bytes (command ID 224); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 加载 27 路 ABS 标定范围及有效 mask。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_13 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_35ca15ce25efd9b621fe7ddb"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_14",
+      "zh": {
+        "plain": "清除 Auto/LUT 标定数据，同时保留 Manual encoder references。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CLEAR_CALIBRATION = 229; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 229）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：清除全部 Auto/LUT 标定结果，保留 Manual。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_14 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Clears Auto/LUT calibration data while preserving manual encoder references. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CLEAR_CALIBRATION = 229; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 229); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 清除 Auto/LUT 标定数据，同时保留 Manual encoder references。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_14 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_5f5ffe6fdc437dcadb017c05"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_15",
+      "zh": {
+        "plain": "写入完整 21 路 Manual Min/Max 原始编码器参考。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_MANUAL_ENCODER_REFERENCE = 230; payload = 85 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 85 字节（命令 ID 230）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：写入或清除 21 组 Manual Min/Max 原始磁编值。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_15 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Writes full 21-channel manual Min/Max raw encoder references. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_MANUAL_ENCODER_REFERENCE = 230; payload = 85 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 85 bytes (command ID 230); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 写入完整 21 路 Manual Min/Max 原始编码器参考。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_15 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_3f1dc77aa9aedb6e86f5aed5"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_16",
+      "zh": {
+        "plain": "请求 P4 回传已保存的 Manual encoder reference。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_MANUAL_ENCODER_QUERY = 231; payload = 0 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 0 字节（命令 ID 231）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：请求 P4 立即回传 Manual 标定表。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_16 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Requests P4 to return saved manual encoder references. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_MANUAL_ENCODER_QUERY = 231; payload = 0 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 0 bytes (command ID 231); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 请求 P4 回传已保存的 Manual encoder reference。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_16 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_c1882f69dab5823b10d0ffb6"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_17",
+      "zh": {
+        "plain": "写入单个 Jxx 的 Manual Min/Max 原始参考。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_MANUAL_ENCODER_SINGLE = 232; payload = 5 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 5 字节（命令 ID 232）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：写入单个 Jxx 的 Manual Min/Max。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_17 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Writes Manual Min/Max raw reference for one Jxx. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_MANUAL_ENCODER_SINGLE = 232; payload = 5 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 5 bytes (command ID 232); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 写入单个 Jxx 的 Manual Min/Max 原始参考。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_17 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_0e45a451d618189c4d74cc7d"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_18",
+      "zh": {
+        "plain": "对指定 joint mask 启动 Rope Init，让 P4 按当前机械参考初始化绳索控制。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_ROPE_INIT = 233; payload = 4 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 4 字节（命令 ID 233）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按 21 位关节掩码启动 P4 Rope Init。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_18 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Starts Rope Init for a joint mask so P4 initializes tendon control from current mechanical references. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_ROPE_INIT = 233; payload = 4 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 4 bytes (command ID 233); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 对指定 joint mask 启动 Rope Init，让 P4 按当前机械参考初始化绳索控制。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_18 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_b566365b541bde744eeb9204"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_19",
+      "zh": {
+        "plain": "仅向指定 joint mask 下发相应角度目标，避免整组无差别覆盖。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_ANGLE_CTRL_MASKED = 234; payload = 88 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 88 字节（命令 ID 234）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按关节掩码下发稀疏关节目标角。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_19 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Sends angle targets only for the specified joint mask instead of overwriting the whole group. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_ANGLE_CTRL_MASKED = 234; payload = 88 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 88 bytes (command ID 234); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 仅向指定 joint mask 下发相应角度目标，避免整组无差别覆盖。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_19 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_6cc49283e4cb77bbea7dd613"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_20",
+      "zh": {
+        "plain": "仅清除 mask 指定关节的 Auto/LUT 标定数据。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CLEAR_CALIBRATION_SCOPE = 235; payload = 4 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 4 字节（命令 ID 235）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按电机位图清除关联关节 Auto/LUT。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_20 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Clears Auto/LUT calibration only for joints selected by the mask. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CLEAR_CALIBRATION_SCOPE = 235; payload = 4 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 4 bytes (command ID 235); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 仅清除 mask 指定关节的 Auto/LUT 标定数据。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_20 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_0a22676e7b256280a0200fe3"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_21",
+      "zh": {
+        "plain": "请求所选伺服硬件多圈圈数清零/零点复位，为后续参考流程做准备。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_SERVO_RESET_ZERO = 236; payload = 4 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 4 字节（命令 ID 236）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：标定前归零所选舵机硬件圈数并清除对应多圈锚点。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_21 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Requests multi-turn count/zero reset for selected servos as preparation for reference workflows. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_SERVO_RESET_ZERO = 236; payload = 4 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 4 bytes (command ID 236); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 请求所选伺服硬件多圈圈数清零/零点复位，为后续参考流程做准备。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_21 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_7d8554b1c2edaf0ca39ca47c"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_22",
+      "zh": {
+        "plain": "请求按 32-bit mask 同步状态、标定、路由或诊断快照。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_STATE_SYNC_REQUEST = 237; payload = 4 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 4 字节（命令 ID 237）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：按位请求静态状态、标定快照、路由和产品指纹。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_22 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Requests state, calibration, routing, or diagnostic snapshots using a 32-bit mask. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_STATE_SYNC_REQUEST = 237; payload = 4 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 4 bytes (command ID 237); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 请求按 32-bit mask 同步状态、标定、路由或诊断快照。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_22 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_20920ccc7f5b156f1fd950bb"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_23",
+      "zh": {
+        "plain": "用单字节 enable 开关打开/关闭 RTOS 任务诊断上报。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_TASK_DIAG_SUBSCRIBE = 238; payload = 1 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 1 字节（命令 ID 238）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：打开或关闭 RTOS 任务诊断按需上报。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_23 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Uses a one-byte enable switch to subscribe/unsubscribe to RTOS task diagnostics. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_TASK_DIAG_SUBSCRIBE = 238; payload = 1 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 1 bytes (command ID 238); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 用单字节 enable 开关打开/关闭 RTOS 任务诊断上报。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_23 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_2c80758752474af1e56c2bec"
+      ]
+    },
+    {
+      "id": "graph:arch_serial_commands:node:item_24",
+      "zh": {
+        "plain": "用单字节 enable 开关订阅控制循环 trace，便于 leader 查看目标、反馈和时序。 payload 长度与命令编号由共享协议表固定，写帧成功仍需确认 P4 ACK。",
+        "condition": "协议条件：`CMD_CONTROL_TRACE_SUBSCRIBE = 239; payload = 1 bytes`。发送由相应 UI/backend handler 触发，P4 另行校验。",
+        "effect": "发送时 payload 长度为 1 字节（命令 ID 239）；LEN 统计 CMD、payload 与尾字节，不含帧头。协议描述：打开或关闭统一下位机时间的控制跟踪流。",
+        "failure": "payload 字节数与 schema 不一致时桌面组帧报错；P4 状态或安全门禁还可能拒绝执行。",
+        "recovery": "核对调用方字段顺序/字节数、host/P4 生成定义与 ACK 拒绝原因。",
+        "unknown": "静态协议定义不证明命令已写到串口或 P4 已接受。",
+        "difference": "item_24 的功能见命令 ID 与 payload schema；它不等于相邻命令。",
+        "change": "基线未标记该命令为本次变更。"
+      },
+      "en": {
+        "plain": "Uses a one-byte enable switch to subscribe to control-loop traces of targets, feedback, and timing. Its fixed ID and payload size define the wire format; a host write still needs P4 ACK confirmation.",
+        "condition": "Protocol condition: `CMD_CONTROL_TRACE_SUBSCRIBE = 239; payload = 1 bytes`. A UI/backend handler sends it; P4 validates it independently.",
+        "effect": "On transmit the payload is 1 bytes (command ID 239); LEN counts CMD, payload, and tail but excludes frame header. Protocol role: 用单字节 enable 开关订阅控制循环 trace，便于 leader 查看目标、反馈和时序。.",
+        "failure": "A schema-size mismatch raises a desktop framing error; P4 state or safety gates may still reject execution.",
+        "recovery": "Check caller field order/size, generated host/P4 definitions, and any rejection ACK.",
+        "unknown": "The static protocol definition does not prove the command reached serial or P4 accepted it.",
+        "difference": "The role of item_24 comes from its ID and payload schema; it is distinct from neighboring commands.",
+        "change": "The baseline does not mark this command as changed."
+      },
+      "evidence_ids": [
+        "src_25a73601990303c6caa82c93"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "arch_s3",
+  "bundle_hash": "0e8da0ae7a42161e8dbffe448c21b181a8e4e8835029308894d26dc22b87a528",
+  "overview": {
+    "zh": "S3 使用独立 FreeRTOS 任务做编码器采集、触觉采集和 CAN 发送。编码器数据经长度 1 的覆盖队列传递，触觉摘要另走 CAN 与串口；名义周期、核与优先级见各任务节点。",
+    "en": "S3 uses separate FreeRTOS tasks for encoder acquisition, tactile acquisition, and CAN transmission. Encoder samples pass through a one-item overwrite queue; tactile summaries also use CAN and serial. Each task node lists nominal period, core, and priority.",
+    "evidence_ids": [
+      "src_53ebf6c5393b0e28cc4069ce"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:arch_s3:node:s3",
+      "zh": {
+        "plain": "S3 固件把采集任务与通信任务分开：编码器任务快速采样并覆盖长度 1 的队列，CAN 任务发送编码器帧，触觉任务独立扫描后发送摘要/串口数据。",
+        "condition": "由 startSystemTasks 创建；ENABLE_TACTILE_TASK 控制触觉任务是否启动。",
+        "effect": "任务配置定义周期、优先级、核和栈；共享队列只保存最近一份 EncoderData，避免 CAN 发送变慢时堆积旧样本。",
+        "failure": "队列创建失败进入 fatal 延迟循环；触觉关闭时不会启动 Task_Tactile。",
+        "recovery": "检查启动日志、队列创建和 Config.h 任务开关；CAN 故障看 CanTask 计数与 bus recover。",
+        "unknown": "静态配置不提供实机 CPU 负载、调度抖动或传感器实际在线证明。",
+        "difference": "队列覆盖策略是“保留最新采样”，不是逐样本可靠历史记录。",
+        "change": "基线未标记 S3 任务装配为本次变更。"
+      },
+      "en": {
+        "plain": "S3 firmware separates acquisition and communication tasks: the encoder task samples quickly and overwrites a one-item queue, the CAN task sends encoder frames, and the tactile task scans independently before sending summaries/serial data.",
+        "condition": "Tasks are created by startSystemTasks; ENABLE_TACTILE_TASK controls whether the tactile task starts.",
+        "effect": "Task configuration defines period, priority, core, and stack. The shared queue stores only the latest EncoderData so slow CAN transmission does not accumulate stale samples.",
+        "failure": "Queue creation failure enters a fatal delay loop; disabling tactile support means Task_Tactile is not started.",
+        "recovery": "Check startup logs, queue creation, and Config.h task switches; use CanTask counters and bus-recovery logs for CAN faults.",
+        "unknown": "Static configuration does not prove runtime CPU load, scheduling jitter, or sensor availability.",
+        "difference": "The queue uses latest-sample overwrite semantics, not a lossless history.",
+        "change": "The baseline does not mark S3 task assembly as changed."
+      },
+      "evidence_ids": [
+        "src_53ebf6c5393b0e28cc4069ce"
+      ]
+    },
+    {
+      "id": "graph:arch_s3:node:Task_Encoders",
+      "zh": {
+        "plain": "Task_Encoders 每 2 ms 读取 21 路 AS5047P 原始角度和 errorFlags；无效通道写成 0xFFFF，再覆盖写入 encoder queue。",
+        "condition": "由 startSystemTasks 固定到 Core 1，优先级 TASK_ENC_PRIO=10；循环按 kEncoderTaskPeriodMs=2 延迟到下个周期。",
+        "effect": "每轮复制 EncoderData 到 localData，并调用 xQueueOverwrite；队列容量为 1，CAN 任务总是取到最近一次可用采样。",
+        "failure": "队列句柄为空时任务不会提交数据，并周期性输出 fatal 日志；errorFlags 通道以 0xFFFF sentinel 表示无效。",
+        "recovery": "确认 xQueueEncoderData 已创建，查看 encoder error flags 和队列消费者状态。",
+        "unknown": "源码给出名义 2 ms 周期；SPI 等待和调度可能影响实测周期。",
+        "difference": "这是采集生产者；它不直接发送 CAN，Task_CanBus 负责消费队列。",
+        "change": "基线未标记该任务为本次变更。"
+      },
+      "en": {
+        "plain": "Task_Encoders reads 21 AS5047P raw angles and errorFlags every 2 ms. It writes 0xFFFF for invalid channels, then overwrites the encoder queue with the newest sample.",
+        "condition": "startSystemTasks pins it to Core 1 at TASK_ENC_PRIO=10; the loop delays until the next kEncoderTaskPeriodMs=2 tick.",
+        "effect": "Each loop copies EncoderData into localData and calls xQueueOverwrite. The queue has capacity one, so the CAN task receives the latest available sample.",
+        "failure": "A null queue handle prevents submission and triggers a periodic fatal log; channels with errorFlags use the 0xFFFF invalid sentinel.",
+        "recovery": "Confirm xQueueEncoderData was created and inspect encoder error flags and the queue consumer.",
+        "unknown": "The source specifies a nominal 2 ms period; SPI waits and scheduling can change measured timing.",
+        "difference": "This is the acquisition producer; it does not send CAN directly. Task_CanBus consumes the queue.",
+        "change": "The baseline does not mark this task as changed."
+      },
+      "evidence_ids": [
+        "src_968c87c32fb1c859e0570c5f",
+        "src_af58675501028e290930ba0b",
+        "src_958c9503645ebb5b0cf47f76",
+        "src_025ef071d1c77a5a993c5d97",
+        "src_ffb52165528c65fcab106f5e",
+        "src_fbaeb3cb26644aa0537ad142"
+      ]
+    },
+    {
+      "id": "graph:arch_s3:node:Task_Tactile",
+      "zh": {
+        "plain": "Task_Tactile 每约 33 ms 更新触觉传感器，读取采集数据和诊断位图；默认把摘要分别送到 CAN relay 和 S3 串口。",
+        "condition": "由 startSystemTasks 在 ENABLE_TACTILE_TASK 开启时创建于 Core 0，优先级 TASK_TAC_PRIO=5，栈 8192。",
+        "effect": "每轮 tactile.update/getData/getDiagnostics；CAN relay 开启时发送 summary，始终发送 Serial summary，并按开关/降采样配置发送 full dump 和诊断。",
+        "failure": "full CAN dump 默认受 ENABLE_TACTILE_CAN_FULL_DUMP 控制；传感器读失败会体现在 summaryOkMask/diagnostics，而非伪装有效值。",
+        "recovery": "查看 enable 开关、诊断位图、序列号及 serial/CAN 接收端是否在线。",
+        "unknown": "名义周期约 33 ms；阻塞式传感器读取可能影响实际节拍，需实机确认。",
+        "difference": "触觉摘要存在 CAN 与串口路径；全量数据配置可能带来显著带宽负载。",
+        "change": "基线未标记该任务为本次变更。"
+      },
+      "en": {
+        "plain": "Task_Tactile updates tactile sensors about every 33 ms and reads data plus diagnostic masks; it sends summaries through CAN relay and the S3 serial link.",
+        "condition": "When ENABLE_TACTILE_TASK is on, startSystemTasks creates it on Core 0 at TASK_TAC_PRIO=5 with an 8192-byte stack.",
+        "effect": "Each loop calls tactile.update/getData/getDiagnostics. With CAN relay enabled it sends a summary, always sends a serial summary, and emits full dump/diagnostics according to switches and decimation.",
+        "failure": "Full CAN dump is gated by ENABLE_TACTILE_CAN_FULL_DUMP; failed sensor reads appear in summaryOkMask/diagnostics rather than valid-looking data.",
+        "recovery": "Inspect enable switches, diagnostic masks, sequence numbers, and whether serial/CAN receivers are online.",
+        "unknown": "The nominal period is about 33 ms; blocking sensor reads can affect actual cadence and require hardware measurement.",
+        "difference": "Tactile summaries have CAN and serial paths; enabling full data can consume substantial bandwidth.",
+        "change": "The baseline does not mark this task as changed."
+      },
+      "evidence_ids": [
+        "src_b9d7a2c15f05f037b596211d",
+        "src_85314767263b83978fcbf2d1",
+        "src_3b596c0bb37f178cccbf276f",
+        "src_968d119ec9383769afa126ed",
+        "src_108d8634ede8d79eedf5a09d",
+        "src_07bcf0f518622231612a62e6"
+      ]
+    },
+    {
+      "id": "graph:arch_s3:node:Task_CanBus",
+      "zh": {
+        "plain": "Task_CanBus 每 4 ms 维护 TWAI 总线并尝试从长度 1 的 encoder queue 取最新样本，随后发送一批编码器 CAN 帧。",
+        "condition": "由 startSystemTasks 创建在 Core 0、优先级 TASK_CAN_PRIO=5、栈 4096；主循环名义周期 kCanTaskPeriodMs=4。",
+        "effect": "总线正常时消费队列并统计成功/失败帧；每五批最多检查一次传感器错误并按需上报。bus-off/STOPPED 时执行 maintain 恢复路径。",
+        "failure": "总线未就绪时不发送队列数据并延迟 50 ms；队列为空时没有新编码器帧可发。",
+        "recovery": "检查 TWAI bus recovery 计数、队列接收计数与 tx 成功/失败计数，并核对 S3-P4 CAN 接线和配置。",
+        "unknown": "名义 4 ms 循环和 50 ms 错误延迟不保证 bus 恢复成功或 P4 收到帧。",
+        "difference": "它是 CAN 发送消费者；数据来源是 Task_Encoders 覆盖写队列。",
+        "change": "基线未标记该任务为本次变更。"
+      },
+      "en": {
+        "plain": "Task_CanBus maintains the TWAI bus every 4 ms and tries to take the newest encoder sample from the one-item queue before sending a batch of encoder CAN frames.",
+        "condition": "startSystemTasks creates it on Core 0 at TASK_CAN_PRIO=5 with a 4096-byte stack; the main loop has nominal period kCanTaskPeriodMs=4.",
+        "effect": "When the bus is healthy it consumes the queue and counts successful/failed frames; every fifth batch it checks sensor errors and reports them when needed. maintain handles bus-off/STOPPED recovery.",
+        "failure": "When the bus is unavailable it does not send queued data and delays 50 ms; an empty queue means there is no new encoder sample to send.",
+        "recovery": "Inspect bus-recovery, queue-receive, and TX success/failure counters; verify S3–P4 CAN wiring and configuration.",
+        "unknown": "A nominal 4 ms loop and 50 ms error delay do not guarantee bus recovery or P4 reception.",
+        "difference": "This is the CAN consumer; its samples come from the overwrite queue written by Task_Encoders.",
+        "change": "The baseline does not mark this task as changed."
+      },
+      "evidence_ids": [
+        "src_324791d1e910d3b6e0a0ace9",
+        "src_3706e70d43b68796eca3f913",
+        "src_33479ef3cc147de86f0a2587",
+        "src_f90dc2d01874f1d0738cae93",
+        "src_5fc80d219f987072d8823829",
+        "src_9b79e418e7532d8355e56bf3",
+        "src_99ad11e49235e19ad974eded"
+      ]
+    },
+    {
+      "id": "graph:arch_s3:node:twai",
+      "zh": {
+        "plain": "TWAI 是 S3 与 P4 之间的 CAN 驱动/总线端点；Task_CanBus 用它传编码器批次，触觉任务可选传触觉摘要。",
+        "condition": "启用对应 CAN 任务与 relay 开关，并确保总线驱动完成初始化。",
+        "effect": "总线端点提供 maintain、sendEncoderData、sendTactileSummary 等收发操作。",
+        "failure": "bus-off 或发送失败会导致帧丢失；Task_CanBus 的恢复状态可能暂时不收发。",
+        "recovery": "检查 TWAI 错误与恢复计数、节点配置和物理总线。",
+        "unknown": "本源码图不证明终端电阻、布线或现场仲裁状态。",
+        "difference": "编码器通过队列送往 CAN；触觉摘要是独立数据类别。",
+        "change": "基线未标记该总线节点为本次变更。"
+      },
+      "en": {
+        "plain": "TWAI is the S3–P4 CAN driver/bus endpoint. Task_CanBus uses it for encoder batches, and the tactile task can optionally send tactile summaries.",
+        "condition": "The corresponding CAN task and relay switch must be enabled and the driver initialized.",
+        "effect": "The endpoint provides operations such as maintain, sendEncoderData, and sendTactileSummary.",
+        "failure": "Bus-off or send failures can drop frames; Task_CanBus may temporarily stop traffic during recovery.",
+        "recovery": "Inspect TWAI error/recovery counters, node configuration, and the physical bus.",
+        "unknown": "This source view does not prove termination, wiring, or live arbitration health.",
+        "difference": "Encoder traffic arrives through the queue; tactile summaries are a separate data class.",
+        "change": "The baseline does not mark this bus node as changed."
+      },
+      "evidence_ids": [
+        "src_53c6a90d0a08d5656cb0424b"
+      ]
+    },
+    {
+      "id": "graph:arch_s3:node:tactile_serial",
+      "zh": {
+        "plain": "S3 的串口触觉路径把摘要、全量触觉数据和诊断包发送给桌面端；它与 CAN relay 并存。",
+        "condition": "Task_Tactile 每轮调用串口发送函数；全量帧由 ENABLE_TACTILE_CAN_FULL_DUMP 等配置控制。",
+        "effect": "串口帧使用 FE/FF 边界和触觉 packet type；摘要携带序列号与成功位图，全量包携带传感器数据。",
+        "failure": "串口未连接、帧损坏或桌面端解析不匹配时，触觉显示无法刷新；打开过多 full dump 也会占用带宽。",
+        "recovery": "检查 tactile serial 端口、包类型、序列号和诊断 CRC；需要时关闭全量 dump。",
+        "unknown": "静态源码未证明当前接收端、带宽和帧周期。",
+        "difference": "触觉串口可绕开 CAN 转发摘要，CAN 和串口并非同一条物理链路。",
+        "change": "基线未标记该串口路径为本次变更。"
+      },
+      "en": {
+        "plain": "The S3 tactile serial path sends summaries, full tactile data, and diagnostic packets to the desktop alongside the CAN relay.",
+        "condition": "Task_Tactile calls serial send functions each cycle; full-frame behavior is controlled by configuration such as ENABLE_TACTILE_CAN_FULL_DUMP.",
+        "effect": "Serial frames use FE/FF boundaries and tactile packet types. Summaries carry sequence and success masks; full packets carry sensor data.",
+        "failure": "An offline serial link, corrupt frame, or desktop parser mismatch prevents tactile display updates; excessive full dumps can consume bandwidth.",
+        "recovery": "Check the tactile serial port, packet type, sequence, and diagnostic CRC; disable full dumps if needed.",
+        "unknown": "The source does not prove the live receiver, bandwidth, or frame cadence.",
+        "difference": "Tactile serial can deliver summaries without CAN relay; these are distinct physical paths.",
+        "change": "The baseline does not mark this serial path as changed."
+      },
+      "evidence_ids": [
+        "src_fcddb9e19f4497f02884d8d8"
+      ]
+    }
+  ]
+}

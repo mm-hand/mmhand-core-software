@@ -1,0 +1,302 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "arch_can",
+  "bundle_hash": "1bf0178295067b28173e6264785832dc0f15fe526a19b11658fb453296a65274",
+  "overview": {
+    "zh": "S3SensorCanProtocol.h 定义 S3→P4 encoder 分片与 CRC、逐通道错误码、触觉摘要、raw diagnostics 和 full dump 的 CAN ID 与分片规则。P4 收到完整帧组并通过长度/序号/CRC/超时检查后才发布有效快照。",
+    "en": "S3SensorCanProtocol.h defines S3→P4 CAN IDs and fragmentation for encoder data/CRC, per-channel errors, tactile summaries, raw diagnostics, and full dumps. P4 publishes a valid snapshot only after complete reception and length/sequence/CRC/deadline checks.",
+    "evidence_ids": [
+      "src_8b4c8064fbcaae3cfffc56b3"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:arch_can:node:can",
+      "zh": {
+        "plain": "CAN 总览把 S3→P4 编码器、错误细节、触觉摘要、诊断和全量触觉数据分配到不同 CAN ID 区间。",
+        "condition": "该节点汇总 S3SensorCanProtocol.h 中共同定义的 ID、帧大小与校验时限。",
+        "effect": "接收端按 ID 选择解析器，再校验 DLC、片段、序号、CRC 与重组时限后更新快照。",
+        "failure": "缺帧、错长、CRC 错或超时会使本轮样本无效；应检查对应通信规则。",
+        "recovery": "核对 S3 与 P4 的共享定义和部署固件版本。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 can 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "The map assigns separate CAN ID ranges to S3→P4 encoders, error details, tactile summary, diagnostics, and full tactile data.",
+        "condition": "This node summarizes shared IDs, frame sizes, and validation deadlines in S3SensorCanProtocol.h.",
+        "effect": "The receiver selects a parser by ID and validates DLC, fragments, sequence, CRC, and deadline before updating a snapshot.",
+        "failure": "Missing frames, wrong length, CRC errors, or timeout invalidate a sample; inspect the related communication rule.",
+        "recovery": "Check shared definitions and deployed firmware versions on S3 and P4.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of can; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_8b4c8064fbcaae3cfffc56b3"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_ENC_BASE",
+      "zh": {
+        "plain": "编码器 raw-angle 帧从 0x100 开始；一个 8 字节帧装最多 4 个 16-bit 原始值。",
+        "condition": "源码常量/表达式：`0x100`。它定义该消息类别的 ID 值或区间。",
+        "effect": "P4 用 CAN ID 减去 base 得到数据片段编号，并放入编码器重组缓存。",
+        "failure": "DLC 不为 8 时报告 CAN frame invalid 并标坏本轮快照。",
+        "recovery": "核对发送端 ID 起点、DLC 和每帧通道布局。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_ENC_BASE 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "Encoder raw-angle frames start at 0x100; one 8-byte frame carries up to four 16-bit raw values.",
+        "condition": "Source constant/expression: `0x100`. It defines the ID or range for this message class.",
+        "effect": "P4 subtracts this base ID to obtain a fragment index and stores values in the encoder reassembly buffer.",
+        "failure": "A DLC other than 8 reports an invalid CAN frame and marks this snapshot bad.",
+        "recovery": "Check sender base ID, DLC, and per-frame channel layout.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_ENC_BASE; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_49c4c2163a170213c36231ac"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_ENC_LAST",
+      "zh": {
+        "plain": "按 21 路编码器、每帧 4 路向上取整，数据 ID 范围最后一帧由该表达式计算。",
+        "condition": "源码常量/表达式：`CAN_ID_ENC_BASE + (ENCODER_TOTAL_NUM + 3) / 4 - 1`。它定义该消息类别的 ID 值或区间。",
+        "effect": "表达式 `CAN_ID_ENC_BASE + (ENCODER_TOTAL_NUM + 3) / 4 - 1` 给出最后一个 raw-angle 分片。",
+        "failure": "缺少任何分片时，即使 CRC 帧到了也不能得到完整快照。",
+        "recovery": "修改通道数后同步核对 frame count、payload bytes 与 CAN ID 范围。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_ENC_LAST 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "For 21 encoders with four values per frame, the expression rounds up to derive the final data-frame ID.",
+        "condition": "Source constant/expression: `CAN_ID_ENC_BASE + (ENCODER_TOTAL_NUM + 3) / 4 - 1`. It defines the ID or range for this message class.",
+        "effect": "The expression `CAN_ID_ENC_BASE + (ENCODER_TOTAL_NUM + 3) / 4 - 1` gives the final raw-angle fragment.",
+        "failure": "If any fragment is missing, a later CRC frame cannot complete the snapshot.",
+        "recovery": "When channel count changes, check frame count, payload bytes, and CAN ID range together.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_ENC_LAST; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_bf037da2daf0c4fb73a74de9"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_ENC_CRC",
+      "zh": {
+        "plain": "最后一个编码器分片之后的专用 ID 承载整批角度数据的 CRC 与元数据。",
+        "condition": "源码常量/表达式：`CAN_ID_ENC_LAST + 1`。它定义该消息类别的 ID 值或区间。",
+        "effect": "接收端核对片段完整性、数量/字节数及 CRC16 后才更新有效 encoder snapshot。",
+        "failure": "CRC 或元数据不匹配会报告 snapshot invalid 并重置当前重组。",
+        "recovery": "对照 S3/P4 的 CRC 输入字节顺序和帧数。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_ENC_CRC 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "The dedicated ID after the last encoder fragment carries CRC and metadata for the complete angle batch.",
+        "condition": "Source constant/expression: `CAN_ID_ENC_LAST + 1`. It defines the ID or range for this message class.",
+        "effect": "The receiver updates a valid encoder snapshot only after checking completeness, count/byte length, and CRC16.",
+        "failure": "CRC or metadata mismatch reports an invalid snapshot and resets reassembly.",
+        "recovery": "Compare CRC input byte order and frame count on S3 and P4.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_ENC_CRC; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_f0ba28d7c8fb7ba5d4982b99"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_ERROR_DETAIL_BASE",
+      "zh": {
+        "plain": "0x1F0 起的三帧错误表覆盖 21 路通道，每帧至多七个错误码。",
+        "condition": "源码常量/表达式：`0x1F0`。它定义该消息类别的 ID 值或区间。",
+        "effect": "P4 按 sequence 重组每路 errorFlags；这些标志参与对应角度值有效性判断。",
+        "failure": "缺帧或超过 100 ms 的组装时限会使错误表无法完整更新。",
+        "recovery": "检查三帧序号、DLC 和 error detail timeout。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_ERROR_DETAIL_BASE 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "The three-frame error table from 0x1F0 covers 21 channels with up to seven error codes per frame.",
+        "condition": "Source constant/expression: `0x1F0`. It defines the ID or range for this message class.",
+        "effect": "P4 reassembles per-channel errorFlags by sequence; these flags contribute to angle-value validity.",
+        "failure": "Missing frames or the 100 ms reassembly deadline can prevent a complete error-table update.",
+        "recovery": "Check the three frame sequences, DLC, and error-detail timeout.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_ERROR_DETAIL_BASE; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_1d6c6b198d6c9bc5f7a14a3b"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_ERROR_DETAIL_LAST",
+      "zh": {
+        "plain": "0x1F2 是从 0x1F0 开始的三帧 encoder 错误表末 ID。",
+        "condition": "源码常量/表达式：`0x1F2`。它定义该消息类别的 ID 值或区间。",
+        "effect": "base 到 last 界定错误码分片；frame count 和端点必须一致。",
+        "failure": "错序、越界或缺片都会让该轮错误表不完整。",
+        "recovery": "与 CAN_ERROR_DETAIL_FRAME_COUNT=3 交叉检查。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_ERROR_DETAIL_LAST 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "0x1F2 is the final ID of the three-frame encoder error table starting at 0x1F0.",
+        "condition": "Source constant/expression: `0x1F2`. It defines the ID or range for this message class.",
+        "effect": "The base-to-last range bounds error-code fragments; frame count and endpoint must agree.",
+        "failure": "Sequence mismatch, out-of-range IDs, or missing fragments leave this error table incomplete.",
+        "recovery": "Cross-check against CAN_ERROR_DETAIL_FRAME_COUNT=3.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_ERROR_DETAIL_LAST; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_d48335045cb23aecc39489ca"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_TAC_SUMMARY_BASE",
+      "zh": {
+        "plain": "触觉摘要使用 0x240–0x246 七帧，每帧七个 payload 字节，包含 summary、valid mask 和 CRC 输入。",
+        "condition": "源码常量/表达式：`0x240`。它定义该消息类别的 ID 值或区间。",
+        "effect": "P4 按 seq 重组，要求 80 ms 内收齐并通过完整性校验。",
+        "failure": "缺片、超时或 CRC 错会阻止本轮触觉快照发布。",
+        "recovery": "这是 compact summary，不是完整 taxel raw dump。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_TAC_SUMMARY_BASE 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "Tactile summary uses seven frames, 0x240–0x246, with seven payload bytes each for summary, valid mask, and CRC input.",
+        "condition": "Source constant/expression: `0x240`. It defines the ID or range for this message class.",
+        "effect": "P4 reassembles by sequence and requires complete reception within 80 ms plus integrity validation.",
+        "failure": "Missing fragments, timeout, or CRC errors prevent publication of this tactile snapshot.",
+        "recovery": "This is a compact summary, not the full taxel raw dump.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_TAC_SUMMARY_BASE; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_f377128488921ce6835719d0"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_TAC_SUMMARY_LAST",
+      "zh": {
+        "plain": "0x246 是触觉摘要七帧 ID 区间的末帧。",
+        "condition": "源码常量/表达式：`0x246`。它定义该消息类别的 ID 值或区间。",
+        "effect": "接收端需要 base 至 last 的全部分片与一致 sequence 才能发布 summary。",
+        "failure": "末帧缺失或超出组包期限时，该轮摘要不完整。",
+        "recovery": "勿将末帧单独解释成一份完整触觉数据。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_TAC_SUMMARY_LAST 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "0x246 is the last frame in the seven-ID tactile-summary range.",
+        "condition": "Source constant/expression: `0x246`. It defines the ID or range for this message class.",
+        "effect": "The receiver needs every fragment from base through last with a matching sequence before publishing the summary.",
+        "failure": "If the last frame is missing or late, this summary is incomplete.",
+        "recovery": "Do not interpret the last frame alone as a complete tactile sample.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_TAC_SUMMARY_LAST; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_c700594da8ec01b301885e20"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_TAC_RAW_DIAG",
+      "zh": {
+        "plain": "0x3F0 专用于触觉 raw diagnostics，独立于 summary 和 full dump。",
+        "condition": "源码常量/表达式：`0x3F0`。它定义该消息类别的 ID 值或区间。",
+        "effect": "P4 按 diagnostic 类型解析该 ID，不将其并入触觉载荷分片。",
+        "failure": "版本或 DLC 不匹配时诊断字段无法可靠解读。",
+        "recovery": "核对诊断版本号及收发两端 packet type。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_TAC_RAW_DIAG 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "0x3F0 is reserved for tactile raw diagnostics, separate from summary and full dump.",
+        "condition": "Source constant/expression: `0x3F0`. It defines the ID or range for this message class.",
+        "effect": "P4 parses this ID as a diagnostic type and does not add it to tactile payload fragments.",
+        "failure": "A version or DLC mismatch makes diagnostic fields unreliable.",
+        "recovery": "Check the diagnostic version and packet type on both ends.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_TAC_RAW_DIAG; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_400e370e6d92661768457216"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_TAC_FULL_DUMP_BASE",
+      "zh": {
+        "plain": "全量触觉数据从 0x400 开始，按每帧七字节分片；需要帧数取决于 TACTILE_FULL_BYTES。",
+        "condition": "源码常量/表达式：`0x400`。它定义该消息类别的 ID 值或区间。",
+        "effect": "P4 以序号和 frame mask 重组大数据包，CAN full dump 还受独立配置开关控制。",
+        "failure": "缺帧/超时会令 dump 不完整；启用该流会提高 CAN 总线负载。",
+        "recovery": "仅在需要原始全量触觉数据时开启，并观察带宽。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_TAC_FULL_DUMP_BASE 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "Full tactile data starts at 0x400 and is fragmented at seven bytes per frame; count depends on TACTILE_FULL_BYTES.",
+        "condition": "Source constant/expression: `0x400`. It defines the ID or range for this message class.",
+        "effect": "P4 reassembles the large packet by sequence and frame mask; CAN full dump also has a separate configuration switch.",
+        "failure": "Missing frames/timeouts make the dump incomplete; enabling this stream increases CAN bus load.",
+        "recovery": "Enable only when full tactile data is needed and monitor bus load.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_TAC_FULL_DUMP_BASE; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_a2f2679981a483b1588916ac"
+      ]
+    },
+    {
+      "id": "graph:arch_can:node:CAN_ID_TAC_FULL_DUMP_LAST",
+      "zh": {
+        "plain": "full dump 末 ID 按 base 加帧数减一派生，帧数由 payload 字节数计算。",
+        "condition": "源码常量/表达式：`CAN_ID_TAC_FULL_DUMP_BASE + CAN_TAC_FULL_FRAME_COUNT - 1`。它定义该消息类别的 ID 值或区间。",
+        "effect": "两端必须按相同 payload 长度和每帧七字节规则计算末片位置。",
+        "failure": "派生结果不一致会造成漏认末片或整批重组失败。",
+        "recovery": "修改 payload 后核对 frame mask 位数和 receiver range。",
+        "unknown": "源码是静态协议定义，不能证明当前总线帧已到达、数据新鲜或传感器物理读数正确。",
+        "difference": "此节点说明 CAN_ID_TAC_FULL_DUMP_LAST 的编码/范围角色；其它 CAN 消息使用各自的 ID 区间和组包条件。",
+        "change": "基线未标记该 ID/协议定义为本次变更。"
+      },
+      "en": {
+        "plain": "The full-dump endpoint is derived as base plus frame count minus one; count comes from payload bytes.",
+        "condition": "Source constant/expression: `CAN_ID_TAC_FULL_DUMP_BASE + CAN_TAC_FULL_FRAME_COUNT - 1`. It defines the ID or range for this message class.",
+        "effect": "Both ends must derive the endpoint from the same payload size and seven-byte-per-frame rule.",
+        "failure": "A mismatch can misidentify the final fragment or prevent full reassembly.",
+        "recovery": "After payload changes, verify frame-mask width and receiver range.",
+        "unknown": "These are static protocol definitions; they do not prove a live frame arrived, data is fresh, or a physical sensor reading is correct.",
+        "difference": "This node describes the encoding/range role of CAN_ID_TAC_FULL_DUMP_LAST; other CAN messages have separate ID ranges and reassembly rules.",
+        "change": "The baseline does not mark this ID/protocol definition as changed."
+      },
+      "evidence_ids": [
+        "src_e9ff30a5133b5f07af31e7f0"
+      ]
+    }
+  ]
+}

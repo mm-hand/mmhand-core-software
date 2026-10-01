@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "instruction_version": 2,
+  "graph_id": "safety_rules",
+  "bundle_hash": "a1010b5c8d1e895f938814c0f850b0e9d6d6532d97a9dfc25bed86434d91700a",
+  "overview": {
+    "zh": "P4 安全目录总览，按规则代码前缀把规则分为七个可下钻的领域：ACT 执行器、CTL 控制、SYS 系统、CAL 自动标定、RCV 恢复、COM 通信、RUN 运行时，以及 WRN 警告。当前分类节点给出的规则数合计 103；它说明审计索引如何组织规则，不等于已证明每条运行时谓词正确或每种故障都能检测。具体触发式、调用点、事件和恢复入口要进入子图逐条核查。",
+    "en": "Top-level P4 safety catalog, grouped by rule-code family into seven drill-down domains: ACT actuator, CTL control, SYS system, CAL automatic calibration, RCV recovery, COM communication, RUN runtime, and WRN warnings. The group counts shown here total 103. This describes how the audit index organizes rules; it does not prove that every runtime predicate is correct or every fault is detected. Inspect each child graph for its trigger, caller, event, and recovery entry.",
+    "evidence_ids": [
+      "src_6ff235c62b80f00b7c873043",
+      "src_8fd664a5b450d070a4b109a3",
+      "src_874da4b4e5acec01d937f7f1",
+      "src_057b2727d652b873b5abfeb5",
+      "src_a1236e94fdbf07127a990f31",
+      "src_5d87917be5074709c684b591",
+      "src_ce9ed7d30ef40f0b1db215d9"
+    ]
+  },
+  "glossary": [],
+  "items": [
+    {
+      "id": "graph:safety_rules:node:rules",
+      "zh": {
+        "plain": "P4 安全规则目录根节点。其数据来自 `SafetyRuleCatalog.def` 并被索引分组；规则本身同时包含稳定 ID、代码、严重级别、层级、动作和恢复建议。此目录能帮助定位规则，不提供每个运行时判断式。",
+        "condition": "没有一个全局触发条件；该节点概览静态登记的规则。是否触发必须看各策略实现和调用点。",
+        "effect": "把规则按 ACT/CTL/SYS/CAL/RCV/COM/RUN/WRN 代码前缀分组并连到对应子图。",
+        "failure": "索引缺失或过期会使规则无法完整审计；索引存在不代表实现行为安全。",
+        "recovery": "先运行目录生成器并只读检查，再导出闭环 JSON；若检查缺引用，逐条修复索引链。",
+        "unknown": "它不能证明谓词覆盖、运行频率、误报率或硬件响应。",
+        "difference": "这是规则审计目录，不是 P4 执行中的状态或保护动作。",
+        "change": "基线未标记该目录节点变化。"
+      },
+      "en": {
+        "plain": "Root node for the P4 safety-rule catalog. Its data comes from `SafetyRuleCatalog.def` and is grouped into an index; each rule records a stable ID/code, severity, layer, action, and recovery advice. The catalog helps locate rules but does not contain every runtime predicate.",
+        "condition": "There is no single global trigger: this node summarizes statically registered rules. Inspect each policy implementation and caller to determine when it fires.",
+        "effect": "Groups rules by ACT/CTL/SYS/CAL/RCV/COM/RUN/WRN code prefix and links to the corresponding child graphs.",
+        "failure": "A missing or stale index prevents complete auditing; an index entry does not prove safe implementation behavior.",
+        "recovery": "Run the catalog generator and its read-only check, then export the closure JSON. Repair individual references when the audit reports gaps.",
+        "unknown": "It cannot prove predicate coverage, firing frequency, false-positive rate, or hardware response.",
+        "difference": "This is an audit catalog, not a P4 runtime state or protective action.",
+        "change": "The baseline does not mark this catalog node as changed."
+      },
+      "evidence_ids": [
+        "src_6ff235c62b80f00b7c873043"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_actuator",
+      "zh": {
+        "plain": "Actuator / ACT 规则子图入口，索引列出 14 条。本组按 `safety_actuator` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_actuator` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "驱动器命令和舵机动作边界，包括拒绝命令、输出所有权、舵机在线状态、逻辑/硬件行程、急停及多圈位置可信性。紧急级规则可禁用扭矩；具体谓词须在执行器策略和调用点子图中核对。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Actuator / ACT rule-group entry; the index lists 14 rules. This group is aggregated under `safety_actuator`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_actuator` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "Servo commands and actuator-motion boundaries: rejected commands, output ownership, servo online state, logical/hardware travel, E-STOP, and multi-turn trust. Emergency rules can disable torque; inspect the actuator policy and caller subgraph for exact predicates.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_6ff235c62b80f00b7c873043"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_calibration",
+      "zh": {
+        "plain": "Calibration / CAL 规则子图入口，索引列出 35 条。本组按 `safety_calibration` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_calibration` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "自动标定的输入、运动过程、结果计算/提交和质量警告。动作主要是停止标定运动，严重条件会升级为紧急停止；目录中的恢复建议不证明系统已自动恢复。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Calibration / CAL rule-group entry; the index lists 35 rules. This group is aggregated under `safety_calibration`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_calibration` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "Automatic-calibration inputs, motion, result calculation/commit, and quality warnings. Actions generally stop calibration motion, with severe conditions escalating to emergency handling; catalog recovery advice does not prove automatic recovery.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_8fd664a5b450d070a4b109a3"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_communication",
+      "zh": {
+        "plain": "Communication / COM 规则子图入口，索引列出 5 条。本组按 `safety_communication` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_communication` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "P4 与 S3/上位机之间的 CAN、编码器快照、触觉片段和上位帧输入。响应包含标记不可控、保持实际位置、拒绝帧或仅告警；要区分坏帧被拒绝与链路完全断开。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Communication / COM rule-group entry; the index lists 5 rules. This group is aggregated under `safety_communication`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_communication` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "CAN, encoder snapshots, tactile fragments, and upper-protocol input across P4, S3, and the desktop. Responses include uncontrollable marking, holding actual position, rejecting a frame, or warning only; distinguish one bad frame from a complete link loss.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_874da4b4e5acec01d937f7f1"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_control",
+      "zh": {
+        "plain": "Control / CTL 规则子图入口，索引列出 9 条。本组按 `safety_control` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_control` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "闭环控制数据和目标边界，包括反馈缺失、索引或编码器错误、映射角异常、碰撞保持、LUT/关节目标限幅及热插拔保持。保持位置、限幅、告警是不同动作，不能统称为“停机”。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Control / CTL rule-group entry; the index lists 9 rules. This group is aggregated under `safety_control`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_control` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "Closed-loop feedback and target boundaries: missing feedback, invalid index/encoder, mapped-angle faults, collision hold, LUT/joint-target clamps, and hot-plug hold. Holding position, clamping, and warning are distinct actions, not all equivalent to a stop.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_057b2727d652b873b5abfeb5"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_recovery",
+      "zh": {
+        "plain": "Recovery / RCV 规则子图入口，索引列出 3 条。本组按 `safety_recovery` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_recovery` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "恢复路径中多圈位置恢复或标定恢复相关的信任/等待检查。该组规模小，但它连接到安全恢复闭环；遇到未知多圈状态时不可假定恢复已完成。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Recovery / RCV rule-group entry; the index lists 3 rules. This group is aggregated under `safety_recovery`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_recovery` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "Trust and wait checks for multi-turn or calibration recovery. This group is small but belongs to the safety-recovery closure; an unknown multi-turn state must not be treated as recovered.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_a1236e94fdbf07127a990f31"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_runtime",
+      "zh": {
+        "plain": "Runtime / RUN 规则子图入口，索引列出 6 条。本组按 `safety_runtime` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_runtime` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "任务、队列、周期、栈和事件缓存等运行时资源保护。资源不足或运行时诊断队列问题可能使更高层状态/安全报告无法按预期推进。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "Runtime / RUN rule-group entry; the index lists 6 rules. This group is aggregated under `safety_runtime`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_runtime` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "Runtime-resource protection for tasks, queues, periods, stacks, and event caches. Resource exhaustion or diagnostic-queue problems can prevent higher-level state or safety reporting from progressing as intended.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_5d87917be5074709c684b591"
+      ]
+    },
+    {
+      "id": "graph:safety_rules:node:safety_system",
+      "zh": {
+        "plain": "System / SYS 规则子图入口，索引列出 31 条。本组按 `safety_system` 聚合，包含所描述的安全域；点入子图可查看规则级策略、调用者、事件和恢复链接。",
+        "condition": "本节点没有单一布尔准入式；它是分类/下钻节点，计数只表示索引收录数量。每条规则的触发谓词需要在对应策略实现中核验。",
+        "effect": "将该领域规则指向 `safety_system` 子图；子图用于逐条查看 policy、caller、event 与 recovery 索引。",
+        "failure": "若子图中的策略或调用入口缺失，闭环审计会暴露引用缺口；不过完整索引仍不能证明条件语义正确。",
+        "recovery": "进入子图，先按 rule code 定位具体策略和调用处，再读实现条件；遇到不一致时修正唯一维护源或生成索引。",
+        "unknown": "系统状态准入、READY 门槛、主机租约、DIRECT/FEEDBACK 模式、故障位与 Rope Init 等系统级规则。它们决定命令是否可进入状态机或是否退回不可控/空闲；详细准入表达式必须查对应状态处理函数。",
+        "difference": "该分类说明审计范围，不表示同组规则具有相同严重度或动作。",
+        "change": "基线未标记该分类节点变化。"
+      },
+      "en": {
+        "plain": "System / SYS rule-group entry; the index lists 31 rules. This group is aggregated under `safety_system`. Drill down to inspect rule-level policy, caller, event, and recovery links.",
+        "condition": "This is not one boolean admission predicate. It is a category/drill-down node; the count is the number indexed. Verify each trigger in its policy implementation.",
+        "effect": "Links rules in this domain to the `safety_system` subgraph, where policy, caller, event, and recovery references can be reviewed rule by rule.",
+        "failure": "Missing policy or caller links should appear as closure-audit gaps; a complete index still does not prove predicate semantics.",
+        "recovery": "Drill into the graph, locate a rule by code, and inspect its policy condition and caller. Repair the maintained source or generated index when links disagree.",
+        "unknown": "System-level rules for state admission, READY gates, host lease, DIRECT/FEEDBACK modes, fault bits, and Rope Init. They determine whether commands enter the state machine or return the system to uncontrollable/idle handling; inspect state handlers for exact admission expressions.",
+        "difference": "The category defines audit scope; it does not mean all rules share severity or action.",
+        "change": "The baseline does not mark this category node as changed."
+      },
+      "evidence_ids": [
+        "src_ce9ed7d30ef40f0b1db215d9"
+      ]
+    }
+  ]
+}
