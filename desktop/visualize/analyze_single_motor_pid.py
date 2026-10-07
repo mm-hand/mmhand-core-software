@@ -191,6 +191,23 @@ def load_joint_state_trace(session_dir: Path, joint: int) -> Optional[JointTrace
 def load_joint_trace(session_dir: Path, joint: int) -> JointTrace:
     trace = load_joint_state_trace(session_dir, joint)
     if trace is None:
+        # Historical recordings remain useful without restoring their live protocol.
+        path = find_topic_csv(session_dir, "_joint_debug_packets.csv")
+        if path is not None:
+            rows = [row for row in read_csv_rows(path)
+                    if safe_int(row.get("joint_index")) == joint
+                    and safe_int(row.get("valid")) == 1]
+            columns = tuple(np.asarray(values, dtype=float) for values in (
+                [row_time(row) for row in rows],
+                [safe_float(row.get("target_deg")) for row in rows],
+                [safe_float(row.get("actual_deg")) for row in rows],
+                [safe_float(row.get("loop1_output")) for row in rows],
+            ))
+            valid = np.isfinite(columns[0]) & np.isfinite(columns[1]) & np.isfinite(columns[2])
+            columns = deduplicate_time(tuple(column[valid] for column in columns))
+            if len(columns[0]) >= 3:
+                trace = JointTrace(*columns, path.name)
+    if trace is None:
         raise ValueError(f"session has no valid target/actual samples for J{joint:02d}")
     return trace
 

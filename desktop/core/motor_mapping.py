@@ -11,22 +11,21 @@
 from .protocol import ENCODER_COUNT, MOTOR_ABS_CMD_MAX, MOTOR_ABS_CMD_MIN, MOTOR_COUNT
 
 
-MOTOR_TO_JOINT_INDEX = [
-    0, 0, 1, 2, 3,
-    4, 4, 5, 6, 7,
-    8, 8, 9, 10, 11,
-    12, 12, 13, 14, 15,
-    16, 16, 17, 18, 19, 20, 20,
-]
-if len(MOTOR_TO_JOINT_INDEX) < MOTOR_COUNT:
-    MOTOR_TO_JOINT_INDEX.extend([-1] * (MOTOR_COUNT - len(MOTOR_TO_JOINT_INDEX)))
+import json
+from desktop.paths import URDF_JOINT_MAPPING_PATH
+
+_MODEL = json.loads(URDF_JOINT_MAPPING_PATH.read_text(encoding="utf-8"))
+MOTOR_TO_JOINT_INDEX = [-1] * MOTOR_COUNT
+for _joint in _MODEL["joints"]:
+    for _motor in _joint["motor_indices"]:
+        MOTOR_TO_JOINT_INDEX[int(_motor)] = int(_joint["joint_index"])
 
 JOINT_TO_PRIMARY_MOTOR_INDEX = [-1] * ENCODER_COUNT
 for _motor_idx, _joint_idx in enumerate(MOTOR_TO_JOINT_INDEX):
     if 0 <= _joint_idx < ENCODER_COUNT and JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] < 0:
         JOINT_TO_PRIMARY_MOTOR_INDEX[_joint_idx] = _motor_idx
 
-MOTOR_TENDON_SHORTEN_ABS_SIGN = [1] * MOTOR_COUNT
+MOTOR_TENDON_SHORTEN_ABS_SIGN = [int(motor["tendon_shorten_abs_sign"]) for motor in _MODEL["motors"]]
 
 
 def clamp_motor_abs(value: int) -> int:

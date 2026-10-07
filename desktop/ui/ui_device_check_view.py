@@ -29,6 +29,7 @@ from .ui_qt_compat import QtCore, QtGui, QtWidgets, Signal
 class DeviceCheckView(QtWidgets.QWidget):
     operation_finished = Signal(str, bool, str)
     manual_prepare_finished = Signal(object)
+    manual_capture_finished = Signal(int, bool, object)
 
     COL_STATUS = 0
     COL_JOINT = 1
@@ -78,6 +79,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         self._capture_max_buttons: list[QtWidgets.QPushButton] = []
         self.operation_finished.connect(self._on_operation_finished)
         self.manual_prepare_finished.connect(self._on_manual_prepare_finished)
+        self.manual_capture_finished.connect(self._on_manual_capture_finished)
         self._build()
 
     def _build(self) -> None:
@@ -99,14 +101,10 @@ class DeviceCheckView(QtWidgets.QWidget):
             "Reset online, uniquely routed servo turn counters, clear desktop multi-turn anchors, "
             "invalidate their Auto/LUT, then release these motors by 1500 counts"
         )
-        self.write_btn = QtWidgets.QPushButton("Write Modified")
-        self.write_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
-        self.write_btn.setToolTip("Persist only rows edited in this table, then read them back")
         self.clear_btn = QtWidgets.QPushButton("Clear Manual")
         self.clear_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogDiscardButton))
         self.clear_btn.setToolTip("Clear all Manual endpoints from P4 RAM and desktop JSON")
         toolbar_layout.addWidget(self.manual_prepare_btn)
-        toolbar_layout.addWidget(self.write_btn)
         toolbar_layout.addWidget(self.clear_btn)
         layout.addWidget(toolbar)
 
@@ -116,9 +114,9 @@ class DeviceCheckView(QtWidgets.QWidget):
             "Raw Dir",
             "Current Raw",
             "Manual Min",
-            "Use Raw",
+            "Set",
             "Manual Max",
-            "Use Raw",
+            "Set",
             "Manual Span",
             "Auto Min",
             "Auto Max",
@@ -202,6 +200,8 @@ class DeviceCheckView(QtWidgets.QWidget):
             self._auto_max_items.append(auto_max)
             self._current_min_items.append(current_min)
             self._flash_items.append(flash)
+            min_spin.setReadOnly(True)
+            max_spin.setReadOnly(True)
             self._manual_min_spins.append(min_spin)
             self._manual_max_spins.append(max_spin)
             self._capture_min_buttons.append(capture_min)
@@ -211,7 +211,6 @@ class DeviceCheckView(QtWidgets.QWidget):
         self.manual_prepare_btn.clicked.connect(
             lambda _checked=False: self.manual_prepare()
         )
-        self.write_btn.clicked.connect(lambda _checked=False: self.write_modified())
         self.clear_btn.clicked.connect(lambda _checked=False: self.clear_manual())
         self._refresh_buttons()
 
@@ -244,7 +243,7 @@ class DeviceCheckView(QtWidgets.QWidget):
         button = QtWidgets.QPushButton("Set")
         button.setFixedWidth(42)
         endpoint = "Manual Min" if is_min else "Manual Max"
-        button.setToolTip(f"Copy this joint's Current Raw into {endpoint}")
+        button.setToolTip(f"Capture latest valid backend raw into {endpoint}; both endpoints are required")
         button.clicked.connect(
             lambda _checked=False, idx=joint, target_min=is_min: self._capture_raw(idx, target_min)
         )
@@ -255,13 +254,34 @@ class DeviceCheckView(QtWidgets.QWidget):
         self._refresh_buttons()
 
     def _capture_raw(self, joint: int, is_min: bool) -> None:
-        raw = self._current_raw[joint] if 0 <= joint < len(self._current_raw) else None
-        if raw is None:
-            self.context.set_status(f"J{joint:02d} capture blocked: Current Raw is unavailable")
+        if self._busy or not self.context.is_comm_connected():
             return
-        target = self._manual_min_spins[joint] if is_min else self._manual_max_spins[joint]
-        target.setValue(int(raw))
-        self._mark_dirty(joint)
+        self._busy = True
+        self._refresh_buttons()
+        def capture():
+            try:
+                result = self.backend.capture_manual_endpoint(joint, is_min)
+            except Exception as exc:
+                result = SimpleNamespace(accepted=False, saved=False, raw=None, message=str(exc))
+            self.manual_capture_finished.emit(joint, is_min, result)
+        threading.Thread(target=capture, name="mmhand-manual-capture", daemon=True).start()
+
+    def _on_manual_capture_finished(self, joint: int, is_min: bool, result) -> None:
+        self._busy = False
+        if result.accepted and result.raw is not None:
+            target = self._manual_min_spins[joint] if is_min else self._manual_max_spins[joint]
+            target.blockSignals(True)
+            target.setValue(result.raw)
+            target.blockSignals(False)
+            self._dirty_rows.add(joint)
+        if result.saved:
+            self._dirty_rows.discard(joint)
+        self._flash_items[joint].setText("Saved" if result.saved else "Not saved")
+        self.context.set_status(result.message)
+        self.context.emit_action(result.message)
+        self._refresh_buttons()
+        if not result.accepted:
+            QtWidgets.QMessageBox.warning(self, "Manual capture", result.message)
 
     def _run_operation(self, name: str, callback: Callable[[], tuple[bool, str]]) -> None:
         if self._busy:
@@ -330,42 +350,6 @@ class DeviceCheckView(QtWidgets.QWidget):
             daemon=True,
         ).start()
 
-    def write_modified(self) -> None:
-        rows = sorted(self._dirty_rows)
-        if not rows:
-            self.context.set_status("Manual write skipped: no modified row")
-            return
-        values = [
-            (
-                joint,
-                int(self._manual_min_spins[joint].value()),
-                int(self._manual_max_spins[joint].value()),
-            )
-            for joint in rows
-        ]
-
-        def write_rows() -> tuple[bool, str]:
-            completed: list[int] = []
-            for joint, min_raw, max_raw in values:
-                if not self.backend.set_manual_encoder_reference(joint, min_raw, max_raw):
-                    done = ",".join(f"J{idx:02d}" for idx in completed) or "none"
-                    return False, (
-                        f"Manual write failed: J{joint:02d} min={min_raw} max={max_raw}; "
-                        f"completed={done}; ACK/readback/CRC/desktop JSON verification failed"
-                    )
-                completed.append(joint)
-            self.backend.query_manual_encoder_references()
-            details = ",".join(
-                f"J{joint:02d}[min={min_raw},max={max_raw}]"
-                for joint, min_raw, max_raw in values
-            )
-            return True, (
-                f"Manual saved and verified: {details}; "
-                "ACK=ok, readback=ok, CRC=ok, desktop JSON=saved; automatic calibration is required"
-            )
-
-        self._run_operation("Manual write", write_rows)
-
     def clear_manual(self) -> None:
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -390,7 +374,7 @@ class DeviceCheckView(QtWidgets.QWidget):
 
     def _on_operation_finished(self, name: str, ok: bool, message: str) -> None:
         self._busy = False
-        if ok and name in ("Manual write", "Manual clear"):
+        if ok and name in ("Manual clear",):
             self._dirty_rows.clear()
         self._refresh_buttons()
         self.context.set_status(message)
@@ -420,7 +404,6 @@ class DeviceCheckView(QtWidgets.QWidget):
     def _refresh_buttons(self) -> None:
         connected = bool(self.context.is_comm_connected())
         self.manual_prepare_btn.setEnabled(connected and not self._busy)
-        self.write_btn.setEnabled(connected and not self._busy and bool(self._dirty_rows))
         self.clear_btn.setEnabled(connected and not self._busy)
         for joint in range(ENCODER_COUNT):
             enabled = connected and not self._busy and self._current_raw[joint] is not None

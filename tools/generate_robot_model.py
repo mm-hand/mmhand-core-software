@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -15,13 +16,16 @@ import zlib
 from pathlib import Path
 from typing import Iterable
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.robot_model_source import inspect_source, validate_tree
+from desktop.core.model_resources import mesh_paths
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "desktop/resources/config/robot_model_manifest.json"
 DEFAULT_URDF = ROOT / "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf"
-DEFAULT_ADAPTER_MANIFEST = (
-    ROOT / "desktop/resources/hku_hand_v2_urdf/structure_urdf_adapter.json"
-)
+DEFAULT_SOURCE = ROOT / "desktop/resources/config/robot_model_source.json"
 DEFAULT_MAPPING = ROOT / "desktop/resources/config/urdf_joint_mapping.json"
 DEFAULT_FINGERPRINT = ROOT / "desktop/resources/config/product_fingerprint.json"
 DEFAULT_P4_LIMITS = (
@@ -30,6 +34,7 @@ DEFAULT_P4_LIMITS = (
 DEFAULT_P4_FINGERPRINT = (
     ROOT / "ESP32-P4/ServoBoardMain/src/generated/ProductFingerprint.generated.h"
 )
+DEFAULT_P4_BINDINGS = ROOT / "ESP32-P4/ServoBoardMain/src/generated/HardwareBindings.generated.h"
 EXPECTED_JOINT_COUNT = 21
 
 
@@ -78,12 +83,9 @@ def load_manifest(path: Path) -> dict:
     for expected, joint in enumerate(joints):
         if not isinstance(joint, dict) or int(joint.get("joint_index", -1)) != expected:
             raise ModelGenerationError(f"manifest joint order mismatch at J{expected:02d}")
-        for key in ("display_name", "source_urdf_joint_name", "urdf_joint_name"):
+        for key in ("display_name", "urdf_joint_name"):
             if not str(joint.get(key, "")).strip():
                 raise ModelGenerationError(f"J{expected:02d} missing {key}")
-        calibrated = joint.get("calibrated_default_range_deg")
-        if not isinstance(calibrated, list) or len(calibrated) != 2:
-            raise ModelGenerationError(f"J{expected:02d} calibrated range is invalid")
         motors = joint.get("motor_indices")
         if not isinstance(motors, list) or len(motors) not in (1, 2):
             raise ModelGenerationError(f"J{expected:02d} motor_indices is invalid")
@@ -94,6 +96,18 @@ def load_manifest(path: Path) -> dict:
             used_motors.add(motor)
     if used_motors != set(range(27)):
         raise ModelGenerationError("manifest must bind every motor M00-M26 exactly once")
+    if len({item["urdf_joint_name"] for item in joints}) != EXPECTED_JOINT_COUNT:
+        raise ModelGenerationError("duplicate control joint names in manifest")
+    motors = data.get("motors", [])
+    if len(motors) != 27 or [item.get("channel") for item in motors] != list(range(27)):
+        raise ModelGenerationError("manifest needs ordered motor channels M00-M26")
+    if len({item.get("servo_id") for item in motors}) != 27:
+        raise ModelGenerationError("duplicate physical servo IDs")
+    for motor in motors:
+        if not 0 <= int(motor["servo_id"]) <= 26 or int(motor["raw_modulo"]) != 4096:
+            raise ModelGenerationError(f"invalid servo topology: {motor}")
+        if motor.get("feedback_abs_sign") not in (-1, 1) or motor.get("tendon_shorten_abs_sign") not in (-1, 1):
+            raise ModelGenerationError(f"invalid motor direction: {motor}")
     return data
 
 
@@ -103,6 +117,7 @@ def load_urdf_limits(path: Path, manifest: dict) -> list[tuple[int, float, float
         root = ET.parse(path).getroot()
     except (OSError, ET.ParseError) as exc:
         raise ModelGenerationError(f"cannot parse active URDF {path}: {exc}") from exc
+    validate_tree(path, [item["urdf_joint_name"] for item in manifest["joints"]])
     by_name = {joint.get("name", ""): joint for joint in root.findall("joint")}
     limits: list[tuple[int, float, float]] = []
     for item in manifest["joints"]:
@@ -145,15 +160,8 @@ def mapping_crc32(version: int, limits: list[tuple[int, float, float]]) -> int:
     return zlib.crc32(payload) & 0xFFFFFFFF
 
 
-def _source_commit(adapter_manifest: Path) -> str:
-    if not adapter_manifest.is_file():
-        return "unknown"
-    value = _read_json(adapter_manifest).get("source_commit")
-    return str(value or "unknown")
-
-
 def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
-                   source_commit: str) -> str:
+                   source_commit: str, source_urdf_path: str = "") -> str:
     joints = []
     for semantic, (_, lower, upper) in zip(manifest["joints"], limits):
         min_endpoint = str(semantic["calibrated_min_endpoint"])
@@ -165,19 +173,17 @@ def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
             {
                 "joint_index": int(semantic["joint_index"]),
                 "display_name": str(semantic["display_name"]),
-                "source_urdf_joint_name": str(semantic["source_urdf_joint_name"]),
                 "urdf_joint_name": str(semantic["urdf_joint_name"]),
                 "urdf_limit_deg": [round(lower, 6), round(upper, 6)],
                 "calibrated_default_range_deg": [
-                    float(semantic["calibrated_default_range_deg"][0]),
-                    float(semantic["calibrated_default_range_deg"][1]),
+                    endpoint[min_endpoint], endpoint[max_endpoint],
                 ],
                 "urdf_at_calibrated_min_deg": round(endpoint[min_endpoint], 6),
                 "urdf_at_calibrated_max_deg": round(endpoint[max_endpoint], 6),
                 "is_coupled": bool(semantic["is_coupled"]),
                 "motor_indices": [int(v) for v in semantic["motor_indices"]],
-                "mapping_source": str(semantic["mapping_source"]),
-                "mapping_status": str(semantic["mapping_status"]),
+                "mapping_source": "original URDF and explicit motor binding",
+                "mapping_status": "unverified",
             }
         )
     data = {
@@ -188,9 +194,11 @@ def render_mapping(manifest: dict, limits: list[tuple[int, float, float]],
         "manual_scaled_mapping_version": int(manifest["manual_scaled_mapping_version"]),
         "p4_sync_required": False,
         "p4_generated_header_required": True,
-        "description": "Generated from robot_model_manifest.json and active hand.urdf; do not edit manually.",
+        "description": "Generated from original URDF and robot_model_manifest.json; do not edit manually.",
         "source_urdf": "desktop/resources/hku_hand_v2_urdf/urdf/hand.urdf",
         "source_commit": source_commit,
+        "source_urdf_path": source_urdf_path,
+        "motors": manifest["motors"],
         "joints": joints,
     }
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
@@ -243,8 +251,42 @@ def _tree_crc(paths: Iterable[Path], base: Path) -> int:
     for path in sorted(paths, key=lambda item: item.relative_to(base).as_posix()):
         relative = path.relative_to(base).as_posix().encode("utf-8")
         crc = zlib.crc32(relative + b"\0", crc)
-        crc = zlib.crc32(path.read_bytes(), crc)
+        crc = zlib.crc32(path.read_bytes().replace(b"\r\n", b"\n"), crc)
     return crc & 0xFFFFFFFF
+
+
+def topology_crc32(motors: list[dict]) -> int:
+    """拓扑 v2: >BB 版本/数量，随后按 Mxx 排序的 >BBHb 通道/ID/模数/反馈方向。"""
+    payload = bytearray(struct.pack(">BB", 2, len(motors)))
+    for motor in sorted(motors, key=lambda item: item["channel"]):
+        payload.extend(struct.pack(">BBHb", motor["channel"], motor["servo_id"],
+                                   motor["raw_modulo"], motor["feedback_abs_sign"]))
+    return zlib.crc32(payload) & 0xFFFFFFFF
+
+
+def render_p4_bindings(manifest: dict) -> str:
+    primary = ", ".join("{" + str(joint["motor_indices"][0]) + "}" for joint in manifest["joints"])
+    servo_ids = ", ".join("{" + str(motor["servo_id"]) + "}" for motor in manifest["motors"])
+    signs = ", ".join(str(motor["tendon_shorten_abs_sign"]) for motor in manifest["motors"])
+    groups = []
+    for joint in manifest["joints"]:
+        indices = joint["motor_indices"]
+        actuators = [f"{{{motor}, {1 if index == 0 else -1}, 0}}" for index, motor in enumerate(indices)]
+        if len(actuators) == 1:
+            actuators.append("{0xFF, 1, 0}")
+        groups.append("    {" + str(len(indices)) + ", {" + ", ".join(actuators) + "}}")
+    return """/**
+ * @file HardwareBindings.generated.h
+ * @brief 原始关节绑定表生成的 P4 拓扑数据，禁止手工编辑。
+ */
+#ifndef MMHAND_HARDWARE_BINDINGS_GENERATED_H
+#define MMHAND_HARDWARE_BINDINGS_GENERATED_H
+#include "../data/HardwareTypes.h"
+""" + f"JointMapItem jointMap[ENCODER_TOTAL_NUM] = {{{primary}}};\n" + \
+        f"MotorMapItem motorMap[SERVO_TOTAL_NUM] = {{{servo_ids}}};\n" + \
+        f"static constexpr int8_t kMotorTendonShortenAbsSign[SERVO_TOTAL_NUM] = {{{signs}}};\n" + \
+        "JointActuatorGroup jointActuatorGroups[ENCODER_TOTAL_NUM] = {\n" + ",\n".join(groups) + \
+        "\n};\n#endif // MMHAND_HARDWARE_BINDINGS_GENERATED_H\n"
 
 
 def build_fingerprint(manifest: dict, limits: list[tuple[int, float, float]],
@@ -261,27 +303,18 @@ def build_fingerprint(manifest: dict, limits: list[tuple[int, float, float]],
     source_files.append(ROOT / "desktop/resources/config/upper_protocol_schema.json")
     config_root = p4_root / "src/config"
     config_files = [path for path in config_root.rglob("*.h") if path.is_file()]
-    semantic_joints = [
-        {
-            "joint_index": int(item["joint_index"]),
-            "urdf_joint_name": item["urdf_joint_name"],
-            "motor_indices": item["motor_indices"],
-            "is_coupled": item["is_coupled"],
-        }
-        for item in manifest["joints"]
-    ]
     control_model_crc = mapping_crc32(
         int(manifest["manual_scaled_mapping_version"]), limits
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "model_id": str(manifest["model_id"]),
         "mapping_id": str(manifest["mapping_id"]),
         "feedback_mapping_version": int(manifest["feedback_mapping_version"]),
         "manual_scaled_mapping_version": int(manifest["manual_scaled_mapping_version"]),
         "control_model_crc": _hex32(control_model_crc),
         "visual_model_crc": _hex32(zlib.crc32(urdf_path.read_bytes()) & 0xFFFFFFFF),
-        "hardware_map_crc": _hex32(_crc32(semantic_joints)),
+        "hardware_map_crc": _hex32(topology_crc32(manifest["motors"])),
         "parameter_crc": _hex32(_tree_crc(config_files, ROOT)),
         "firmware_source_crc": _hex32(_tree_crc(source_files, ROOT)),
         "structure_commit_crc": _hex32(zlib.crc32(source_commit.encode("utf-8")) & 0xFFFFFFFF),
@@ -336,44 +369,104 @@ def _atomic_write(path: Path, content: str) -> None:
 def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
     manifest = load_manifest(args.manifest)
     limits = load_urdf_limits(args.urdf, manifest)
-    source_commit = _source_commit(args.adapter_manifest)
+    source = _read_json(DEFAULT_SOURCE)
+    source_commit = source["source_commit"]
     fingerprint = build_fingerprint(manifest, limits, args.urdf, source_commit)
     return {
-        args.mapping_output: render_mapping(manifest, limits, source_commit),
+        args.mapping_output: render_mapping(manifest, limits, source_commit, source["source_urdf_path"]),
         args.p4_limits_output: render_p4_limits(manifest, limits),
         args.fingerprint_output: render_fingerprint_json(fingerprint),
         args.p4_fingerprint_output: render_p4_fingerprint(fingerprint),
+        getattr(args, "p4_bindings_output", DEFAULT_P4_BINDINGS): render_p4_bindings(manifest),
     }
+
+
+def default_args() -> argparse.Namespace:
+    return argparse.Namespace(manifest=DEFAULT_MANIFEST, urdf=DEFAULT_URDF,
+        mapping_output=DEFAULT_MAPPING, fingerprint_output=DEFAULT_FINGERPRINT,
+        p4_limits_output=DEFAULT_P4_LIMITS, p4_fingerprint_output=DEFAULT_P4_FINGERPRINT,
+        p4_bindings_output=DEFAULT_P4_BINDINGS)
+
+
+def check_outputs() -> list[Path]:
+    source = _read_json(DEFAULT_SOURCE)
+    stale = []
+    resource_root = DEFAULT_URDF.parent.parent
+    for relative, digest in source["resource_sha256"].items():
+        path = resource_root / Path(relative).relative_to(source["package_path"])
+        if relative == source["source_urdf_path"]:
+            path = DEFAULT_URDF
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            stale.append(path)
+    mesh_paths(DEFAULT_URDF)
+    stale.extend(path for path, content in build_outputs(default_args()).items()
+                 if not path.is_file() or path.read_text(encoding="utf-8") != content)
+    return stale
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--urdf", type=Path, default=DEFAULT_URDF)
-    parser.add_argument("--adapter-manifest", type=Path, default=DEFAULT_ADAPTER_MANIFEST)
-    parser.add_argument("--mapping-output", type=Path, default=DEFAULT_MAPPING)
-    parser.add_argument("--fingerprint-output", type=Path, default=DEFAULT_FINGERPRINT)
-    parser.add_argument("--p4-limits-output", type=Path, default=DEFAULT_P4_LIMITS)
-    parser.add_argument("--p4-fingerprint-output", type=Path, default=DEFAULT_P4_FINGERPRINT)
-    parser.add_argument("--check", action="store_true", help="只检查生成物是否过期")
-    args = parser.parse_args()
+    parser.add_argument("urdf", type=Path, help="原始结构 Git 仓库中的 URDF 文件")
+    source_path = parser.parse_args().urdf
     try:
-        outputs = build_outputs(args)
-    except (OSError, ModelGenerationError) as exc:
+        manifest = load_manifest(DEFAULT_MANIFEST)
+        limits = load_urdf_limits(source_path, manifest)
+        source, repository, resources = inspect_source(source_path)
+        package = source_path.resolve().parent.parent
+        source["package_path"] = package.relative_to(repository).as_posix()
+        # 所有输入、资源和生成文本验证完成后才开始发布。
+        args = default_args()
+        args.urdf = source_path
+        fingerprint = build_fingerprint(manifest, limits, source_path, source["source_commit"])
+        outputs = {
+            DEFAULT_MAPPING: render_mapping(manifest, limits, source["source_commit"], source["source_urdf_path"]),
+            DEFAULT_P4_LIMITS: render_p4_limits(manifest, limits),
+            DEFAULT_FINGERPRINT: render_fingerprint_json(fingerprint),
+            DEFAULT_P4_FINGERPRINT: render_p4_fingerprint(fingerprint),
+            DEFAULT_P4_BINDINGS: render_p4_bindings(manifest),
+            DEFAULT_SOURCE: json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+        }
+        resource_bytes = {}
+        for relative in source["resource_sha256"]:
+            original = repository / relative
+            destination = DEFAULT_URDF.parent.parent / original.relative_to(package)
+            if original == source_path.resolve():
+                destination = DEFAULT_URDF
+            resource_bytes[destination] = original.read_bytes()
+    except (OSError, ValueError, ET.ParseError) as exc:
         print(f"robot model generation failed: {exc}", file=sys.stderr)
         return 2
 
-    stale = [path for path, content in outputs.items()
-             if not path.is_file() or path.read_text(encoding="utf-8") != content]
-    if args.check:
-        for path in stale:
-            print(f"generated robot-model file is stale: {path}", file=sys.stderr)
-        return 1 if stale else 0
-
-    for path, content in outputs.items():
-        _atomic_write(path, content)
-        print(f"generated {path}")
+    publish_outputs({**resource_bytes, **{path: text.encode("utf-8") for path, text in outputs.items()}})
     return 0
+
+
+def publish_outputs(outputs: dict[Path, bytes]) -> None:
+    """先暂存完整输出集合；替换失败时恢复原文件，避免半套模型。"""
+    staged, previous, installed = {}, {}, []
+    try:
+        for path, content in outputs.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            previous[path] = path.read_bytes() if path.exists() else None
+            fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+            staged[path] = Path(name)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
+            installed.append(path)
+    except OSError:
+        for path in reversed(installed):
+            if previous[path] is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(previous[path])
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

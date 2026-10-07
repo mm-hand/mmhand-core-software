@@ -75,7 +75,7 @@ PROJECT_ROOT_DIR = str(PROJECT_ROOT)
 DISPLAY_POLL_MS = 33
 STATE_RECORD_POLL_MS = 50
 TASK_DIAG_RENEW_INTERVAL_MS = 2000
-SYSTEM_STATUS_STALE_AFTER_S = 1.0
+SYSTEM_STATUS_STALE_AFTER_S = 0.6
 FAULT_STATUS_STALE_AFTER_S = 1.0
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
 
@@ -178,6 +178,9 @@ class HandGUI(QtWidgets.QMainWindow):
         self._display_timer = QtCore.QTimer(self)
         self._display_timer.timeout.connect(self._display_poll)
         self._display_timer.start(DISPLAY_POLL_MS)
+        self._port_scan_timer = QtCore.QTimer(self)
+        self._port_scan_timer.timeout.connect(self.refresh_ports)
+        self._port_scan_timer.start(1000)
         # Task Runtime 使用独立诊断租约；窗口存活期间周期续订，不能依赖运动控制心跳。
         self._task_diag_renew_timer = QtCore.QTimer(self)
         self._task_diag_renew_timer.setInterval(TASK_DIAG_RENEW_INTERVAL_MS)
@@ -198,8 +201,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.port_combo.setMinimumWidth(240)
         self.refresh_ports()
         self.port_combo.currentIndexChanged.connect(lambda _idx: self._on_port_selection_changed())
-        self.connect_btn = QtWidgets.QPushButton("Refresh")
-        self.connect_btn.clicked.connect(lambda _checked=False: self.refresh_ports())
         self.save_data_check = QtWidgets.QCheckBox("Save Data")
         # 基础 CSV 记录默认开启；在连接 P4 后自动创建会话。触觉全量数据仍由
         # _recording_format_options 控制，默认不写入，用户可随时取消勾选停止记录。
@@ -213,7 +214,7 @@ class HandGUI(QtWidgets.QMainWindow):
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.comm_conn_light,
-            self.connect_btn, self.save_data_check, self.start_indicator,
+            self.save_data_check,
         ]:
             toolbar.addWidget(widget)
 
@@ -372,16 +373,19 @@ class HandGUI(QtWidgets.QMainWindow):
             log_session("TASK_RUNTIME", f"unsubscribe failed: {exc}")
 
     def refresh_ports(self) -> None:
-        current = self.current_port
+        current = self.port_combo.currentData() or self.current_port
+        ports = self.backend.discover_ports()
         self.port_combo.blockSignals(True)
         self.port_combo.clear()
         self.port_combo.addItem("No Connection", None)
-        for device, desc in list_ports():
+        for device, desc in ports:
             self.port_combo.addItem(f"{device} ({desc})", device)
         if current:
             idx = self.port_combo.findData(current)
-            if idx >= 0:
-                self.port_combo.setCurrentIndex(idx)
+            if idx < 0:
+                self.port_combo.addItem(f"{current} (设备已离线)", current)
+                idx = self.port_combo.count() - 1
+            self.port_combo.setCurrentIndex(idx)
         self.port_combo.blockSignals(False)
 
     def connect_selected_port(self) -> bool:

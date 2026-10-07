@@ -16,18 +16,18 @@ def _args(tmp_path: Path, *, urdf: Path | None = None) -> argparse.Namespace:
     return argparse.Namespace(
         manifest=generate_robot_model.DEFAULT_MANIFEST,
         urdf=urdf or generate_robot_model.DEFAULT_URDF,
-        adapter_manifest=generate_robot_model.DEFAULT_ADAPTER_MANIFEST,
         mapping_output=tmp_path / "mapping.json",
         fingerprint_output=tmp_path / "fingerprint.json",
         p4_limits_output=tmp_path / "limits.h",
         p4_fingerprint_output=tmp_path / "fingerprint.h",
+        p4_bindings_output=tmp_path / "bindings.h",
         check=False,
     )
 
 
 def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
     outputs = generate_robot_model.build_outputs(_args(tmp_path))
-    assert len(outputs) == 4
+    assert len(outputs) == 5
     mapping = json.loads(outputs[tmp_path / "mapping.json"])
     fingerprint = json.loads(outputs[tmp_path / "fingerprint.json"])
 
@@ -40,7 +40,7 @@ def test_generator_outputs_desktop_and_p4_contracts(tmp_path: Path) -> None:
 def test_urdf_limit_change_updates_every_control_contract(tmp_path: Path) -> None:
     tree = ET.parse(generate_robot_model.DEFAULT_URDF)
     root = tree.getroot()
-    target = next(joint for joint in root.findall("joint") if joint.get("name") == "little_aa_joint")
+    target = next(joint for joint in root.findall("joint") if joint.get("name") == "Little_MCP_AA")
     target.find("limit").set("upper", "1.000000")
     changed_urdf = tmp_path / "hand.urdf"
     tree.write(changed_urdf, encoding="utf-8", xml_declaration=True)

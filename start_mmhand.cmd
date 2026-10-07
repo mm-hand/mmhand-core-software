@@ -19,7 +19,7 @@ if defined MMHAND_ROS_SETUP (
     if errorlevel 1 goto :failed
 )
 pushd "%~dp0" || goto :failed
-"%MMHAND_PYTHON%" -m desktop ui %*
+"%MMHAND_PYTHON%" -m desktop %*
 set "result=%errorlevel%"
 popd
 if "%result%"=="0" exit /b 0

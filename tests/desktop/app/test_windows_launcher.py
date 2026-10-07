@@ -47,7 +47,7 @@ def test_launcher_paths_setup_and_argument_forwarding(launcher):
     result = run_cmd(f'"{root / "start_mmhand.cmd"}" --no-ros2 --port "COM 7"', root, env)
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(result.stdout)
-    assert data == {"args": ["ui", "--no-ros2", "--port", "COM 7"],
+    assert data == {"args": ["--no-ros2", "--port", "COM 7"],
                     "cwd": str(root), "setup": "ready"}
 
 
@@ -70,7 +70,7 @@ def test_double_click_without_virtualenv_or_configuration(launcher, source):
         assert b"Python not found" in result.stdout
     else:
         assert result.returncode == 0, result.stdout + result.stderr
-        assert json.loads(result.stdout)["args"] == ["ui"]
+        assert json.loads(result.stdout)["args"] == []
 
 
 @pytest.mark.parametrize("failure", ["python", "setup_missing", "setup_failed", "app_failed"])
@@ -118,5 +118,5 @@ def test_generated_shortcut_runs_same_entry(launcher, with_setup):
     )
     assert launched.returncode == 0, launched.stdout + launched.stderr
     assert json.loads(launched.stdout) == {
-        "args": ["ui"], "cwd": str(root), "setup": "ready" if with_setup else None,
+        "args": [], "cwd": str(root), "setup": "ready" if with_setup else None,
     }

@@ -36,8 +36,9 @@ def test_legacy_target_space_is_rejected() -> None:
 
 
 def test_semantic_thumb_names_use_canonical_j16_to_j20_order() -> None:
-    assert joint_index_for_urdf_name("thumb_aa_joint") == 16
-    assert joint_index_for_urdf_name("thumb_cmc1_joint") == 20
+    assert joint_index_for_urdf_name("Thumb_MCP_AA") == 16
+    assert joint_index_for_urdf_name("Thumb_CMC") == 20
+    assert joint_index_for_urdf_name("thumb_aa_joint") is None
     assert joint_index_for_urdf_name("5-1") is None
 
 

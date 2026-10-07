@@ -97,7 +97,7 @@ class ManualControlView(_ModeBody):
         motor_page_layout.addWidget(panel.motor_table, 1)
         panel._sync_scope_group_checks()
         panel.test_panel = panel._build_test_panel()
-        panel.tabs.addTab(panel.device_check_view, "Device Check")
+        panel.tabs.addTab(panel.device_check_view, "Calibrate")
         panel.tabs.addTab(joint_page, "Joint Channels")
         panel.tabs.addTab(panel.motor_page, "Motor Channels")
         panel.tabs.addTab(panel.test_panel, "Test")

@@ -1,0 +1,27 @@
+name: Repository checks
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y g++ libegl1 libopengl0
+      - run: python -m pip install -r desktop/requirements.txt pytest
+      - run: python tools/check.py
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install the verified ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.10 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Compile P4 without uploading
+        run: arduino-cli compile --fqbn esp32:esp32:esp32p4:ChipVariant=prev3 --libraries ESP32-P4/libraries ESP32-P4/ServoBoardMain

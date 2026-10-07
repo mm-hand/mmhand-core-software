@@ -22,10 +22,10 @@ def test_replay_runner_forwards_ros2_configuration(monkeypatch) -> None:
         port="PORT",
         tactile_port="TACTILE",
         ros2_enabled=True,
-        ros_topic="/raw_ik_target",
+        ros_topic="/mmhand/joint_targets",
     )
 
-    assert calls == [(backend, "PORT", "TACTILE", True, "/raw_ik_target")]
+    assert calls == [(backend, "PORT", "TACTILE", True, "/mmhand/joint_targets")]
 
 
 @pytest.mark.parametrize("enabled,fails", [(True, False), (True, True), (False, False)])
@@ -47,7 +47,7 @@ def test_ros2_startup_and_manual_fallback(monkeypatch, enabled, fails, mode):
     backend.start.assert_not_called()
     backend.connect.assert_not_called()
     if enabled:
-        assert factory.call_args.kwargs["auto_start"] is False
+        factory.assert_called_once_with(backend)
         bridge.start.assert_called_once()
     else:
         factory.assert_not_called()
@@ -56,7 +56,9 @@ def test_ros2_startup_and_manual_fallback(monkeypatch, enabled, fails, mode):
         log.assert_called_once_with("ROS2", "startup failed: missing rclpy")
     else:
         warning.assert_not_called()
-    assert bridge.stop.call_count == int(enabled and not fails)
+    assert bridge.stop.call_count == int(enabled)
+    backend.shutdown.assert_called_once_with(stop_lower=True)
+    backend.disconnect_tactile_serial.assert_called_once()
 
 
 def test_ros2_warning_waits_for_gui_event_loop(monkeypatch):
@@ -87,3 +89,16 @@ def test_gui_failure_still_stops_ros2_bridge(monkeypatch):
     with pytest.raises(RuntimeError, match="GUI failure"):
         ui_runner.run_ui(backend=Mock())
     bridge.stop.assert_called_once()
+
+
+def test_ros2_cleanup_failure_cannot_prevent_device_shutdown(monkeypatch):
+    bridge = Mock()
+    bridge.stop.side_effect = RuntimeError("cleanup failed")
+    backend = Mock()
+    monkeypatch.setattr(ui_runner, "_configure_gui_diagnostics", lambda: None)
+    monkeypatch.setattr(ui_runner, "_make_ros2_bridge", Mock(return_value=bridge))
+    monkeypatch.setattr(ui_runner, "run", Mock())
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        ui_runner.run_ui(backend=backend)
+    backend.shutdown.assert_called_once_with(stop_lower=True)
+    backend.disconnect_tactile_serial.assert_called_once()

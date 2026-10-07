@@ -22,7 +22,8 @@ from .calibration_workflow import (
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
-from .protocol import ControlMode, ENCODER_COUNT
+from .protocol import ControlMode, ENCODER_COUNT, directed_encoder_delta
+from .calibration_snapshot import joint_calib_result_tendon_lut_abs_ranges
 from .session_log import log_session
 
 
@@ -90,6 +91,14 @@ class JointCommandResult:
     targets: List[float] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ManualCaptureResult:
+    accepted: bool
+    saved: bool
+    raw: Optional[int]
+    message: str
+
+
 class HandBackend:
     """UI-free orchestration layer above HandController.
 
@@ -103,6 +112,10 @@ class HandBackend:
         controller: Optional[HandController] = None,
     ) -> None:
         self._controller = controller or HandController()
+        self._manual_capture_lock = threading.RLock()
+        self._manual_drafts: dict[int, dict[str, int]] = {}
+        self._port_scan_ts = float("-inf")
+        self._port_scan_cache: tuple = ()
         self._calibration_workflow = CalibrationWorkflowService(self._controller)
         self.tactile_port = ""
         self.tactile_comm: Optional[TactileSerialComm] = None
@@ -203,10 +216,20 @@ class HandBackend:
         with self._controller.state_lock:
             return clone_hand_model(self._controller.current_state)
 
+    def discover_ports(self) -> tuple:
+        """每秒刷新发现结果；只枚举端口，不修改选择或连接。"""
+        now = time.monotonic()
+        if now - self._port_scan_ts >= 1.0:
+            self._port_scan_cache = tuple(list_ports())
+            self._port_scan_ts = now
+        return self._port_scan_cache
+
     def get_current_state(self) -> HandModel:
         return self._controller.current_state
 
     def connect(self, port: str) -> bool:
+        with self._manual_capture_lock:
+            self._manual_drafts.clear()
         self._calibration_workflow.cancel()
         self.cancel_replay_motion("connect")
         self.set_ros2_output_armed(False, reason="connect")
@@ -222,6 +245,8 @@ class HandBackend:
         """关闭上位机链路；默认交由 P4 租约 Hold，显式急停才下发 STOP。"""
         self.cancel_replay_motion("shutdown")
         self._calibration_workflow.cancel()
+        with self._manual_capture_lock:
+            self._manual_drafts.clear()
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="shutdown")
             self._requested_active_joint_mask = None
@@ -845,11 +870,55 @@ class HandBackend:
             joint, manual_min_raw, manual_max_raw
         )
 
+    def capture_manual_endpoint(self, joint: int, is_min: bool) -> ManualCaptureResult:
+        """捕获核心快照中的新鲜 raw；完整本轮端点对才安装并保存。"""
+        joint = int(joint)
+        with self._manual_capture_lock:
+            if not 0 <= joint < ENCODER_COUNT or not self.is_comm_connected():
+                return ManualCaptureResult(False, False, None, "Manual capture rejected: device disconnected or joint invalid")
+            state = self.get_state_snapshot()
+            age = time.time() - float(state.encoder_raw_last_rx_ts or 0)
+            encoder = state.encoders[joint]
+            if (not state.has_encoder_raw_data or not 0 <= age <= 0.3
+                    or encoder.raw_error or not 0 <= int(encoder.raw_sensor) < 16384
+                    or (state.has_encoder_health_status and not state.encoder_online_bitmap & (1 << joint))):
+                return ManualCaptureResult(False, False, None, f"J{joint:02d}：磁编采样无效或过期。检查 S3 后重试。")
+            if not state.has_manual_reference_encoder_directions:
+                return ManualCaptureResult(False, False, None, f"J{joint:02d}：尚无 P4 安装方向。等待设备状态后重试。")
+            direction = int(state.manual_reference_encoder_directions[joint])
+            if direction not in (-1, 1):
+                return ManualCaptureResult(False, False, None, f"J{joint:02d}：安装方向无效。检查 P4 配置。")
+            raw = int(encoder.raw_sensor)
+            draft = self._manual_drafts.setdefault(joint, {})
+            draft["min" if is_min else "max"] = raw
+            if len(draft) < 2:
+                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：端点草稿已捕获，请 Set 另一端；尚未保存。")
+            span = directed_encoder_delta(draft["min"], draft["max"], direction)
+            if not 0 < span < 8192:
+                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：端点行程 {span} counts 无效。检查方向并重新 Set；尚未保存。")
+            try:
+                saved = bool(self._controller.set_manual_encoder_reference(joint, draft["min"], draft["max"]))
+            except Exception as exc:
+                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：保存或安装失败：{exc}。草稿保留，可重新 Set 重试。")
+            if not saved:
+                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：未保存或未确认安装。草稿保留，检查连接后重新 Set 重试。")
+            self._manual_drafts.pop(joint, None)
+            return ManualCaptureResult(True, True, raw, f"J{joint:02d} Manual 已保存并安装，需重新自动标定。")
+
+    @staticmethod
+    def joint_motor_lut_ranges(result, joint: int):
+        """提供展示所需的已验证 LUT 范围，UI 不解析持久化格式。"""
+        return joint_calib_result_tendon_lut_abs_ranges(result, joint)
+
     def query_manual_encoder_references(self) -> bool:
         return self._controller.query_manual_encoder_references()
 
     def clear_manual_encoder_references(self) -> bool:
-        return self._controller.clear_manual_encoder_references()
+        with self._manual_capture_lock:
+            ok = self._controller.clear_manual_encoder_references()
+            if ok:
+                self._manual_drafts.clear()
+            return ok
 
     def rope_init(self, active_joint_mask: int) -> bool:
         return self._controller.rope_init(active_joint_mask)

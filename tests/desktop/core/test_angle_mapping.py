@@ -59,11 +59,8 @@ def test_feedback_mapping_declares_current_v4_manual_contract():
 
 def test_generated_p4_urdf_limits_are_current_and_crc_matches():
     root = Path(__file__).resolve().parents[3]
-    subprocess.run(
-        [sys.executable, str(root / "tools" / "generate_robot_model.py"), "--check"],
-        cwd=root,
-        check=True,
-    )
+    from tools.generate_robot_model import check_outputs
+    assert check_outputs() == []
     version, _ = angle_mapping.urdf_feedback_mapping_metadata()
     header = (
         root

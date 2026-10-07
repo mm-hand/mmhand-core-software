@@ -59,9 +59,7 @@ from .ui_control_common import (
     motor_tendon_shorten_abs_sign,
 )
 from .ui_dialogs import show_scrollable_message
-from desktop.core.calibration_snapshot import (
-    joint_calib_result_tendon_lut_abs_ranges,
-)
+from desktop.core.hand_backend import HandBackend
 from desktop.core.generated_upper_protocol import STATE_SYNC_ALL
 from desktop.core.safety_rules import explain_direct_reject
 from desktop.core.session_log import log_session
@@ -1336,7 +1334,7 @@ class ControlPanelStateMixin:
         details: List[str] = []
         results = getattr(state, "joint_calib_results", []) or []
         result = results[joint_idx] if joint_idx < len(results) else None
-        for motor_idx, lo, hi in joint_calib_result_tendon_lut_abs_ranges(
+        for motor_idx, lo, hi in HandBackend.joint_motor_lut_ranges(
             result, joint_idx
         ):
             shorten_sign = motor_tendon_shorten_abs_sign(motor_idx)

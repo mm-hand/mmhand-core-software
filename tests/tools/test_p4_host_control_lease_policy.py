@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,14 +15,14 @@ P4_SRC = REPO_ROOT / "ESP32-P4" / "ServoBoardMain" / "src"
 
 
 def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Path) -> None:
-    compiler = shutil.which("g++") or shutil.which("clang++")
+    compiler = os.environ.get("MMHAND_CXX") or shutil.which("g++") or shutil.which("clang++")
     if compiler is None:
-        pytest.skip("C++ compiler is unavailable")
+        pytest.fail("A native C++ compiler is required; set MMHAND_CXX to its executable")
 
     source = tmp_path / "host_control_lease_policy_test.cpp"
     source.write_text(
         r'''
-#include "safety/HostControlLeasePolicy.h"
+#include "safety/policies/HostLeaseSafetyPolicy.h"
 #include "config/SafetyConfig.h"
 #include "data/ActuatorTypes.h"
 #include "data/SystemTypes.h"
@@ -69,10 +70,11 @@ int main()
     subprocess.run(
         [
             compiler,
+            *(["c++"] if Path(compiler).stem == "zig" else []),
             "-std=c++17",
             f"-I{P4_SRC}",
             str(source),
-            str(P4_SRC / "safety" / "HostControlLeasePolicy.cpp"),
+            str(P4_SRC / "safety" / "policies" / "HostLeaseSafetyPolicy.cpp"),
             "-o",
             str(executable),
         ],

@@ -1,82 +1,32 @@
 # Desktop Application
 
-`desktop` 是 mmhand 上位机 Python package。当前统一入口是：
-
-```bash
+```powershell
 python -m desktop
+python -m desktop --no-ros2
 ```
 
-旧的 `desktop/development_mode.py`、`desktop/ui_main.py` 和 `desktop/main.py` 兼容入口已经删除。请使用 `python -m desktop ui|cli`，或直接导入 `desktop.app`、`desktop.core`、`desktop.ui` 下的模块。
+无参数打开 Qt GUI。端口及 Monitor/Replay 在界面中选择，连接和重连不自动授权运动。
+业务参数只保留 `--no-ros2`；旧 `ui`、`cli`、端口、模式和自动启动参数明确报错。
+未安装 ROS2 时 GUI 正常启动，ROS 输入显示不可用原因。
 
-## Environment
+检查入口：
 
-常用验证环境：
-
-```bash
-conda activate torch
+```powershell
+python tools/check.py
+python tools/check.py --fast
 ```
 
-基础检查：
+完整检查需要原生 C++ 编译器，可用 `MMHAND_CXX` 指定其可执行文件。
+快速检查用于现有提交 hook；固件构建及实机验收需另外执行。
 
-```bash
-python -m desktop --help
-python -m desktop ui --help
-python -m desktop cli --help
-python tools/check_desktop_architecture.py
-python -m compileall -q desktop tests
-pytest -q tests
+模型生成：
+
+```powershell
+python tools/generate_robot_model.py "<结构仓库中的原始 URDF 路径>"
 ```
 
-正式运行模块统一使用“职责、线程、输入、输出、状态所有权、禁止依赖”六项中文文件头。
-分层边界、允许依赖和新增文件维护方式见 [ARCHITECTURE_P0.md](ARCHITECTURE_P0.md)。
-
-ROS2 功能需要当前 Python 环境能导入 `rclpy` 和 `std_msgs`。如果使用 ROS2 Jazzy，请注意它通常绑定 Python 3.12；不要把 ROS2 的 Python 3.12 site-packages 混到 Python 3.10 环境中运行。
-
-## Entrypoints
-
-主入口：
-
-```bash
-python -m desktop
-```
-
-对应文件：
-
-- `desktop/__main__.py`：`python -m desktop` 入口。
-- `desktop/app/entry.py`：argparse 参数解析和 `ui`/`cli` 子命令分发。
-- `desktop/app/ui_runner.py`：UI 模式启动、ROS2 bridge 生命周期管理。
-- `desktop/app/cli_monitor.py`：CLI 监视和控制入口。
-
-## UI Mode
-
-启动 monitor UI：
-
-```bash
-python -m desktop ui --mode monitor
-```
-
-连接 P4 主串口：
-
-```bash
-python -m desktop ui --mode monitor --port COMx
-```
-
-同时指定 S3 tactile 串口：
-
-```bash
-python -m desktop ui --mode monitor --port COMx --tactile-port COMy
-```
-
-可选 UI mode：
-
-- `monitor`：常规监视和控制界面。
-- `replay`：读取 Save Data 中已实际下发的关节命令 CSV，并按原时间轴整段回放。
-
-示例：
-
-```bash
-python -m desktop ui --mode replay --port COMx
-```
+结构仓库必须干净，URDF 与资源必须已跟踪。检查全部通过后更新固定生成位置。
+绑定表维护原名关节与电机关系；限位来自原始 URDF。
 
 ## Replay 动作轨迹
 
@@ -125,78 +75,12 @@ Joint Debug 原始包和五指触觉宽表不再保存；需要触觉阵列明�
 - `06_操作事件总表.csv`：记录 `collision_monitor_enter/exit` 和
   `collision_hold_enter/release`，并注明具体关节和位图。
 
-## CLI Mode
-
-启动 CLI monitor：
-
-```bash
-python -m desktop cli --port COMx
-```
-
-禁用调试 plot：
-
-```bash
-python -m desktop cli --port COMx --no-plot
-```
-
-CLI 控制键：
-
-- `s`：start
-- `x`：stop
-- `r`：reset
-- `c`：calibrate
-- `q`：quit
-
-CLI 只通过 `HandBackend` 操作硬件，不直接持有或调用 `HandController`。
-它显示当前 P4 映射关节角与 27 路舵机反馈；不依赖已删除的 `JOINT1_DEBUG` 包。
-
 ## ROS2 Joint Target Input
 
-ROS2 输入桥默认启用；没有 ROS2 环境或只使用普通 UI 时，可显式加
-`--no-ros2` 关闭。
-
-UI + ROS2：
-
-```bash
-python -m desktop ui --mode monitor --port COMx
-```
-
-CLI + ROS2：
-
-```bash
-python -m desktop cli --port COMx
-```
-
-自定义 topic：
-
-```bash
-python -m desktop cli --port COMx --ros2 --ros-topic /mmhand/joint_targets
-```
-
-自动 start：
-
-```bash
-python -m desktop cli --port COMx --ros2 --auto-start
-```
-
-`--auto-start` 只启动普通控制器，不会自动放行遥操。GUI 中还需点击
-`ROS2 INPUT`；CLI 中按 `i` 开启、按 `o` 关闭。ROS2 节点在未授权时
-仍持续接收最新角度，但不会向 P4 下发运动命令。
-
-ROS2 消息约定：
-
-- topic 默认值：`/mmhand/joint_targets`
-- type：`std_msgs.msg.Float32MultiArray`
-- data length：必须正好为 21
-- unit：degree
-- order：desktop J00-J20
-- invalid length、NaN、Inf 会被拒收并节流 warning
-
-测试发布脚本：
-
-```bash
-python -m desktop.examples.ros2_joint_target_sender
-```
+固定 topic `/mmhand/joint_targets`，类型 `std_msgs/msg/Float32MultiArray`。
+`data` 为 21 个有限数值，单位 degree，顺序 J00–J20，含义为当前控制模型的原始 URDF 关节角。
+非法消息整帧拒绝，原因限频记录。通过 GUI 授权后才能发送；STOP、急停和断联撤销授权。
+高频订阅只保留最新帧，不支持自定义 topic、单位切换、raw_ik 或自动使能。
 
 ## Directory Structure
 
@@ -210,16 +94,15 @@ desktop/
   requirements.txt            # desktop 依赖说明
 
   app/
-    entry.py                  # argparse 子命令：ui、cli
+    entry.py                  # Qt 启动参数解析
     ui_runner.py              # UI 启动和 mode 分发
-    cli_monitor.py            # CLI monitor/control
 
   core/
     protocol.py               # P4 串口协议打包/解析
     data_models.py            # 核心状态数据模型
     comm_layer.py             # 串口通信层
     core_logic.py             # HandController 等核心控制逻辑
-    hand_backend.py           # UI/CLI/ROS2 共用 backend facade
+    hand_backend.py           # UI/ROS2 共用 backend facade
     motor_mapping.py          # 电机/关节映射与直控辅助函数
     angle_mapping.py          # 关节/电机映射
     auto_calib_logger.py      # 自动标定日志
