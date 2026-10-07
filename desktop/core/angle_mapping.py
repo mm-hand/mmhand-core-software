@@ -218,7 +218,6 @@ for _idx, _spec in JOINT_SPECS.items():
     JOINT_NAME_TO_INDEX[f"J{_idx:02d}"] = _idx
     JOINT_NAME_TO_INDEX[str(_idx)] = _idx
 
-_CALIB_CACHE: tuple[float, Dict[int, tuple[float, float]]] | None = None
 
 
 class AngleMappingError(ValueError):
@@ -261,15 +260,11 @@ def _has_consistent_auto_raw_endpoints(item: dict) -> bool:
 def load_calibrated_ranges(
     snapshot_path: Path | str | None = None,
 ) -> Dict[int, tuple[float, float]]:
-    path = Path(CALIB_LOAD_SNAPSHOT_PATH if snapshot_path is None else snapshot_path)
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
+    # Device ownership belongs to the backend. Pure mapping has no device identity
+    # and must never infer calibration from the legacy global file.
+    if snapshot_path is None:
         return {}
-
-    global _CALIB_CACHE
-    if path == CALIB_LOAD_SNAPSHOT_PATH and _CALIB_CACHE is not None and _CALIB_CACHE[0] == mtime:
-        return dict(_CALIB_CACHE[1])
+    path = Path(snapshot_path)
 
     ranges: Dict[int, tuple[float, float]] = {}
     try:
@@ -312,8 +307,6 @@ def load_calibrated_ranges(
                 # 当前 URDF 静态上下限，不能让历史 Auto Span 再次改变比例。
                 ranges[idx] = (urdf_min, urdf_max)
 
-    if path == CALIB_LOAD_SNAPSHOT_PATH:
-        _CALIB_CACHE = (mtime, dict(ranges))
     return ranges
 
 
@@ -346,7 +339,7 @@ def urdf_to_calibrated(
     """URDF rad -> calibrated/hardware command degrees.
 
     This is a temporary linear mapping framework. The measured calibration
-    range is read from the active V6 calibration bundle. If no
+    range requires an explicitly selected device snapshot. If no
     calibrated range is available and allow_default is False, this raises.
     """
     idx = resolve_joint(joint)

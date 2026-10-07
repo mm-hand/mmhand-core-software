@@ -514,6 +514,7 @@ def update_manual_snapshot(
     valid_mask: int,
     min_raw: list[int],
     max_raw: list[int],
+    identity: dict | None = None,
 ) -> dict:
     """更新 V6 Manual 数据，并只失效端点真正变化关节的 Auto/LUT 与限位。"""
     with snapshot_write_transaction():
@@ -522,6 +523,7 @@ def update_manual_snapshot(
             valid_mask=valid_mask,
             min_raw=min_raw,
             max_raw=max_raw,
+            identity=identity,
         )
 
 
@@ -531,11 +533,15 @@ def _update_manual_snapshot_locked(
     valid_mask: int,
     min_raw: list[int],
     max_raw: list[int],
+    identity: dict | None = None,
 ) -> dict:
     """在快照写事务内更新 Manual 数据。"""
     target = Path(path)
     if target.exists():
         payload = read_snapshot(target)
+        if identity is not None and any(payload.get(key) != identity.get(key)
+                for key in ("device_id", "urdf_repo_path")):
+            raise CalibrationSnapshotError("existing Manual snapshot identity mismatch")
     else:
         payload = _empty_v6_snapshot()
     if len(min_raw) != ENCODER_COUNT or len(max_raw) != ENCODER_COUNT:
@@ -599,6 +605,8 @@ def _update_manual_snapshot_locked(
     )
     payload["updated_joint_mask"] = format_mask(changed_mask)
     payload["updated_motor_mask"] = format_mask(invalid_motor_mask)
+    if identity is not None:
+        payload.update(identity)
     payload["saved_at_host_time"] = time.time()
     return atomic_write_snapshot(target, payload)
 
@@ -711,6 +719,9 @@ def merge_snapshot(
 
     if previous is not None:
         validate_snapshot(previous)
+        if "device_id" in current and any(previous.get(key) != current.get(key)
+                for key in ("device_id", "urdf_repo_path")):
+            raise CalibrationSnapshotError("existing Auto snapshot identity mismatch")
         merged = json.loads(json.dumps(previous, ensure_ascii=False))
     else:
         merged = _empty_v6_snapshot()
@@ -804,6 +815,9 @@ def merge_snapshot(
     merged["schema_version"] = CALIBRATION_SNAPSHOT_SCHEMA_VERSION
 
     for key in (
+        "device_id",
+        "urdf_repo_path",
+        "product_fingerprint",
         "hand_profile",
         "feedback_mapping_version",
         "manual_scaled_mapping_version",

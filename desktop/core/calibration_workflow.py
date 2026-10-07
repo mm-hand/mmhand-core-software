@@ -82,7 +82,8 @@ class CalibrationWorkflowService:
 
     def __init__(self, controller, snapshot_path=CALIB_LOAD_SNAPSHOT_PATH):
         self._controller = controller
-        self._store = CalibrationSnapshotStore(snapshot_path)
+        self._store_override = snapshot_path != CALIB_LOAD_SNAPSHOT_PATH
+        self._snapshot_store = CalibrationSnapshotStore(snapshot_path)
         self._executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="mmhand-calibration",
@@ -103,6 +104,28 @@ class CalibrationWorkflowService:
         self._last_observation_signature = ""
         self._last_calib_status = "IDLE"
         self._last_notice = ""
+
+    @property
+    def _store(self):
+        if not self._store_override:
+            path = self._controller.calibration_snapshot_path
+            if self._snapshot_store.path != path:
+                self._snapshot_store = CalibrationSnapshotStore(path)
+        return self._snapshot_store
+
+    def _validate_device_identity(self, snapshot):
+        if self._store_override:
+            return
+        current = self._controller.calibration_data_identity
+        if any(snapshot.get(key) != current[key]
+               for key in ("device_id", "urdf_repo_path")):
+            raise CalibrationSnapshotError("calibration device or URDF identity mismatch")
+        stored = snapshot.get("product_fingerprint", {})
+        expected = current["product_fingerprint"]
+        if any(stored.get(key) != expected[key] for key in (
+                "schema_version", "manual_scaled_mapping_version",
+                "control_model_crc", "hardware_map_crc")):
+            raise CalibrationSnapshotError("calibration model or feedback contract mismatch")
 
     @property
     def snapshot_path(self):
@@ -689,6 +712,8 @@ class CalibrationWorkflowService:
             },
             "joint_calib_results": results,
         }
+        if not self._store_override:
+            payload.update(self._controller.calibration_data_identity)
         signature = json.dumps(
             {
                 "joint_mask": joint_mask,
@@ -712,6 +737,7 @@ class CalibrationWorkflowService:
 
     def inspect_snapshot(self, path) -> dict:
         snapshot = self._store.inspect(path)
+        self._validate_device_identity(snapshot)
         if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
             raise CalibrationSnapshotError(
                 f"hand_profile mismatch: {snapshot.get('hand_profile')} != {HAND_PROFILE}"
@@ -730,6 +756,7 @@ class CalibrationWorkflowService:
             try:
                 if not self._is_current(epoch):
                     return
+                self._validate_device_identity(snapshot)
                 error = validate_calibration_snapshot_for_load(snapshot)
                 if error:
                     raise CalibrationSnapshotError(error)
@@ -822,6 +849,7 @@ class CalibrationWorkflowService:
                     )
                     return
                 snapshot = self._store.load()
+                self._validate_device_identity(snapshot)
                 if str(snapshot.get("hand_profile", "")) != HAND_PROFILE:
                     raise CalibrationSnapshotError("hand profile mismatch")
                 if system_state in (

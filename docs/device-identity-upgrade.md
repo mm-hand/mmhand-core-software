@@ -28,10 +28,11 @@ P4 在命令分派和状态准入处独立检查。握手不会自动授权 ROS 
 不匹配返回独立的契约错误状态，并触发 P4 停止；失联后需要重新握手。
 控制模型 CRC 包含关节绑定、方向和限位；改绑不会改变反馈拓扑 CRC。
 
-运行锚点位置：
+运行数据位置：
 
 ```text
 desktop/resources/config/device_state/<设备ID>/<URDF仓库内路径SHA256前16位>/multiturn_runtime.json
+desktop/resources/config/device_state/<设备ID>/<URDF仓库内路径SHA256前16位>/calibration_bundle.mmcal.json
 ```
 
 原始 URDF 路径来自生成来源记录，不包含开发机绝对路径或结构提交号。
@@ -43,5 +44,8 @@ desktop/resources/config/device_state/<设备ID>/<URDF仓库内路径SHA256前16
 旧文件保持原样，来源不明的锚点不自动恢复。
 旧标定文件里的运行锚点只有明确匹配设备 ID 和 URDF 路径才参与恢复。
 
-Manual 与 Auto/LUT 的正式存储目录隔离、关节改绑的局部失效及导入契约
-仍在实施中。本记录只说明当前已实现的设备 ID 上报和运行锚点保护。
+Manual 和 Auto/LUT 的活动文件也使用相同的设备目录。无有效身份时拒绝
+保存与启动恢复；导入要求匹配设备、URDF 路径及模型/反馈契约。
+Manual 元数据与端点在同一个原子写事务中保存，不能覆盖另一设备的有效文件。
+设备切换撤销输入、取消标定事务并清除未提交 Manual 草稿。
+当前模型契约变化保守拒绝恢复，关节改绑的局部失效仍待实现。

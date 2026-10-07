@@ -81,7 +81,6 @@ def test_generated_p4_urdf_limits_are_current_and_crc_matches():
 
 def test_endpoint_mapping_round_trip_without_calib_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(angle_mapping, "CALIB_LOAD_SNAPSHOT_PATH", tmp_path / "missing_snapshot.json")
-    monkeypatch.setattr(angle_mapping, "_CALIB_CACHE", None)
 
     for idx, spec in angle_mapping.JOINT_SPECS.items():
         calib_min, calib_max = spec.default_calib_range_deg
@@ -137,3 +136,10 @@ def test_bad_direction_negative_v4_endpoints_are_not_loaded(tmp_path):
     assert angle_mapping.load_calibrated_ranges(snapshot)[14] == pytest.approx(
         angle_mapping.get_spec(14).urdf_range_deg
     )
+
+
+def test_identity_free_mapping_does_not_read_legacy_global_calibration(monkeypatch):
+    def reject_read(*args, **kwargs):
+        raise AssertionError("legacy calibration must not be read without device identity")
+    monkeypatch.setattr(angle_mapping.Path, "read_text", reject_read)
+    assert angle_mapping.load_calibrated_ranges() == {}

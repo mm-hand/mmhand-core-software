@@ -525,6 +525,29 @@ class HandController:
 
         log_session("CTRL", "shutdown complete")
 
+    @property
+    def calibration_data_identity(self) -> dict:
+        with self.state_lock:
+            reported = dict(getattr(self.current_state, "product_fingerprint", {}) or {})
+            present = bool(getattr(self.current_state, "has_product_fingerprint", False))
+        device_id = str(reported.get("device_id", ""))
+        if (not present or int(reported.get("protocol_version", 0)) != HOST_PROTOCOL_VERSION
+                or len(device_id) != 16 or device_id == "0000000000000000"
+                or any(char not in "0123456789ABCDEF" for char in device_id)):
+            raise CalibrationSnapshotError("valid P4 device identity unavailable")
+        urdf_path = _active_urdf_repo_path()
+        if not urdf_path:
+            raise CalibrationSnapshotError("URDF source identity unavailable")
+        return {"device_id": device_id, "urdf_repo_path": urdf_path,
+                "product_fingerprint": canonical_product_fingerprint(reported)}
+
+    @property
+    def calibration_snapshot_path(self):
+        identity = self.calibration_data_identity
+        namespace = hashlib.sha256(identity["urdf_repo_path"].encode("utf-8")).hexdigest()[:16]
+        return (MULTITURN_RUNTIME_PATH.parent / identity["device_id"] / namespace
+                / CALIB_LOAD_SNAPSHOT_PATH.name)
+
     def _multiturn_identity(self, state: HandModel) -> Optional[dict]:
         """组合产品指纹与标定摘要，防止把另一只手的多圈锚点发给当前 P4。"""
         if not bool(getattr(state, "has_product_fingerprint", False)):
@@ -561,7 +584,7 @@ class HandController:
         if now - self._calibration_digest_checked_at >= 1.0:
             self._calibration_digest_checked_at = now
             try:
-                mtime_ns = CALIB_LOAD_SNAPSHOT_PATH.stat().st_mtime_ns
+                mtime_ns = (anchor_path.parent / CALIB_LOAD_SNAPSHOT_PATH.name).stat().st_mtime_ns
             except OSError:
                 mtime_ns = -1
             if mtime_ns != self._calibration_digest_mtime_ns:
@@ -572,7 +595,7 @@ class HandController:
                 self._calibration_snapshot_anchor_raw = [0] * MOTOR_COUNT
                 if mtime_ns >= 0:
                     try:
-                        snapshot = read_snapshot(CALIB_LOAD_SNAPSHOT_PATH)
+                        snapshot = read_snapshot(anchor_path.parent / CALIB_LOAD_SNAPSHOT_PATH.name)
                         self._calibration_digest_cache = str(
                             snapshot.get("integrity", {}).get("digest", "")
                         ).lower()
@@ -863,7 +886,7 @@ class HandController:
             return
         try:
             snapshot = update_snapshot_multiturn_anchors(
-                CALIB_LOAD_SNAPSHOT_PATH,
+                self.calibration_snapshot_path,
                 motor_mask=confirmed_mask,
                 logical_abs=(
                     [int(value) for value in servo_abs] + [0] * MOTOR_COUNT
@@ -1304,7 +1327,8 @@ class HandController:
         if verified:
             try:
                 update_manual_snapshot(
-                    CALIB_LOAD_SNAPSHOT_PATH,
+                    self.calibration_snapshot_path,
+                    identity=self.calibration_data_identity,
                     valid_mask=expected_mask,
                     min_raw=list(manual_min_raw),
                     max_raw=list(manual_max_raw),
@@ -1469,7 +1493,8 @@ class HandController:
         if verified:
             try:
                 update_manual_snapshot(
-                    CALIB_LOAD_SNAPSHOT_PATH,
+                    self.calibration_snapshot_path,
+                    identity=self.calibration_data_identity,
                     valid_mask=expected_mask,
                     min_raw=expected_min,
                     max_raw=expected_max,
@@ -1529,7 +1554,8 @@ class HandController:
             return False
         try:
             update_manual_snapshot(
-                CALIB_LOAD_SNAPSHOT_PATH,
+                self.calibration_snapshot_path,
+                identity=self.calibration_data_identity,
                 valid_mask=0,
                 min_raw=[0] * ENCODER_COUNT,
                 max_raw=[0] * ENCODER_COUNT,
@@ -1713,6 +1739,11 @@ class HandController:
         if not self.comm:
             return empty._replace(message="serial not connected")
 
+        try:
+            _ = self.calibration_snapshot_path
+        except CalibrationSnapshotError as exc:
+            return empty._replace(message=str(exc))
+
         with self.state_lock:
             state = self.current_state
             system_state = int(getattr(state, "system_state", -1) or 0)
@@ -1753,7 +1784,7 @@ class HandController:
         # 在放绳途中退出，下次启动也不能重新加载旧舵机坐标。Manual 端点保留。
         try:
             snapshot_message = invalidate_calibration_snapshot_scope(
-                CALIB_LOAD_SNAPSHOT_PATH,
+                self.calibration_snapshot_path,
                 motor_mask=reset_mask,
                 joint_mask=invalidated_joint_mask,
                 reason="manual_prepare",

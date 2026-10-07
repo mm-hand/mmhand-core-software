@@ -100,7 +100,7 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
             updated_joint_mask=1 << 14,
         ),
     )
-    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(HandController, "calibration_snapshot_path", property(lambda _controller: snapshot_path))
     state = _trusted_multiturn_state(motor_idx)
 
     controller._block_multiturn_anchor_capture(bit)
@@ -167,7 +167,7 @@ def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
             updated_joint_mask=(1 << 14) | (1 << 15),
         ),
     )
-    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(HandController, "calibration_snapshot_path", property(lambda _controller: snapshot_path))
     state = _trusted_multiturn_state(18)
 
     assert controller.request_multiturn_anchor_capture(motor_mask)
@@ -519,6 +519,8 @@ class TestAsyncPersistenceAck:
         self, monkeypatch
     ):
         controller = HandController()
+        controller.current_state.has_product_fingerprint = True
+        controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
         controller.comm = MagicMock()
         controller.comm.wait_for_ack.return_value = (
             CMD_MANUAL_ENCODER_REFERENCE,
@@ -644,6 +646,8 @@ class TestPrepareCalibrationTurnZero:
         controller.comm = MagicMock()
         controller.prepare_calibration_turn_zero = MagicMock(return_value=(False, "reset rejected", 0, 0))
         state = controller.current_state
+        state.has_product_fingerprint = True
+        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
         state.system_state = 0
         state.has_servo_angle_data = True
         state.has_servo_route_status = True
@@ -800,3 +804,50 @@ class TestShutdownSemantics:
 
         controller.comm.send_command.assert_called_once_with("stop")
         controller.comm.disconnect.assert_called_once_with()
+
+
+def test_calibration_namespace_requires_device_identity_and_separates_devices():
+    from desktop.core.calibration_snapshot import CalibrationSnapshotError
+    controller = HandController()
+    with pytest.raises(CalibrationSnapshotError, match="identity unavailable"):
+        _ = controller.calibration_snapshot_path
+    controller.current_state.has_product_fingerprint = True
+    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    first = controller.calibration_snapshot_path
+    controller.current_state.product_fingerprint["device_id"] = "0000123456789ABD"
+    second = controller.calibration_snapshot_path
+    assert first != second
+    assert first.parent.name == second.parent.name
+    assert first.parent.parent.name == "0000123456789ABC"
+    assert second.parent.parent.name == "0000123456789ABD"
+
+
+def test_production_calibration_service_rejects_foreign_or_unproven_contract():
+    from desktop.core.calibration_workflow import CalibrationWorkflowService
+    from desktop.core.calibration_snapshot import CalibrationSnapshotError
+    controller = HandController()
+    controller.current_state.has_product_fingerprint = True
+    controller.current_state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2,
+        "schema_version": 2, "control_model_crc": 123, "hardware_map_crc": 456}
+    service = CalibrationWorkflowService(controller)
+    identity = controller.calibration_data_identity
+    service._validate_device_identity(identity)
+    with pytest.raises(CalibrationSnapshotError, match="identity mismatch"):
+        service._validate_device_identity(dict(identity, device_id="0000123456789ABD"))
+    with pytest.raises(CalibrationSnapshotError, match="contract mismatch"):
+        service._validate_device_identity(dict(identity, product_fingerprint={}))
+
+
+def test_device_change_clears_manual_drafts_and_calibration_transaction():
+    from desktop.core.hand_backend import HandBackend
+    backend = HandBackend()
+    backend._manual_drafts[0] = {"min": 123}
+    backend._calibration_workflow._operation = "calibration"
+    snapshot = core_logic.HandModel()
+    snapshot.protocol_compatible = True
+    snapshot.has_product_fingerprint = True
+    snapshot.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    backend._on_controller_state_update(snapshot)
+    assert backend._manual_drafts == {}
+    assert backend._calibration_workflow._operation == ""
+    assert not backend.ros2_output_armed()

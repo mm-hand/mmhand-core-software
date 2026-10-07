@@ -12,6 +12,8 @@ def controller_with_motor():
     controller = HandController()
     controller.comm = MagicMock()
     state = controller.current_state
+    state.has_product_fingerprint = True
+    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
     state.system_state = SYSTEM_STATE_IDLE
     state.has_servo_angle_data = state.has_servo_route_status = True
     state.has_p4_time = True
@@ -86,4 +88,14 @@ def test_partial_reset_invalidates_only_success_without_motion(monkeypatch):
     result = controller.manual_prepare_all_motors()
     assert not result.ok and result.reset_motor_mask == 8 and result.failed_motor_mask == 16
     assert invalidate.call_args.kwargs["motor_mask"] == 8
+    controller.comm.send_command.assert_not_called()
+
+
+def test_release_rejects_missing_identity_before_reset_or_motion():
+    controller = controller_with_motor()
+    controller.current_state.has_product_fingerprint = False
+    controller.prepare_calibration_turn_zero = MagicMock()
+    result = controller.manual_prepare_all_motors()
+    assert not result.ok
+    controller.prepare_calibration_turn_zero.assert_not_called()
     controller.comm.send_command.assert_not_called()

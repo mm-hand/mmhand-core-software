@@ -23,7 +23,8 @@ from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
 from .protocol import ControlMode, ENCODER_COUNT, directed_encoder_delta
-from .calibration_snapshot import joint_calib_result_tendon_lut_abs_ranges
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
+from .calibration_snapshot import CalibrationSnapshotError, joint_calib_result_tendon_lut_abs_ranges
 from .session_log import log_session
 
 
@@ -114,6 +115,7 @@ class HandBackend:
         self._controller = controller or HandController()
         self._manual_capture_lock = threading.RLock()
         self._manual_drafts: dict[int, dict[str, int]] = {}
+        self._last_reported_device_id = ""
         self._port_scan_ts = float("-inf")
         self._port_scan_cache: tuple = ()
         self._calibration_workflow = CalibrationWorkflowService(self._controller)
@@ -164,7 +166,11 @@ class HandBackend:
 
     @property
     def calibration_snapshot_path(self):
-        return self._calibration_workflow.snapshot_path
+        try:
+            return self._calibration_workflow.snapshot_path
+        except CalibrationSnapshotError:
+            # Only the file-dialog starting directory; active persistence never falls back.
+            return CALIB_LOAD_SNAPSHOT_PATH
 
     def _ensure_controller_callback_registered(self) -> None:
         callbacks = getattr(self._controller, "update_callbacks", None)
@@ -175,6 +181,14 @@ class HandBackend:
 
     def _on_controller_state_update(self, state: HandModel) -> None:
         snapshot = clone_hand_model(state)
+        device_id = str(snapshot.product_fingerprint.get("device_id", "")) if snapshot.has_product_fingerprint else ""
+        if device_id != self._last_reported_device_id:
+            self._last_reported_device_id = device_id
+            self._calibration_workflow.cancel()
+            with self._manual_capture_lock:
+                self._manual_drafts.clear()
+            self.set_ros2_output_armed(False, reason="device_identity_changed")
+            self.cancel_replay_motion("device identity changed")
         if not snapshot.protocol_compatible:
             with self._ros2_output_lock:
                 self._set_ros2_output_armed_locked(False, reason="protocol_contract_lost")
