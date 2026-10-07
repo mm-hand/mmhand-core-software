@@ -21,6 +21,8 @@ from ..data_models import (
     TACTILE_SOURCE_P4_CAN_RELAY,
 )
 from ..protocol import (
+    CMD_PROTOCOL_HELLO,
+    COMMANDS_REQUIRING_HANDSHAKE,
     CMD_ACTIVE_SCOPE,
     CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION,
@@ -37,6 +39,7 @@ from ..protocol import (
     ENCODER_COUNT,
     MOTOR_COUNT,
     PROTO_ACK_STATUS_OK,
+    PROTO_ACK_STATUS_CONTRACT_MISMATCH,
     PROTO_ACK_STATUS_QUEUED,
     SYSTEM_FAULT_CALIBRATION,
     SYSTEM_STATE_CALIBRATION_RUNNING,
@@ -765,6 +768,13 @@ class StateReducer:
                     model.proto_ack_cmd = int(ack_cmd)
                     model.proto_ack_mode = int(applied_mode)
                     model.proto_ack_status = int(status)
+                    if ack_cmd == CMD_PROTOCOL_HELLO:
+                        owner._protocol_compatible = int(status) == PROTO_ACK_STATUS_OK
+                        model.protocol_compatible = owner._protocol_compatible
+                    elif (ack_cmd in COMMANDS_REQUIRING_HANDSHAKE
+                          and int(status) == PROTO_ACK_STATUS_CONTRACT_MISMATCH):
+                        owner._protocol_compatible = False
+                        model.protocol_compatible = False
                     model.proto_ack_p4_time_ms = int(packet_p4_time_ms or 0)
                     # 模型保留最近历史供 UI 展示；可靠逐条消费仍由 AckTracker 事件通道负责。
                     model.proto_ack_history.append({

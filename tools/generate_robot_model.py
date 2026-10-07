@@ -303,9 +303,20 @@ def build_fingerprint(manifest: dict, limits: list[tuple[int, float, float]],
     source_files.append(ROOT / "desktop/resources/config/upper_protocol_schema.json")
     config_root = p4_root / "src/config"
     config_files = [path for path in config_root.rglob("*.h") if path.is_file()]
-    control_model_crc = mapping_crc32(
-        int(manifest["manual_scaled_mapping_version"]), limits
-    )
+    control_contract = {
+        "version": 2,
+        "mapping_version": int(manifest["manual_scaled_mapping_version"]),
+        "joints": [{key: entry[key] for key in (
+            "joint_index", "urdf_joint_name", "motor_indices",
+            "calibrated_min_endpoint", "calibrated_max_endpoint",
+        )} for entry in manifest["joints"]],
+        "limits": limits,
+        "tendon_directions": [(motor["channel"], motor["tendon_shorten_abs_sign"])
+                              for motor in sorted(manifest["motors"], key=lambda item: item["channel"])],
+    }
+    control_model_crc = zlib.crc32(json.dumps(
+        control_contract, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")) & 0xFFFFFFFF
     return {
         "schema_version": 2,
         "model_id": str(manifest["model_id"]),

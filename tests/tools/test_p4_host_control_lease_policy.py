@@ -24,6 +24,7 @@ def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Pat
         r'''
 #include "safety/policies/HostLeaseSafetyPolicy.h"
 #include "safety/policies/StateAdmissionPolicy.h"
+#include "safety/policies/ProtocolContractPolicy.h"
 #include "config/SafetyConfig.h"
 #include "data/ActuatorTypes.h"
 #include "data/SystemTypes.h"
@@ -69,6 +70,10 @@ int main()
     assert(!p4::system::canAcceptCalibration(7));
     assert(p4::system::canAcceptRunFeedback(SYSTEM_STATE_READY));
     assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_RECOVERY_REQUIRED));
+    assert(p4::system::protocolContractMatches(2, 31, 42, 2, 31, 42));
+    assert(!p4::system::protocolContractMatches(1, 31, 42, 2, 31, 42));
+    assert(!p4::system::protocolContractMatches(2, 30, 42, 2, 31, 42));
+    assert(!p4::system::protocolContractMatches(2, 31, 43, 2, 31, 42));
     return 0;
 }
 ''',

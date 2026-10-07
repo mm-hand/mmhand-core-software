@@ -9,6 +9,7 @@
 #include "HostTelemetryPublisher.h"
 #include "HostAckPublisher.h"
 #include "HostProtocolCodec.h"
+#include "../../safety/policies/ProtocolContractPolicy.h"
 #include "HostCalibrationCommandHandler.h"
 #include "../../data/RecoveryTypes.h"
 #include "../../data/SafetyTypes.h"
@@ -25,6 +26,7 @@
 #include "../../config/topology/HardwareMap.h"
 #include "../../config/CalibrationConfig.h"
 #include "../../config/ServoConfig.h"
+#include "../../config/SafetyConfig.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/ports/SystemEventPort.h"
@@ -111,9 +113,29 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     const uint8_t cmd = frame[0];
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
+    const uint32_t previousHeartbeat = sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms);
+    if (previousHeartbeat == 0 || (uint32_t)(nowMs - previousHeartbeat) >
+            mmhand::config::safety::kHostControlLeaseTimeoutMs) {
+        sharedAtomicStore(&sharedData->host_protocol_compatible, (uint8_t)0);
+    }
     // 每一帧通过结构校验的上位机命令都刷新心跳，不要求它一定是运动命令。
     // SystemStateTask 在另一核心读取该字段，统一走原子接口避免租约边界读到撕裂值。
     sharedAtomicStore(&sharedData->host_rx_heartbeat_ms, nowMs);
+    if (cmd == CMD_PROTOCOL_HELLO) {
+        const bool compatible = p4::system::protocolContractMatches(
+            frame[1], readU32BigEndian(frame + 2), readU32BigEndian(frame + 6),
+            kHostProtocolVersion, kProductControlModelCrc, kProductHardwareMapCrc);
+        sharedAtomicStore(&sharedData->host_protocol_compatible, (uint8_t)compatible);
+        if (!compatible) requestEmergencyStop(sharedData);
+        sendProtoAckPacket(cmd, sharedData->system_state,
+                           compatible ? PROTO_ACK_STATUS_OK : PROTO_ACK_STATUS_CONTRACT_MISMATCH);
+        return;
+    }
+    if (generatedCommandRequiresHandshake(cmd) &&
+        !sharedAtomicLoad(&sharedData->host_protocol_compatible)) {
+        sendProtoAckPacket(cmd, sharedData->system_state, PROTO_ACK_STATUS_CONTRACT_MISMATCH);
+        return;
+    }
 
     if (cmd == CMD_HOST_HEARTBEAT)
     {

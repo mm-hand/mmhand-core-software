@@ -67,12 +67,14 @@ inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
 inline constexpr uint8_t CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF; ///< 打开或关闭统一下位机时间的控制跟踪流
+inline constexpr uint8_t CMD_PROTOCOL_HELLO = 0xF0; ///< 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
 inline constexpr uint8_t PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED = 3; ///< 缺少目标关节 Manual Min/Max
 inline constexpr uint8_t PROTO_ACK_STATUS_INVALID_DATA = 4; ///< 字段、长度、索引或数值范围非法
 inline constexpr uint8_t PROTO_ACK_STATUS_MANUAL_CRC_MISMATCH = 6; ///< Auto 快照绑定的 Manual CRC 不一致
+inline constexpr uint8_t PROTO_ACK_STATUS_CONTRACT_MISMATCH = 8; ///< 协议版本或运动模型契约未匹配
 inline constexpr uint8_t PROTO_ACK_STATUS_CALIBRATION_REQUIRED = 7; ///< 缺少目标关节有效 Auto/LUT
 inline constexpr uint8_t MANUAL_SAVE_STATUS_NONE = 0; ///< 本次上电尚未收到桌面端 Manual 数据
 inline constexpr uint8_t MANUAL_SAVE_STATUS_OK = 1; ///< 最近一次 Manual 已提交到 P4 RAM 并完成校验
@@ -134,7 +136,30 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
         case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
         case CMD_CONTROL_TRACE_SUBSCRIBE: return kControlTraceSubscribePayloadBytes;
+        case CMD_PROTOCOL_HELLO: return 9;
         default: return SIZE_MAX;
+    }
+}
+
+/** 未握手时拒绝运动和运动配置命令。 */
+inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)
+{
+    switch (command) {
+        case CMD_CALIBRATE: return true;
+        case CMD_ANGLE_CTRL: return true;
+        case CMD_START: return true;
+        case CMD_MOTOR_POS_ABS: return true;
+        case CMD_RUN_FEEDBACK: return true;
+        case CMD_RESTORE_MULTITURN: return true;
+        case CMD_MOTOR_POS_ABS_ONE: return true;
+        case CMD_CALIB_LOAD_JOINT: return true;
+        case CMD_CALIB_LOAD_LIMITS: return true;
+        case CMD_MANUAL_ENCODER_REFERENCE: return true;
+        case CMD_MANUAL_ENCODER_SINGLE: return true;
+        case CMD_ROPE_INIT: return true;
+        case CMD_ANGLE_CTRL_MASKED: return true;
+        case CMD_SERVO_RESET_ZERO: return true;
+        default: return false;
     }
 }
 

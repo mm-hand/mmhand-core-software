@@ -616,6 +616,7 @@ class HandModel:
     # P4 周期上报的产品指纹，用于把运行日志绑定到确切的固件、参数和机器人模型。
     product_fingerprint: dict = field(default_factory=dict)
     has_product_fingerprint: bool = False
+    protocol_compatible: bool = False
     # P4 安全规则事件只保留最近 64 条；sequence 用于去重和日志关联。
     latest_safety_event: dict = field(default_factory=dict)
     safety_event_history: List[dict] = field(default_factory=list)
@@ -982,6 +983,7 @@ class HandModel:
         self.product_fingerprint = dict(
             getattr(other, "product_fingerprint", {}) or {}
         )
+        self.protocol_compatible = bool(getattr(other, "protocol_compatible", False))
         self.has_product_fingerprint = bool(
             getattr(other, "has_product_fingerprint", False)
         )

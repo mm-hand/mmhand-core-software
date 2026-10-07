@@ -46,7 +46,7 @@ void resetHostControlLeaseRuntime(SystemRuntimeContext* sharedData)
  */
 bool prepareHostControlCommandAdmission(SystemRuntimeContext* sharedData)
 {
-    if (!sharedData) {
+    if (!sharedData || !sharedAtomicLoad(&sharedData->host_protocol_compatible)) {
         return false;
     }
     const uint32_t nowMs = monotonicMillis();

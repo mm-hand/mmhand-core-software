@@ -13,6 +13,7 @@ def test_latest_live_joint_target_stays_before_pending_feedback_start():
 
 def test_joint_target_and_feedback_start_are_one_queue_item():
     comm = LowerComputerComm("")
+    comm._protocol_compatible = True
     comm.is_connected = lambda: True
     command = ("joint_target_run", [12.0] * 21)
 
@@ -62,3 +63,28 @@ def test_invalidating_joint_commands_also_removes_feedback_request():
 
     assert comm.invalidate_pending_joint_commands() == 2
     assert list(comm.tx_queue.queue) == ["query_manual_encoder_reference"]
+
+
+def test_target_stays_replaceable_while_waiting_for_next_motion_slot(monkeypatch):
+    comm = LowerComputerComm("")
+    now = [10.0]
+    monkeypatch.setattr("desktop.core.comm_layer.time.monotonic", lambda: now[0])
+    comm._last_motion_tx = now[0]
+    comm._enqueue_latest_high_rate(("angle_live", [1.0] * 21))
+    latest = ("angle_live", [2.0] * 21)
+
+    def next_slot(delay):
+        comm.tx_queue.queue.clear()
+        comm.tx_queue.queue.append(latest)
+        now[0] += delay + 0.000001
+
+    monkeypatch.setattr(comm.tx_queue.not_empty, "wait", next_slot)
+    assert comm._get_paced_tx_command() == latest
+    assert now[0] >= 10.01
+
+
+def test_stop_is_not_delayed_by_motion_rate_limit():
+    comm = LowerComputerComm("")
+    comm._last_motion_tx = float("inf")
+    comm.tx_queue.put_nowait("stop")
+    assert comm._get_paced_tx_command() == "stop"

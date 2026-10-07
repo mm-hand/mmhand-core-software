@@ -8,6 +8,7 @@
 禁止依赖：禁止依赖 Qt/UI、app、ROS2 或 Replay 页面，禁止把控件和展示规则带入核心层。
 """
 import struct
+import json
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
 
@@ -1060,6 +1061,18 @@ def build_active_scope_cmd(active_motor_mask: int, active_joint_mask: int, requi
         1 if require_can_feedback else 0,
     )
     return _build_command_frame(CMD_ACTIVE_SCOPE, payload)
+
+
+def build_protocol_hello_cmd() -> bytes:
+    """发送本地生成的版本和模型契约；握手不包含运动授权。"""
+    from desktop.paths import PRODUCT_FINGERPRINT_PATH
+    fingerprint = json.loads(PRODUCT_FINGERPRINT_PATH.read_text(encoding="utf-8"))
+    payload = struct.pack(
+        ">BII", HOST_PROTOCOL_VERSION,
+        int(fingerprint["control_model_crc"], 16),
+        int(fingerprint["hardware_map_crc"], 16),
+    )
+    return _build_command_frame(CMD_PROTOCOL_HELLO, payload)
 
 
 def build_angle_cmd(angles: List[float]) -> bytes:

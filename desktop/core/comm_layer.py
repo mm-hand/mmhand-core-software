@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import os
 import queue
 import threading
 import time
@@ -888,42 +887,6 @@ class TactileSerialComm:
 
 
 
-def choose_serial_port_interactive() -> Optional[str]:
-    while True:
-        os.system("cls")
-        print("Scanning serial ports...")
-        ports = list_ports()
-        if not ports:
-            print("No serial port detected.")
-            print("Press Enter to retry, or Ctrl+C to exit.")
-            try:
-                input()
-            except KeyboardInterrupt:
-                return None
-            continue
-
-        print("\nAvailable ports:")
-        for idx, (device, desc) in enumerate(ports):
-            print(f"  [{idx}] {device} ({desc})")
-
-        try:
-            user_input = input(
-                f"\nSelect index [0-{len(ports) - 1}] or press Enter for [0]: "
-            ).strip()
-            if user_input == "":
-                return ports[0][0]
-            index = int(user_input)
-            if 0 <= index < len(ports):
-                return ports[index][0]
-            print("Invalid index.")
-            time.sleep(1.0)
-        except ValueError:
-            print("Please input a number.")
-            time.sleep(1.0)
-        except KeyboardInterrupt:
-            return None
-
-
 class LowerComputerComm:
     """P4 通信兼容门面。
 
@@ -995,7 +958,9 @@ class LowerComputerComm:
         self._tx_diag_angle_live_cmds = 0
         self._tx_diag_bytes = 0
         self._last_heartbeat_tx = 0.0
+        self._last_motion_tx = float("-inf")
         self._heartbeat_enabled = False
+        self._protocol_compatible = False
         self._offline_reported = False
         self._auto_calib_logger = AutoCalibLogger(self.port)
         self._tactile_hold_groups: Optional[List[List[List[int]]]] = None
@@ -1037,6 +1002,7 @@ class LowerComputerComm:
             self._frame_decoder.reset()
             self._firmware_text_buffer = bytearray()
             self._state_reducer.reset()
+            self._protocol_compatible = False
             self._ack_tracker.reset()
             self._safety_event_channel.reset()
             self._clear_queue(self.rx_queue)
@@ -1057,6 +1023,7 @@ class LowerComputerComm:
             self._tx_thread = threading.Thread(target=self._tx_loop, daemon=True)
             self._rx_thread.start()
             self._tx_thread.start()
+            self.send_command("protocol_hello")
             return True
         except Exception as exc:
             try:
@@ -1102,6 +1069,7 @@ class LowerComputerComm:
             model.copy_state_from(previous)
         model.host_rx_time = time.time()
         model.calib_status = "DISCONNECTED"
+        model.protocol_compatible = False
         model.has_system_status_data = False
         model.has_feedback_collision_status = False
         model.feedback_collision_armed_bitmap = 0
@@ -1160,6 +1128,7 @@ class LowerComputerComm:
         return self._safety_event_channel.drain()
 
     def _mark_comm_offline(self, reason: str, exc: Optional[BaseException] = None) -> None:
+        self._protocol_compatible = False
         with self._offline_lock:
             if self._offline_reported:
                 return
@@ -1464,6 +1433,11 @@ class LowerComputerComm:
                 model.encoders[i].error = not usable
 
     def send_command(self, cmd: SendCmd) -> bool:
+        if not getattr(self, "_protocol_compatible", False):
+            packet = self._encode_command(cmd)
+            if packet and packet[2] in protocol_codec.COMMANDS_REQUIRING_HANDSHAKE:
+                log_session("PROTOCOL", "motion/config rejected: protocol or model handshake incomplete")
+                return False
         if not self.is_connected():
             log_session("COMM", f"drop TX while offline cmd={cmd!r}")
             return False
@@ -1602,14 +1576,39 @@ class LowerComputerComm:
             self.tx_queue.not_empty.notify()
             return True
 
+    def _get_paced_tx_command(self):
+        """Leave targets in the replaceable mailbox until the 100 Hz slot opens."""
+        deadline = time.monotonic() + TX_QUEUE_GET_TIMEOUT
+        with self.tx_queue.not_empty:
+            while True:
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise queue.Empty
+                if self.tx_queue.queue:
+                    command = self.tx_queue.queue[0]
+                    delay = self._last_motion_tx + 0.010 - now
+                    if not self._is_high_rate_command(command) or delay <= 0:
+                        command = self.tx_queue.queue.popleft()
+                        self.tx_queue.not_full.notify()
+                        return command
+                    self.tx_queue.not_empty.wait(min(delay, remaining))
+                else:
+                    self.tx_queue.not_empty.wait(remaining)
+
     def _tx_loop(self):
         while self.running and self._transport.is_open:
             try:
                 self._maybe_send_host_heartbeat()
-                cmd = self.tx_queue.get(timeout=TX_QUEUE_GET_TIMEOUT)
+                cmd = self._get_paced_tx_command()
                 data = self._encode_command(cmd)
+                if (data and data[2] in protocol_codec.COMMANDS_REQUIRING_HANDSHAKE
+                        and not self._protocol_compatible):
+                    continue
                 if data:
                     self._transport.write(data)
+                    if self._is_high_rate_command(cmd):
+                        self._last_motion_tx = time.monotonic()
                     self._update_tx_diag(cmd, len(data))
                 self._maybe_print_tx_diag()
             except queue.Empty:
@@ -1627,6 +1626,9 @@ class LowerComputerComm:
             return
         if not self._transport.is_open:
             return
+        if not self._protocol_compatible:
+            self._transport.write(protocol_codec.build_protocol_hello_cmd())
+            self._last_heartbeat_tx = now
         if not self._heartbeat_enabled:
             return
         data = build_host_heartbeat_cmd()
@@ -1654,6 +1656,8 @@ class LowerComputerComm:
         )
 
     def _encode_command(self, cmd: SendCmd) -> Optional[bytes]:
+        if cmd == "protocol_hello":
+            return protocol_codec.build_protocol_hello_cmd()
         if cmd == "calibrate":
             return build_calibrate_cmd()
         if isinstance(cmd, tuple) and len(cmd) == 4 and cmd[0] == "active_scope":

@@ -175,6 +175,10 @@ class HandBackend:
 
     def _on_controller_state_update(self, state: HandModel) -> None:
         snapshot = clone_hand_model(state)
+        if not snapshot.protocol_compatible:
+            with self._ros2_output_lock:
+                self._set_ros2_output_armed_locked(False, reason="protocol_contract_lost")
+            self.cancel_replay_motion("protocol contract lost")
         self._calibration_workflow.observe_state(snapshot)
         with self._callback_lock:
             callbacks = list(self._state_callbacks)
@@ -534,7 +538,7 @@ class HandBackend:
             sent = self._controller.set_target_angles(guarded)
         message = workspace_message
         if not sent and not message:
-            message = "Joint command was not queued; check connection, mode, and pause state"
+            message = "Joint command was not queued; check connection, protocol/model handshake and mode"
         result = JointCommandResult(
             sent=bool(sent),
             blocked=[],
@@ -585,6 +589,8 @@ class HandBackend:
             return False, "ROS2 enable blocked: P4 serial is not connected"
 
         state = self.get_current_state()
+        if not bool(getattr(state, "protocol_compatible", False)):
+            return False, "ROS2 enable blocked: protocol/model handshake unconfirmed"
         scope = self._requested_active_scope or self._state_active_scope(state)
         if int(scope[1]) == 0:
             return False, "ROS2 enable blocked: active joint scope is empty"
@@ -670,6 +676,9 @@ class HandBackend:
                 reason = "serial_offline"
             elif not self.is_started():
                 reason = "controller_not_ready"
+            elif not bool(getattr(self.get_current_state(), "protocol_compatible", False)):
+                self._set_ros2_output_armed_locked(False, reason="protocol_contract_lost")
+                reason = "protocol_contract_lost"
             else:
                 state_scope = self._state_active_scope(self.get_current_state())
                 if self._ros2_armed_scope is None or state_scope != self._ros2_armed_scope:

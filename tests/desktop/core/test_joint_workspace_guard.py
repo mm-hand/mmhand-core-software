@@ -15,6 +15,7 @@ def _ready_state(joint_idx=0, current_min=None):
     version, urdf_crc = urdf_manual_scaled_mapping_metadata()
     spec = get_spec(joint_idx)
     state = HandModel()
+    state.protocol_compatible = True
     state.manual_reference_committed = True
     state.manual_reference_valid_bitmap = 1 << joint_idx
     state.manual_reference_crc = 0x12345678

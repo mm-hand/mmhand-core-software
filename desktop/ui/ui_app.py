@@ -670,6 +670,8 @@ class HandGUI(QtWidgets.QMainWindow):
         else:
             self.fault_label.setText("设备：" + sys_text.removeprefix("System: "))
         problems = []
+        if connected and not getattr(state, "protocol_compatible", False):
+            problems.append("协议或模型握手未确认")
         if connected and not system_status_fresh:
             problems.append("等待新鲜 P4 状态")
         if sys_faults or system_uncontrollable:
@@ -683,6 +685,8 @@ class HandGUI(QtWidgets.QMainWindow):
         self.problem_label.setText("当前问题：" + ("；".join(problems) or "无"))
         self.problem_label.setToolTip("\n".join((sys_tip, calib_tip, overload_tip, hold_tip, turn_tip)))
         self.fault_details_btn.setEnabled(self._has_active_issue_details)
+        if connected and not getattr(state, "protocol_compatible", False):
+            self.fault_details_btn.setEnabled(True)
         self._handle_fault_side_effects(state)
 
     def format_feedback_collision_summary(
@@ -838,6 +842,15 @@ class HandGUI(QtWidgets.QMainWindow):
     ) -> str:
         """汇总当前问题和最近规则证据，供状态栏 Details 按钮一次性展示。"""
         sections: List[str] = []
+        if (getattr(state, "has_product_fingerprint", False)
+                and not getattr(state, "protocol_compatible", False)):
+            fingerprint = state.product_fingerprint
+            sections.append(
+                "协议与模型契约未确认\n"
+                f"P4 协议版本：{fingerprint.get('protocol_version', '未知')}\n"
+                f"P4 设备 ID：{fingerprint.get('device_id', '未知')}\n"
+                "运动和运动配置请求被拒绝。检查 Desktop、固件及生成模型是否配套，再重新连接。"
+            )
         summary = self._build_fault_summary(state)
         if summary.get("active"):
             body = self._fault_body_text(summary)

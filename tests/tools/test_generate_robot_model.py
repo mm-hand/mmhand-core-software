@@ -5,10 +5,23 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import copy
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tools import generate_robot_model
+
+
+def test_joint_rebinding_changes_control_contract_but_not_feedback_topology():
+    manifest = generate_robot_model.load_manifest(generate_robot_model.DEFAULT_MANIFEST)
+    limits = generate_robot_model.load_urdf_limits(generate_robot_model.DEFAULT_URDF, manifest)
+    original = generate_robot_model.build_fingerprint(manifest, limits, generate_robot_model.DEFAULT_URDF, "commit")
+    rebound = copy.deepcopy(manifest)
+    rebound["joints"][2]["motor_indices"], rebound["joints"][3]["motor_indices"] = (
+        rebound["joints"][3]["motor_indices"], rebound["joints"][2]["motor_indices"])
+    changed = generate_robot_model.build_fingerprint(rebound, limits, generate_robot_model.DEFAULT_URDF, "commit")
+    assert changed["control_model_crc"] != original["control_model_crc"]
+    assert changed["hardware_map_crc"] == original["hardware_map_crc"]
 
 
 def _args(tmp_path: Path, *, urdf: Path | None = None) -> argparse.Namespace:

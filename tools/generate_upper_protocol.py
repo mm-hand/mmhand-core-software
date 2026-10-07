@@ -159,6 +159,13 @@ def _render_cpp(schema: dict) -> str:
         return_value = alias_for_command.get(name, str(int(item["payload_bytes"])))
         lines.append(f"        case {name}: return {return_value};")
     lines.extend(["        default: return SIZE_MAX;", "    }", "}", ""])
+    lines.extend(["/** 未握手时拒绝运动和运动配置命令。 */",
+                  "inline constexpr bool generatedCommandRequiresHandshake(uint8_t command)",
+                  "{", "    switch (command) {"])
+    for item in schema["commands"]:
+        if item.get("requires_handshake"):
+            lines.append(f"        case {item['name']}: return true;")
+    lines.extend(["        default: return false;", "    }", "}", ""])
     for name, value in schema["p4_runtime"]["heartbeats_ms"].items():
         lines.append(
             f"inline constexpr uint32_t {name} = {int(value)}; "
@@ -227,6 +234,11 @@ def _render_python(schema: dict) -> str:
     for item in schema["commands"]:
         lines.append(f"    {item['name']}: {int(item['payload_bytes'])},")
     lines.extend(["}", ""])
+    lines.append("COMMANDS_REQUIRING_HANDSHAKE = frozenset({")
+    for item in schema["commands"]:
+        if item.get("requires_handshake"):
+            lines.append(f"    {item['name']},")
+    lines.extend(["})", ""])
     return "\n".join(lines)
 
 

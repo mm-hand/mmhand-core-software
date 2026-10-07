@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 struct CommandRuntimeState {
+    volatile uint8_t host_protocol_compatible = 0; ///< 通信线程确认的契约；运动许可仍由状态任务仲裁。
     volatile uint32_t host_rx_heartbeat_ms; ///< 最近收到有效上位机帧的单调时间，用于控制租约。
     float targetAngles[ENCODER_TOTAL_NUM]; ///< 最新关节目标，单位 deg。
     int32_t motorTargetRaw[SERVO_TOTAL_NUM]; ///< 已应用单点直控 logical ABS。
