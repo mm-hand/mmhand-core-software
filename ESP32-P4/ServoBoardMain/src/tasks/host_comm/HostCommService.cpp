@@ -20,6 +20,7 @@
 #include "../../generated/ProductFingerprint.generated.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../config/DiagnosticsConfig.h"
+#include "../../config/TaskConfig.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/TaskSignal.h"
@@ -40,6 +41,8 @@ using namespace p4::host;
 struct HostCommRuntimeContext {
     SystemRuntimeContext* sharedData;
     bool initialized;
+    uint32_t lastTelemetryDispatchMs;
+    bool telemetrySentInitialized;
     RemoteSensorData_t sensorRawData;
     MappedAngleData_t mappedAngleData;
     ControlTraceData_t controlTraceData;
@@ -276,6 +279,12 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     }
     processServoResetZeroResult(
         sharedData, &lastServoResetZeroResultToken);
+    if (runtime.telemetrySentInitialized &&
+        (uint32_t)(nowMs - runtime.lastTelemetryDispatchMs) < HOST_TELEMETRY_PERIOD_MS) {
+        return true;
+    }
+    runtime.lastTelemetryDispatchMs = nowMs;
+    runtime.telemetrySentInitialized = true;
 
         // 50 ms 批次最多发送 8 帧；失败保留队首重试，控制任务永不等待串口。
         if (runtime.controlTraceSubscribed &&

@@ -14,7 +14,6 @@ struct ControlRuntimeState {
     volatile uint8_t control_enabled; ///< MotionControlTask 总使能。
     volatile uint8_t control_mode; ///< CONTROL_MODE_*。
     volatile uint8_t system_state; ///< SYSTEM_STATE_*。
-    volatile uint8_t paused_resume_state; ///< PAUSED 前应恢复状态。
     volatile uint8_t servo_target_owner; ///< 唯一 SERVO_TARGET_OWNER_*。
     volatile uint32_t feedback_admission_sequence; ///< 反馈门禁结果序号。
     volatile uint8_t feedback_admission_status; ///< 反馈命令准入状态。

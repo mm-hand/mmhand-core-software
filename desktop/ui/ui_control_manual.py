@@ -14,7 +14,6 @@ from .ui_control_common import (
     FIST_POSE_URDF_MAX_OFFSET_DEG,
     List,
     MOTOR_COUNT,
-    MOTOR_RELEASE_HALF_TURN_COUNTS,
     Optional,
     ReplayView,
     SYSTEM_STATE_CALIBRATION_RUNNING,
@@ -27,7 +26,6 @@ from .ui_control_common import (
     SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
     clamp_motor_abs,
-    motor_abs_after_tendon_action,
 )
 
 
@@ -155,12 +153,7 @@ class ControlPanelManualMixin:
             self.open_btn.setEnabled(
                 interaction and mode == "test" and joint_workspace_ready
             )
-        if getattr(self, "release_half_turn_btn", None) is not None:
-            self.release_half_turn_btn.setVisible(mode == "motor")
-            self.release_half_turn_btn.setEnabled(interaction and mode == "motor")
-        if getattr(self, "tighten_half_turn_btn", None) is not None:
-            self.tighten_half_turn_btn.setVisible(mode == "motor")
-            self.tighten_half_turn_btn.setEnabled(interaction and mode == "motor")
+
         if getattr(self, "calib_file_load_btn", None) is not None:
             self.calib_file_load_btn.setEnabled(
                 bool(self.context.is_comm_connected())
@@ -271,8 +264,6 @@ class ControlPanelManualMixin:
                     )
                 )
             )
-        if getattr(self, "pause_btn", None) is not None:
-            self.pause_btn.setEnabled(system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK))
         self._set_test_button_states()
 
     def sync_app_mode(self, mode_name: str) -> None:
@@ -414,177 +405,7 @@ class ControlPanelManualMixin:
                 self._set_status(f"Motor absolute command sent (M{idx})")
 
 
-    def release_all_motors_half_turn(self) -> None:
-        """Run the release all motors half turn workflow."""
-        if not self._controller_interaction_ready():
-            return
-        if self._manual_submode() != "motor":
-            self._set_status("Release Half Turn is only available in Motor Channels")
-            return
-        try:
-            if not self.context.is_comm_connected():
-                raise RuntimeError("Serial port is not connected")
-            self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-            if self._estop_latched and not self.backend.is_started():
-                self._set_status("Release blocked: press ENABLE after E-STOP")
-                return
-            if not self.backend.is_started():
-                self._set_status("Release blocked: waiting for controllable IDLE after ENABLE")
-                return
-            unknown_mask = self._active_scope_multiturn_unknown_mask()
-            if unknown_mask != 0:
-                self._show_turn_recovery_guide(unknown_mask, "Release Half Turn")
-                return
-            state = self._state
-            if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
-                self._set_status("Release blocked: waiting for motor ABS feedback")
-                return
-            unroutable = self._active_scope_unroutable_motor_indices(state)
-            if unroutable:
-                self._set_status(
-                    "Release blocked: no unique controllable BUS route "
-                    + self._format_motor_list(unroutable)
-                )
-                return
 
-            active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)
-            if active_mask == 0:
-                self._set_status("Release blocked: no active motor selected")
-                return
-            targets = self._current_motor_hold_targets_from_feedback()
-            current_abs: List[Optional[int]] = [None] * MOTOR_COUNT
-            missing: List[str] = []
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                if (
-                    idx >= len(getattr(state, "servo_online", [])) or
-                    not state.servo_online[idx] or
-                    idx >= len(getattr(state, "servo_angles", []))
-                ):
-                    missing.append(f"M{idx:02d}")
-                    continue
-                current = clamp_motor_abs(int(state.servo_angles[idx]))
-                current_abs[idx] = current
-                targets[idx] = motor_abs_after_tendon_action(current, idx, -MOTOR_RELEASE_HALF_TURN_COUNTS)
-
-            if missing:
-                self._set_status(f"Release blocked: waiting ABS feedback {','.join(missing[:4])}")
-                return
-
-            self.backend.set_motor_positions_absolute(targets)
-            self._motor_last_sent_abs = list(targets)
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                self._motor_session_origin_abs[idx] = int(targets[idx])
-                self._motor_abs_pos[idx] = 0
-                self._motor_last_slider[idx] = 0
-                self._motor_target_user_set[idx] = False
-                if idx < len(self.motor_target_spins) and idx < len(self.motor_sliders):
-                    self._set_motor_target_widget(idx, 0)
-
-            preview_items = []
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                if current_abs[idx] is not None:
-                    preview_items.append(f"M{idx:02d}:{current_abs[idx]}->{targets[idx]}")
-                if len(preview_items) >= 4:
-                    break
-            active_count = bin(active_mask).count("1")
-            suffix = "" if active_count <= 4 else f" ... +{active_count - 4}"
-            preview = ", ".join(preview_items)
-            self.context.emit_action(f"Release Half Turn sent: {preview}{suffix}")
-            self._set_status(f"Released {active_count} active motor(s) by 1/2 turn ({MOTOR_RELEASE_HALF_TURN_COUNTS} counts)")
-        except Exception as exc:
-            self._error("Release Failed", f"{type(exc).__name__}: {exc}")
-
-    def tighten_all_motors_half_turn(self) -> None:
-        """Run the tighten all motors half turn workflow."""
-        if not self._controller_interaction_ready():
-            return
-        if self._manual_submode() != "motor":
-            self._set_status("Tighten Half Turn is only available in Motor Channels")
-            return
-        try:
-            if not self.context.is_comm_connected():
-                raise RuntimeError("Serial port is not connected")
-            self.backend.set_control_mode(ControlMode.DIRECT_MOTOR)
-            if self._estop_latched and not self.backend.is_started():
-                self._set_status("Tighten blocked: press ENABLE after E-STOP")
-                return
-            if not self.backend.is_started():
-                self._set_status("Tighten blocked: waiting for controllable IDLE after ENABLE")
-                return
-            unknown_mask = self._active_scope_multiturn_unknown_mask()
-            if unknown_mask != 0:
-                self._show_turn_recovery_guide(unknown_mask, "Tighten Half Turn")
-                return
-            state = self._state
-            if state is None or not bool(getattr(state, "has_servo_angle_data", False)):
-                self._set_status("Tighten blocked: waiting for motor ABS feedback")
-                return
-            unroutable = self._active_scope_unroutable_motor_indices(state)
-            if unroutable:
-                self._set_status(
-                    "Tighten blocked: no unique controllable BUS route "
-                    + self._format_motor_list(unroutable)
-                )
-                return
-
-            active_mask = self._active_motor_mask_from_ui() & int(VALID_MOTOR_MASK) & ((1 << MOTOR_COUNT) - 1)
-            if active_mask == 0:
-                self._set_status("Tighten blocked: no active motor selected")
-                return
-            targets = self._current_motor_hold_targets_from_feedback()
-            current_abs: List[Optional[int]] = [None] * MOTOR_COUNT
-            missing: List[str] = []
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                if (
-                    idx >= len(getattr(state, "servo_online", [])) or
-                    not state.servo_online[idx] or
-                    idx >= len(getattr(state, "servo_angles", []))
-                ):
-                    missing.append(f"M{idx:02d}")
-                    continue
-                current = clamp_motor_abs(int(state.servo_angles[idx]))
-                current_abs[idx] = current
-                targets[idx] = motor_abs_after_tendon_action(current, idx, MOTOR_RELEASE_HALF_TURN_COUNTS)
-
-            if missing:
-                self._set_status(f"Tighten blocked: waiting ABS feedback {','.join(missing[:4])}")
-                return
-
-            self.backend.set_motor_positions_absolute(targets)
-            self._motor_last_sent_abs = list(targets)
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                self._motor_session_origin_abs[idx] = int(targets[idx])
-                self._motor_abs_pos[idx] = 0
-                self._motor_last_slider[idx] = 0
-                self._motor_target_user_set[idx] = False
-                if idx < len(self.motor_target_spins) and idx < len(self.motor_sliders):
-                    self._set_motor_target_widget(idx, 0)
-
-            preview_items = []
-            for idx in range(MOTOR_COUNT):
-                if ((active_mask >> idx) & 0x01) == 0:
-                    continue
-                if current_abs[idx] is not None:
-                    preview_items.append(f"M{idx:02d}:{current_abs[idx]}->{targets[idx]}")
-                if len(preview_items) >= 4:
-                    break
-            active_count = bin(active_mask).count("1")
-            suffix = "" if active_count <= 4 else f" ... +{active_count - 4}"
-            preview = ", ".join(preview_items)
-            self.context.emit_action(f"Tighten Half Turn sent: {preview}{suffix}")
-            self._set_status(f"Tightened {active_count} active motor(s) by 1/2 turn ({MOTOR_RELEASE_HALF_TURN_COUNTS} counts)")
-        except Exception as exc:
-            self._error("Tighten Failed", f"{type(exc).__name__}: {exc}")
 
     def apply_preset(self, angles: List[float], joint_indices: Optional[List[int]] = None) -> None:
         """Apply the preset command to the UI or backend."""

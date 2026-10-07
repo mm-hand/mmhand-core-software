@@ -61,8 +61,10 @@ def test_calibrated_anchor_is_saved_only_after_explicit_capture_request(
         tmp_path / "multiturn_runtime.json"
     )
     identity = {
+        "device_id": "0000123456789ABC",
+        "urdf_repo_path": "models/hand.urdf",
         "product_fingerprint": {
-            "schema_version": 1,
+            "schema_version": 2,
             "feedback_mapping_version": 3,
             "hardware_map_crc": 0x1234,
         }
@@ -126,8 +128,10 @@ def test_calibrated_anchors_are_saved_per_eligible_motor(tmp_path, monkeypatch):
         tmp_path / "multiturn_runtime.json"
     )
     identity = {
+        "device_id": "0000123456789ABC",
+        "urdf_repo_path": "models/hand.urdf",
         "product_fingerprint": {
-            "schema_version": 1,
+            "schema_version": 2,
             "feedback_mapping_version": 3,
             "hardware_map_crc": 0x1234,
         }
@@ -300,22 +304,11 @@ class TestSetMotorPositionsAbsolute:
 
     # --- Paused State Tests ---
 
-    def test_paused_returns_early(self, controller, mock_comm):
-        """Verify method returns early when paused."""
-        controller.comm = mock_comm
-        controller._control_mode = ControlMode.DIRECT_MOTOR
-        controller._paused = True
-
-        motor_abs = [1000] * MOTOR_COUNT
-        controller.set_motor_positions_absolute(motor_abs)
-
-        mock_comm.send_command.assert_not_called()
 
     # --- Invalid Length Tests ---
 
     def test_wrong_length_raises_valueerror(self, controller):
         """Verify ValueError is raised when motor_abs length is not MOTOR_COUNT."""
-        controller._paused = False
         motor_abs = [1000] * (MOTOR_COUNT - 1)  # Wrong length
 
         with pytest.raises(ValueError) as excinfo:
@@ -324,14 +317,12 @@ class TestSetMotorPositionsAbsolute:
 
     def test_empty_list_raises_valueerror(self, controller):
         """Verify ValueError is raised for empty list."""
-        controller._paused = False
 
         with pytest.raises(ValueError):
             controller.set_motor_positions_absolute([])
 
     def test_too_many_values_raises_valueerror(self, controller):
         """Verify ValueError is raised when list is longer than MOTOR_COUNT."""
-        controller._paused = False
         motor_abs = [1000] * (MOTOR_COUNT + 1)
 
         with pytest.raises(ValueError):
@@ -454,11 +445,10 @@ class TestSetMotorPositionsAbsolute:
 
     # --- Combination Tests ---
 
-    def test_paused_with_joint_angle_mode(self, controller, mock_comm):
+    def test_direct_command_rejects_joint_angle_mode(self, controller, mock_comm):
         """Verify early return when both paused and wrong mode."""
         controller.comm = mock_comm
         controller._control_mode = ControlMode.JOINT_ANGLE
-        controller._paused = True
 
         motor_abs = [1000] * MOTOR_COUNT
         controller.set_motor_positions_absolute(motor_abs)
@@ -469,7 +459,6 @@ class TestSetMotorPositionsAbsolute:
         """Verify silent return when comm is None but mode is correct."""
         controller.comm = None
         controller._control_mode = ControlMode.DIRECT_MOTOR
-        controller._paused = False
 
         motor_abs = [1000] * MOTOR_COUNT
         # Should not raise
@@ -485,7 +474,6 @@ class TestRequestRunFeedback:
 
     def test_sends_when_cached_state_is_idle_after_scope_change(self, controller):
         controller.comm = MagicMock()
-        controller._paused = False
         controller.current_state.system_state = SYSTEM_STATE_IDLE
 
         assert controller.request_run_feedback() is True
@@ -493,7 +481,6 @@ class TestRequestRunFeedback:
 
     def test_requeues_when_feedback_is_already_running(self, controller):
         controller.comm = MagicMock()
-        controller._paused = False
         controller.current_state.system_state = SYSTEM_STATE_RUN_FEEDBACK
 
         assert controller.request_run_feedback() is True
@@ -560,7 +547,9 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     controller = HandController()
     controller.comm = MagicMock()
     identity = {
-        "product_fingerprint": {"schema_version": 1},
+        "device_id": "0000123456789ABC",
+        "urdf_repo_path": "models/hand.urdf",
+        "product_fingerprint": {"schema_version": 2},
         "calibration_snapshot_sha256": "abc",
     }
     controller._multiturn_identity = MagicMock(return_value=identity)
@@ -605,7 +594,9 @@ class TestPrepareCalibrationTurnZero:
             tmp_path / "multiturn_runtime.json"
         )
         identity = {
-            "product_fingerprint": {"schema_version": 1},
+            "device_id": "0000123456789ABC",
+        "urdf_repo_path": "models/hand.urdf",
+        "product_fingerprint": {"schema_version": 2},
             "calibration_snapshot_sha256": "abc",
         }
         controller._multiturn_store_payload = controller._multiturn_store.save(

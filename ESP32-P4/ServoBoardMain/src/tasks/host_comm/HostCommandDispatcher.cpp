@@ -264,13 +264,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_PAUSE)
-    {
-        postSystemEvent(sharedData, SYSTEM_EVENT_PAUSE);
-        sendProtoAckPacket(CMD_PAUSE, sharedData->system_state, PROTO_ACK_STATUS_QUEUED);
-        return;
-    }
-
     if (cmd == CMD_STOP)
     {
         taskRuntimeMarkStopReceived();
@@ -739,8 +732,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
             sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
-            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
-            sharedData->system_state == SYSTEM_STATE_PAUSED;
+            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
 
         if (motionActive) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;

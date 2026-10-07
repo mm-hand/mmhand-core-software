@@ -40,34 +40,15 @@ class ManualControlView(_ModeBody):
         layout = QtWidgets.QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        workflow = QtWidgets.QGroupBox("Manual Workflow")
-        wf_layout = QtWidgets.QHBoxLayout(workflow)
-        panel.calib_file_load_btn = QtWidgets.QPushButton("Load Calibration…")
-        panel.calib_file_load_btn.setToolTip(
-            "Select a saved or external calibration JSON; validate it and restore it to P4"
-        )
-        panel.release_half_turn_btn = QtWidgets.QPushButton("Release Half Turn")
-        panel.tighten_half_turn_btn = QtWidgets.QPushButton("Tighten Half Turn")
-        wf_layout.addStretch(1)
-        for btn in [
-            panel.calib_file_load_btn,
-            panel.release_half_turn_btn,
-            panel.tighten_half_turn_btn,
-        ]:
-            wf_layout.addWidget(btn)
-        layout.addWidget(workflow)
-
-        panel.calib_file_load_btn.clicked.connect(
-            lambda _checked=False: panel.load_calibration_from_file()
-        )
-        panel.release_half_turn_btn.clicked.connect(lambda _checked=False: panel.release_all_motors_half_turn())
-        panel.tighten_half_turn_btn.clicked.connect(lambda _checked=False: panel.tighten_all_motors_half_turn())
-
         panel.tabs = QtWidgets.QTabWidget()
         panel.device_check_view = DeviceCheckView(
             panel.context,
             mapping_version=WORKSPACE_MAPPING_VERSION,
             urdf_crc=WORKSPACE_URDF_CRC,
+        )
+        panel.calib_file_load_btn = panel.device_check_view.load_calibration_btn
+        panel.calib_file_load_btn.clicked.connect(
+            lambda _checked=False: panel.load_calibration_from_file()
         )
         panel.device_check_view.operation_finished.connect(
             panel._on_device_check_operation_finished

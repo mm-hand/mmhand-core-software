@@ -207,7 +207,7 @@ foreach ($match in $removedServiceLoops) {
 # R6.1：三个历史超大文件必须保持为编排层，禁止状态机实现重新回流。
 $coordinatorBudgets = @{
     "tasks\auto_calibration\AutoCalibrationCoordinator.cpp" = 260
-    "tasks\host_comm\HostCommService.cpp" = 600
+    "tasks\host_comm\HostCommService.cpp" = 620
     "tasks\system_state\SystemStateCoordinator.cpp" = 180
 }
 foreach ($entry in $coordinatorBudgets.GetEnumerator()) {

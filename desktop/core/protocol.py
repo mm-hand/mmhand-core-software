@@ -51,7 +51,6 @@ SYSTEM_STATE_RUN_FEEDBACK = 2
 SYSTEM_STATE_CALIBRATION_RUNNING = 4
 SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
-SYSTEM_STATE_PAUSED = 7
 SYSTEM_STATE_ROPE_INIT_RUNNING = 8
 SYSTEM_STATE_RECOVERY_REQUIRED = 9
 
@@ -811,10 +810,12 @@ def parse_control_trace_packet(payload: bytes) -> Optional[dict]:
 
 def parse_product_fingerprint_packet(payload: bytes) -> Optional[dict]:
     """解析 P4 当前固件、参数、硬件映射和 URDF 的可复现实验指纹。"""
-    if len(payload) != 28:
+    if len(payload) != 36:
         return None
-    values = struct.unpack(">BBBBIIIIII", payload)
+    values = struct.unpack(">BBBBIIIIIIQ", payload)
     return {
+        "protocol_version": int(values[3]),
+        "device_id": f"{values[10]:016X}" if values[10] else "",
         "schema_version": int(values[0]),
         "feedback_mapping_version": int(values[1]),
         "manual_scaled_mapping_version": int(values[2]),
@@ -1088,8 +1089,6 @@ def build_run_feedback_cmd() -> bytes:
     return _build_command_frame(CMD_RUN_FEEDBACK, b"")
 
 
-def build_pause_cmd() -> bytes:
-    return _build_command_frame(CMD_PAUSE, b"")
 
 
 def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) -> bytes:

@@ -23,6 +23,7 @@ def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Pat
     source.write_text(
         r'''
 #include "safety/policies/HostLeaseSafetyPolicy.h"
+#include "safety/policies/StateAdmissionPolicy.h"
 #include "config/SafetyConfig.h"
 #include "data/ActuatorTypes.h"
 #include "data/SystemTypes.h"
@@ -61,6 +62,13 @@ int main()
 
     // Unsigned subtraction keeps the watchdog correct across millis() wrap.
     assert(isHostControlLeaseFresh(5, UINT32_MAX - 5));
+    // Retired PAUSED state 7 cannot grant execution through any admission path.
+    assert(!p4::system::canAcceptStart(7));
+    assert(!p4::system::canAcceptRunDirect(7));
+    assert(!p4::system::canAcceptRunFeedback(7));
+    assert(!p4::system::canAcceptCalibration(7));
+    assert(p4::system::canAcceptRunFeedback(SYSTEM_STATE_READY));
+    assert(!p4::system::canAcceptRunFeedback(SYSTEM_STATE_RECOVERY_REQUIRED));
     return 0;
 }
 ''',
@@ -75,6 +83,7 @@ int main()
             f"-I{P4_SRC}",
             str(source),
             str(P4_SRC / "safety" / "policies" / "HostLeaseSafetyPolicy.cpp"),
+            str(P4_SRC / "safety" / "policies" / "StateAdmissionPolicy.cpp"),
             "-o",
             str(executable),
         ],

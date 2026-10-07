@@ -43,7 +43,7 @@ Replay 不再保存单帧手势 JSON，而是直接读取 `Save Data` 生成的
 5. 核对轨迹时长、帧数、active scope及21关节实时角后点击`Send`。
 
 Replay只有在启动瞬间系统状态严格等于`READY`时才会进入。运行期间如果发生
-E-STOP、Pause、断线、FAULT或active scope变化，Replay会立即终止。碰撞保持
+E-STOP、断线、FAULT或active scope变化，Replay会立即终止。碰撞保持
 不会暂停轨迹；后续反向目标会继续发往P4并用于解除保持。
 播放期间`Send`会切换为`Stop`；URDF CRC不一致或轨迹越过当前工作空间时会拒绝启动。
 

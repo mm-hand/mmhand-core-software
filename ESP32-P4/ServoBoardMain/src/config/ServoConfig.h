@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include "DimensionsConfig.h"
 
-inline constexpr uint32_t SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT = 3; ///< 同步读单批等待时限。
+inline constexpr uint32_t SERVO_PROBE_TIMEOUT_MS = 3; ///< 独立舵机探测的阻塞读取时限。
 inline constexpr uint16_t SERVO_TARGET_SPEED_DEFAULT = 400; ///< 标定/直控默认速度。
 inline constexpr uint8_t SERVO_TARGET_ACC_DEFAULT = 254; ///< 标定/直控默认加速度。
 

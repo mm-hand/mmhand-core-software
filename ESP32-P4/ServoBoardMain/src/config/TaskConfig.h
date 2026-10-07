@@ -17,6 +17,7 @@ inline constexpr uint8_t TASK_AUTO_CALIB_PRIORITY = 2;    ///< 自动标定状�
 inline constexpr uint8_t TASK_MONITOR_PRIORITY = 1;       ///< 运行时统计任务优先级。
 
 inline constexpr uint32_t HOST_COMM_SERVICE_PERIOD_MS = 5; ///< 上位机收发周期兜底；RX 事件可提前唤醒。
+inline constexpr uint32_t HOST_TELEMETRY_PERIOD_MS = 10; ///< 常规遥测最多 100 Hz，样本时间戳仍来自采集层。
 
 inline constexpr uint32_t HOST_COMM_TASK_STACK_SIZE = 8192;    ///< FreeRTOS 栈深度，单位 word。
 inline constexpr uint32_t S3_CAN_RX_TASK_STACK_SIZE = 4096;      ///< FreeRTOS 栈深度，单位 word。

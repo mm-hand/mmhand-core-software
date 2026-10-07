@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -84,6 +85,14 @@ def multiturn_identity_compatible(saved: dict, current: dict) -> bool:
     URDF 或整份标定快照发生变化，不会改变同一 Mxx 的 raw/logical ABS 关系，
     因此不能因为这些诊断指纹变化而丢弃全部 27 路运行锚点。
     """
+    saved, current = dict(saved or {}), dict(current or {})
+    device_id = str(current.get("device_id", ""))
+    if (not re.fullmatch(r"[0-9A-F]{16}", device_id)
+            or int(device_id, 16) == 0
+            or saved.get("device_id") != device_id
+            or not current.get("urdf_repo_path")
+            or saved.get("urdf_repo_path") != current.get("urdf_repo_path")):
+        return False
     saved_fp = canonical_product_fingerprint(
         dict(saved or {}).get("product_fingerprint", {})
     )
@@ -95,7 +104,8 @@ def multiturn_identity_compatible(saved: dict, current: dict) -> bool:
         "feedback_mapping_version",
         "hardware_map_crc",
     )
-    return all(saved_fp[key] == current_fp[key] for key in compatibility_keys)
+    return (current_fp["schema_version"] == 2
+            and all(saved_fp[key] == current_fp[key] for key in compatibility_keys))
 
 
 def _canonical_bytes(payload: dict) -> bytes:

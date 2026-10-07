@@ -11,6 +11,7 @@
 #include "../config/DimensionsConfig.h"
 
 inline constexpr uint8_t PROTOCOL_HEADER = 0xFE;
+inline constexpr uint8_t kHostProtocolVersion = 2;
 inline constexpr uint8_t PROTOCOL_TAIL = 0xFF;
 inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = 32767;
 inline constexpr size_t kP4TimestampBytes = 4;
@@ -50,7 +51,6 @@ inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故�
 inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 27 路 logical ABS 直控目标，每路 int32 counts
 inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor mask 与 control enable
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
-inline constexpr uint8_t CMD_PAUSE = 0xD9; ///< 暂停当前负反馈或直控运行
 inline constexpr uint8_t CMD_RESTORE_MULTITURN = 0xDA; ///< 按位图恢复 27 路 logical ABS 多圈快照
 inline constexpr uint8_t CMD_HOST_HEARTBEAT = 0xDC; ///< 刷新上位机在线计时器，不携带业务数据
 inline constexpr uint8_t CMD_MOTOR_POS_ABS_ONE = 0xDE; ///< 单台 Mxx logical ABS 直控，Mxx 加 int32 counts
@@ -118,7 +118,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_MOTOR_POS_ABS: return kMotorPosAbsPayloadBytes;
         case CMD_ACTIVE_SCOPE: return kActiveScopePayloadBytes;
         case CMD_RUN_FEEDBACK: return 0;
-        case CMD_PAUSE: return 0;
         case CMD_RESTORE_MULTITURN: return kRestoreMultiTurnPayloadBytes;
         case CMD_HOST_HEARTBEAT: return 0;
         case CMD_MOTOR_POS_ABS_ONE: return kMotorPosAbsOnePayloadBytes;
@@ -140,6 +139,6 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
 }
 
 inline constexpr uint32_t kFaultStatusHeartbeatMs = 200; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
-inline constexpr uint32_t kSystemStatusHeartbeatMs = 100; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
+inline constexpr uint32_t kSystemStatusHeartbeatMs = 200; ///< 对应上行包无变化时的强制心跳周期，单位 ms。
 
 #endif // MMHAND_UPPER_PROTOCOL_GENERATED_H

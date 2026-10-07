@@ -10,6 +10,10 @@
 # core_logic.py - 灵巧手控制器核心逻辑（关节角路数与协议 ENCODER_COUNT 一致，电机路数与 MOTOR_COUNT 一致）
 
 import math
+import json
+import hashlib
+import shutil
+from functools import lru_cache
 import queue
 import threading
 import time
@@ -37,8 +41,9 @@ from .device_state_store import (
     nearest_logical_abs,
 )
 from .motor_mapping import MOTOR_TO_JOINT_INDEX, motor_abs_after_tendon_action
-from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH
+from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH, MULTITURN_RUNTIME_PATH, CONFIG_DIR
 from .protocol import (
+    HOST_PROTOCOL_VERSION,
     CMD_ACTIVE_SCOPE,
     CMD_CALIBRATE,
     CMD_CLEAR_CALIBRATION_SCOPE,
@@ -64,7 +69,7 @@ from .protocol import (
     SYSTEM_STATE_RUN_FEEDBACK,
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RUN_DIRECT,
-    SYSTEM_STATE_PAUSED,
+
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_UNCONTROLLABLE,
     STATE_SYNC_ALL,
@@ -97,6 +102,16 @@ MANUAL_PREPARE_RELEASE_COUNTS = 1500
 MANUAL_PREPARE_FEEDBACK_TIMEOUT_S = 2.0
 MANUAL_PREPARE_MOTION_TIMEOUT_S = 12.0
 MANUAL_PREPARE_TARGET_TOLERANCE_COUNTS = 80
+
+
+@lru_cache(maxsize=1)
+def _active_urdf_repo_path() -> str:
+    """读取生成来源中的仓库内路径；缺失时不得恢复运动锚点。"""
+    try:
+        source = json.loads((CONFIG_DIR / "robot_model_source.json").read_text(encoding="utf-8"))
+        return str(source.get("source_urdf_path", ""))
+    except (OSError, ValueError):
+        return ""
 
 
 class ManualPrepareResult(NamedTuple):
@@ -136,7 +151,7 @@ class HandController:
         self.update_callbacks: List[callable] = []
         self._last_update_callback_error = ""
         self._last_update_loop_error = ""
-        self._paused = False
+
         self._control_mode = ControlMode.JOINT_ANGLE
         self._started = False
         self._update_thread: Optional[threading.Thread] = None
@@ -313,18 +328,7 @@ class HandController:
         except Exception:
             return 0
 
-    def pause(self):
-        """Pause firmware output without clearing the cached target."""
-        if self.comm:
-            self.comm.send_command("pause")
-        self._paused = True
-        self._started = False
 
-    def resume(self):
-        """Resume a firmware PAUSED state with the regular START command."""
-        if self.comm:
-            self.comm.send_command("start")
-        self._paused = False
 
     def initialize(self, comm_port: str) -> bool:
         self._reset_local_runtime_state("SYNCING")
@@ -419,7 +423,7 @@ class HandController:
         self._state_sync_last_request_at = 0.0
         self._state_sync_waiting_logged = False
         self._started = False
-        self._paused = False
+
         self._control_mode = ControlMode.JOINT_ANGLE
 
     def _wait_for_lower_sync(self, timeout_s: float) -> bool:
@@ -513,7 +517,7 @@ class HandController:
         # Step 5: 清理资源
         with self.state_lock:
             self.update_callbacks.clear()  # 移除所有回调
-        self._paused = False  # 恢复暂停状态
+
         
         # Step 6: 重置内部状态为断开连接状态
         with self.state_lock:
@@ -525,6 +529,29 @@ class HandController:
         """组合产品指纹与标定摘要，防止把另一只手的多圈锚点发给当前 P4。"""
         if not bool(getattr(state, "has_product_fingerprint", False)):
             return None
+        reported = dict(getattr(state, "product_fingerprint", {}) or {})
+        device_id = str(reported.get("device_id", ""))
+        if (int(reported.get("protocol_version", 0)) != HOST_PROTOCOL_VERSION
+                or len(device_id) != 16
+                or any(char not in "0123456789ABCDEF" for char in device_id)
+                or device_id == "0000000000000000"):
+            return None
+        urdf_repo_path = _active_urdf_repo_path()
+        if not urdf_repo_path:
+            return None
+        namespace = hashlib.sha256(urdf_repo_path.encode("utf-8")).hexdigest()[:16]
+        anchor_path = MULTITURN_RUNTIME_PATH.parent / device_id / namespace / "multiturn_runtime.json"
+        if self._multiturn_store.path != anchor_path:
+            for legacy_path in (MULTITURN_RUNTIME_PATH, CALIB_LOAD_SNAPSHOT_PATH):
+                backup = legacy_path.with_name(legacy_path.name + ".before-device-isolation.bak")
+                if legacy_path.is_file() and not backup.exists():
+                    shutil.copy2(legacy_path, backup)
+            self._multiturn_store = MultiTurnRuntimeStore(anchor_path)
+            self._multiturn_store_payload = None
+            self._multiturn_store_identity = None
+            self._calibration_digest_checked_at = 0.0
+            self._calibration_digest_mtime_ns = -1
+            self._calibration_snapshot_anchor_valid_mask = 0
         fingerprint = canonical_product_fingerprint(
             getattr(state, "product_fingerprint", {}) or {}
         )
@@ -549,14 +576,18 @@ class HandController:
                         self._calibration_digest_cache = str(
                             snapshot.get("integrity", {}).get("digest", "")
                         ).lower()
-                        (
-                            self._calibration_snapshot_anchor_valid_mask,
-                            self._calibration_snapshot_anchor_abs,
-                            self._calibration_snapshot_anchor_raw,
-                        ) = multiturn_anchor_fields(snapshot)
+                        if (snapshot.get("device_id") == device_id
+                                and snapshot.get("urdf_repo_path") == urdf_repo_path):
+                            (
+                                self._calibration_snapshot_anchor_valid_mask,
+                                self._calibration_snapshot_anchor_abs,
+                                self._calibration_snapshot_anchor_raw,
+                            ) = multiturn_anchor_fields(snapshot)
                     except CalibrationSnapshotError:
                         pass
         return {
+            "device_id": device_id,
+            "urdf_repo_path": urdf_repo_path,
             "product_fingerprint": fingerprint,
             "calibration_snapshot_sha256": self._calibration_digest_cache,
         }
@@ -1098,7 +1129,7 @@ class HandController:
                             SYSTEM_STATE_READY,
                             SYSTEM_STATE_RUN_DIRECT,
                         )
-                        self._paused = int(new_model.system_state) == SYSTEM_STATE_PAUSED
+
                 for cb in self.update_callbacks:
                     try:
                         cb(self.current_state)
@@ -1119,9 +1150,7 @@ class HandController:
                         print(f"Update loop recovered: {message}")
 
     def set_target_angles(self, angles: List[float]) -> bool:
-        """设置 ENCODER_COUNT 路关节目标角（度），JOINT_ANGLE 模式；暂停时不发送"""
-        if self._paused:
-            return False
+        """设置 ENCODER_COUNT 路关节目标角（度），JOINT_ANGLE 模式"""
         if len(angles) != ENCODER_COUNT:
             raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
 
@@ -1136,8 +1165,6 @@ class HandController:
         self, angles: List[float], *, joint_mask: Optional[int] = None
     ) -> bool:
         """高频滑条跟随专用：仅保留最新目标，避免串口队列积压。"""
-        if self._paused:
-            return False
         if len(angles) != ENCODER_COUNT:
             raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
 
@@ -1161,7 +1188,7 @@ class HandController:
         joint_mask: Optional[int] = None,
     ) -> bool:
         """把关节目标与 RUN_FEEDBACK 作为同一个队列事务发送。"""
-        if self._paused or not self.comm or self._control_mode != ControlMode.JOINT_ANGLE:
+        if not self.comm or self._control_mode != ControlMode.JOINT_ANGLE:
             return False
         if len(angles) != ENCODER_COUNT:
             raise ValueError(f"Expected {ENCODER_COUNT} joint angles")
@@ -1176,8 +1203,6 @@ class HandController:
 
     def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
         """下发27路 logical ABS；每路先按 P4 当前会话动态行程独立钳位。"""
-        if self._paused:
-            return
         if len(motor_abs) != MOTOR_COUNT:
             raise ValueError(f"Expected {MOTOR_COUNT} absolute motor positions")
         raw = [
@@ -1188,8 +1213,6 @@ class HandController:
             self.comm.send_command(("motor_pos_abs", raw))
 
     def set_single_motor_position_absolute(self, motor_index: int, motor_abs: int) -> None:
-        if self._paused:
-            return
         idx = int(motor_index)
         if idx < 0 or idx >= MOTOR_COUNT:
             raise ValueError(f"motor index out of range: {idx}")
@@ -1230,7 +1253,7 @@ class HandController:
         return True
 
     def request_run_feedback(self) -> bool:
-        if self._paused or not self.comm:
+        if not self.comm:
             return False
         # A status packet can lag behind a freshly completed one-shot feedback
         # run. Always pair a new joint target with RUN_FEEDBACK so P4 can
@@ -2134,24 +2157,24 @@ class HandController:
             # Firmware SYSTEM_STATUS is the source of truth. It will set
             # _started after the state machine reaches a controllable state.
             self._started = False
-            self._paused = False
+
 
     def stop(self):
-        """停止：暂停时也可发送，便于紧急停"""
+        """发送安全停止并撤销旧运动输入"""
         if self.comm:
             self.comm.send_command("stop")
         with self.state_lock:
             if getattr(self.current_state, "calib_status", None) in ("PENDING", "RUNNING"):
                 self.current_state.calib_status = "IDLE"
         self._started = False
-        self._paused = False
+
 
     def reset(self):
-        """发送重置指令；暂停时不发送"""
+        """发送故障重置指令"""
         if self.comm:
             self.comm.send_command("reset")
         self._started = False
-        self._paused = False
+
 
     def is_started(self) -> bool:
         with self.state_lock:

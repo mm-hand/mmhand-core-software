@@ -458,35 +458,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
 
-            if (sharedData->system_state == SYSTEM_STATE_PAUSED) {
-                const uint8_t resumeState = sharedData->paused_resume_state;
-                const bool resumeReady =
-                    (resumeState == SYSTEM_STATE_RUN_DIRECT)
-                        ? p4::state::controllableEntryReady(sharedData)
-                        : ((resumeState == SYSTEM_STATE_RUN_FEEDBACK) &&
-                           activeJointsInControlWorkspace(sharedData));
-                if (!resumeReady) {
-                    sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-                    sharedData->control_enabled = 0;
-                    setSystemState(sharedData, idleOrReadyState(sharedData));
-                    break;
-                }
-                resetServoTargetQueue(sharedData);
-                sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
-                sharedData->control_enabled = 1;
-                if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
-                    setCommandModeDirect(sharedData);
-                } else if (resumeState == SYSTEM_STATE_RUN_FEEDBACK) {
-                    setCommandModeJoint(sharedData);
-                }
-                setSystemState(sharedData,
-                               (resumeState == SYSTEM_STATE_RUN_DIRECT ||
-                                resumeState == SYSTEM_STATE_RUN_FEEDBACK)
-                                   ? resumeState
-                                   : idleOrReadyState(sharedData));
-                break;
-            }
-
             resetServoTargetQueue(sharedData);
             sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
             sharedData->control_enabled = 0;
@@ -830,21 +801,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 "[STATE] RUN_FEEDBACK timeout token=%lu; releasing owner\r\n",
                 (unsigned long)event.token);
             releaseFeedbackRun(sharedData);
-            break;
-
-        case SYSTEM_EVENT_PAUSE:
-            // PAUSE 记录原运行态并断扭矩；START 仅在门禁仍满足时恢复。
-            if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT &&
-                sharedData->system_state != SYSTEM_STATE_RUN_FEEDBACK) {
-                FW_LOG_INFO_PRINTF("[STATE] reject PAUSE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            sharedData->paused_resume_state = sharedData->system_state;
-            sharedData->control_enabled = 0;
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            requestServoEmergencyTorqueOff(sharedData);
-            setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;
 
         case SYSTEM_EVENT_CALIBRATE:

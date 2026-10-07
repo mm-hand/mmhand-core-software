@@ -379,16 +379,11 @@ def test_expired_replay_token_cannot_enqueue_an_old_target():
     assert controller.run_requests == 0
 
 
-def test_pause_and_scope_change_both_revoke_ros2_authorization():
+def test_scope_change_revokes_ros2_authorization():
     state = _ready_state(current_min=12.5)
     controller = _Controller(state)
     backend = HandBackend(controller=controller)
     _arm_ros2_backend(backend)
 
-    backend.pause()
-    assert controller.pause_requests == 1
-    assert not backend.ros2_output_armed()
-
-    _arm_ros2_backend(backend)
     assert backend.set_active_scope(0x02, 0x02, True)
     assert not backend.ros2_output_armed()

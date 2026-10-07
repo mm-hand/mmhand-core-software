@@ -38,7 +38,6 @@ class ControlPanelViewMixin:
         device = DeviceControlBar(self)
         self.enable_btn = device.enable_btn
         self.stop_btn = device.stop_btn
-        self.pause_btn = device.pause_btn
         self.ros2_output_btn = device.ros2_output_btn
         self.reset_btn = device.reset_btn
         self.calib_btn = device.calib_btn
@@ -165,8 +164,6 @@ class ControlPanelViewMixin:
     def _reset_manual_widget_refs(self) -> None:
         self.calib_file_load_btn = None
         self.open_btn = None
-        self.release_half_turn_btn = None
-        self.tighten_half_turn_btn = None
         self.fist_btn = None
         self.tabs = None
         self.device_check_view = None

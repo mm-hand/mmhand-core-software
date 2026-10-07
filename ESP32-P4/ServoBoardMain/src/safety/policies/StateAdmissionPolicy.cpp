@@ -13,8 +13,7 @@ bool canAcceptStart(uint8_t state)
     return state == SYSTEM_STATE_UNCONTROLLABLE ||
            state == SYSTEM_STATE_IDLE ||
            state == SYSTEM_STATE_READY ||
-           state == SYSTEM_STATE_RECOVERY_REQUIRED ||
-           state == SYSTEM_STATE_PAUSED;
+           state == SYSTEM_STATE_RECOVERY_REQUIRED;
 }
 
 bool canAcceptRunDirect(uint8_t state)

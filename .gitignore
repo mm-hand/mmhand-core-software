@@ -48,3 +48,5 @@ ROSexample/**/build/
 ROSexample/**/install/
 ROSexample/**/log/
 *.egg-info/
+desktop/resources/config/*.before-device-isolation.bak
+desktop/resources/config/device_state/**/*.before-device-isolation.bak

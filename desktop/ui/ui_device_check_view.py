@@ -96,6 +96,9 @@ class DeviceCheckView(QtWidgets.QWidget):
         toolbar_layout.addWidget(self.summary_label)
         toolbar_layout.addStretch(1)
 
+        self.load_calibration_btn = QtWidgets.QPushButton("Load Calibration…")
+        self.load_calibration_btn.setToolTip("Validate and import a saved calibration JSON")
+        toolbar_layout.addWidget(self.load_calibration_btn)
         self.manual_prepare_btn = QtWidgets.QPushButton("Release Rope")
         self.manual_prepare_btn.setToolTip(
             "Reset online, uniquely routed servo turn counters, clear desktop multi-turn anchors, "

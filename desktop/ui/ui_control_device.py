@@ -16,7 +16,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
 
     start_requested = Signal()
     stop_requested = Signal()
-    pause_requested = Signal()
     ros2_output_toggled = Signal(bool)
     clear_fault_requested = Signal()
     calibrate_requested = Signal()
@@ -26,7 +25,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         super().__init__("Device", parent)
         self.enable_btn = QtWidgets.QPushButton("ENABLE")
         self.stop_btn = QtWidgets.QPushButton("E-STOP")
-        self.pause_btn = QtWidgets.QPushButton("Pause")
         self.ros2_output_btn = QtWidgets.QPushButton("ROS2 INPUT")
         self.ros2_output_btn.setCheckable(True)
         self.ros2_output_btn.setChecked(False)
@@ -48,7 +46,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         for button in (
             self.enable_btn,
             self.stop_btn,
-            self.pause_btn,
             self.ros2_output_btn,
         ):
             button.setMinimumHeight(46)
@@ -60,12 +57,10 @@ class DeviceControlBar(QtWidgets.QGroupBox):
 
         self.enable_btn.setStyleSheet("font-weight:700;background:#2e7d32;color:white;")
         self.stop_btn.setStyleSheet("font-weight:700;background:#c62828;color:white;")
-        self.pause_btn.setStyleSheet("font-weight:700;background:#f9a825;color:black;")
         self.ros2_output_btn.setStyleSheet("font-weight:700;background:#455a64;color:white;")
 
         layout.addWidget(self._centered_action_cell(self.enable_btn), 0, 0, 2, 1)
         layout.addWidget(self._centered_action_cell(self.stop_btn), 0, 1, 2, 1)
-        layout.addWidget(self._centered_action_cell(self.pause_btn), 0, 2, 2, 1)
         layout.addWidget(self._centered_action_cell(self.ros2_output_btn), 0, 3, 2, 1)
         layout.addWidget(self.calib_btn, 0, 4)
         layout.addWidget(self.reset_btn, 1, 4)
@@ -75,7 +70,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
             layout.setColumnStretch(col, 1)
         self.enable_btn.clicked.connect(lambda _checked=False: self.start_requested.emit())
         self.stop_btn.clicked.connect(lambda _checked=False: self.stop_requested.emit())
-        self.pause_btn.clicked.connect(lambda _checked=False: self.pause_requested.emit())
         self.ros2_output_btn.toggled.connect(self.ros2_output_toggled.emit)
         self.reset_btn.clicked.connect(lambda _checked=False: self.clear_fault_requested.emit())
         self.calib_btn.clicked.connect(lambda _checked=False: self.calibrate_requested.emit())
@@ -95,7 +89,6 @@ class DeviceControlBar(QtWidgets.QGroupBox):
         """Wire button signals to the owning control panel."""
         self.start_requested.connect(panel.start_controller)
         self.stop_requested.connect(panel.stop_controller)
-        self.pause_requested.connect(panel.pause_controller)
         self.ros2_output_toggled.connect(panel.toggle_ros2_output)
         self.clear_fault_requested.connect(panel.clear_fault_with_confirm)
         self.calibrate_requested.connect(panel.calibrate)

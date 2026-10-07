@@ -11,13 +11,16 @@ from desktop.core.device_state_store import (
     MultiTurnRuntimeStore,
     circular_raw_distance,
     nearest_logical_abs,
+    multiturn_identity_compatible,
 )
 from desktop.core.protocol import MOTOR_COUNT
 
 
 def _identity() -> dict:
     return {
-        "product_fingerprint": {"schema_version": 1, "hardware_map_crc": 7},
+        "device_id": "0000123456789ABC",
+        "urdf_repo_path": "models/hand.urdf",
+        "product_fingerprint": {"schema_version": 2, "hardware_map_crc": 7},
         "calibration_snapshot_sha256": "abc",
     }
 
@@ -81,3 +84,15 @@ def test_nearest_logical_abs_supports_both_wrap_directions() -> None:
 def test_nearest_logical_abs_preserves_non_integer_turn_offset() -> None:
     """logical offset 不为整圈时，只能使用成对的 SavedRaw 计算增量。"""
     assert nearest_logical_abs(5000, 1000, 1100) == 5100
+
+
+def test_anchor_identity_rejects_unknown_or_other_device_even_with_same_crc():
+    current = _identity()
+    assert multiturn_identity_compatible(current, current)
+    for saved in (
+        {**current, "device_id": ""},
+        {**current, "device_id": "0000123456789ABD"},
+        {**current, "urdf_repo_path": "other/hand.urdf"},
+        {**current, "product_fingerprint": {"schema_version": 1, "hardware_map_crc": 7}},
+    ):
+        assert not multiturn_identity_compatible(saved, current)

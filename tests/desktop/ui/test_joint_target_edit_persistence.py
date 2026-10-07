@@ -81,11 +81,10 @@ def test_manual_workflow_buttons_keep_signals_after_module_split():
     """模块拆分后，工作流按钮仍应调用 ControlPanel 上的最新方法。"""
     panel = _panel()
     calls = []
-    actions = (
-        ("calib_file_load_btn", "load_calibration_from_file", "load-file"),
-        ("release_half_turn_btn", "release_all_motors_half_turn", "release"),
-        ("tighten_half_turn_btn", "tighten_all_motors_half_turn", "tighten"),
-    )
+    actions = (("calib_file_load_btn", "load_calibration_from_file", "load-file"),)
+    assert not hasattr(panel, "release_all_motors_half_turn")
+    assert not hasattr(panel, "tighten_all_motors_half_turn")
+    assert panel.calib_file_load_btn.parent() is not None
     for button_name, method_name, marker in actions:
         setattr(panel, method_name, lambda value=marker: calls.append(value))
         button = getattr(panel, button_name)
@@ -107,16 +106,10 @@ def test_pose_buttons_exist_only_in_test_panel_and_keep_signals():
     panel.apply_fist_pose = lambda: calls.append("fist")
 
     test_buttons = panel.test_panel.findChildren(QtWidgets.QPushButton)
-    workflow = next(
-        group
-        for group in panel.findChildren(QtWidgets.QGroupBox)
-        if group.title() == "Manual Workflow"
-    )
-    workflow_buttons = workflow.findChildren(QtWidgets.QPushButton)
+    assert not any(group.title() == "Manual Workflow"
+                   for group in panel.findChildren(QtWidgets.QGroupBox))
     assert panel.open_btn in test_buttons
     assert panel.fist_btn in test_buttons
-    assert panel.open_btn not in workflow_buttons
-    assert panel.fist_btn not in workflow_buttons
     panel.open_btn.setEnabled(True)
     panel.fist_btn.setEnabled(True)
     panel.open_btn.click()

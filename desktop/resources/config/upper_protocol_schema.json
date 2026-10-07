@@ -1,5 +1,7 @@
 {
   "schema_version": 1,
+  "protocol_version": 2,
+  "retired_command_values": [217],
   "description": "MMHand Desktop 与 ESP32-P4 当前唯一上位串口协议契约",
   "maintenance_note": "只修改本文件，再运行 tools/generate_upper_protocol.py；payload_bytes 不包含命令字和帧尾",
   "frame": {
@@ -45,7 +47,6 @@
     {"name": "CMD_MOTOR_POS_ABS", "value": 211, "payload_bytes": 108, "description": "27 路 logical ABS 直控目标，每路 int32 counts"},
     {"name": "CMD_ACTIVE_SCOPE", "value": 215, "payload_bytes": 9, "description": "同步 active joint/motor mask 与 control enable"},
     {"name": "CMD_RUN_FEEDBACK", "value": 216, "payload_bytes": 0, "description": "申请状态机进入负反馈运行"},
-    {"name": "CMD_PAUSE", "value": 217, "payload_bytes": 0, "description": "暂停当前负反馈或直控运行"},
     {"name": "CMD_RESTORE_MULTITURN", "value": 218, "payload_bytes": 112, "description": "按位图恢复 27 路 logical ABS 多圈快照"},
     {"name": "CMD_HOST_HEARTBEAT", "value": 220, "payload_bytes": 0, "description": "刷新上位机在线计时器，不携带业务数据"},
     {"name": "CMD_MOTOR_POS_ABS_ONE", "value": 222, "payload_bytes": 5, "description": "单台 Mxx logical ABS 直控，Mxx 加 int32 counts"},
@@ -115,7 +116,7 @@
     "serial_rx_buffer_size": 1024,
     "heartbeats_ms": {
       "kFaultStatusHeartbeatMs": 200,
-      "kSystemStatusHeartbeatMs": 100
+      "kSystemStatusHeartbeatMs": 200
     }
   }
 }

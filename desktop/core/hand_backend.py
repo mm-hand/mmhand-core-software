@@ -608,7 +608,7 @@ class HandBackend:
 
         该授权只由独立 ROS2 INPUT 或 CLI 的独立按键建立，普通控制 ENABLE
         不得隐式放行外部目标。P4 在线、READY 和作用域一致性仍由每一帧发送前
-        核验；E-STOP、Pause、断连和作用域切换会主动撤销授权。
+        核验；E-STOP、断连和作用域切换会主动撤销授权。
         """
         with self._ros2_output_lock:
             return self._set_ros2_output_armed_locked(bool(armed), reason=reason)
@@ -780,14 +780,7 @@ class HandBackend:
     def invalidate_joint_commands(self) -> int:
         return self._controller.invalidate_joint_commands()
 
-    def pause(self) -> None:
-        self.cancel_replay_motion("pause")
-        with self._ros2_output_lock:
-            self._set_ros2_output_armed_locked(False, reason="pause")
-            self._controller.pause()
 
-    def resume(self) -> None:
-        self._controller.resume()
 
     def set_target_angles(self, angles: List[float]) -> JointCommandResult:
         return self.send_joint_targets(angles, source="Backend set_target_angles", live=False)

@@ -12,7 +12,7 @@ from .ui_control_common import (
     ControlMode,
     ENCODER_COUNT,
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
-    SYSTEM_STATE_PAUSED,
+
     SYSTEM_STATE_UNCONTROLLABLE,
     VALID_MOTOR_MASK,
 )
@@ -76,23 +76,12 @@ class ControlCommandController:
         system_state = (
             getattr(state, "system_state", None) if state is not None else None
         )
-        resume_allowed = (bool(getattr(self, "_pause_resume_allowed", False))
-                          and getattr(self, "_pause_resume_scope", None)
-                          == (mode, self._active_motor_mask_from_ui()))
-        if (self._estop_latched or system_state == SYSTEM_STATE_UNCONTROLLABLE
-                or (system_state == SYSTEM_STATE_PAUSED and not resume_allowed)):
+        if self._estop_latched or system_state == SYSTEM_STATE_UNCONTROLLABLE:
             self.backend.reset()
             self._estop_latched = False
         if not self._apply_active_scope_for_current_mode():
             self._set_status("Enable blocked: active scope was not accepted by lower controller")
             return
-        if system_state == SYSTEM_STATE_PAUSED and resume_allowed:
-            self._estop_latched = False
-            self.backend.start()
-            self.context.emit_action("Resume")
-            self._set_status("Resume requested: continuing paused target")
-            return
-
         if mode != "motor":
             # 关节负反馈/遥操启动时不能先发舵机 ABS 直控命令。
             # ABS 命令会让 P4 立即进入 RUN_DIRECT，紧接着的负反馈
@@ -139,7 +128,6 @@ class ControlCommandController:
             return
         self._estop_in_progress = True
         try:
-            self._pause_resume_allowed = False
             self._estop_latched = True
             # STOP is safety-critical. Enqueue it before CSV recorder cleanup
             # or any other UI-side cancellation work.
@@ -155,18 +143,6 @@ class ControlCommandController:
         finally:
             self._estop_in_progress = False
 
-    def pause_controller(self) -> None:
-        """Run the pause controller workflow."""
-        self.context.cancel_replay("Pause")
-        try:
-            self.backend.pause()
-            self._pause_resume_allowed = True
-            self._pause_resume_scope = (self._manual_submode(), self._active_motor_mask_from_ui())
-        except Exception:
-            pass
-        self.clear_ros2_joint_targets()
-        self.context.emit_action("Pause")
-        self._set_status("Pause requested: target cache kept for resume")
 
     def clear_fault_with_confirm(self) -> None:
         """Clear the fault with confirm state."""

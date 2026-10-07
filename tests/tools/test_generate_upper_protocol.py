@@ -82,6 +82,18 @@ def test_desktop_frame_builder_rejects_unknown_command() -> None:
         protocol._build_command_frame(0xFE, b"")
 
 
+def test_retired_pause_number_cannot_be_reassigned(tmp_path: Path) -> None:
+    schema = json.loads(generator.DEFAULT_SCHEMA.read_text(encoding="utf-8"))
+    assert 217 in schema["retired_command_values"]
+    assert not hasattr(protocol, "CMD_PAUSE")
+    assert schema["p4_runtime"]["heartbeats_ms"]["kSystemStatusHeartbeatMs"] == 200
+    schema["commands"][0]["value"] = 217
+    path = tmp_path / "reused.json"
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    with pytest.raises(ValueError, match="retired command"):
+        generator.build_outputs(path)
+
+
 def test_desktop_frame_builder_rejects_wrong_payload_length() -> None:
     with pytest.raises(ValueError, match="payload length mismatch"):
         protocol._build_command_frame(protocol.CMD_ANGLE_CTRL, b"\x00")

@@ -28,7 +28,6 @@ inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT = 7;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT_DONE = 8;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK = 9;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_DONE = 10;
-inline constexpr uint8_t SYSTEM_EVENT_PAUSE = 11;
 inline constexpr uint8_t SYSTEM_EVENT_REEVALUATE_READY = 14;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT = 15;
 inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT = 16;
@@ -42,7 +41,6 @@ inline constexpr uint8_t SYSTEM_STATE_RUN_FEEDBACK = 2;
 inline constexpr uint8_t SYSTEM_STATE_CALIBRATION_RUNNING = 4;
 inline constexpr uint8_t SYSTEM_STATE_READY = 5;
 inline constexpr uint8_t SYSTEM_STATE_RUN_DIRECT = 6;
-inline constexpr uint8_t SYSTEM_STATE_PAUSED = 7;
 inline constexpr uint8_t SYSTEM_STATE_ROPE_INIT_RUNNING = 8;
 inline constexpr uint8_t SYSTEM_STATE_RECOVERY_REQUIRED = 9;
 

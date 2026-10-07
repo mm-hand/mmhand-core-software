@@ -27,7 +27,7 @@ from ..protocol import (
     CMD_CLEAR_CALIBRATION_SCOPE,
     CMD_MANUAL_ENCODER_REFERENCE,
     CMD_MANUAL_ENCODER_SINGLE,
-    CMD_PAUSE,
+
     CMD_RESET,
     CMD_RESTORE_MULTITURN,
     CMD_RUN_FEEDBACK,
@@ -41,7 +41,7 @@ from ..protocol import (
     SYSTEM_FAULT_CALIBRATION,
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_IDLE,
-    SYSTEM_STATE_PAUSED,
+
     SYSTEM_STATE_READY,
     SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_RUN_FEEDBACK,
@@ -791,7 +791,7 @@ class StateReducer:
                         CMD_CALIBRATE,
                         CMD_ACTIVE_SCOPE,
                         CMD_RUN_FEEDBACK,
-                        CMD_PAUSE,
+
                         CMD_RESTORE_MULTITURN,
                         CMD_MANUAL_ENCODER_REFERENCE,
                         CMD_MANUAL_ENCODER_SINGLE,
@@ -818,9 +818,6 @@ class StateReducer:
                             pass
                         elif ack_cmd == CMD_RUN_FEEDBACK:
                             model.control_enabled = int(applied_mode) == SYSTEM_STATE_RUN_FEEDBACK
-                        elif ack_cmd == CMD_PAUSE:
-                            model.control_enabled = False
-                            model.system_state = SYSTEM_STATE_PAUSED
                         elif ack_cmd == CMD_RESTORE_MULTITURN:
                             pass
                         elif ack_cmd in (

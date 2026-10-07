@@ -95,7 +95,7 @@ from .protocol import (
     build_task_diag_subscribe_cmd,
     build_control_trace_subscribe_cmd,
     build_rope_init_cmd,
-    build_pause_cmd,
+
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
     build_reset_cmd,
@@ -1481,9 +1481,6 @@ class LowerComputerComm:
         if cmd == "stop":
             self._enqueue_stop_immediately()
             return True
-        if cmd == "pause":
-            self._enqueue_pause_immediately()
-            return True
         if self._is_high_rate_command(cmd):
             return self._enqueue_latest_high_rate(cmd)
         try:
@@ -1501,15 +1498,6 @@ class LowerComputerComm:
             self.tx_queue.unfinished_tasks += 1
             self.tx_queue.not_empty.notify()
 
-    def _enqueue_pause_immediately(self) -> None:
-        with self.tx_queue.mutex:
-            pending = self.tx_queue.queue
-            kept = [item for item in pending if not self._is_high_rate_command(item)]
-            pending.clear()
-            pending.extend(kept)
-            pending.append("pause")
-            self.tx_queue.unfinished_tasks += 1
-            self.tx_queue.not_empty.notify()
 
     @staticmethod
     def _is_high_rate_command(cmd: SendCmd) -> bool:
@@ -1723,8 +1711,6 @@ class LowerComputerComm:
             return build_start_cmd()
         if cmd == "run_feedback":
             return build_run_feedback_cmd()
-        if cmd == "pause":
-            return build_pause_cmd()
         if cmd == "stop":
             return build_stop_cmd()
         if cmd == "reset":

@@ -69,7 +69,6 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
     events = []
     bar.start_requested.connect(lambda: events.append("start"))
     bar.stop_requested.connect(lambda: events.append("stop"))
-    bar.pause_requested.connect(lambda: events.append("pause"))
     bar.ros2_output_toggled.connect(lambda enabled: events.append(("ros2", enabled)))
     bar.clear_fault_requested.connect(lambda: events.append("clear"))
     bar.calibrate_requested.connect(lambda: events.append("calibrate"))
@@ -81,14 +80,12 @@ def test_device_control_bar_exposes_expected_buttons() -> None:
     assert not hasattr(bar, "nvs_control_btn")
     bar.enable_btn.click()
     bar.stop_btn.click()
-    bar.pause_btn.click()
     bar.ros2_output_btn.click()
     bar.reset_btn.click()
     bar.calib_btn.click()
     assert events == [
         "start",
         "stop",
-        "pause",
         ("ros2", True),
         "clear",
         "calibrate",

@@ -103,7 +103,6 @@ bool assembleAndStartSystem() {
     // 上电默认不允许任何任务拥有舵机输出；状态机完成硬件/标定门禁后再进入 IDLE/READY。
     sharedData.control_mode = CONTROL_MODE_JOINT;
     sharedData.system_state = SYSTEM_STATE_UNCONTROLLABLE;
-    sharedData.paused_resume_state = SYSTEM_STATE_IDLE;
     sharedData.servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData.feedback_admission_status = FEEDBACK_ADMISSION_IDLE;
     sharedData.feedback_reject_reason = FEEDBACK_REJECT_NONE;

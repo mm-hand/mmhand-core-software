@@ -25,8 +25,13 @@ def _load_schema(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if int(data.get("schema_version", 0)) != 1:
         raise ValueError("upper protocol schema_version must be 1")
+    if not 1 <= int(data.get("protocol_version", 0)) <= 255:
+        raise ValueError("protocol_version must fit a nonzero byte")
     packets = list(data.get("packets", []))
     commands = list(data.get("commands", []))
+    retired = {int(value) for value in data.get("retired_command_values", [])}
+    if retired.intersection(int(item["value"]) for item in commands):
+        raise ValueError("retired command numbers must not be reused")
     for label, items in (("packet", packets), ("command", commands)):
         names = [str(item["name"]) for item in items]
         values = [int(item["value"]) for item in items]
@@ -81,6 +86,7 @@ def _render_cpp(schema: dict) -> str:
         "#include \"../config/DimensionsConfig.h\"",
         "",
         f"inline constexpr uint8_t PROTOCOL_HEADER = 0x{int(frame['header']):02X};",
+        f"inline constexpr uint8_t kHostProtocolVersion = {int(schema['protocol_version'])};",
         f"inline constexpr uint8_t PROTOCOL_TAIL = 0x{int(frame['tail']):02X};",
         f"inline constexpr int16_t PROTOCOL_DISCONNECT_SENTINEL = {int(frame['disconnect_sentinel'])};",
         f"inline constexpr size_t kP4TimestampBytes = {int(frame['p4_timestamp_bytes'])};",
@@ -178,6 +184,7 @@ def _render_python(schema: dict) -> str:
         '"""',
         "",
         f"PROTOCOL_HEADER = 0x{int(frame['header']):02X}",
+        f"HOST_PROTOCOL_VERSION = {int(schema['protocol_version'])}",
         f"PROTOCOL_TAIL = 0x{int(frame['tail']):02X}",
         f"DISCONNECT_SENTINEL = {int(frame['disconnect_sentinel'])}",
         f"P4_TIMESTAMP_BYTES = {int(frame['p4_timestamp_bytes'])}",

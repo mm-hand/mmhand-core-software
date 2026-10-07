@@ -5,6 +5,7 @@
  */
 #include "HostTelemetryPublisher.h"
 #include "../../platform/time/Clock.h"
+#include "../../platform/identity/DeviceIdentity.h"
 #include "HostProtocolCodec.h"
 #include "HostCalibrationCommandHandler.h"
 #include "../../data/SafetyTypes.h"
@@ -943,7 +944,7 @@ bool sendSafetyEventPacket(const SafetyEventRecord& event,
  */
 bool sendProductFingerprintPacket()
 {
-    uint8_t buffer[40];
+    uint8_t buffer[48];
     size_t idx = 0;
     buffer[idx++] = PROTOCOL_HEADER;
     buffer[idx++] = 0x00;
@@ -951,13 +952,16 @@ bool sendProductFingerprintPacket()
     buffer[idx++] = kProductFingerprintSchemaVersion;
     buffer[idx++] = kUrdfFeedbackMappingVersion;
     buffer[idx++] = kManualScaledUrdfFeedbackMappingVersion;
-    buffer[idx++] = 0; // 保留字节，后续扩展时不改变当前字段偏移。
+    buffer[idx++] = kHostProtocolVersion;
     appendU32BigEndian(buffer, &idx, kProductControlModelCrc);
     appendU32BigEndian(buffer, &idx, kProductVisualModelCrc);
     appendU32BigEndian(buffer, &idx, kProductHardwareMapCrc);
     appendU32BigEndian(buffer, &idx, kProductParameterCrc);
     appendU32BigEndian(buffer, &idx, kProductFirmwareSourceCrc);
     appendU32BigEndian(buffer, &idx, kProductStructureCommitCrc);
+    const uint64_t deviceId = p4::platform::deviceIdentity();
+    appendU32BigEndian(buffer, &idx, static_cast<uint32_t>(deviceId >> 32U));
+    appendU32BigEndian(buffer, &idx, static_cast<uint32_t>(deviceId));
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = (uint8_t)(idx - 2);

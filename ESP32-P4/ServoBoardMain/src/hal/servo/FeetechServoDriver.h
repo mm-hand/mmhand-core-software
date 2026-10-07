@@ -126,7 +126,6 @@ public:
           _txPin(-1),
           _baud(0),
           _writeCount(0),
-          _syncReadTimeoutMs(SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT),
           _currentReadDivider(0),
           _syncReadActive(false),
           _syncReadIncludeCurrent(false),
@@ -391,7 +390,8 @@ public:
         _syncReadDeadlineUs =
             nowUs + mmhand::config::servo::kServoFeedbackDeadlineUs;
 
-        _sms.syncReadBegin(count, feedbackLen, _syncReadTimeoutMs);
+        // 正常链路使用 TxOnly + CollectAvailable；SDK 阻塞超时在此不参与调度。
+        _sms.syncReadBegin(count, feedbackLen, 0);
         const int txResult = _sms.syncReadPacketTxOnly(
             _syncReadIds, count, addrPresentPosition, feedbackLen);
         if (txResult <= 0) {
@@ -498,7 +498,7 @@ public:
 
     /** 对一台离线舵机执行低频单播探测，成功时更新上线去抖状态。 */
     bool probeFeedback(uint8_t id,
-                       uint16_t timeoutMs = SERVO_SYNC_READ_TIMEOUT_MS_DEFAULT)
+                       uint16_t timeoutMs = SERVO_PROBE_TIMEOUT_MS)
     {
         if (!_serial || id > MAX_SERVO_ID) {
             return false;
@@ -1105,7 +1105,6 @@ private:
     ServoFeedbackInternal _feedback[MAX_SERVO_ID + 1]; ///< 按物理 ID 索引的驱动私有状态。
     bool _torqueDisabled[MAX_SERVO_ID + 1]; ///< 最近一次成功设置的扭矩关闭状态。
     bool _multiTurnConfigured[MAX_SERVO_ID + 1]; ///< 本次上线是否已完成多圈配置。
-    uint16_t _syncReadTimeoutMs; ///< 单次同步读响应时限。
     uint8_t _currentReadDivider; ///< 降频读取 Present Current 的分频计数器。
     bool _syncReadActive; ///< 当前 BUS 是否正在等待同步读回包。
     bool _syncReadIncludeCurrent; ///< 本轮是否读取扩展15字节遥测。

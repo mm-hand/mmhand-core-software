@@ -7,20 +7,23 @@ from desktop.core.protocol import parse_product_fingerprint_packet
 
 def test_parse_product_fingerprint_packet() -> None:
     payload = struct.pack(
-        ">BBBBIIIIII",
+        ">BBBBIIIIIIQ",
         1,
         2,
         3,
-        0,
+        2,
         0x11111111,
         0x22222222,
         0x33333333,
         0x44444444,
         0x55555555,
         0x66666666,
+        0x0000123456789ABC,
     )
     parsed = parse_product_fingerprint_packet(payload)
     assert parsed == {
+        "protocol_version": 2,
+        "device_id": "0000123456789ABC",
         "schema_version": 1,
         "feedback_mapping_version": 2,
         "manual_scaled_mapping_version": 3,
@@ -35,3 +38,4 @@ def test_parse_product_fingerprint_packet() -> None:
 
 def test_reject_truncated_product_fingerprint_packet() -> None:
     assert parse_product_fingerprint_packet(bytes(27)) is None
+    assert parse_product_fingerprint_packet(bytes(28)) is None

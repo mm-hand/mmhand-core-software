@@ -51,7 +51,7 @@ from desktop.core.protocol import (
     SYSTEM_FAULT_MULTITURN_UNKNOWN,
     SYSTEM_FAULT_OVERLOAD,
     SYSTEM_FAULT_SERVO_OFFLINE,
-    SYSTEM_STATE_PAUSED,
+
     SYSTEM_STATE_RECOVERY_REQUIRED,
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
@@ -207,10 +207,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self.save_data_check.setChecked(True)
         self.save_data_check.toggled.connect(self._on_toggle_save_data)
         self.comm_conn_light = self._make_toolbar_connection_light()
-        self.start_indicator = QtWidgets.QLabel("STOP")
-        self.start_indicator.setAlignment(QtCore.Qt.AlignCenter)
-        self.start_indicator.setMinimumWidth(56)
-        self._refresh_start_indicator()
 
         for widget in [
             QtWidgets.QLabel("Port:"), self.port_combo, self.comm_conn_light,
@@ -260,16 +256,15 @@ class HandGUI(QtWidgets.QMainWindow):
         self.fault_details_btn.setEnabled(False)
         self.fault_details_btn.clicked.connect(self._show_active_issue_details)
 
-        for label in [
-            self.fault_label,
-            self.calib_label,
-            self.overload_label,
-            self.feedback_hold_label,
-            self.turn_label,
-            self.delay_label,
-            self.fault_details_btn,
-        ]:
+        self.communication_label = self._make_top_status_label("通信：未知", 100)
+        self.problem_label = self._make_top_status_label("当前问题：未知", 160)
+        for label in (self.communication_label, self.fault_label,
+                      self.problem_label, self.fault_details_btn):
             layout.addWidget(label)
+        self.statusBar().addPermanentWidget(self.calib_label)
+        for label in (self.overload_label,
+                      self.feedback_hold_label, self.turn_label, self.delay_label):
+            label.hide()
 
         strip.setStyleSheet(
             "QWidget#TopStatusStrip {"
@@ -430,7 +425,6 @@ class HandGUI(QtWidgets.QMainWindow):
                 self.port_combo.setCurrentIndex(idx)
             self.port_combo.blockSignals(False)
         self._set_status(status)
-        self._refresh_start_indicator()
 
     def _connect_selected_port(self) -> bool:
         port = self.port_combo.currentData()
@@ -467,7 +461,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._set_status(f"Mode: {self._mode_display_name(self.current_mode)}")
 
     def _on_comm_ready(self) -> None:
-        self._refresh_start_indicator()
         try:
             self.control_panel.refresh_active_scope()
         except Exception:
@@ -588,7 +581,6 @@ class HandGUI(QtWidgets.QMainWindow):
         self._update_status_text(state)
 
     def _update_status_text(self, state: HandModel) -> None:
-        self._refresh_start_indicator()
         now = time.time()
         self._last_status_refresh = now
         connected = self.is_comm_connected()
@@ -668,6 +660,28 @@ class HandGUI(QtWidgets.QMainWindow):
             state,
             system_status_fresh=connected and system_status_fresh,
         )
+        self.communication_label.setText(
+            "通信：正常" if connected and system_status_fresh
+            else ("通信：状态过期" if connected else "通信：断开")
+        )
+        self.communication_label.setToolTip(self.delay_label.toolTip())
+        if not connected or not system_status_fresh:
+            self.fault_label.setText("设备：未知")
+        else:
+            self.fault_label.setText("设备：" + sys_text.removeprefix("System: "))
+        problems = []
+        if connected and not system_status_fresh:
+            problems.append("等待新鲜 P4 状态")
+        if sys_faults or system_uncontrollable:
+            problems.append(sys_text)
+        if overload_active:
+            problems.append(overload_text)
+        if hold_active:
+            problems.append(hold_text)
+        if connected and not turn_ok:
+            problems.append(turn_text)
+        self.problem_label.setText("当前问题：" + ("；".join(problems) or "无"))
+        self.problem_label.setToolTip("\n".join((sys_tip, calib_tip, overload_tip, hold_tip, turn_tip)))
         self.fault_details_btn.setEnabled(self._has_active_issue_details)
         self._handle_fault_side_effects(state)
 
@@ -1172,7 +1186,7 @@ class HandGUI(QtWidgets.QMainWindow):
         if not summary.get("offline_only"):
             return True
         system_state = getattr(state, "system_state", None)
-        runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PAUSED)
+        runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK)
         return bool(runtime_state or self._fault_previous_runtime_active)
 
     def _fault_stop_allowed(self, summary: dict, state: HandModel) -> bool:
@@ -1182,7 +1196,7 @@ class HandGUI(QtWidgets.QMainWindow):
         motion_state = system_state in (
             SYSTEM_STATE_RUN_DIRECT,
             SYSTEM_STATE_RUN_FEEDBACK,
-            SYSTEM_STATE_PAUSED,
+
         )
         # 连接初期尚未收到舵机/CAN首帧时，故障位会短暂出现。此时系统没有
         # 运动所有权，无需发送会被P4永久锁存的E-STOP；真正运行中出现故障
@@ -1196,7 +1210,7 @@ class HandGUI(QtWidgets.QMainWindow):
         runtime_state = system_state in (
             SYSTEM_STATE_RUN_DIRECT,
             SYSTEM_STATE_RUN_FEEDBACK,
-            SYSTEM_STATE_PAUSED,
+
         )
         if runtime_state:
             self._fault_previous_runtime_active = True
@@ -1364,7 +1378,6 @@ class HandGUI(QtWidgets.QMainWindow):
             4: "Calibrating",
             5: "Ready",
             6: "Direct Control",
-            7: "Paused",
             SYSTEM_STATE_ROPE_INIT_RUNNING: "Rope Initialization",
             SYSTEM_STATE_RECOVERY_REQUIRED: "Recovery Required",
         }
@@ -2275,8 +2288,6 @@ class HandGUI(QtWidgets.QMainWindow):
             return "start"
         if lower.startswith("stop"):
             return "stop"
-        if lower.startswith("pause"):
-            return "pause"
         if lower.startswith("resume"):
             return "resume"
         if "clear fault" in lower:
@@ -2313,13 +2324,6 @@ class HandGUI(QtWidgets.QMainWindow):
     def _on_keyboard_stop(self) -> None:
         self.control_panel.stop_controller()
 
-    def _refresh_start_indicator(self) -> None:
-        started = bool(self.backend.is_started())
-        self.start_indicator.setText("RUN" if started else "STOP")
-        self.start_indicator.setStyleSheet(
-            "background:#1e8e3e;color:white;padding:4px;" if started else "background:#c62828;color:white;padding:4px;"
-        )
-        self._refresh_toolbar_connection_lights()
 
     def _make_toolbar_connection_light(self) -> QtWidgets.QLabel:
         light = QtWidgets.QLabel()
