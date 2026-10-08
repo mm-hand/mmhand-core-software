@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}\\.debug\\p4\\ServoBoardMain.ino.elf",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
-      "miDebuggerPath": "D:\\esp32\\Espressif\\tools\\riscv32-esp-elf-gdb\\16.3_20250913\\riscv32-esp-elf-gdb\\bin\\riscv32-esp-elf-gdb.exe",
+      "miDebuggerPath": "${env:LOCALAPPDATA}\\Arduino15\\packages\\esp32\\tools\\riscv32-esp-elf-gdb\\16.3_20250913\\bin\\riscv32-esp-elf-gdb.exe",
       "stopAtEntry": false,
       "externalConsole": false,
       "preLaunchTask": "P4: Start OpenOCD",
@@ -35,25 +35,6 @@
         "trace": false,
         "traceResponse": false
       }
-    },
-    {
-      "name": "C/C++ Runner: Debug Session",
-      "type": "cppdbg",
-      "request": "launch",
-      "args": [],
-      "stopAtEntry": false,
-      "externalConsole": true,
-      "cwd": "c:/Users/g8765/mmhand-debug/ESP32-P4/ServoBoardMain/src/system",
-      "program": "c:/Users/g8765/mmhand-debug/ESP32-P4/ServoBoardMain/src/system/build/Debug/outDebug",
-      "MIMode": "gdb",
-      "miDebuggerPath": "gdb",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        }
-      ]
     }
   ]
 }
