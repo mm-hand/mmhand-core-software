@@ -24,7 +24,6 @@ from .math import (
     build_calibration_result,
     build_tendon_lut,
     encoder_count_to_deg,
-    encoder_for_positive_travel,
     forward_encoder_delta,
     f32,
     map_manual_scaled_encoder_to_urdf,
@@ -57,6 +56,22 @@ class WorkspaceCacheEntry:
     primary_release_abs: int = 0
     secondary_tight_abs: int = 0
     secondary_release_abs: int = 0
+
+
+@dataclass
+class _EncoderTravel:
+    """Unwrap consecutive feedback in the unchanged Manual coordinate frame."""
+
+    last_encoder: int
+    counts: int = 0
+    min_counts: int = 0
+    max_counts: int = 0
+
+    def observe(self, encoder):
+        self.counts += wrap_encoder_delta(encoder, self.last_encoder)
+        self.last_encoder = encoder
+        self.min_counts = min(self.min_counts, self.counts)
+        self.max_counts = max(self.max_counts, self.counts)
 
 
 def _get(snapshot, name, default=None):
@@ -174,6 +189,7 @@ class _DualMachine:
         # 辅助手指让位沿用原速度，不跟随当前侧摆校准的低速参数。
         self.workspace_params = config.default_auto_calibration_params()
         self.reason = protocol.CALIB_DIAG_REASON_NONE
+        self._result_travel = None
 
     def _diag(self, reason, phase, joint, motor=255, *values):
         # Same first-root-cause semantics as setCalibrationDiagIfEmpty.
@@ -488,6 +504,8 @@ class _DualMachine:
             if raw is None or encoder is None or current is None:
                 self._feedback_lost(phase, self.joint, secondary, (1 << primary) | (1 << secondary))
                 return None
+            if self._result_travel is not None:
+                self._result_travel.observe(encoder)
             load_raw = self.io.servo_load(secondary)
             load = config.load_magnitude(load_raw) if load_raw is not None else 0
             if load_raw is not None and load >= threshold:
@@ -513,6 +531,7 @@ class _DualMachine:
         window_encoder, window_s, window_p, stable = start_encoder, start_s, start_p, 0
         threshold = config.kDualSecondaryFinalLoadThreshold
         motor_mask = (1 << primary) | (1 << secondary)
+        exchange_travel = _EncoderTravel(start_encoder)
         while self.io.owns_control():
             now = self.io.now_ms()
             raw, encoder = self.io.encoder_raw(self.joint), self.io.encoder(self.joint)
@@ -520,10 +539,13 @@ class _DualMachine:
             if raw is None or encoder is None or s_abs is None or p_abs is None:
                 self._feedback_lost(phase, self.joint, secondary, motor_mask)
                 return None
+            exchange_travel.observe(encoder)
+            if self._result_travel is not None:
+                self._result_travel.observe(encoder)
             load_raw = self.io.servo_load(secondary)
             load = config.load_magnitude(load_raw) if load_raw is not None else 0
             load_high = load_raw is not None and load >= threshold
-            total_delta = wrap_encoder_delta(encoder, start_encoder)
+            total_delta = exchange_travel.counts
             total_deg = abs(encoder_count_to_deg(total_delta))
             if fit is not None:
                 fit.maybe_append(total_deg, encoder, p_abs, s_abs)
@@ -535,7 +557,7 @@ class _DualMachine:
                 angle_stalled = angle_delta <= p.stallActualDeg
                 stable = min(stable + 1, 255) if load_high and not enough_travel and angle_stalled else 0
                 self.io.trace("CHECK_DUAL_EXCHANGE_NEG3", self.joint, secondary,
-                              total_deg=total_deg, window_deg=angle_delta,
+                              total_deg=total_deg, signed_travel=total_delta, window_deg=angle_delta,
                               secondary_delta=s_delta, primary_delta=p_delta,
                               angle_stable=stable, load=load, enough_travel=enough_travel)
                 if stable >= config.kAngleStallStableSamples:
@@ -601,19 +623,24 @@ class _DualMachine:
             if tight is None:
                 return None
         tight_abs, tight_raw, tight_encoder, tight_load = tight
+        self._result_travel = _EncoderTravel(tight_encoder)
         s_start, s_encoder = self.io.servo_abs(secondary), self.io.encoder(self.joint)
         if s_start is None or s_encoder is None:
             self._feedback_lost(protocol.CALIB_DIAG_PHASE_DUAL_PRELOAD, self.joint, secondary, 1 << secondary)
             return None
+        self._result_travel.observe(s_encoder)
         preload = self._find_secondary_preload(secondary, s_start, primary, tight_abs)
         if preload is None:
             return None
         preload_abs, preload_raw, preload_encoder, preload_load = preload
+        self._result_travel.observe(preload_encoder)
         exchange_encoder = self.io.encoder(self.joint)
         if exchange_encoder is None:
             self._feedback_lost(protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE,
                                 self.joint, secondary, (1 << primary) | (1 << secondary))
             return None
+        self._result_travel.observe(exchange_encoder)
+        preload_travel = self._result_travel.counts
         fit = TendonRawFitBuffer()
         begin_sampling = getattr(self.io, "begin_lut_sampling", None)
         sampling_window = None
@@ -638,6 +665,7 @@ class _DualMachine:
         if endpoint is None:
             return None
         s_limit, p_final, ready_raw, limit_encoder, ready_load = endpoint
+        self._result_travel.observe(limit_encoder)
         if sampling_window is not None:
             try:
                 fit = self.io.finish_lut_sampling(sampling_window)
@@ -649,10 +677,25 @@ class _DualMachine:
                 return None
         else:
             fit.append(limit_encoder, p_final, s_limit)
-        start_encoder = encoder_for_positive_travel(limit_encoder, 1)
-        result_tight = encoder_for_positive_travel(tight_encoder, 1)
-        span = forward_encoder_delta(start_encoder, result_tight)
-        if span <= 0 or span >= config.kRejectNearFullWrapSpanCounts:
+        signed_travel = self._result_travel.counts
+        span = abs(signed_travel)
+        observed_span = self._result_travel.max_counts - self._result_travel.min_counts
+        # Primary tendon tension need not increase the Manual/URDF angle (thumb).
+        # Order actual endpoints; do not flip direction or the LUT sample frame.
+        if signed_travel > 0:
+            start_encoder, result_tight = tight_encoder, limit_encoder
+            start_primary_abs, end_primary_abs = tight_abs, p_final
+        else:
+            start_encoder, result_tight = limit_encoder, tight_encoder
+            start_primary_abs, end_primary_abs = p_final, tight_abs
+        self.io.trace("DUAL_SPAN_CHECK", self.joint, primary,
+                      tight_encoder=tight_encoder, preload_encoder=preload_encoder,
+                      exchange_encoder=exchange_encoder, limit_encoder=limit_encoder,
+                      preload_travel=preload_travel, exchange_travel=signed_travel - preload_travel,
+                      signed_travel=signed_travel, span=span, observed_span=observed_span,
+                      start_encoder=start_encoder, end_encoder=result_tight)
+        if (span <= 0 or observed_span >= config.kRejectNearFullWrapSpanCounts
+                or forward_encoder_delta(start_encoder, result_tight) != span):
             self._diag(protocol.CALIB_DIAG_REASON_RESULT_SPAN_INVALID,
                        protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
                        span, limit_encoder, tight_encoder, (1 << primary) | (1 << secondary))
@@ -661,7 +704,7 @@ class _DualMachine:
         fraction = f32(f32(config.kLutZeroDeg - config.kLutStartDeg) / total_deg) if total_deg > 0 else 0
         zero_encoder = wrap_encoder_count(start_encoder + round_to_int32(f32(f32(span) * fraction)))
         result = build_calibration_result(self.io, self.joint, start_encoder, zero_encoder,
-                                          result_tight, s_limit, tight_abs, tight_abs)
+                                          result_tight, start_primary_abs, tight_abs, end_primary_abs)
         if result is None:
             self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
                        protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
