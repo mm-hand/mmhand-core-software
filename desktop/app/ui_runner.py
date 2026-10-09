@@ -177,6 +177,10 @@ def run_ui(
     backend: Optional[HandBackend] = None,
 ) -> int:
     _configure_gui_diagnostics()
+    from desktop.ui.ui_qt_compat import ensure_app
+
+    # 在连接串口和启动后台线程前安装 GUI GC，并保持 QApplication 存活。
+    _qt_app = ensure_app()
     backend = backend or HandBackend()
     if port:
         if backend.connect(port):

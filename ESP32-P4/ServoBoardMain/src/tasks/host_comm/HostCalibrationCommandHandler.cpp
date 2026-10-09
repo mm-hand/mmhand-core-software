@@ -16,7 +16,6 @@
 #include "../../generated/UrdfJointLimits.generated.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/SharedSafetyState.h"
-#include "../../app/AppBootstrap.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/SystemRuntimeContext.h"
 #include "../../runtime/ports/SystemEventPort.h"
@@ -49,7 +48,6 @@ uint32_t autoCalibrationValidMask(SystemRuntimeContext* sharedData)
 bool commandRequiresManualReference(uint8_t command)
 {
     switch (command) {
-        case CMD_CALIBRATE:
         case CMD_RUN_FEEDBACK:
         case CMD_ANGLE_CTRL:
         case CMD_ANGLE_CTRL_MASKED:
@@ -66,7 +64,6 @@ bool manualUpdateMotionActive(SystemRuntimeContext* sharedData)
            sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
            sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-           sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
            sharedData->system_state == SYSTEM_STATE_PAUSED;
 }
@@ -151,11 +148,6 @@ void invalidateAutomaticCalibration(SystemRuntimeContext* sharedData,
     }
 
     clearCalibrationAssemblyWarnings(sharedData, jointMask);
-    // Manual 改写只是为下一轮标定准备数据。即使其他关节仍保留有效
-    // Auto，也不能把这次准备动作伪装成一轮 CALIB SUCCESS/WARN。
-    g_calibrationStatus = CALIB_STATUS_IDLE;
-    sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                         (uint32_t)~SYSTEM_FAULT_CALIBRATION);
     FW_LOG_INFO_PRINTF(
         "[MANUAL RAM] AUTO_INVALIDATE joints=0x%08lX motors=0x%08lX remaining=0x%08lX\r\n",
         (unsigned long)jointMask,

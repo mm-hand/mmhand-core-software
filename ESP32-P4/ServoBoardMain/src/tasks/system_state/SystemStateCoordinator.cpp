@@ -24,7 +24,6 @@
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../platform/log/FirmwareLog.h"
-#include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
 #include "SystemEventDispatcher.h"
@@ -65,7 +64,7 @@ bool stepSystemStateCoordinator(SystemStateCoordinatorContext* context,
             input.emergencyStopToken;
         if (emergencyStopToken != context->handledEmergencyStopToken) {
             context->handledEmergencyStopToken = emergencyStopToken;
-            SystemEvent_t stopEvent;
+            SystemEvent_t stopEvent{};
             stopEvent.event = SYSTEM_EVENT_STOP;
             stopEvent.timestamp = nowMs;
             stopEvent.token = emergencyStopToken;
@@ -87,7 +86,6 @@ bool stepSystemStateCoordinator(SystemStateCoordinatorContext* context,
         const p4::state::HostLeaseSupervisorPort hostLeasePort = {
             idleOrReadyState,
             setSystemState,
-            setCalibrationStatus,
         };
         p4::state::updateHostControlLease(sharedData, hostLeasePort);
 

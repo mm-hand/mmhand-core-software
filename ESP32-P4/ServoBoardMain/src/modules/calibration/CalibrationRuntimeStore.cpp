@@ -18,12 +18,12 @@
 // 模块职责：
 // 1) 管理关节标定结果和人工磁编参考值；
 // 2) 提供标定结果告警、编码器方向和双执行器映射等公共能力；
-// 3) 实际机械搜索由 AutoCalibrationTask 的非阻塞状态机执行。
+// 3) 接收上位机生成的 LUT；P4 不执行机械搜索。
 //
 // 数据来源约束：
 // - 编码器原始值来自 canRxQueue（RemoteSensorData_t）；
-// - 舵机运动与反馈通过 servoBusTask 的队列快照交互；
-// - 标定生命周期与 UI 状态由 SystemStateTask 统一管理。
+// - 标定结果通过已有 Manual/LUT 通信协议写入；
+// - 标定生命周期与 UI 状态由上位机管理。
 
 // 全局标定结果（按关节索引 0~ENCODER_TOTAL_NUM-1）。
 JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
@@ -73,6 +73,8 @@ bool publishJointCalibrationResult(
     g_jointCalibResult[jointIndex] = result;
     return true;
 }
+
+
 
 void clearJointCalibrationResult(uint8_t jointIndex)
 {
@@ -246,17 +248,9 @@ bool updateCalibrationAssemblyWarning(
     }
     return warning;
 }
-// 21 路磁编固定安装方向：+1 表示 raw 增加为关节正向，-1 表示 raw 减少。
-extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM] = {
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1, -1, -1,  1,
-    -1,  -1, -1, 1, -1
-};
-
-// 运行期磁编方向表。自动标定不从噪声行程“学习方向”，而是恢复固定安装表；
+// 运行期磁编方向表。默认使用固定安装方向，上位机可通过现有协议同步方向；
 // 角度显示、Manual/Auto 跨度计算和 PID 反馈映射都读取这张表。
+// +1 表示 raw 增加为关节正向，-1 表示 raw 减少。
 int8_t g_encoderDirection[ENCODER_TOTAL_NUM] = {
     -1, -1, -1,  1,
     -1, -1, -1,  1,
@@ -281,5 +275,5 @@ void initializeCalibrationRuntimeState(void) {
     memset(g_jointCalibResult, 0, sizeof(g_jointCalibResult));
     memset(g_manualEncoderReference, 0, sizeof(g_manualEncoderReference));
 
-    FW_LOG_INFO_PRINTLN("[BOOT CALIB] runtime state cleared; auto calibration pending");
+    FW_LOG_INFO_PRINTLN("[BOOT CALIB] runtime state cleared; waiting for desktop Manual/LUT data");
 }

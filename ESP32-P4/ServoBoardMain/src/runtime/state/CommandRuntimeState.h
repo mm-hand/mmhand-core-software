@@ -28,6 +28,23 @@ struct CommandRuntimeState {
     volatile uint32_t pending_direct_joint_mask; ///< pending 对应的 Jxx。
     volatile uint8_t pending_direct_require_can; ///< pending 是否依赖磁编 CAN。
     volatile uint8_t direct_reject_reason; ///< 最近一次 DIRECT_REJECT_*。
+    uint32_t pending_direct_token;
+    uint16_t pending_direct_speed;
+    uint8_t pending_direct_acc;
+    volatile uint32_t applied_direct_token;
+    uint16_t applied_direct_speed;
+    uint8_t applied_direct_acc;
+    volatile uint32_t applied_direct_motor_mask; ///< 实际输出范围，不改写 active 授权范围。
+    uint32_t direct_release_generation; ///< 排队释放的代际，防止旧释放事件覆盖新目标。
+    volatile uint32_t direct_target_request_generation;
+    volatile uint32_t direct_target_request_token;
+    volatile uint32_t direct_target_request_mask;
+    volatile uint32_t direct_target_result_generation;
+    volatile uint32_t direct_target_result_token;
+    volatile uint32_t direct_target_requested_mask;
+    volatile uint32_t direct_target_applied_mask;
+    volatile uint32_t direct_target_rejected_mask;
+    volatile uint8_t direct_target_status;
 };
 
 #endif // P4_SYSTEM_CONTEXT_COMMAND_RUNTIME_STATE_H

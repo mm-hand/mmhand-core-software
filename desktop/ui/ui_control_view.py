@@ -210,6 +210,8 @@ class ControlPanelViewMixin:
         self.joint_use_checks = [None] * ENCODER_COUNT
         self.joint_group_use_checks = []
         self._joint_target_user_set = []
+        self.motor_bus_items = []
+        self.motor_route_items = []
         self.motor_turn_items = []
         self.motor_raw_items = []
         self.motor_flash_raw_items = []

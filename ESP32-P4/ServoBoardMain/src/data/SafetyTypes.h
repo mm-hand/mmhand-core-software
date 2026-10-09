@@ -13,7 +13,7 @@ inline constexpr uint32_t SYSTEM_FAULT_CAN_OFFLINE = 1UL << 0; ///< S3/CAN 反�
 inline constexpr uint32_t SYSTEM_FAULT_JOINT16_DUAL = 1UL << 1; ///< 协议保留的历史故障位，不得重编号。
 inline constexpr uint32_t SYSTEM_FAULT_OVERLOAD = 1UL << 2; ///< 舵机负载硬保护触发。
 inline constexpr uint32_t SYSTEM_FAULT_SERVO_OFFLINE = 1UL << 4; ///< active scope 舵机离线。
-inline constexpr uint32_t SYSTEM_FAULT_CALIBRATION = 1UL << 5; ///< 自动标定失败。
+// 故障位 5 为旧自动标定保留，不再由固件产生；后续故障位保持原编号。
 inline constexpr uint32_t SYSTEM_FAULT_MULTITURN_UNKNOWN = 1UL << 6; ///< active scope 多圈不可信。
 
 enum class ServoRejectReason : uint8_t {

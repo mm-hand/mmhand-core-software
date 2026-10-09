@@ -21,9 +21,7 @@ inline constexpr uint8_t MOTOR_DIRECT_SOURCE_ABSOLUTE = 1; ///< 已解析的 log
 inline constexpr uint8_t SYSTEM_EVENT_START = 1;
 inline constexpr uint8_t SYSTEM_EVENT_STOP = 2;
 inline constexpr uint8_t SYSTEM_EVENT_RESET = 3;
-inline constexpr uint8_t SYSTEM_EVENT_CALIBRATE = 4;
-inline constexpr uint8_t SYSTEM_EVENT_CALIBRATION_DONE = 5;
-inline constexpr uint8_t SYSTEM_EVENT_CALIBRATION_FAILED = 6;
+// 4/5/6 是已删除的 P4 自动标定事件，永久保留编号，不再接收或产生。
 inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT = 7;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_DIRECT_DONE = 8;
 inline constexpr uint8_t SYSTEM_EVENT_RUN_FEEDBACK = 9;
@@ -39,14 +37,13 @@ inline constexpr uint8_t SYSTEM_EVENT_ROPE_INIT_FAILED = 18;
 inline constexpr uint8_t SYSTEM_STATE_UNCONTROLLABLE = 0;
 inline constexpr uint8_t SYSTEM_STATE_IDLE = 1;
 inline constexpr uint8_t SYSTEM_STATE_RUN_FEEDBACK = 2;
-inline constexpr uint8_t SYSTEM_STATE_CALIBRATION_RUNNING = 4;
+// 4 是已删除的 P4 自动标定运行态，永久保留编号，不再进入。
 inline constexpr uint8_t SYSTEM_STATE_READY = 5;
 inline constexpr uint8_t SYSTEM_STATE_RUN_DIRECT = 6;
 inline constexpr uint8_t SYSTEM_STATE_PAUSED = 7;
 inline constexpr uint8_t SYSTEM_STATE_ROPE_INIT_RUNNING = 8;
 inline constexpr uint8_t SYSTEM_STATE_RECOVERY_REQUIRED = 9;
 
-/** Rope Init 子任务状态及失败原因，用于状态栏和一次性弹窗。 */
 /** 直控命令在状态机准入阶段的拒绝原因。 */
 inline constexpr uint8_t DIRECT_REJECT_NONE = 0;
 inline constexpr uint8_t DIRECT_REJECT_STATE = 1;
@@ -76,6 +73,7 @@ struct SystemEvent_t {
     uint32_t timestamp;  ///< 事件生成的单调毫秒时间。
     // 完成事件携带命令代次，防止旧任务完成事件释放较新的控制命令。
     uint32_t token;
+    uint32_t servoMaintenanceToken; ///< 入队时的坐标维护代际，旧运动事件不能跨 ABS 归零复活。
 };
 
 #endif // MMHAND_SYSTEM_TYPES_H

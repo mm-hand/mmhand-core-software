@@ -184,6 +184,7 @@ class StateReducer:
                             model.encoders[i].raw_sensor = raw_values[i]
                         model.encoders[i].error = raw_error
                     model.has_encoder_raw_data = True
+                    model.encoder_raw_p4_time_ms = int(packet_p4_time_ms or 0)
                     model.encoder_raw_last_rx_ts = time.time()
                     emitted = True
 
@@ -207,6 +208,8 @@ class StateReducer:
                 if parsed is not None:
                     for i in range(min(MOTOR_COUNT, len(parsed))):
                         model.servo_raw_positions[i] = int(parsed[i])
+                    if packet_p4_time_ms is not None:
+                        model.servo_raw_p4_time_ms = int(packet_p4_time_ms)
                     model.has_servo_raw_data = True
                     emitted = True
 
@@ -222,6 +225,38 @@ class StateReducer:
                     model.multiturn_restore_result_last_rx_ts = time.time()
                     emitted = True
 
+            elif packet_kind == "servo_rebase_zero_result":
+                parsed = owner._parse_protocol_payload(
+                    "parse_servo_rebase_zero_result_packet", payload
+                )
+                if parsed is not None:
+                    token, success_mask, failed_mask, offsets = parsed
+                    model.servo_rebase_zero_result_token = int(token)
+                    model.servo_rebase_zero_success_mask = int(success_mask)
+                    model.servo_rebase_zero_failed_mask = int(failed_mask)
+                    model.servo_rebase_zero_logical_offsets = list(offsets)
+                    model.servo_rebase_zero_result_p4_time_ms = int(
+                        packet_p4_time_ms or 0
+                    )
+                    model.servo_rebase_zero_result_last_rx_ts = time.time()
+                    model.has_servo_rebase_zero_result = True
+                    emitted = True
+
+            elif packet_kind == "direct_target_result":
+                parsed = owner._parse_protocol_payload(
+                    "parse_direct_target_result_packet", payload
+                )
+                if parsed is not None:
+                    token, requested, applied, rejected, status = parsed
+                    model.direct_target_token = int(token)
+                    model.direct_target_requested_mask = int(requested)
+                    model.direct_target_applied_mask = int(applied)
+                    model.direct_target_rejected_mask = int(rejected)
+                    model.direct_target_status = int(status)
+                    model.direct_target_result_rx_ts = time.time()
+                    model.has_direct_target_result = True
+                    emitted = True
+
             # 舵机遥测：速度、负载、电流、电压和温度保持同一帧原子更新。
             elif packet_kind == "servo_telemetry":
                 parsed = owner._parse_protocol_payload("parse_servo_telem_packet", payload)
@@ -233,6 +268,8 @@ class StateReducer:
                         model.servo_current[i] = int(currents[i])
                         model.servo_voltage[i] = int(volts[i])
                         model.servo_temperature[i] = int(temps[i])
+                    model.servo_telem_p4_time_ms = int(packet_p4_time_ms or 0)
+                    model.servo_telem_last_rx_ts = time.time()
                     emitted = True
 
             # 故障包只描述每台舵机的过载锁存，不在通信层自行清除故障。
@@ -513,6 +550,8 @@ class StateReducer:
                     for i in range(min(MOTOR_COUNT, len(mins), len(maxs))):
                         model.servo_logical_range_min[i] = int(mins[i])
                         model.servo_logical_range_max[i] = int(maxs[i])
+                    model.servo_logical_range_last_rx_ts = time.time()
+                    model.servo_logical_range_p4_time_ms = int(packet_p4_time_ms or 0)
                     emitted = True
 
             # Manual Min/Max 是 Auto 标定前置基准，跨圈方向由独立 direction 字段表达。

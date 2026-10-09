@@ -11,6 +11,37 @@
 
 namespace p4::host {
 
+size_t encodeServoPositionPackets(uint8_t* buffer,
+                                  size_t capacity,
+                                  const ServoAngleData_t& position)
+{
+    constexpr size_t rawLength = 3U + SERVO_TOTAL_NUM * 2U + 4U + 1U;
+    constexpr size_t absLength = 3U + SERVO_TOTAL_NUM * 4U + 4U + 1U;
+    static_assert(rawLength - 2U <= UINT8_MAX && absLength - 2U <= UINT8_MAX,
+                  "servo position frame length exceeds wire field");
+    if (!buffer || capacity < rawLength + absLength) {
+        return 0;
+    }
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = static_cast<uint8_t>(rawLength - 2U);
+    buffer[idx++] = PACKET_TYPE_SERVO_RAW;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        appendI16BigEndian(buffer, &idx, position.servoRawPositions[i]);
+    }
+    appendU32BigEndian(buffer, &idx, position.timestamp);
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = static_cast<uint8_t>(absLength - 2U);
+    buffer[idx++] = PACKET_TYPE_SERVO_ANGLE;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        appendI32BigEndian(buffer, &idx, position.servoAngles[i]);
+    }
+    appendU32BigEndian(buffer, &idx, position.timestamp);
+    buffer[idx++] = PROTOCOL_TAIL;
+    return idx;
+}
+
 // 按协议大端序追加 float 的 IEEE-754 位模式，不做数值格式转换。
 void appendFloatBigEndian(uint8_t* buffer, size_t* idx, float value)
 {

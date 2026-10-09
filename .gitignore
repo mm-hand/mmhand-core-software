@@ -18,3 +18,5 @@ desktop/resources/config/calibration_bundle.mmcal.json
 desktop/resources/config/calibration_bundle.mmcal.json.bak
 desktop/resources/config/device_state/
 desktop/resources/hku_hand_v2_urdf_builtin/
+
+.reference/

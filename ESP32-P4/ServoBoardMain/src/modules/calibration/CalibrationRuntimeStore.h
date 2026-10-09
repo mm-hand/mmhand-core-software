@@ -1,6 +1,6 @@
 /**
  * @file CalibrationRuntimeStore.h
- * @brief 定义标定结果、Manual 参考、LUT 和诊断协议结构。
+ * @brief 定义上位机写入的标定结果、Manual 参考、LUT 和装配告警结构。
  */
 #ifndef CALIBRATION_TASK_H
 #define CALIBRATION_TASK_H
@@ -10,7 +10,7 @@
 #include "../../runtime/SystemRuntimeContext.h"
 
 // 标定公共数据与接口。
-// 标定生命周期由 SystemStateTask 统一管理；本模块只保存标定结果，并提供
+// 标定生命周期由上位机管理；本模块只保存上传结果，并提供
 // 编码器方向、装配告警和运行期映射所需的公共算法。
 // 三项装配告警阈值，单位均为磁编码器 counts。
 // 告警不影响标定结果可用性，只用于提示机械装配或人工端点录入偏差。
@@ -92,8 +92,7 @@ struct JointCalibrationRuntimeSnapshot {
 extern JointCalibrationResult g_jointCalibResult[ENCODER_TOTAL_NUM];
 extern ManualEncoderReference g_manualEncoderReference[ENCODER_TOTAL_NUM];
 
-// 固定安装方向表与运行期方向表。自动标定开始时会恢复对应关节的固定方向。
-extern const int8_t kDefaultEncoderDirection[ENCODER_TOTAL_NUM];
+// 运行期方向表默认采用固定安装方向，上位机可通过现有数据同步协议设置方向。
 extern int8_t g_encoderDirection[ENCODER_TOTAL_NUM];
 bool setRuntimeEncoderDirection(uint8_t jointIndex, int8_t direction);
 

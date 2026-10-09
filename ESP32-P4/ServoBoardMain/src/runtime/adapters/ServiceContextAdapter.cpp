@@ -59,9 +59,6 @@ ServoServiceInputSnapshot captureServoServiceInput(
     if (!sharedData) return out;
     out.activeMotorMask =
         p4::platform::rtos::atomicLoad(&sharedData->active_motor_mask);
-    out.calibrationAuxMotorMask =
-        p4::platform::rtos::atomicLoad(
-            &sharedData->calibration_aux_motor_mask);
     out.multiTurnUnknownMask =
         p4::platform::rtos::atomicLoad(
             &sharedData->multi_turn_unknown_bitmap);
@@ -77,26 +74,6 @@ ServoServiceInputSnapshot captureServoServiceInput(
     out.emergencyStopLatched =
         p4::platform::rtos::atomicLoad(
             &sharedData->emergency_stop_latched);
-    return out;
-}
-
-CalibrationServiceInputSnapshot captureCalibrationServiceInput(
-    SystemRuntimeContext* sharedData, uint32_t nowMs)
-{
-    CalibrationServiceInputSnapshot out = {};
-    out.nowMs = nowMs;
-    if (!sharedData) return out;
-    out.activeMotorMask =
-        p4::platform::rtos::atomicLoad(&sharedData->active_motor_mask);
-    out.activeJointMask =
-        p4::platform::rtos::atomicLoad(&sharedData->active_joint_mask);
-    out.servoOnlineMask =
-        p4::platform::rtos::atomicLoad(&sharedData->servo_online_bitmap);
-    out.encoderOnlineMask =
-        p4::platform::rtos::atomicLoad(&sharedData->encoder_online_bitmap);
-    out.multiTurnUnknownMask =
-        p4::platform::rtos::atomicLoad(
-            &sharedData->multi_turn_unknown_bitmap);
     return out;
 }
 

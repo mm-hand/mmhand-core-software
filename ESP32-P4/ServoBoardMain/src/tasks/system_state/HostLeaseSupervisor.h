@@ -23,7 +23,6 @@ namespace p4::state {
 struct HostLeaseSupervisorPort {
     uint8_t (*resolveIdleOrReady)(SystemRuntimeContext* sharedData);
     void (*transitionTo)(SystemRuntimeContext* sharedData, uint8_t nextState);
-    void (*setCalibrationStatus)(uint8_t status);
 };
 
 /** 清理上一次 Hold 的状态；请求 token 保持单调递增。 */

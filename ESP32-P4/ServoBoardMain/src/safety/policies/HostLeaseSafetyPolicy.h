@@ -10,7 +10,7 @@
 
 namespace p4::system {
 
-/** 所有会驱动舵机的运行态都需要上位机租约，包括标定与 Rope Init。 */
+/** 所有会驱动舵机的运行态都需要上位机租约，包括直控、负反馈与 Rope Init。 */
 bool requiresHostControlLease(uint8_t systemState, uint8_t targetOwner);
 
 /** 判断最近有效上位机帧是否仍在租约窗口内，使用无符号差值兼容单调时钟回绕。 */

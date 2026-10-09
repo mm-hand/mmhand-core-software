@@ -108,6 +108,10 @@ class CalibrationWorkflowService:
     def snapshot_path(self):
         return self._store.path
 
+    def is_host_calibration_active(self) -> bool:
+        """默认执行下位机校准；宿主实现由子类覆写。"""
+        return False
+
     def register_callback(
         self, callback: Callable[[CalibrationWorkflowEvent], None]
     ) -> None:

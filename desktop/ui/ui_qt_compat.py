@@ -62,6 +62,10 @@ def ensure_app():
     if app is None:
         configure_opengl_before_app()
         app = QtWidgets.QApplication(sys.argv[:1])
+    # 反馈/校准线程的 Python 分配也会触发循环 GC；Qt 对象只在 GUI 收集。
+    from .ui_gc import install_gui_garbage_collector
+
+    install_gui_garbage_collector(app)
     return app
 
 

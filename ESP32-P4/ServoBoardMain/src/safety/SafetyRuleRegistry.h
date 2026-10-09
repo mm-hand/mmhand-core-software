@@ -30,9 +30,6 @@ SafetyRuleId ruleForFeedbackReadyRejectReason(uint8_t reason);
 /** 将 Rope Init 失败原因映射到稳定规则 ID。 */
 SafetyRuleId ruleForRopeInitReason(uint8_t reason);
 
-/** 将自动标定诊断原因映射到稳定规则 ID。 */
-SafetyRuleId ruleForCalibrationDiagReason(uint8_t reason);
-
 /** 将 CALIB_WARN_* 单一告警位映射到稳定规则 ID。 */
 SafetyRuleId ruleForCalibrationWarningBit(uint8_t warningBit);
 

@@ -5,14 +5,11 @@
  */
 #include "RopeInitController.h"
 
-#include <math.h>
 #include <string.h>
 
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../modules/calibration/CalibrationMath.h"
-#include "../../modules/calibration/CalibrationRuntimeStore.h"
 #include "../../modules/calibration/ManualEncoderReferenceStore.h"
-#include "../../modules/calibration/TendonCalibrationLut.h"
 #include "../../config/topology/HardwareMap.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../safety/SafetyEventReporter.h"
@@ -44,85 +41,6 @@ bool appendMotorTarget(ServoTargetBatch_t* batch,
     command.speed = SERVO_TARGET_SPEED_DEFAULT;
     command.acc = SERVO_TARGET_ACC_DEFAULT;
     return true;
-}
-
-uint32_t completedDualJointMask(SystemRuntimeContext* sharedData)
-{
-    if (!sharedData) return 0;
-    const uint32_t completed =
-        sharedAtomicLoad(&sharedData->calibration_completed_joint_bitmap);
-    const uint32_t active = sharedAtomicLoad(&sharedData->active_joint_mask) &
-                            kManualEncoderReferenceFullMask;
-    uint32_t dualMask = 0;
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        JointActuatorGroup group = {};
-        if ((completed & active & (1UL << joint)) != 0 &&
-            getJointActuatorGroup(joint, &group) && group.count == 2) {
-            dualMask |= 1UL << joint;
-        }
-    }
-    return dualMask;
-}
-
-uint8_t publishNextDualZeroTarget(SystemRuntimeContext* sharedData,
-                                  const ServoAngleData_t& servo,
-                                  uint32_t nowMs)
-{
-    RopeInitRuntimeState& runtime = sharedData->ropeInitRuntime;
-    if (!p4::state::activeMotorsMultiTurnKnown(sharedData)) {
-        return ROPE_INIT_REASON_MULTITURN_UNKNOWN;
-    }
-    for (uint8_t joint = 0; joint < ENCODER_TOTAL_NUM; ++joint) {
-        const uint32_t bit = 1UL << joint;
-        if ((runtime.zeroPendingJointMask & bit) == 0) continue;
-
-        JointActuatorGroup group = {};
-        JointCalibrationRuntimeSnapshot snapshot = {};
-        if (!getJointActuatorGroup(joint, &group) || group.count != 2 ||
-            !readJointCalibrationRuntimeSnapshot(joint, &snapshot)) {
-            return ROPE_INIT_REASON_AUTO_REQUIRED;
-        }
-        const JointCalibrationResult& calib = snapshot.result;
-        if (!calib.success || !calib.tendonLutValid ||
-            calib.tendonLutCount < 3 ||
-            !tendonCalibrationContainsAngle(calib, 0.0f)) {
-            return ROPE_INIT_REASON_AUTO_REQUIRED;
-        }
-
-        ServoTargetBatch_t batch = {};
-        batch.source = SERVO_TARGET_OWNER_CALIBRATION;
-        batch.timestamp = nowMs;
-        for (uint8_t actuator = 0; actuator < 2; ++actuator) {
-            const uint8_t motor = group.actuators[actuator].motorChannel;
-            float target = 0.0f;
-            if (motor >= SERVO_TOTAL_NUM || servo.onlineStatus[motor] == 0) {
-                return ROPE_INIT_REASON_SERVO_OFFLINE;
-            }
-            if (calib.tendonLutMotor[actuator] != motor ||
-                !interpolateTendonCalibrationMotorAbs(
-                    calib, actuator, 0.0f, &target)) {
-                return ROPE_INIT_REASON_AUTO_REQUIRED;
-            }
-            if (!appendMotorTarget(
-                    &batch, motor, (int32_t)lroundf(target))) {
-                return ROPE_INIT_REASON_TARGET_PUBLISH_FAILED;
-            }
-        }
-        if (!p4::actuator::publishLatest(sharedData, batch)) {
-            return ROPE_INIT_REASON_TARGET_PUBLISH_FAILED;
-        }
-        runtime.zeroPendingJointMask &= ~bit;
-        FW_LOG_INFO_PRINTF(
-            "[ROPE INIT] ZERO_TARGET J%02u M%02u=%ld M%02u=%ld pending=0x%08lX\r\n",
-            (unsigned)joint,
-            (unsigned)batch.commands[0].motorChannel,
-            (long)batch.commands[0].position,
-            (unsigned)batch.commands[1].motorChannel,
-            (long)batch.commands[1].position,
-            (unsigned long)runtime.zeroPendingJointMask);
-        return ROPE_INIT_REASON_NONE;
-    }
-    return ROPE_INIT_REASON_AUTO_REQUIRED;
 }
 
 /** 统一提交最终状态、安全事件和内部完成事件，确保一个会话只结束一次。 */
@@ -162,9 +80,6 @@ bool startRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
     RopeInitRuntimeState& runtime = sharedData->ropeInitRuntime;
     runtime.active = 1;
     runtime.insideStableSamples = 0;
-    runtime.zeroPublishActive = 0;
-    runtime.zeroPublishComplete = 0;
-    runtime.zeroPendingJointMask = 0;
     runtime.beginMs = nowMs;
     runtime.nextStepMs = nowMs;
     return true;
@@ -175,9 +90,6 @@ void cancelRopeInitController(SystemRuntimeContext* sharedData)
     if (!sharedData) return;
     sharedData->ropeInitRuntime.active = 0;
     sharedData->ropeInitRuntime.insideStableSamples = 0;
-    sharedData->ropeInitRuntime.zeroPublishActive = 0;
-    sharedData->ropeInitRuntime.zeroPublishComplete = 0;
-    sharedData->ropeInitRuntime.zeroPendingJointMask = 0;
 }
 
 void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
@@ -202,11 +114,6 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
         finish(sharedData, false, session.reason, nowMs);
         return;
     }
-    if (runtime.zeroPublishComplete != 0) {
-        FW_LOG_INFO_PRINTLN("[ROPE INIT] calibration zero targets published");
-        finish(sharedData, true, ROPE_INIT_REASON_NONE, nowMs);
-        return;
-    }
 
     const uint32_t activeJointMask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
@@ -229,18 +136,6 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
         return;
     }
 
-    if (runtime.zeroPublishActive != 0) {
-        const uint8_t reason =
-            publishNextDualZeroTarget(sharedData, servo, nowMs);
-        if (reason != ROPE_INIT_REASON_NONE) {
-            finish(sharedData, false, reason, nowMs);
-            return;
-        }
-        if (runtime.zeroPendingJointMask == 0) {
-            runtime.zeroPublishComplete = 1;
-        }
-        return;
-    }
 
     ServoTargetBatch_t batch = {};
     batch.source = SERVO_TARGET_OWNER_CALIBRATION;
@@ -291,19 +186,6 @@ void stepRopeInitController(SystemRuntimeContext* sharedData, uint32_t nowMs)
     if (allInside) {
         if (runtime.insideStableSamples < 255) runtime.insideStableSamples++;
         if (runtime.insideStableSamples >= kInsideStableSamples) {
-            if (sharedAtomicLoad(
-                    &sharedData->calibration_rope_init_pending) != 0) {
-                runtime.zeroPendingJointMask = completedDualJointMask(sharedData);
-                if (runtime.zeroPendingJointMask != 0) {
-                    runtime.zeroPublishActive = 1;
-                    runtime.insideStableSamples = 0;
-                    runtime.beginMs = nowMs;
-                    FW_LOG_INFO_PRINTF(
-                        "[ROPE INIT] sequential calibration zero targets joints=0x%08lX\r\n",
-                        (unsigned long)runtime.zeroPendingJointMask);
-                    return;
-                }
-            }
             FW_LOG_INFO_PRINTF("[ROPE INIT] complete joints=0x%08lX\r\n",
                                (unsigned long)activeJointMask);
             finish(sharedData, true, ROPE_INIT_REASON_NONE, nowMs);

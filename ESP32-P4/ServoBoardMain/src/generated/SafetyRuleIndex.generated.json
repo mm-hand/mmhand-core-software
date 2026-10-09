@@ -8,6 +8,8 @@
       "name": "C++ SafetyRuleId 枚举名称，用于源码内稳定引用规则。",
       "rule_id": "规则的稳定整数编号；协议、日志和上位机按此编号关联。",
       "code": "面向人员的规则编码；前缀表示规则所属模块，例如 ACT、CTL、SYS。",
+      "active": "是否仍存在固件运行调用链；false 表示仅保留历史日志编号。",
+      "retired": "旧固件自动标定规则已退役，不再存在 policy/caller/event/recovery 绑定。",
       "policy": "规则判断实现位置；file 是源码路径，symbol 是判断函数或关键符号。",
       "caller": "调用 Policy 的业务入口，说明该规则在哪条运行链路中真正执行。",
       "event": "规则触发后提交诊断事件或故障证据的位置。",
@@ -34,6 +36,8 @@
       "name": "ActuatorInvalidCommand",
       "rule_id": 1001,
       "code": "ACT-1001",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -56,6 +60,8 @@
       "name": "ActuatorRouteUnknown",
       "rule_id": 1002,
       "code": "ACT-1002",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -78,6 +84,8 @@
       "name": "ActuatorRouteConflict",
       "rule_id": 1003,
       "code": "ACT-1003",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -100,6 +108,8 @@
       "name": "ActuatorBusOverCapacity",
       "rule_id": 1004,
       "code": "ACT-1004",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -122,6 +132,8 @@
       "name": "ActuatorEmergencyStop",
       "rule_id": 1005,
       "code": "ACT-1005",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -144,6 +156,8 @@
       "name": "ActuatorInvalidOwner",
       "rule_id": 1006,
       "code": "ACT-1006",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -166,6 +180,8 @@
       "name": "ActuatorInvalidState",
       "rule_id": 1007,
       "code": "ACT-1007",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -188,6 +204,8 @@
       "name": "ActuatorOffline",
       "rule_id": 1008,
       "code": "ACT-1008",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -210,6 +228,8 @@
       "name": "ActuatorMultiTurnUnknown",
       "rule_id": 1009,
       "code": "ACT-1009",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -232,6 +252,8 @@
       "name": "ActuatorStaleTarget",
       "rule_id": 1010,
       "code": "ACT-1010",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -254,6 +276,8 @@
       "name": "ActuatorLogicalRange",
       "rule_id": 1011,
       "code": "ACT-1011",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -276,6 +300,8 @@
       "name": "ActuatorHardwareRange",
       "rule_id": 1012,
       "code": "ACT-1012",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -298,6 +324,8 @@
       "name": "ActuatorTurnOverflow",
       "rule_id": 1013,
       "code": "ACT-1013",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ActuatorSafetyPolicy.cpp",
         "symbol": "evaluateCommand"
@@ -320,6 +348,8 @@
       "name": "ControlCanFeedbackInvalid",
       "rule_id": 2001,
       "code": "CTL-2001",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlInputSafetyPolicy.cpp",
         "symbol": "evaluateControlSafety"
@@ -342,6 +372,8 @@
       "name": "ControlJointIndexInvalid",
       "rule_id": 2002,
       "code": "CTL-2002",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlInputSafetyPolicy.cpp",
         "symbol": "evaluateControlSafety"
@@ -364,6 +396,8 @@
       "name": "ControlEncoderFault",
       "rule_id": 2003,
       "code": "CTL-2003",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlInputSafetyPolicy.cpp",
         "symbol": "evaluateControlSafety"
@@ -386,6 +420,8 @@
       "name": "ControlMappedAngleInvalid",
       "rule_id": 2004,
       "code": "CTL-2004",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlInputSafetyPolicy.cpp",
         "symbol": "evaluateControlSafety"
@@ -408,6 +444,8 @@
       "name": "ControlCollisionHold",
       "rule_id": 2005,
       "code": "CTL-2005",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CollisionSafetyPolicy.cpp",
         "symbol": "FeedbackCollisionGuard::update"
@@ -430,6 +468,8 @@
       "name": "ControlLutBoundaryClamp",
       "rule_id": 2006,
       "code": "CTL-2006",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
         "symbol": "clampAbsToBoundary"
@@ -452,6 +492,8 @@
       "name": "ControlJointTargetClamp",
       "rule_id": 2007,
       "code": "CTL-2007",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
         "symbol": "clampFloatToBoundary"
@@ -474,6 +516,8 @@
       "name": "ControlUpperWorkspaceWarning",
       "rule_id": 2008,
       "code": "CTL-2008",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
         "symbol": "evaluateUpperWorkspaceWarning"
@@ -496,6 +540,8 @@
       "name": "ControlHotplugHold",
       "rule_id": 2009,
       "code": "CTL-2009",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/ControlBoundarySafetyPolicy.cpp",
         "symbol": "shouldEnterHotplugHold"
@@ -518,6 +564,8 @@
       "name": "SystemHostLeaseExpired",
       "rule_id": 3001,
       "code": "SYS-3001",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/HostLeaseSafetyPolicy.cpp",
         "symbol": "isHostControlLeaseFresh"
@@ -540,6 +588,8 @@
       "name": "SystemStartStateRejected",
       "rule_id": 3002,
       "code": "SYS-3002",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/StateAdmissionPolicy.cpp",
         "symbol": "canAcceptStart"
@@ -562,6 +612,8 @@
       "name": "SystemDirectStateRejected",
       "rule_id": 3003,
       "code": "SYS-3003",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/StateAdmissionPolicy.cpp",
         "symbol": "canAcceptStart"
@@ -584,6 +636,8 @@
       "name": "SystemFeedbackStateRejected",
       "rule_id": 3004,
       "code": "SYS-3004",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/StateAdmissionPolicy.cpp",
         "symbol": "canAcceptStart"
@@ -606,28 +660,16 @@
       "name": "SystemCalibrationStateRejected",
       "rule_id": 3005,
       "code": "SYS-3005",
-      "policy": {
-        "file": "safety/policies/StateAdmissionPolicy.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "caller": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "canAcceptStart"
-      },
-      "event": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "SYSTEM_EVENT_RESET"
-      },
-      "registry_function": ""
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "DirectStateRejected",
       "rule_id": 3101,
       "code": "DIR-3101",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -650,6 +692,8 @@
       "name": "DirectHardwareRejected",
       "rule_id": 3102,
       "code": "DIR-3102",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -672,6 +716,8 @@
       "name": "DirectMultiTurnRejected",
       "rule_id": 3103,
       "code": "DIR-3103",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -694,6 +740,8 @@
       "name": "DirectEventQueueRejected",
       "rule_id": 3104,
       "code": "DIR-3104",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -716,6 +764,8 @@
       "name": "DirectStaleRejected",
       "rule_id": 3105,
       "code": "DIR-3105",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -738,6 +788,8 @@
       "name": "DirectFaultRejected",
       "rule_id": 3106,
       "code": "DIR-3106",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "directMotorMaskReady"
@@ -760,6 +812,8 @@
       "name": "FeedbackManualMissing",
       "rule_id": 3201,
       "code": "FBK-3201",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -782,6 +836,8 @@
       "name": "FeedbackStateRejected",
       "rule_id": 3202,
       "code": "FBK-3202",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -804,6 +860,8 @@
       "name": "FeedbackWorkspaceRejected",
       "rule_id": 3203,
       "code": "FBK-3203",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -826,6 +884,8 @@
       "name": "FeedbackMultiTurnRejected",
       "rule_id": 3204,
       "code": "FBK-3204",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -848,6 +908,8 @@
       "name": "FeedbackAbsLimitRejected",
       "rule_id": 3205,
       "code": "FBK-3205",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -870,6 +932,8 @@
       "name": "FeedbackModeSwitchRejected",
       "rule_id": 3206,
       "code": "FBK-3206",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -892,6 +956,8 @@
       "name": "FeedbackEventQueueRejected",
       "rule_id": 3207,
       "code": "FBK-3207",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -914,6 +980,8 @@
       "name": "ReadyCanGate",
       "rule_id": 3301,
       "code": "RDY-3301",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -936,6 +1004,8 @@
       "name": "ReadyMultiTurnGate",
       "rule_id": 3302,
       "code": "RDY-3302",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -958,6 +1028,8 @@
       "name": "ReadyEmptyScope",
       "rule_id": 3303,
       "code": "RDY-3303",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -980,6 +1052,8 @@
       "name": "ReadyMappedUnavailable",
       "rule_id": 3304,
       "code": "RDY-3304",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1002,6 +1076,8 @@
       "name": "ReadyCalibrationMissing",
       "rule_id": 3305,
       "code": "RDY-3305",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1024,6 +1100,8 @@
       "name": "ReadyMappedInvalid",
       "rule_id": 3306,
       "code": "RDY-3306",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1046,6 +1124,8 @@
       "name": "ReadyBelowWorkspace",
       "rule_id": 3307,
       "code": "RDY-3307",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1068,6 +1148,8 @@
       "name": "ReadyCalibrationMismatch",
       "rule_id": 3308,
       "code": "RDY-3308",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1090,6 +1172,8 @@
       "name": "ReadyEncoderCanFault",
       "rule_id": 3309,
       "code": "RDY-3309",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1112,6 +1196,8 @@
       "name": "ReadySystemFault",
       "rule_id": 3310,
       "code": "RDY-3310",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1134,6 +1220,8 @@
       "name": "ReadyTurnOverflow",
       "rule_id": 3311,
       "code": "RDY-3311",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemReadinessPolicy.cpp",
         "symbol": "evaluateFeedbackReadiness"
@@ -1156,6 +1244,8 @@
       "name": "RopeInitTimeout",
       "rule_id": 3401,
       "code": "ROP-3401",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1178,6 +1268,8 @@
       "name": "RopeInitFeedbackStale",
       "rule_id": 3402,
       "code": "ROP-3402",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1200,6 +1292,8 @@
       "name": "RopeInitServoOffline",
       "rule_id": 3403,
       "code": "ROP-3403",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1222,6 +1316,8 @@
       "name": "RopeInitMultiTurnUnknown",
       "rule_id": 3404,
       "code": "ROP-3404",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1244,6 +1340,8 @@
       "name": "RopeInitManualRequired",
       "rule_id": 3405,
       "code": "ROP-3405",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1266,6 +1364,8 @@
       "name": "RopeInitAutoRequired",
       "rule_id": 3406,
       "code": "ROP-3406",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1288,6 +1388,8 @@
       "name": "RopeInitTargetPublishFailed",
       "rule_id": 3407,
       "code": "ROP-3407",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1310,6 +1412,8 @@
       "name": "RopeInitSystemFault",
       "rule_id": 3408,
       "code": "ROP-3408",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1332,6 +1436,8 @@
       "name": "RopeInitCancelled",
       "rule_id": 3409,
       "code": "ROP-3409",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RopeInitSafetyPolicy.cpp",
         "symbol": "evaluateRopeInitSession"
@@ -1354,6 +1460,8 @@
       "name": "FaultCanOffline",
       "rule_id": 3501,
       "code": "FLT-3501",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemFaultPolicy.cpp",
         "symbol": "collectSystemFaults"
@@ -1376,6 +1484,8 @@
       "name": "FaultOverload",
       "rule_id": 3502,
       "code": "FLT-3502",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemFaultPolicy.cpp",
         "symbol": "collectSystemFaults"
@@ -1398,6 +1508,8 @@
       "name": "FaultServoOffline",
       "rule_id": 3503,
       "code": "FLT-3503",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemFaultPolicy.cpp",
         "symbol": "collectSystemFaults"
@@ -1420,28 +1532,16 @@
       "name": "FaultCalibration",
       "rule_id": 3504,
       "code": "FLT-3504",
-      "policy": {
-        "file": "safety/policies/SystemFaultPolicy.cpp",
-        "symbol": "collectSystemFaults"
-      },
-      "caller": {
-        "file": "tasks/system_state/SystemStateCoordinator.cpp",
-        "symbol": "collectSystemFaults"
-      },
-      "event": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/system_state/SystemEventDispatcher.cpp",
-        "symbol": "SYSTEM_EVENT_RESET"
-      },
-      "registry_function": "ruleForSystemFaultBit"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "FaultMultiTurnUnknown",
       "rule_id": 3505,
       "code": "FLT-3505",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/SystemFaultPolicy.cpp",
         "symbol": "collectSystemFaults"
@@ -1464,534 +1564,200 @@
       "name": "CalibrationActiveScopeEmpty",
       "rule_id": 4001,
       "code": "CAL-4001",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationEncoderError",
       "rule_id": 4005,
       "code": "CAL-4005",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationServoOffline",
       "rule_id": 4006,
       "code": "CAL-4006",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationOverload",
       "rule_id": 4008,
       "code": "CAL-4008",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationZeroCrossInvalid",
       "rule_id": 4013,
       "code": "CAL-4013",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationWrapTooLarge",
       "rule_id": 4014,
       "code": "CAL-4014",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationAbsLimitInvalid",
       "rule_id": 4015,
       "code": "CAL-4015",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationTargetPublishFailed",
       "rule_id": 4016,
       "code": "CAL-4016",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationFeedbackLost",
       "rule_id": 4017,
       "code": "CAL-4017",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationTaskStartFailed",
       "rule_id": 4018,
       "code": "CAL-4018",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationControlLost",
       "rule_id": 4020,
       "code": "CAL-4020",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationHoldTargetFailed",
       "rule_id": 4021,
       "code": "CAL-4021",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationJointListInvalid",
       "rule_id": 4022,
       "code": "CAL-4022",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationDuplicateJoint",
       "rule_id": 4023,
       "code": "CAL-4023",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationWorkspacePrepFailed",
       "rule_id": 4024,
       "code": "CAL-4024",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationJointStepFailed",
       "rule_id": 4025,
       "code": "CAL-4025",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationServoRecoveryTimeout",
       "rule_id": 4026,
       "code": "CAL-4026",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationReleaseOverTwoTurns",
       "rule_id": 4027,
       "code": "CAL-4027",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationMotorMappingInvalid",
       "rule_id": 4028,
       "code": "CAL-4028",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationResultSpanInvalid",
       "rule_id": 4029,
       "code": "CAL-4029",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationResultBuildFailed",
       "rule_id": 4030,
       "code": "CAL-4030",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationResultCommitFailed",
       "rule_id": 4031,
       "code": "CAL-4031",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationMultiTurnTrustFailed",
       "rule_id": 4032,
       "code": "CAL-4032",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationDualExchangeStalled",
       "rule_id": 4034,
       "code": "CAL-4034",
-      "policy": {
-        "file": "safety/policies/CalibrationSafetyPolicy.cpp",
-        "symbol": "validateCalibrationSequence"
-      },
-      "caller": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "setCalibrationDiag"
-      },
-      "event": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "reportSafetyRuleEvent"
-      },
-      "recovery": {
-        "file": "tasks/auto_calibration/CalibrationDiagnostics.cpp",
-        "symbol": "CALIB_DIAG_REASON_NONE"
-      },
-      "registry_function": "ruleForCalibrationDiagReason"
+      "active": false,
+      "retired": true,
+      "retirement_reason": "Automatic calibration runs on the host; retained for historical logs."
     },
     {
       "name": "CalibrationWarnAutoMinOffset",
       "rule_id": 4101,
       "code": "CAW-4101",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CalibrationSafetyPolicy.h",
         "symbol": "calibrationAssemblyWarningReasonForMetrics"
@@ -2014,6 +1780,8 @@
       "name": "CalibrationWarnAutoMaxShortfall",
       "rule_id": 4102,
       "code": "CAW-4102",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CalibrationSafetyPolicy.h",
         "symbol": "calibrationAssemblyWarningReasonForMetrics"
@@ -2036,6 +1804,8 @@
       "name": "CalibrationWarnSpanMismatch",
       "rule_id": 4103,
       "code": "CAW-4103",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CalibrationSafetyPolicy.h",
         "symbol": "calibrationAssemblyWarningReasonForMetrics"
@@ -2058,6 +1828,8 @@
       "name": "CommunicationCanInitFailed",
       "rule_id": 6001,
       "code": "COM-6001",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CommunicationSafetyPolicy.cpp",
         "symbol": "communicationCanInitializationRule"
@@ -2080,6 +1852,8 @@
       "name": "CommunicationCanFrameInvalid",
       "rule_id": 6002,
       "code": "COM-6002",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CommunicationSafetyPolicy.cpp",
         "symbol": "communicationLengthValid"
@@ -2102,6 +1876,8 @@
       "name": "CommunicationEncoderSnapshotInvalid",
       "rule_id": 6003,
       "code": "COM-6003",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CommunicationSafetyPolicy.cpp",
         "symbol": "communicationLengthValid"
@@ -2124,6 +1900,8 @@
       "name": "CommunicationTactileSnapshotInvalid",
       "rule_id": 6004,
       "code": "COM-6004",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CommunicationSafetyPolicy.cpp",
         "symbol": "communicationLengthValid"
@@ -2146,6 +1924,8 @@
       "name": "CommunicationUpperFrameRejected",
       "rule_id": 6005,
       "code": "COM-6005",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/CommunicationSafetyPolicy.cpp",
         "symbol": "communicationEventMayReport"
@@ -2168,6 +1948,8 @@
       "name": "RuntimeSafetyEventCacheOverflow",
       "rule_id": 8001,
       "code": "RUN-8001",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "runtimeEventCacheWillOverflow"
@@ -2190,6 +1972,8 @@
       "name": "RuntimeQueueCreateFailed",
       "rule_id": 8002,
       "code": "RUN-8002",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "runtimeResourceCreationRule"
@@ -2212,6 +1996,8 @@
       "name": "RuntimeMutexCreateFailed",
       "rule_id": 8003,
       "code": "RUN-8003",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "runtimeResourceCreationRule"
@@ -2234,6 +2020,8 @@
       "name": "RuntimeTaskCreateFailed",
       "rule_id": 8004,
       "code": "RUN-8004",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "runtimeResourceCreationRule"
@@ -2256,6 +2044,8 @@
       "name": "RuntimeTaskPeriodOverrun",
       "rule_id": 8005,
       "code": "RUN-8005",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "evaluateRuntimeOverrun"
@@ -2278,6 +2068,8 @@
       "name": "RuntimeTaskStackLow",
       "rule_id": 8006,
       "code": "RUN-8006",
+      "active": true,
+      "retired": false,
       "policy": {
         "file": "safety/policies/RuntimeSafetyPolicy.cpp",
         "symbol": "evaluateRuntimeStack"

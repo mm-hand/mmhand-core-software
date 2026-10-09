@@ -467,6 +467,7 @@ class HandModel:
     # 最近一帧 PACKET_TYPE_SERVO_ANGLE 自带的 P4 时间戳；记录舵机 ABS 时
     # 必须使用该值，不能借用随后到达的其他状态包时间。
     servo_feedback_p4_time_ms: int = 0
+    servo_raw_p4_time_ms: int = 0
     servo_abs_last_rx_ts: float = 0.0
     # 控制跟踪由 P4 10 ms 控制周期一次性封装，禁止与其他状态包时间拼接。
     has_control_trace: bool = False
@@ -495,6 +496,9 @@ class HandModel:
     # 原始磁编包（PACKET_TYPE_ENCODER_RAW）与映射角包独立：未标定时 raw 仍应可见。
     has_encoder_raw_data: bool = False
     encoder_raw_last_rx_ts: float = 0.0
+    encoder_raw_p4_time_ms: int = 0
+    servo_telem_p4_time_ms: int = 0
+    servo_telem_last_rx_ts: float = 0.0
     has_servo_angle_data: bool = False
     has_servo_raw_data: bool = False
     has_system_status_data: bool = False
@@ -512,6 +516,23 @@ class HandModel:
     multiturn_restore_restored_mask: int = 0
     multiturn_restore_rejected_mask: int = 0
     multiturn_restore_result_last_rx_ts: float = 0.0
+    # 当前位置 ABS 设零的独立最终结果，QUEUED ACK 不代表硬件执行成功。
+    servo_rebase_zero_result_token: int = 0
+    servo_rebase_zero_success_mask: int = 0
+    servo_rebase_zero_failed_mask: int = 0
+    servo_rebase_zero_logical_offsets: List[int] = field(
+        default_factory=lambda: [0] * MOTOR_COUNT
+    )
+    servo_rebase_zero_result_p4_time_ms: int = 0
+    servo_rebase_zero_result_last_rx_ts: float = 0.0
+    has_servo_rebase_zero_result: bool = False
+    direct_target_token: int = 0
+    direct_target_requested_mask: int = 0
+    direct_target_applied_mask: int = 0
+    direct_target_rejected_mask: int = 0
+    direct_target_status: int = 0
+    direct_target_result_rx_ts: float = 0.0
+    has_direct_target_result: bool = False
     # 上位机 JSON 中的可信多圈锚点。该状态不来自 P4 协议，只用于 UI 展示和掉电恢复。
     host_multiturn_valid_mask: int = 0
     host_multiturn_saved_raw_positions: List[int] = field(
@@ -589,6 +610,8 @@ class HandModel:
     # 每台舵机当前上电会话的 logical ABS 可达范围。该范围由
     # logicalOffset + ST3215 硬件多圈行程得到，单台舵机掉电只改变对应一项。
     servo_logical_range_valid_bitmap: int = 0
+    servo_logical_range_last_rx_ts: float = 0.0
+    servo_logical_range_p4_time_ms: int = 0
     servo_logical_range_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     servo_logical_range_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     joint_calib_results: List[Optional[dict]] = field(default_factory=lambda: [None] * ENCODER_COUNT)
@@ -674,6 +697,9 @@ class HandModel:
         self.servo_feedback_p4_time_ms = int(
             getattr(other, "servo_feedback_p4_time_ms", 0) or 0
         )
+        self.servo_raw_p4_time_ms = int(
+            getattr(other, "servo_raw_p4_time_ms", 0) or 0
+        )
         self.has_control_trace = bool(getattr(other, "has_control_trace", False))
         self.control_trace_sequence = int(getattr(other, "control_trace_sequence", 0) or 0)
         self.control_trace_target_token = int(getattr(other, "control_trace_target_token", 0) or 0)
@@ -746,6 +772,16 @@ class HandModel:
         self.has_sensor_data = bool(other.has_sensor_data)
         self.has_encoder_raw_data = bool(getattr(other, "has_encoder_raw_data", False))
         self.encoder_raw_last_rx_ts = float(getattr(other, "encoder_raw_last_rx_ts", 0.0) or 0.0)
+        self.encoder_raw_p4_time_ms = int(getattr(other, "encoder_raw_p4_time_ms", 0) or 0)
+        self.servo_telem_p4_time_ms = int(getattr(other, "servo_telem_p4_time_ms", 0) or 0)
+        self.servo_telem_last_rx_ts = float(getattr(other, "servo_telem_last_rx_ts", 0.0) or 0.0)
+        self.direct_target_token = int(getattr(other, "direct_target_token", 0) or 0)
+        self.direct_target_requested_mask = int(getattr(other, "direct_target_requested_mask", 0) or 0)
+        self.direct_target_applied_mask = int(getattr(other, "direct_target_applied_mask", 0) or 0)
+        self.direct_target_rejected_mask = int(getattr(other, "direct_target_rejected_mask", 0) or 0)
+        self.direct_target_status = int(getattr(other, "direct_target_status", 0) or 0)
+        self.direct_target_result_rx_ts = float(getattr(other, "direct_target_result_rx_ts", 0.0) or 0.0)
+        self.has_direct_target_result = bool(getattr(other, "has_direct_target_result", False))
         self.has_servo_angle_data = bool(other.has_servo_angle_data)
         self.has_servo_raw_data = bool(other.has_servo_raw_data)
         self.has_system_status_data = bool(other.has_system_status_data)
@@ -771,6 +807,27 @@ class HandModel:
         )
         self.multiturn_restore_result_last_rx_ts = float(
             getattr(other, "multiturn_restore_result_last_rx_ts", 0.0) or 0.0
+        )
+        self.servo_rebase_zero_result_token = int(
+            getattr(other, "servo_rebase_zero_result_token", 0) or 0
+        )
+        self.servo_rebase_zero_success_mask = int(
+            getattr(other, "servo_rebase_zero_success_mask", 0) or 0
+        )
+        self.servo_rebase_zero_failed_mask = int(
+            getattr(other, "servo_rebase_zero_failed_mask", 0) or 0
+        )
+        self.servo_rebase_zero_logical_offsets = list(
+            getattr(other, "servo_rebase_zero_logical_offsets", [0] * MOTOR_COUNT)
+        )
+        self.servo_rebase_zero_result_p4_time_ms = int(
+            getattr(other, "servo_rebase_zero_result_p4_time_ms", 0) or 0
+        )
+        self.servo_rebase_zero_result_last_rx_ts = float(
+            getattr(other, "servo_rebase_zero_result_last_rx_ts", 0.0) or 0.0
+        )
+        self.has_servo_rebase_zero_result = bool(
+            getattr(other, "has_servo_rebase_zero_result", False)
         )
         self.host_multiturn_valid_mask = int(
             getattr(other, "host_multiturn_valid_mask", 0) or 0
@@ -928,6 +985,8 @@ class HandModel:
         self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
         self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
         self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
+        self.servo_logical_range_last_rx_ts = float(getattr(other, "servo_logical_range_last_rx_ts", 0.0) or 0.0)
+        self.servo_logical_range_p4_time_ms = int(getattr(other, "servo_logical_range_p4_time_ms", 0) or 0)
         self.servo_logical_range_valid_bitmap = int(
             getattr(other, "servo_logical_range_valid_bitmap", 0)
         )

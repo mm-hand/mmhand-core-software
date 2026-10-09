@@ -15,9 +15,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
 /** 写入系统状态并同步状态变更日志。仅供状态协调循环与事件分发器使用。 */
 void setSystemState(SystemRuntimeContext* sharedData, uint8_t state);
 
-/** 写入持续标定状态；上位机通过 SYSTEM_STATUS 读取，不再插队发送瞬时 ACK。 */
-void setCalibrationStatus(uint8_t status);
-
 /** 撤销运动 owner、保持安全输出并切入不可控状态。 */
 void enterFaultHold(SystemRuntimeContext* sharedData, uint32_t faultBits);
 

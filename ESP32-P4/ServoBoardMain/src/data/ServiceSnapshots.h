@@ -1,6 +1,6 @@
 /**
  * @file ServiceSnapshots.h
- * @brief 定义 Control、Servo、Calibration、State 每周期使用的纯值输入快照。
+ * @brief 定义 Control、Servo、State 每周期使用的纯值输入快照。
  * @details
  * - 快照不含 Queue、Mutex、TaskHandle 或 TaskSharedData 指针，可在主机单测中直接构造。
  * - 任务层在周期开始时采集一次，业务层同一周期不得重新读取同名门禁字段。
@@ -28,22 +28,12 @@ struct ControlServiceInputSnapshot {
 struct ServoServiceInputSnapshot {
     uint32_t nowMs;
     uint32_t activeMotorMask;
-    uint32_t calibrationAuxMotorMask;
     uint32_t multiTurnUnknownMask;
     uint32_t emergencyStopToken;
     uint8_t systemState;
     uint8_t owner;
     uint8_t controlEnabled;
     uint8_t emergencyStopLatched;
-};
-
-struct CalibrationServiceInputSnapshot {
-    uint32_t nowMs;
-    uint32_t activeMotorMask;
-    uint32_t activeJointMask;
-    uint32_t servoOnlineMask;
-    uint32_t encoderOnlineMask;
-    uint32_t multiTurnUnknownMask;
 };
 
 struct StateServiceInputSnapshot {

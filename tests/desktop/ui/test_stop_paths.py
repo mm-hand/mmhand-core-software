@@ -2,9 +2,15 @@ import threading
 import time
 from types import MethodType, SimpleNamespace
 
+import pytest
+
 from desktop.ui.ui_app import HandGUI
+from desktop.core.data_models import HandModel
 from desktop.core.protocol import (
+    CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED,
     ControlMode,
+    SYSTEM_FAULT_MULTITURN_UNKNOWN,
+    SYSTEM_FAULT_SERVO_OFFLINE,
     SYSTEM_STATE_CALIBRATION_RUNNING,
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_RUN_DIRECT,
@@ -60,6 +66,185 @@ def test_internal_p4_motion_fault_does_not_send_competing_host_estop():
         summary,
         SimpleNamespace(system_state=SYSTEM_STATE_ROPE_INIT_RUNNING),
     )
+
+
+def test_expected_calibration_rebase_unknown_does_not_popup_or_stop():
+    state = SimpleNamespace(
+        system_state=SYSTEM_STATE_UNCONTROLLABLE,
+        control_enabled=False,
+        servo_target_owner=0,
+    )
+    calls = []
+    app = SimpleNamespace(
+        _fault_previous_runtime_active=True,
+        backend=SimpleNamespace(
+            is_expected_calibration_turn_unknown=lambda snapshot: calls.append(snapshot) or True,
+        ),
+    )
+    summary = {"active": True, "offline_only": False, "only_turn_unknown": True}
+
+    assert not HandGUI._fault_popup_allowed(app, summary, state)
+    assert not HandGUI._fault_stop_allowed(app, summary, state)
+    assert calls == [state, state]
+
+
+def test_motion_unknown_is_not_suppressed_by_calibration_hook():
+    state = SimpleNamespace(system_state=SYSTEM_STATE_RUN_DIRECT)
+    app = SimpleNamespace(
+        _fault_previous_runtime_active=False,
+        backend=SimpleNamespace(
+            is_expected_calibration_turn_unknown=lambda snapshot:
+                snapshot.system_state == SYSTEM_STATE_UNCONTROLLABLE,
+        ),
+    )
+    summary = {"active": True, "offline_only": False, "only_turn_unknown": True}
+
+    assert HandGUI._fault_popup_allowed(app, summary, state)
+    assert HandGUI._fault_stop_allowed(app, summary, state)
+
+
+def test_other_faults_keep_popup_and_stop_during_calibration_rebase():
+    calls = []
+    state = SimpleNamespace(system_state=SYSTEM_STATE_UNCONTROLLABLE)
+    app = SimpleNamespace(
+        _fault_previous_runtime_active=True,
+        backend=SimpleNamespace(
+            is_expected_calibration_turn_unknown=lambda snapshot: calls.append(snapshot) or True,
+        ),
+    )
+    summary = {"active": True, "offline_only": False, "only_turn_unknown": False}
+
+    assert HandGUI._fault_popup_allowed(app, summary, state)
+    assert HandGUI._fault_stop_allowed(app, summary, state)
+    assert calls == []
+
+
+def test_unknown_without_explicit_core_rebase_confirmation_keeps_fault_protection():
+    def failed_predicate(_state):
+        raise RuntimeError("backend unavailable")
+
+    state = SimpleNamespace(system_state=SYSTEM_STATE_UNCONTROLLABLE)
+    summary = {"active": True, "offline_only": False, "only_turn_unknown": True}
+    apps = [
+        SimpleNamespace(_fault_previous_runtime_active=True),
+        SimpleNamespace(_fault_previous_runtime_active=True, backend=SimpleNamespace()),
+        SimpleNamespace(
+            _fault_previous_runtime_active=True,
+            backend=SimpleNamespace(is_expected_calibration_turn_unknown=lambda _: False),
+        ),
+        SimpleNamespace(
+            _fault_previous_runtime_active=True,
+            backend=SimpleNamespace(is_expected_calibration_turn_unknown=failed_predicate),
+        ),
+    ]
+    for app in apps:
+        assert HandGUI._fault_popup_allowed(app, summary, state)
+        assert HandGUI._fault_stop_allowed(app, summary, state)
+
+
+def _fault_app(monkeypatch, predicate):
+    events = []
+    app = SimpleNamespace(
+        _fault_previous_runtime_active=True,
+        _fault_stop_sent=False,
+        _fault_popup_episode_active=False,
+        _fault_dialog_active=False,
+        _calib_diag_wait_started_at=0.0,
+        backend=SimpleNamespace(
+            is_expected_calibration_turn_unknown=predicate,
+            stop=lambda: events.append("stop"),
+        ),
+        control_panel=SimpleNamespace(
+            stop_all_tests=lambda *_args, **_kwargs: events.append("stop_tests"),
+            turn_unknown_popup_seen=lambda: False,
+            mark_turn_unknown_popup_seen=lambda mask: events.append(("turn_popup", mask)),
+        ),
+        _set_status=lambda text: events.append(("status", text)),
+        _latest_safety_event_text=lambda _state: "",
+        _fault_bitmap_value=HandGUI._fault_bitmap_value,
+        _overload_detail_items=HandGUI._overload_detail_items,
+        _overload_mask_from_state=HandGUI._overload_mask_from_state,
+        _calib_diag_summary=HandGUI._calib_diag_summary,
+        _fault_body_text=HandGUI._fault_body_text,
+    )
+    for name in ("_build_fault_summary", "_fault_stop_allowed", "_fault_popup_allowed"):
+        setattr(app, name, MethodType(getattr(HandGUI, name), app))
+    monkeypatch.setattr("desktop.ui.ui_app.log_session", lambda *_args: None)
+    monkeypatch.setattr(
+        "desktop.ui.ui_app.show_scrollable_message",
+        lambda *_args, **_kwargs: events.append("dialog"),
+    )
+    return app, events
+
+
+def _unknown_after_prior_joint_failure():
+    state = HandModel()
+    state.system_state = SYSTEM_STATE_UNCONTROLLABLE
+    state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN
+    state.multi_turn_unknown_bitmap = 1 << 8
+    state.calib_diag_valid = True
+    state.calib_diag_reason = CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
+    state.calib_diag_joint = 5
+    state.calib_diag_failed_joint_mask = 1 << 5
+    return state
+
+
+def test_prior_joint_diagnostic_does_not_interrupt_confirmed_rebase(monkeypatch):
+    calls = []
+    app, events = _fault_app(
+        monkeypatch, lambda snapshot: calls.append(snapshot) or True
+    )
+    state = _unknown_after_prior_joint_failure()
+
+    summary = app._build_fault_summary(state)
+    assert summary["only_turn_unknown"]
+    assert app._calib_diag_summary(state)["active"]
+    HandGUI._handle_fault_side_effects(app, state)
+
+    assert calls == [state]
+    assert events == []
+    assert not app._fault_stop_sent
+    assert not app._fault_popup_episode_active
+    assert state.calib_diag_reason == CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED
+
+
+@pytest.mark.parametrize("extra_fault", ["servo_offline", "overload"])
+def test_prior_joint_diagnostic_keeps_real_fault_protection(monkeypatch, extra_fault):
+    calls = []
+    app, events = _fault_app(
+        monkeypatch, lambda snapshot: calls.append(snapshot) or True
+    )
+    state = _unknown_after_prior_joint_failure()
+    if extra_fault == "servo_offline":
+        state.system_fault_bitmap |= SYSTEM_FAULT_SERVO_OFFLINE
+    else:
+        state.servo_overload_fault[8] = True
+
+    assert not app._build_fault_summary(state)["only_turn_unknown"]
+    HandGUI._handle_fault_side_effects(app, state)
+
+    assert calls == []
+    assert "stop" in events
+    assert "dialog" in events
+
+
+@pytest.mark.parametrize("initial_confirmation", [True, False])
+def test_fault_effects_use_one_core_confirmation_for_the_same_snapshot(
+    monkeypatch, initial_confirmation
+):
+    calls = []
+
+    def changing_confirmation(snapshot):
+        calls.append(snapshot)
+        return initial_confirmation if len(calls) == 1 else not initial_confirmation
+
+    app, events = _fault_app(monkeypatch, changing_confirmation)
+    state = _unknown_after_prior_joint_failure()
+    HandGUI._handle_fault_side_effects(app, state)
+
+    assert calls == [state]
+    assert ("stop" in events) is not initial_confirmation
+    assert ("dialog" in events) is not initial_confirmation
 
 
 def test_estop_is_enqueued_before_test_and_recorder_cleanup():

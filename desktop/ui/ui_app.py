@@ -80,6 +80,19 @@ FAULT_STATUS_STALE_AFTER_S = 1.0
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky"]
 
 
+def _expected_calibration_turn_unknown(backend, summary: dict, state: HandModel) -> bool:
+    """维护归零的瞬时 UNKNOWN 由 core 确认；原始故障状态继续显示。"""
+    if not summary.get("only_turn_unknown"):
+        return False
+    predicate = getattr(backend, "is_expected_calibration_turn_unknown", None)
+    if not callable(predicate):
+        return False
+    try:
+        return predicate(state) is True
+    except Exception:
+        return False
+
+
 class HandGUI(QtWidgets.QMainWindow):
     test_recording_stop_finished = Signal(str, str, str)
     replay_event_received = Signal(str, str)
@@ -1129,9 +1142,10 @@ class HandGUI(QtWidgets.QMainWindow):
             active and
             (bitmap & SYSTEM_FAULT_MULTITURN_UNKNOWN) and
             (bitmap & ~SYSTEM_FAULT_MULTITURN_UNKNOWN) == 0 and
-            not overload_items and
-            not calib_diag.get("active")
+            not overload_items
         )
+        # Historical host diagnostics remain available for display, but only
+        # current device faults determine whether core may confirm an F0 window.
         title = " / ".join(titles[:2]) if titles else "System status normal"
         if len(titles) > 2:
             title += f" and {len(titles) - 2} more"
@@ -1162,8 +1176,16 @@ class HandGUI(QtWidgets.QMainWindow):
                 parts.append(f"- {item}")
         return "\n".join(parts).strip()
 
-    def _fault_popup_allowed(self, summary: dict, state: HandModel) -> bool:
+    def _fault_popup_allowed(
+        self, summary: dict, state: HandModel, *, expected_turn_unknown: Optional[bool] = None
+    ) -> bool:
         if not summary.get("active"):
+            return False
+        if expected_turn_unknown is None:
+            expected_turn_unknown = _expected_calibration_turn_unknown(
+                getattr(self, "backend", None), summary, state
+            )
+        if expected_turn_unknown:
             return False
         if not summary.get("offline_only"):
             return True
@@ -1171,8 +1193,16 @@ class HandGUI(QtWidgets.QMainWindow):
         runtime_state = system_state in (SYSTEM_STATE_RUN_DIRECT, SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_PAUSED)
         return bool(runtime_state or self._fault_previous_runtime_active)
 
-    def _fault_stop_allowed(self, summary: dict, state: HandModel) -> bool:
+    def _fault_stop_allowed(
+        self, summary: dict, state: HandModel, *, expected_turn_unknown: Optional[bool] = None
+    ) -> bool:
         if not summary.get("active"):
+            return False
+        if expected_turn_unknown is None:
+            expected_turn_unknown = _expected_calibration_turn_unknown(
+                getattr(self, "backend", None), summary, state
+            )
+        if expected_turn_unknown:
             return False
         system_state = getattr(state, "system_state", None)
         motion_state = system_state in (
@@ -1204,7 +1234,18 @@ class HandGUI(QtWidgets.QMainWindow):
             self._calib_diag_wait_started_at = 0.0
             return
 
-        if self._fault_stop_allowed(summary, state) and not self._fault_stop_sent:
+        # STOP cancels the core transaction. Decide both effects from the same
+        # confirmation before either effect can change that transaction window.
+        expected_turn_unknown = _expected_calibration_turn_unknown(
+            getattr(self, "backend", None), summary, state
+        )
+        stop_allowed = self._fault_stop_allowed(
+            summary, state, expected_turn_unknown=expected_turn_unknown
+        )
+        popup_allowed = self._fault_popup_allowed(
+            summary, state, expected_turn_unknown=expected_turn_unknown
+        )
+        if stop_allowed and not self._fault_stop_sent:
             self._fault_stop_sent = True
             try:
                 self.control_panel.stop_all_tests("fault detected", update_status=False)
@@ -1217,7 +1258,7 @@ class HandGUI(QtWidgets.QMainWindow):
             log_session("FAULT", f"stop requested: {summary.get('key')} {summary.get('title')}")
             self._set_status("Fault detected; STOP sent")
 
-        if not self._fault_popup_allowed(summary, state):
+        if not popup_allowed:
             return
         # SYSTEM_STATUS 与 CALIB_DIAG 分包发送。故障位可能先到，短暂等待
         # 结构化诊断，避免通用提示抢先弹出并吞掉真实的 J/M/阶段原因。

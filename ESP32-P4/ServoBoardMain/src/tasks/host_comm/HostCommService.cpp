@@ -50,8 +50,7 @@ struct HostCommRuntimeContext {
     uint32_t lastControlTraceTimestampSent;
     bool controlTraceSentInitialized;
     uint32_t lastEncoderRawTimestampSent;
-    uint32_t lastServoAngleTimestampSent;
-    uint32_t lastServoRawTimestampSent;
+    uint32_t lastServoPositionTimestampSent;
     uint32_t lastServoTelemetryTimestampSent;
     uint32_t lastFaultStatusSent;
     uint32_t lastFaultStatusSentMs;
@@ -68,8 +67,6 @@ struct HostCommRuntimeContext {
     bool motorAbsLimitSentInitialized;
     uint32_t lastServoLogicalRangeHashSent;
     bool servoLogicalRangeSentInitialized;
-    uint32_t lastCalibrationCompletedMask;
-    uint32_t lastCalibrationDiagSequenceSent;
     uint32_t lastTaskDiagWindowSequence;
     uint32_t sendingTaskDiagWindowSequence;
     uint8_t nextTaskDiagId;
@@ -163,8 +160,6 @@ bool initHostCommService(SystemRuntimeContext* sharedData)
     g_hostCommRuntime.lastManualReferenceSequenceSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceValidMaskSent = 0xFFFFFFFFUL;
     g_hostCommRuntime.lastManualReferenceCommittedSent = 0xFF;
-    g_hostCommRuntime.lastCalibrationCompletedMask =
-        sharedAtomicLoad(&sharedData->calibration_completed_joint_bitmap);
     g_hostCommRuntime.lastServoResetZeroResultToken =
         sharedAtomicLoad(&sharedData->servo_reset_zero_result_token);
     initHostMultiTurnPublisher();
@@ -188,8 +183,7 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     auto& lastSensorTimestampSent = runtime.lastSensorTimestampSent;
     auto& lastControlTraceSequenceSent = runtime.lastControlTraceSequenceSent;
     auto& lastEncoderRawTimestampSent = runtime.lastEncoderRawTimestampSent;
-    auto& lastServoAngleTimestampSent = runtime.lastServoAngleTimestampSent;
-    auto& lastServoRawTimestampSent = runtime.lastServoRawTimestampSent;
+    auto& lastServoPositionTimestampSent = runtime.lastServoPositionTimestampSent;
     auto& lastServoTelemetryTimestampSent = runtime.lastServoTelemetryTimestampSent;
     auto& lastFaultStatusSent = runtime.lastFaultStatusSent;
     auto& lastFaultStatusSentMs = runtime.lastFaultStatusSentMs;
@@ -206,8 +200,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
     auto& motorAbsLimitSentInitialized = runtime.motorAbsLimitSentInitialized;
     auto& lastServoLogicalRangeHashSent = runtime.lastServoLogicalRangeHashSent;
     auto& servoLogicalRangeSentInitialized = runtime.servoLogicalRangeSentInitialized;
-    auto& lastCalibrationCompletedMask = runtime.lastCalibrationCompletedMask;
-    auto& lastCalibrationDiagSequenceSent = runtime.lastCalibrationDiagSequenceSent;
     auto& lastTaskDiagWindowSequence = runtime.lastTaskDiagWindowSequence;
     auto& sendingTaskDiagWindowSequence = runtime.sendingTaskDiagWindowSequence;
     auto& nextTaskDiagId = runtime.nextTaskDiagId;
@@ -326,12 +318,15 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
-        ServoAngleData_t servoRawData;
-        if (sharedData->servoRawQueue.peek(&servoRawData) &&
-            servoRawData.timestamp != lastServoRawTimestampSent)
-        {
-            if (sendServoRawPacket(servoRawData)) {
-                lastServoRawTimestampSent = servoRawData.timestamp;
+        // ABS/raw 必须共享快照和限频条件，否则 raw-only 更新会覆盖同戳锚点。
+        ServoAngleData_t servoPositionData;
+        if (sharedData->servoFeedbackQueue.peek(&servoPositionData)) {
+            if ((!runtime.controlTraceSubscribed ||
+                 (uint32_t)(servoPositionData.timestamp -
+                            lastServoPositionTimestampSent) >= 50) &&
+                servoPositionData.timestamp != lastServoPositionTimestampSent &&
+                sendServoPositionPackets(servoPositionData)) {
+                lastServoPositionTimestampSent = servoPositionData.timestamp;
             }
         }
 
@@ -344,15 +339,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
-        ServoAngleData_t servoAngleData;
-        if (sharedData->servoFeedbackQueue.peek(&servoAngleData) &&
-            (!runtime.controlTraceSubscribed || (uint32_t)(servoAngleData.timestamp - lastServoAngleTimestampSent) >= 50) &&
-            servoAngleData.timestamp != lastServoAngleTimestampSent)
-        {
-            if (sendServoAnglePacket(servoAngleData)) {
-                lastServoAngleTimestampSent = servoAngleData.timestamp;
-            }
-        }
         const uint32_t faultBitmap =
             sharedAtomicLoad(&sharedData->overload_fault_bitmap);
         const bool bitmapChanged =
@@ -527,28 +513,17 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
             }
         }
 
-        // 标定快照不再每秒全量广播：新完成关节立即上报；重连或查询时全量同步。
-        const uint32_t completedThisRun =
-            sharedAtomicLoad(&sharedData->calibration_completed_joint_bitmap) &
-            ((1UL << ENCODER_TOTAL_NUM) - 1UL);
-        const uint32_t newlyCompleted =
-            completedThisRun & ~lastCalibrationCompletedMask;
-        // 已清除的关节必须从已发送位图中退出，后续再次完成时才能重新上报。
-        lastCalibrationCompletedMask &= completedThisRun;
+        // LUT 上传结果由命令处理器立即回包；重连或查询时仍可全量同步。
         const bool calibrationSyncRequested =
             (pendingStateSyncMask & STATE_SYNC_JOINT_CALIBRATION) != 0;
-        const uint32_t snapshotMask = calibrationSyncRequested
-            ? ((1UL << ENCODER_TOTAL_NUM) - 1UL)
-            : newlyCompleted;
         bool calibrationSyncSucceeded = true;
-        for (uint8_t jointIndex = 0; jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
+        for (uint8_t jointIndex = 0;
+             calibrationSyncRequested && jointIndex < ENCODER_TOTAL_NUM; ++jointIndex) {
             JointCalibrationRuntimeSnapshot snapshot;
             const bool snapshotValid =
                 readJointCalibrationRuntimeSnapshot(jointIndex, &snapshot);
-            if ((snapshotMask & (1UL << jointIndex)) != 0 &&
-                snapshotValid && snapshot.result.success) {
+            if (snapshotValid && snapshot.result.success) {
                 if (sendJointCalibSnapshotPacket(jointIndex)) {
-                    lastCalibrationCompletedMask |= 1UL << jointIndex;
                     // 本周期的映射角可能早于快照发送。强制下一周期再发一帧，
                     // 保证上位机在应用新快照后立即获得同一标定代次的 Current。
                     lastSensorTimestampSent = 0xFFFFFFFFUL;
@@ -559,19 +534,6 @@ bool stepHostCommService(SystemRuntimeContext* sharedData,
         }
         if (calibrationSyncRequested && calibrationSyncSucceeded) {
             pendingStateSyncMask &= ~((uint32_t)STATE_SYNC_JOINT_CALIBRATION);
-        }
-
-        CalibrationDiagData_t calibDiag;
-        {
-            SharedSafetyGuard guard;
-            calibDiag = sharedData->calibration_diag;
-        }
-        const bool calibrationDiagChanged =
-            calibDiag.sequence != lastCalibrationDiagSequenceSent;
-        if (calibrationDiagChanged) {
-            if (sendCalibrationDiagPacket(calibDiag)) {
-                lastCalibrationDiagSequenceSent = calibDiag.sequence;
-            }
         }
 
         const uint32_t servoRouteGeneration =

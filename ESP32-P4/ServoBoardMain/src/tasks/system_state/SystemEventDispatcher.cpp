@@ -13,7 +13,6 @@
 #include "../../safety/policies/SystemReadinessPolicy.h"
 #include "../../safety/policies/SystemFaultPolicy.h"
 #include "RopeInitController.h"
-#include "../auto_calibration/AutoCalibrationTaskRuntime.h"
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../modules/calibration/CalibrationMath.h"
 #include "../../modules/calibration/CalibrationRuntimeStore.h"
@@ -32,7 +31,6 @@
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../platform/log/FirmwareLog.h"
-#include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 
 using namespace mmhand::system;
@@ -70,11 +68,6 @@ static void logManualReferenceReject(SystemRuntimeContext* sharedData,
         (unsigned long)validMask,
         (unsigned long)(requiredMask & ~validMask),
         sharedData && sharedData->manual_reference_committed ? 1U : 0U);
-}
-
-void setCalibrationStatus(uint8_t status)
-{
-    g_calibrationStatus = status;
 }
 
 bool postSystemEvent(SystemRuntimeContext* sharedData, uint8_t event)
@@ -115,6 +108,8 @@ bool postSystemEventForToken(SystemRuntimeContext* sharedData, uint8_t event, ui
     msg.event = event;
     msg.timestamp = p4::platform::time::monotonicMillis();
     msg.token = token;
+    msg.servoMaintenanceToken =
+        sharedAtomicLoad(&sharedData->servo_rebase_zero_request_token);
     const bool queued = sharedData->stateEventQueue.send(msg);
     if (queued) {
         sharedData->systemStateWake.notify(p4::runtime::wake::kStateEvent);
@@ -134,6 +129,29 @@ void setSystemState(SystemRuntimeContext* sharedData, uint8_t state)
         p4::platform::rtos::atomicAddFetch(&sharedData->state_transition_count,
                                      (uint32_t)1);
     }
+}
+
+static bool servoRebaseZeroPending(SystemRuntimeContext* sharedData)
+{
+    return sharedAtomicLoad(&sharedData->servo_rebase_zero_request_token) !=
+           sharedAtomicLoad(&sharedData->servo_rebase_zero_result_token);
+}
+
+/** 与 Host 归零入队共用短临界区，闭合“检查完成到授予 owner”间的跨核窗口。 */
+static bool grantMotionOwnerUnlessServoRebaseZeroPending(
+    SystemRuntimeContext* sharedData, uint8_t owner, uint8_t enabled,
+    uint8_t state, uint32_t servoMaintenanceToken)
+{
+    SharedSafetyGuard guard;
+    if (servoRebaseZeroPending(sharedData) ||
+        servoMaintenanceToken !=
+            sharedAtomicLoad(&sharedData->servo_rebase_zero_request_token)) {
+        return false;
+    }
+    sharedData->servo_target_owner = owner;
+    sharedData->control_enabled = enabled;
+    setSystemState(sharedData, state);
+    return true;
 }
 
 static void resetServoTargetQueue(SystemRuntimeContext* sharedData)
@@ -217,23 +235,10 @@ void enterFaultHold(SystemRuntimeContext* sharedData, uint32_t faultBits)
     }
     sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
     sharedData->control_enabled = 0;
-    sharedAtomicStore(&sharedData->calibration_motion_started, (uint8_t)0);
-    if (interruptedState == SYSTEM_STATE_CALIBRATION_RUNNING) {
-        setCalibrationStatus(CALIB_STATUS_FAILED);
-        sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
-    }
     if (interruptedState == SYSTEM_STATE_ROPE_INIT_RUNNING) {
         sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
         sharedData->rope_init_reason = ROPE_INIT_REASON_SYSTEM_FAULT;
         sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
-        // 标定结果已提交后才会自动进入 Rope Init。此阶段发生故障时保留
-        // 已生成的 Auto/LUT，但用 WARN 表示尚未完成 READY 收尾。
-        if (sharedAtomicLoad(
-                &sharedData->calibration_rope_init_pending) != 0) {
-            setCalibrationStatus(CALIB_STATUS_WARN);
-            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                              (uint8_t)0);
-        }
     }
     requestServoEmergencyTorqueOff(sharedData);
     setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
@@ -334,13 +339,13 @@ static bool feedbackTargetsPointIntoWorkspace(SystemRuntimeContext* sharedData)
 
 static bool beginRopeInitMotion(SystemRuntimeContext* sharedData,
                                 bool feedbackRecovery,
-                                uint32_t feedbackRequestSequence)
+                                uint32_t feedbackRequestSequence,
+                                uint32_t servoMaintenanceToken)
 {
     if (!sharedData) {
         return false;
     }
-    // Rope Init 临时借用 CALIBRATION 输出所有权，但 system_state 使用独立状态，
-    // 便于 UI、故障处理和完成事件区分自动标定。
+    // 保留 Rope Init 的既有输出所有权编号，运行态由独立状态表示。
     p4::platform::rtos::atomicAddFetch(&sharedData->rope_init_sequence,
                                  (uint32_t)1);
     sharedData->rope_init_joint_mask =
@@ -348,8 +353,11 @@ static bool beginRopeInitMotion(SystemRuntimeContext* sharedData,
         kManualEncoderReferenceFullMask;
     sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
     resetServoTargetQueue(sharedData);
-    sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
-    sharedData->control_enabled = 0;
+    if (!grantMotionOwnerUnlessServoRebaseZeroPending(
+            sharedData, SERVO_TARGET_OWNER_CALIBRATION, 0,
+            SYSTEM_STATE_ROPE_INIT_RUNNING, servoMaintenanceToken)) {
+        return false;
+    }
     sharedData->rope_init_status = ROPE_INIT_STATUS_RUNNING;
     sharedData->rope_init_reason = ROPE_INIT_REASON_NONE;
     sharedAtomicStore(&sharedData->feedback_recovery_pending,
@@ -443,6 +451,35 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
         return;
     }
 
+    // STOP/RESET 等安全事件继续处理。归零完成后仍须拒绝旧坐标代际的
+    // 运动启动事件；只检查 pending 会让本轮之后才消费的旧事件复活。
+    const bool staleMaintenanceGeneration = event.servoMaintenanceToken !=
+        sharedAtomicLoad(&sharedData->servo_rebase_zero_request_token);
+    if ((servoRebaseZeroPending(sharedData) || staleMaintenanceGeneration) &&
+        (event.event == SYSTEM_EVENT_START ||
+         event.event == SYSTEM_EVENT_RUN_DIRECT ||
+         event.event == SYSTEM_EVENT_RUN_FEEDBACK ||
+         event.event == SYSTEM_EVENT_ROPE_INIT)) {
+        if (event.event == SYSTEM_EVENT_RUN_DIRECT) {
+            rejectPendingDirectCommand(sharedData, event.token,
+                                       staleMaintenanceGeneration
+                                           ? DIRECT_REJECT_STALE
+                                           : DIRECT_REJECT_STATE);
+        } else if (event.event == SYSTEM_EVENT_RUN_FEEDBACK) {
+            setFeedbackAdmissionResult(sharedData, event.token,
+                                       FEEDBACK_ADMISSION_REJECTED,
+                                       FEEDBACK_REJECT_STATE);
+        } else if (event.event == SYSTEM_EVENT_ROPE_INIT) {
+            sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+            sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
+            sharedData->rope_init_timestamp =
+                p4::platform::time::monotonicMillis();
+        }
+        FW_LOG_INFO_PRINTF("[STATE] reject motion event=%u: ABS zero pending or old coordinate generation\r\n",
+                           (unsigned)event.event);
+        return;
+    }
+
     // 所有状态迁移集中在此处；事件处理必须先做门禁，再授予输出所有权。
     switch (event.event)
     {
@@ -472,8 +509,11 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                     break;
                 }
                 resetServoTargetQueue(sharedData);
-                sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
-                sharedData->control_enabled = 1;
+                if (!grantMotionOwnerUnlessServoRebaseZeroPending(
+                        sharedData, SERVO_TARGET_OWNER_CONTROL, 1,
+                        resumeState, event.servoMaintenanceToken)) {
+                    break;
+                }
                 if (resumeState == SYSTEM_STATE_RUN_DIRECT) {
                     setCommandModeDirect(sharedData);
                 } else if (resumeState == SYSTEM_STATE_RUN_FEEDBACK) {
@@ -510,16 +550,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
                 sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
                 sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
-                if (sharedAtomicLoad(
-                        &sharedData->calibration_rope_init_pending) != 0) {
-                    setCalibrationStatus(CALIB_STATUS_WARN);
-                    sharedAtomicStore(
-                        &sharedData->calibration_rope_init_pending,
-                        (uint8_t)0);
-                }
-            }
-            if (sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING) {
-                setCalibrationStatus(CALIB_STATUS_IDLE);
             }
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
@@ -535,10 +565,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             sharedAtomicStore(&sharedData->emergency_stop_latched, (uint8_t)0);
             p4::state::resetHostControlLeaseRuntime(sharedData);
             resetControlProtectionFaults(sharedData);
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
             sharedAtomicStore(&sharedData->system_fault_latched_bitmap, (uint32_t)0);
             sharedAtomicStore(&sharedData->system_fault_bitmap, (uint32_t)0);
-            setCalibrationStatus(CALIB_STATUS_IDLE);
             setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
             break;
 
@@ -610,14 +638,12 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                            DIRECT_REJECT_STALE);
                 break;
             }
-            sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                                 (uint32_t)~(SYSTEM_FAULT_CAN_OFFLINE |
-                                             SYSTEM_FAULT_SERVO_OFFLINE |
-                                             SYSTEM_FAULT_MULTITURN_UNKNOWN));
-            sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap,
-                                 (uint32_t)~(SYSTEM_FAULT_CAN_OFFLINE |
-                                             SYSTEM_FAULT_SERVO_OFFLINE |
-                                             SYSTEM_FAULT_MULTITURN_UNKNOWN));
+            {
+                const uint32_t clearScopeFaults = SYSTEM_FAULT_SERVO_OFFLINE |
+                    SYSTEM_FAULT_MULTITURN_UNKNOWN | SYSTEM_FAULT_CAN_OFFLINE;
+                sharedAtomicFetchAnd(&sharedData->system_fault_bitmap, ~clearScopeFaults);
+                sharedAtomicFetchAnd(&sharedData->system_fault_latched_bitmap, ~clearScopeFaults);
+            }
             if (sharedData->system_state != SYSTEM_STATE_RUN_DIRECT) {
                 resetServoTargetQueue(sharedData);
             }
@@ -625,8 +651,13 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                               (uint8_t)0);
             sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                               (uint32_t)0);
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
-            sharedData->control_enabled = 1;
+            if (!grantMotionOwnerUnlessServoRebaseZeroPending(
+                    sharedData, SERVO_TARGET_OWNER_CONTROL, 1,
+                    SYSTEM_STATE_RUN_DIRECT, event.servoMaintenanceToken)) {
+                sharedAtomicStore(&sharedData->direct_reject_reason,
+                                  (uint8_t)DIRECT_REJECT_STATE);
+                break;
+            }
             setSystemState(sharedData, SYSTEM_STATE_RUN_DIRECT);
             break;
 
@@ -721,7 +752,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                 : FEEDBACK_REJECT_WORKSPACE);
                         break;
                     }
-                    if (!beginRopeInitMotion(sharedData, true, event.token)) {
+                    if (!beginRopeInitMotion(sharedData, true, event.token,
+                                             event.servoMaintenanceToken)) {
                         setFeedbackAdmissionResult(sharedData, event.token,
                                                    FEEDBACK_ADMISSION_REJECTED,
                                                    FEEDBACK_REJECT_STATE);
@@ -779,8 +811,14 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
             resetServoTargetQueue(sharedData);
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CONTROL;
-            sharedData->control_enabled = 1;
+            if (!grantMotionOwnerUnlessServoRebaseZeroPending(
+                    sharedData, SERVO_TARGET_OWNER_CONTROL, 1,
+                    SYSTEM_STATE_RUN_FEEDBACK, event.servoMaintenanceToken)) {
+                setFeedbackAdmissionResult(sharedData, event.token,
+                                           FEEDBACK_ADMISSION_REJECTED,
+                                           FEEDBACK_REJECT_STATE);
+                break;
+            }
             setSystemState(sharedData, SYSTEM_STATE_RUN_FEEDBACK);
             setFeedbackAdmissionResult(sharedData, event.token,
                                        FEEDBACK_ADMISSION_ACCEPTED,
@@ -799,8 +837,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                                    (unsigned long)sharedData->applied_direct_generation);
                 break;
             }
-            sharedData->control_enabled = 0;
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
+            if (!retireDirectCommand(sharedData, event.token)) break;
+            resetServoTargetQueue(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
             break;
 
@@ -846,80 +884,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, SYSTEM_STATE_PAUSED);
             break;
-
-        case SYSTEM_EVENT_CALIBRATE:
-        {
-            // 标定允许从 UNCONTROLLABLE 启动，但 Manual、任务所有权和 active scope
-            // 仍必须在启动 AutoCalibrationTask 前通过检查。
-            if (rejectMotionWhenEmergencyStopLatched(sharedData,
-                                                     "CALIBRATE")) {
-                setCalibrationStatus(CALIB_STATUS_FAILED);
-                break;
-            }
-            if (!p4::state::prepareHostControlCommandAdmission(sharedData)) {
-                FW_LOG_INFO_PRINTLN(
-                    "[STATE] reject CALIBRATE: host lease stale or Hold pending");
-                setCalibrationStatus(CALIB_STATUS_FAILED);
-                break;
-            }
-            if (!manualReferenceGateReady(sharedData)) {
-                logManualReferenceReject(sharedData, "CALIBRATE");
-                setCalibrationStatus(CALIB_STATUS_FAILED);
-                break;
-            }
-            if (!p4::system::canAcceptCalibration(sharedData->system_state)) {
-                p4::safety::reportSafetyRuleEvent(
-                    sharedData,
-                    SafetyRuleId::SystemCalibrationStateRejected,
-                    (int32_t)event.token,
-                    sharedData->system_state);
-                FW_LOG_INFO_PRINTF("[STATE] reject CALIBRATE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            resetServoTargetQueue(sharedData);
-            sharedAtomicStore(&sharedData->feedback_recovery_pending,
-                              (uint8_t)0);
-            sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
-                              (uint32_t)0);
-            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                              (uint8_t)0);
-            // 刚进入 CALIBRATION_RUNNING 时仍处于无运动预检，允许舵机通信任务完成热插拔恢复。
-            sharedAtomicStore(&sharedData->calibration_motion_started,
-                              (uint8_t)0);
-            sharedAtomicStore(&sharedData->calibration_trust_request_mask,
-                              (uint32_t)0);
-            sharedAtomicStore(&sharedData->calibration_trust_accepted_mask,
-                              (uint32_t)0);
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_CALIBRATION;
-            sharedData->control_enabled = 0;
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
-            setCommandModeJoint(sharedData);
-            setCalibrationStatus(CALIB_STATUS_RUNNING);
-            setSystemState(sharedData, SYSTEM_STATE_CALIBRATION_RUNNING);
-            if (!startAutoCalibrationTaskRuntime(sharedData)) {
-                CalibrationDiagData_t diag;
-                memset(&diag, 0, sizeof(diag));
-                diag.valid = 1;
-                diag.reason = CALIB_DIAG_REASON_TASK_START_FAILED;
-                diag.phase = CALIB_DIAG_PHASE_SEQUENCE;
-                diag.joint = 0xFF;
-                diag.motor = 0xFF;
-                diag.timestamp = p4::platform::time::monotonicMillis();
-                {
-                    SharedSafetyGuard guard;
-                    diag.sequence = sharedData->calibration_diag.sequence + 1;
-                    sharedData->calibration_diag = diag;
-                }
-                setCalibrationStatus(CALIB_STATUS_FAILED);
-                sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
-                sharedAtomicStore(&sharedData->calibration_motion_started,
-                                  (uint8_t)0);
-                requestServoEmergencyTorqueOff(sharedData);
-                setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
-            }
-            break;
-        }
 
         case SYSTEM_EVENT_ROPE_INIT:
         {
@@ -970,7 +934,12 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
                 break;
             }
-            beginRopeInitMotion(sharedData, false, 0);
+            if (!beginRopeInitMotion(sharedData, false, 0,
+                                     event.servoMaintenanceToken)) {
+                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
+                sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
+                sharedData->rope_init_timestamp = p4::platform::time::monotonicMillis();
+            }
             break;
         }
 
@@ -987,9 +956,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 break;
             }
             {
-                const bool completesCalibration =
-                    sharedAtomicLoad(
-                        &sharedData->calibration_rope_init_pending) != 0;
                 const bool resumeFeedback =
                     sharedAtomicLoad(&sharedData->feedback_recovery_pending) != 0;
                 const uint32_t recoveryRequestSequence =
@@ -1008,17 +974,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                 sharedAtomicStore(
                     &sharedData->feedback_recovery_request_sequence,
                     (uint32_t)0);
-                sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                                  (uint8_t)0);
-                if (completesCalibration) {
-                    setCalibrationStatus(
-                        sharedAtomicLoad(
-                            &sharedData->calibration_warning_bitmap) != 0
-                            ? CALIB_STATUS_WARN
-                            : CALIB_STATUS_SUCCESS);
-                    FW_LOG_INFO_PRINTLN(
-                        "[STATE] calibration Rope Init complete; READY may be entered");
-                }
                 // 自动恢复场景下，Rope Init 完成后再次核验最新目标，再交还反馈所有权。
                 if (resumeFeedback && commandModeJoint &&
                     feedbackTargetsPointIntoWorkspace(sharedData) &&
@@ -1081,73 +1036,8 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
                               (uint8_t)0);
             sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                               (uint32_t)0);
-            if (sharedAtomicLoad(
-                    &sharedData->calibration_rope_init_pending) != 0) {
-                // Rope Init 失败不抹掉已提交的标定数据；WARN 明确表示需要在
-                // 下一次控制准入时重新完成工作空间恢复。
-                setCalibrationStatus(CALIB_STATUS_WARN);
-            }
-            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                              (uint8_t)0);
             requestServoEmergencyTorqueOff(sharedData);
             setSystemState(sharedData, idleOrReadyState(sharedData));
-            break;
-
-        case SYSTEM_EVENT_CALIBRATION_DONE:
-            // 标定结果写入 RAM 后直接进入 Rope Init。CALIB SUCCESS/WARN 延后到
-            // Rope Init 完成时发布，保证“标定完成”同时意味着已建立 READY 姿态。
-            if (sharedAtomicLoad(&sharedData->host_control_hold_status) ==
-                HOST_CONTROL_HOLD_PENDING) {
-                FW_LOG_INFO_PRINTLN(
-                    "[STATE] ignore CALIB_DONE while host Hold pending");
-                break;
-            }
-            if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_DONE in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            sharedAtomicStore(&sharedData->calibration_motion_started,
-                              (uint8_t)0);
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)0);
-            {
-                uint8_t ropeReason =
-                    p4::recovery::ropeInitActiveScopeRejectReason(sharedData);
-                if (ropeReason == ROPE_INIT_REASON_NONE &&
-                    !activeMotorsMultiTurnKnown(sharedData)) {
-                    ropeReason = ROPE_INIT_REASON_MULTITURN_UNKNOWN;
-                }
-                sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                                  (uint8_t)1);
-                if (ropeReason == ROPE_INIT_REASON_NONE &&
-                    beginRopeInitMotion(sharedData, false, 0)) {
-                    FW_LOG_INFO_PRINTLN(
-                        "[STATE] calibration complete; automatic Rope Init started");
-                    break;
-                }
-
-                // 自动收尾无法启动时释放标定 owner，并保留有效结果供后续
-                // RUN_FEEDBACK 的既有 RECOVERY_REQUIRED 路径再次恢复。
-                resetServoTargetQueue(sharedData);
-                sharedData->control_enabled = 0;
-                sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-                setCommandModeJoint(sharedData);
-                sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
-                sharedData->rope_init_reason =
-                    ropeReason != ROPE_INIT_REASON_NONE
-                        ? ropeReason
-                        : ROPE_INIT_REASON_CANCELLED;
-                sharedData->rope_init_timestamp =
-                    p4::platform::time::monotonicMillis();
-                sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                                  (uint8_t)0);
-                setCalibrationStatus(CALIB_STATUS_WARN);
-                requestServoEmergencyTorqueOff(sharedData);
-                setSystemState(sharedData, idleOrReadyState(sharedData));
-                FW_LOG_WARN_PRINTF(
-                    "[STATE] calibration result kept, automatic Rope Init failed reason=%u\r\n",
-                    (unsigned)sharedData->rope_init_reason);
-            }
             break;
 
         case SYSTEM_EVENT_REEVALUATE_READY:
@@ -1169,33 +1059,6 @@ void handleSystemEvent(SystemRuntimeContext* sharedData, const SystemEvent_t& ev
             }
             break;
 
-        case SYSTEM_EVENT_CALIBRATION_FAILED:
-            // 标定失败属于锁存故障：撤销所有权、断扭矩并等待用户 Clear Fault。
-            // 但若失败是租约 Hold 拒绝普通批次引起，则由 Hold 确认路径取消标定，
-            // 不能把“上位机失联取消”误升级成“标定算法/硬件故障”。
-            if (sharedAtomicLoad(&sharedData->host_control_hold_status) ==
-                HOST_CONTROL_HOLD_PENDING) {
-                FW_LOG_INFO_PRINTLN(
-                    "[STATE] ignore CALIB_FAILED while host Hold pending");
-                break;
-            }
-            if (sharedData->system_state != SYSTEM_STATE_CALIBRATION_RUNNING) {
-                FW_LOG_INFO_PRINTF("[STATE] ignore CALIB_FAILED in state=%u\r\n",
-                              (unsigned)sharedData->system_state);
-                break;
-            }
-            sharedData->control_enabled = 0;
-            sharedData->servo_target_owner = SERVO_TARGET_OWNER_NONE;
-            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                              (uint8_t)0);
-            sharedAtomicStore(&sharedData->calibration_motion_started,
-                              (uint8_t)0);
-            sharedAtomicStore(&sharedData->calibration_fault_latched, (uint8_t)1);
-            setCalibrationStatus(CALIB_STATUS_FAILED);
-            requestServoEmergencyTorqueOff(sharedData);
-            setSystemState(sharedData, SYSTEM_STATE_UNCONTROLLABLE);
-            break;
-
         default:
             break;
     }
@@ -1210,6 +1073,5 @@ bool stateOwnsMotionResources(SystemRuntimeContext* sharedData)
            sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
            sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
            sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-           sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
            sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING;
 }

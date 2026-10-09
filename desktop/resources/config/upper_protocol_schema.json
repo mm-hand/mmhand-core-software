@@ -34,7 +34,9 @@
     {"name": "PACKET_TYPE_SERVO_ROUTE_STATUS", "value": 21, "timestamp": true, "description": "动态舵机 BUS 路由、冲突、容量和扫描状态"},
     {"name": "PACKET_TYPE_SAFETY_EVENT", "value": 22, "timestamp": true, "description": "去重后的结构化安全规则事件"},
     {"name": "PACKET_TYPE_MULTITURN_RESTORE_RESULT", "value": 23, "timestamp": true, "description": "桌面 JSON 多圈恢复异步最终结果"},
-    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角、舵机CMD和下位机时间"}
+    {"name": "PACKET_TYPE_CONTROL_TRACE", "value": 24, "timestamp": true, "description": "同一控制周期的目标角、反馈角、舵机CMD和下位机时间"},
+    {"name": "PACKET_TYPE_SERVO_REBASE_ZERO_RESULT", "value": 25, "timestamp": true, "description": "logical ABS 设零事务的最终token、成功失败位图与27路offset"},
+    {"name": "PACKET_TYPE_DIRECT_TARGET_RESULT", "value": 26, "timestamp": true, "description": "通用直控目标完成总线同步写后的事务结果，与机械到位独立"}
   ],
   "commands": [
     {"name": "CMD_CALIBRATE", "value": 202, "payload_bytes": 0, "description": "按当前 active scope 启动自动标定"},
@@ -42,7 +44,7 @@
     {"name": "CMD_START", "value": 204, "payload_bytes": 0, "description": "历史启动命令，进入控制申请流程"},
     {"name": "CMD_STOP", "value": 205, "payload_bytes": 0, "description": "停止当前运行并撤销待执行目标"},
     {"name": "CMD_RESET", "value": 206, "payload_bytes": 0, "description": "清除允许恢复的系统故障锁存"},
-    {"name": "CMD_MOTOR_POS_ABS", "value": 211, "payload_bytes": 108, "description": "27 路 logical ABS 直控目标，每路 int32 counts"},
+    {"name": "CMD_MOTOR_POS_ABS", "value": 211, "payload_bytes": 119, "description": "通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope"},
     {"name": "CMD_ACTIVE_SCOPE", "value": 215, "payload_bytes": 9, "description": "同步 active joint/motor mask 与 control enable"},
     {"name": "CMD_RUN_FEEDBACK", "value": 216, "payload_bytes": 0, "description": "申请状态机进入负反馈运行"},
     {"name": "CMD_PAUSE", "value": 217, "payload_bytes": 0, "description": "暂停当前负反馈或直控运行"},
@@ -61,7 +63,9 @@
     {"name": "CMD_SERVO_RESET_ZERO", "value": 236, "payload_bytes": 4, "description": "标定前归零所选舵机硬件圈数并清除对应多圈锚点"},
     {"name": "CMD_STATE_SYNC_REQUEST", "value": 237, "payload_bytes": 4, "description": "按位请求静态状态、标定快照、路由和产品指纹"},
     {"name": "CMD_TASK_DIAG_SUBSCRIBE", "value": 238, "payload_bytes": 1, "description": "打开或关闭 RTOS 任务诊断按需上报"},
-    {"name": "CMD_CONTROL_TRACE_SUBSCRIBE", "value": 239, "payload_bytes": 1, "description": "打开或关闭统一下位机时间的控制跟踪流"}
+    {"name": "CMD_CONTROL_TRACE_SUBSCRIBE", "value": 239, "payload_bytes": 1, "description": "打开或关闭统一下位机时间的控制跟踪流"},
+    {"name": "CMD_SERVO_REBASE_ZERO", "value": 240, "payload_bytes": 4, "description": "按电机位图RESET硬件圈数，将当前位置logical ABS设为0并在RAM保存offset"},
+    {"name": "CMD_MOTOR_DIRECT_RELEASE", "value": 242, "payload_bytes": 4, "description": "结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际"}
   ],
   "proto_ack_status": {
     "PROTO_ACK_STATUS_OK": 0,
@@ -108,7 +112,7 @@
     "STATE_SYNC_JOINT_CALIBRATION": "同步全部有效 Auto/LUT 标定快照",
     "STATE_SYNC_SERVO_ROUTE": "同步动态舵机 BUS 路由",
     "STATE_SYNC_PRODUCT_FINGERPRINT": "同步产品配置指纹",
-    "STATE_SYNC_MULTITURN_STATE": "同步桌面 JSON 多圈恢复结果",
+    "STATE_SYNC_MULTITURN_STATE": "同步多圈恢复、logical ABS设零及上位机标定目标的最终结果",
     "STATE_SYNC_ALL": "同步全部静态运行契约"
   },
   "p4_runtime": {

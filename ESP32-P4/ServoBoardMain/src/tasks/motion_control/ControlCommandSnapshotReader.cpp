@@ -27,6 +27,10 @@ bool readCommandSnapshot(SystemRuntimeContext* runtime,
            runtime->motorTargetRaw,
            sizeof(snapshot->motorTargetRaw));
     snapshot->motorCommandToken = runtime->motor_command_token;
+    snapshot->directToken = runtime->applied_direct_token;
+    snapshot->directMotorMask = runtime->applied_direct_motor_mask;
+    snapshot->directSpeed = runtime->applied_direct_speed;
+    snapshot->directAcc = runtime->applied_direct_acc;
     snapshot->jointCommandToken = runtime->joint_command_token;
     snapshot->jointCommandAcceptedMs = runtime->joint_command_accepted_ms;
     snapshot->feedbackCommandJointMask = runtime->feedback_command_joint_mask;

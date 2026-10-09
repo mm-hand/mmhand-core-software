@@ -49,6 +49,12 @@ OBSOLETE_FIRMWARE_INDEX_FILES = (
 )
 
 _ROW_RE = re.compile(r"^P4_SAFETY_RULE\((.*)\)\s*$")
+# 旧固件自动标定编号继续解释历史日志，不再登记运行调用链。
+# CAW 是上传 LUT 的装配质量告警，继续保留活动绑定。
+RETIRED_RULE_NAMES = frozenset({
+    "SystemCalibrationStateRejected",
+    "FaultCalibration",
+})
 _ACTION_TEXT = {
     "Allow": "Allow",
     "RejectCommand": "Reject command",
@@ -155,12 +161,6 @@ GROUP_BINDINGS: dict[str, RuleBinding] = {
         "tasks/system_state/SystemEventDispatcher.cpp", "reportSafetyRuleEvent",
         "tasks/system_state/SystemEventDispatcher.cpp", "SYSTEM_EVENT_RESET",
         "ruleForSystemFaultBit"),
-    "CAL": binding(
-        "safety/policies/CalibrationSafetyPolicy.cpp", "validateCalibrationSequence",
-        "tasks/auto_calibration/CalibrationDiagnostics.cpp", "setCalibrationDiag",
-        "tasks/auto_calibration/CalibrationDiagnostics.cpp", "reportSafetyRuleEvent",
-        "tasks/auto_calibration/CalibrationDiagnostics.cpp", "CALIB_DIAG_REASON_NONE",
-        "ruleForCalibrationDiagReason"),
     "CAW": binding(
         "safety/policies/CalibrationSafetyPolicy.h", "calibrationAssemblyWarningReasonForMetrics",
         "modules/calibration/CalibrationRuntimeStore.cpp", "calibrationAssemblyWarningReasonForMetrics",
@@ -302,10 +302,19 @@ def load_rules() -> list[dict]:
 def resolve_rule_binding(rule: dict) -> RuleBinding | None:
     """按单条覆盖优先、规则族默认次之的顺序解析调用链。"""
 
+    if is_retired_rule(rule):
+        return None
     return RULE_BINDING_OVERRIDES.get(
         str(rule["name"]),
         GROUP_BINDINGS.get(str(rule["code"]).split("-", 1)[0]),
     )
+
+
+def is_retired_rule(rule: dict) -> bool:
+    """只有明确移除的固件自动标定规则退役，结果质量告警仍活动。"""
+
+    return (str(rule["code"]).startswith("CAL-")
+            or str(rule["name"]) in RETIRED_RULE_NAMES)
 
 
 def render() -> str:
@@ -351,6 +360,16 @@ def render_firmware_index_json() -> str:
 
     items: list[dict] = []
     for rule in load_rule_definitions():
+        if is_retired_rule(rule):
+            items.append({
+                "name": rule["name"],
+                "rule_id": rule["rule_id"],
+                "code": rule["code"],
+                "active": False,
+                "retired": True,
+                "retirement_reason": "Automatic calibration runs on the host; retained for historical logs.",
+            })
+            continue
         contract = resolve_rule_binding(rule)
         if contract is None:
             raise ValueError(f"missing safety binding for {rule['code']} {rule['name']}")
@@ -359,6 +378,8 @@ def render_firmware_index_json() -> str:
                 "name": rule["name"],
                 "rule_id": rule["rule_id"],
                 "code": rule["code"],
+                "active": True,
+                "retired": False,
                 "policy": {
                     "file": contract.policy.path,
                     "symbol": contract.policy.token,
@@ -390,6 +411,8 @@ def render_firmware_index_json() -> str:
                 "name": "C++ SafetyRuleId 枚举名称，用于源码内稳定引用规则。",
                 "rule_id": "规则的稳定整数编号；协议、日志和上位机按此编号关联。",
                 "code": "面向人员的规则编码；前缀表示规则所属模块，例如 ACT、CTL、SYS。",
+                "active": "是否仍存在固件运行调用链；false 表示仅保留历史日志编号。",
+                "retired": "旧固件自动标定规则已退役，不再存在 policy/caller/event/recovery 绑定。",
                 "policy": "规则判断实现位置；file 是源码路径，symbol 是判断函数或关键符号。",
                 "caller": "调用 Policy 的业务入口，说明该规则在哪条运行链路中真正执行。",
                 "event": "规则触发后提交诊断事件或故障证据的位置。",
@@ -419,13 +442,19 @@ def render_firmware_index_json() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="只检查生成文件是否最新")
+    parser.add_argument(
+        "--firmware-only", action="store_true",
+        help="只生成或检查 P4 目录头和调用索引，保留 Desktop 目录",
+    )
     args = parser.parse_args()
     expected = render()
     expected_header = render_firmware_header()
     expected_index_json = render_firmware_index_json()
     if args.check:
         stale = False
-        if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != expected:
+        if not args.firmware_only and (
+            not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != expected
+        ):
             print(f"stale generated file: {OUTPUT}")
             stale = True
         if (
@@ -445,14 +474,17 @@ def main() -> int:
                 print(f"obsolete generated file: {path}")
                 stale = True
         return 1 if stale else 0
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(expected, encoding="utf-8")
+    if not args.firmware_only:
+        OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT.write_text(expected, encoding="utf-8")
     FIRMWARE_HEADER.parent.mkdir(parents=True, exist_ok=True)
     FIRMWARE_HEADER.write_text(expected_header, encoding="utf-8")
     FIRMWARE_INDEX_JSON.write_text(expected_index_json, encoding="utf-8")
-    for path in OBSOLETE_FIRMWARE_INDEX_FILES:
-        path.unlink(missing_ok=True)
-    print(f"generated {OUTPUT}")
+    if not args.firmware_only:
+        for path in OBSOLETE_FIRMWARE_INDEX_FILES:
+            path.unlink(missing_ok=True)
+    if not args.firmware_only:
+        print(f"generated {OUTPUT}")
     print(f"generated {FIRMWARE_HEADER}")
     print(f"generated {FIRMWARE_INDEX_JSON}")
     return 0

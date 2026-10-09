@@ -14,14 +14,15 @@ P4_SRC = REPO_ROOT / "ESP32-P4" / "ServoBoardMain" / "src"
 
 
 def test_host_control_lease_policy_covers_every_servo_motion_state(tmp_path: Path) -> None:
-    compiler = shutil.which("g++") or shutil.which("clang++")
+    compiler = shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
     if compiler is None:
         pytest.skip("C++ compiler is unavailable")
 
     source = tmp_path / "host_control_lease_policy_test.cpp"
     source.write_text(
         r'''
-#include "safety/HostControlLeasePolicy.h"
+#include "safety/policies/HostLeaseSafetyPolicy.h"
+#include "safety/policies/StateAdmissionPolicy.h"
 #include "config/SafetyConfig.h"
 #include "data/ActuatorTypes.h"
 #include "data/SystemTypes.h"
@@ -38,8 +39,8 @@ int main()
                                     SERVO_TARGET_OWNER_CONTROL));
     assert(requiresHostControlLease(SYSTEM_STATE_RUN_FEEDBACK,
                                     SERVO_TARGET_OWNER_CONTROL));
-    assert(requiresHostControlLease(SYSTEM_STATE_CALIBRATION_RUNNING,
-                                    SERVO_TARGET_OWNER_CALIBRATION));
+    // Wire state 4 is retired. Neither old owner pairing may admit motion.
+    assert(!requiresHostControlLease(4, SERVO_TARGET_OWNER_CALIBRATION));
     assert(requiresHostControlLease(SYSTEM_STATE_ROPE_INIT_RUNNING,
                                     SERVO_TARGET_OWNER_CALIBRATION));
 
@@ -47,8 +48,10 @@ int main()
                                      SERVO_TARGET_OWNER_NONE));
     assert(!requiresHostControlLease(SYSTEM_STATE_RUN_DIRECT,
                                      SERVO_TARGET_OWNER_CALIBRATION));
-    assert(!requiresHostControlLease(SYSTEM_STATE_CALIBRATION_RUNNING,
-                                     SERVO_TARGET_OWNER_CONTROL));
+    assert(!requiresHostControlLease(4, SERVO_TARGET_OWNER_CONTROL));
+    assert(!p4::system::canAcceptStart(4));
+    assert(!p4::system::canAcceptRunDirect(4));
+    assert(!p4::system::canAcceptRunFeedback(4));
 
     constexpr std::uint32_t last = 100;
     assert(isHostControlLeaseFresh(last, last));
@@ -66,17 +69,19 @@ int main()
         encoding="utf-8",
     )
     executable = tmp_path / "host_control_lease_policy_test.exe"
-    subprocess.run(
-        [
-            compiler,
-            "-std=c++17",
-            f"-I{P4_SRC}",
-            str(source),
-            str(P4_SRC / "safety" / "HostControlLeasePolicy.cpp"),
-            "-o",
-            str(executable),
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-    )
+    production_sources = [
+        str(P4_SRC / "safety" / "policies" / "HostLeaseSafetyPolicy.cpp"),
+        str(P4_SRC / "safety" / "policies" / "StateAdmissionPolicy.cpp"),
+    ]
+    if Path(compiler).name.lower() in {"cl", "cl.exe"}:
+        compile_command = [
+            compiler, "/std:c++17", "/EHsc", "/utf-8", f"/I{P4_SRC}", str(source),
+            *production_sources, f"/Fo{tmp_path.resolve()}\\", f"/Fe{executable}",
+        ]
+    else:
+        compile_command = [
+            compiler, "-std=c++17", f"-I{P4_SRC}", str(source),
+            *production_sources, "-o", str(executable),
+        ]
+    subprocess.run(compile_command, check=True, cwd=REPO_ROOT)
     subprocess.run([str(executable)], check=True, cwd=REPO_ROOT)

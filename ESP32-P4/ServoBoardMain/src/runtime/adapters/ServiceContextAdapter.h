@@ -15,8 +15,6 @@ ControlServiceInputSnapshot captureControlServiceInput(
     SystemRuntimeContext* sharedData, uint32_t nowMs);
 ServoServiceInputSnapshot captureServoServiceInput(
     SystemRuntimeContext* sharedData, uint32_t nowMs);
-CalibrationServiceInputSnapshot captureCalibrationServiceInput(
-    SystemRuntimeContext* sharedData, uint32_t nowMs);
 StateServiceInputSnapshot captureStateServiceInput(
     SystemRuntimeContext* sharedData, uint32_t nowMs);
 ServiceOutputPort makeSystemServiceOutputPort(SystemRuntimeContext* sharedData);

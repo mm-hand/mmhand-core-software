@@ -40,6 +40,8 @@ inline constexpr uint8_t PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15; ///< 动态舵�
 inline constexpr uint8_t PACKET_TYPE_SAFETY_EVENT = 0x16; ///< 去重后的结构化安全规则事件
 inline constexpr uint8_t PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17; ///< 桌面 JSON 多圈恢复异步最终结果
 inline constexpr uint8_t PACKET_TYPE_CONTROL_TRACE = 0x18; ///< 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
+inline constexpr uint8_t PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19; ///< logical ABS 设零事务的最终token、成功失败位图与27路offset
+inline constexpr uint8_t PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A; ///< 通用直控目标完成总线同步写后的事务结果，与机械到位独立
 
 // Desktop -> P4 命令及 ACK 状态。
 inline constexpr uint8_t CMD_CALIBRATE = 0xCA; ///< 按当前 active scope 启动自动标定
@@ -47,7 +49,7 @@ inline constexpr uint8_t CMD_ANGLE_CTRL = 0xCB; ///< 下发完整 21 路关节�
 inline constexpr uint8_t CMD_START = 0xCC; ///< 历史启动命令，进入控制申请流程
 inline constexpr uint8_t CMD_STOP = 0xCD; ///< 停止当前运行并撤销待执行目标
 inline constexpr uint8_t CMD_RESET = 0xCE; ///< 清除允许恢复的系统故障锁存
-inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 27 路 logical ABS 直控目标，每路 int32 counts
+inline constexpr uint8_t CMD_MOTOR_POS_ABS = 0xD3; ///< 通用logical ABS直控：token、实际电机位图、27路int32 counts、速度和加速度；token=0不跟踪，位图=0用当前scope
 inline constexpr uint8_t CMD_ACTIVE_SCOPE = 0xD7; ///< 同步 active joint/motor mask 与 control enable
 inline constexpr uint8_t CMD_RUN_FEEDBACK = 0xD8; ///< 申请状态机进入负反馈运行
 inline constexpr uint8_t CMD_PAUSE = 0xD9; ///< 暂停当前负反馈或直控运行
@@ -67,6 +69,8 @@ inline constexpr uint8_t CMD_SERVO_RESET_ZERO = 0xEC; ///< 标定前归零所选
 inline constexpr uint8_t CMD_STATE_SYNC_REQUEST = 0xED; ///< 按位请求静态状态、标定快照、路由和产品指纹
 inline constexpr uint8_t CMD_TASK_DIAG_SUBSCRIBE = 0xEE; ///< 打开或关闭 RTOS 任务诊断按需上报
 inline constexpr uint8_t CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF; ///< 打开或关闭统一下位机时间的控制跟踪流
+inline constexpr uint8_t CMD_SERVO_REBASE_ZERO = 0xF0; ///< 按电机位图RESET硬件圈数，将当前位置logical ABS设为0并在RAM保存offset
+inline constexpr uint8_t CMD_MOTOR_DIRECT_RELEASE = 0xF2; ///< 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 inline constexpr uint8_t PROTO_ACK_STATUS_OK = 0; ///< 命令已同步执行成功
 inline constexpr uint8_t PROTO_ACK_STATUS_UNSUPPORTED_MODE = 1; ///< 当前状态或 owner 不允许该命令
 inline constexpr uint8_t PROTO_ACK_STATUS_QUEUED = 2; ///< 异步请求已入队，最终结果看状态包
@@ -83,13 +87,13 @@ inline constexpr uint8_t STATE_SYNC_SERVO_LOGICAL_RANGE = 4; ///< 同步 27 路�
 inline constexpr uint8_t STATE_SYNC_JOINT_CALIBRATION = 8; ///< 同步全部有效 Auto/LUT 标定快照
 inline constexpr uint8_t STATE_SYNC_SERVO_ROUTE = 16; ///< 同步动态舵机 BUS 路由
 inline constexpr uint8_t STATE_SYNC_PRODUCT_FINGERPRINT = 32; ///< 同步产品配置指纹
-inline constexpr uint8_t STATE_SYNC_MULTITURN_STATE = 64; ///< 同步桌面 JSON 多圈恢复结果
+inline constexpr uint8_t STATE_SYNC_MULTITURN_STATE = 64; ///< 同步多圈恢复、logical ABS设零及上位机标定目标的最终结果
 inline constexpr uint8_t STATE_SYNC_ALL = 127; ///< 同步全部静态运行契约
 
 // 固定 payload 长度；单位 byte，不包含命令字本身。
 inline constexpr size_t kFloatPayloadBytes = 84;
 inline constexpr size_t kMaskedFloatPayloadBytes = 88;
-inline constexpr size_t kMotorPosAbsPayloadBytes = 108;
+inline constexpr size_t kMotorPosAbsPayloadBytes = 119;
 inline constexpr size_t kMotorPosAbsOnePayloadBytes = 5;
 inline constexpr size_t kActiveScopePayloadBytes = 9;
 inline constexpr size_t kRestoreMultiTurnPayloadBytes = 112;
@@ -100,6 +104,8 @@ inline constexpr size_t kManualEncoderSinglePayloadBytes = 5;
 inline constexpr size_t kRopeInitPayloadBytes = 4;
 inline constexpr size_t kClearCalibrationScopePayloadBytes = 4;
 inline constexpr size_t kServoResetZeroPayloadBytes = 4;
+inline constexpr size_t kServoRebaseZeroPayloadBytes = 4;
+inline constexpr size_t kMotorDirectReleasePayloadBytes = 4;
 inline constexpr size_t kStateSyncRequestPayloadBytes = 4;
 inline constexpr size_t kTaskDiagSubscribePayloadBytes = 1;
 inline constexpr size_t kControlTraceSubscribePayloadBytes = 1;
@@ -135,6 +141,8 @@ inline constexpr size_t generatedCommandPayloadLength(uint8_t command)
         case CMD_STATE_SYNC_REQUEST: return kStateSyncRequestPayloadBytes;
         case CMD_TASK_DIAG_SUBSCRIBE: return kTaskDiagSubscribePayloadBytes;
         case CMD_CONTROL_TRACE_SUBSCRIBE: return kControlTraceSubscribePayloadBytes;
+        case CMD_SERVO_REBASE_ZERO: return kServoRebaseZeroPayloadBytes;
+        case CMD_MOTOR_DIRECT_RELEASE: return kMotorDirectReleasePayloadBytes;
         default: return SIZE_MAX;
     }
 }

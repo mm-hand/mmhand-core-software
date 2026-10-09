@@ -19,15 +19,7 @@ bool controlSnapshotHasActiveScope(const ControlServiceInputSnapshot& input)
 
 bool servoSnapshotIsConsistent(const ServoServiceInputSnapshot& input)
 {
-    return (input.activeMotorMask & ~kValidMotorMask) == 0 &&
-           (input.calibrationAuxMotorMask & ~kValidMotorMask) == 0;
-}
-
-bool calibrationSnapshotHasSelection(
-    const CalibrationServiceInputSnapshot& input)
-{
-    return (input.activeJointMask & kValidJointMask) != 0 &&
-           (input.activeMotorMask & kValidMotorMask) != 0;
+    return (input.activeMotorMask & ~kValidMotorMask) == 0;
 }
 
 bool stateSnapshotIsConsistent(const StateServiceInputSnapshot& input)

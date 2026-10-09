@@ -338,12 +338,21 @@ def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
     limits = load_urdf_limits(args.urdf, manifest)
     source_commit = _source_commit(args.adapter_manifest)
     fingerprint = build_fingerprint(manifest, limits, args.urdf, source_commit)
-    return {
-        args.mapping_output: render_mapping(manifest, limits, source_commit),
+    outputs = {
         args.p4_limits_output: render_p4_limits(manifest, limits),
-        args.fingerprint_output: render_fingerprint_json(fingerprint),
         args.p4_fingerprint_output: render_p4_fingerprint(fingerprint),
     }
+    if getattr(args, "firmware_only", False):
+        desktop_root = (ROOT / "desktop").resolve()
+        for path in outputs:
+            if path.resolve().is_relative_to(desktop_root):
+                raise ModelGenerationError(
+                    f"--firmware-only output cannot be inside desktop: {path}"
+                )
+    else:
+        outputs[args.mapping_output] = render_mapping(manifest, limits, source_commit)
+        outputs[args.fingerprint_output] = render_fingerprint_json(fingerprint)
+    return outputs
 
 
 def main() -> int:
@@ -356,6 +365,10 @@ def main() -> int:
     parser.add_argument("--p4-limits-output", type=Path, default=DEFAULT_P4_LIMITS)
     parser.add_argument("--p4-fingerprint-output", type=Path, default=DEFAULT_P4_FINGERPRINT)
     parser.add_argument("--check", action="store_true", help="只检查生成物是否过期")
+    parser.add_argument(
+        "--firmware-only", action="store_true",
+        help="只生成或检查 P4 头文件，保留 Desktop 当前生成物",
+    )
     args = parser.parse_args()
     try:
         outputs = build_outputs(args)

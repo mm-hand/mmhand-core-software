@@ -28,9 +28,9 @@
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/ports/SystemEventPort.h"
-#include "../../app/AppBootstrap.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 #include "../../safety/SafetyEventReporter.h"
+#include "../../runtime/ports/DirectTargetResult.h"
 #include "HostCommandRouter.h"
 
 #include <math.h>
@@ -41,6 +41,30 @@ using namespace p4::host;
 namespace p4::host {
 
 namespace {
+
+bool servoRebaseZeroPending(const SystemRuntimeContext* sharedData)
+{
+    return sharedAtomicLoad(&sharedData->servo_rebase_zero_request_token) !=
+           sharedAtomicLoad(&sharedData->servo_rebase_zero_result_token);
+}
+
+bool commandConflictsWithServoRebaseZero(uint8_t command)
+{
+    switch (command) {
+        case CMD_START:
+        case CMD_RUN_FEEDBACK:
+        case CMD_ROPE_INIT:
+        case CMD_MOTOR_POS_ABS:
+        case CMD_MOTOR_POS_ABS_ONE:
+        case CMD_ANGLE_CTRL:
+        case CMD_ANGLE_CTRL_MASKED:
+        case CMD_CALIB_LOAD_JOINT:
+        case CMD_CALIB_LOAD_LIMITS:
+            return true;
+        default:
+            return false;
+    }
+}
 
 /**
  * Calib Load 的 ABS Limit 包可能来自较早的控制策略。单腱关节加载完
@@ -114,6 +138,21 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     // 每一帧通过结构校验的上位机命令都刷新心跳，不要求它一定是运动命令。
     // SystemStateTask 在另一核心读取该字段，统一走原子接口避免租约边界读到撕裂值。
     sharedAtomicStore(&sharedData->host_rx_heartbeat_ms, nowMs);
+
+    if (servoRebaseZeroPending(sharedData) &&
+        commandConflictsWithServoRebaseZero(cmd)) {
+        sendProtoAckPacket(cmd, sharedData->system_state,
+                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
+    if (sharedAtomicLoad(&sharedData->direct_target_request_generation) !=
+            sharedAtomicLoad(&sharedData->direct_target_result_generation) &&
+        (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_SERVO_RESET_ZERO ||
+         cmd == CMD_RESTORE_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
+        sendProtoAckPacket(cmd, sharedData->system_state,
+                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+        return;
+    }
 
     if (cmd == CMD_HOST_HEARTBEAT)
     {
@@ -210,17 +249,10 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     if (cmd == CMD_CALIBRATE)
     {
-        if (!activeManualReferencesReady(sharedData)) {
-            sendProtoAckPacket(
-                CMD_CALIBRATE,
-                sharedData->system_state,
-                PROTO_ACK_STATUS_MANUAL_REFERENCE_REQUIRED);
-        } else {
-            postSystemEvent(sharedData, SYSTEM_EVENT_CALIBRATE);
-            sendProtoAckPacket(CMD_CALIBRATE,
-                               sharedData->system_state,
-                               PROTO_ACK_STATUS_QUEUED);
-        }
+        // 保留旧命令编号和帧长度，明确拒绝已迁至上位机的固件标定入口。
+        sendProtoAckPacket(CMD_CALIBRATE,
+                           sharedData->system_state,
+                           PROTO_ACK_STATUS_UNSUPPORTED_MODE);
         return;
     }
 
@@ -323,13 +355,37 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
 
     if (cmd == CMD_MOTOR_POS_ABS)
     {
-        int32_t motorTargets[SERVO_TOTAL_NUM] = {0};
-        if (parseInt32ArrayBigEndian(frame + 1,
-                                     frameLen - 1,
-                                     motorTargets,
-                                     SERVO_TOTAL_NUM)) {
-            upperApplyMotorTargets(sharedData, motorTargets, SERVO_TOTAL_NUM);
+        uint8_t status = PROTO_ACK_STATUS_QUEUED;
+        int32_t targets[SERVO_TOTAL_NUM] = {};
+        const uint32_t token = frameLen == 1 + kMotorPosAbsPayloadBytes
+            ? readU32BigEndian(frame + 1) : 0;
+        const uint32_t wireMask = frameLen == 1 + kMotorPosAbsPayloadBytes
+            ? readU32BigEndian(frame + 5) : 0;
+        const uint32_t activeMask =
+            sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+        const uint32_t requestedMask = wireMask != 0 ? wireMask : activeMask;
+        if (frameLen != 1 + kMotorPosAbsPayloadBytes ||
+            requestedMask == 0 || (requestedMask & ~activeMask) != 0 ||
+            !parseInt32ArrayBigEndian(frame + 9, SERVO_TOTAL_NUM * 4U,
+                                       targets, SERVO_TOTAL_NUM)) {
+            status = PROTO_ACK_STATUS_INVALID_DATA;
+        } else if (!upperApplyMotorTargets(
+            sharedData, targets, SERVO_TOTAL_NUM, token, requestedMask,
+            readU16BigEndian(frame + 117), frame[119])) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         }
+        sendProtoAckPacket(CMD_MOTOR_POS_ABS, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_MOTOR_DIRECT_RELEASE)
+    {
+        const uint8_t status =
+            frameLen != 1 + kMotorDirectReleasePayloadBytes
+                ? PROTO_ACK_STATUS_INVALID_DATA
+                : upperReleaseMotorDirect(sharedData, readU32BigEndian(frame + 1))
+                    ? PROTO_ACK_STATUS_QUEUED : PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        sendProtoAckPacket(CMD_MOTOR_DIRECT_RELEASE, sharedData->system_state, status);
         return;
     }
 
@@ -376,6 +432,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     {
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (frameLen < 1 + kRestoreMultiTurnPayloadBytes) {
+            status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+        } else if (servoRebaseZeroPending(sharedData)) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
                     validMotorChannelMask()) == 0) {
@@ -458,7 +516,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
                    sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
@@ -493,10 +550,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                     (previousValid & ~updateMask) | (validMask & updateMask);
                 sharedAtomicStore(&sharedData->motor_abs_limit_valid_bitmap,
                                   appliedValidMask);
-                // Calib Load 是恢复事务，不代表刚完成一轮自动标定。
-                // 从事务第一包起清除历史 SUCCESS/WARN，避免重启上位机后
-                // 状态栏保留旧结果并让用户误以为它是控制门禁。
-                g_calibrationStatus = CALIB_STATUS_IDLE;
                 FW_LOG_INFO_PRINTF(
                     "[UPPER] CALIB_LOAD_LIMITS update=0x%08lX valid=0x%08lX\r\n",
                     (unsigned long)updateMask,
@@ -515,7 +568,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_INVALID_DATA;
         } else if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
                    sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-                   sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
                    sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
@@ -639,13 +691,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
                     if (result.success) {
                         updateCalibrationAssemblyWarning(
                             sharedData, jointIndex, result);
-                        // Calib Load 是数据恢复事务，不是一轮自动标定。
-                        // SUCCESS/WARN 仅由真实标定完成事件产生，避免重启
-                        // 上位机后状态栏长期停在 CALIB SUCCESS 并干扰控制。
-                        g_calibrationStatus = CALIB_STATUS_IDLE;
-                        sharedAtomicFetchAnd(
-                            &sharedData->system_fault_bitmap,
-                            (uint32_t)~SYSTEM_FAULT_CALIBRATION);
                     }
                     FW_LOG_INFO_PRINTF(
                         "[UPPER] CALIB_LOAD J%02u auto=%u->%u manualCrc=0x%08lX current=%.3f..%.3f\r\n",
@@ -738,7 +783,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
             sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
             sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING ||
             sharedData->system_state == SYSTEM_STATE_PAUSED;
 
@@ -802,7 +846,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         uint8_t status = PROTO_ACK_STATUS_OK;
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
             sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
@@ -815,9 +858,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             clearAllJointCalibrationResults();
             clearCalibrationAssemblyWarnings(
                 sharedData, kManualEncoderReferenceFullMask);
-            g_calibrationStatus = CALIB_STATUS_IDLE;
-            sharedAtomicFetchAnd(&sharedData->system_fault_bitmap,
-                                 (uint32_t)~SYSTEM_FAULT_CALIBRATION);
             postSystemEvent(sharedData, SYSTEM_EVENT_REEVALUATE_READY);
             FW_LOG_INFO_PRINTLN("[UPPER] CLEAR_CALIBRATION: joint calibration and ABS limits cleared");
         }
@@ -838,7 +878,6 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         const uint32_t jointMask = jointMaskForMotorMask(motorMask);
         if (sharedData->system_state == SYSTEM_STATE_RUN_DIRECT ||
             sharedData->system_state == SYSTEM_STATE_RUN_FEEDBACK ||
-            sharedData->system_state == SYSTEM_STATE_CALIBRATION_RUNNING ||
             sharedData->system_state == SYSTEM_STATE_ROPE_INIT_RUNNING) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (motorMask == 0 || jointMask == 0 ||
@@ -888,7 +927,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else if (sharedAtomicLoad(
                        &sharedData->servo_reset_zero_status) ==
-                   SERVO_RESET_ZERO_STATUS_RUNNING) {
+                       SERVO_RESET_ZERO_STATUS_RUNNING ||
+                   servoRebaseZeroPending(sharedData)) {
             status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
         } else {
             sharedAtomicStore(
@@ -912,6 +952,81 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         }
         sendProtoAckPacket(
             CMD_SERVO_RESET_ZERO, sharedData->system_state, status);
+        return;
+    }
+
+    if (cmd == CMD_SERVO_REBASE_ZERO)
+    {
+        uint8_t status = PROTO_ACK_STATUS_QUEUED;
+        const uint32_t requestedMask =
+            frameLen == 1 + kServoRebaseZeroPayloadBytes
+                ? readU32BigEndian(frame + 1)
+                : 0;
+        // 必须先取命令 mutex，不能在短跨核临界区内等待 RTOS mutex。
+        // 它与 pending→applied 提升串行，接受归零即撤销旧坐标待执行目标。
+        SemaphoreHandle_t commandLock = sharedData->commandStateMutex;
+        if (commandLock &&
+            xSemaphoreTake(commandLock, pdMS_TO_TICKS(10)) != pdTRUE) {
+            sendProtoAckPacket(CMD_SERVO_REBASE_ZERO,
+                               sharedData->system_state,
+                               PROTO_ACK_STATUS_UNSUPPORTED_MODE);
+            return;
+        }
+        {
+            // 与状态机授予运动 owner 的最后一步使用同一短临界区。
+            // 不在此处访问 UART；已有结果和 offset 保留到新事务完整提交。
+            SharedSafetyGuard guard;
+            const uint8_t state = sharedData->system_state;
+            const bool safeState =
+                state == SYSTEM_STATE_UNCONTROLLABLE ||
+                state == SYSTEM_STATE_IDLE ||
+                state == SYSTEM_STATE_READY ||
+                state == SYSTEM_STATE_RECOVERY_REQUIRED;
+            const uint32_t onlineMask =
+                sharedAtomicLoad(&sharedData->servo_online_bitmap);
+            const uint32_t controllableMask =
+                sharedAtomicLoad(&sharedData->servo_route_controllable_bitmap);
+            const uint32_t recoveryBusyMask =
+                sharedAtomicLoad(&sharedData->servo_recovery_pending_bitmap) &
+                ~sharedAtomicLoad(&sharedData->servo_recovery_failed_bitmap);
+            if (requestedMask == 0 ||
+                (requestedMask & ~validMotorChannelMask()) != 0 ||
+                (requestedMask & ~onlineMask) != 0 ||
+                (requestedMask & ~controllableMask) != 0) {
+                status = PROTO_ACK_STATUS_INVALID_DATA;
+            } else if (!safeState || sharedData->control_enabled != 0 ||
+                       sharedData->servo_target_owner != SERVO_TARGET_OWNER_NONE ||
+                       servoRebaseZeroPending(sharedData) ||
+                       sharedAtomicLoad(&sharedData->restore_multi_turn_request_token) !=
+                           sharedAtomicLoad(&sharedData->restore_multi_turn_result_token) ||
+                       sharedAtomicLoad(&sharedData->servo_reset_zero_status) ==
+                           SERVO_RESET_ZERO_STATUS_RUNNING ||
+                       (requestedMask & recoveryBusyMask) != 0) {
+                status = PROTO_ACK_STATUS_UNSUPPORTED_MODE;
+            } else {
+                sharedData->pending_direct_valid = 0;
+                sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
+                sharedData->pending_direct_motor_mask = 0;
+                sharedData->pending_direct_joint_mask = 0;
+                sharedData->pending_direct_require_can = 0;
+                sharedData->direct_reject_reason = DIRECT_REJECT_STALE;
+                sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+                sharedData->pending_direct_token = 0;
+                sharedData->direct_release_generation = 0;
+                sharedData->applied_direct_token = 0;
+                sharedData->applied_direct_motor_mask = 0;
+                sharedAtomicStore(&sharedData->servo_rebase_zero_request_mask,
+                                  requestedMask);
+                uint32_t token = sharedAtomicLoad(
+                    &sharedData->servo_rebase_zero_request_token) + 1U;
+                if (token == 0) token = 1;
+                sharedAtomicStore(&sharedData->servo_rebase_zero_request_token,
+                                  token);
+            }
+        }
+        if (commandLock) xSemaphoreGive(commandLock);
+        sendProtoAckPacket(CMD_SERVO_REBASE_ZERO,
+                           sharedData->system_state, status);
         return;
     }
 

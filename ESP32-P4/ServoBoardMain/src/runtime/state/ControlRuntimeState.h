@@ -24,7 +24,6 @@ struct ControlRuntimeState {
     volatile uint32_t feedback_collision_transition_count; ///< 碰撞状态切换计数。
     volatile uint8_t feedback_recovery_pending; ///< Rope Init 后恢复反馈目标。
     volatile uint32_t feedback_recovery_request_sequence; ///< 待恢复关节命令序号。
-    volatile uint8_t calibration_rope_init_pending; ///< 当前 Rope Init 属于标定完成收尾。
     volatile uint32_t emergency_stop_request_token; ///< E-STOP 请求代际。
     volatile uint32_t servo_emergency_stop_token; ///< 舵机断扭矩请求代际。
     volatile uint8_t emergency_stop_latched; ///< E-STOP 最终发送门禁。

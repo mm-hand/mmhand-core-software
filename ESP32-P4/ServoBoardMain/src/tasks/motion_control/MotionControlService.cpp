@@ -99,7 +99,7 @@ struct ControlServiceRuntime {
     float singleTendonVelocityFfCounts[ENCODER_TOTAL_NUM];
     RemoteSensorData_t sensorData;
     MappedAngleData_t mappedData;
-    // 标定结果由 AutoCalibration/HostComm 跨核更新；控制周期只使用同代一致快照。
+    // 上位机上传的 LUT 由 HostComm 跨核更新；控制周期只使用同代一致快照。
     JointCalibrationRuntimeSnapshot calibrationSnapshot[ENCODER_TOTAL_NUM];
     uint32_t calibrationSnapshotValidMask;
     uint32_t overloadFaultLatched;
@@ -128,6 +128,7 @@ struct ControlServiceRuntime {
     uint32_t controlTraceDropped;
     ControlTraceData_t cycleTrace;
     uint8_t directRunDoneStableCount;
+    uint32_t directRunDoneGeneration;
     uint32_t feedbackRunToken;
     uint32_t feedbackRunStartMs;
     uint32_t feedbackRunInsideToleranceSinceMs;
@@ -918,6 +919,11 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
         // 每个循环生成一个 batch 并用 overwrite 发布，下游始终看到最新完整命令集。
         targetBatch.timestamp = nowMs;
         targetBatch.source = SERVO_TARGET_OWNER_CONTROL;
+        if (commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR &&
+            commandSnapshot.motorDirectCommandSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
+            targetBatch.directGeneration = commandSnapshot.motorDirectCommandGeneration;
+            targetBatch.directToken = commandSnapshot.directToken;
+        }
 
         ServoAngleData_t servoData;
         memset(&servoData, 0, sizeof(servoData));
@@ -1566,8 +1572,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             {
                 // 直控模式绕过关节 PID，将上位机电机目标直接发给对应物理通道。
                 const uint32_t activeMotorMask =
-                    sharedAtomicLoad(&sharedData->active_motor_mask) &
-                    validMotorChannelMask();
+                    commandSnapshot.directMotorMask & validMotorChannelMask();
                 for (uint8_t ch = 0; ch < SERVO_TOTAL_NUM; ch++)
                 {
                     if (((activeMotorMask >> ch) & 0x1UL) == 0) {
@@ -1578,7 +1583,7 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
                         targetPos = commandSnapshot.motorTargetRaw[ch];
                     }
                     appendServoTarget(&targetBatch, ch, targetPos,
-                                      SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+                                      commandSnapshot.directSpeed, commandSnapshot.directAcc);
                 }
             }
             else
@@ -2000,7 +2005,15 @@ bool stepMotionControlService(SystemRuntimeContext* sharedData,
             if (!sharedData->controlTraceQueue.send(trace)) ++runtime.controlTraceDropped;
         }
 
-        if (directRunningState &&
+        if (runtime.directRunDoneGeneration != commandSnapshot.motorDirectCommandGeneration) {
+            runtime.directRunDoneGeneration = commandSnapshot.motorDirectCommandGeneration;
+            directRunDoneStableCount = 0;
+        }
+        const bool directBatchExecuted =
+            sharedAtomicLoad(&sharedData->direct_target_result_generation) ==
+                commandSnapshot.motorDirectCommandGeneration &&
+            sharedAtomicLoad(&sharedData->direct_target_status) == DIRECT_TARGET_APPLY_APPLIED;
+        if (directRunningState && directBatchExecuted &&
             commandSnapshot.controlMode == CONTROL_MODE_DIRECT_MOTOR &&
             commandSnapshot.motorDirectCommandSource == MOTOR_DIRECT_SOURCE_ABSOLUTE) {
             // 当所有激活电机连续多个控制帧保持在容差内时，直控 absolute RUN 完成。

@@ -87,3 +87,19 @@ def test_gui_failure_still_stops_ros2_bridge(monkeypatch):
     with pytest.raises(RuntimeError, match="GUI failure"):
         ui_runner.run_ui(backend=Mock())
     bridge.stop.assert_called_once()
+
+
+def test_gui_gc_is_installed_before_serial_workers_start(monkeypatch):
+    from desktop.ui import ui_qt_compat as qt
+
+    calls = []
+    backend = Mock()
+    app = object()
+    monkeypatch.setattr(ui_runner, "_configure_gui_diagnostics",
+                        lambda: calls.append("diagnostics"))
+    monkeypatch.setattr(qt, "ensure_app", lambda: calls.append("gui_gc") or app)
+    backend.connect.side_effect = lambda _port: calls.append("connect") or True
+    monkeypatch.setattr(ui_runner, "run", lambda *_args, **_kwargs: calls.append("gui"))
+
+    assert ui_runner.run_ui(port="PORT", backend=backend, ros2_enabled=False) == 0
+    assert calls == ["diagnostics", "gui_gc", "connect", "gui"]

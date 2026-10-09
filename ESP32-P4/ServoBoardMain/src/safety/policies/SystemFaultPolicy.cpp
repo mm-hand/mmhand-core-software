@@ -2,7 +2,7 @@
  * @file SystemFaultAggregator.cpp
  * @brief 汇总系统当前故障，并按运动态计算阻断故障。
  *
- * 输入：CAN/磁编、舵机反馈、标定与多圈原子状态。
+ * 输入：CAN/磁编、舵机反馈与多圈原子状态。
  * 输出：无副作用 fault bitmap；禁止在这里执行 E-STOP、owner 释放或状态迁移。
  */
 #include "SystemFaultPolicy.h"
@@ -65,9 +65,6 @@ uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
     if (sharedAtomicLoad(&sharedData->overload_fault_bitmap) != 0) {
         faults |= SYSTEM_FAULT_OVERLOAD;
     }
-    if (sharedAtomicLoad(&sharedData->calibration_fault_latched) != 0) {
-        faults |= SYSTEM_FAULT_CALIBRATION;
-    }
     if ((sharedAtomicLoad(&sharedData->multi_turn_unknown_bitmap) &
          p4::state::requiredMotorMask(sharedData)) != 0) {
         faults |= SYSTEM_FAULT_MULTITURN_UNKNOWN;
@@ -76,7 +73,7 @@ uint32_t collectSystemFaults(SystemRuntimeContext* sharedData)
            sharedAtomicLoad(&sharedData->system_fault_latched_bitmap);
 }
 
-uint32_t blockingFaultsForState(SystemRuntimeContext* sharedData,
+uint32_t blockingFaultsForState(SystemRuntimeContext*,
                                 uint8_t state,
                                 uint32_t faults)
 {
@@ -87,17 +84,6 @@ uint32_t blockingFaultsForState(SystemRuntimeContext* sharedData,
         case SYSTEM_STATE_RUN_FEEDBACK:
         case SYSTEM_STATE_ROPE_INIT_RUNNING:
             return faults;
-
-        case SYSTEM_STATE_CALIBRATION_RUNNING:
-            // 标定会重建多圈；预检阶段还允许通信任务完成舵机/CAN 恢复。
-            if (sharedData &&
-                sharedAtomicLoad(&sharedData->calibration_motion_started) == 0) {
-                return faults &
-                       ~(SYSTEM_FAULT_CAN_OFFLINE |
-                         SYSTEM_FAULT_MULTITURN_UNKNOWN |
-                         SYSTEM_FAULT_SERVO_OFFLINE);
-            }
-            return faults & ~SYSTEM_FAULT_MULTITURN_UNKNOWN;
 
         default:
             return 0;

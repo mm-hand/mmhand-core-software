@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from desktop.core.data_models import HandModel
 from desktop.core.protocol import ENCODER_COUNT, SYSTEM_STATE_UNCONTROLLABLE
 from desktop.ui.ui_control_panels import ControlPanel
-from desktop.ui.ui_qt_compat import QtWidgets, ensure_app
+from desktop.ui.ui_qt_compat import QtCore, QtWidgets, ensure_app
 
 
 _APP = ensure_app()
@@ -147,6 +147,19 @@ def test_calibration_load_signal_survives_mode_body_rebuild():
     panel.calib_file_load_btn.click()
 
     assert calls == ["load-file"]
+
+
+def test_body_clear_drops_motor_route_items_before_old_table_destruction():
+    panel = _panel()
+    assert any(item is not None for item in panel.motor_bus_items)
+    assert any(item is not None for item in panel.motor_route_items)
+
+    panel._clear_body()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+
+    assert panel.motor_bus_items == []
+    assert panel.motor_route_items == []
+    panel._refresh_motor_route_item(0, HandModel())
 
 
 def test_load_calibration_opens_snapshot_directory_then_restores_selected_file(monkeypatch):
