@@ -8,6 +8,8 @@
 禁止依赖：禁止依赖 Qt/UI、页面控件或直接操作串口对象。
 """
 
+from typing import override
+
 from desktop.paths import CALIB_LOAD_SNAPSHOT_PATH
 
 from ..calibration_diagnostics import format_calibration_warning
@@ -24,6 +26,7 @@ class HostCalibrationWorkflowService(CalibrationWorkflowService):
         super().__init__(controller, snapshot_path)
         self._host_worker_active = False
 
+    @override
     def is_host_calibration_active(self) -> bool:
         with self._lock:
             return self._host_worker_active
@@ -48,6 +51,7 @@ class HostCalibrationWorkflowService(CalibrationWorkflowService):
         """保留显式请求原 P4 工作流的入口。"""
         return super().begin_calibration(**kwargs)
 
+    @override
     def begin_calibration(
         self,
         *,
