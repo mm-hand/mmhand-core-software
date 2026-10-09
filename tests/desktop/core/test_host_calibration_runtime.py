@@ -7,6 +7,8 @@ import pytest
 
 from desktop.core.core_logic import HandController
 from desktop.core.host_calibration import runtime
+from desktop.core.communication.feedback_history import TimestampedFeedbackHistory
+from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 from desktop.core.host_calibration.math import (
     TendonRawFitBuffer, build_calibration_result, build_tendon_lut,
 )
@@ -56,6 +58,104 @@ def io(monkeypatch):
 def test_empty_batch_keeps_original_initial_state_behavior(io):
     assert io.publish({}, 400, 20)
     io.controller.comm.send_command.assert_not_called()
+
+
+def _record_fit_raw(history, timestamp, value):
+    values = [0] * 21
+    values[1] = value
+    history.record('encoder_raw', timestamp, values, 2, 100 + timestamp / 1000)
+
+
+def _record_fit_abs(history, timestamp, value):
+    values = [0] * 27
+    values[2] = value
+    history.record('servo_abs', timestamp, values, 4, 200 + timestamp / 1000)
+
+
+def _fit_window(io):
+    history = TimestampedFeedbackHistory()
+    io.controller.comm.feedback_history = history
+    _record_fit_raw(history, 0, 10000)
+    _record_fit_abs(history, 10, 300)
+    return history, io.begin_lut_sampling(1, (2,))
+
+
+def test_lut_fit_pairs_p4_time_instead_of_latest_model_and_never_waits(io, monkeypatch):
+    history, window = _fit_window(io)
+    for timestamp in (20, 40, 60, 80, 100):
+        _record_fit_raw(history, timestamp, 10000 - 10 * timestamp)
+    for timestamp in (30, 50, 70, 90, 110):
+        _record_fit_abs(history, timestamp, 100 + 20 * timestamp)
+    # These independently updated getters deliberately describe another pair.
+    io.controller.current_state.encoders[1].raw_sensor = 5000
+    io.controller.current_state.servo_angles[2] = -9999
+    monkeypatch.setattr(io, 'sleep_ms', lambda *_: pytest.fail('fit must not wait during release'))
+    fit = io.finish_lut_sampling(window)
+    assert fit.count >= 3
+    for sample in fit.samples:
+        assert sample.primary_abs == 100 + 2 * (sample.encoder - 6384)
+        assert sample.secondary_abs == 0
+    diagnostics = io._lut_sampling_diagnostics[1]
+    assert (diagnostics['start_ms'], diagnostics['end_ms']) == (10, 100)
+    assert diagnostics['raw_gap_ms'] == diagnostics['abs_gap_ms'] == 20
+    assert diagnostics['fit_points'] == len(diagnostics['samples']) == fit.count
+    assert fit.samples[0].encoder == 6484
+    assert fit.samples[-1].encoder == 7384
+    io.controller.comm.send_command.assert_not_called()
+
+
+@pytest.mark.parametrize('change', ['reset', 'source', 'direction'])
+def test_lut_fit_rejects_coordinate_or_source_change_without_fallback(io, change):
+    history, window = _fit_window(io)
+    _record_fit_raw(history, 100, 9000)
+    _record_fit_abs(history, 110, 2300)
+    if change == 'reset':
+        history.reset()
+    elif change == 'source':
+        io.controller.comm.feedback_history = TimestampedFeedbackHistory()
+    else:
+        io.set_direction(1, 1)
+    with pytest.raises(TimeAlignmentError):
+        io.finish_lut_sampling(window)
+    assert io.lut_sampling_error
+    assert io.failure_message(16) == io.lut_sampling_error
+    assert 1 not in io._lut_sampling_diagnostics
+    io.controller.comm.send_command.assert_not_called()
+
+
+def test_lut_fit_with_insufficient_common_travel_reports_counts(io):
+    history, window = _fit_window(io)
+    _record_fit_raw(history, 100, 9990)
+    _record_fit_abs(history, 110, 310)
+    with pytest.raises(TimeAlignmentError, match='insufficient common-time LUT samples'):
+        io.finish_lut_sampling(window)
+    assert 'fit=2' in io.lut_sampling_error
+    assert io._lut_sampling_diagnostics[1]['fit_points'] == 2
+
+
+def test_lut_fit_with_no_common_time_rejects_latest_value_pairing(io):
+    history, window = _fit_window(io)
+    history.reset()
+    _record_fit_raw(history, 0, 10000)
+    _record_fit_raw(history, 100, 9000)
+    _record_fit_abs(history, 200, 4000)
+    _record_fit_abs(history, 300, 5000)
+    window = io.begin_lut_sampling(1, (2,))
+    _record_fit_raw(history, 120, 8800)
+    _record_fit_abs(history, 320, 5200)
+    with pytest.raises(TimeAlignmentError, match='no common valid'):
+        io.finish_lut_sampling(window)
+
+
+def test_old_sampling_window_cannot_remove_new_active_window(io):
+    history, old = _fit_window(io)
+    active = io.begin_lut_sampling(1, (2,))
+    with pytest.raises(TimeAlignmentError, match='not active'):
+        io.finish_lut_sampling(old)
+    _record_fit_raw(history, 50, 9500)
+    _record_fit_raw(history, 100, 9000)
+    _record_fit_abs(history, 110, 2300)
+    assert io.finish_lut_sampling(active).count >= 3
 
 
 def test_encoder_raw_uses_packet_age_and_fixed_installation_direction(io):

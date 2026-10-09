@@ -5,6 +5,7 @@ import pytest
 from desktop.core import protocol
 from desktop.core.host_calibration import config, dual_motor as dual
 from desktop.core.host_calibration.math import TendonRawFitBuffer
+from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 
 
 class FakeIO:
@@ -538,6 +539,62 @@ def test_dual_lut_build_failure_keeps_original_mechanical_commit_branch(monkeypa
     assert not outcome['result']['tendonLutValid']
     assert outcome['result']['tendonLutCount'] == 0
     assert len(outcome['limits']) == 2
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_dual_exchange_replaces_complete_fit_and_rejects_alignment_failure(monkeypatch, fail):
+    io = FakeIO()
+    worker = machine(io)
+    events = []
+    window = object()
+    fit = TendonRawFitBuffer()
+    for sample in ((4300, 700, 200), (4650, 800, 150), (5000, 900, 100)):
+        fit.append(*sample)
+    monkeypatch.setattr(worker, '_wait_motor_target', lambda *_: True)
+    monkeypatch.setattr(worker, '_find_tight', lambda *_: (120, 11384, 5000, 190))
+
+    def preload(*_args):
+        events.append('preload')
+        return 20, 11384, 5000, 190
+
+    def begin(joint, motors):
+        assert (joint, motors) == (16, (20, 21))
+        events.append('begin')
+        return window
+
+    def exchange(*args):
+        assert args[-1] is None  # Independent getters cannot enter the buffer.
+        events.append('exchange')
+        return 80, -60, 12084, 4300, 250
+
+    def finish(value):
+        assert value is window
+        events.append('finish')
+        if fail:
+            raise TimeAlignmentError('raw/ABS coverage missing')
+        return fit
+
+    monkeypatch.setattr(worker, '_find_secondary_preload', preload)
+    monkeypatch.setattr(worker, '_find_exchange', exchange)
+    io.begin_lut_sampling, io.finish_lut_sampling = begin, finish
+    original_builder = dual.build_tendon_lut
+
+    def build(calib_io, joint, result, primary, secondary, count, raw):
+        assert raw is fit and raw.count == 3
+        assert [(s.primary_abs, s.secondary_abs) for s in raw.samples] == [(700, 200), (800, 150), (900, 100)]
+        return original_builder(calib_io, joint, result, primary, secondary, count, raw)
+
+    monkeypatch.setattr(dual, 'build_tendon_lut', build)
+    result = worker.calibrate()
+    assert events == ['preload', 'begin', 'exchange', 'finish']
+    if fail:
+        assert result is None
+        assert worker.reason == protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED
+        assert io.limits == {}
+    else:
+        assert result is not None and result['result']['tendonLutValid']
+        assert fit.count == 3
+        assert set(io.limits) == {20, 21}
 
 
 def test_run_dual_preserves_preflight_failure_status_without_mechanical_commands():

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import threading
 import time
 
@@ -21,6 +22,9 @@ from ..calibration_snapshot import (
     CalibrationSnapshotStore, update_snapshot_multiturn_anchors,
 )
 from ..data_models import HandModel
+from ..communication.feedback_history import (
+    FeedbackCursor, FeedbackHistoryError, TimestampedFeedbackHistory,
+)
 from ..motor_mapping import MOTOR_TO_JOINT_INDEX
 from ..protocol import (
     CALIB_DIAG_PHASE_NONE, CALIB_DIAG_PHASE_SEQUENCE,
@@ -43,7 +47,21 @@ from .config import (
     kFeedbackReadyServoTimeoutMs, kServoRecoveryStableSamples,
     kServoRecoveryTimeoutMs, kHostTargetResultTimeoutMs, kHostRebaseFeedbackTimeoutMs,
     kOverloadLoadThreshold, load_magnitude,
+    kTendonFitSampleStepDeg,
 )
+from .math import TendonRawFitBuffer, encoder_count_to_deg, wrap_encoder_delta
+from .time_alignment import TimeAlignmentError, align_feedback
+
+
+@dataclass(frozen=True)
+class LutSamplingWindow:
+    """A movement phase in one feedback history and logical coordinate epoch."""
+
+    history: TimestampedFeedbackHistory
+    cursor: FeedbackCursor
+    joint: int
+    motors: tuple[int, ...]
+    direction: int
 
 
 class HostCalibrationIO:
@@ -65,6 +83,9 @@ class HostCalibrationIO:
         self._motion_scope = self.selected_motor_mask
         self._limits = {}
         self._committed_joint_results = {}
+        self._lut_sampling_windows = {}
+        self._lut_sampling_diagnostics = {}
+        self.lut_sampling_error = ''
         self._directions = [default_encoder_direction(j) for j in range(ENCODER_COUNT)]
         self._manual = None
         self._last_diag = None
@@ -200,6 +221,88 @@ class HostCalibrationIO:
                 getattr(state, 'servo_telem_last_rx_ts', 0)) > kFeedbackReadyServoTimeoutMs):
             return None
         return int(state.servo_load[motor])
+
+    def begin_lut_sampling(self, joint, motors):
+        """Start independent raw(t)/ABS(t) tables without polling latest values."""
+        joint, motors = int(joint), tuple(int(motor) for motor in motors)
+        self.lut_sampling_error = ''
+        self._lut_sampling_diagnostics.pop(joint, None)
+        if (not 0 <= joint < ENCODER_COUNT or
+                not self.selected_joint_mask & (1 << joint) or
+                motors != joint_motors(joint)):
+            self.lut_sampling_error = 'time-aligned LUT sampling scope does not match joint'
+            raise TimeAlignmentError(self.lut_sampling_error)
+        history = getattr(self.controller.comm, 'feedback_history', None)
+        if not isinstance(history, TimestampedFeedbackHistory):
+            self.lut_sampling_error = 'time-aligned LUT sampling requires P4 packet history'
+            raise TimeAlignmentError(self.lut_sampling_error)
+        window = LutSamplingWindow(history, history.mark(), joint, motors,
+                                   self.direction(joint))
+        self._lut_sampling_windows[joint] = window
+        return window
+
+    def finish_lut_sampling(self, window):
+        """Fit both time streams and retain the old 5-degree spatial sample rule.
+
+        This is pure processing of the packets already received. In particular,
+        it must not wait here: the single-tendon caller has not published its
+        final release-position hold until its step returns.
+        """
+        try:
+            if (not isinstance(window, LutSamplingWindow) or
+                    self._lut_sampling_windows.get(window.joint) is not window):
+                raise TimeAlignmentError('time-aligned LUT sampling window is not active')
+            self._lut_sampling_windows.pop(window.joint)
+            if (getattr(self.controller.comm, 'feedback_history', None) is not window.history or
+                    self.direction(window.joint) != window.direction):
+                raise TimeAlignmentError('time-aligned LUT sampling source or direction changed')
+            aligned = align_feedback(
+                window.history.read(window.cursor), window.joint, window.motors,
+                window.direction, raw_max_gap_ms=kEncoderTrustedSampleMaxAgeMs,
+                abs_max_gap_ms=kFeedbackReadyServoTimeoutMs)
+            fit = TendonRawFitBuffer()
+            first = aligned.samples[0]
+            fit.append(first.encoder, first.primary_abs, first.secondary_abs)
+            fit.next_travel_deg = kTendonFitSampleStepDeg
+            selected = [first]
+            for sample in aligned.samples[1:]:
+                count = fit.count
+                travel = abs(encoder_count_to_deg(
+                    wrap_encoder_delta(sample.encoder, first.encoder)))
+                fit.maybe_append(travel, sample.encoder, sample.primary_abs,
+                                 sample.secondary_abs)
+                if fit.count > count:
+                    selected.append(sample)
+            last = aligned.samples[-1]
+            count = fit.count
+            if not fit.append(last.encoder, last.primary_abs, last.secondary_abs):
+                raise TimeAlignmentError('time-aligned LUT endpoint buffer is full')
+            if fit.count > count:
+                selected.append(last)
+            summary = dict(raw_points=aligned.raw_point_count,
+                           abs_points=aligned.abs_point_count,
+                           paired_points=len(aligned.samples), fit_points=fit.count,
+                           start_ms=aligned.overlap_start_ms,
+                           end_ms=aligned.overlap_end_ms,
+                           raw_gap_ms=aligned.max_raw_gap_ms,
+                           abs_gap_ms=aligned.max_abs_gap_ms)
+            self._lut_sampling_diagnostics[window.joint] = dict(
+                summary, samples=tuple(selected))
+            self.trace('LUT_TIME_FIT', window.joint, window.motors[0], **summary)
+            for sample in selected:
+                self.trace('LUT_TIME_SAMPLE', window.joint, window.motors[0],
+                           t=sample.timestamp_ms, encoder=sample.encoder,
+                           primary_abs=sample.primary_abs,
+                           secondary_abs=sample.secondary_abs,
+                           raw_t=sample.raw_bracket_ms, abs_t=sample.abs_bracket_ms)
+            if fit.count < 3:
+                raise TimeAlignmentError(
+                    f'insufficient common-time LUT samples: raw={aligned.raw_point_count} '
+                    f'ABS={aligned.abs_point_count} paired={len(aligned.samples)} fit={fit.count}')
+            return fit
+        except (FeedbackHistoryError, TimeAlignmentError) as exc:
+            self.lut_sampling_error = str(exc)
+            raise TimeAlignmentError(str(exc)) from exc
 
     def direction(self, joint):
         return self._directions[joint]
@@ -575,6 +678,8 @@ class HostCalibrationIO:
 
     def prepare_joint(self, joint, mask):
         self.clear_limits(joint)
+        self._lut_sampling_windows.pop(joint, None)
+        self.lut_sampling_error = ''
         self._committed_joint_results.pop(joint, None)
         if not self._rebase(mask):
             if self._rebase_zero_applied:
@@ -685,6 +790,8 @@ class HostCalibrationIO:
         return False
 
     def failure_message(self, reason):
+        if self.lut_sampling_error:
+            return self.lut_sampling_error
         if self.motion_publish_error:
             return self.motion_publish_error
         if isinstance(reason, int):
@@ -869,6 +976,7 @@ class HostCalibrationIO:
             finished_ok, message = finish_dual_zero(self, completed)
             return finished_ok, message
         finally:
+            self._lut_sampling_windows.clear()
             if (success and not finished_ok and self.controller.comm and
                     self.controller._host_calibration_io is self):
                 self.controller.invalidate_direct_commands()

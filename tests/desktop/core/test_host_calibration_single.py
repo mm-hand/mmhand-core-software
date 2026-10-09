@@ -4,7 +4,8 @@ from dataclasses import replace
 
 from desktop.core import protocol as p
 from desktop.core.host_calibration.config import AutoCalibrationParams, kSingleTendonMaxReleaseCounts
-from desktop.core.host_calibration.math import orient_encoder_raw
+from desktop.core.host_calibration.math import TendonRawFitBuffer, orient_encoder_raw
+from desktop.core.host_calibration.time_alignment import TimeAlignmentError
 from desktop.core.host_calibration.single_motor import (
     AutoCalibState, JointCalibContext, run_single, step_single,
 )
@@ -250,6 +251,55 @@ def test_full_mechanical_trajectory_runs_search_sync_release_lut_and_holds_auto_
     assert io.commands[-1][1] == {2: result["startServoAbs"]}
     assert all((speed, acc) == (400, 20) for _, _, speed, acc in io.commands)
     assert not io.diags
+
+
+def test_single_release_uses_only_aligned_samples_including_both_endpoints():
+    io = FakeIO()
+    io.dynamic = True
+    window = object()
+    fit = TendonRawFitBuffer()
+    for encoder, absolute in ((2000, 777), (4000, 888), (6000, 999)):
+        fit.append(encoder, absolute, 0)
+
+    def begin(joint, motors):
+        assert (joint, motors) == (1, (2,))
+        assert io.traces[-1][0] == 'PRE_RELEASE_SYNC'
+        assert io.abs >= 1000  # Begin after the tight-end hold settles.
+        return window
+
+    def finish(value):
+        assert value is window
+        assert io.encoder_value == 2000
+        return fit
+
+    io.begin_lut_sampling, io.finish_lut_sampling = begin, finish
+    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
+    assert outcome['success']
+    assert fit.count == 3
+    result = outcome['result']
+    assert result['tendonLutMotorAbs'][0][0] == 777
+    assert result['tendonLutMotorAbs'][0][result['tendonLutCount'] - 1] == 999
+    assert result['startServoAbs'] != 777  # Mechanical metadata stays measured.
+    assert io.commands[-1][1] == {2: result['startServoAbs']}
+    assert all((speed, acc) == (400, 20) for _, _, speed, acc in io.commands)
+
+
+def test_single_alignment_failure_holds_actual_without_using_old_samples():
+    io = FakeIO()
+    io.dynamic = True
+    io.begin_lut_sampling = lambda *_: object()
+
+    def finish(_window):
+        raise TimeAlignmentError('no common valid raw/ABS time interval')
+
+    io.finish_lut_sampling = finish
+    outcome = run_single(io, 1, AutoCalibrationParams(), [1], 0, 0, 2)
+    assert not outcome['success']
+    assert 'no common valid' in outcome['reason']
+    assert outcome['result'] is None
+    assert io.diags[0][0] == p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED
+    assert io.commands[-1][1] == {2: io.abs}
+    assert io.limits == {}
 
 
 def test_control_hold_and_publish_failures_abort_the_outer_sequence():

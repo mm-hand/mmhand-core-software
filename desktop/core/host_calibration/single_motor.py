@@ -32,6 +32,7 @@ from .math import (
     signed_encoder_delta, round_to_int32, f32,
     build_calibration_result, build_tendon_lut, tendon_motor_abs_range,
 )
+from .time_alignment import TimeAlignmentError
 
 
 class AutoCalibState(IntEnum):
@@ -82,6 +83,7 @@ class JointCalibContext:
     pre_release_sync_stable_samples: int = 0
     release_angle_stall_stable: int = 0
     fit_samples: TendonRawFitBuffer = field(default_factory=TendonRawFitBuffer)
+    lut_sampling_window: object | None = None
     result: dict | None = None
     limits: dict[int, tuple[int, int]] = field(default_factory=dict)
     reason: str = ""
@@ -200,12 +202,24 @@ def _finish_release(ctx, io, params, targets, current_raw, encoder, actual,
     zero_fraction = f32(f32(kLutZeroDeg - kLutStartDeg) / total_deg) if total_deg > 0 else 0.0
     zero_encoder = wrap_encoder_count(taut_encoder + round_to_int32(f32(f32(span) * zero_fraction)))
     zero_abs = motor_apply_tendon_delta(ctx.motor, release_abs, kServoZeroPullCounts)
-    tight_stored = ctx.fit_samples.append(max_encoder, max_abs, 0)
-    release_stored = ctx.fit_samples.append(release_encoder, release_abs, 0)
-    if not tight_stored or not release_stored:
-        _fail(ctx, io, "single tendon LUT endpoint buffer full", p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
-              p.CALIB_DIAG_PHASE_RELEASE, a=ctx.fit_samples.count, b=max_abs, c=release_abs)
-        return
+    if ctx.lut_sampling_window is not None:
+        try:
+            # Replace the whole buffer: unsynchronised mechanical endpoints
+            # must never be appended to the common-time interpolation results.
+            ctx.fit_samples = io.finish_lut_sampling(ctx.lut_sampling_window)
+        except TimeAlignmentError as exc:
+            targets[ctx.motor] = actual
+            _fail(ctx, io, str(exc), p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                  p.CALIB_DIAG_PHASE_RELEASE, bitmap=1 << ctx.motor)
+            return
+    else:
+        # Algorithm-only fake ports can still exercise the original machine.
+        tight_stored = ctx.fit_samples.append(max_encoder, max_abs, 0)
+        release_stored = ctx.fit_samples.append(release_encoder, release_abs, 0)
+        if not tight_stored or not release_stored:
+            _fail(ctx, io, "single tendon LUT endpoint buffer full", p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                  p.CALIB_DIAG_PHASE_RELEASE, a=ctx.fit_samples.count, b=max_abs, c=release_abs)
+            return
     result = build_calibration_result(io, ctx.joint, taut_encoder, zero_encoder, tight_encoder,
                                       release_abs, zero_abs, max_abs)
     if result is None:
@@ -347,8 +361,19 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
         ctx.release_angle_stall_stable = 0
         ctx.start_encoder, ctx.start_servo_abs = encoder, actual
         ctx.fit_samples.reset()
-        ctx.fit_samples.append(encoder, actual, 0)
-        ctx.fit_samples.next_travel_deg = kTendonFitSampleStepDeg
+        begin_sampling = getattr(io, "begin_lut_sampling", None)
+        if callable(begin_sampling):
+            try:
+                ctx.lut_sampling_window = begin_sampling(ctx.joint, (ctx.motor,))
+                if ctx.lut_sampling_window is None:
+                    raise TimeAlignmentError("time-aligned LUT sampling window is missing")
+            except TimeAlignmentError as exc:
+                _fail(ctx, io, str(exc), p.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                      p.CALIB_DIAG_PHASE_RELEASE, bitmap=1 << ctx.motor)
+                return
+        else:
+            ctx.fit_samples.append(encoder, actual, 0)
+            ctx.fit_samples.next_travel_deg = kTendonFitSampleStepDeg
         ctx.state = AutoCalibState.TIGHTEN
         io.trace("PRE_RELEASE_SYNC_READY", ctx.joint, ctx.motor, release_start_abs=actual)
         return
@@ -375,7 +400,8 @@ def step_single(ctx: JointCalibContext, io, params: AutoCalibrationParams,
                   c=released, bitmap=1 << ctx.motor)
             return
         release_delta = wrap_encoder_delta(encoder, ctx.start_encoder)
-        ctx.fit_samples.maybe_append(abs(encoder_count_to_deg(release_delta)), encoder, actual, 0)
+        if ctx.lut_sampling_window is None:
+            ctx.fit_samples.maybe_append(abs(encoder_count_to_deg(release_delta)), encoder, actual, 0)
     if _elapsed(now, ctx.last_trace_ms) >= params.traceMs:
         ctx.last_trace_ms = now
         io.trace("TRACE", ctx.joint, ctx.motor, phase="RELEASE_TO_TIGHT" if ctx.start_found else "FIND_MAX",

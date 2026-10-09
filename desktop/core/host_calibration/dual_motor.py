@@ -33,6 +33,7 @@ from .math import (
     wrap_encoder_count,
     wrap_encoder_delta,
 )
+from .time_alignment import TimeAlignmentError
 
 
 WORKSPACE_DUAL_JOINTS = (0, 4, 8, 12)
@@ -524,7 +525,8 @@ class _DualMachine:
             load_high = load_raw is not None and load >= threshold
             total_delta = wrap_encoder_delta(encoder, start_encoder)
             total_deg = abs(encoder_count_to_deg(total_delta))
-            fit.maybe_append(total_deg, encoder, p_abs, s_abs)
+            if fit is not None:
+                fit.maybe_append(total_deg, encoder, p_abs, s_abs)
             found = False
             if now - window_start >= p.windowMs:
                 angle_delta = abs(encoder_count_to_deg(wrap_encoder_delta(encoder, window_encoder)))
@@ -613,13 +615,40 @@ class _DualMachine:
                                 self.joint, secondary, (1 << primary) | (1 << secondary))
             return None
         fit = TendonRawFitBuffer()
-        fit.append(exchange_encoder, tight_abs, preload_abs)
-        fit.next_travel_deg = config.kTendonFitSampleStepDeg
-        endpoint = self._find_exchange(secondary, preload_abs, primary, tight_abs, exchange_encoder, fit)
+        begin_sampling = getattr(self.io, "begin_lut_sampling", None)
+        sampling_window = None
+        if callable(begin_sampling):
+            try:
+                sampling_window = begin_sampling(self.joint, motors)
+                if sampling_window is None:
+                    raise TimeAlignmentError("time-aligned LUT sampling window is missing")
+            except TimeAlignmentError as exc:
+                self.io.trace("LUT_TIME_FAILED", self.joint, primary, reason=str(exc))
+                self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                           protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
+                           0, 0, 0, (1 << primary) | (1 << secondary))
+                return None
+        else:
+            # Only algorithm fake ports use legacy independent getter samples.
+            fit.append(exchange_encoder, tight_abs, preload_abs)
+            fit.next_travel_deg = config.kTendonFitSampleStepDeg
+        endpoint = self._find_exchange(secondary, preload_abs, primary, tight_abs,
+                                       exchange_encoder,
+                                       None if sampling_window is not None else fit)
         if endpoint is None:
             return None
         s_limit, p_final, ready_raw, limit_encoder, ready_load = endpoint
-        fit.append(limit_encoder, p_final, s_limit)
+        if sampling_window is not None:
+            try:
+                fit = self.io.finish_lut_sampling(sampling_window)
+            except TimeAlignmentError as exc:
+                self.io.trace("LUT_TIME_FAILED", self.joint, primary, reason=str(exc))
+                self._diag(protocol.CALIB_DIAG_REASON_RESULT_BUILD_FAILED,
+                           protocol.CALIB_DIAG_PHASE_DUAL_EXCHANGE, self.joint, primary,
+                           0, 0, 0, (1 << primary) | (1 << secondary))
+                return None
+        else:
+            fit.append(limit_encoder, p_final, s_limit)
         start_encoder = encoder_for_positive_travel(limit_encoder, 1)
         result_tight = encoder_for_positive_travel(tight_encoder, 1)
         span = forward_encoder_delta(start_encoder, result_tight)

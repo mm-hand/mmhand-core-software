@@ -51,6 +51,7 @@ from ..protocol import (
 from ..session_log import log_session
 from .ack_tracker import AckTracker
 from .event_channel import EventChannel
+from .feedback_history import TimestampedFeedbackHistory
 from .packet_router import P4PacketRouter
 
 
@@ -70,6 +71,12 @@ class StateReducer:
         self._packet_router = packet_router
         self._ack_tracker = ack_tracker
         self._safety_event_channel = safety_event_channel
+        # 高频原始反馈按协议包逐帧留存，不能从批次末尾的 HandModel 反推历史。
+        # UI 快照仍保持 latest-value；需要时间对齐的业务显式读取此独立历史。
+        self.feedback_history = TimestampedFeedbackHistory()
+        # 只有 SYSTEM_STATUS 的包尾时间是当前设备时钟；raw/ABS 保留采集
+        # 时间，历史诊断也可回放旧 timestamp，不能拿它们判断设备重启。
+        self._feedback_status_clock_ms: Optional[int] = None
         # TASK_DIAG v4 由 P4 在约 35 ms 内分七包发出；先按窗口暂存，
         # 避免 UI 把不同一秒统计窗口的任务行混合展示。
         self._task_runtime_window_sequence: Optional[int] = None
@@ -89,6 +96,8 @@ class StateReducer:
     def reset(self) -> None:
         """连接新设备时清空旧设备状态，避免跨设备沿用在线位图或标定结果。"""
         self._last_model = None
+        self.feedback_history.reset()
+        self._feedback_status_clock_ms = None
         self._task_runtime_window_sequence = None
         self._task_runtime_window_packets.clear()
         self._task_runtime_dropped_windows = 0
@@ -186,6 +195,28 @@ class StateReducer:
                     model.has_encoder_raw_data = True
                     model.encoder_raw_p4_time_ms = int(packet_p4_time_ms or 0)
                     model.encoder_raw_last_rx_ts = time.time()
+                    valid_mask = sum(
+                        1 << index
+                        for index in range(min(ENCODER_COUNT, len(raw_values)))
+                        if index >= len(errors) or not errors[index]
+                    )
+                    if model.has_connectivity_status:
+                        valid_mask &= (
+                            int(model.encoder_online_bitmap)
+                            if model.can_link_online else 0
+                        )
+                    else:
+                        # 尚无权威在线状态的首批帧仍留存，但不能用于拟合；
+                        # 后到 SYSTEM_STATUS 不反向解释或修补先前的数据帧。
+                        valid_mask = 0
+                    if model.has_encoder_health_status:
+                        valid_mask &= ~int(model.encoder_fault_bitmap)
+                    if packet_p4_time_ms is not None:
+                        self.feedback_history.record(
+                            "encoder_raw", int(packet_p4_time_ms),
+                            tuple(int(value) for value in raw_values),
+                            valid_mask, model.encoder_raw_last_rx_ts,
+                        )
                     emitted = True
 
             # 舵机 logical ABS：控制、标定和多圈恢复共同使用的连续位置反馈。
@@ -200,6 +231,20 @@ class StateReducer:
                         model.servo_feedback_p4_time_ms = int(packet_p4_time_ms)
                     model.servo_abs_last_rx_ts = time.time()
                     model.has_servo_angle_data = True
+                    # ABS 包没有单路有效位。尚无权威在线状态时，不能把
+                    # 默认 multi_turn_unknown=0 和占位 ABS 误当成可信反馈。
+                    valid_mask = (
+                        int(model.servo_online_bitmap)
+                        & ~int(model.multi_turn_unknown_bitmap)
+                        & ((1 << min(MOTOR_COUNT, len(parsed))) - 1)
+                        if model.has_connectivity_status else 0
+                    )
+                    if packet_p4_time_ms is not None:
+                        self.feedback_history.record(
+                            "servo_abs", int(packet_p4_time_ms),
+                            tuple(int(value) for value in parsed),
+                            valid_mask, model.servo_abs_last_rx_ts,
+                        )
                     emitted = True
 
             # 100 Hz 舵机单圈 raw；跨重启多圈锚点只由桌面 JSON 持有。
@@ -231,6 +276,19 @@ class StateReducer:
                 )
                 if parsed is not None:
                     token, success_mask, failed_mask, offsets = parsed
+                    previous_identity = (
+                        int(model.servo_rebase_zero_result_token),
+                        int(model.servo_rebase_zero_success_mask),
+                        int(model.servo_rebase_zero_failed_mask),
+                        tuple(model.servo_rebase_zero_logical_offsets),
+                    )
+                    result_identity = (
+                        int(token), int(success_mask), int(failed_mask), tuple(offsets),
+                    )
+                    new_result = (
+                        not model.has_servo_rebase_zero_result
+                        or previous_identity != result_identity
+                    )
                     model.servo_rebase_zero_result_token = int(token)
                     model.servo_rebase_zero_success_mask = int(success_mask)
                     model.servo_rebase_zero_failed_mask = int(failed_mask)
@@ -240,6 +298,11 @@ class StateReducer:
                     )
                     model.servo_rebase_zero_result_last_rx_ts = time.time()
                     model.has_servo_rebase_zero_result = True
+                    if success_mask and new_result:
+                        # F0 改变 logical ABS 的坐标原点；旧、新 offset 的
+                        # 数据不能处于同一可插值时间窗口。状态同步会重发
+                        # 同一事务结果，单纯回显不能废弃正在采集的窗口。
+                        self.feedback_history.reset()
                     emitted = True
 
             elif packet_kind == "direct_target_result":
@@ -290,6 +353,20 @@ class StateReducer:
             elif packet_kind == "system_status":
                 parsed = owner._parse_protocol_payload("parse_system_status_packet", payload)
                 if parsed is not None:
+                    if packet_p4_time_ms is not None:
+                        status_clock_ms = int(packet_p4_time_ms) & 0xFFFFFFFF
+                        previous_clock_ms = self._feedback_status_clock_ms
+                        if previous_clock_ms is not None:
+                            signed_delta = (
+                                (status_clock_ms - previous_clock_ms + 0x80000000)
+                                & 0xFFFFFFFF
+                            ) - 0x80000000
+                            if signed_delta < 0:
+                                # 串口 FIFO 的同类状态包时钟倒退：保守地
+                                # 撤销旧 epoch，不能跨自主重启拼接位置曲线。
+                                # uint32 的正常自然回卷 signed_delta 仍为正。
+                                self.feedback_history.reset()
+                        self._feedback_status_clock_ms = status_clock_ms
                     (
                         system_state,
                         control_enabled,
@@ -805,6 +882,10 @@ class StateReducer:
                     model.proto_ack_mode = int(applied_mode)
                     model.proto_ack_status = int(status)
                     model.proto_ack_p4_time_ms = int(packet_p4_time_ms or 0)
+                    if ack_cmd == CMD_RESET and status in (
+                        PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED
+                    ):
+                        self.feedback_history.reset()
                     # 模型保留最近历史供 UI 展示；可靠逐条消费仍由 AckTracker 事件通道负责。
                     model.proto_ack_history.append({
                         "sequence": int(model.proto_ack_sequence),

@@ -32,6 +32,7 @@ from .communication import (
     SerialTransport,
     StateReducer,
 )
+from .communication.feedback_history import TimestampedFeedbackHistory
 from .data_models import (
     FingerTactile,
     HandModel,
@@ -1096,7 +1097,13 @@ class LowerComputerComm:
             tx_thread.join(timeout=1.0)
         self._rx_thread = None
         self._tx_thread = None
+        self.feedback_history.reset()
         log_session("COMM", "serial disconnected")
+
+    @property
+    def feedback_history(self) -> TimestampedFeedbackHistory:
+        """逐包 P4 时间戳反馈历史；独立于可被覆盖的 UI 状态邮箱。"""
+        return self._state_reducer.feedback_history
 
     def is_connected(self) -> bool:
         return bool(self.running and self._transport.is_open)
@@ -1147,6 +1154,7 @@ class LowerComputerComm:
             motor.state = MotorState.ERROR
         model.tactile_online = False
         model.tactile_module_online = [False] * len(model.tactile_module_online)
+        self.feedback_history.reset()
         self._state_reducer.last_model = model
         return model
 
