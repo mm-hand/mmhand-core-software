@@ -22,12 +22,9 @@ kFeedbackReadyServoTimeoutMs = 500
 kEncoderTrustedSampleMaxAgeMs = 300
 kInitialFeedbackWaitMs = 1200
 kEncoderRecoveryTimeoutMs = 2000
-kEncoderRecoveryLogIntervalMs = 500
 kEncoderRecoveryStableSamples = 3
 kServoRecoveryTimeoutMs = 5000
-kServoRecoveryLogIntervalMs = 500
 kServoRecoveryStableSamples = 3
-kTrustCommitTimeoutMs = 1000
 kMinTravelDeg = 10.0
 kMaxTravelDeg = 359.0
 kRejectNearFullWrapSpanCounts = 15360
@@ -46,7 +43,6 @@ kWorkspaceTightLoadThreshold = 190
 kWorkspaceReleaseCounts = 3200
 kWorkspaceTargetToleranceCounts = 60
 kReverseMinFollowDeg = 12.0
-kTargetApplyAckTimeoutMs = 100
 # 上位机串口事务预算；不替代 P4 机械状态机内部的 100 ms 执行确认配置。
 kHostTargetResultTimeoutMs = 1000
 kHostRebaseFeedbackTimeoutMs = 3000
@@ -60,7 +56,6 @@ kTendonRawSampleCapacity = TENDON_LUT_MAX_SAMPLES * 3
 kCalibrationEncoderModulo = 16384
 kCalibrationEncoderHalfTurn = 8192
 kFeedbackReadyEnterOutsideToleranceCounts = 24
-kManualScaledUrdfFeedbackMappingVersion = 4
 kDefaultEncoderDirection = (
     -1, -1, -1, 1, -1, -1, -1, 1, -1, -1, -1, 1,
     -1, -1, -1, 1, -1, -1, -1, 1, -1,

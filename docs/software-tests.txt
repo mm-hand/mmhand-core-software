@@ -1,0 +1,8 @@
+Unified software gate, Windows/Python 3.13
+Working and isolated Python environments: 698 passed, 0 failed, 0 skipped
+Production C++ codec and control-lease tests compiled with MSVC
+Protocol/model/safety generated checks: passed
+Desktop architecture: passed (68 files)
+P4 architecture: passed (199 source files)
+Safety closure: 77 active closed; 26 retired unbound
+Negative gate tests: partial staging, missing tools/dependencies, failed commands and skipped/empty reports

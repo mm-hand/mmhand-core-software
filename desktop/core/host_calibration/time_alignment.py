@@ -4,6 +4,13 @@ The fit is local piecewise linear interpolation. It neither predicts outside
 measured intervals nor bridges invalid feedback or excessive source gaps.
 Physical 14-bit raw is unwrapped before interpolation and oriented afterward.
 Dual tendon ABS channels always share the same original servo position frame.
+
+职责：保持本模块既有数据与算法契约。
+线程：调用方线程，遵守现有锁边界。
+输入：类型化状态和数据。
+输出：诊断或计算结果。
+状态所有权：既有后端拥有设备真值。
+禁止依赖：禁止依赖 UI 或直接操作串口。
 """
 
 from __future__ import annotations

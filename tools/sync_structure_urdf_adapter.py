@@ -79,38 +79,12 @@ def _resolve_source_urdf(source_root: Path) -> Path:
     return fallback
 
 
-def _ensure_mesh_junction(adapter_root: Path, source_meshes: Path) -> None:
-    target = adapter_root / "meshes"
-    if target.exists() or target.is_symlink():
-        if target.resolve() == source_meshes.resolve():
-            return
-        raise RuntimeError(f"adapter mesh path already exists with another target: {target}")
-
-    target_text = str(target).replace("'", "''")
-    source_text = str(source_meshes).replace("'", "''")
-    command = (
-        "$ErrorActionPreference='Stop'; "
-        f"New-Item -ItemType Junction -Path '{target_text}' -Target '{source_text}' | Out-Null"
-    )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"cannot create mesh Junction: {result.stderr or result.stdout}")
 
 
 def build_adapter(source_root: Path, adapter_root: Path,
                   manifest_path: Path = DEFAULT_MANIFEST) -> Path:
     source_root = source_root.resolve()
     source_urdf = _resolve_source_urdf(source_root)
-    source_meshes = source_root / "meshes"
-    if not source_meshes.is_dir():
-        raise FileNotFoundError(
-            "source root must contain meshes/: " + str(source_root)
-        )
-
     joint_aliases = _load_joint_aliases(manifest_path)
     # CAD 导出器可能只改变 PIP/DIP 名称大小写；语义匹配不应因此失效。
     folded_aliases = {name.casefold(): target for name, target in joint_aliases.items()}
@@ -145,7 +119,6 @@ def build_adapter(source_root: Path, adapter_root: Path,
         raise ValueError("adapter did not create required desktop joints: " + ", ".join(missing_desktop))
 
     adapter_root.mkdir(parents=True, exist_ok=True)
-    _ensure_mesh_junction(adapter_root, source_meshes)
     output_urdf = adapter_root / "urdf" / "hand.urdf"
     output_urdf.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(tree, space="  ")

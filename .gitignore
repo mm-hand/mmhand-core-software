@@ -20,3 +20,7 @@ desktop/resources/config/device_state/
 desktop/resources/hku_hand_v2_urdf_builtin/
 
 reference/
+# Historical calibration and one-off local validation outputs
+desktop/resources/config/*.before_*.json
+desktop/resources/config/*.bak
+simplify-*.log

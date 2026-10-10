@@ -44,6 +44,7 @@ PAIR_PARTIAL_ONLINE = "partial-online"
 PAIR_TURN_UNKNOWN = "turn-unknown"
 PAIR_FEEDBACK_STALE = "feedback-stale"
 PAIR_MAP_INVALID = "map-invalid"
+PAIR_ROUTE_CONFLICT = "route-conflict"
 
 
 @dataclass
@@ -108,6 +109,8 @@ def classify_dual_workspace_pair(io, joint):
     if motors is None:
         return PAIR_MAP_INVALID
     snapshot = io.snapshot()
+    if int(_get(snapshot, 'servo_route_conflict_bitmap', 0)) & sum(1 << motor for motor in motors):
+        return PAIR_ROUTE_CONFLICT
     age = _get(snapshot, "servo_feedback_age_ms")
     if age is None:
         timestamp = _get(snapshot, "servo_feedback_timestamp_ms")
@@ -131,9 +134,12 @@ def build_dynamic_workspace_motor_mask(io, active_joints):
     """Exclude fully offline helpers; reject partial/unknown/stale helpers."""
     mask = 0
     for target in active_joints:
-        if target not in WORKSPACE_DUAL_JOINTS:
+        if not 0 <= target < 16:
             continue
+        target_root = target // 4 * 4
         for candidate in WORKSPACE_DUAL_JOINTS:
+            if candidate == target_root and target != target_root:
+                continue  # 单腱标定只要求其他手指让位。
             motors = _dual_motors(candidate)
             pair_mask = sum(1 << motor for motor in motors) if motors else 0
             availability = classify_dual_workspace_pair(io, candidate)
@@ -165,10 +171,11 @@ def build_dynamic_workspace_motor_mask(io, active_joints):
 
 
 def build_dual_workspace_plan(io, target):
-    if target not in WORKSPACE_DUAL_JOINTS:
+    if not 0 <= target < 16:
         return []
-    candidates = [(joint, POSE_A) for joint in WORKSPACE_DUAL_JOINTS if joint < target]
-    candidates += [(joint, POSE_B) for joint in reversed(WORKSPACE_DUAL_JOINTS) if joint > target]
+    root = target // 4 * 4
+    candidates = [(joint, POSE_A) for joint in WORKSPACE_DUAL_JOINTS if joint < root]
+    candidates += [(joint, POSE_B) for joint in reversed(WORKSPACE_DUAL_JOINTS) if joint > root]
     steps = []
     for joint, pose in candidates:
         availability = classify_dual_workspace_pair(io, joint)
@@ -471,12 +478,13 @@ class _DualMachine:
         return True
 
     def prepare_workspace(self):
-        if self.joint not in WORKSPACE_DUAL_JOINTS:
+        if not 0 <= self.joint < 16:
             return True
-        motors = _dual_motors(self.joint)
-        if motors is None or self._wait_workspace_feedback(self.joint, *motors) is None:
-            self._workspace_failed(self.joint, self.joint, POSE_NONE, STAGE_PREFLIGHT)
-            return False
+        if self.joint in WORKSPACE_DUAL_JOINTS:
+            motors = _dual_motors(self.joint)
+            if motors is None or self._wait_workspace_feedback(self.joint, *motors) is None:
+                self._workspace_failed(self.joint, self.joint, POSE_NONE, STAGE_PREFLIGHT)
+                return False
         steps = build_dual_workspace_plan(self.io, self.joint)
         if steps is None:
             self._workspace_failed(self.joint, self.joint, POSE_B, STAGE_PREFLIGHT)
@@ -742,6 +750,11 @@ class _DualMachine:
         return {"result": result, "limits": limits,
                 "final_target_deg": ready_map["urdf_deg"],
                 "requires_rope_init": not inside_ready}
+
+
+def prepare_single_workspace(io, joint, params):
+    """复用双腱 A/B 状态机，为四指任意单腱关节准备其他手指。"""
+    return _DualMachine(io, joint, params).prepare_workspace()
 
 
 def run_dual(io, joint, sequence_index, joint_count, selected_joint_mask, params):

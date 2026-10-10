@@ -1319,27 +1319,6 @@ class HandController:
             out.append(v)
         return out
 
-    def request_firmware_calibration(self) -> bool:
-        self._cancel_host_calibration()
-        self._host_calibration_overlay = {}
-        if not self.comm:
-            return False
-        sent_at = time.time()
-        if not self.comm.send_command("calibrate"):
-            log_session("CALIB", "firmware calibration command queue rejected")
-            return False
-        ack = self.comm.wait_for_ack(
-            CMD_CALIBRATE, CALIBRATE_ACK_TIMEOUT_S, received_after=sent_at
-        )
-        if ack is None or int(ack[2]) not in (
-            PROTO_ACK_STATUS_OK,
-            PROTO_ACK_STATUS_QUEUED,
-        ):
-            status = "timeout" if ack is None else str(int(ack[2]))
-            log_session("CALIB", f"firmware calibration ACK rejected: {status}")
-            return False
-        self._started = False
-        return True
 
     def request_run_feedback(self) -> bool:
         if self._paused or not self.comm:
@@ -1501,11 +1480,12 @@ class HandController:
         return True
 
     def set_manual_encoder_reference(
-        self, joint: int, manual_min_raw: int, manual_max_raw: int
+        self, joint: int, manual_min_raw: int, manual_max_raw: int, *, cancelled=lambda: False
     ) -> bool:
         """Write one joint while preserving all existing Manual entries."""
+        self.last_manual_write_phase = 'INSTALL_FAILED'
         joint = int(joint)
-        if not 0 <= joint < ENCODER_COUNT or not self.comm:
+        if not 0 <= joint < ENCODER_COUNT or not self.comm or cancelled():
             return False
         if not self.query_manual_encoder_references(
             MANUAL_REFERENCE_ACK_TIMEOUT_S
@@ -1526,6 +1506,8 @@ class HandController:
             return False
         expected_min[joint] = int(manual_min_raw)
         expected_max[joint] = int(manual_max_raw)
+        if cancelled():
+            return False
         sent_at = time.time()
         self.comm.send_command((
             "manual_encoder_single",
@@ -1555,7 +1537,8 @@ class HandController:
             expected_max,
             expected_crc,
         )
-        if verified:
+        if verified and not cancelled():
+            self.last_manual_write_phase = 'INSTALLED_NOT_SAVED'
             try:
                 update_manual_snapshot(
                     CALIB_LOAD_SNAPSHOT_PATH,
@@ -1566,7 +1549,8 @@ class HandController:
             except (OSError, CalibrationSnapshotError) as exc:
                 log_session("MANUAL", f"desktop JSON save failed: {exc}")
                 return False
-        return verified
+            self.last_manual_write_phase = 'SAVED'
+        return verified and not cancelled()
 
     def rope_init(self, active_joint_mask: int) -> bool:
         if not self.comm:
@@ -1970,7 +1954,7 @@ class HandController:
             requested_mask,
         )
 
-    def manual_prepare_all_motors(self) -> ManualPrepareResult:
+    def manual_prepare_all_motors(self, *, cancelled=lambda: False, motion_gate=lambda action: action()) -> ManualPrepareResult:
         """冻结当前在线且路由可控的电机集合，归零并放绳 1500 counts。
 
         该维护事务允许从 Turn Unknown 状态开始，但不会放宽普通直控门禁：
@@ -1979,6 +1963,8 @@ class HandController:
         """
         requested_mask = (1 << MOTOR_COUNT) - 1
         empty = ManualPrepareResult(False, "", 0, requested_mask, 0, 0)
+        if cancelled():
+            return empty._replace(message='Release Rope cancelled')
         if not self.comm:
             return empty._replace(message="serial not connected")
 
@@ -2042,12 +2028,16 @@ class HandController:
                 False, reset_message, reset_mask,
                 failed_mask | (requested_mask & ~reset_mask), invalidated_joint_mask, 0,
             )
+        if cancelled():
+            return empty._replace(message='Release Rope cancelled after reset; Auto/LUT invalidated', reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
 
         # Reset Zero 后 logical ABS 必须与新单圈 raw 对齐。等待这一条件而不是
         # 固定猜测圈数，避免把复位前缓存作为 -1500 counts 的基准。
         feedback_deadline = time.monotonic() + MANUAL_PREPARE_FEEDBACK_TIMEOUT_S
         baseline: Optional[List[int]] = None
         while time.monotonic() < feedback_deadline:
+            if cancelled():
+                break
             with self.state_lock:
                 state = self.current_state
                 unknown = int(
@@ -2103,8 +2093,12 @@ class HandController:
             )
 
         self.set_control_mode(ControlMode.DIRECT_MOTOR)
-        self.start()
-        if not self.comm.send_command(("motor_pos_abs", targets)):
+        if cancelled():
+            return empty._replace(message='Release Rope cancelled before movement', reset_motor_mask=reset_mask, invalidated_joint_mask=invalidated_joint_mask)
+        def send_release():
+            self.start()
+            return self.comm.send_command(("motor_pos_abs", targets))
+        if not motion_gate(send_release):
             self.reset()
             return ManualPrepareResult(
                 False,
@@ -2118,6 +2112,8 @@ class HandController:
         reached_mask = 0
         motion_deadline = time.monotonic() + MANUAL_PREPARE_MOTION_TIMEOUT_S
         while time.monotonic() < motion_deadline:
+            if cancelled():
+                break
             with self.state_lock:
                 state = self.current_state
                 online = int(getattr(state, "servo_online_bitmap", 0) or 0)

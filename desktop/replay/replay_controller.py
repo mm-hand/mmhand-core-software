@@ -105,7 +105,7 @@ class ReplayController:
         with self._lock:
             return bool(self._thread and self._thread.is_alive())
 
-    def start(self, trace: ReplayTrace) -> tuple[bool, str]:
+    def start(self, trace: ReplayTrace, *, expected_application_epoch=None) -> tuple[bool, str]:
         trace.validate()
         with self._lock:
             if self._thread and self._thread.is_alive():
@@ -133,7 +133,8 @@ class ReplayController:
                 self._emit("replay_rejected", reason)
                 return False, reason
 
-            ok, token, message = self.backend.begin_replay_motion()
+            ok, token, message = (self.backend.begin_replay_motion() if expected_application_epoch is None else
+                                  self.backend.begin_replay_motion(expected_application_epoch=expected_application_epoch))
             if not ok:
                 self._set_status(
                     "rejected",

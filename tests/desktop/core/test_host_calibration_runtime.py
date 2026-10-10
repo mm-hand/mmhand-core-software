@@ -486,13 +486,13 @@ def test_normal_direct_done_allows_next_step_but_stop_and_foreign_token_do_not(i
     assert not io.owns_control()  # 用户 STOP 不等于普通 DONE。
 
 
-@pytest.mark.parametrize('unknown,expected_extra', [(0, 0), (1 << 5, (1 << 5) | (1 << 6))])
-def test_core_rechecks_current_unknown_helper_pair_before_initial_f0(io, unknown, expected_extra):
+@pytest.mark.parametrize('unknown', [0, 1 << 5])
+def test_core_rejects_unknown_helper_without_rebasing_it(io, unknown):
     io.selected_joint_mask = 1
     io.selected_motor_mask = io.preparation_reset_mask = 3
     io.controller.current_state.multi_turn_unknown_bitmap = unknown
-    assert io._prepare_workspace_reset_scope()
-    assert io.preparation_reset_mask == 3 | expected_extra
+    assert io._prepare_workspace_reset_scope() == (unknown == 0)
+    assert io.preparation_reset_mask == 3
 
 
 def test_core_removes_now_offline_helper_from_old_preplanned_rebase_mask(io):

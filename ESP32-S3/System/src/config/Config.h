@@ -24,8 +24,6 @@
 // ===========================================
 // [AS5047P] 错误寄存器位及锁存错误码范围
 // ===========================================
-#define AS5047P_ERR_FRERR    0x0001
-#define AS5047P_ERR_INVCOMM  0x0002
 #define AS5047P_ERR_PARERR   0x0004
 
 #define ERR_CODE_NONE        0x0000
@@ -127,7 +125,6 @@ static constexpr uint8_t ENC_GROUP_CHANNEL_MAP[5] = {4, 3, 2, 1, 0};
 #define TACTILE_SENSOR1_TAXELS 25
 #define TACTILE_SENSOR2_TAXELS 25
 #define TACTILE_PAD_TAXELS TACTILE_SENSOR0_TAXELS
-#define TACTILE_TIP_TAXELS TACTILE_SENSOR1_TAXELS
 #define TACTILE_FULL_BYTES \
     (TACTILE_GROUP_NUM * (TACTILE_SENSOR0_TAXELS + TACTILE_SENSOR1_TAXELS + TACTILE_SENSOR2_TAXELS) * TACTILE_AXIS_COUNT)
 

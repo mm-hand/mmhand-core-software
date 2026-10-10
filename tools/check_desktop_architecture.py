@@ -12,7 +12,7 @@ from typing import Iterable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DESKTOP_ROOT = PROJECT_ROOT / "desktop"
 
-# P0 只约束正式运行链路；visualize、tools、examples 属于离线工具，后续单独治理。
+# Check every module in the supported Web GUI runtime.
 TARGET_TOP_LEVEL_FILES = {
     "__init__.py",
     "__main__.py",
@@ -23,10 +23,8 @@ TARGET_TOP_LEVEL_FILES = {
 TARGET_PACKAGES = (
     "app",
     "core",
-    "algorithm",
-    "recording",
+    "replay",
     "ros2",
-    "teleop",
     "ui",
 )
 REQUIRED_HEADER_FIELDS = (

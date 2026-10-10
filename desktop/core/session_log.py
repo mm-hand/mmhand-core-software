@@ -18,7 +18,6 @@ from desktop.paths import LOG_DIR
 SESSION_LOG_DIR = str(LOG_DIR)
 SESSION_LOG_MAX_LINES = 2000
 SESSION_LOG_MAX_LINE_CHARS = 300
-SESSION_LOG_KEEP_FILES = 20
 
 
 class SessionLog:
@@ -30,6 +29,8 @@ class SessionLog:
         self.max_line_chars = max(40, int(max_line_chars))
         self._lines: Deque[str] = deque(maxlen=max(100, int(max_lines)))
         self._lock = Lock()
+        self._sequence = 0
+        self._entries = deque(maxlen=max(100, int(max_lines)))
         self._closed = False
         self._start_ts = datetime.now()
         self.add("SESSION", f"start {self._start_ts.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -45,6 +46,12 @@ class SessionLog:
             line = (prefix + raw_line.strip())[: self.max_line_chars]
             with self._lock:
                 self._lines.append(line)
+                self._sequence += 1
+                self._entries.append((self._sequence, line))
+
+    def since(self, sequence=0):
+        with self._lock:
+            return {'sequence': self._sequence, 'lines': [line for number, line in self._entries if number > sequence]}
 
     def snapshot(self) -> Iterable[str]:
         with self._lock:
@@ -62,25 +69,8 @@ class SessionLog:
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write("\n".join(lines))
             handle.write("\n")
-        self._prune_old_logs()
         return path
 
-    @staticmethod
-    def _prune_old_logs() -> None:
-        try:
-            entries = [
-                os.path.join(SESSION_LOG_DIR, name)
-                for name in os.listdir(SESSION_LOG_DIR)
-                if name.startswith("session_") and name.endswith(".log")
-            ]
-        except OSError:
-            return
-        entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-        for path in entries[SESSION_LOG_KEEP_FILES:]:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
 
 
 _SESSION_LOG = SessionLog()
@@ -88,6 +78,10 @@ _SESSION_LOG = SessionLog()
 
 def log_session(source: str, message: str) -> None:
     _SESSION_LOG.add(source, message)
+
+
+def session_log_since(sequence=0):
+    return _SESSION_LOG.since(sequence)
 
 
 def close_session_log() -> Optional[str]:

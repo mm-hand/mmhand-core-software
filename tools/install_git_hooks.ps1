@@ -18,7 +18,7 @@ try {
         throw "Failed to set the local core.hooksPath."
     }
     Write-Host "Enabled .githooks/pre-commit." -ForegroundColor Green
-    Write-Host "Commits now check P4 architecture and generated contracts."
+    Write-Host "Commits now check full software and generated contracts."
 } finally {
     Pop-Location
 }

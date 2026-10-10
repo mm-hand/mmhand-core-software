@@ -8,20 +8,22 @@
 禁止依赖：禁止导入 Qt 控件或直接操作下位机通信。
 """
 
+import os
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent
 RESOURCE_DIR = PACKAGE_DIR / "resources"
 CONFIG_DIR = RESOURCE_DIR / "config"
-DEVICE_STATE_DIR = CONFIG_DIR / "device_state"
+DATA_DIR = Path(os.environ.get("MMHAND_DATA_DIR") or Path.home() / "mmhand_data").expanduser().resolve()
+DEVICE_STATE_DIR = DATA_DIR / "device_state"
 URDF_DIR = RESOURCE_DIR / "hku_hand_v2_urdf"
-RUN_DATA_DIR = PROJECT_ROOT / "run_data"
-LOG_DIR = RUN_DATA_DIR / "运行日志"
+RUN_DATA_DIR = DATA_DIR / "recordings"
+LOG_DIR = DATA_DIR / "logs"
 
 # 唯一受支持的便携式 Calib Load V6 快照。旧 calib_load_snapshot.json
 # 不再作为活动配置读取，避免旧格式被误加载或覆盖新格式。
-CALIB_LOAD_SNAPSHOT_PATH = CONFIG_DIR / "calibration_bundle.mmcal.json"
+CALIB_LOAD_SNAPSHOT_PATH = DATA_DIR / "calibration" / "calibration_bundle.mmcal.json"
 # 运行期多圈锚点独立于体积较大的标定快照，以便运动时低开销原子更新。
 MULTITURN_RUNTIME_PATH = DEVICE_STATE_DIR / "multiturn_runtime.json"
 URDF_JOINT_MAPPING_PATH = CONFIG_DIR / "urdf_joint_mapping.json"

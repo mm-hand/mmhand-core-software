@@ -26,12 +26,6 @@ def _required_joint_names(manifest_path: Path) -> set[str]:
     return names
 
 
-def _resolve_mesh_path(resource_root: Path, urdf_path: Path, filename: str) -> Path | None:
-    if filename.startswith("file://"):
-        return Path(filename.removeprefix("file://"))
-    if filename.startswith("package://"):
-        return None
-    return (urdf_path.parent / filename).resolve()
 
 
 def validate(resource_root: Path, manifest_path: Path = DEFAULT_MANIFEST) -> list[str]:
@@ -48,19 +42,6 @@ def validate(resource_root: Path, manifest_path: Path = DEFAULT_MANIFEST) -> lis
 
     if root.tag != "robot":
         errors.append(f"URDF root must be <robot>, got <{root.tag}>")
-
-    mesh_count = 0
-    for mesh in root.findall(".//mesh"):
-        mesh_count += 1
-        filename = (mesh.get("filename") or mesh.get("file") or "").strip()
-        if not filename:
-            errors.append("mesh entry has no filename")
-            continue
-        resolved = _resolve_mesh_path(resource_root, urdf_path, filename)
-        if resolved is None:
-            errors.append(f"unsupported package:// mesh URI: {filename}")
-        elif not resolved.is_file():
-            errors.append(f"missing mesh: {filename} -> {resolved}")
 
     joints = {joint.get("name", ""): joint for joint in root.findall("joint")}
     try:
@@ -91,7 +72,7 @@ def validate(resource_root: Path, manifest_path: Path = DEFAULT_MANIFEST) -> lis
 
     print(f"URDF: {urdf_path}")
     print(f"Robot: {root.get('name', '<unnamed>')}")
-    print(f"Meshes: {mesh_count}; joints: {len(joints)}; required mapping joints: {len(required_joint_names)}")
+    print(f"Joints: {len(joints)}; required mapping joints: {len(required_joint_names)}")
     return errors
 
 
@@ -103,7 +84,7 @@ def main() -> int:
         "--urdf-root",
         required=True,
         type=Path,
-        help="Resource root containing urdf/hand.urdf and its mesh tree.",
+        help="Resource root containing urdf/hand.urdf with the control joint limits.",
     )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()

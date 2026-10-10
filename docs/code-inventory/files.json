@@ -1,0 +1,1574 @@
+[
+  {
+    "path": "ESP32-P4/ServoBoardMain/ServoBoardMain.ino",
+    "lines": 16
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/app/AppBootstrap.cpp",
+    "lines": 36
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/app/AppBootstrap.h",
+    "lines": 16
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp",
+    "lines": 228
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/app/SystemAssembly.h",
+    "lines": 12
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/BoardConfig.h",
+    "lines": 33
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/CalibrationConfig.h",
+    "lines": 17
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/Config.h",
+    "lines": 18
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/ControlConfig.h",
+    "lines": 148
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/DiagnosticsConfig.h",
+    "lines": 22
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/DimensionsConfig.h",
+    "lines": 40
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/SafetyConfig.h",
+    "lines": 49
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/ServoConfig.h",
+    "lines": 72
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/TaskConfig.h",
+    "lines": 27
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/protocol/S3SensorCanProtocol.h",
+    "lines": 58
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/safety/ServoPositionRange.h",
+    "lines": 63
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/topology/HardwareMap.cpp",
+    "lines": 190
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/config/topology/HardwareMap.h",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/ActuatorTypes.h",
+    "lines": 68
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/CalibrationTypes.h",
+    "lines": 20
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/ControlTraceTypes.h",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/HardwareTypes.h",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/JointTypes.h",
+    "lines": 27
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/RecoveryTypes.h",
+    "lines": 16
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/RopeInitTypes.h",
+    "lines": 35
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/SafetyRuleTypes.h",
+    "lines": 30
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/SafetyTypes.h",
+    "lines": 47
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/ServiceSnapshots.h",
+    "lines": 51
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/ServoRouteTypes.h",
+    "lines": 44
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/ServoTypes.h",
+    "lines": 45
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/SystemTypes.h",
+    "lines": 79
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/data/TelemetryTypes.h",
+    "lines": 23
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/generated/ProductFingerprint.generated.h",
+    "lines": 20
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/generated/SafetyRuleCatalog.generated.h",
+    "lines": 112
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/generated/UpperProtocol.generated.h",
+    "lines": 153
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/generated/UrdfJointLimits.generated.h",
+    "lines": 50
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/can/TwaiCanDriver.cpp",
+    "lines": 116
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/can/TwaiCanDriver.h",
+    "lines": 62
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/serial/HostSerialPort.cpp",
+    "lines": 61
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/serial/HostSerialPort.h",
+    "lines": 28
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.cpp",
+    "lines": 11
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.h",
+    "lines": 1108
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/servo/ServoBusRegistry.cpp",
+    "lines": 32
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/servo/ServoBusRegistry.h",
+    "lines": 26
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/hal/servo/ServoValue.h",
+    "lines": 58
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/actuator/ActuatorCommandArbiter.cpp",
+    "lines": 24
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/actuator/ActuatorCommandArbiter.h",
+    "lines": 24
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/actuator/ActuatorCommandGateway.cpp",
+    "lines": 77
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/actuator/ActuatorCommandGateway.h",
+    "lines": 33
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/CalibrationMath.cpp",
+    "lines": 277
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/CalibrationMath.h",
+    "lines": 69
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/CalibrationRuntimeStore.cpp",
+    "lines": 279
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/CalibrationRuntimeStore.h",
+    "lines": 127
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/ManualEncoderReferenceStore.cpp",
+    "lines": 123
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/ManualEncoderReferenceStore.h",
+    "lines": 40
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/TendonCalibrationLut.cpp",
+    "lines": 211
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/calibration/TendonCalibrationLut.h",
+    "lines": 55
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/integrity/Crc16Ccitt.cpp",
+    "lines": 26
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/integrity/Crc16Ccitt.h",
+    "lines": 19
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/integrity/Crc32Ieee.cpp",
+    "lines": 28
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/integrity/Crc32Ieee.h",
+    "lines": 21
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/protocol/HostProtocol.h",
+    "lines": 14
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/runtime/ServiceCyclePolicy.cpp",
+    "lines": 29
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/modules/runtime/ServiceCyclePolicy.h",
+    "lines": 14
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/log/FirmwareLog.cpp",
+    "lines": 21
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/log/FirmwareLog.h",
+    "lines": 117
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/AtomicValue.h",
+    "lines": 50
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/FreeRtosKernel.h",
+    "lines": 19
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/MessageChannel.h",
+    "lines": 75
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/PeriodicDeadline.h",
+    "lines": 55
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/SharedSafetyState.cpp",
+    "lines": 18
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/SharedSafetyState.h",
+    "lines": 59
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/TaskFactory.cpp",
+    "lines": 32
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/TaskFactory.h",
+    "lines": 36
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/rtos/TaskSignal.h",
+    "lines": 58
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/platform/time/Clock.h",
+    "lines": 31
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/SystemRuntimeContext.h",
+    "lines": 26
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/adapters/ServiceContextAdapter.cpp",
+    "lines": 113
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/adapters/ServiceContextAdapter.h",
+    "lines": 22
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/channels/InterTaskChannels.h",
+    "lines": 39
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/metrics/RuntimeMonitorConfig.h",
+    "lines": 22
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/metrics/TaskRuntimeMetrics.h",
+    "lines": 108
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/metrics/TaskRuntimeWindow.cpp",
+    "lines": 65
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/metrics/TaskRuntimeWindow.h",
+    "lines": 31
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/ports/DirectTargetResult.h",
+    "lines": 42
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/ports/ServiceOutputPort.h",
+    "lines": 28
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/ports/SystemEventPort.h",
+    "lines": 29
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/state/CalibrationRuntimeState.h",
+    "lines": 27
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/state/CommandRuntimeState.h",
+    "lines": 50
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/state/ControlRuntimeState.h",
+    "lines": 55
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/runtime/state/ServoRuntimeState.h",
+    "lines": 53
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyEventReporter.cpp",
+    "lines": 168
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyEventReporter.h",
+    "lines": 85
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.cpp",
+    "lines": 117
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyEventStore.h",
+    "lines": 46
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyRuleRegistry.cpp",
+    "lines": 121
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/SafetyRuleRegistry.h",
+    "lines": 41
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ActuatorSafetyPolicy.cpp",
+    "lines": 299
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ActuatorSafetyPolicy.h",
+    "lines": 69
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/CalibrationSafetyPolicy.h",
+    "lines": 51
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.cpp",
+    "lines": 374
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/CollisionSafetyPolicy.h",
+    "lines": 138
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/CommunicationSafetyPolicy.cpp",
+    "lines": 70
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/CommunicationSafetyPolicy.h",
+    "lines": 41
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.cpp",
+    "lines": 90
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ControlBoundarySafetyPolicy.h",
+    "lines": 67
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.cpp",
+    "lines": 64
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/ControlInputSafetyPolicy.h",
+    "lines": 40
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/EncoderHealthSafetyPolicy.cpp",
+    "lines": 69
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/EncoderHealthSafetyPolicy.h",
+    "lines": 32
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.cpp",
+    "lines": 32
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/HostLeaseSafetyPolicy.h",
+    "lines": 21
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/OverloadSafetyPolicy.cpp",
+    "lines": 79
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/OverloadSafetyPolicy.h",
+    "lines": 38
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/RopeInitSafetyPolicy.cpp",
+    "lines": 96
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/RopeInitSafetyPolicy.h",
+    "lines": 32
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.cpp",
+    "lines": 58
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/RuntimeSafetyPolicy.h",
+    "lines": 46
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.cpp",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/StateAdmissionPolicy.h",
+    "lines": 18
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.cpp",
+    "lines": 94
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/SystemFaultPolicy.h",
+    "lines": 27
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp",
+    "lines": 405
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.h",
+    "lines": 70
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostAckPublisher.cpp",
+    "lines": 80
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostAckPublisher.h",
+    "lines": 20
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCalibrationCommandHandler.cpp",
+    "lines": 231
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCalibrationCommandHandler.h",
+    "lines": 44
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommService.cpp",
+    "lines": 558
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommService.h",
+    "lines": 44
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommTask.cpp",
+    "lines": 55
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommTask.h",
+    "lines": 13
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommandDispatcher.cpp",
+    "lines": 1035
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommandDispatcher.h",
+    "lines": 23
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommandRouter.cpp",
+    "lines": 329
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommandRouter.h",
+    "lines": 45
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostFrameReader.cpp",
+    "lines": 124
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostFrameReader.h",
+    "lines": 62
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostMultiTurnPublisher.cpp",
+    "lines": 137
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostMultiTurnPublisher.h",
+    "lines": 23
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostProtocolCodec.cpp",
+    "lines": 179
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostProtocolCodec.h",
+    "lines": 53
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostTelemetryPublisher.cpp",
+    "lines": 958
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostTelemetryPublisher.h",
+    "lines": 61
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ControlCommandSnapshotReader.cpp",
+    "lines": 48
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ControlCommandSnapshotReader.h",
+    "lines": 23
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ControlSolver.cpp",
+    "lines": 92
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ControlSolver.h",
+    "lines": 44
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.cpp",
+    "lines": 349
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/DualTendonControl.h",
+    "lines": 47
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/JointAngleMapper.cpp",
+    "lines": 43
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/JointAngleMapper.h",
+    "lines": 24
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionCompletionEvaluator.cpp",
+    "lines": 84
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionCompletionEvaluator.h",
+    "lines": 26
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.cpp",
+    "lines": 2089
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlService.h",
+    "lines": 28
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlTask.cpp",
+    "lines": 49
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/MotionControlTask.h",
+    "lines": 16
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ServoTargetBuilder.cpp",
+    "lines": 135
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/ServoTargetBuilder.h",
+    "lines": 47
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/motion_control/pid.h",
+    "lines": 65
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.cpp",
+    "lines": 547
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorService.h",
+    "lines": 14
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorTask.cpp",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/runtime_monitor/RuntimeMonitorTask.h",
+    "lines": 9
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/EncoderHealthMonitor.cpp",
+    "lines": 107
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/EncoderHealthMonitor.h",
+    "lines": 34
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/S3CanRxService.cpp",
+    "lines": 766
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/S3CanRxService.h",
+    "lines": 17
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/S3CanRxTask.cpp",
+    "lines": 37
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/s3_can_rx/S3CanRxTask.h",
+    "lines": 13
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ParallelServoFeedbackCycle.cpp",
+    "lines": 130
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ParallelServoFeedbackCycle.h",
+    "lines": 45
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusRouting.cpp",
+    "lines": 155
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusRouting.h",
+    "lines": 33
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.cpp",
+    "lines": 1275
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.h",
+    "lines": 36
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusTask.cpp",
+    "lines": 60
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusTask.h",
+    "lines": 13
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoDiscoveryManager.cpp",
+    "lines": 236
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoDiscoveryManager.h",
+    "lines": 52
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoFeedbackPublisher.cpp",
+    "lines": 267
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoFeedbackPublisher.h",
+    "lines": 38
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoRouteTable.cpp",
+    "lines": 211
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoRouteTable.h",
+    "lines": 36
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.cpp",
+    "lines": 293
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/DirectCommandCoordinator.h",
+    "lines": 44
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.cpp",
+    "lines": 106
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/FeedbackReadyDiagnostics.h",
+    "lines": 25
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.cpp",
+    "lines": 280
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/HostLeaseSupervisor.h",
+    "lines": 40
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/RopeInitController.cpp",
+    "lines": 210
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/RopeInitController.h",
+    "lines": 29
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp",
+    "lines": 1077
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.h",
+    "lines": 30
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.cpp",
+    "lines": 107
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateCoordinator.h",
+    "lines": 31
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateTask.cpp",
+    "lines": 58
+  },
+  {
+    "path": "ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemStateTask.h",
+    "lines": 17
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.cpp",
+    "lines": 260
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/HLSCL.h",
+    "lines": 89
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/INST.h",
+    "lines": 51
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.cpp",
+    "lines": 480
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCS.h",
+    "lines": 72
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.cpp",
+    "lines": 203
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCSCL.h",
+    "lines": 77
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.cpp",
+    "lines": 115
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCSerial.h",
+    "lines": 39
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SCServo.h",
+    "lines": 15
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.cpp",
+    "lines": 249
+  },
+  {
+    "path": "ESP32-P4/libraries/FTServo_Arduino/src/SMS_STS.h",
+    "lines": 86
+  },
+  {
+    "path": "ESP32-P4/tools/strip_utf8_bom.py",
+    "lines": 68
+  },
+  {
+    "path": "ESP32-P4/tools/watch_strip_utf8_bom.py",
+    "lines": 81
+  },
+  {
+    "path": "ESP32-S3/System/System.ino",
+    "lines": 65
+  },
+  {
+    "path": "ESP32-S3/System/src/config/Config.h",
+    "lines": 150
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalEncoders.cpp",
+    "lines": 349
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalEncoders.h",
+    "lines": 86
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalSensorSpi.cpp",
+    "lines": 119
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalSensorSpi.h",
+    "lines": 17
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalTWAI.cpp",
+    "lines": 435
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalTWAI.h",
+    "lines": 64
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalTactile.cpp",
+    "lines": 533
+  },
+  {
+    "path": "ESP32-S3/System/src/hal/HalTactile.h",
+    "lines": 94
+  },
+  {
+    "path": "ESP32-S3/System/src/system/FirmwareLog.h",
+    "lines": 27
+  },
+  {
+    "path": "ESP32-S3/System/src/system/SystemTasks.cpp",
+    "lines": 48
+  },
+  {
+    "path": "ESP32-S3/System/src/system/SystemTasks.h",
+    "lines": 15
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/CanTask.cpp",
+    "lines": 94
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/CanTask.h",
+    "lines": 14
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/EncodersTask.cpp",
+    "lines": 78
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/EncodersTask.h",
+    "lines": 14
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/TactileTask.cpp",
+    "lines": 337
+  },
+  {
+    "path": "ESP32-S3/System/src/tasks/TactileTask.h",
+    "lines": 14
+  },
+  {
+    "path": "desktop/__init__.py",
+    "lines": 10
+  },
+  {
+    "path": "desktop/__main__.py",
+    "lines": 15
+  },
+  {
+    "path": "desktop/app/__init__.py",
+    "lines": 10
+  },
+  {
+    "path": "desktop/app/entry.py",
+    "lines": 22
+  },
+  {
+    "path": "desktop/app/ui_runner.py",
+    "lines": 45
+  },
+  {
+    "path": "desktop/core/__init__.py",
+    "lines": 10
+  },
+  {
+    "path": "desktop/core/angle_mapping.py",
+    "lines": 481
+  },
+  {
+    "path": "desktop/core/application_actions.py",
+    "lines": 908
+  },
+  {
+    "path": "desktop/core/auto_calib_logger.py",
+    "lines": 86
+  },
+  {
+    "path": "desktop/core/calibration_diagnostics.py",
+    "lines": 413
+  },
+  {
+    "path": "desktop/core/calibration_snapshot.py",
+    "lines": 816
+  },
+  {
+    "path": "desktop/core/calibration_workflow.py",
+    "lines": 310
+  },
+  {
+    "path": "desktop/core/comm_layer.py",
+    "lines": 1772
+  },
+  {
+    "path": "desktop/core/communication/__init__.py",
+    "lines": 26
+  },
+  {
+    "path": "desktop/core/communication/ack_tracker.py",
+    "lines": 105
+  },
+  {
+    "path": "desktop/core/communication/event_channel.py",
+    "lines": 43
+  },
+  {
+    "path": "desktop/core/communication/feedback_history.py",
+    "lines": 113
+  },
+  {
+    "path": "desktop/core/communication/frame_decoder.py",
+    "lines": 84
+  },
+  {
+    "path": "desktop/core/communication/packet_router.py",
+    "lines": 51
+  },
+  {
+    "path": "desktop/core/communication/serial_transport.py",
+    "lines": 101
+  },
+  {
+    "path": "desktop/core/communication/state_reducer.py",
+    "lines": 1074
+  },
+  {
+    "path": "desktop/core/console_snapshot.py",
+    "lines": 159
+  },
+  {
+    "path": "desktop/core/core_logic.py",
+    "lines": 2456
+  },
+  {
+    "path": "desktop/core/data_models.py",
+    "lines": 568
+  },
+  {
+    "path": "desktop/core/data_recording/__init__.py",
+    "lines": 13
+  },
+  {
+    "path": "desktop/core/data_recording/csv_exporter.py",
+    "lines": 109
+  },
+  {
+    "path": "desktop/core/data_recording/event_recorder.py",
+    "lines": 44
+  },
+  {
+    "path": "desktop/core/data_recording/motion_sampler.py",
+    "lines": 125
+  },
+  {
+    "path": "desktop/core/data_recording/packet_recorder.py",
+    "lines": 75
+  },
+  {
+    "path": "desktop/core/data_recording/recorder.py",
+    "lines": 284
+  },
+  {
+    "path": "desktop/core/data_recording/topic_schema.py",
+    "lines": 227
+  },
+  {
+    "path": "desktop/core/device_state_store.py",
+    "lines": 237
+  },
+  {
+    "path": "desktop/core/generated_upper_protocol.py",
+    "lines": 148
+  },
+  {
+    "path": "desktop/core/hand_backend.py",
+    "lines": 981
+  },
+  {
+    "path": "desktop/core/host_calibration/__init__.py",
+    "lines": 9
+  },
+  {
+    "path": "desktop/core/host_calibration/config.py",
+    "lines": 121
+  },
+  {
+    "path": "desktop/core/host_calibration/dual_motor.py",
+    "lines": 784
+  },
+  {
+    "path": "desktop/core/host_calibration/finish.py",
+    "lines": 110
+  },
+  {
+    "path": "desktop/core/host_calibration/flow.py",
+    "lines": 243
+  },
+  {
+    "path": "desktop/core/host_calibration/math.py",
+    "lines": 329
+  },
+  {
+    "path": "desktop/core/host_calibration/runtime.py",
+    "lines": 994
+  },
+  {
+    "path": "desktop/core/host_calibration/single_motor.py",
+    "lines": 545
+  },
+  {
+    "path": "desktop/core/host_calibration/time_alignment.py",
+    "lines": 204
+  },
+  {
+    "path": "desktop/core/joint_target_adapter.py",
+    "lines": 188
+  },
+  {
+    "path": "desktop/core/motor_mapping.py",
+    "lines": 48
+  },
+  {
+    "path": "desktop/core/protocol.py",
+    "lines": 1455
+  },
+  {
+    "path": "desktop/core/safety_rules.py",
+    "lines": 99
+  },
+  {
+    "path": "desktop/core/session_log.py",
+    "lines": 88
+  },
+  {
+    "path": "desktop/examples/__init__.py",
+    "lines": 2
+  },
+  {
+    "path": "desktop/examples/ros2_joint_target_sender.py",
+    "lines": 62
+  },
+  {
+    "path": "desktop/paths.py",
+    "lines": 32
+  },
+  {
+    "path": "desktop/replay/__init__.py",
+    "lines": 24
+  },
+  {
+    "path": "desktop/replay/replay_controller.py",
+    "lines": 676
+  },
+  {
+    "path": "desktop/replay/replay_csv_loader.py",
+    "lines": 400
+  },
+  {
+    "path": "desktop/replay/replay_models.py",
+    "lines": 121
+  },
+  {
+    "path": "desktop/replay/replay_service.py",
+    "lines": 79
+  },
+  {
+    "path": "desktop/ros2/__init__.py",
+    "lines": 10
+  },
+  {
+    "path": "desktop/ros2/joint_targets.py",
+    "lines": 192
+  },
+  {
+    "path": "desktop/ui/__init__.py",
+    "lines": 10
+  },
+  {
+    "path": "desktop/ui/browser_view.py",
+    "lines": 150
+  },
+  {
+    "path": "desktop/ui/web/__init__.py",
+    "lines": 9
+  },
+  {
+    "path": "desktop/ui/web/common.py",
+    "lines": 72
+  },
+  {
+    "path": "desktop/ui/web/diagnostics.py",
+    "lines": 40
+  },
+  {
+    "path": "desktop/ui/web/direct_control.py",
+    "lines": 62
+  },
+  {
+    "path": "desktop/ui/web/feedback_control.py",
+    "lines": 52
+  },
+  {
+    "path": "desktop/ui/web/joint_calibration.py",
+    "lines": 47
+  },
+  {
+    "path": "desktop/ui/web/motor_calibration.py",
+    "lines": 44
+  },
+  {
+    "path": "desktop/ui/web/plots.py",
+    "lines": 47
+  },
+  {
+    "path": "desktop/ui/web/replay.py",
+    "lines": 44
+  },
+  {
+    "path": "desktop/ui/web/tactile.py",
+    "lines": 51
+  },
+  {
+    "path": "tests/conftest.py",
+    "lines": 6
+  },
+  {
+    "path": "tests/desktop/algorithm/test_replay_controller.py",
+    "lines": 315
+  },
+  {
+    "path": "tests/desktop/algorithm/test_replay_csv_loader.py",
+    "lines": 338
+  },
+  {
+    "path": "tests/desktop/app/test_entry.py",
+    "lines": 22
+  },
+  {
+    "path": "tests/desktop/app/test_ui_runner_ros2.py",
+    "lines": 48
+  },
+  {
+    "path": "tests/desktop/app/test_windows_launcher.py",
+    "lines": 122
+  },
+  {
+    "path": "tests/desktop/core/test_angle_mapping.py",
+    "lines": 142
+  },
+  {
+    "path": "tests/desktop/core/test_application_actions.py",
+    "lines": 175
+  },
+  {
+    "path": "tests/desktop/core/test_calib_snapshot_current.py",
+    "lines": 290
+  },
+  {
+    "path": "tests/desktop/core/test_calibration_diag_protocol.py",
+    "lines": 25
+  },
+  {
+    "path": "tests/desktop/core/test_calibration_diagnostics.py",
+    "lines": 48
+  },
+  {
+    "path": "tests/desktop/core/test_calibration_snapshot.py",
+    "lines": 212
+  },
+  {
+    "path": "tests/desktop/core/test_comm_layer_mapped_angles.py",
+    "lines": 193
+  },
+  {
+    "path": "tests/desktop/core/test_communication_components.py",
+    "lines": 617
+  },
+  {
+    "path": "tests/desktop/core/test_console_operations.py",
+    "lines": 221
+  },
+  {
+    "path": "tests/desktop/core/test_console_snapshot.py",
+    "lines": 34
+  },
+  {
+    "path": "tests/desktop/core/test_core_logic.py",
+    "lines": 788
+  },
+  {
+    "path": "tests/desktop/core/test_device_state_store.py",
+    "lines": 83
+  },
+  {
+    "path": "tests/desktop/core/test_direct_hold_and_release.py",
+    "lines": 89
+  },
+  {
+    "path": "tests/desktop/core/test_external_data_paths.py",
+    "lines": 20
+  },
+  {
+    "path": "tests/desktop/core/test_feedback_command_order.py",
+    "lines": 64
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_backend_handoff.py",
+    "lines": 340
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_dual.py",
+    "lines": 786
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_finish.py",
+    "lines": 175
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_flow.py",
+    "lines": 373
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_math.py",
+    "lines": 138
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_runtime.py",
+    "lines": 869
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_single.py",
+    "lines": 341
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_time_alignment.py",
+    "lines": 258
+  },
+  {
+    "path": "tests/desktop/core/test_host_calibration_transport.py",
+    "lines": 266
+  },
+  {
+    "path": "tests/desktop/core/test_joint_target_adapter.py",
+    "lines": 63
+  },
+  {
+    "path": "tests/desktop/core/test_joint_workspace_guard.py",
+    "lines": 394
+  },
+  {
+    "path": "tests/desktop/core/test_manual_reference_crc.py",
+    "lines": 21
+  },
+  {
+    "path": "tests/desktop/core/test_manual_reference_protocol.py",
+    "lines": 219
+  },
+  {
+    "path": "tests/desktop/core/test_manual_scaled_mapping_v3.py",
+    "lines": 46
+  },
+  {
+    "path": "tests/desktop/core/test_motion_sampler.py",
+    "lines": 47
+  },
+  {
+    "path": "tests/desktop/core/test_packet_recording.py",
+    "lines": 102
+  },
+  {
+    "path": "tests/desktop/core/test_product_fingerprint_protocol.py",
+    "lines": 37
+  },
+  {
+    "path": "tests/desktop/core/test_recording_timestamps.py",
+    "lines": 220
+  },
+  {
+    "path": "tests/desktop/core/test_scoped_multiturn_protocol.py",
+    "lines": 38
+  },
+  {
+    "path": "tests/desktop/core/test_servo_rebase_zero_protocol.py",
+    "lines": 385
+  },
+  {
+    "path": "tests/desktop/core/test_state_copy.py",
+    "lines": 53
+  },
+  {
+    "path": "tests/desktop/core/test_tactile_summary_protocol.py",
+    "lines": 155
+  },
+  {
+    "path": "tests/desktop/ros2/test_joint_targets.py",
+    "lines": 95
+  },
+  {
+    "path": "tests/desktop/ui/test_browser_view.py",
+    "lines": 16
+  },
+  {
+    "path": "tests/desktop/ui/test_native_pages.py",
+    "lines": 89
+  },
+  {
+    "path": "tests/firmware/test_calibration_snapshot_v4_protocol.py",
+    "lines": 71
+  },
+  {
+    "path": "tests/firmware/test_control_trace_protocol.py",
+    "lines": 122
+  },
+  {
+    "path": "tests/firmware/test_manual_reference_ack_scope.py",
+    "lines": 46
+  },
+  {
+    "path": "tests/firmware/test_multiturn_runtime_identity.py",
+    "lines": 70
+  },
+  {
+    "path": "tests/firmware/test_p4_safety_rule_closure.py",
+    "lines": 77
+  },
+  {
+    "path": "tests/firmware/test_rope_init_compatibility.py",
+    "lines": 23
+  },
+  {
+    "path": "tests/firmware/test_safety_event_protocol.py",
+    "lines": 50
+  },
+  {
+    "path": "tests/firmware/test_safety_rules.py",
+    "lines": 33
+  },
+  {
+    "path": "tests/firmware/test_state_sync_protocol.py",
+    "lines": 39
+  },
+  {
+    "path": "tests/firmware/test_task_runtime_protocol.py",
+    "lines": 44
+  },
+  {
+    "path": "tests/firmware/test_task_runtime_window_reducer.py",
+    "lines": 61
+  },
+  {
+    "path": "tests/tools/test_desktop_architecture.py",
+    "lines": 9
+  },
+  {
+    "path": "tests/tools/test_generate_p4_safety_catalog.py",
+    "lines": 82
+  },
+  {
+    "path": "tests/tools/test_generate_robot_model.py",
+    "lines": 113
+  },
+  {
+    "path": "tests/tools/test_generate_upper_protocol.py",
+    "lines": 87
+  },
+  {
+    "path": "tests/tools/test_p4_host_control_lease_policy.py",
+    "lines": 87
+  },
+  {
+    "path": "tests/tools/test_p4_servo_position_codec.py",
+    "lines": 85
+  },
+  {
+    "path": "tests/tools/test_precommit_checks.py",
+    "lines": 51
+  },
+  {
+    "path": "tests/tools/test_sync_structure_urdf_adapter.py",
+    "lines": 36
+  },
+  {
+    "path": "tools/build_protocol_docx.py",
+    "lines": 329
+  },
+  {
+    "path": "tools/capture_dist_scan.ps1",
+    "lines": 53
+  },
+  {
+    "path": "tools/capture_manual_cs_scan.ps1",
+    "lines": 59
+  },
+  {
+    "path": "tools/capture_tactile_map.ps1",
+    "lines": 69
+  },
+  {
+    "path": "tools/check_desktop_architecture.py",
+    "lines": 187
+  },
+  {
+    "path": "tools/clone_structure_repo.ps1",
+    "lines": 81
+  },
+  {
+    "path": "tools/create_desktop_shortcut.ps1",
+    "lines": 27
+  },
+  {
+    "path": "tools/desktop_architecture/apply_desktop_headers.py",
+    "lines": 274
+  },
+  {
+    "path": "tools/generate_handover_index.py",
+    "lines": 304
+  },
+  {
+    "path": "tools/generate_p4_safety_catalog.py",
+    "lines": 494
+  },
+  {
+    "path": "tools/generate_p4_urdf_limits.py",
+    "lines": 16
+  },
+  {
+    "path": "tools/generate_robot_model.py",
+    "lines": 393
+  },
+  {
+    "path": "tools/generate_upper_protocol.py",
+    "lines": 272
+  },
+  {
+    "path": "tools/install_git_hooks.ps1",
+    "lines": 24
+  },
+  {
+    "path": "tools/link_urdf.ps1",
+    "lines": 52
+  },
+  {
+    "path": "tools/p4_architecture/check_p4_architecture.ps1",
+    "lines": 441
+  },
+  {
+    "path": "tools/p4_architecture/check_safety_rule_closure.py",
+    "lines": 254
+  },
+  {
+    "path": "tools/p4_debug/build_debug.ps1",
+    "lines": 43
+  },
+  {
+    "path": "tools/p4_debug/p4_debug_env.ps1",
+    "lines": 60
+  },
+  {
+    "path": "tools/p4_debug/start_openocd.ps1",
+    "lines": 19
+  },
+  {
+    "path": "tools/p4_debug/upload_debug.ps1",
+    "lines": 27
+  },
+  {
+    "path": "tools/p4_debug/verify_debug_env.ps1",
+    "lines": 45
+  },
+  {
+    "path": "tools/precommit_checks.py",
+    "lines": 100
+  },
+  {
+    "path": "tools/sync_structure_urdf_adapter.py",
+    "lines": 156
+  },
+  {
+    "path": "tools/update_structure_urdf.ps1",
+    "lines": 77
+  },
+  {
+    "path": "tools/validate_urdf.py",
+    "lines": 102
+  }
+]

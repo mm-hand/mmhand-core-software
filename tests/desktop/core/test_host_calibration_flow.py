@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from desktop.core.host_calibration import workflow as calibration_workflow
+from desktop.core import calibration_workflow
 from desktop.core.calibration_workflow import CalibrationWorkflowService
 from desktop.core.data_models import HandModel
 from desktop.core.host_calibration import flow
@@ -77,6 +77,7 @@ def machines(monkeypatch):
                         lambda io, joint: calls.append(("invalidate", joint)))
     monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
                         lambda io, joints: 0)
+    monkeypatch.setattr(flow, "prepare_single_workspace", lambda io, joint, params: True)
 
     def single(io, joint, params, ordered, failed, index, selected):
         calls.append(("single", joint, tuple(ordered), failed, index, selected, params))
@@ -300,8 +301,6 @@ def test_ui_default_workflow_uses_host_io_and_ignores_p4_idle(tmp_path, monkeypa
             self.factory = (cancel_check, joint_mask, motor_mask, kwargs)
             return io
 
-        def request_firmware_calibration(self):
-            raise AssertionError("default UI path must use the host machines")
 
     def host_run(calib_io, joint_mask, motor_mask, on_joint):
         assert calib_io is io
@@ -316,13 +315,12 @@ def test_ui_default_workflow_uses_host_io_and_ignores_p4_idle(tmp_path, monkeypa
 
     monkeypatch.setattr(calibration_workflow, "run_host_calibration", host_run)
     controller = Controller()
-    service = calibration_workflow.HostCalibrationWorkflowService(controller, tmp_path / "calib.json")
+    service = calibration_workflow.CalibrationWorkflowService(controller, tmp_path / "calib.json")
     events = queue.Queue()
     service.register_callback(events.put)
     assert service.begin_calibration(joint_mask=1 << 1, motor_mask=_mask((1,)),
                                      reset_motor_mask=_mask((1,)), baseline_state=HandModel())
     assert entered.wait(2)
-    service.observe_state(HandModel())
     assert service._operation == "host_calibration"
     release.set()
     completed = None
@@ -350,7 +348,7 @@ def test_cancel_keeps_external_output_blocked_until_host_worker_finishes(tmp_pat
         return flow.CalibrationSessionResult(False, cancelled=True)
 
     monkeypatch.setattr(calibration_workflow, 'run_host_calibration', host_run)
-    service = calibration_workflow.HostCalibrationWorkflowService(Controller(), tmp_path / 'calib.json')
+    service = calibration_workflow.CalibrationWorkflowService(Controller(), tmp_path / 'calib.json')
     args = dict(joint_mask=2, motor_mask=4, reset_motor_mask=4, baseline_state=HandModel())
     assert service.begin_calibration(**args)
     assert entered.wait(2)
@@ -362,37 +360,12 @@ def test_cancel_keeps_external_output_blocked_until_host_worker_finishes(tmp_pat
     assert not service.is_host_calibration_active()
 
 
-def test_host_service_inherits_original_transaction_facilities(tmp_path):
-    service = calibration_workflow.HostCalibrationWorkflowService(MagicMock(), tmp_path / 'calib.json')
-    assert isinstance(service, CalibrationWorkflowService)
-    assert service.cancel.__func__ is CalibrationWorkflowService.cancel
-    assert service.begin_import.__func__ is CalibrationWorkflowService.begin_import
-    assert service.begin_startup_restore.__func__ is CalibrationWorkflowService.begin_startup_restore
-    assert not service.is_host_calibration_active()
-    assert not CalibrationWorkflowService.is_host_calibration_active(service)
-    service._executor.shutdown(wait=True)
 
 
-def test_explicit_firmware_entry_uses_original_base_flow_in_host_subclass(tmp_path):
-    controller = MagicMock()
-    controller.prepare_calibration_turn_zero.return_value = (True, 'prepared', 4, 0)
-    controller.set_active_scope.return_value = True
-    controller.request_firmware_calibration.return_value = True
-    service = calibration_workflow.HostCalibrationWorkflowService(controller, tmp_path / 'calib.json')
-    prepared = threading.Event()
-    service.register_callback(lambda event: prepared.set() if event.phase == 'prepare' else None)
-    assert service.begin_firmware_calibration(
-        joint_mask=2, motor_mask=4, reset_motor_mask=4, baseline_state=HandModel())
-    assert prepared.wait(2)
-    controller.request_firmware_calibration.assert_called_once()
-    controller.create_host_calibration_io.assert_not_called()
-    assert not service.is_host_calibration_active()
-    service.cancel()
-    service._executor.shutdown(wait=True)
 
 
 def test_executor_submit_failure_rolls_back_host_flags(tmp_path):
-    service = calibration_workflow.HostCalibrationWorkflowService(MagicMock(), tmp_path / 'calib.json')
+    service = calibration_workflow.CalibrationWorkflowService(MagicMock(), tmp_path / 'calib.json')
     service._executor.shutdown(wait=True)
     assert not service.begin_calibration(
         joint_mask=2, motor_mask=4, reset_motor_mask=4, baseline_state=HandModel())

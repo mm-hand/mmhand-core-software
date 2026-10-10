@@ -1,30 +1,22 @@
-from desktop.app.entry import build_parser
+from unittest.mock import Mock
+import pytest
+from desktop.app.entry import build_parser, main
 
 
-def test_cli_args_parse_ros2_auto_start() -> None:
-    args = build_parser().parse_args(
-        ["cli", "--port", "COM7", "--ros2", "--ros-topic", "/hand/targets", "--auto-start", "--no-plot"]
-    )
-
-    assert args.command == "cli"
-    assert args.port == "COM7"
-    assert args.ros2 is True
-    assert args.ros_topic == "/hand/targets"
-    assert args.auto_start is True
-    assert args.no_plot is True
+def test_default_entry_enables_optional_ros():
+    assert not build_parser().parse_args([]).no_ros2
+    assert build_parser().parse_args(['--no-ros2']).no_ros2
 
 
-def test_ui_args_parse_mode_and_ros2() -> None:
-    args = build_parser().parse_args(["ui", "--mode", "replay", "--ros2"])
-
-    assert args.command == "ui"
-    assert args.mode == "replay"
-    assert args.ros2 is True
+@pytest.mark.parametrize('arguments', [['ui'], ['cli'], ['--auto-start'], ['--ros-topic', '/raw_ik_target']])
+def test_retired_modes_are_not_formal_entry(arguments):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(arguments)
 
 
-def test_ros2_is_enabled_by_default_and_can_be_disabled() -> None:
-    default_args = build_parser().parse_args(["ui", "--mode", "monitor"])
-    disabled_args = build_parser().parse_args(["ui", "--no-ros2"])
-
-    assert default_args.ros2 is True
-    assert disabled_args.ros2 is False
+def test_main_launches_one_local_ui(monkeypatch):
+    from desktop.app import ui_runner
+    runner = Mock(return_value=0)
+    monkeypatch.setattr(ui_runner, 'run_ui', runner)
+    assert main(['--no-ros2']) == 0
+    runner.assert_called_once_with(ros2_enabled=False)

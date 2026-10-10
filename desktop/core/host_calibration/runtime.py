@@ -170,6 +170,7 @@ class HostCalibrationIO:
         return {
             'servo_feedback_age_ms': age,
             'servo_online_bitmap': state.servo_online_bitmap,
+            'servo_route_conflict_bitmap': state.servo_route_conflict_bitmap,
             'multi_turn_unknown_bitmap': state.multi_turn_unknown_bitmap,
             'servo_feedback_timestamp_ms': self.now_ms() - age,
             'system_state': state.system_state,
@@ -584,13 +585,19 @@ class HostCalibrationIO:
         selected = self.selected_joint_mask | sum(
             1 << joint for joint in {MOTOR_TO_JOINT_INDEX[m]
                 for m in range(MOTOR_COUNT) if self.selected_motor_mask & (1 << m)})
-        if not any(selected & (1 << joint) for joint in WORKSPACE_DUAL_JOINTS):
+        targets = [j for j in range(16) if selected & (1 << j)]
+        if not targets:
             return True
         state = self._state()
         for joint in WORKSPACE_DUAL_JOINTS:
             if selected & (1 << joint):
                 continue
+            if all(j // 4 * 4 == joint for j in targets):
+                continue  # 不让位目标手指自己的侧摆。
             pair = sum(1 << motor for motor in joint_motors(joint))
+            if state.servo_route_conflict_bitmap & pair:
+                self.feedback_recovery_error = f'J{joint:02d} helper motor route conflict; check IDs and bus connections'
+                return False
             online = state.servo_online_bitmap & pair
             if not online:
                 self.preparation_reset_mask &= ~pair
@@ -599,7 +606,9 @@ class HostCalibrationIO:
                 self.feedback_recovery_error = f'J{joint:02d} workspace helper pair partially online (mask=0x{pair:08X})'
                 return False
             if state.multi_turn_unknown_bitmap & pair:
-                self.preparation_reset_mask |= pair  # 两台一起建立新原点。
+                self.feedback_recovery_error = f'J{joint:02d} helper multi-turn position unknown; only selected calibration joints may rebuild coordinates'
+                return False
+            self.preparation_reset_mask &= ~pair  # 辅助电机不能被 UI 的 reset 范围归零。
         return True
 
     def wait_servo_recovery(self, mask):

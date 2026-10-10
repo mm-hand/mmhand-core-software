@@ -170,11 +170,35 @@ def test_target_unknown_rebuild_requires_original_recovery_gates(gate):
     assert not io.commands
 
 
-def test_single_or_thumb_scope_has_no_four_finger_read_mask():
+def test_thumb_scope_has_no_four_finger_read_mask():
     io = FakeIO()
     io.online = 0
     io.age = 10000
-    assert dual.build_dynamic_workspace_motor_mask(io, [1, 16, 20]) == 0
+    assert dual.build_dynamic_workspace_motor_mask(io, [16, 20]) == 0
+
+
+def test_single_scope_rejects_stale_helpers_before_movement():
+    io = FakeIO()
+    io.age = 10000
+    assert dual.build_dynamic_workspace_motor_mask(io, [1]) is None
+    assert not io.commands
+
+
+def test_route_conflict_helper_is_rejected_before_workspace_movement():
+    io = FakeIO()
+    snapshot = io.snapshot
+    io.snapshot = lambda: dict(snapshot(), servo_route_conflict_bitmap=1 << config.joint_motors(4)[0])
+    assert dual.build_dynamic_workspace_motor_mask(io, [1]) is None
+    assert not io.commands
+
+
+@pytest.mark.parametrize('target', range(16))
+def test_every_four_finger_joint_uses_other_fingers_in_safe_order(target):
+    io = FakeIO()
+    root = target // 4 * 4
+    expected = [(j, dual.POSE_A) for j in (0, 4, 8, 12) if j < root]
+    expected += [(j, dual.POSE_B) for j in (12, 8, 4, 0) if j > root]
+    assert dual.build_dual_workspace_plan(io, target) == expected
 
 
 def test_helper_preflight_finishes_before_any_workspace_movement():

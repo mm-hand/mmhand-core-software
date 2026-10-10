@@ -18,6 +18,22 @@ def frames(sequence, stamp):
     return [(PACKET_TYPE_CONTROL_TRACE, p + struct.pack(">I", stamp)) for p in (detail, base)]
 
 
+def test_starting_new_recording_preserves_all_existing_sessions(tmp_path):
+    existing = []
+    for i in range(25):
+        folder = tmp_path / f'数据记录_20260101_{i:06d}'
+        folder.mkdir()
+        path = folder / 'evidence.txt'
+        path.write_text(str(i))
+        existing.append(path)
+    recorder = DataSessionRecorder()
+    try:
+        recorder.start(str(tmp_path))
+    finally:
+        recorder.stop()
+    assert all(path.exists() and path.read_text() == str(i) for i, path in enumerate(existing))
+
+
 def test_five_frames_in_one_batch_have_five_original_timestamps():
     rows = []
     recorder = PacketRecorder(lambda topic, row: rows.append((topic, row)))

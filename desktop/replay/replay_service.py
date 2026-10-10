@@ -58,11 +58,13 @@ class ReplayService:
         with self._lock:
             return self._trace
 
-    def send(self) -> tuple[bool, str]:
+    def send(self, *, expected_application_epoch=None) -> tuple[bool, str]:
         trace = self.trace()
         if trace is None:
             return False, "Import a motion or joint-state CSV first"
-        return self.controller.start(trace)
+        if expected_application_epoch is None:
+            return self.controller.start(trace)
+        return self.controller.start(trace, expected_application_epoch=expected_application_epoch)
 
     def stop(self, reason: str = "User stopped replay") -> bool:
         return self.controller.stop(reason)

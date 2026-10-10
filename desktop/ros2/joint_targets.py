@@ -42,6 +42,8 @@ class JointTargetCommandHandler:
         warn_interval_s: float = 1.0,
     ) -> None:
         self.backend = backend
+        if auto_start:
+            raise ValueError('ROS2 requires /mmhand/joint_targets and 21 URDF degrees; automatic startup is prohibited')
         self.topic = topic
         self.auto_start = bool(auto_start)
         self.input_space = str(input_space)
@@ -74,9 +76,6 @@ class JointTargetCommandHandler:
             self._warn(message)
         if not sent and not message:
             self._warn(f"ignored ROS2 joint target on {self.topic}: backend rejected frame")
-        if sent and self.auto_start and not self._auto_started:
-            self.backend.start()
-            self._auto_started = True
         return sent
 
     def _warn(self, text: str) -> None:
@@ -97,6 +96,8 @@ class Ros2JointTargetBridge:
         topic: str = DEFAULT_JOINT_TARGET_TOPIC,
         auto_start: bool = False,
     ) -> None:
+        if topic != DEFAULT_JOINT_TARGET_TOPIC or auto_start:
+            raise ValueError('ROS2 bridge requires /mmhand/joint_targets; automatic startup is prohibited')
         self.backend = backend
         self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=URDF_DEG)
         self.handler = JointTargetCommandHandler(
@@ -137,7 +138,7 @@ class Ros2JointTargetBridge:
                     Float32MultiArray,
                     bridge.config.topic,
                     bridge.handler.handle_message,
-                    10,
+                    1,
                 )
                 self.get_logger().info(
                     f"Listening for Float32MultiArray joint targets on {bridge.config.topic}"

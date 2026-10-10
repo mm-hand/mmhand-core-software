@@ -51,7 +51,7 @@ def test_clear_manual_reference_uses_same_fixed_wire_length():
 
 
 def test_system_status_parses_manual_nvs_extension_and_old_payload():
-    legacy = bytearray(61)
+    legacy = bytearray(43)
     parsed_legacy = parse_system_status_packet(bytes(legacy))
     assert parsed_legacy is not None
     assert parsed_legacy[-1] is False
@@ -59,7 +59,7 @@ def test_system_status_parses_manual_nvs_extension_and_old_payload():
     extended = legacy + struct.pack(">III", 0x001FFFFF, 0x12345678, 7) + bytes([1])
     parsed = parse_system_status_packet(bytes(extended))
     assert parsed is not None
-    assert parsed[26:31] == (
+    assert parsed[19:24] == (
         0x001FFFFF,
         0x12345678,
         7,
@@ -69,7 +69,7 @@ def test_system_status_parses_manual_nvs_extension_and_old_payload():
 
 
 def test_system_status_parses_calibration_assembly_warning_extension():
-    payload = bytearray(102)
+    payload = bytearray(84)
     payload[4] = 4
     warning_mask = (1 << 12) | (1 << 15)
     offsets = [0] * ENCODER_COUNT
@@ -89,7 +89,7 @@ def test_system_status_parses_calibration_assembly_warning_extension():
 
 
 def test_system_status_parses_feedback_admission_extension():
-    payload = bytearray(148)
+    payload = bytearray(130)
     payload.extend(struct.pack(">I", 42))
     payload.extend(bytes([3, 4]))
 
@@ -102,7 +102,7 @@ def test_system_status_parses_feedback_admission_extension():
 
 
 def test_system_status_parses_feedback_collision_extension():
-    payload = bytearray(154)
+    payload = bytearray(136)
     dual_hold_mask = (1 << 0) | (1 << 12) | (1 << 20)
     armed_mask = dual_hold_mask | (1 << 3)
     payload.extend(struct.pack(">II", dual_hold_mask, 9))
@@ -120,23 +120,23 @@ def test_system_status_parses_feedback_collision_extension():
 
 
 def test_system_status_parses_servo_reset_zero_extension():
-    payload = bytearray(191)
+    payload = bytearray(173)
     overflow_mask = (1 << 2) | (1 << 24)
     success_mask = 1 << 24
     failed_mask = 1 << 2
     invalidated_joint_mask = (1 << 19) | (1 << 20)
-    payload[166:170] = struct.pack(">I", overflow_mask)
-    payload[170:174] = struct.pack(">I", 7)
-    payload[174:178] = struct.pack(">I", 6)
-    payload[178:182] = struct.pack(">I", success_mask)
-    payload[182:186] = struct.pack(">I", failed_mask)
-    payload[186:190] = struct.pack(">I", invalidated_joint_mask)
-    payload[190] = 3
+    payload[148:152] = struct.pack(">I", overflow_mask)
+    payload[152:156] = struct.pack(">I", 7)
+    payload[156:160] = struct.pack(">I", 6)
+    payload[160:164] = struct.pack(">I", success_mask)
+    payload[164:168] = struct.pack(">I", failed_mask)
+    payload[168:172] = struct.pack(">I", invalidated_joint_mask)
+    payload[172] = 3
 
     parsed = parse_system_status_packet(bytes(payload))
 
     assert parsed is not None
-    assert parsed[43:51] == (
+    assert parsed[36:44] == (
         overflow_mask,
         7,
         6,
@@ -161,23 +161,26 @@ def test_servo_reset_zero_command_contains_big_endian_motor_mask():
 def test_manual_reference_snapshot_parses_all_21_pairs():
     mins = [100 + i for i in range(ENCODER_COUNT)]
     maxs = [1000 + i for i in range(ENCODER_COUNT)]
-    payload = bytearray([1])
+    payload = bytearray([3])
     payload.extend(struct.pack(">III", (1 << ENCODER_COUNT) - 1, 0x12345678, 9))
+    payload.append(1)
+    payload.extend(struct.pack(">I", 0))
     payload.append(1)
     for min_raw, max_raw in zip(mins, maxs):
         payload.extend(struct.pack(">HH", min_raw, max_raw))
 
+    payload.extend(bytes([1] * ENCODER_COUNT))
     parsed = parse_manual_encoder_reference_packet(bytes(payload))
 
     assert parsed is not None
     assert parsed["valid_bitmap"] == (1 << ENCODER_COUNT) - 1
     assert parsed["reference_crc"] == 0x12345678
-    assert parsed["nvs_sequence"] == 9
-    assert parsed["nvs_valid"] is True
+    assert parsed["revision"] == 9
+    assert parsed["committed"] is True
     assert parsed["min_raw"] == mins
     assert parsed["max_raw"] == maxs
-    assert parsed["has_encoder_directions"] is False
-    assert parsed["encoder_directions"] == [0] * ENCODER_COUNT
+    assert parsed["has_encoder_directions"] is True
+    assert parsed["encoder_directions"] == [1] * ENCODER_COUNT
 
 
 def test_manual_reference_v3_parses_p4_encoder_directions():
@@ -199,7 +202,7 @@ def test_manual_reference_v3_parses_p4_encoder_directions():
     assert parsed is not None
     assert parsed["version"] == 3
     assert parsed["auto_valid_bitmap"] == 0x00000003
-    assert parsed["save_status"] == 1
+    assert parsed["commit_status"] == 1
     assert parsed["has_encoder_directions"] is True
     assert parsed["encoder_directions"] == directions
 

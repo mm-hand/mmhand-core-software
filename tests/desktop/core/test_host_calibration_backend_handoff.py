@@ -45,6 +45,9 @@ class _Workflow:
     def is_host_calibration_active(self):
         return self.active
 
+    def is_import_active(self):
+        return False
+
     def begin_calibration(self, **kwargs):
         if self.begin_hook is not None:
             self.begin_hook()
@@ -235,7 +238,6 @@ _USER_OUTPUT_CASES = [
     ("resume", (), None),
     ("set_motor_positions_absolute", ([0] * MOTOR_COUNT,), None),
     ("set_single_motor_position_absolute", (0, 1000), None),
-    ("request_firmware_calibration", (), False),
     ("request_run_feedback", (), False),
     ("set_active_scope", (1, 1, True), False),
     ("set_manual_encoder_references", ([1000] * ENCODER_COUNT, [5000] * ENCODER_COUNT), False),
@@ -332,7 +334,7 @@ def test_user_output_proxy_remains_available_after_host_cleanup(backend, method,
 
     controller_call.assert_called_once()
     if method in {"hold_current_motor_positions", "enable_direct_hold", "invalidate_joint_commands",
-                  "request_firmware_calibration", "request_run_feedback", "set_active_scope",
+                  "request_run_feedback", "set_active_scope",
                   "set_manual_encoder_references", "set_manual_encoder_reference",
                   "clear_manual_encoder_references", "rope_init"}:
         assert returned is controller_result

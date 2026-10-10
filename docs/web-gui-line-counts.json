@@ -1,0 +1,41 @@
+{
+  "baseline": "Actual implementation worktree before this cleanup; old Qt pages were already removed.",
+  "before_desktop": {
+    "files": 70,
+    "lines": 24117
+  },
+  "after_desktop": {
+    "files": 70,
+    "lines": 19364
+  },
+  "groups": {
+    "desktop/": {
+      "files": 70,
+      "lines": 19364
+    },
+    "desktop/ui/": {
+      "files": 12,
+      "lines": 628
+    },
+    "desktop/core/": {
+      "files": 43,
+      "lines": 17036
+    },
+    "ESP32-P4/ServoBoardMain/src/": {
+      "files": 198,
+      "lines": 23051
+    },
+    "ESP32-S3/System/src/": {
+      "files": 18,
+      "lines": 2488
+    },
+    "tests/": {
+      "files": 65,
+      "lines": 10564
+    },
+    "tools/": {
+      "files": 26,
+      "lines": 3958
+    }
+  }
+}

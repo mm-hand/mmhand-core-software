@@ -5,18 +5,14 @@
  */
 #include "HostCommTask.h"
 #include <Arduino.h>
-
 #include "HostCommService.h"
 #include "../../config/TaskConfig.h"
 #include "../../hal/serial/HostSerialPort.h"
 #include "../../platform/rtos/PeriodicDeadline.h"
-#include "../../platform/rtos/TaskSignal.h"
 #include "../../platform/time/Clock.h"
 #include "../../runtime/metrics/TaskRuntimeMetrics.h"
 #include "../../runtime/SystemRuntimeContext.h"
-
 namespace {
-
 /** USB/UART 数据就绪时只置位通知；协议读取仍由 HostCommTask 串行完成。 */
 void wakeHostComm(void* context)
 {
@@ -25,9 +21,7 @@ void wakeHostComm(void* context)
         sharedData->hostCommWake.notify(p4::runtime::wake::kHostRx);
     }
 }
-
 } // namespace
-
 void hostCommTask(void* parameter)
 {
     SystemRuntimeContext* sharedData = static_cast<SystemRuntimeContext*>(parameter);
@@ -35,7 +29,6 @@ void hostCommTask(void* parameter)
         vTaskDelete(NULL);
         return;
     }
-
     sharedData->hostCommWake.bind(xTaskGetCurrentTaskHandle());
     HostSerialPort::setRxWakeHandler(wakeHostComm, sharedData);
     const TickType_t periodTicks = pdMS_TO_TICKS(HOST_COMM_SERVICE_PERIOD_MS);
@@ -50,28 +43,13 @@ void hostCommTask(void* parameter)
             continue;
         }
         if (periodicDue) deadline.advancePast(dispatchTicks);
-
         const TickType_t loopBegin = xTaskGetTickCount();
         taskRuntimeMarkLoopStart(TASK_RUNTIME_HOST_COMM);
-        taskRuntimeMarkCycle(TASK_RUNTIME_HOST_COMM,
-                             periodicDue,
-                             wakeReasons != 0U);
+        taskRuntimeMarkCycle(TASK_RUNTIME_HOST_COMM, periodicDue, wakeReasons != 0U);
         const HostCommStepRequest request = {wakeReasons, periodicDue};
         wakeReasons = 0;
-        stepHostCommService(sharedData,
-                            p4::platform::time::monotonicMillis(),
-                            request);
-        taskRuntimeMarkLoopEnd(TASK_RUNTIME_HOST_COMM);
-        if (periodicDue) {
-            const TickType_t loopEnd = xTaskGetTickCount();
-            const bool periodOverrun =
-                (loopEnd - loopBegin) >= periodTicks || deadline.due(loopEnd);
-            taskRuntimeMarkPeriodResult(TASK_RUNTIME_HOST_COMM, periodOverrun);
-            if (periodOverrun) {
-                if (deadline.due(loopEnd)) deadline.advancePast(loopEnd);
-                vTaskDelay(1);
-            }
-        }
+        stepHostCommService(sharedData, p4::platform::time::monotonicMillis(), request);
+        taskRuntimeFinishCycle(TASK_RUNTIME_HOST_COMM, periodicDue, loopBegin, periodTicks, deadline);
     }
     vTaskDelete(NULL);
 }

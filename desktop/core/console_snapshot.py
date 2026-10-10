@@ -1,0 +1,159 @@
+"""Read-only console interpretation. No device commands or control decisions.
+
+Quality thresholds mirror the existing calibration warning contract. Missing
+measurements remain unknown; presentation labels never authorize motion.
+
+
+职责：解释只读状态与质量标签。
+线程：读取后端同步快照，不创建线程。
+输入：后端快照及用户交互。
+输出：只读显示字段。
+状态所有权：不拥有设备状态，不授权控制。
+禁止依赖：禁止依赖 UI 或改变硬件判据。
+"""
+from .host_calibration.math import directed_encoder_delta, deg_to_encoder_count, f32
+from .host_calibration.config import joint_motors
+from .motor_mapping import MOTOR_TO_JOINT_INDEX
+from .calibration_snapshot import parse_mask
+
+
+def joint_quality(valid, span, urdf_span, draft_status='', fresh=True):
+    if draft_status and draft_status not in ('SAVED', 'DRAFT'):
+        return ['FAILED']
+    if draft_status == 'DRAFT':
+        return ['PENDING']
+    if not fresh:
+        return ['UNKNOWN']
+    if not valid:
+        return ['PENDING']
+    if span is None or urdf_span is None:
+        return ['UNKNOWN']
+    return ['OFFSET' if abs(span - urdf_span) > 360 else 'READY']
+
+
+def motor_quality(valid, result, fresh=True):
+    if result and result.get('success') is False:
+        return ['FAILED']
+    if not fresh:
+        return ['UNKNOWN']
+    if not valid:
+        return ['PENDING']
+    if not result or result.get('success') is not True or not result.get('hasAssemblyWarningFields'):
+        return ['UNKNOWN']
+    if 'autoMinOffsetCounts' not in result or 'autoMaxShortfallCounts' not in result:
+        return ['UNKNOWN']
+    warnings = []
+    reason = int(result.get('assemblyWarningReason', 0))
+    if reason & 1 or int(result['autoMinOffsetCounts']) >= 350:
+        warnings.append('WEAK RETURN')
+    if reason & 2 or int(result['autoMaxShortfallCounts']) >= 300:
+        warnings.append('HIGH FRICTION')
+    return warnings or ['READY']
+
+
+def enrich_snapshot(hand, state, snapshot, now, fresh):
+    for row in snapshot['joints']:
+        j, draft = row['joint'], row['draft']
+        result = state.joint_calib_results[j] or {}
+        minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
+        span = directed_encoder_delta(minimum, maximum, row['direction']) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
+        urdf_span = deg_to_encoder_count(f32(f32(row['max']) - f32(row['min'])))
+        quality = joint_quality(row['manual_valid'] or draft.get('status') == 'SAVED', span, urdf_span, hand._joint_transactions.get(j, draft.get('status', '')), fresh)
+        persisted = (draft.get('status') == 'SAVED' or state.manual_reference_committed and
+                     hand._manual_saved_pairs.get(j) == (state.manual_reference_min_raw[j], state.manual_reference_max_raw[j]))
+        if row['manual_valid'] and quality[0] in ('READY', 'OFFSET') and not persisted:
+            quality = ['UNKNOWN']
+        motor_status = motor_quality(row['auto_valid'], result, fresh)
+        if draft and draft.get('status') != 'SAVED' or draft.get('status') == 'SAVED' and not row['auto_valid']:
+            motor_status = ['PENDING']
+        transaction = hand._motor_transactions.get(j)
+        if transaction in ('FAILED', 'PENDING'):
+            motor_status = [transaction]
+        row.update(manual_min=minimum if 'min' in draft or row['manual_valid'] else None,
+                   manual_max=maximum if 'max' in draft or row['manual_valid'] else None,
+                   span=span, urdf_span=urdf_span, difference=abs(span - urdf_span) if span is not None else None,
+                   joint_quality=quality, motor_quality=motor_status, motors=list(joint_motors(j)),
+                   auto_min=result.get('autoMinRaw'), auto_max=result.get('autoMaxRaw'),
+                   current_min=result.get('currentMinDeg'), result=result,
+                   persistence=draft.get('status', 'Saved' if persisted else 'RAM / JSON unknown'),
+                   encoder='FAULT' if fresh and state.encoder_fault_bitmap & (1 << j) else
+                           'ONLINE' if fresh and state.has_encoder_health_status and state.encoder_online_bitmap & (1 << j) else 'UNKNOWN',
+                   ros_target=getattr(hand, '_console_ros_targets', {}).get(j))
+    for row in snapshot['motors']:
+        m = row['motor']
+        limits = None
+        if fresh and state.servo_logical_range_valid_bitmap & (1 << m):
+            lo, hi = state.servo_logical_range_min[m], state.servo_logical_range_max[m]
+            if state.motor_abs_limit_valid_bitmap & (1 << m):
+                lo, hi = max(lo, state.motor_abs_limit_min[m]), min(hi, state.motor_abs_limit_max[m])
+            if lo <= hi:
+                limits = [lo, hi]
+        row.update(joint=MOTOR_TO_JOINT_INDEX[m], limits=limits,
+                   bus=state.servo_route_bus[m] if fresh and state.has_servo_route_status else None,
+                   route=state.servo_route_state[m] if fresh and state.has_servo_route_status else None,
+                   raw=state.servo_raw_positions[m] if fresh and state.has_servo_raw_data and row['abs'] is not None and state.servo_raw_p4_time_ms == state.servo_feedback_p4_time_ms else None,
+                   saved_raw=state.host_multiturn_saved_raw_positions[m] if state.host_multiturn_valid_mask & (1 << m) else None,
+                   turn=(state.servo_angles[m] // 4096) if row['abs'] is not None and state.has_connectivity_status and not state.multi_turn_unknown_bitmap & (1 << m) else None)
+    snapshot['selected_motors'] = list(hand._selected_motors)
+    trace = hand._replay_service.trace() if hand._replay_service else None
+    snapshot['replay']['file'] = dict(name=trace.name, frames=trace.frame_count, duration_s=trace.duration_s,
+        rate_hz=trace.average_hz, warnings=list(trace.warnings)) if trace else {}
+    current_op = next((op for op in snapshot['operations'] if op['operation_id'] == hand._application_busy), {})
+    snapshot['connections'] = {}
+    for name, connected, port, age in (
+        ('p4', hand.is_comm_connected(), getattr(hand.comm, 'port', ''), snapshot['diagnostics']['status_age_ms']),
+        ('s3', hand.is_tactile_serial_connected(), hand.tactile_port, snapshot['tactile']['age_ms'])):
+        pending = current_op.get('name', '').replace(' ', '').lower()
+        transition = 'Connecting…' if pending == 'connect' + name else 'Disconnecting…' if pending == 'disconnect' + name else ''
+        snapshot['connections'][name] = dict(connected=connected, port=port, age_ms=age,
+            label=transition or ('Disconnect' if connected else 'Connect'), pending=bool(transition))
+    snapshot['recording'].update(enabled=hand._save_data, full_tactile=hand._record_full_tactile,
+        duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,
+        error=hand._recording_error, finalizing=bool(hand._recording_thread and hand._recording_thread.is_alive()))
+    fault_fresh = fresh and state.has_fault_status_data and 0 <= now - state.fault_status_last_rx_ts <= 0.6
+    snapshot['badges'] = {
+        'System': snapshot['device'], 'Calibration': state.calib_status if fresh else 'UNKNOWN',
+        'Overload': 'ACTIVE' if fault_fresh and any(state.servo_overload_fault) or fresh and state.has_servo_route_status and state.servo_bus_overload_mask else 'CLEAR' if fault_fresh and state.has_servo_route_status else 'UNKNOWN',
+        'Collision': 'HOLD' if fresh and state.feedback_collision_hold_bitmap else 'ARMED' if fresh and state.feedback_collision_armed_bitmap else 'OFF' if fresh and state.has_feedback_collision_status else 'UNKNOWN',
+        'Multi-turn': 'UNKNOWN' if not fresh or not state.has_connectivity_status or not state.servo_online_bitmap else 'MISSING' if state.multi_turn_unknown_bitmap & state.servo_online_bitmap else 'KNOWN'}
+    snapshot['import_preview'] = None
+    for token, preview in hand._import_previews.items():
+        payload = preview['payload']
+        snapshot['import_preview'] = dict(token=token, name=preview['name'], saved_at=payload.get('saved_at_host_time', 'Unknown'),
+            profile=payload.get('hand_profile', 'Unknown'), joints=parse_mask(payload.get('active_joint_mask')),
+            manual_joints=parse_mask(payload.get('manual_reference_valid_bitmap')),
+            motors=parse_mask(payload.get('active_motor_mask')))
+    tactile = snapshot['tactile']
+    tactile.update(level=state.tactile_data_level, modules=[])
+    for f, finger in enumerate(state.tactile_data):
+        for m, sensor in enumerate(finger.sensors):
+            index = f * 3 + m
+            age = now - state.tactile_module_last_rx_ts[index]
+            valid = bool(state.tactile_module_valid_mask & (1 << index)) and 0 <= age <= 0.6
+            tactile['modules'].append(dict(finger=f, module=m, valid=valid, age_ms=int(age * 1000) if state.tactile_module_last_rx_ts[index] else None,
+                force=sensor.resultant.tolist() if valid else None,
+                taxels=sensor.contact_forces.tolist() if valid and state.tactile_data_level == 'FULL' else None))
+    snapshot['diagnostics']['routes'] = [dict(motor=m['motor'], bus=m['bus'], route=m['route'], online=m['online']) for m in snapshot['motors']]
+    snapshot['diagnostics']['raw_warning_bitmap'] = state.calibration_warning_bitmap
+    snapshot['diagnostics'].update(direct_reject_reason=state.direct_reject_reason,
+        feedback_reject_reason=state.feedback_reject_reason, encoder_fault_bitmap=state.encoder_fault_bitmap,
+        multi_turn_unknown_bitmap=state.multi_turn_unknown_bitmap,
+        active_motor_mask=state.active_motor_mask, active_joint_mask=state.active_joint_mask,
+        calibration_results=state.joint_calib_results, manual_reference_crc=state.manual_reference_crc)
+    issues = [dict(id=f'p{i}', severity='Warning', channel='System', problem=text, details=text) for i, text in enumerate(snapshot['problems'])]
+    if fault_fresh:
+        for m, fault in enumerate(state.servo_overload_fault):
+            if fault:
+                issues.append(dict(id=f'overload-{m}', severity='Fault', channel=f'M{m:02d}', problem='OVERLOAD',
+                    details=dict(trigger_load=state.servo_overload_trigger_load[m], guidance='Resolve the mechanical load before clearing faults.')))
+    for row in snapshot['joints']:
+        if row['encoder'] == 'FAULT':
+            issues.append(dict(id=f"enc-{row['joint']}", severity='Fault', channel=f"J{row['joint']:02d}", problem='ENCODER FAULT', details='Check encoder wiring and communication.'))
+        for status in dict.fromkeys(row['joint_quality'] + row['motor_quality']):
+            if status in ('OFFSET', 'WEAK RETURN', 'HIGH FRICTION', 'FAILED'):
+                issues.append(dict(id=f"{row['joint']}-{status}", severity='Fault' if status == 'FAILED' else 'Warning',
+                    channel=f"J{row['joint']:02d}", problem=status, details=dict(manual_span=row['span'], urdf_span=row['urdf_span'],
+                    difference=row['difference'], raw_result=row['result'], thresholds={'OFFSET': '>360', 'WEAK RETURN': '≥350', 'HIGH FRICTION': '≥300'},
+                    guidance='Check installation, spring return, tendon routing and preload. Labels describe symptoms, not measured force.')))
+    snapshot['issues'] = issues
+    return snapshot

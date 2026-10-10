@@ -9,9 +9,10 @@
 """
 # data_models.py - 灵巧手数据模型（状态与控制合一）
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
+from copy import deepcopy
 import math
-from typing import List, Optional, Tuple, NamedTuple
+from typing import List, Optional, Tuple
 import numpy as np
 from enum import Enum
 
@@ -36,182 +37,28 @@ TACTILE_TIP_ROWS, TACTILE_TIP_COLS = 5, 5
 TACTILE_PAD_ROWS, TACTILE_PAD_COLS = 4, 13
 TACTILE_TIP_TAXEL_COUNT = TACTILE_TIP_ROWS * TACTILE_TIP_COLS  # 25
 TACTILE_PAD_TAXEL_COUNT = TACTILE_PAD_ROWS * TACTILE_PAD_COLS  # 52
-# 条带 0/2/4 → sensors[0]/[1]/[2]（尖、中腹、近腹）；关节条带无数据
-TACTILE_BAND_SENSOR_INDEX = {0: 0, 2: 1, 4: 2}
-TACTILE_BAND_WIDTH = 15
-# 自上而下（指尖→指根）：25×15 指尖 +12×15 关节 +16×15 指腹 +12×15 关节 +16×15 指腹
-TACTILE_BAND_HEIGHTS = (25, 12, 16, 12, 16)
-TACTILE_FINGER_STRIP_ROWS = sum(TACTILE_BAND_HEIGHTS)  # 81
-TACTILE_NBANDS = len(TACTILE_BAND_HEIGHTS)
-# 条带索引 1、3 为关节位（无触觉矩阵）；热力图填 TACTILE_HEATMAP_STRUCTURE_VALUE 显示浅灰；3D 着色不采用其读数
-TACTILE_JOINT_BAND_INDICES = (1, 3)
-# 热力图专用：关节条带、拇指近端指腹–掌间连接带等，经 BoundaryNorm 映射为浅灰
-TACTILE_HEATMAP_STRUCTURE_VALUE = -1.0
-TACTILE_HEATMAP_STRUCTURE_BOUNDS = (-1.01, -0.99)  # 包含 STRUCTURE_VALUE 的区间端点
-TACTILE_HEATMAP_GRAY_RGBA = (0.82, 0.82, 0.82, 1.0)  # 间隙/关节等浅灰
-# 热力图掌心：填充 PALM_VALUE，色标用较深灰，与浅灰结构区分
-TACTILE_HEATMAP_PALM_VALUE = -2.0
-TACTILE_HEATMAP_PALM_BOUNDS = (-2.01, -1.99)
-TACTILE_HEATMAP_PALM_RGBA = (0.50, 0.50, 0.50, 1.0)  # 掌心深灰（中性灰）
-TACTILE_PALM_SIDE = 15 * 4 + 5 * 3  # 75，掌宽
-# 食指～小指条带之间的列间隔；拇指近端指腹带与掌左缘之间浅灰列数（仅该节行域内绘制）
-TACTILE_FOUR_FINGER_GAP = 5
-TACTILE_THUMB_PALM_GAP = 8
-# 竖直拇指整体上移的行数（行索引减小，正值=向图像上方移动）
-TACTILE_THUMB_VERTICAL_SHIFT_UP = 20
-# 四指指根–掌顶之间浅灰间隙行数；掌面竖直有效高度 = TACTILE_PALM_SIDE - 本值
-TACTILE_FOUR_FINGER_PALM_GAP = 6
-# 掌面由正方形在下半部左右各切除一个直角三角形（直角在左下/右下顶点）而成六边形；
-# 每条直角边沿掌底/掌侧占用的格数，实际使用时会限制为不超过掌边长一半以免两角相交
-TACTILE_PALM_BOTTOM_CORNER_CUT_LEG = 15
-
-def tactile_band_shape(band_index: int) -> Tuple[int, int]:
-    """band 0=指尖 … 4=近端指腹，均为 (高, 15)。"""
-    if band_index < 0 or band_index >= TACTILE_NBANDS:
-        raise ValueError(f"band_index must be within 0..{TACTILE_NBANDS - 1}")
-    return (TACTILE_BAND_HEIGHTS[band_index], TACTILE_BAND_WIDTH)
-
-
 def tactile_segment_shape(seg_index: int) -> Tuple[int, int]:
-    """兼容旧 API：2→指尖元栅格 5×5；0/1→指腹元栅格 4×13。"""
-    if seg_index == 2:
-        return (TACTILE_TIP_ROWS, TACTILE_TIP_COLS)
-    return (TACTILE_PAD_ROWS, TACTILE_PAD_COLS)
+    """Sensor wire shapes: segment 2 is the tip; 0/1 are finger pads."""
+    return (TACTILE_TIP_ROWS, TACTILE_TIP_COLS) if seg_index == 2 else (TACTILE_PAD_ROWS, TACTILE_PAD_COLS)
 
 
-def tactile_upsample_tip_grid_to_band0(ch2: np.ndarray) -> np.ndarray:
-    """
-    指尖逻辑栅格 5×5（或 25 元扁平）→ 热力图指尖条带 25×15：每行重复 ×5、每列重复 ×3。
-    """
-    g = np.asarray(ch2, dtype=float)
-    if g.size == TACTILE_TIP_TAXEL_COUNT and g.shape != (TACTILE_TIP_ROWS, TACTILE_TIP_COLS):
-        g = g.reshape(TACTILE_TIP_ROWS, TACTILE_TIP_COLS)
-    elif g.shape != (TACTILE_TIP_ROWS, TACTILE_TIP_COLS):
-        t = np.zeros((TACTILE_TIP_ROWS, TACTILE_TIP_COLS), dtype=float)
-        r0, c0 = min(TACTILE_TIP_ROWS, g.shape[0]), min(TACTILE_TIP_COLS, g.shape[1])
-        t[:r0, :c0] = g[:r0, :c0]
-        g = t
-    return np.repeat(np.repeat(g, 5, axis=0), 3, axis=1)
+_SCALAR_STATE_TYPES = {int, float, bool, str, bytes, type(None)}
 
 
-def tactile_upsample_pad_grid_to_band(ch2: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
-    """
-    指腹逻辑栅格 4×13（或 52 元扁平）→ 热力图指腹条带 out_h×out_w（通常 16×15）：行每行重复 ×4，列左右各填 1 列对齐 15。
-    """
-    g = np.asarray(ch2, dtype=float)
-    if g.size == TACTILE_PAD_TAXEL_COUNT and g.shape != (TACTILE_PAD_ROWS, TACTILE_PAD_COLS):
-        g = g.reshape(TACTILE_PAD_ROWS, TACTILE_PAD_COLS)
-    elif g.shape != (TACTILE_PAD_ROWS, TACTILE_PAD_COLS):
-        t = np.zeros((TACTILE_PAD_ROWS, TACTILE_PAD_COLS), dtype=float)
-        r0, c0 = min(TACTILE_PAD_ROWS, g.shape[0]), min(TACTILE_PAD_COLS, g.shape[1])
-        t[:r0, :c0] = g[:r0, :c0]
-        g = t
-    u = np.repeat(g, 4, axis=0)
-    if u.shape[0] > out_h:
-        u = u[:out_h, :]
-    elif u.shape[0] < out_h:
-        u = np.pad(u, ((0, out_h - u.shape[0]), (0, 0)), mode="edge")
-    inner_w = min(u.shape[1], out_w)
-    pad = max(0, (out_w - inner_w) // 2)
-    out = np.zeros((out_h, out_w), dtype=float)
-    out[:, pad : pad + inner_w] = u[:, :inner_w]
-    return out
+def _copy_state_value(value):
+    """Copy nested telemetry; flat scalar lists use the fast built-in list copy."""
+    if isinstance(value, list):
+        if all(type(item) in _SCALAR_STATE_TYPES for item in value):
+            return value.copy()
+        return [_copy_state_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _copy_state_value(item) for key, item in value.items()}
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if is_dataclass(value) or isinstance(value, (tuple, set)):
+        return deepcopy(value)
+    return value
 
-
-def tactile_palm_left_bottom_cut_top_vertex_rc(
-    pr: int,
-    pc: int,
-    palm_h: int,
-    palm_w: int,
-    leg: Optional[int] = None,
-) -> Tuple[int, int]:
-    """
-    掌面左下裁切的等腰直角三角形在「掌左侧竖直边」上的顶点（非直角顶点、靠近斜边与左缘交点一侧），
-    与当前掌面六边形的阶梯边界一致：最上一行被挖行的下标为 pr + palm_h - leg，
-    该顶点取为 (row, col) = (pr + palm_h - leg, pc)。
-    leg 与裁切函数同样截断到 palm_w//2、palm_h//2。
-    """
-    if leg is None:
-        leg = TACTILE_PALM_BOTTOM_CORNER_CUT_LEG
-    leg = min(int(leg), palm_w // 2, palm_h // 2)
-    if leg <= 0:
-        return pr + palm_h - 1, pc
-    r_v = pr + palm_h - leg
-    c_v = pc
-    return r_v, c_v
-
-
-class TactileStitchSpec(NamedTuple):
-    """整手拼接画布（相对坐标，原点在画布左上角）。"""
-
-    height: int
-    width: int
-    palm_r: int
-    palm_c: int
-    palm_h: int
-    palm_w: int
-    thumb_r: int
-    thumb_c: int
-    thumb_h: int
-    thumb_w: int
-    four_r: int
-    four_c: int
-
-
-def build_tactile_stitch_spec() -> TactileStitchSpec:
-    """
-    布局：掌面 palm_h×palm_w；裁左下/右下两角成六边形。
-    竖直拇指：先按顶点对齐定 thumb_r/thumb_c，再整体上移 TACTILE_THUMB_VERTICAL_SHIFT_UP 行。
-    thumb_g=0 时对齐后指根右下与裁切顶点 (vr,vc) 重合再上移；thumb_g>0 时最右列与 pc 间留 thumb_g 列（浅灰仅在近端指腹行带绘制，见 ui）。
-    四指在掌上沿，指根–掌顶 gv 行浅灰；指间在掌宽内为掌心深灰。
-    """
-    margin = 8
-    palm_r0, palm_c0 = 80, 90
-    sw = TACTILE_PALM_SIDE
-    gv = TACTILE_FOUR_FINGER_PALM_GAP
-    sh = sw - gv
-    g = TACTILE_FOUR_FINGER_GAP
-    thumb_g = TACTILE_THUMB_PALM_GAP
-    four_span = 4 * TACTILE_BAND_WIDTH + 3 * g  # 四指总宽大（含指间 3 个间隙）
-    anchor_r = palm_r0 + sh // 2
-    anchor_c = palm_c0
-    h_strip = TACTILE_FINGER_STRIP_ROWS
-    w_strip = TACTILE_BAND_WIDTH
-    vr, vc = tactile_palm_left_bottom_cut_top_vertex_rc(palm_r0, palm_c0, sh, sw)
-    thumb_r = vr - (h_strip - 1)
-    if thumb_g <= 0:
-        # 指根右下与裁切顶点同格
-        thumb_c = vc - (w_strip - 1)
-    else:
-        # 指根右下列为 vc - thumb_g - 1，与掌左缘 pc=vc 之间留 thumb_g 列
-        thumb_c = vc - w_strip - thumb_g
-    thumb_r -= TACTILE_THUMB_VERTICAL_SHIFT_UP
-    four_r = palm_r0 - TACTILE_FINGER_STRIP_ROWS - gv
-    four_c = palm_c0 + (sw - four_span) // 2
-    min_r = min(thumb_r, four_r, palm_r0) - margin
-    min_c = min(thumb_c, four_c, palm_c0) - margin
-    max_r = max(palm_r0 + sh - 1, anchor_r, four_r + TACTILE_FINGER_STRIP_ROWS - 1) + margin
-    max_c = max(palm_c0 + sw - 1, thumb_c + TACTILE_BAND_WIDTH - 1, four_c + four_span - 1) + margin
-    H = max_r - min_r + 1
-    W = max_c - min_c + 1
-
-    return TactileStitchSpec(
-        height=H,
-        width=W,
-        palm_r=palm_r0 - min_r,
-        palm_c=palm_c0 - min_c,
-        palm_h=sh,
-        palm_w=sw,
-        thumb_r=thumb_r - min_r,
-        thumb_c=thumb_c - min_c,
-        thumb_h=TACTILE_FINGER_STRIP_ROWS,
-        thumb_w=TACTILE_BAND_WIDTH,
-        four_r=four_r - min_r,
-        four_c=four_c - min_c,
-    )
-
-
-TACTILE_STITCH_SPEC = build_tactile_stitch_spec()
 
 class MotorState(Enum):
     IDLE = 0
@@ -243,7 +90,7 @@ class TactileSensor:
 
 @dataclass
 class FingerTactile:
-    """单指 3 组数据：sensors[0] 尖 25，[1][2] 两腹各 52；热力图仍为 5 条带几何（尖/腹上采样嵌入）"""
+    """单指 3 组数据：sensors[0] 尖 25，[1][2] 两腹各 52"""
     sensors: List[TactileSensor]
 
 
@@ -493,6 +340,8 @@ class HandModel:
     proto_ack_history: List[dict] = field(default_factory=list)
     # 数据有效性标志：用于 UI 区分“无数据”和“值为 0”
     has_sensor_data: bool = False
+    encoder_mapped_last_rx_ts: float = 0.0
+    encoder_mapped_p4_time_ms: int = 0
     # 原始磁编包（PACKET_TYPE_ENCODER_RAW）与映射角包独立：未标定时 raw 仍应可见。
     has_encoder_raw_data: bool = False
     encoder_raw_last_rx_ts: float = 0.0
@@ -689,428 +538,29 @@ class HandModel:
                 self.encoders[i].target_angle_deg = float(a)
 
     def copy_state_from(self, other: "HandModel") -> None:
-        """仅复制状态（编码器 raw/error、电机 error/state/伺服遥测），不覆盖 target_angle_deg、zero_raw"""
-        self.host_rx_time = float(getattr(other, "host_rx_time", 0.0) or 0.0)
-        self.p4_time_ms = int(getattr(other, "p4_time_ms", 0) or 0)
-        self.has_p4_time = bool(getattr(other, "has_p4_time", False))
-        self.servo_abs_last_rx_ts = float(getattr(other, "servo_abs_last_rx_ts", 0.0))
-        self.servo_feedback_p4_time_ms = int(
-            getattr(other, "servo_feedback_p4_time_ms", 0) or 0
-        )
-        self.servo_raw_p4_time_ms = int(
-            getattr(other, "servo_raw_p4_time_ms", 0) or 0
-        )
-        self.has_control_trace = bool(getattr(other, "has_control_trace", False))
-        self.control_trace_sequence = int(getattr(other, "control_trace_sequence", 0) or 0)
-        self.control_trace_target_token = int(getattr(other, "control_trace_target_token", 0) or 0)
-        self.control_trace_p4_time_ms = int(getattr(other, "control_trace_p4_time_ms", 0) or 0)
-        self.control_trace_target_accepted_ms = int(
-            getattr(other, "control_trace_target_accepted_ms", 0) or 0
-        )
-        self.control_trace_encoder_timestamp_ms = int(
-            getattr(other, "control_trace_encoder_timestamp_ms", 0) or 0
-        )
-        self.control_trace_active_joint_mask = int(
-            getattr(other, "control_trace_active_joint_mask", 0) or 0
-        )
-        self.control_trace_valid_joint_mask = int(
-            getattr(other, "control_trace_valid_joint_mask", 0) or 0
-        )
-        self.control_trace_motor_command_mask = int(
-            getattr(other, "control_trace_motor_command_mask", 0) or 0
-        )
-        self.control_trace_target_deg = list(
-            getattr(other, "control_trace_target_deg", [0.0] * ENCODER_COUNT)
-        )
-        self.control_trace_actual_deg = list(
-            getattr(other, "control_trace_actual_deg", [0.0] * ENCODER_COUNT)
-        )
-        self.control_trace_motor_command_abs = list(
-            getattr(other, "control_trace_motor_command_abs", [0] * MOTOR_COUNT)
-        )
-        self.control_trace_last_rx_ts = float(
-            getattr(other, "control_trace_last_rx_ts", 0.0) or 0.0
-        )
-        self.proto_ack_sequence = int(getattr(other, "proto_ack_sequence", 0) or 0)
-        self.proto_ack_cmd = int(getattr(other, "proto_ack_cmd", 0) or 0)
-        self.proto_ack_mode = int(getattr(other, "proto_ack_mode", 0) or 0)
-        self.proto_ack_status = int(getattr(other, "proto_ack_status", 0) or 0)
-        self.proto_ack_p4_time_ms = int(getattr(other, "proto_ack_p4_time_ms", 0) or 0)
-        self.proto_ack_history = [
-            dict(item)
-            for item in getattr(other, "proto_ack_history", [])
-            if isinstance(item, dict)
-        ][-64:]
-        for i, e in enumerate(self.encoders):
-            if i < len(other.encoders):
-                e.raw = other.encoders[i].raw
-                e.raw_sensor = getattr(other.encoders[i], "raw_sensor", other.encoders[i].raw)
-                e.error = other.encoders[i].error
-                e.angle_error = bool(getattr(other.encoders[i], "angle_error", e.error))
-                e.raw_error = bool(getattr(other.encoders[i], "raw_error", e.error))
-                e.angle_out_of_workspace = bool(
-                    getattr(other.encoders[i], "angle_out_of_workspace", False)
-                )
-        for i, m in enumerate(self.motors):
-            if i < len(other.motors):
-                m.error = other.motors[i].error
-                m.state = other.motors[i].state
-        # 复制伺服绝对角度与遥测
-        self.servo_angles = list(other.servo_angles)
-        self.servo_online = list(other.servo_online)
-        self.servo_raw_positions = list(other.servo_raw_positions)
-        self.servo_raw_online = list(other.servo_raw_online)
-        self.servo_speed = list(other.servo_speed)
-        self.servo_load = list(other.servo_load)
-        self.servo_current = list(other.servo_current)
-        self.servo_voltage = list(other.servo_voltage)
-        self.servo_temperature = list(other.servo_temperature)
-        self.servo_telem_online = list(other.servo_telem_online)
-        self.servo_overload_fault = list(other.servo_overload_fault)
-        self.servo_overload_trigger_load = list(getattr(other, "servo_overload_trigger_load", [None] * MOTOR_COUNT))
-        # 复制数据有效性标志
-        self.has_sensor_data = bool(other.has_sensor_data)
-        self.has_encoder_raw_data = bool(getattr(other, "has_encoder_raw_data", False))
-        self.encoder_raw_last_rx_ts = float(getattr(other, "encoder_raw_last_rx_ts", 0.0) or 0.0)
-        self.encoder_raw_p4_time_ms = int(getattr(other, "encoder_raw_p4_time_ms", 0) or 0)
-        self.servo_telem_p4_time_ms = int(getattr(other, "servo_telem_p4_time_ms", 0) or 0)
-        self.servo_telem_last_rx_ts = float(getattr(other, "servo_telem_last_rx_ts", 0.0) or 0.0)
-        self.direct_target_token = int(getattr(other, "direct_target_token", 0) or 0)
-        self.direct_target_requested_mask = int(getattr(other, "direct_target_requested_mask", 0) or 0)
-        self.direct_target_applied_mask = int(getattr(other, "direct_target_applied_mask", 0) or 0)
-        self.direct_target_rejected_mask = int(getattr(other, "direct_target_rejected_mask", 0) or 0)
-        self.direct_target_status = int(getattr(other, "direct_target_status", 0) or 0)
-        self.direct_target_result_rx_ts = float(getattr(other, "direct_target_result_rx_ts", 0.0) or 0.0)
-        self.has_direct_target_result = bool(getattr(other, "has_direct_target_result", False))
-        self.has_servo_angle_data = bool(other.has_servo_angle_data)
-        self.has_servo_raw_data = bool(other.has_servo_raw_data)
-        self.has_system_status_data = bool(other.has_system_status_data)
-        self.system_status_last_rx_ts = float(getattr(other, "system_status_last_rx_ts", 0.0) or 0.0)
-        self.system_status_p4_time_ms = int(
-            getattr(other, "system_status_p4_time_ms", 0) or 0
-        )
-        self.system_state = int(other.system_state)
-        self.control_enabled = bool(other.control_enabled)
-        self.servo_target_owner = int(other.servo_target_owner)
-        self.control_mode = int(other.control_mode)
-        self.system_fault_bitmap = int(other.system_fault_bitmap)
-        self.state_transition_count = int(other.state_transition_count)
-        self.multi_turn_unknown_bitmap = int(getattr(other, "multi_turn_unknown_bitmap", 0))
-        self.multiturn_restore_result_token = int(
-            getattr(other, "multiturn_restore_result_token", 0) or 0
-        )
-        self.multiturn_restore_restored_mask = int(
-            getattr(other, "multiturn_restore_restored_mask", 0) or 0
-        )
-        self.multiturn_restore_rejected_mask = int(
-            getattr(other, "multiturn_restore_rejected_mask", 0) or 0
-        )
-        self.multiturn_restore_result_last_rx_ts = float(
-            getattr(other, "multiturn_restore_result_last_rx_ts", 0.0) or 0.0
-        )
-        self.servo_rebase_zero_result_token = int(
-            getattr(other, "servo_rebase_zero_result_token", 0) or 0
-        )
-        self.servo_rebase_zero_success_mask = int(
-            getattr(other, "servo_rebase_zero_success_mask", 0) or 0
-        )
-        self.servo_rebase_zero_failed_mask = int(
-            getattr(other, "servo_rebase_zero_failed_mask", 0) or 0
-        )
-        self.servo_rebase_zero_logical_offsets = list(
-            getattr(other, "servo_rebase_zero_logical_offsets", [0] * MOTOR_COUNT)
-        )
-        self.servo_rebase_zero_result_p4_time_ms = int(
-            getattr(other, "servo_rebase_zero_result_p4_time_ms", 0) or 0
-        )
-        self.servo_rebase_zero_result_last_rx_ts = float(
-            getattr(other, "servo_rebase_zero_result_last_rx_ts", 0.0) or 0.0
-        )
-        self.has_servo_rebase_zero_result = bool(
-            getattr(other, "has_servo_rebase_zero_result", False)
-        )
-        self.host_multiturn_valid_mask = int(
-            getattr(other, "host_multiturn_valid_mask", 0) or 0
-        )
-        self.host_multiturn_saved_raw_positions = list(
-            getattr(
-                other,
-                "host_multiturn_saved_raw_positions",
-                [0] * MOTOR_COUNT,
-            )
-        )
-        self.host_multiturn_status = str(
-            getattr(other, "host_multiturn_status", "not loaded")
-        )
-        self.manual_reference_valid_bitmap = int(getattr(other, "manual_reference_valid_bitmap", 0) or 0)
-        self.manual_reference_crc = int(getattr(other, "manual_reference_crc", 0) or 0)
-        self.manual_reference_revision = int(getattr(other, "manual_reference_revision", 0) or 0)
-        self.manual_reference_committed = bool(getattr(other, "manual_reference_committed", False))
-        self.manual_reference_commit_status = int(
-            getattr(other, "manual_reference_commit_status", 0) or 0
-        )
-        self.auto_calibration_valid_bitmap = int(
-            getattr(other, "auto_calibration_valid_bitmap", 0) or 0
-        )
-        self.rope_init_status = int(getattr(other, "rope_init_status", 0) or 0)
-        self.rope_init_reason = int(getattr(other, "rope_init_reason", 0) or 0)
-        self.rope_init_sequence = int(getattr(other, "rope_init_sequence", 0) or 0)
-        self.rope_init_joint_mask = int(getattr(other, "rope_init_joint_mask", 0) or 0)
-        self.rope_init_timestamp_ms = int(
-            getattr(other, "rope_init_timestamp_ms", 0) or 0
-        )
-        self.pending_direct_generation = int(
-            getattr(other, "pending_direct_generation", 0) or 0
-        )
-        self.applied_direct_generation = int(
-            getattr(other, "applied_direct_generation", 0) or 0
-        )
-        self.direct_reject_reason = int(getattr(other, "direct_reject_reason", 0) or 0)
-        self.has_motion_result_status = bool(
-            getattr(other, "has_motion_result_status", False)
-        )
-        self.feedback_collision_armed_bitmap = int(
-            getattr(other, "feedback_collision_armed_bitmap", 0) or 0
-        )
-        self.feedback_collision_hold_bitmap = int(
-            getattr(other, "feedback_collision_hold_bitmap", 0) or 0
-        )
-        self.feedback_collision_transition_count = int(
-            getattr(other, "feedback_collision_transition_count", 0) or 0
-        )
-        self.has_feedback_collision_status = bool(
-            getattr(other, "has_feedback_collision_status", False)
-        )
-        self.servo_turn_overflow_bitmap = int(
-            getattr(other, "servo_turn_overflow_bitmap", 0) or 0
-        )
-        self.servo_reset_zero_request_token = int(
-            getattr(other, "servo_reset_zero_request_token", 0) or 0
-        )
-        self.servo_reset_zero_result_token = int(
-            getattr(other, "servo_reset_zero_result_token", 0) or 0
-        )
-        self.servo_reset_zero_success_mask = int(
-            getattr(other, "servo_reset_zero_success_mask", 0) or 0
-        )
-        self.servo_reset_zero_failed_mask = int(
-            getattr(other, "servo_reset_zero_failed_mask", 0) or 0
-        )
-        self.servo_reset_zero_invalidated_joint_mask = int(
-            getattr(other, "servo_reset_zero_invalidated_joint_mask", 0) or 0
-        )
-        self.servo_reset_zero_status = int(
-            getattr(other, "servo_reset_zero_status", 0) or 0
-        )
-        self.has_servo_reset_zero_status = bool(
-            getattr(other, "has_servo_reset_zero_status", False)
-        )
-        self.manual_reference_last_rx_time = float(
-            getattr(other, "manual_reference_last_rx_time", 0.0) or 0.0
-        )
-        self.has_manual_reference_status = bool(getattr(other, "has_manual_reference_status", False))
-        self.manual_reference_min_raw = list(
-            getattr(other, "manual_reference_min_raw", [0] * ENCODER_COUNT)
-        )
-        self.manual_reference_max_raw = list(
-            getattr(other, "manual_reference_max_raw", [0] * ENCODER_COUNT)
-        )
-        self.manual_reference_encoder_directions = list(
-            getattr(other, "manual_reference_encoder_directions", [0] * ENCODER_COUNT)
-        )
-        self.has_manual_reference_encoder_directions = bool(
-            getattr(other, "has_manual_reference_encoder_directions", False)
-        )
-        self.has_active_scope_status = bool(getattr(other, "has_active_scope_status", False))
-        self.active_motor_mask = int(getattr(other, "active_motor_mask", 0) or 0)
-        self.active_joint_mask = int(getattr(other, "active_joint_mask", 0) or 0)
-        self.require_can_feedback = bool(getattr(other, "require_can_feedback", False))
-        self.has_connectivity_status = bool(getattr(other, "has_connectivity_status", False))
-        self.servo_online_bitmap = int(getattr(other, "servo_online_bitmap", 0) or 0)
-        self.has_servo_route_status = bool(
-            getattr(other, "has_servo_route_status", False)
-        )
-        self.servo_route_controllable_bitmap = int(
-            getattr(other, "servo_route_controllable_bitmap", 0) or 0
-        )
-        self.servo_route_conflict_bitmap = int(
-            getattr(other, "servo_route_conflict_bitmap", 0) or 0
-        )
-        self.servo_bus_overload_mask = int(
-            getattr(other, "servo_bus_overload_mask", 0) or 0
-        )
-        self.servo_route_scan_state = int(
-            getattr(other, "servo_route_scan_state", 0) or 0
-        )
-        self.servo_route_scan_progress = int(
-            getattr(other, "servo_route_scan_progress", 0) or 0
-        )
-        self.servo_bus_device_count = list(
-            getattr(other, "servo_bus_device_count", [0] * 4)
-        )
-        self.servo_route_bus = list(
-            getattr(other, "servo_route_bus", [0xFF] * MOTOR_COUNT)
-        )
-        self.servo_route_state = list(
-            getattr(other, "servo_route_state", [0] * MOTOR_COUNT)
-        )
-        self.encoder_online_bitmap = int(getattr(other, "encoder_online_bitmap", 0) or 0)
-        self.encoder_warn_bitmap = int(getattr(other, "encoder_warn_bitmap", 0) or 0)
-        self.encoder_fault_bitmap = int(getattr(other, "encoder_fault_bitmap", 0) or 0)
-        self.has_encoder_health_status = bool(getattr(other, "has_encoder_health_status", False))
-        self.calibration_warning_bitmap = int(
-            getattr(other, "calibration_warning_bitmap", 0) or 0
-        )
-        self.calibration_auto_min_offset_counts = list(
-            getattr(other, "calibration_auto_min_offset_counts", [0] * ENCODER_COUNT)
-        )
-        self.has_calibration_warning_status = bool(
-            getattr(other, "has_calibration_warning_status", False)
-        )
-        self.feedback_admission_sequence = int(
-            getattr(other, "feedback_admission_sequence", 0) or 0
-        )
-        self.feedback_admission_status = int(
-            getattr(other, "feedback_admission_status", 0) or 0
-        )
-        self.feedback_reject_reason = int(
-            getattr(other, "feedback_reject_reason", 0) or 0
-        )
-        self.has_feedback_admission_status = bool(
-            getattr(other, "has_feedback_admission_status", False)
-        )
-        self.can_link_online = bool(getattr(other, "can_link_online", False))
-        self.has_fault_status_data = bool(getattr(other, "has_fault_status_data", False))
-        self.fault_status_last_rx_ts = float(getattr(other, "fault_status_last_rx_ts", 0.0) or 0.0)
-        self.motor_abs_limit_valid_bitmap = int(getattr(other, "motor_abs_limit_valid_bitmap", 0))
-        self.motor_abs_limit_min = list(getattr(other, "motor_abs_limit_min", [0] * MOTOR_COUNT))
-        self.motor_abs_limit_max = list(getattr(other, "motor_abs_limit_max", [0] * MOTOR_COUNT))
-        self.servo_logical_range_last_rx_ts = float(getattr(other, "servo_logical_range_last_rx_ts", 0.0) or 0.0)
-        self.servo_logical_range_p4_time_ms = int(getattr(other, "servo_logical_range_p4_time_ms", 0) or 0)
-        self.servo_logical_range_valid_bitmap = int(
-            getattr(other, "servo_logical_range_valid_bitmap", 0)
-        )
-        self.servo_logical_range_min = list(
-            getattr(other, "servo_logical_range_min", [0] * MOTOR_COUNT)
-        )
-        self.servo_logical_range_max = list(
-            getattr(other, "servo_logical_range_max", [0] * MOTOR_COUNT)
-        )
-        self.joint_calib_results = [
-            dict(item) if isinstance(item, dict) else None
-            for item in getattr(other, "joint_calib_results", [None] * ENCODER_COUNT)
-        ]
-        self.calib_diag_valid = bool(getattr(other, "calib_diag_valid", False))
-        self.calib_diag_reason = int(getattr(other, "calib_diag_reason", 0) or 0)
-        self.calib_diag_phase = int(getattr(other, "calib_diag_phase", 0) or 0)
-        self.calib_diag_joint = int(getattr(other, "calib_diag_joint", 0xFF) or 0)
-        self.calib_diag_motor = int(getattr(other, "calib_diag_motor", 0xFF) or 0)
-        self.calib_diag_value_a = int(getattr(other, "calib_diag_value_a", 0) or 0)
-        self.calib_diag_value_b = int(getattr(other, "calib_diag_value_b", 0) or 0)
-        self.calib_diag_value_c = int(getattr(other, "calib_diag_value_c", 0) or 0)
-        self.calib_diag_bitmap = int(getattr(other, "calib_diag_bitmap", 0) or 0)
-        self.calib_diag_timestamp_ms = int(getattr(other, "calib_diag_timestamp_ms", 0) or 0)
-        self.calib_diag_sequence = int(getattr(other, "calib_diag_sequence", 0) or 0)
-        self.calib_diag_completed_joint_mask = int(
-            getattr(other, "calib_diag_completed_joint_mask", 0) or 0
-        )
-        self.calib_diag_failed_joint_mask = int(
-            getattr(other, "calib_diag_failed_joint_mask", 0) or 0
-        )
-        self.task_runtime = {
-            int(task_id): dict(item)
-            for task_id, item in getattr(other, "task_runtime", {}).items()
-            if isinstance(item, dict)
-        }
-        self.task_runtime_last_rx_ts = float(getattr(other, "task_runtime_last_rx_ts", 0.0) or 0.0)
-        self.task_runtime_window_sequence = int(
-            getattr(other, "task_runtime_window_sequence", 0) or 0
-        )
-        self.task_runtime_received_mask = int(
-            getattr(other, "task_runtime_received_mask", 0) or 0
-        )
-        self.task_runtime_expected_mask = int(
-            getattr(other, "task_runtime_expected_mask", 0) or 0
-        )
-        self.task_runtime_dropped_windows = int(
-            getattr(other, "task_runtime_dropped_windows", 0) or 0
-        )
-        self.task_runtime_last_packet_rx_ts = float(
-            getattr(other, "task_runtime_last_packet_rx_ts", 0.0) or 0.0
-        )
-        self.product_fingerprint = dict(
-            getattr(other, "product_fingerprint", {}) or {}
-        )
-        self.has_product_fingerprint = bool(
-            getattr(other, "has_product_fingerprint", False)
-        )
-        self.latest_safety_event = dict(
-            getattr(other, "latest_safety_event", {}) or {}
-        )
-        self.safety_event_history = [
-            dict(item)
-            for item in getattr(other, "safety_event_history", [])
-            if isinstance(item, dict)
-        ][-64:]
-        self.safety_event_overflow_count = int(
-            getattr(other, "safety_event_overflow_count", 0) or 0
-        )
-        self.safety_event_last_rx_ts = float(
-            getattr(other, "safety_event_last_rx_ts", 0.0) or 0.0
-        )
-        self.has_safety_event = bool(
-            getattr(other, "has_safety_event", False)
-        )
-        self.tactile_data = list(getattr(other, "tactile_data", []) or [])
-        self.tactile_summary_seq = getattr(other, "tactile_summary_seq", None)
-        self.tactile_full_seq = getattr(other, "tactile_full_seq", None)
-        self.tactile_full_summary_seq = getattr(other, "tactile_full_summary_seq", None)
-        self.tactile_full_crc = getattr(other, "tactile_full_crc", None)
-        self.tactile_full_crc_errors = int(getattr(other, "tactile_full_crc_errors", 0))
-        self.tactile_full_seq_mismatches = int(getattr(other, "tactile_full_seq_mismatches", 0))
-        self.tactile_full_dropped = int(getattr(other, "tactile_full_dropped", 0))
-        self.tactile_source = str(getattr(other, "tactile_source", TACTILE_SOURCE_NONE))
-        self.tactile_data_level = str(getattr(other, "tactile_data_level", TACTILE_DATA_LEVEL_NONE))
-        self.tactile_module_valid_mask = int(getattr(other, "tactile_module_valid_mask", 0) or 0)
-        self.tactile_diag_version = int(getattr(other, "tactile_diag_version", 0) or 0)
-        self.tactile_diag_frame_count = int(getattr(other, "tactile_diag_frame_count", 0) or 0)
-        for name in (
-            "tactile_diag_enabled_mask",
-            "tactile_diag_summary_ok_mask",
-            "tactile_diag_full_ok_mask",
-            "tactile_diag_command_fail_mask",
-            "tactile_diag_response_fail_mask",
-            "tactile_diag_crc_fail_mask",
-            "tactile_diag_status_nonzero_mask",
-            "tactile_diag_summary_retry_recovered_mask",
-        ):
-            setattr(self, name, int(getattr(other, name, 0) or 0))
-        for name in (
-            "tactile_diag_summary_success_count",
-            "tactile_diag_summary_failure_count",
-            "tactile_diag_full_success_count",
-            "tactile_diag_full_failure_count",
-            "tactile_diag_summary_last_fail_reason",
-            "tactile_diag_full_last_fail_reason",
-            "tactile_diag_module_last_status",
-        ):
-            setattr(self, name, list(getattr(other, name, []) or []))
-        self.tactile_diag_last_rx_ts = float(getattr(other, "tactile_diag_last_rx_ts", 0.0) or 0.0)
-        self.tactile_online = bool(getattr(other, "tactile_online", False))
-        self.tactile_last_rx_ts = float(getattr(other, "tactile_last_rx_ts", 0.0) or 0.0)
-        self.tactile_module_online = list(
-            getattr(other, "tactile_module_online", [False] * (5 * TACTILE_SENSORS_PER_FINGER))
-        )
-        self.tactile_module_last_rx_ts = list(
-            getattr(other, "tactile_module_last_rx_ts", [0.0] * (5 * TACTILE_SENSORS_PER_FINGER))
-        )
+        """Copy telemetry without replacing locally owned targets and encoder zeros.
+
+        Mutable nested data (including tactile NumPy arrays) belongs to each snapshot.
+        Encoder/motor objects keep their identity so callers can hold row references.
+        """
+        for item in fields(self):
+            if item.name in ("encoders", "motors"):
+                continue
+            value = getattr(other, item.name)
+            setattr(self, item.name, _copy_state_value(value) if isinstance(value, (list, dict, np.ndarray)) else value)
+        for target, source in zip(self.encoders, other.encoders):
+            for item in fields(target):
+                if item.name not in ("target_angle_deg", "zero_raw"):
+                    setattr(target, item.name, getattr(source, item.name))
+        for target, source in zip(self.motors, other.motors):
+            for item in fields(target):
+                setattr(target, item.name, getattr(source, item.name))
 
 
 def clone_hand_model(model: HandModel) -> HandModel:
     """建立跨线程只读快照，集中维护目标、零点和状态字段复制。"""
     snapshot = HandModel()
     snapshot.copy_state_from(model)
-    snapshot.calib_status = str(getattr(model, "calib_status", "IDLE"))
     snapshot.set_target_angles(model.target_angles)
     for index, encoder in enumerate(snapshot.encoders):
         if index < len(getattr(model, "encoders", [])):
