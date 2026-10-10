@@ -39,7 +39,7 @@ PACKET_TYPE_SERVO_ROUTE_STATUS = 0x15  # 动态舵机 BUS 路由、冲突、容�
 PACKET_TYPE_SAFETY_EVENT = 0x16  # 去重后的结构化安全规则事件
 PACKET_TYPE_MULTITURN_RESTORE_RESULT = 0x17  # 桌面 JSON 多圈恢复异步最终结果
 PACKET_TYPE_CONTROL_TRACE = 0x18  # 同一控制周期的目标角、反馈角、舵机CMD和下位机时间
-PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19  # logical ABS 设零事务的最终token、成功失败位图与27路offset
+PACKET_TYPE_SERVO_REBASE_ZERO_RESULT = 0x19  # 硬件ABS设零事务的最终token、成功失败位图；尾108字节保留区固定为0
 PACKET_TYPE_DIRECT_TARGET_RESULT = 0x1A  # 通用直控目标完成总线同步写后的事务结果，与机械到位独立
 
 # Desktop -> P4 命令。
@@ -68,7 +68,8 @@ CMD_SERVO_RESET_ZERO = 0xEC  # 标定前归零所选舵机硬件圈数并清除�
 CMD_STATE_SYNC_REQUEST = 0xED  # 按位请求静态状态、标定快照、路由和产品指纹
 CMD_TASK_DIAG_SUBSCRIBE = 0xEE  # 打开或关闭 RTOS 任务诊断按需上报
 CMD_CONTROL_TRACE_SUBSCRIBE = 0xEF  # 打开或关闭统一下位机时间的控制跟踪流
-CMD_SERVO_REBASE_ZERO = 0xF0  # 按电机位图RESET硬件圈数，将当前位置logical ABS设为0并在RAM保存offset
+CMD_SERVO_REBASE_ZERO = 0xF0  # 按电机位图用0x0B校正舵机实际ABS为0，读回确认后P4 ABS同步为0
+CMD_MOTOR_ABS_ZERO = 0xF1  # Direct电机页按非空电机位图将当前位置设为ABS零点；复用硬件0x0B归零事务及0x19最终结果
 CMD_MOTOR_DIRECT_RELEASE = 0xF2  # 结束当前普通直控并保留扭矩和故障；非零token匹配已执行事务，零匹配当前直控代际
 CMD_PROTOCOL_HELLO = 0xF3  # 双向版本及控制模型与反馈拓扑契约握手，不授权运动
 
@@ -147,6 +148,7 @@ COMMAND_PAYLOAD_LENGTHS = {
     CMD_TASK_DIAG_SUBSCRIBE: 1,
     CMD_CONTROL_TRACE_SUBSCRIBE: 1,
     CMD_SERVO_REBASE_ZERO: 4,
+    CMD_MOTOR_ABS_ZERO: 4,
     CMD_MOTOR_DIRECT_RELEASE: 4,
     CMD_PROTOCOL_HELLO: 9,
 }
@@ -167,4 +169,5 @@ COMMANDS_REQUIRING_HANDSHAKE = frozenset({
     CMD_ANGLE_CTRL_MASKED,
     CMD_SERVO_RESET_ZERO,
     CMD_SERVO_REBASE_ZERO,
+    CMD_MOTOR_ABS_ZERO,
 })

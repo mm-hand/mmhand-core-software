@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "ServoValue.h"
-#include "../libraries/FTServo_Arduino/src/SMS_STS.h"
+#include <SMS_STS.h>
 #include "../../config/safety/ServoPositionRange.h"
 #include "../../config/BoardConfig.h"
 #include "../../config/ServoConfig.h"
@@ -50,14 +50,12 @@ struct ServoFeedbackInternal {
     uint8_t temperature; ///< 摄氏温度。
     // 当前舵机上电会话中的硬件多圈坐标；舵机独立掉电后可能退回单圈 raw。
     int32_t absolutePosition;
-    // 将当前硬件坐标映射到 P4 恢复的逻辑多圈坐标：
-    // logical ABS = hardware ABS + logicalOffset。
-    int32_t logicalOffset;
-    int16_t turnCount; ///< logical ABS 对应的诊断圈数。
+    int16_t turnCount; ///< 实际 ABS 对应的诊断圈数。
     int16_t lastRawPosition; ///< 最近一次参与展开的 raw。
     bool initialized; ///< hardware ABS 展开器是否已有锚点。
     bool absoluteReliable; ///< logical ABS 是否可供运动控制。
     bool online; ///< 已通过连续成功反馈确认在线。
+    uint32_t onlineSessionGeneration; ///< 每次确认重新上线递增，用于识别跨掉线的未决置数。
     uint8_t missedReadCount; ///< 连续同步读失败计数。
     uint8_t successfulReadCount; ///< 连续同步读成功计数。
     bool onlineTransitionPending; ///< 上线恢复事务尚未完成。
@@ -318,11 +316,11 @@ public:
         }
     }
 
-    /** 将 logical ABS 转换为本次上电会话 hardware ABS 后加入同步写批次。 */
+    /** 检查实际 ABS 的范围和信任状态后加入同步写批次。 */
     bool setTarget(uint8_t id, int32_t logicalPosition, uint16_t speed, uint8_t acc)
     {
         int16_t hardwarePosition = 0;
-        if (!logicalToHardwareTarget(id, logicalPosition, &hardwarePosition)) {
+        if (!validateAbsoluteTarget(id, logicalPosition, &hardwarePosition)) {
             return false;
         }
         return queueTarget(id, hardwarePosition, speed, acc);
@@ -529,15 +527,14 @@ public:
         return _feedback[id].rawPosition;
     }
 
-    /** 返回控制使用的 logical ABS，即 hardware ABS + logicalOffset。 */
+    /** 返回控制使用的实际 ABS，与舵机反馈使用同一坐标。 */
     int32_t getAbsolutePosition(uint8_t id) const
     {
         if (id > MAX_SERVO_ID) return 0;
-        const ServoFeedbackInternal& fb = _feedback[id];
-        return fb.absolutePosition + fb.logicalOffset;
+        return _feedback[id].absolutePosition;
     }
 
-    // hardware ABS 是舵机本次上电会话直接返回的坐标，不叠加 P4 logicalOffset。
+    // 供硬件范围诊断使用，与控制 ABS 使用同一坐标。
     int32_t getHardwareAbsolutePosition(uint8_t id) const
     {
         return id <= MAX_SERVO_ID ? _feedback[id].absolutePosition : 0;
@@ -607,16 +604,11 @@ public:
                _feedback[id].onlineTransitionPending;
     }
 
-    /** 返回 hardware ABS 到 logical ABS 的平移量。 */
-    int32_t getLogicalOffset(uint8_t id) const
-    {
-        return id <= MAX_SERVO_ID ? _feedback[id].logicalOffset : 0;
-    }
-
-    /** 根据 logicalOffset 计算本次上电会话可安全下发的 logical 范围。 */
+    /** 返回舵机实际 ABS 可安全下发的范围，可信/在线状态由发布者核验。 */
     ServoLogicalRange getLogicalRange(uint8_t id) const
     {
-        return servoLogicalRangeFromOffset(getLogicalOffset(id));
+        (void)id;
+        return servoPositionRange();
     }
 
     /** 判断上线恢复事务是否达到下一次重试时间。 */
@@ -681,28 +673,123 @@ public:
         return ok;
     }
 
+    /**
+     * 使用 0x0B 自定义位置校正，直接改写舵机 hardware ABS（STS 固件 >= 3.10）。
+     * 单播 ACK 和校正后的新反馈均确认成功，才建立新的可信坐标。
+     * 不使用 RESET 降级：不支持校正或应答不确定时保持 Unknown，禁止运动。
+     */
+    bool calibrateHardwareAbsolutePosition(uint8_t id,
+                                           int32_t position,
+                                           int16_t* outRaw,
+                                           uint8_t* outAttempts = nullptr,
+                                           bool* outCorrectionAttempted = nullptr)
+    {
+        if (outAttempts) *outAttempts = 0;
+        if (outCorrectionAttempted) *outCorrectionAttempted = false;
+        if (!_serial || id > MAX_SERVO_ID || !outRaw ||
+            !_feedback[id].online ||
+            position < kServoHardwareCommandMin ||
+            position > kServoHardwareCommandMax) {
+            return false;
+        }
+
+        // 旧读事务与旧目标使用校正前坐标，不能跨越此次坐标改写。
+        abortSyncRead(false);
+        clearQueuedTargets();
+        ServoFeedbackInternal& fb = _feedback[id];
+        invalidateMultiTurnTrust(id);
+        fb.offlineTrustedSnapshotPending = false;
+        for (uint8_t attempt = 1;
+             attempt <= kResetZeroTransactionAttempts;
+             ++attempt) {
+            if (outAttempts) *outAttempts = attempt;
+            // SDK 的普通写接口返回 0 表示未收到 ACK，不能作为关力矩成功。
+            if (_sms.EnableTorque(id, 0) <= 0 || _sms.getState() != 0) {
+                delay(kMultiTurnConfigDelayMs);
+                continue;
+            }
+            _torqueDisabled[id] = true;
+            if (!_multiTurnConfigured[id]) {
+                uint8_t limits[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+                const bool configured = configureMultiTurnMode(id) &&
+                    _sms.Read(id, SMS_STS_MIN_ANGLE_LIMIT_L,
+                              limits, sizeof(limits)) == (int)sizeof(limits) &&
+                    _sms.getState() == 0 &&
+                    limits[0] == 0 && limits[1] == 0 &&
+                    limits[2] == 0 && limits[3] == 0;
+                _multiTurnConfigured[id] = configured;
+                if (!configured) {
+                    delay(kMultiTurnConfigDelayMs);
+                    continue;
+                }
+            }
+
+            // 即使 ACK 丢失，舵机也可能已经改写坐标，不能继续相信旧展开锚点。
+            invalidateMultiTurnTrust(id);
+            if (outCorrectionAttempted) *outCorrectionAttempted = true;
+            if (_sms.CalibratePosition(id, (int16_t)position) <= 0) {
+                delay(kMultiTurnConfigDelayMs);
+                continue;
+            }
+            delay(kMultiTurnConfigDelayMs);
+            for (uint8_t readAttempt = 0;
+                 readAttempt < kResetZeroFeedbackAttempts;
+                 ++readAttempt) {
+                fb.initialized = false;
+                if (probeFeedback(id) && _sms.getState() == 0 &&
+                    (int32_t)_sms.ReadPos(-1) == position &&
+                    fb.absolutePosition == position && fb.online &&
+                    fb.lastUpdate != 0) {
+                    const int16_t raw = normalizeServoRawSingleTurn(position);
+                    fb.turnCount = (int16_t)((position - raw) / 4096);
+                    fb.absoluteReliable = true;
+                    fb.onlineTransitionPending = false;
+                    fb.recoveryAttemptCount = 0;
+                    fb.recoveryFailed = false;
+                    fb.nextRecoveryAttemptMs = 0;
+                    fb.offlineLastTrustedAbs = position;
+                    fb.offlineLastTrustedRaw = raw;
+                    fb.offlineLastTrustedTurn = fb.turnCount;
+                    fb.offlineLastTrustedTimestampMs = fb.lastUpdate;
+                    fb.offlineTrustedSnapshotPending = false;
+                    *outRaw = raw;
+                    return true;
+                }
+                delay(kMultiTurnConfigDelayMs);
+            }
+        }
+        invalidateMultiTurnTrust(id);
+        fb.offlineTrustedSnapshotPending = false;
+        return false;
+    }
+
     // 重置一台 ST3215 的内部圈数，并在保持力矩关闭的前提下重新建立 turn0。
     // RESET 绝不使用广播 ID；复位后重新配置多圈模式，防止状态重置同时恢复角度限位。
-    bool resetTurnCounter(uint8_t id, int16_t* outRaw)
+    bool resetTurnCounter(uint8_t id, int16_t* outRaw,
+                          bool* outResetAttempted = nullptr)
     {
+        if (outResetAttempted) *outResetAttempted = false;
         if (!_serial || id > MAX_SERVO_ID || !outRaw ||
             !_feedback[id].online) {
             return false;
         }
-        if (!setTorqueEnabled(id, false)) {
+        abortSyncRead(false);
+        clearQueuedTargets();
+        if (_sms.EnableTorque(id, 0) <= 0 || _sms.getState() != 0) {
             return false;
         }
-        if (_sms.Reset(id) <= 0) {
+        _torqueDisabled[id] = true;
+        ServoFeedbackInternal& fb = _feedback[id];
+        // RESET 即使没有应答也可能已生效；发送前撤销旧坐标及恢复锚点。
+        invalidateMultiTurnTrust(id);
+        fb.offlineTrustedSnapshotPending = false;
+        _multiTurnConfigured[id] = false;
+        if (outResetAttempted) *outResetAttempted = true;
+        if (_sms.Reset(id) <= 0 || _sms.getState() != 0) {
             return false;
         }
         delay(kMultiTurnConfigDelayMs);
 
-        ServoFeedbackInternal& fb = _feedback[id];
-        fb.initialized = false;
-        fb.absoluteReliable = false;
-        fb.logicalOffset = 0;
-        fb.turnCount = 0;
-        _multiTurnConfigured[id] = false;
         if (!configureMultiTurnMode(id)) {
             return false;
         }
@@ -712,7 +799,9 @@ public:
         for (uint8_t attempt = 0;
              attempt < kResetZeroFeedbackAttempts;
              attempt++) {
-            if (probeFeedback(id)) {
+            fb.initialized = false;
+            if (probeFeedback(id) && _sms.getState() == 0 &&
+                fb.online && fb.lastUpdate != 0) {
                 feedbackOk = true;
                 break;
             }
@@ -725,9 +814,8 @@ public:
         const int16_t raw = normalizeServoRawSingleTurn(fb.rawPosition);
         fb.rawPosition = raw;
         fb.lastRawPosition = raw;
-        fb.absolutePosition = raw;
-        fb.logicalOffset = 0;
-        fb.turnCount = 0;
+        // 保留 RESET 后真实读回的 ABS，不能把原生多圈反馈强制改成单圈 raw。
+        fb.turnCount = (int16_t)((fb.absolutePosition - raw) / 4096);
         fb.initialized = true;
         fb.absoluteReliable = true;
         fb.onlineTransitionPending = false;
@@ -735,129 +823,15 @@ public:
         fb.recoveryFailed = false;
         fb.nextRecoveryAttemptMs = 0;
         fb.lastUpdate = millis();
+        fb.offlineLastTrustedAbs = fb.absolutePosition;
+        fb.offlineLastTrustedRaw = raw;
+        fb.offlineLastTrustedTurn = fb.turnCount;
+        fb.offlineLastTrustedTimestampMs = fb.lastUpdate;
+        fb.offlineTrustedSnapshotPending = false;
         *outRaw = raw;
         return true;
     }
 
-    /**
-     * 单播重置舵机硬件圈数，并立即恢复上层稳定的 logical ABS。
-     *
-     * 每次完整尝试都要求 RESET 有响应、重新配置多圈模式且读回一帧新反馈；
-     * 只有 hardware turn0 和 logicalOffset 同时校验成功才返回 true。这样 P4
-     * 重启后可以统一硬件坐标，又不会平移已经保存的 LUT 和 ABS Limit。
-     */
-    bool resetTurnCounterAndRestoreLogical(uint8_t id,
-                                           int32_t restoredLogicalAbs,
-                                           int16_t* outRaw,
-                                           uint8_t* outAttempts = nullptr)
-    {
-        if (outAttempts) *outAttempts = 0;
-        if (!_serial || id > MAX_SERVO_ID || !outRaw ||
-            !_feedback[id].online) {
-            return false;
-        }
-
-        for (uint8_t attempt = 1;
-             attempt <= kResetZeroTransactionAttempts;
-             ++attempt) {
-            if (outAttempts) *outAttempts = attempt;
-            int16_t resetRaw = 0;
-            if (resetTurnCounter(id, &resetRaw) &&
-                restoreAbsolutePosition(id, restoredLogicalAbs) &&
-                getHardwareAbsolutePosition(id) == (int32_t)resetRaw &&
-                getAbsolutePosition(id) == restoredLogicalAbs &&
-                getFeedback(id).lastUpdate != 0) {
-                *outRaw = resetRaw;
-                return true;
-            }
-            delay(kMultiTurnConfigDelayMs);
-        }
-
-        // 半成功事务不能进入运动控制；保留 online 供下一次单播恢复重试。
-        ServoFeedbackInternal& fb = _feedback[id];
-        fb.initialized = false;
-        fb.absoluteReliable = false;
-        fb.logicalOffset = 0;
-        fb.turnCount = 0;
-        return false;
-    }
-
-    /** 使用掉线前同帧 raw/ABS 锚点计算最近圈，再执行硬件归零与逻辑坐标恢复。 */
-    bool resetTurnCounterAndRestoreNearAnchor(uint8_t id,
-                                              int32_t anchorLogicalAbs,
-                                              int16_t anchorRaw,
-                                              int32_t* outLogicalAbs,
-                                              uint8_t* outAttempts = nullptr)
-    {
-        if (id > MAX_SERVO_ID || !outLogicalAbs) {
-            return false;
-        }
-        const int16_t currentRaw =
-            normalizeServoRawSingleTurn(_feedback[id].rawPosition);
-        int32_t rawDelta = (int32_t)currentRaw -
-            (int32_t)normalizeServoRawSingleTurn(anchorRaw);
-        if (rawDelta > 2047) rawDelta -= 4096;
-        if (rawDelta < -2048) rawDelta += 4096;
-        const int32_t restoredLogicalAbs = anchorLogicalAbs + rawDelta;
-        int16_t resetRaw = 0;
-        if (!resetTurnCounterAndRestoreLogical(id,
-                                               restoredLogicalAbs,
-                                               &resetRaw,
-                                               outAttempts)) {
-            return false;
-        }
-        *outLogicalAbs = restoredLogicalAbs;
-        return true;
-    }
-
-    /**
-     * 把上层已展开好的 logical ABS 绑定到当前硬件反馈。
-     *
-     * 上位机使用同一帧 SavedRaw + saved logical ABS 完成最近圈查找，
-     * 因此此处必须直接接受结果。logical ABS 可能包含非整圈 offset，
-     * 不能再用 logicalAbs % 4096 当作 SavedRaw 二次展开。
-     */
-    bool restoreAbsolutePosition(uint8_t id, int32_t restoredLogicalAbs)
-    {
-        if (id > MAX_SERVO_ID) {
-            return false;
-        }
-        ServoFeedbackInternal& fb = _feedback[id];
-        if (!fb.online) {
-            return false;
-        }
-
-        const int16_t currentRaw = normalizeServoRawSingleTurn(fb.rawPosition);
-        const int32_t hardwareAbs = fb.initialized
-            ? fb.absolutePosition
-            : (int32_t)currentRaw;
-        fb.rawPosition = currentRaw;
-        fb.lastRawPosition = currentRaw;
-        fb.absolutePosition = hardwareAbs;
-        fb.logicalOffset = restoredLogicalAbs - hardwareAbs;
-        fb.turnCount = (int16_t)((restoredLogicalAbs - currentRaw) / 4096);
-        fb.initialized = true;
-        fb.absoluteReliable = true;
-        fb.lastUpdate = millis();
-        return true;
-    }
-
-    /** P4 RAM 或桌面 JSON 锚点同时保存 raw 时，在驱动层完成跨 0/4095 的最近圈展开。 */
-    bool restoreAbsolutePositionNearAnchor(uint8_t id,
-                                           int32_t anchorLogicalAbs,
-                                           int16_t anchorRaw)
-    {
-        if (id > MAX_SERVO_ID) {
-            return false;
-        }
-        const int16_t currentRaw =
-            normalizeServoRawSingleTurn(_feedback[id].rawPosition);
-        int32_t rawDelta =
-            (int32_t)currentRaw - (int32_t)normalizeServoRawSingleTurn(anchorRaw);
-        if (rawDelta > 2047) rawDelta -= 4096;
-        if (rawDelta < -2048) rawDelta += 4096;
-        return restoreAbsolutePosition(id, anchorLogicalAbs + rawDelta);
-    }
 
     // ServoBus 消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
     // 仅建立一份会话内热插拔恢复锚点。
@@ -919,6 +893,7 @@ private:
             fb.successfulReadCount++;
         }
         if (!wasOnline && fb.successfulReadCount >= kOnlineConfirmReads) {
+            ++fb.onlineSessionGeneration;
             fb.online = true;
             fb.onlineTransitionPending = true;
             fb.recoveryAttemptCount = 0;
@@ -928,7 +903,7 @@ private:
         // 只有已经建立过可信多圈基准的反馈，才能作为掉电恢复锚点。
         // 初次发现的新舵机仍保持 Turn Unknown，不能把未知圈数写入 Flash。
         if (fb.absoluteReliable) {
-            const int32_t logicalAbs = fb.absolutePosition + fb.logicalOffset;
+            const int32_t logicalAbs = fb.absolutePosition;
             const int16_t trustedRaw =
                 normalizeServoRawSingleTurn(fb.rawPosition);
             fb.offlineLastTrustedAbs = logicalAbs;
@@ -963,11 +938,10 @@ private:
             return;
         }
         ServoFeedbackInternal& fb = _feedback[id];
-        // 在清除 logicalOffset/turnCount 之前冻结最后可信反馈。这里只写
+        // 在清除多圈信任之前冻结最后可信反馈。这里只写
         // RAM，不在舵机总线任务里直接写 Flash。
         if (fb.absoluteReliable) {
-            const int32_t logicalAbs =
-                fb.absolutePosition + fb.logicalOffset;
+            const int32_t logicalAbs = fb.absolutePosition;
             const int16_t trustedRaw =
                 normalizeServoRawSingleTurn(fb.rawPosition);
             fb.offlineLastTrustedAbs = logicalAbs;
@@ -1000,22 +974,19 @@ private:
         ServoFeedbackInternal& fb = _feedback[id];
         fb.initialized = false;
         fb.absoluteReliable = false;
-        fb.logicalOffset = 0;
         fb.turnCount = 0;
     }
 
-    /** 把业务 logical ABS 反算为 ST3215 可接受的 int16 hardware ABS。 */
-    bool logicalToHardwareTarget(uint8_t id,
+    /** 在线且坐标可信时，检查实际 ABS 的硬件范围后生成命令。 */
+    bool validateAbsoluteTarget(uint8_t id,
                                  int32_t logicalPosition,
                                  int16_t* outHardwarePosition) const
     {
-        if (id > MAX_SERVO_ID || !outHardwarePosition) {
+        if (id > MAX_SERVO_ID || !outHardwarePosition ||
+            !_feedback[id].online || !_feedback[id].absoluteReliable) {
             return false;
         }
-        const ServoFeedbackInternal& fb = _feedback[id];
-        return servoLogicalToHardwareAbs(logicalPosition,
-                                         fb.logicalOffset,
-                                         outHardwarePosition);
+        return servoHardwareCommandFromAbs(logicalPosition, outHardwarePosition);
     }
 
     /** 将单圈 raw 展开到最接近 anchor 的多圈坐标，避免跨零点跳变。 */
@@ -1046,7 +1017,7 @@ private:
         return (raw & (1 << 10)) ? (int16_t)-magnitude : magnitude;
     }
 
-    /** 用最新 raw 更新 hardware ABS，并据 logicalOffset 维护诊断圈数。 */
+    /** 用最新 raw 更新实际 ABS，并维护诊断圈数。 */
     void _updateMultiTurnPosition(uint8_t id, int16_t newRawPos)
     {
         ServoFeedbackInternal& fb = _feedback[id];
@@ -1068,8 +1039,7 @@ private:
         fb.rawPosition = rawSingleTurn;
         fb.lastRawPosition = rawSingleTurn;
         fb.absolutePosition = absPos;
-        const int32_t logicalAbs = absPos + fb.logicalOffset;
-        fb.turnCount = (int16_t)((logicalAbs - rawSingleTurn) / 4096);
+        fb.turnCount = (int16_t)((absPos - rawSingleTurn) / 4096);
         fb.initialized = true;
     }
 

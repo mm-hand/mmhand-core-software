@@ -44,10 +44,9 @@ struct ServoRuntimeState {
     volatile uint8_t servo_reset_zero_status; ///< RESET_ZERO_STATUS_*。
     volatile uint32_t servo_rebase_zero_request_mask; ///< 当前 logical ABS 归零请求 Mxx。
     volatile uint32_t servo_rebase_zero_request_token; ///< 非零请求代际，与结果不同表示事务未完成。
-    volatile uint32_t servo_rebase_zero_result_token; ///< offset/标定失效均完成后发布的结果代际。
-    volatile uint32_t servo_rebase_zero_success_mask; ///< hardware RESET 与 logical ABS=0 均验证成功。
+    volatile uint32_t servo_rebase_zero_result_token; ///< 实际置数/标定失效均完成后发布的结果代际。
+    volatile uint32_t servo_rebase_zero_success_mask; ///< 0x0B 校正后 hardware ABS 与 logical ABS 均为0。
     volatile uint32_t servo_rebase_zero_failed_mask; ///< 本次归零失败或执行前安全门禁拒绝的 Mxx。
-    int32_t servo_rebase_zero_offset[SERVO_TOTAL_NUM]; ///< 仅 success mask 对应项有效，保存于 P4 RAM。
 };
 
 #endif // P4_SYSTEM_CONTEXT_SERVO_RUNTIME_STATE_H

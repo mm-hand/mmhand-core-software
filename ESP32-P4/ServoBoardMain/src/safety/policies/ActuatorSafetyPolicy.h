@@ -58,7 +58,6 @@ uint32_t computeTargetAgeMs(uint32_t nowMs, uint32_t targetTimestampMs);
  */
 ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     uint8_t commandIndex,
-                                    int32_t logicalOffset,
                                     const ServoSafetyContext& context);
 
 /** 返回用于低频日志和 UI 诊断的稳定英文原因名。 */

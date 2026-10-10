@@ -99,3 +99,40 @@ def test_release_rejects_missing_identity_before_reset_or_motion():
     assert not result.ok
     controller.prepare_calibration_turn_zero.assert_not_called()
     controller.comm.send_command.assert_not_called()
+
+
+def test_selected_release_never_resets_invalidates_or_moves_other_motors(monkeypatch):
+    controller = controller_with_motor()
+    state = controller.current_state
+    state.servo_online_bitmap = state.servo_route_controllable_bitmap = 24
+    state.servo_raw_positions[3] = state.servo_angles[3]
+    state.servo_raw_online[3] = True
+    state.servo_angles[4] = 2500
+    controller.prepare_calibration_turn_zero = MagicMock(return_value=(True, 'ok', 8, 0))
+    controller.set_active_scope = MagicMock(return_value=True)
+    invalidate = MagicMock(return_value='saved')
+    monkeypatch.setattr(core_logic, 'invalidate_calibration_snapshot_scope', invalidate)
+
+    def send(command):
+        if isinstance(command, tuple) and command[0] == 'motor_pos_abs':
+            assert command[1][4] == 2500
+            state.servo_angles[3] = command[1][3]
+        return True
+
+    controller.comm.send_command.side_effect = send
+    result = controller.manual_prepare_all_motors(motor_mask=8)
+    assert result.ok and result.reset_motor_mask == result.reached_motor_mask == 8
+    assert controller.prepare_calibration_turn_zero.call_args.args[0] == 8
+    assert invalidate.call_args.kwargs['motor_mask'] == 8
+    assert invalidate.call_args.kwargs['joint_mask'] == 4
+    controller.set_active_scope.assert_called_once_with(8, 0, False)
+    assert state.servo_angles[4] == 2500
+
+
+def test_selected_release_requires_every_requested_motor_before_any_write():
+    controller = controller_with_motor()
+    controller.prepare_calibration_turn_zero = MagicMock()
+    result = controller.manual_prepare_all_motors(motor_mask=24)
+    assert not result.ok and 'offline or unroutable' in result.message
+    controller.prepare_calibration_turn_zero.assert_not_called()
+    controller.comm.send_command.assert_not_called()

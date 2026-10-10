@@ -391,7 +391,8 @@ def test_expected_turn_unknown_only_covers_static_rebase_window(io, monkeypatch)
     state = io.controller.current_state
     seen = []
 
-    def rebase(_mask):
+    def rebase(_mask, *, cancelled, send_gate):
+        assert not cancelled() and send_gate(lambda: True)
         state.system_status_p4_time_ms = 1050
         state.system_status_last_rx_ts = time.time()
         state.multi_turn_unknown_bitmap = 4
@@ -438,7 +439,8 @@ def test_failed_rebase_does_not_hide_persistent_unknown(io, monkeypatch):
     state = io.controller.current_state
     monkeypatch.setattr(io, '_release_motion', lambda: True)
 
-    def failed(_mask):
+    def failed(_mask, *, cancelled, send_gate):
+        assert not cancelled() and send_gate(lambda: True)
         state.multi_turn_unknown_bitmap = 4
         state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN
         state.system_status_p4_time_ms = 1050
@@ -449,6 +451,26 @@ def test_failed_rebase_does_not_hide_persistent_unknown(io, monkeypatch):
     io.controller.rebase_servo_abs_zero = failed
     assert not io._rebase(4)
     assert not io.is_expected_calibration_turn_unknown(io._state())
+
+
+def test_calibration_passes_live_cancellation_and_owner_gate_into_rebase(io, monkeypatch):
+    monkeypatch.setattr(io, '_release_motion', lambda: True)
+    calls = []
+
+    def rebase(mask, *, cancelled, send_gate):
+        assert mask == 4 and not cancelled()
+        assert send_gate(lambda: calls.append('first') or True)
+        io.controller.current_state.servo_target_owner = 1
+        assert not send_gate(lambda: calls.append('foreign owner') or True)
+        io.controller.current_state.servo_target_owner = 0
+        io.cancel()
+        assert cancelled()
+        assert not send_gate(lambda: calls.append('after stop') or True)
+        return MagicMock(ok=False, message='cancelled')
+
+    io.controller.rebase_servo_abs_zero = rebase
+    assert not io._rebase(4)
+    assert calls == ['first']
 
 
 def test_new_session_diagnostics_stay_clear_when_old_p4_failure_arrives(io):
@@ -505,16 +527,50 @@ def test_core_removes_now_offline_helper_from_old_preplanned_rebase_mask(io):
     assert io.preparation_reset_mask == 3
 
 
-def test_partial_helper_pair_blocks_initial_rebase(io, monkeypatch):
+@pytest.mark.parametrize('motor_only', [False, True])
+def test_j07_initial_recovery_requires_only_its_selected_motor(io, monkeypatch, motor_only):
+    selected = 1 << 9
+    io.selected_joint_mask = 0 if motor_only else 1 << 7
+    io.selected_motor_mask = io.preparation_reset_mask = selected
+    state = io.controller.current_state
+    state.has_direct_target_result = True
+    state.servo_online_bitmap = state.servo_route_controllable_bitmap = selected
+    state.servo_logical_range_valid_bitmap = selected
+    state.multi_turn_unknown_bitmap = state.servo_route_conflict_bitmap = (
+        ((1 << 27) - 1) & ~selected)
+    state.servo_raw_online = [motor == 9 for motor in range(27)]
+    # One helper is only partially online, and has unknown turns/conflicting routes.
+    state.servo_online_bitmap |= 1 << 5
+    monkeypatch.setattr(io, '_prepare_device', lambda: True)
+    monkeypatch.setattr(io, '_rebase', MagicMock(return_value=True))
+    _recovery_clock(io, monkeypatch)
+    assert io.wait_servo_recovery(selected)
+    assert io.preparation_reset_mask == selected
+    assert io.feedback_recovery_error == ''
+    io._rebase.assert_called_once_with(selected)
+    io.controller.comm.send_command.assert_not_called()
+
+
+@pytest.mark.parametrize('failure,reason', [
+    ('partial', 'helper pair partially online'),
+    ('unknown', 'helper multi-turn position unknown'),
+    ('route_conflict', 'helper motor route conflict'),
+])
+def test_unusable_helper_pair_blocks_side_sway_initial_rebase(io, monkeypatch, failure, reason):
     io.selected_joint_mask = 1
     io.selected_motor_mask = io.preparation_reset_mask = 3
     state = io.controller.current_state
     state.has_direct_target_result = True
-    state.servo_online_bitmap &= ~(1 << 6)
+    if failure == 'partial':
+        state.servo_online_bitmap &= ~(1 << 6)
+    elif failure == 'unknown':
+        state.multi_turn_unknown_bitmap = 1 << 5
+    else:
+        state.servo_route_conflict_bitmap = 1 << 5
     monkeypatch.setattr(io, '_prepare_device', lambda: True)
     io.controller.rebase_servo_abs_zero = MagicMock()
     assert not io.wait_servo_recovery(3)
-    assert 'helper pair partially online' in io.feedback_recovery_error
+    assert reason in io.feedback_recovery_error
     io.controller.rebase_servo_abs_zero.assert_not_called()
 
 
@@ -687,7 +743,9 @@ def test_successful_zero_followed_by_cancel_is_not_reported_as_hardware_failure(
     assert 'zero failed' not in message
     assert 'timeout' not in message
     assert 'abs_raw_timestamp_mismatch' in message
-    io.controller.rebase_servo_abs_zero.assert_called_once_with(4)
+    io.controller.rebase_servo_abs_zero.assert_called_once()
+    assert io.controller.rebase_servo_abs_zero.call_args.args == (4,)
+    assert io.controller.rebase_servo_abs_zero.call_args.kwargs['cancelled'] == io.is_cancelled
     assert io._rebase_windows[-1]['end_ms'] is None
 
 
@@ -703,7 +761,9 @@ def test_post_zero_feedback_timeout_identifies_the_same_timestamp_gate(io, monke
     assert 'unmet=abs_raw_timestamp_mismatch' in message
     assert 'zero failed' not in message
     assert not io.is_cancelled()
-    io.controller.rebase_servo_abs_zero.assert_called_once_with(4)
+    io.controller.rebase_servo_abs_zero.assert_called_once()
+    assert io.controller.rebase_servo_abs_zero.call_args.args == (4,)
+    assert io.controller.rebase_servo_abs_zero.call_args.kwargs['cancelled'] == io.is_cancelled
 
 
 @pytest.mark.parametrize('field,value,expected', [
@@ -769,7 +829,8 @@ def test_completed_rebase_window_uses_known_anchor_even_when_system_status_lags(
     _rebase_wait_clock(io, monkeypatch)
     during = []
 
-    def zero(_mask):
+    def zero(_mask, *, cancelled, send_gate):
+        assert not cancelled() and send_gate(lambda: True)
         state.system_status_last_rx_ts = time.time()
         state.multi_turn_unknown_bitmap = 4
         state.system_fault_bitmap = SYSTEM_FAULT_MULTITURN_UNKNOWN

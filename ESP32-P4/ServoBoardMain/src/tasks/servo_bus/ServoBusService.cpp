@@ -53,30 +53,15 @@ static void logServoSafetyReject(SystemRuntimeContext* sharedData,
     }
     if (decision.reason == ServoRejectReason::LogicalRange ||
         decision.reason == ServoRejectReason::HardwareRange) {
-        ServoRoute route;
-        FeetechServoDriver* bus =
-            resolveMotorDriver(decision.motorChannel, &route, false);
-        const int32_t logicalOffset =
-            bus ? bus->getLogicalOffset(route.servoId) : 0;
-        const ServoLogicalRange range =
-            servoLogicalRangeFromOffset(logicalOffset);
-        int64_t hardwareTarget =
-            (int64_t)decision.requestedAbs - (int64_t)logicalOffset;
-        if (hardwareTarget > INT32_MAX) hardwareTarget = INT32_MAX;
-        if (hardwareTarget < INT32_MIN) hardwareTarget = INT32_MIN;
+        const ServoLogicalRange range = servoPositionRange();
         FW_LOG_WARN_PRINTF(
-            "[SERVO SAFETY REJECT] M%02u reason=%s logical=%ld hardware=%ld "
-            "offset=%ld logicalRange=[%ld,%ld] hardwareRange=[%ld,%ld] "
+            "[SERVO SAFETY REJECT] M%02u reason=%s abs=%ld range=[%ld,%ld] "
             "owner=%u state=%u\r\n",
             (unsigned)decision.motorChannel,
             p4::actuator::rejectReasonName(decision.reason),
             (long)decision.requestedAbs,
-            (long)hardwareTarget,
-            (long)logicalOffset,
             (long)range.minAbs,
             (long)range.maxAbs,
-            (long)kServoHardwareCommandMin,
-            (long)kServoHardwareCommandMax,
             (unsigned)sharedData->servo_target_owner,
             (unsigned)sharedData->system_state);
         return;
@@ -213,13 +198,9 @@ static ServoBatchApplyResult applyServoTargetBatch(
         const ServoTargetCommand_t& cmd = batch.commands[i];
         FeetechServoDriver* bus =
             resolveMotorDriver(cmd.motorChannel, &commandRoutes[i], true);
-        const int32_t logicalOffset = bus
-                                          ? bus->getLogicalOffset(commandRoutes[i].servoId)
-                                          : 0;
         commandDecisions[i] =
             p4::actuator::evaluateCommand(batch,
                                           i,
-                                          logicalOffset,
                                           safetyContext);
         const ServoSafetyDecision& decision = commandDecisions[i];
         if (!decision.allowed || !bus) {
@@ -373,7 +354,7 @@ struct ServoHostRestoreContext {
     int32_t logicalAbs[SERVO_TOTAL_NUM];
 };
 
-/** 上位机请求的 logical ABS=0 事务；结果提交前保持上次结果快照不变。 */
+/** 标定 F0 / Direct F1 共用的实际 ABS=0 事务；完成前保留上次结果快照。 */
 struct ServoRebaseZeroContext {
     bool active;
     uint32_t token;
@@ -381,7 +362,6 @@ struct ServoRebaseZeroContext {
     uint32_t pendingMask;
     uint32_t successMask;
     uint32_t failedMask;
-    int32_t offsets[SERVO_TOTAL_NUM];
 };
 
 /** RESET/坐标重建只能在没有运动 owner、控制关闭时执行。 */
@@ -453,67 +433,26 @@ static void captureHostMultiTurnRestore(
     }
 }
 
-/**
- * 每个完整反馈轮次最多恢复一台舵机，避免27路 RESET 连续阻塞实时反馈。
- * sessionRebasedMask 保证同一 P4 会话内重复 JSON 同步不会再次清硬件圈数。
- */
-static bool stepHostMultiTurnRestore(
-    SystemRuntimeContext* sharedData,
-    ServoHostRestoreContext* restore,
-    uint32_t* sessionRebasedMask)
-{
-    if (!sharedData || !restore || !sessionRebasedMask || !restore->active) {
-        return false;
-    }
-    if (!servoCoordinateMaintenanceSafe(sharedData)) {
-        restore->rejectedMask |= restore->pendingMask;
-        restore->pendingMask = 0;
-        finishHostMultiTurnRestore(sharedData, restore);
-        return false;
-    }
-
-    uint8_t channel = SERVO_TOTAL_NUM;
-    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
-        if ((restore->pendingMask & (1UL << i)) != 0) {
-            channel = i;
-            break;
-        }
-    }
-    if (channel >= SERVO_TOTAL_NUM) {
-        finishHostMultiTurnRestore(sharedData, restore);
-        return false;
-    }
-
-    const uint32_t bit = 1UL << channel;
-    uint32_t restoredBit = 0;
-    uint32_t rejectedBit = 0;
-    const uint32_t resetMask = (*sessionRebasedMask & bit) == 0 ? bit : 0;
-    restoreServoMultiTurnFromHost(sharedData,
-                                  bit,
-                                  restore->logicalAbs,
-                                  resetMask,
-                                  true,
-                                  &restoredBit,
-                                  &rejectedBit);
-    restore->pendingMask &= ~bit;
-    restore->restoredMask |= restoredBit;
-    restore->rejectedMask |= rejectedBit;
-    if (restoredBit != 0) {
-        *sessionRebasedMask |= bit;
-    }
-    if (restore->pendingMask == 0) {
-        finishHostMultiTurnRestore(sharedData, restore);
-    }
-    return true;
-}
 
 // P4 持续供电而舵机单独掉电时使用的 RAM 恢复锚点。
 // 该状态与 Flash 开关独立：Flash OFF 只禁止跨 P4 掉电持久化，
 // 不能丢弃本次 P4 上电会话内已经冻结的可信多圈位置。
+struct ServoHotplugPendingSync {
+    FeetechServoDriver* driver = nullptr;
+    int32_t targetAbs = 0;
+    uint32_t onlineSessionGeneration = 0;
+    uint32_t trustedTimestampMs = 0;
+    uint8_t servoId = 0;
+    uint8_t failedRequests = 0;
+    bool active = false;
+    bool blocked = false;
+};
+
 struct ServoHotplugRecoveryAnchors {
     uint32_t validMask;                    // 已冻结可信锚点的舵机位图。
-    int32_t logicalAbs[SERVO_TOTAL_NUM];    // 舵机掉线前最后可信的 P4 逻辑 ABS。
+    int32_t logicalAbs[SERVO_TOTAL_NUM];    // 舵机掉线前最后可信的 ABS。
     int16_t raw[SERVO_TOTAL_NUM];           // 与 logicalAbs 同帧的单圈 raw。
+    ServoHotplugPendingSync pending[SERVO_TOTAL_NUM]; // 应答未确认时固定首次置数目标。
 };
 
 // 热插拔恢复只使用本次 P4 会话内冻结的 RAM 锚点；跨 P4 掉电恢复由桌面 JSON 完成。
@@ -528,6 +467,25 @@ struct ServoOnlineRecoveryContext {
     uint8_t nextChannel; ///< 下一轮查找 pending 舵机的起点，保证 27 路公平处理。
     bool torqueOffComplete; ///< 当前舵机是否已完成一次关扭矩。
 };
+
+/** 用同帧 ABS/raw 锚点计算最近圈目标；检查加法及硬件范围后才允许置数。 */
+static bool servoHotplugTargetFromAnchor(int32_t anchorAbs,
+                                         int16_t anchorRaw,
+                                         int16_t currentRaw,
+                                         int32_t* outTargetAbs)
+{
+    if (!outTargetAbs) return false;
+    int32_t delta = (int32_t)normalizeServoRawSingleTurn(currentRaw) -
+        (int32_t)normalizeServoRawSingleTurn(anchorRaw);
+    if (delta > 2047) delta -= 4096;
+    if (delta < -2048) delta += 4096;
+    const int64_t target = (int64_t)anchorAbs + (int64_t)delta;
+    if (target < kServoHardwareCommandMin || target > kServoHardwareCommandMax) {
+        return false;
+    }
+    *outTargetAbs = (int32_t)target;
+    return true;
+}
 
 // 为重新上线的单台舵机选择最新可信锚点。刚冻结的 RAM 锚点优先于
 // 桌面 JSON 恢复，避免舵机恢复速度快于 JSON 同步时出现 anchor=0。
@@ -571,6 +529,30 @@ static void processServoOnlineTransitions(
     *hardwareResetAttempted = false;
     const uint32_t nowMs = p4::platform::time::monotonicMillis();
 
+    // 实际置数可能已生效而 ACK 丢失。保持同一次上线的首次目标；新可信
+    // 坐标可以结束该事务，路由或上线代次变化则必须拒绝继续使用旧 raw。
+    for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
+        ServoHotplugPendingSync& pending = hotplugAnchors->pending[channel];
+        if (!pending.active) continue;
+        ServoRoute pendingRoute;
+        FeetechServoDriver* pendingBus =
+            resolveMotorDriver(channel, &pendingRoute, true);
+        if (!pendingBus || pendingBus != pending.driver ||
+            pendingRoute.servoId != pending.servoId) {
+            pending.blocked = true;
+            continue;
+        }
+        const ServoFeedbackInternal& feedback =
+            pendingBus->getFeedback(pendingRoute.servoId);
+        if (pendingBus->isAbsoluteReliable(pendingRoute.servoId) ||
+            feedback.offlineLastTrustedTimestampMs != pending.trustedTimestampMs) {
+            pending = ServoHotplugPendingSync{};
+        } else if (!pendingBus->isOnline(pendingRoute.servoId) ||
+                   feedback.onlineSessionGeneration != pending.onlineSessionGeneration) {
+            pending.blocked = true;
+        }
+    }
+
     if (recovery->activeChannel >= SERVO_TOTAL_NUM) {
         for (uint8_t offset = 0; offset < SERVO_TOTAL_NUM; ++offset) {
             const uint8_t candidate = (uint8_t)(
@@ -604,7 +586,21 @@ static void processServoOnlineTransitions(
     }
     const uint8_t id = route.servoId;
 
-    // 恢复事务先关闭力矩；后续寄存器核验、EEPROM 配置与 offset 恢复都不重复执行该写操作。
+    ServoHotplugPendingSync& pending = hotplugAnchors->pending[ch];
+    if (pending.active &&
+        (pending.blocked || pending.failedRequests >= kRecoveryMaxAttempts)) {
+        sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
+        bus->finishRecoveryAttempt(id, false, nowMs);
+        FW_LOG_WARN_PRINTF(
+            "[SERVO HOTPLUG] M%02u bus=%u id=%u pending_abs=%ld result=failed reason=unresolved-sync\r\n",
+            (unsigned)ch, (unsigned)route.busIndex, (unsigned)id,
+            (long)pending.targetAbs);
+        recovery->activeChannel = 0xFF;
+        recovery->torqueOffComplete = false;
+        return;
+    }
+
+    // 先关闭力矩，再核验多圈配置；位置校正入口仍独立检查关力矩应答。
     if (!recovery->torqueOffComplete) {
         if (!bus->setTorqueEnabled(id, false)) {
             bus->finishRecoveryAttempt(id, false, nowMs);
@@ -646,21 +642,48 @@ static void processServoOnlineTransitions(
                                                        &recoveryLogicalAbs,
                                                        &recoveryRaw,
                                                        &anchorSource);
-    uint8_t resetAttempts = 0;
-    if (!trusted && configured && hasAnchor) {
-        *hardwareResetAttempted = true;
-        int32_t restoredLogicalAbs = 0;
-        trusted = bus->resetTurnCounterAndRestoreNearAnchor(
-            id,
-            recoveryLogicalAbs,
-            recoveryRaw,
-            &restoredLogicalAbs,
-            &resetAttempts);
-        configured = trusted && bus->isMultiTurnConfigured(id);
-    }
-
     const uint8_t attemptNumber =
         (uint8_t)(bus->recoveryAttemptCount(id) + 1U);
+    uint8_t correctionAttempts = 0;
+    if (!trusted && configured && hasAnchor) {
+        int32_t targetAbs = pending.targetAbs;
+        const bool targetValid = pending.active || servoHotplugTargetFromAnchor(
+            recoveryLogicalAbs, recoveryRaw, bus->getRawPosition(id), &targetAbs);
+        if (targetValid) {
+            const uint32_t sessionGeneration =
+                bus->getFeedback(id).onlineSessionGeneration;
+            const uint32_t trustedTimestamp =
+                bus->getFeedback(id).offlineLastTrustedTimestampMs;
+            bool correctionAttempted = false;
+            int16_t correctedRaw = 0;
+            *hardwareResetAttempted = true;
+            trusted = bus->calibrateHardwareAbsolutePosition(
+                id, targetAbs, &correctedRaw, &correctionAttempts,
+                &correctionAttempted);
+            if (!trusted && correctionAttempted) {
+                if (!pending.active) {
+                    pending.driver = bus;
+                    pending.servoId = id;
+                    pending.targetAbs = targetAbs;
+                    pending.onlineSessionGeneration = sessionGeneration;
+                    pending.trustedTimestampMs = trustedTimestamp;
+                    pending.active = true;
+                }
+                ++pending.failedRequests;
+                if (!bus->isOnline(id) ||
+                    bus->getFeedback(id).onlineSessionGeneration != sessionGeneration) {
+                    pending.blocked = true;
+                }
+            }
+        } else {
+            FW_LOG_WARN_PRINTF(
+                "[SERVO HOTPLUG] M%02u anchor_abs=%ld anchor_raw=%d raw=%d result=failed reason=abs-range\r\n",
+                (unsigned)ch, (long)recoveryLogicalAbs, (int)recoveryRaw,
+                (int)bus->getRawPosition(id));
+        }
+        configured = bus->isMultiTurnConfigured(id);
+    }
+
     const bool recoveryTransactionComplete = configured &&
         (trusted || !hasAnchor);
     bus->finishRecoveryAttempt(id, recoveryTransactionComplete, nowMs);
@@ -668,13 +691,14 @@ static void processServoOnlineTransitions(
         if (trusted) {
             sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
             hotplugAnchors->validMask &= ~bit;
+            pending = ServoHotplugPendingSync{};
             *sessionRebasedMask |= bit;
         } else {
             // 没有可信锚点时保持 Turn Unknown，禁止把“多圈模式正确”误当作“圈数可信”。
             sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
         }
     }
-    FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u attempt=%u/%u reset_attempts=%u "
+    FW_LOG_INFO_PRINTF("[SERVO HOTPLUG] M%02u bus=%u id=%u instruction=0x0B attempt=%u/%u correction_attempts=%u "
                   "configured=%u anchor=%u anchor_src=%u trusted=%u ready=%u "
                   "failed=%u raw=%d unknown=0x%08lX\r\n",
                   (unsigned)ch,
@@ -682,7 +706,7 @@ static void processServoOnlineTransitions(
                   (unsigned)id,
                   (unsigned)attemptNumber,
                   (unsigned)mmhand::config::servo::kRecoveryMaxAttempts,
-                  (unsigned)resetAttempts,
+                  (unsigned)correctionAttempts,
                   configured ? 1U : 0U,
                   hasAnchor ? 1U : 0U,
                   (unsigned)anchorSource,
@@ -726,6 +750,7 @@ static uint32_t cacheServoPowerLossSnapshots(
         const uint32_t bit = 1UL << ch;
         hotplugAnchors->logicalAbs[ch] = logicalAbs;
         hotplugAnchors->raw[ch] = raw;
+        hotplugAnchors->pending[ch] = ServoHotplugPendingSync{};
         hotplugAnchors->validMask |= bit;
         capturedMask |= bit;
         FW_LOG_WARN_PRINTF(
@@ -740,6 +765,71 @@ static uint32_t cacheServoPowerLossSnapshots(
     return capturedMask;
 }
 
+/**
+ * 每个完整反馈轮次最多恢复一台舵机，避免27路位置校正连续阻塞实时反馈。
+ * 接收既有 0xDA 请求后，以 0x0B 将主机 ABS 实际写入舵机并读回核验。
+ */
+static bool stepHostMultiTurnRestore(
+    SystemRuntimeContext* sharedData,
+    ServoHostRestoreContext* restore,
+    uint32_t* sessionRebasedMask,
+    ServoHotplugRecoveryAnchors* hotplugAnchors)
+{
+    if (!sharedData || !restore || !sessionRebasedMask || !hotplugAnchors || !restore->active) {
+        return false;
+    }
+    if (!servoCoordinateMaintenanceSafe(sharedData)) {
+        restore->rejectedMask |= restore->pendingMask;
+        restore->pendingMask = 0;
+        finishHostMultiTurnRestore(sharedData, restore);
+        return false;
+    }
+
+    uint8_t channel = SERVO_TOTAL_NUM;
+    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
+        if ((restore->pendingMask & (1UL << i)) != 0) {
+            channel = i;
+            break;
+        }
+    }
+    if (channel >= SERVO_TOTAL_NUM) {
+        finishHostMultiTurnRestore(sharedData, restore);
+        return false;
+    }
+
+    const uint32_t bit = 1UL << channel;
+    uint32_t restoredBit = 0;
+    uint32_t rejectedBit = 0;
+    if (hotplugAnchors->pending[channel].active) {
+        // 热插拔置数应答未确认时，JSON/raw 可能已漂移；不能由主机恢复绕过该锁。
+        rejectedBit = bit;
+        FW_LOG_WARN_PRINTF(
+            "[SERVO RESTORE] M%02u result=failed reason=unresolved-hotplug-sync\r\n",
+            (unsigned)channel);
+    } else {
+        // 主机接管坐标恢复，撤销旧 RAM 锚点，防止失败后另一恢复路径回写旧目标。
+        hotplugAnchors->validMask &= ~bit;
+        const uint32_t resetMask = (*sessionRebasedMask & bit) == 0 ? bit : 0;
+        restoreServoMultiTurnFromHost(sharedData,
+                                      bit,
+                                      restore->logicalAbs,
+                                      resetMask,
+                                      true,
+                                      &restoredBit,
+                                      &rejectedBit);
+    }
+    restore->pendingMask &= ~bit;
+    restore->restoredMask |= restoredBit;
+    restore->rejectedMask |= rejectedBit;
+    if (restoredBit != 0) {
+        *sessionRebasedMask |= bit;
+    }
+    if (restore->pendingMask == 0) {
+        finishHostMultiTurnRestore(sharedData, restore);
+    }
+    return true;
+}
+
 /** 标定失效已经完成后，才允许 Host 发布本次最终结果。 */
 static void finishServoRebaseZero(SystemRuntimeContext* sharedData,
                                   ServoRebaseZeroContext* rebase)
@@ -750,8 +840,6 @@ static void finishServoRebaseZero(SystemRuntimeContext* sharedData,
                           rebase->successMask);
         sharedAtomicStore(&sharedData->servo_rebase_zero_failed_mask,
                           rebase->failedMask);
-        memcpy(sharedData->servo_rebase_zero_offset, rebase->offsets,
-               sizeof(rebase->offsets));
         sharedAtomicStore(&sharedData->servo_rebase_zero_result_token,
                           rebase->token);
     }
@@ -812,10 +900,11 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
     ServoRoute route;
     FeetechServoDriver* driver = resolveMotorDriver(channel, &route, true);
 
-    // 即使 RESET 最终失败，也可能已经改写硬件 turn0。先撤销旧 LUT/限位
+    // 即使 0x0B 校正最终失败，也可能已经改写硬件 ABS。先撤销旧 LUT/限位
     // 和掉电锚点，杜绝半成功事务继续使用旧逻辑坐标。
     invalidateAutomaticCalibration(sharedData, jointMaskForMotorMask(bit));
     hotplugAnchors->validMask &= ~bit;
+    hotplugAnchors->pending[channel] = ServoHotplugPendingSync{};
     *sessionRebasedMask &= ~bit;
     if (recovery->activeChannel == channel) {
         recovery->activeChannel = 0xFF;
@@ -824,10 +913,10 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
     sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
     int16_t resetRaw = 0;
     uint8_t attempts = 0;
-    const bool ok = driver && driver->resetTurnCounterAndRestoreLogical(
+    const bool ok = driver && driver->calibrateHardwareAbsolutePosition(
         route.servoId, 0, &resetRaw, &attempts);
     if (driver) {
-        // 读失败可能冻结 RESET 前的旧锚点；此次显式重定义坐标后不能再恢复它。
+        // 此次显式重定义硬件坐标后不能再恢复校正前的旧锚点。
         int32_t discardedAbs = 0;
         int16_t discardedRaw = 0;
         int16_t discardedTurn = 0;
@@ -837,7 +926,6 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
             &discardedTurn, &discardedTimestamp);
     }
     if (ok) {
-        rebase->offsets[channel] = driver->getLogicalOffset(route.servoId);
         rebase->successMask |= bit;
         *sessionRebasedMask |= bit;
         sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap, ~bit);
@@ -848,9 +936,9 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
     }
     rebase->pendingMask &= ~bit;
     FW_LOG_INFO_PRINTF(
-        "[SERVO REBASE ZERO] M%02u token=%lu raw=%d offset=%ld attempts=%u success=%u\r\n",
+        "[SERVO REBASE ZERO] M%02u token=%lu raw=%d attempts=%u success=%u instruction=0x0B\r\n",
         (unsigned)channel, (unsigned long)rebase->token,
-        (int)resetRaw, (long)rebase->offsets[channel],
+        (int)resetRaw,
         (unsigned)attempts, ok ? 1U : 0U);
     if (rebase->pendingMask == 0) {
         finishServoRebaseZero(sharedData, rebase);
@@ -865,9 +953,13 @@ static bool stepServoRebaseZero(SystemRuntimeContext* sharedData,
  * 失效对应 Auto/LUT，并把新的 raw/ABS 锚点写入 JSON；处理完成不依赖后台持久化任务。
  */
 static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
-                                         uint32_t* lastRequestToken)
+                                         uint32_t* lastRequestToken,
+                                         ServoHotplugRecoveryAnchors* hotplugAnchors,
+                                         ServoOnlineRecoveryContext* recovery,
+                                         uint32_t* sessionRebasedMask)
 {
-    if (!sharedData || !lastRequestToken) {
+    if (!sharedData || !lastRequestToken || !hotplugAnchors ||
+        !recovery || !sessionRebasedMask) {
         return;
     }
     const uint32_t token =
@@ -906,17 +998,33 @@ static void processServoResetZeroRequest(SystemRuntimeContext* sharedData,
             int16_t raw = 0;
             uint8_t attempts = 0;
             bool resetOk = false;
+            bool anyResetAttempted = false;
             while (driver &&
                    attempts <
                        mmhand::config::servo::kResetZeroTransactionAttempts) {
                 ++attempts;
-                if (driver->resetTurnCounter(route.servoId, &raw)) {
-                    resetOk = true;
+                bool resetAttempted = false;
+                resetOk = driver->resetTurnCounter(
+                    route.servoId, &raw, &resetAttempted);
+                anyResetAttempted |= resetAttempted;
+                if (resetOk) {
                     break;
+                }
+            }
+            if (anyResetAttempted) {
+                hotplugAnchors->validMask &= ~bit;
+                hotplugAnchors->pending[channel] = ServoHotplugPendingSync{};
+                *sessionRebasedMask &= ~bit;
+                if (recovery->activeChannel == channel) {
+                    recovery->activeChannel = 0xFF;
+                    recovery->torqueOffComplete = false;
                 }
             }
             if (!resetOk) {
                 failedMask |= bit;
+                if (anyResetAttempted) {
+                    sharedAtomicFetchOr(&sharedData->multi_turn_unknown_bitmap, bit);
+                }
                 continue;
             }
             successMask |= bit;
@@ -970,7 +1078,7 @@ struct ServoRuntimeContext {
     ServoOnlineRecoveryContext onlineRecovery;
     ServoHostRestoreContext hostRestore; ///< 当前上位机 JSON 逐台恢复事务。
     ServoRebaseZeroContext rebaseZero; ///< 当前上位机 logical ABS 归零事务。
-    uint32_t sessionRebasedMask; ///< 本次 P4 会话已完成硬件归零和 offset 重建的 Mxx。
+    uint32_t sessionRebasedMask; ///< 本次 P4 会话已完成硬件坐标重建的 Mxx。
 };
 
 static ServoRuntimeContext g_servoRuntime;
@@ -1218,7 +1326,8 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
             !rebaseZero.active &&
             stepHostMultiTurnRestore(sharedData,
                                      &hostRestore,
-                                     &sessionRebasedMask);
+                                     &sessionRebasedMask,
+                                     &hotplugRecoveryAnchors);
         if (hostRestoreStepped || rebaseZeroStepped) {
             runtime.feedbackFreshnessGraceUntilMs =
                 p4::platform::time::monotonicMillis() +
@@ -1240,7 +1349,9 @@ bool stepServoBusService(SystemRuntimeContext* sharedData,
         p4::servo::publishTurnOverflowState(sharedData);
         const uint32_t resetZeroTokenBefore = lastServoResetZeroToken;
         if (!hostRestoreStepped && !rebaseZeroStepped && !rebaseZero.active) {
-            processServoResetZeroRequest(sharedData, &lastServoResetZeroToken);
+            processServoResetZeroRequest(sharedData, &lastServoResetZeroToken,
+                                         &hotplugRecoveryAnchors, &onlineRecovery,
+                                         &sessionRebasedMask);
         }
         if (lastServoResetZeroToken != resetZeroTokenBefore) {
             // Reset Zero 会暂时阻塞本任务；从事务真正结束的时刻重新计算宽限期。

@@ -108,7 +108,7 @@ def test_joint_calibration_current_protocol_round_trip():
     assert parsed["tendonLutMotorAbs"][0][:3] == [0, 1, 2]
 
 def test_joint_calibration_preserves_large_logical_abs():
-    """舵机单独掉电重建 offset 后，logical ABS 超过 int16 仍须无损恢复。"""
+    """历史快照的 ABS 超过 int16 时，int32 协议须无损解析和传输。"""
     mapping_version, mapping_crc = urdf_manual_scaled_mapping_metadata()
     result = {
         "joint": 4,

@@ -150,8 +150,7 @@ size_t getCommandPayloadLength(uint8_t cmd)
     return generatedCommandPayloadLength(cmd);
 }
 
-// 解析 P4 逻辑多圈 ABS。逻辑坐标可能因单台舵机掉电后的 offset 平移
-// 超过 int16 范围，因此绝对位置命令统一使用大端 int32。
+// 解析多圈 ABS；绝对位置命令保持既有大端 int32 格式，执行层检查硬件范围。
 bool parseInt32ArrayBigEndian(const uint8_t* payload,
                                      size_t payloadLen,
                                      int32_t* outValues,

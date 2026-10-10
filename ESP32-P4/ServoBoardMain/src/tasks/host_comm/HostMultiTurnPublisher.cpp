@@ -60,7 +60,6 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
     uint32_t rebaseToken = rebaseTokenHint;
     uint32_t rebaseSuccessMask = 0;
     uint32_t rebaseFailedMask = 0;
-    int32_t rebaseOffsets[SERVO_TOTAL_NUM] = {};
     uint32_t directGeneration = directGenerationHint;
     uint32_t directToken = 0;
     uint32_t directRequestedMask = 0;
@@ -84,9 +83,6 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
                 &sharedData->servo_rebase_zero_success_mask);
             rebaseFailedMask = sharedAtomicLoad(
                 &sharedData->servo_rebase_zero_failed_mask);
-            for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
-                rebaseOffsets[motor] = sharedData->servo_rebase_zero_offset[motor];
-            }
         }
         if (needDirectResult) {
             directGeneration = sharedData->direct_target_result_generation;
@@ -117,7 +113,7 @@ bool stepHostMultiTurnPublisher(SystemRuntimeContext* sharedData,
                                  STATE_SYNC_JOINT_CALIBRATION);
         }
         rebaseSent = sendServoRebaseZeroResultPacket(
-            rebaseToken, rebaseSuccessMask, rebaseFailedMask, rebaseOffsets);
+            rebaseToken, rebaseSuccessMask, rebaseFailedMask);
         if (rebaseSent) {
             s_lastRebaseZeroResultTokenSent = rebaseToken;
         }

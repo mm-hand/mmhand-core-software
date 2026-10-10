@@ -90,7 +90,6 @@ bool getJointActuatorGroup(uint8_t jointIndex, JointActuatorGroup* out)
     for (uint8_t i = 0; i < MAX_JOINT_ACTUATORS; i++) {
         out->actuators[i].motorChannel = 0xFF;
         out->actuators[i].sign = 1;
-        out->actuators[i].offset = 0;
     }
 
     const uint8_t configuredCount = getJointActuatorCount(jointIndex);

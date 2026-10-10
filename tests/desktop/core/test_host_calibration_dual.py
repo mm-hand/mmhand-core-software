@@ -177,10 +177,16 @@ def test_thumb_scope_has_no_four_finger_read_mask():
     assert dual.build_dynamic_workspace_motor_mask(io, [16, 20]) == 0
 
 
-def test_single_scope_rejects_stale_helpers_before_movement():
+@pytest.mark.parametrize("joint", [joint for joint in range(21)
+                                  if joint not in dual.WORKSPACE_DUAL_JOINTS])
+def test_non_workspace_joint_needs_no_helper_feedback_or_plan(joint):
     io = FakeIO()
+    io.online = 0
     io.age = 10000
-    assert dual.build_dynamic_workspace_motor_mask(io, [1]) is None
+    io.snapshot = lambda: pytest.fail("non-workspace joint must not inspect helpers")
+    assert dual.build_dynamic_workspace_motor_mask(io, [joint]) == 0
+    assert dual.build_dual_workspace_plan(io, joint) == []
+    assert not io.diags
     assert not io.commands
 
 
@@ -188,17 +194,19 @@ def test_route_conflict_helper_is_rejected_before_workspace_movement():
     io = FakeIO()
     snapshot = io.snapshot
     io.snapshot = lambda: dict(snapshot(), servo_route_conflict_bitmap=1 << config.joint_motors(4)[0])
-    assert dual.build_dynamic_workspace_motor_mask(io, [1]) is None
+    assert dual.build_dynamic_workspace_motor_mask(io, [0]) is None
     assert not io.commands
 
 
-@pytest.mark.parametrize('target', range(16))
-def test_every_four_finger_joint_uses_other_fingers_in_safe_order(target):
+@pytest.mark.parametrize('target', dual.WORKSPACE_DUAL_JOINTS)
+def test_side_sway_joints_keep_other_fingers_in_safe_order(target):
     io = FakeIO()
-    root = target // 4 * 4
-    expected = [(j, dual.POSE_A) for j in (0, 4, 8, 12) if j < root]
-    expected += [(j, dual.POSE_B) for j in (12, 8, 4, 0) if j > root]
+    expected = [(j, dual.POSE_A) for j in (0, 4, 8, 12) if j < target]
+    expected += [(j, dual.POSE_B) for j in (12, 8, 4, 0) if j > target]
     assert dual.build_dual_workspace_plan(io, target) == expected
+    assert dual.build_dynamic_workspace_motor_mask(io, [target]) == sum(
+        1 << motor for joint in dual.WORKSPACE_DUAL_JOINTS
+        for motor in config.joint_motors(joint))
 
 
 def test_helper_preflight_finishes_before_any_workspace_movement():
@@ -213,7 +221,8 @@ def test_helper_preflight_finishes_before_any_workspace_movement():
 
 
 @pytest.mark.parametrize("params", [config.AutoCalibrationParams(),
-                                    config.default_auto_calibration_params(0)])
+                                    config.AutoCalibrationParams(tightenSpeedCountsPerSec=200,
+                                                                 servoSpeed=200, windowMs=400)])
 def test_workspace_fresh_pose_releases_antagonist_before_tightening(params):
     io = FakeIO()
     worker = dual._DualMachine(io, 0, params)
@@ -232,9 +241,11 @@ def test_workspace_fresh_pose_releases_antagonist_before_tightening(params):
     assert len(io.commands) == before
 
 
-def test_slow_side_sway_calibration_preserves_workspace_tightening_rate():
+def test_custom_slow_calibration_preserves_workspace_tightening_rate():
     io = FakeIO()
-    worker = dual._DualMachine(io, 0, config.default_auto_calibration_params(0))
+    params = config.AutoCalibrationParams(tightenSpeedCountsPerSec=200,
+                                          servoSpeed=200, windowMs=400)
+    worker = dual._DualMachine(io, 0, params)
     primary, secondary = config.joint_motors(4)
     io.loads[secondary] = 0
 
@@ -298,7 +309,7 @@ def test_reset_and_origin_change_only_invalidate_corresponding_pose():
 
 @pytest.mark.parametrize("params,step,endpoint", [
     (config.AutoCalibrationParams(), 8, 152),
-    (config.default_auto_calibration_params(16), 4, 156),
+    (config.default_auto_calibration_params(16), 8, 152),
 ])
 def test_primary_tight_requires_load_motion_and_two_stalled_windows(params, step, endpoint):
     io = FakeIO()
@@ -354,7 +365,7 @@ def test_preload_accepts_load_without_encoder_stall_or_extra_motion():
 
 @pytest.mark.parametrize("params,step,endpoint", [
     (config.AutoCalibrationParams(), 8, 72),
-    (config.default_auto_calibration_params(16), 4, 76),
+    (config.default_auto_calibration_params(16), 8, 72),
 ])
 def test_exchange_endpoint_requires_12_degrees_and_both_motors_progress_not_angle_stall(
         params, step, endpoint):

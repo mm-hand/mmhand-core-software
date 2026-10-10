@@ -39,6 +39,9 @@ public:
 	u16 syncReadExpectedBytes() const { return syncReadRxBuffMax; }
 	int Reset(u8 ID);//重置舵机状态
 	int Recal(u8 ID);//重置舵机中位
+	// STS firmware >= 3.10: opcode 0x0B with an encoded little-endian position,
+	// no register address. Unicast requires a valid zero-status ACK.
+	int Recal(u8 ID, u16 EncodedPosition);
 	u8 getState() { return u8Status; }
 	u8 getLastError() { return u8Error; }
 public:

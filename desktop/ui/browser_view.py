@@ -25,6 +25,7 @@ body {background:#F5F7FA;color:#1e293b}
 .status-bar {min-height:32px;padding:4px 12px;background:#eef2f7;gap:14px;flex-shrink:0}
 .console-tabs {height:36px;min-height:36px;background:white;flex-shrink:0}
 .console-tabs .q-tab {min-height:36px;padding:0 12px;font-size:12px}
+.toolbar-area {width:100%;padding:8px 12px;background:white;flex-shrink:0}
 .page-panels {flex:1;min-height:0;overflow:auto;width:100%;background:transparent}
 .page-panels .q-tab-panel {padding:12px;display:flex;flex-direction:column;gap:12px}
 .page-toolbar {width:100%;display:flex;align-items:center;justify-content:flex-start;flex-wrap:nowrap;gap:8px;overflow-x:auto;flex-shrink:0}
@@ -46,6 +47,25 @@ def build_page(hand):
     ui.colors(primary='#2563eb', positive='#16a34a', warning='#ea880c', negative='#dc2626')
     ui.add_css(CSS)
     preview_token, log_sequence = [None], [0]
+    displayed_calibration_alerts = set()
+    pending_calibration_alerts = []
+    with ui.dialog().props('persistent') as calibration_dialog, ui.card().classes('w-[600px] max-w-full'):
+        calibration_title = ui.label().classes('font-semibold text-lg')
+        calibration_message = ui.label().classes('whitespace-pre-wrap text-sm')
+        ui.button('Close', on_click=calibration_dialog.close).props('dense')
+    def refresh_calibration_alerts(snapshot):
+        for operation in snapshot['operations']:
+            operation_id = operation['operation_id']
+            alert = operation.get('calibration_alert')
+            if alert and operation_id not in displayed_calibration_alerts:
+                displayed_calibration_alerts.add(operation_id)
+                pending_calibration_alerts.append(alert)
+        if pending_calibration_alerts and not calibration_dialog.value:
+            alert = pending_calibration_alerts.pop(0)
+            calibration_title.set_text(alert['title'])
+            calibration_title.style('color:#dc2626' if alert['severity'] == 'negative' else 'color:#ea880c')
+            calibration_message.set_text(alert['message'])
+            calibration_dialog.open()
     def act(action):
         try:
             result = action()
@@ -93,7 +113,7 @@ def build_page(hand):
                     act(lambda: hand.request_disconnect(tactile=name == 's3') if state['connected'] else hand.request_connect(selectors[name].value or '', tactile=name == 's3'))
                 buttons[name] = ui.button('Connect', on_click=connection).props('dense outline')
                 ages[name] = ui.label('—ms').classes('text-xs whitespace-nowrap')
-                with ages[name]: ui.tooltip('Feedback age since the latest received status, in milliseconds. This is not round-trip latency.')
+                with ages[name]: ui.tooltip('Time since the latest data received on this connection, in milliseconds.')
             ui.space()
             save = ui.button('Save Data: ON', on_click=lambda: act(lambda: hand.request_recording(not hand.application_snapshot(include_curves=False)['recording']['enabled']))).props('dense outline')
             ui.button('■ STOP', on_click=lambda: act(hand.stop_motion), color='negative').props('dense').classes('font-bold px-5')
@@ -102,8 +122,9 @@ def build_page(hand):
         with ui.tabs(value=TABS[0]).classes('console-tabs w-full').props('dense no-caps active-color=primary outside-arrows mobile-arrows') as tabs:
             for name in TABS: ui.tab(name)
         for badge in badges.values(): badge.on('click', lambda: tabs.set_value('Diagnostics'))
+        toolbar_area = ui.element('div').classes('toolbar-area')
         refreshers = {}
-        with ui.tab_panels(tabs, value=TABS[0], animated=False).classes('page-panels').props('keep-alive'):
+        with ui.tab_panels(tabs, value=TABS[0], animated=False).classes('page-panels').props('keep-alive') as panels:
             with ui.tab_panel(TABS[0]): refreshers[TABS[0]] = joint_calibration.build(hand, act, open_import, confirm)
             with ui.tab_panel(TABS[1]): refreshers[TABS[1]] = motor_calibration.build(hand, act, open_import)
             with ui.tab_panel(TABS[2]): refreshers[TABS[2]] = feedback_control.build(hand, act)
@@ -112,6 +133,17 @@ def build_page(hand):
             with ui.tab_panel(TABS[5]): refreshers[TABS[5]] = plots.build(hand, act)
             with ui.tab_panel(TABS[6]): refreshers[TABS[6]] = tactile.build(hand)
             with ui.tab_panel(TABS[7]): refreshers[TABS[7]] = diagnostics.build(hand, act)
+        toolbars = {}
+        for panel in panels.default_slot.children:
+            for child in list(panel.default_slot.children):
+                if 'page-toolbar' in child.classes:
+                    child.move(toolbar_area)
+                    toolbars[panel._props['name']] = child
+        def switch_toolbar():
+            for name, toolbar in toolbars.items():
+                toolbar.set_visibility(name == tabs.value)
+        tabs.on_value_change(lambda _: switch_toolbar())
+        switch_toolbar()
         with ui.column().classes('system-log w-full'):
             ui.label('System Log').classes('text-xs font-semibold')
             output = ui.log(max_lines=2000)
@@ -119,6 +151,7 @@ def build_page(hand):
     def refresh():
         heavy = time.monotonic() - last_heavy[0] >= 0.2
         snapshot = hand.application_snapshot(include_curves=heavy)
+        refresh_calibration_alerts(snapshot)
         choices = {d['port']: f"{d['port']} · {d['description']}" for d in snapshot['devices']}
         for name, state in snapshot['connections'].items():
             selector, options = selectors[name], dict(choices)
@@ -131,7 +164,9 @@ def build_page(hand):
             buttons[name].set_enabled(not state['pending'] and (state['connected'] or bool(selector.value)) and not snapshot['busy'])
             ages[name].set_text(('—' if state['age_ms'] is None else str(state['age_ms'])) + 'ms')
         for name, value in snapshot['badges'].items():
-            badges[name].set_text(f'{name}: {value}')
+            display_name = 'Motor multi-turn position' if name == 'Multi-turn' else name
+            display_value = 'UNKNOWN' if name == 'Multi-turn' and value == 'MISSING' else value
+            badges[name].set_text(f'{display_name}: {display_value}')
             color = '#16a34a' if value in ('Ready', 'KNOWN', 'CLEAR', 'SUCCESS') else '#dc2626' if value in ('ACTIVE', 'FAILED') else '#ea880c' if value in ('HOLD', 'MISSING', 'WARN') else '#64748b'
             badges[name].style(f'color:{color}')
         save.set_text('Save Data: ON' if snapshot['recording']['enabled'] else 'Save Data: OFF')

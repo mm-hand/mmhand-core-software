@@ -39,11 +39,10 @@ bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
 bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
                                       uint32_t restoredMask,
                                       uint32_t rejectedMask);
-/** logical ABS 设零的最终结果；offset 仅在 successMask 对应电机有效。 */
+/** 实际 ABS 设零的最终结果；原帧长度保留。 */
 bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
                                      uint32_t successMask,
-                                     uint32_t failedMask,
-                                     const int32_t offsets[SERVO_TOTAL_NUM]);
+                                     uint32_t failedMask);
 /** 普通直控总线写入结果；0 token 表示未请求回执关联。 */
 bool sendDirectTargetResultPacket(uint32_t token,
                                            uint32_t requestedMask,

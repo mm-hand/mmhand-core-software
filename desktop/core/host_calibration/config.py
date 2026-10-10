@@ -1,6 +1,6 @@
 """config.py - MMHand Desktop 模块契约。
 
-职责：保留原 P4 标定配置，并提供上位机侧摆校准的低速参数。
+职责：保留原 P4 标定配置，提供上位机自动校准的原速参数。
 线程：纯常量与无状态查询，不拥有线程。
 输入：关节或电机索引。
 输出：安装映射、标定阈值及参数。
@@ -8,7 +8,7 @@
 禁止依赖：禁止依赖 Qt/UI、串口、ROS2 或 Replay。
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from ..motor_mapping import (
     MOTOR_TO_JOINT_INDEX,
@@ -61,9 +61,6 @@ kDefaultEncoderDirection = (
     -1, -1, -1, 1, -1, -1, -1, 1, -1,
 )
 
-# 四指 MCP AA 和拇指 AA；J20 的拇指 CMC 不属于侧摆。
-SIDE_SWAY_JOINT_INDICES = (0, 4, 8, 12, 16)
-
 
 @dataclass(frozen=True)
 class AutoCalibrationParams:
@@ -82,13 +79,9 @@ class AutoCalibrationParams:
 
 
 def default_auto_calibration_params(joint: int | None = None) -> AutoCalibrationParams:
-    params = AutoCalibrationParams()
-    if joint not in SIDE_SWAY_JOINT_INDICES:
-        return params
-    # 降低反馈延迟期间的位移，保留原 50-count 运动门禁以抗噪。
-    # 低速下将窗口扩大到 400 ms（约 80 counts），避免正常运动无法达标。
-    return replace(params, tightenSpeedCountsPerSec=200, servoSpeed=200,
-                   windowMs=400)
+    # 侧摆双舵机恢复原速：400 counts/s × 200 ms 仍约 80 counts，
+    # 保留原 50-count 运动门禁；joint 参数保留调用接口。
+    return AutoCalibrationParams()
 
 
 def joint_motors(joint: int) -> tuple[int, ...]:

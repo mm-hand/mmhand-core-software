@@ -73,7 +73,7 @@ def test_completed_selected_dual_joints_send_one_batch_each_in_joint_order():
         joint_motors(0), joint_motors(4), joint_motors(16), joint_motors(20)]
     assert [command[3] for command in io.commands] == [0, 50, 100, 150]
     assert [command[1:3] for command in io.commands] == [
-        (200, 254), (200, 254), (200, 254), (400, 254)]
+        (400, 254), (400, 254), (400, 254), (400, 254)]
     # lroundf 的 ±0.5 远离零，不能使用 Python 的银行家舍入。
     assert all(list(command[0].values()) == [1, -1] for command in io.commands)
     assert io.waits == [50, 50, 50, 50]

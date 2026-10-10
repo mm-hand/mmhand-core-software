@@ -169,7 +169,8 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
     }
     if (sharedAtomicLoad(&sharedData->direct_target_request_generation) !=
             sharedAtomicLoad(&sharedData->direct_target_result_generation) &&
-        (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_SERVO_RESET_ZERO ||
+        (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO ||
+         cmd == CMD_SERVO_RESET_ZERO ||
          cmd == CMD_RESTORE_MULTITURN || cmd == CMD_ACTIVE_SCOPE)) {
         sendProtoAckPacket(cmd, sharedData->system_state,
                            PROTO_ACK_STATUS_UNSUPPORTED_MODE);
@@ -977,7 +978,9 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         return;
     }
 
-    if (cmd == CMD_SERVO_REBASE_ZERO)
+    // Direct 显式置零与标定前 F0 共用同一坐标维护事务和最终 0x19 结果。
+    // motor mask 原样提交；关联关节的标定失效不会扩大实际置零的电机范围。
+    if (cmd == CMD_SERVO_REBASE_ZERO || cmd == CMD_MOTOR_ABS_ZERO)
     {
         uint8_t status = PROTO_ACK_STATUS_QUEUED;
         const uint32_t requestedMask =
@@ -989,14 +992,14 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
         SemaphoreHandle_t commandLock = sharedData->commandStateMutex;
         if (commandLock &&
             xSemaphoreTake(commandLock, pdMS_TO_TICKS(10)) != pdTRUE) {
-            sendProtoAckPacket(CMD_SERVO_REBASE_ZERO,
+            sendProtoAckPacket(cmd,
                                sharedData->system_state,
                                PROTO_ACK_STATUS_UNSUPPORTED_MODE);
             return;
         }
         {
             // 与状态机授予运动 owner 的最后一步使用同一短临界区。
-            // 不在此处访问 UART；已有结果和 offset 保留到新事务完整提交。
+            // 不在此处访问 UART；已有结果保留到新事务完整提交。
             SharedSafetyGuard guard;
             const uint8_t state = sharedData->system_state;
             const bool safeState =
@@ -1047,7 +1050,7 @@ void dispatchHostCommand(SystemRuntimeContext* sharedData, const uint8_t* frame,
             }
         }
         if (commandLock) xSemaphoreGive(commandLock);
-        sendProtoAckPacket(CMD_SERVO_REBASE_ZERO,
+        sendProtoAckPacket(cmd,
                            sharedData->system_state, status);
         return;
     }

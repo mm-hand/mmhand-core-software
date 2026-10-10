@@ -270,9 +270,9 @@ def render_p4_bindings(manifest: dict) -> str:
     groups = []
     for joint in manifest["joints"]:
         indices = joint["motor_indices"]
-        actuators = [f"{{{motor}, {1 if index == 0 else -1}, 0}}" for index, motor in enumerate(indices)]
+        actuators = [f"{{{motor}, {1 if index == 0 else -1}}}" for index, motor in enumerate(indices)]
         if len(actuators) == 1:
-            actuators.append("{0xFF, 1, 0}")
+            actuators.append("{0xFF, 1}")
         groups.append("    {" + str(len(indices)) + ", {" + ", ".join(actuators) + "}}")
     return """/**
  * @file HardwareBindings.generated.h

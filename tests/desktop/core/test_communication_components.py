@@ -400,7 +400,7 @@ def test_successful_f0_result_breaks_history_before_new_logical_origin_samples()
     comm = LowerComputerComm("")
     comm._process_packets([_connectivity_packet(1), _encoder_packet(2, 100), _abs_packet(3, 900)])
     old_cursor = comm.feedback_history.mark()
-    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+    payload = struct.pack(">III", 42, 0b1, 0) + bytes(MOTOR_COUNT * 4)
 
     comm._process_packets([
         _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
@@ -568,7 +568,7 @@ def test_malformed_status_packet_cannot_change_feedback_clock_or_epoch() -> None
 
 def test_repeated_f0_result_echo_keeps_active_history_and_updates_model_timestamp() -> None:
     comm = LowerComputerComm("")
-    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+    payload = struct.pack(">III", 42, 0b1, 0) + bytes(MOTOR_COUNT * 4)
     comm._process_packets([
         _connectivity_packet(1),
         _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
@@ -585,28 +585,23 @@ def test_repeated_f0_result_echo_keeps_active_history_and_updates_model_timestam
     assert comm._state_reducer.last_model.servo_rebase_zero_result_p4_time_ms == 20
 
 
-@pytest.mark.parametrize("token,success_mask,failed_mask,first_offset", [
-    (42, 0b1, 0, -110),
-    (42, 0b11, 0, -99),
-    (42, 0b1, 0b10, -99),
-    (43, 0b1, 0, -99),
+@pytest.mark.parametrize("token,success_mask,failed_mask", [
+    (42, 0b11, 0),
+    (42, 0b1, 0b10),
+    (43, 0b1, 0),
 ])
 def test_changed_f0_result_identity_breaks_history(
-    token: int, success_mask: int, failed_mask: int, first_offset: int,
+    token: int, success_mask: int, failed_mask: int,
 ) -> None:
     comm = LowerComputerComm("")
-    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+    payload = struct.pack(">III", 42, 0b1, 0) + bytes(MOTOR_COUNT * 4)
     comm._process_packets([
         _connectivity_packet(1),
         _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
         _encoder_packet(11, 700), _abs_packet(12, 0),
     ])
     cursor = comm.feedback_history.mark()
-    offsets = [-99] * MOTOR_COUNT
-    offsets[0] = first_offset
-    changed_payload = struct.pack(">III", token, success_mask, failed_mask) + struct.pack(
-        f">{MOTOR_COUNT}i", *offsets
-    )
+    changed_payload = struct.pack(">III", token, success_mask, failed_mask) + bytes(MOTOR_COUNT * 4)
 
     comm._process_packets([
         _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, changed_payload, 20),
@@ -615,3 +610,26 @@ def test_changed_f0_result_identity_breaks_history(
     with pytest.raises(FeedbackHistoryError):
         comm.feedback_history.read(cursor)
     assert comm.feedback_history.read(comm.feedback_history.mark()) == ()
+
+
+def test_f0_nonzero_reserved_area_cannot_change_result_or_coordinate_history() -> None:
+    comm = LowerComputerComm("")
+    payload = struct.pack(">III", 42, 0b1, 0) + bytes(MOTOR_COUNT * 4)
+    comm._process_packets([
+        _connectivity_packet(1),
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
+        _encoder_packet(11, 700), _abs_packet(12, 0),
+    ])
+    cursor = comm.feedback_history.mark()
+    invalid_payload = bytearray(payload)
+    struct.pack_into(">I", invalid_payload, 0, 43)
+    invalid_payload[12] = 1
+
+    comm._process_packets([
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, invalid_payload, 20),
+        _encoder_packet(21, 710), _abs_packet(22, 10),
+    ])
+
+    assert len(comm.feedback_history.read(cursor)) == 4
+    assert comm._state_reducer.last_model.servo_rebase_zero_result_token == 42
+    assert comm._state_reducer.last_model.servo_rebase_zero_result_p4_time_ms == 10

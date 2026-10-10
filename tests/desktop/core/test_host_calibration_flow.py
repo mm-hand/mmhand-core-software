@@ -9,7 +9,7 @@ import pytest
 from desktop.core import calibration_workflow
 from desktop.core.calibration_workflow import CalibrationWorkflowService
 from desktop.core.data_models import HandModel
-from desktop.core.host_calibration import flow
+from desktop.core.host_calibration import dual_motor, flow
 from desktop.core.host_calibration.config import AutoCalibrationParams
 
 
@@ -77,7 +77,6 @@ def machines(monkeypatch):
                         lambda io, joint: calls.append(("invalidate", joint)))
     monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
                         lambda io, joints: 0)
-    monkeypatch.setattr(flow, "prepare_single_workspace", lambda io, joint, params: True)
 
     def single(io, joint, params, ordered, failed, index, selected):
         calls.append(("single", joint, tuple(ordered), failed, index, selected, params))
@@ -90,6 +89,47 @@ def machines(monkeypatch):
     monkeypatch.setattr(flow, "run_single", single)
     monkeypatch.setattr(flow, "run_dual", dual)
     return calls, outcomes
+
+
+def test_j07_runs_single_with_no_helper_feedback_or_workspace(machines, monkeypatch):
+    io = _IO()  # This IO deliberately has no helper snapshot or route data.
+    calls, _ = machines
+    monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
+                        dual_motor.build_dynamic_workspace_motor_mask)
+    results = []
+    session = flow.run(io, 1 << 7, _mask((7,)),
+                       lambda joint, outcome: results.append((joint, outcome)))
+    assert session.success
+    assert [item[1] for item in calls if item[0] == "single"] == [7]
+    assert not any(item[0] == "dual" for item in calls)
+    assert all(item[1] == 0 for item in io.calls if item[0] == "workspace")
+    assert [item for item in io.calls if item[0] == "servo"] == [
+        ("servo", 1 << 9), ("servo", 1 << 9),
+    ]
+    assert [item for item in io.calls if item[0] == "prepare"] == [
+        ("prepare", 7, 1 << 9),
+    ]
+    assert [joint for joint, _ in results] == [7]
+
+
+def test_mixed_single_and_side_sway_batch_keeps_only_side_sway_workspace(
+        machines, monkeypatch):
+    io = _IO()
+    calls, _ = machines
+    io.snapshot = lambda: {"servo_feedback_age_ms": 0,
+                          "servo_online_bitmap": (1 << 27) - 1,
+                          "multi_turn_unknown_bitmap": 0}
+    monkeypatch.setattr(flow, "build_dynamic_workspace_motor_mask",
+                        dual_motor.build_dynamic_workspace_motor_mask)
+    session = flow.run(io, (1 << 7) | (1 << 8), _mask((7, 8)), lambda *_: None)
+    workspace = _mask(dual_motor.WORKSPACE_DUAL_JOINTS)
+    assert session.success
+    assert [item[1] for item in calls if item[0] == "single"] == [7]
+    assert [item[1] for item in calls if item[0] == "dual"] == [8]
+    assert ("workspace", workspace) in io.calls
+    assert [item for item in io.calls if item[0] == "servo"] == [
+        ("servo", _mask((7, 8))), ("servo", _mask((7, 8)) | workspace),
+    ]
 
 
 def test_original_mechanical_order_and_one_commit_per_completed_joint(machines):
@@ -119,7 +159,7 @@ def test_motor_only_selection_infers_the_complete_joint_group(machines):
     assert ("prepare", 0, 3) in io.calls
 
 
-def test_side_sway_joints_use_slower_targets_and_matching_motion_threshold(machines):
+def test_dual_and_single_joints_use_original_speed_and_motion_window(machines):
     io = _IO()
     calls, _ = machines
     joints = (0, 4, 8, 12, 16, 20, 1)
@@ -128,11 +168,10 @@ def test_side_sway_joints_use_slower_targets_and_matching_motion_threshold(machi
     for call in calls:
         if call[0] not in ("single", "dual"):
             continue
-        joint, params = call[1], call[-1]
-        expected = (400, 400, 50) if joint in (1, 20) else (200, 200, 50)
+        params = call[-1]
         assert (params.tightenSpeedCountsPerSec, params.servoSpeed,
-                params.windowServoDeltaCounts) == expected
-        assert params.windowMs == (200 if joint in (1, 20) else 400)
+                params.windowServoDeltaCounts) == (400, 400, 50)
+        assert params.windowMs == 200
         assert params.servoAcc == 20
 
 

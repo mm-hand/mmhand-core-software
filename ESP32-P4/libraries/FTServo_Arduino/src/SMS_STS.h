@@ -71,6 +71,9 @@ public:
 	int unLockEprom(u8 ID);//eprom解锁
 	int LockEprom(u8 ID);//eprom加锁
 	int CalibrationOfs(u8 ID);//中位校准
+	// STS firmware >= 3.10: correct the present hardware position without motion.
+	// Reuses the SDK position sign/magnitude encoding; -32768 is unrepresentable.
+	int CalibratePosition(u8 ID, s16 Position);
 	int FeedBack(int ID);//反馈舵机信息
 	int ReadPos(int ID);//读位置
 	int ReadSpeed(int ID);//读速度

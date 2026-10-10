@@ -333,12 +333,14 @@ class StateReducer:
         parsed = owner._parse_protocol_payload(
             "parse_multiturn_restore_result_packet", payload
         )
-        if parsed is not None:
+        if parsed is not None and packet_p4_time_ms is not None:
             token, restored_mask, rejected_mask = parsed
             model.multiturn_restore_result_token = int(token)
             model.multiturn_restore_restored_mask = int(restored_mask)
             model.multiturn_restore_rejected_mask = int(rejected_mask)
             model.multiturn_restore_result_last_rx_ts = time.time()
+            model.multiturn_restore_result_p4_time_ms = int(packet_p4_time_ms or 0)
+            model.has_multiturn_restore_result = True
             emitted = True
         return emitted
 
@@ -349,15 +351,14 @@ class StateReducer:
             "parse_servo_rebase_zero_result_packet", payload
         )
         if parsed is not None:
-            token, success_mask, failed_mask, offsets = parsed
+            token, success_mask, failed_mask = parsed
             previous_identity = (
                 int(model.servo_rebase_zero_result_token),
                 int(model.servo_rebase_zero_success_mask),
                 int(model.servo_rebase_zero_failed_mask),
-                tuple(model.servo_rebase_zero_logical_offsets),
             )
             result_identity = (
-                int(token), int(success_mask), int(failed_mask), tuple(offsets),
+                int(token), int(success_mask), int(failed_mask),
             )
             new_result = (
                 not model.has_servo_rebase_zero_result
@@ -366,14 +367,13 @@ class StateReducer:
             model.servo_rebase_zero_result_token = int(token)
             model.servo_rebase_zero_success_mask = int(success_mask)
             model.servo_rebase_zero_failed_mask = int(failed_mask)
-            model.servo_rebase_zero_logical_offsets = list(offsets)
             model.servo_rebase_zero_result_p4_time_ms = int(
                 packet_p4_time_ms or 0
             )
             model.servo_rebase_zero_result_last_rx_ts = time.time()
             model.has_servo_rebase_zero_result = True
             if success_mask and new_result:
-                # F0 改变 logical ABS 的坐标原点；旧、新 offset 的
+                # F0 改变 ABS 的坐标原点；旧、新坐标的
                 # 数据不能处于同一可插值时间窗口。状态同步会重发
                 # 同一事务结果，单纯回显不能废弃正在采集的窗口。
                 self.feedback_history.reset()

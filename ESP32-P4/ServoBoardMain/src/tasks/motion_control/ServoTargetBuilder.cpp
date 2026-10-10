@@ -99,7 +99,7 @@ uint8_t appendJointActuatorTargets(ServoTargetBatch_t* batch,
             return 0;
         }
         if (appendServoTarget(batch, actuator.motorChannel,
-                              primaryTargetAbs + actuator.offset, speed, acc)) {
+                              primaryTargetAbs, speed, acc)) {
             appended++;
         }
     }
@@ -121,7 +121,7 @@ uint8_t appendJointActuatorRuntimeTargets(ServoTargetBatch_t* batch,
 
     uint8_t appended = 0;
     for (uint8_t i = 0; i < targetCount; i++) {
-        // 运行时目标已包含 offset 和方向相关决策。
+        // 运行时目标已包含方向相关决策。
         if (!appendServoTarget(batch,
                                targets[i].motorChannel,
                                targets[i].targetAbs,

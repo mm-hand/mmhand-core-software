@@ -99,7 +99,7 @@
       "severity": "Blocking",
       "layer": "Actuator",
       "action": "Reject command",
-      "recovery": "Check multi-turn recovery, logical offset, and upper-layer angle conversion."
+      "recovery": "Check ABS recovery, the reachable range, and upper-layer angle conversion."
     },
     {
       "rule_id": 1012,
@@ -108,7 +108,7 @@
       "severity": "Emergency",
       "layer": "Actuator",
       "action": "Reject command",
-      "recovery": "Check logicalOffset, multi-turn recovery, and target conversion."
+      "recovery": "Check servo ABS recovery and the hardware travel limits."
     },
     {
       "rule_id": 1013,

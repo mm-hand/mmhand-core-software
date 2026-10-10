@@ -29,7 +29,6 @@ from .dual_motor import (
     invalidate_dual_workspace_cache_joint,
     reset_dual_workspace_cache,
     run_dual,
-    prepare_single_workspace,
 )
 from .single_motor import run_single
 
@@ -155,14 +154,10 @@ def run(io, joint_mask: int, motor_mask: int,
                                     io, joint, index, len(joints), selected_mask, joint_params
                                 )
                             else:
-                                workspace_ok = prepare_single_workspace(io, joint, joint_params)
                                 outcome = run_single(
                                     io, joint, joint_params, joints, failed, index,
                                     selected_mask,
-                                ) if workspace_ok else {
-                                    'success': False, 'aborted': True,
-                                    'reason': 'Workspace preparation failed; the batch was stopped', 'result': None, 'limits': {},
-                                }
+                                )
                             outcome = dict(outcome)
                             if bool(outcome.get("success")):
                                 committed, commit_message = _accepted(io.commit_joint(

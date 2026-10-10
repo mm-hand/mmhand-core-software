@@ -139,8 +139,8 @@ class HandBackend(ApplicationActions):
         except (OSError, TypeError, ValueError):
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
-        self._ensure_controller_callback_registered()
         self._init_application_actions()
+        self._ensure_controller_callback_registered()
 
     @property
     def comm(self):
@@ -176,16 +176,9 @@ class HandBackend(ApplicationActions):
     def _on_controller_state_update(self, state: HandModel) -> None:
         snapshot = clone_hand_model(state)
         device_id = str(snapshot.product_fingerprint.get("device_id", "")) if snapshot.has_product_fingerprint else ""
-        if device_id != self._last_reported_device_id:
-            self._last_reported_device_id = device_id
+        if self._application_observe_identity(device_id):
             self._calibration_workflow.cancel()
             self._manual_cancel.set()
-            if hasattr(self, '_application_lock'):
-                with self._application_lock:
-                    self._application_epoch += 1
-                    self._manual_drafts.clear()
-                    self._manual_saved_pairs.clear()
-                    self._import_previews.clear()
             self.set_ros2_output_armed(False, reason="device_identity_changed")
             self.cancel_replay_motion("device identity changed")
         if not snapshot.protocol_compatible:
@@ -277,7 +270,8 @@ class HandBackend(ApplicationActions):
             self._set_ros2_output_armed_locked(False, reason="shutdown")
             self._requested_active_joint_mask = None
             self._requested_active_scope = None
-            self._controller.shutdown(stop_lower=stop_lower)
+        # State callbacks need the output lock while the controller joins them.
+        self._controller.shutdown(stop_lower=stop_lower)
 
     def disconnect(self, stop_lower: bool = False) -> None:
         self.shutdown(stop_lower=stop_lower)
@@ -548,6 +542,11 @@ class HandBackend(ApplicationActions):
 
         start_feedback = bool(source and not str(source).startswith("Hold"))
         if start_feedback:
+            if self._controller.get_control_mode() != ControlMode.JOINT_ANGLE:
+                # 关节 Run 接管 Direct 时先撤销队列里的旧电机目标和 START。
+                # 校准、Replay 令牌和 workspace 检查已通过，切换仍受运动源锁保护。
+                self._controller.invalidate_direct_commands()
+                self._controller.set_control_mode(ControlMode.JOINT_ANGLE)
             sent = self._controller.send_target_angles_and_run_feedback(
                 guarded,
                 live=live,
@@ -1001,10 +1000,10 @@ class HandBackend(ApplicationActions):
     def rope_init(self, active_joint_mask: int) -> bool:
         return self._run_user_output(lambda: self._controller.rope_init(active_joint_mask), False)
 
-    def manual_prepare_all_motors(self) -> ManualPrepareResult:
-        """停止外部连续输入后执行全手 turn0 与 1500-count 预松事务。"""
+    def manual_prepare_all_motors(self, *, motor_mask=None) -> ManualPrepareResult:
+        """停止外部连续输入后执行指定电机的 turn0 与 1500-count 预松事务。"""
         return self._run_manual_transaction(
-            lambda cancelled: self._controller.manual_prepare_all_motors(cancelled=cancelled, motion_gate=self._submit_manual_motion),
+            lambda cancelled: self._controller.manual_prepare_all_motors(motor_mask=motor_mask, cancelled=cancelled, motion_gate=self._submit_manual_motion),
             ManualPrepareResult(False, 'host calibration is active or device transaction is finishing', 0, 0, 0, 0))
 
     def start(self) -> None:

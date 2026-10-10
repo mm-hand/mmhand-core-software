@@ -478,3 +478,52 @@ int SCS::Recal(u8 ID)
 	wFlushSCS();
 	return Ack(ID);
 }
+
+int SCS::Recal(u8 ID, u16 EncodedPosition)
+{
+	u8Status = 0;
+	u8Error = 0;
+	if(ID == 0xff){
+		u8Error = ERR_SLAVE_ID;
+		return 0;
+	}
+	// Position correction has two parameters, without writeBuf's MemAddr byte.
+	u8 frame[8] = {0xff, 0xff, ID, 4, INST_CAL,
+		(u8)(EncodedPosition & 0xff), (u8)(EncodedPosition >> 8), 0};
+	frame[7] = (u8)~(frame[2] + frame[3] + frame[4] + frame[5] + frame[6]);
+	rFlushSCS();
+	const int sent = writeSCS(frame, sizeof(frame));
+	wFlushSCS();
+	if(sent != (int)sizeof(frame)){
+		u8Error = ERR_NO_REPLY;
+		return 0;
+	}
+	if(ID == 0xfe){
+		return 1; // Broadcast has no ACK; success means the full frame was sent.
+	}
+	// This operation requires confirmation even when the normal reply Level is 0.
+	if(!checkHead()){
+		u8Error = ERR_NO_REPLY;
+		return 0;
+	}
+	u8 response[4];
+	if(readSCS(response, sizeof(response)) != (int)sizeof(response)){
+		u8Error = ERR_NO_REPLY;
+		return 0;
+	}
+	if(response[0] != ID){
+		u8Error = ERR_SLAVE_ID;
+		return 0;
+	}
+	if(response[1] != 2){
+		u8Error = ERR_BUFF_LEN;
+		return 0;
+	}
+	const u8 checksum = (u8)~(response[0] + response[1] + response[2]);
+	if(response[3] != checksum){
+		u8Error = ERR_CRC_CMP;
+		return 0;
+	}
+	u8Status = response[2];
+	return u8Status == 0 ? 1 : 0;
+}

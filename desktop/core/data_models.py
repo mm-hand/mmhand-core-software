@@ -365,13 +365,12 @@ class HandModel:
     multiturn_restore_restored_mask: int = 0
     multiturn_restore_rejected_mask: int = 0
     multiturn_restore_result_last_rx_ts: float = 0.0
+    multiturn_restore_result_p4_time_ms: int = 0
+    has_multiturn_restore_result: bool = False
     # 当前位置 ABS 设零的独立最终结果，QUEUED ACK 不代表硬件执行成功。
     servo_rebase_zero_result_token: int = 0
     servo_rebase_zero_success_mask: int = 0
     servo_rebase_zero_failed_mask: int = 0
-    servo_rebase_zero_logical_offsets: List[int] = field(
-        default_factory=lambda: [0] * MOTOR_COUNT
-    )
     servo_rebase_zero_result_p4_time_ms: int = 0
     servo_rebase_zero_result_last_rx_ts: float = 0.0
     has_servo_rebase_zero_result: bool = False
@@ -456,8 +455,7 @@ class HandModel:
     motor_abs_limit_valid_bitmap: int = 0
     motor_abs_limit_min: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
     motor_abs_limit_max: List[int] = field(default_factory=lambda: [0] * MOTOR_COUNT)
-    # 每台舵机当前上电会话的 logical ABS 可达范围。该范围由
-    # logicalOffset + ST3215 硬件多圈行程得到，单台舵机掉电只改变对应一项。
+    # 每台舵机当前可信的 ABS 可达范围，与 ST3215 硬件多圈行程一致。
     servo_logical_range_valid_bitmap: int = 0
     servo_logical_range_last_rx_ts: float = 0.0
     servo_logical_range_p4_time_ms: int = 0

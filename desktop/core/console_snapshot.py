@@ -15,6 +15,10 @@ from .host_calibration.math import directed_encoder_delta, deg_to_encoder_count,
 from .host_calibration.config import joint_motors
 from .motor_mapping import MOTOR_TO_JOINT_INDEX
 from .calibration_snapshot import parse_mask
+from .protocol import (
+    DUAL_TENDON_JOINT_INDICES, ControlMode, SERVO_TARGET_OWNER_CONTROL,
+    SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_RUN_DIRECT,
+)
 
 
 def joint_quality(valid, span, urdf_span, draft_status='', fresh=True):
@@ -31,7 +35,7 @@ def joint_quality(valid, span, urdf_span, draft_status='', fresh=True):
     return ['OFFSET' if abs(span - urdf_span) > 360 else 'READY']
 
 
-def motor_quality(valid, result, fresh=True):
+def motor_quality(valid, result, fresh=True, *, joint=None):
     if result and result.get('success') is False:
         return ['FAILED']
     if not fresh:
@@ -45,15 +49,23 @@ def motor_quality(valid, result, fresh=True):
     warnings = []
     reason = int(result.get('assemblyWarningReason', 0))
     if reason & 1 or int(result['autoMinOffsetCounts']) >= 350:
-        warnings.append('WEAK RETURN')
+        warnings.append('HIGH FRICTION' if joint in DUAL_TENDON_JOINT_INDICES else 'WEAK RETURN')
     if reason & 2 or int(result['autoMaxShortfallCounts']) >= 300:
         warnings.append('HIGH FRICTION')
-    return warnings or ['READY']
+    return list(dict.fromkeys(warnings)) or ['READY']
 
 
 def enrich_snapshot(hand, state, snapshot, now, fresh):
+    control_known = fresh and state.has_active_scope_status
+    control_active = state.control_enabled and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
+    feedback_active = (control_active and state.control_mode == ControlMode.JOINT_ANGLE.value
+                       and state.system_state == SYSTEM_STATE_RUN_FEEDBACK)
+    direct_active = (control_active and state.control_mode == ControlMode.DIRECT_MOTOR.value
+                     and state.system_state == SYSTEM_STATE_RUN_DIRECT)
     for row in snapshot['joints']:
         j, draft = row['joint'], row['draft']
+        row['feedback_control_status'] = ('UNKNOWN' if not control_known else
+            'ENABLED' if feedback_active and state.active_joint_mask & (1 << j) else 'DISABLED')
         result = state.joint_calib_results[j] or {}
         minimum, maximum = draft.get('min', row['manual_min']), draft.get('max', row['manual_max'])
         span = directed_encoder_delta(minimum, maximum, row['direction']) if row['manual_valid'] or {'min', 'max'} <= draft.keys() else None
@@ -63,7 +75,7 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                      hand._manual_saved_pairs.get(j) == (state.manual_reference_min_raw[j], state.manual_reference_max_raw[j]))
         if row['manual_valid'] and quality[0] in ('READY', 'OFFSET') and not persisted:
             quality = ['UNKNOWN']
-        motor_status = motor_quality(row['auto_valid'], result, fresh)
+        motor_status = motor_quality(row['auto_valid'], result, fresh, joint=j)
         if draft and draft.get('status') != 'SAVED' or draft.get('status') == 'SAVED' and not row['auto_valid']:
             motor_status = ['PENDING']
         transaction = hand._motor_transactions.get(j)
@@ -81,6 +93,8 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
                    ros_target=getattr(hand, '_console_ros_targets', {}).get(j))
     for row in snapshot['motors']:
         m = row['motor']
+        row['direct_control_status'] = ('UNKNOWN' if not control_known else
+            'ENABLED' if direct_active and state.active_motor_mask & (1 << m) else 'DISABLED')
         limits = None
         if fresh and state.servo_logical_range_valid_bitmap & (1 << m):
             lo, hi = state.servo_logical_range_min[m], state.servo_logical_range_max[m]
@@ -100,12 +114,14 @@ def enrich_snapshot(hand, state, snapshot, now, fresh):
         rate_hz=trace.average_hz, warnings=list(trace.warnings)) if trace else {}
     current_op = next((op for op in snapshot['operations'] if op['operation_id'] == hand._application_busy), {})
     snapshot['connections'] = {}
+    s3_received_at = getattr(hand._tactile_state, 'tactile_last_rx_ts', 0.0)
+    s3_age = int((now - s3_received_at) * 1000) if s3_received_at and now >= s3_received_at else None
     for name, connected, port, age in (
-        ('p4', hand.is_comm_connected(), getattr(hand.comm, 'port', ''), snapshot['diagnostics']['status_age_ms']),
-        ('s3', hand.is_tactile_serial_connected(), hand.tactile_port, snapshot['tactile']['age_ms'])):
+        ('p4', hand.is_comm_connected(), getattr(hand.comm, 'port', ''), snapshot['diagnostics']['receive_age_ms']),
+        ('s3', hand.is_tactile_serial_connected(), hand.tactile_port, s3_age)):
         pending = current_op.get('name', '').replace(' ', '').lower()
         transition = 'Connecting…' if pending == 'connect' + name else 'Disconnecting…' if pending == 'disconnect' + name else ''
-        snapshot['connections'][name] = dict(connected=connected, port=port, age_ms=age,
+        snapshot['connections'][name] = dict(connected=connected, port=port, age_ms=age if connected else None,
             label=transition or ('Disconnect' if connected else 'Connect'), pending=bool(transition))
     snapshot['recording'].update(enabled=hand._save_data, full_tactile=hand._record_full_tactile,
         duration_s=max(0, now - hand._recording_started_at) if hand._recorder.is_running() else 0,

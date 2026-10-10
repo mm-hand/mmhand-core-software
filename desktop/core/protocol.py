@@ -947,21 +947,26 @@ def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int,
     """解析多圈恢复的异步最终 token、成功位图和拒绝位图。"""
     if len(payload) != 12:
         return None
-    return struct.unpack(">III", payload)
+    token, restored_mask, rejected_mask = struct.unpack(">III", payload)
+    valid_mask = (1 << MOTOR_COUNT) - 1
+    if (restored_mask | rejected_mask) & ~valid_mask or restored_mask & rejected_mask:
+        return None
+    return token, restored_mask, rejected_mask
 
 
 def parse_servo_rebase_zero_result_packet(
     payload: bytes,
-) -> Optional[Tuple[int, int, int, List[int]]]:
-    """解析当前位置设零事务；offset 仅对 success mask 中的电机有效。"""
+) -> Optional[Tuple[int, int, int]]:
+    """解析硬件 ABS 设零结果；保留原帧长度，末尾保留区必须全零。"""
     if len(payload) != 12 + MOTOR_COUNT * 4:
         return None
     token, success_mask, failed_mask = struct.unpack_from(">III", payload)
     valid_mask = (1 << MOTOR_COUNT) - 1
     if (success_mask | failed_mask) & ~valid_mask or success_mask & failed_mask:
         return None
-    offsets = list(struct.unpack_from(f">{MOTOR_COUNT}i", payload, 12))
-    return token, success_mask, failed_mask, offsets
+    if any(payload[12:]):
+        return None
+    return token, success_mask, failed_mask
 
 
 def parse_direct_target_result_packet(
@@ -1302,11 +1307,19 @@ def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
 
 
 def build_servo_rebase_zero_cmd(motor_mask: int) -> bytes:
-    """所选 Mxx 当前位置 logical ABS 设为零，并由 P4 保存逻辑 offset。"""
+    """所选 Mxx 的舵机实际 ABS 与 P4 ABS 一起设为零。"""
     mask = int(motor_mask)
     if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
         raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
     return _build_command_frame(CMD_SERVO_REBASE_ZERO, struct.pack(">I", mask))
+
+
+def build_motor_abs_zero_cmd(motor_mask: int) -> bytes:
+    """Direct 页将所选电机当前实际位置设为 ABS 0；不发运动目标。"""
+    mask = int(motor_mask)
+    if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
+        raise ValueError("motor ABS zero requires a non-zero valid motor mask")
+    return _build_command_frame(CMD_MOTOR_ABS_ZERO, struct.pack(">I", mask))
 
 
 def build_motor_direct_release_cmd(token: int = 0) -> bytes:
@@ -1437,8 +1450,8 @@ def manual_encoder_reference_entry_crc(
     return (~value) & 0xFFFFFFFF
 
 
-# P4 逻辑多圈坐标使用 int32；实际可达范围由下位机按每台舵机的
-# logicalOffset 独立上报和校验。
+# P4 多圈 ABS 使用 int32 传输；实际可达范围由下位机按舵机硬件行程
+# 上报和校验。
 MOTOR_ABS_CMD_MIN = -(2**31)
 MOTOR_ABS_CMD_MAX = 2**31 - 1
 

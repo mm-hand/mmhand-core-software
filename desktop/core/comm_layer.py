@@ -87,6 +87,7 @@ from .protocol import (
     build_clear_calibration_scope_cmd,
     build_servo_reset_zero_cmd,
     build_servo_rebase_zero_cmd,
+    build_motor_abs_zero_cmd,
     build_motor_direct_release_cmd,
     build_host_heartbeat_cmd,
     build_motor_pos_abs_cmd,
@@ -1715,6 +1716,8 @@ class LowerComputerComm:
             and cmd[0] == "servo_rebase_zero"
         ):
             return build_servo_rebase_zero_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_abs_zero":
+            return build_motor_abs_zero_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 6 and cmd[0] == "motor_pos_abs":
             return build_motor_pos_abs_cmd(
                 cmd[3], token=cmd[1], motor_mask=cmd[2], speed=cmd[4], acc=cmd[5])

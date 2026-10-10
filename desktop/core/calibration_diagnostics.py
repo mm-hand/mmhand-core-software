@@ -326,6 +326,9 @@ def format_calibration_warning(state: object, warning_mask: int) -> dict:
         min_offset = int(min_offsets[joint]) if joint < len(min_offsets) else 0
         max_shortfall = auto_span = manual_span = urdf_span = span_difference = 0
         details = []
+        return_cause = ('Possible cause: excessive tendon friction.'
+                        if joint in protocol.DUAL_TENDON_JOINT_INDICES
+                        else 'Possible cause: weak spring return.')
         if bool(result.get("hasAssemblyWarningFields", False)):
             min_offset = int(result.get("autoMinOffsetCounts", 0) or 0)
             max_shortfall = int(result.get("autoMaxShortfallCounts", 0) or 0)
@@ -335,24 +338,24 @@ def format_calibration_warning(state: object, warning_mask: int) -> dict:
             span_difference = int(result.get("assemblySpanDifferenceCounts", 0) or 0)
             if reason & protocol.CALIB_WARN_AUTO_MIN_OFFSET:
                 details.append(
-                    f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts). 疑似弹簧回复力不足。"
+                    f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts). {return_cause}"
                 )
             if reason & protocol.CALIB_WARN_AUTO_MAX_SHORTFALL:
                 details.append(
-                    f"Auto Max remains {max_shortfall} counts below Manual Max (limit: 300 counts). 疑似绳路摩擦过大。"
+                    f"Auto Max remains {max_shortfall} counts below Manual Max (limit: 300 counts). Possible cause: excessive tendon friction."
                 )
             if reason & protocol.CALIB_WARN_URDF_MANUAL_SPAN_MISMATCH:
                 if bool(result.get("hasAssemblySpanComparisonFields", False)):
                     details.append(
                         f"Manual span={manual_span} counts, URDF span={urdf_span} counts, "
-                        f"difference={span_difference} counts (limit: 360 counts). 疑似磁编码器安装或机械范围异常。"
+                        f"difference={span_difference} counts (limit: 360 counts). Possible magnetic encoder or joint installation error."
                     )
                 else:
                     details.append(f"Legacy firmware reported an Auto span warning: {auto_span} counts.")
         else:
             reason = protocol.CALIB_WARN_AUTO_MIN_OFFSET
             details.append(
-                f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts)."
+                f"Auto Min is {min_offset} counts inside Manual Min (limit: 350 counts). {return_cause}"
             )
         known = (
             protocol.CALIB_WARN_AUTO_MIN_OFFSET

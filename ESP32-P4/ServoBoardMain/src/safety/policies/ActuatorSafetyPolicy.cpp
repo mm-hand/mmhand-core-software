@@ -141,7 +141,6 @@ uint32_t computeTargetAgeMs(uint32_t nowMs, uint32_t targetTimestampMs)
 
 ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                                     uint8_t commandIndex,
-                                    int32_t logicalOffset,
                                     const ServoSafetyContext& context)
 {
     const uint8_t motorChannel = commandIndex < batch.count
@@ -159,14 +158,8 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
     const ServoTargetCommand_t& command = batch.commands[commandIndex];
     const int32_t requestedAbs = command.position;
     const uint32_t motorBit = 1UL << motorChannel;
-    // logicalOffset 可能使减法越过 int32，因此先在 int64 中完成坐标转换。
-    const int64_t hardware64 =
-        (int64_t)requestedAbs - (int64_t)logicalOffset;
-    const int32_t hardwareAbs = hardware64 > INT32_MAX
-                                    ? INT32_MAX
-                                    : (hardware64 < INT32_MIN
-                                           ? INT32_MIN
-                                           : (int32_t)hardware64);
+    // 业务目标与舵机实际 ABS 使用相同坐标。
+    const int32_t hardwareAbs = requestedAbs;
 
     // 动态路由是所有物理访问的前置条件；冲突和超载必须在 online 判断前给出明确原因。
     if ((context.routeConflictMask & motorBit) != 0) {
@@ -255,9 +248,9 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                       motorChannel,
                       commandIndex);
     }
-    // 最终硬边界检查的是换算后的舵机内部坐标，不是平移后的 logical 坐标。
-    if (hardware64 < kServoHardwareCommandMin ||
-        hardware64 > kServoHardwareCommandMax) {
+    // 即使尚未发布范围快照，硬件边界仍独立生效。
+    if (hardwareAbs < kServoHardwareCommandMin ||
+        hardwareAbs > kServoHardwareCommandMax) {
         return reject(ServoRejectReason::HardwareRange,
                       requestedAbs,
                       hardwareAbs,

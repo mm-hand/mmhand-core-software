@@ -3,10 +3,15 @@ import threading
 import pytest
 
 from desktop.core.angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
+from desktop.core.comm_layer import LowerComputerComm
+from desktop.core.core_logic import HandController
 from desktop.core.data_models import HandModel, resolve_joint_workspace_range
 from desktop.core.hand_backend import HandBackend
 from desktop.core.protocol import (
+    ControlMode,
     ENCODER_COUNT,
+    MOTOR_COUNT,
+    STATE_SYNC_ALL,
     manual_encoder_reference_entry_crc,
 )
 
@@ -112,6 +117,8 @@ class _Controller:
         self.stop_requests = 0
         self.pause_requests = 0
         self.queue_result = True
+        self.control_mode = ControlMode.JOINT_ANGLE
+        self.direct_invalidations = 0
 
     def register_update_callback(self, callback):
         self.update_callbacks.append(callback)
@@ -139,8 +146,14 @@ class _Controller:
     def pause(self):
         self.pause_requests += 1
 
-    def set_control_mode(self, _mode):
-        pass
+    def set_control_mode(self, mode):
+        self.control_mode = mode
+
+    def get_control_mode(self):
+        return self.control_mode
+
+    def invalidate_direct_commands(self):
+        self.direct_invalidations += 1
 
     def set_active_scope(self, motor_mask, joint_mask, require_can):
         self.current_state.active_motor_mask = int(motor_mask)
@@ -388,3 +401,158 @@ def test_scope_change_revokes_ros2_authorization():
 
     assert backend.set_active_scope(0x02, 0x02, True)
     assert not backend.ros2_output_armed()
+
+
+@pytest.fixture
+def direct_backend(monkeypatch):
+    """Use the actual controller and transport queue without opening hardware."""
+    controller = HandController()
+    controller.current_state = _ready_state(joint_idx=3)
+    controller.set_control_mode(ControlMode.DIRECT_MOTOR)
+    comm = LowerComputerComm("")
+    comm._protocol_compatible = True
+    monkeypatch.setattr(comm, "is_connected", lambda: True)
+    controller.comm = comm
+    return HandBackend(controller=controller), controller, comm
+
+
+def _pending_direct_command():
+    return ("motor_pos_abs", 11, 1 << 3, [0] * MOTOR_COUNT, 400, 20)
+
+
+def test_gui_joint_run_switches_from_direct_and_discards_stale_motor_commands(
+    direct_backend, monkeypatch
+):
+    backend, controller, comm = direct_backend
+    recovery_commands = [
+        "stop",
+        "query_manual_encoder_reference",
+        ("restore_multiturn", 1, [0] * MOTOR_COUNT),
+        ("state_sync", STATE_SYNC_ALL),
+    ]
+    for command in [
+        _pending_direct_command(),
+        "start",
+        ("motor_pos_abs_one", 3, 123),
+        ("motor_direct_release", 1 << 3),
+        *recovery_commands,
+    ]:
+        comm.tx_queue.put_nowait(command)
+    original_invalidate = controller.invalidate_direct_commands
+    invalidation_modes = []
+
+    def tracked_invalidate():
+        invalidation_modes.append(controller.get_control_mode())
+        assert backend._ros2_output_lock._is_owned()
+        assert backend._replay_motion_lock._is_owned()
+        original_invalidate()
+
+    monkeypatch.setattr(controller, "invalidate_direct_commands", tracked_invalidate)
+    targets = [20.0] * ENCODER_COUNT
+    result = backend.send_joint_targets(
+        targets, source="Run J03", command_joint_mask=1 << 3
+    )
+
+    assert result.sent
+    assert controller.get_control_mode() == ControlMode.JOINT_ANGLE
+    assert invalidation_modes == [ControlMode.DIRECT_MOTOR]
+    assert list(comm.tx_queue.queue) == recovery_commands + [
+        ("joint_target_run_masked", result.targets, 1 << 3)
+    ]
+
+    repeated = backend.send_joint_targets(
+        [25.0] * ENCODER_COUNT,
+        source="Run J03",
+        live=True,
+        command_joint_mask=1 << 3,
+    )
+    assert repeated.sent
+    assert invalidation_modes == [ControlMode.DIRECT_MOTOR]
+    assert list(comm.tx_queue.queue) == recovery_commands + [
+        ("joint_target_run_masked", repeated.targets, 1 << 3)
+    ]
+
+
+@pytest.mark.parametrize("blocked_by", ["handshake", "offline", "full_tx"])
+def test_joint_mode_transition_keeps_real_transport_admission_gates(
+    direct_backend, monkeypatch, blocked_by
+):
+    backend, controller, comm = direct_backend
+    if blocked_by == "handshake":
+        comm._protocol_compatible = False
+        controller.current_state.protocol_compatible = False
+    elif blocked_by == "offline":
+        monkeypatch.setattr(comm, "is_connected", lambda: False)
+    else:
+        for _ in range(comm.tx_queue.maxsize):
+            comm.tx_queue.put_nowait("query_manual_encoder_reference")
+    queued_before = list(comm.tx_queue.queue)
+
+    result = backend.send_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source="Run J03",
+        command_joint_mask=1 << 3,
+    )
+
+    assert not result.sent
+    assert "not queued" in result.message
+    assert list(comm.tx_queue.queue) == queued_before
+    assert not controller.is_started()
+
+
+@pytest.mark.parametrize(
+    "blocked_by", ["workspace", "host_calibration", "maintenance", "import", "replay"]
+)
+def test_rejected_joint_command_does_not_preempt_direct_mode_or_queue(
+    direct_backend, blocked_by
+):
+    backend, controller, comm = direct_backend
+    source = "Run J03"
+    kwargs = {}
+    if blocked_by == "workspace":
+        controller.current_state.auto_calibration_valid_bitmap = 0
+    elif blocked_by == "host_calibration":
+        backend._calibration_workflow._host_worker_active = True
+    elif blocked_by == "maintenance":
+        backend._manual_transaction_active = True
+    elif blocked_by == "import":
+        backend._calibration_workflow._import_worker_active = True
+    else:
+        source = "Replay:expired-token"
+        kwargs["motion_token"] = 123
+    queued_before = [_pending_direct_command(), "start"]
+    for command in queued_before:
+        comm.tx_queue.put_nowait(command)
+
+    result = backend.send_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source=source,
+        command_joint_mask=1 << 3,
+        **kwargs,
+    )
+
+    assert not result.sent
+    assert controller.get_control_mode() == ControlMode.DIRECT_MOTOR
+    assert list(comm.tx_queue.queue) == queued_before
+
+
+@pytest.mark.parametrize("source", ["", "Hold", "Hold J03"])
+@pytest.mark.parametrize("live", [False, True])
+def test_hold_or_passive_joint_target_keeps_direct_mode_guard(
+    direct_backend, source, live
+):
+    backend, controller, comm = direct_backend
+    queued_before = [_pending_direct_command(), "start"]
+    for command in queued_before:
+        comm.tx_queue.put_nowait(command)
+
+    result = backend.send_joint_targets(
+        [20.0] * ENCODER_COUNT,
+        source=source,
+        live=live,
+        command_joint_mask=1 << 3,
+    )
+
+    assert not result.sent
+    assert controller.get_control_mode() == ControlMode.DIRECT_MOTOR
+    assert list(comm.tx_queue.queue) == queued_before

@@ -21,6 +21,7 @@ bool addServoReadTarget(uint8_t busIds[NUM_BUSES][MAX_SERVOS_PER_BUS],
                         uint8_t busCounts[NUM_BUSES],
                         uint8_t bus,
                         uint8_t id);
+/** 现有 0xDA 接收执行入口：以 0x0B 写入并核验主机 ABS，使用同一实际坐标。 */
 bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
                                    uint32_t motorMask,
                                    const int32_t* motorAbs,

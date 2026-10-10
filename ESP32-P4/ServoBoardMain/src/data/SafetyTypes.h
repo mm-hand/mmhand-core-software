@@ -39,7 +39,7 @@ struct ServoSafetyDecision {
     SafetyRuleId ruleId;      ///< 可跨固件/上位机稳定解释的规则编号。
     int32_t requestedAbs;     ///< 业务层请求的 logical ABS，单位 counts。
     int32_t appliedAbs;       ///< 安全策略允许进入驱动的 logical ABS，单位 counts。
-    int32_t hardwareAbs;      ///< requestedAbs-logicalOffset，单位 counts；拒绝时仍供诊断。
+    int32_t hardwareAbs;      ///< 与 requestedAbs 相同的舵机 ABS，单位 counts；拒绝时仍供诊断。
     uint8_t motorChannel;     ///< 对应 Mxx；结构错误且无法映射时为 0xFF。
     uint8_t commandIndex;     ///< 批次内命令下标；无法对应单条命令时为 0xFF。
 };

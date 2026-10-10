@@ -13,6 +13,8 @@ from desktop.core.data_models import HandModel
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
     CMD_SERVO_REBASE_ZERO,
+    CMD_MOTOR_ABS_ZERO,
+    HOST_PROTOCOL_VERSION,
     MOTOR_COUNT,
     PACKET_TYPE_PROTO_ACK,
     PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
@@ -21,14 +23,14 @@ from desktop.core.protocol import (
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_RUN_DIRECT,
     build_servo_rebase_zero_cmd,
+    build_motor_abs_zero_cmd,
     parse_servo_rebase_zero_result_packet,
     split_p4_timestamp,
 )
 
 
-def _result_payload(token=8, success=3, failed=0, offsets=None):
-    offsets = list(offsets or [-64, -4095] + [0] * (MOTOR_COUNT - 2))
-    return struct.pack(f">III{MOTOR_COUNT}i", token, success, failed, *offsets)
+def _result_payload(token=8, success=3, failed=0):
+    return struct.pack(">III", token, success, failed) + bytes(MOTOR_COUNT * 4)
 
 
 def test_command_encodes_selected_channels_with_fixed_big_endian_mask():
@@ -40,24 +42,46 @@ def test_command_encodes_selected_channels_with_fixed_big_endian_mask():
     assert comm._encode_command(("servo_rebase_zero", mask)) == build_servo_rebase_zero_cmd(mask)
 
 
+def test_direct_zero_encodes_a_distinct_command_with_only_selected_motors():
+    mask = (1 << 9) | (1 << 26)
+    expected = bytes((0xFE, 6, CMD_MOTOR_ABS_ZERO)) + struct.pack(">I", mask) + b"\xFF"
+    assert CMD_MOTOR_ABS_ZERO == 0xF1
+    assert build_motor_abs_zero_cmd(mask) == expected
+    assert LowerComputerComm("")._encode_command(("motor_abs_zero", mask)) == expected
+    assert expected != build_servo_rebase_zero_cmd(mask)
+
+
+@pytest.mark.parametrize("mask", [0, -1, 1 << 27, (1 << 31) | 1])
+def test_direct_zero_rejects_invalid_motor_scope(mask):
+    with pytest.raises(ValueError, match="non-zero valid motor mask"):
+        build_motor_abs_zero_cmd(mask)
+
+
 @pytest.mark.parametrize("mask", [0, -1, 1 << 27, (1 << 31) | 1, 1 << 32])
 def test_command_rejects_empty_negative_or_outside_hardware_mask(mask):
     with pytest.raises(ValueError, match="non-zero valid motor mask"):
         build_servo_rebase_zero_cmd(mask)
 
 
-def test_result_decodes_signed_offsets_and_exact_length():
-    offsets = [-4095, 0, -2147483648, 2147483647] + [0] * (MOTOR_COUNT - 4)
-    payload = _result_payload(success=0x0F, offsets=offsets)
+def test_result_decodes_masks_with_zero_reserved_area_and_exact_length():
+    payload = _result_payload(success=0x0F)
     assert len(payload) == 120
-    assert parse_servo_rebase_zero_result_packet(payload) == (8, 0x0F, 0, offsets)
+    assert parse_servo_rebase_zero_result_packet(payload) == (8, 0x0F, 0)
     assert parse_servo_rebase_zero_result_packet(payload[:-1]) is None
     assert parse_servo_rebase_zero_result_packet(payload + b"\x00") is None
     assert parse_servo_rebase_zero_result_packet(_result_payload(success=1, failed=1)) is None
     assert parse_servo_rebase_zero_result_packet(_result_payload(success=1 << 27)) is None
 
 
-def test_result_routes_timestamp_and_preserves_independent_snapshot_offsets():
+@pytest.mark.parametrize("index", [12, 15, 116, 119])
+@pytest.mark.parametrize("success,failed", [(3, 0), (0, 3)])
+def test_nonzero_reserved_area_cannot_publish_a_rebase_result(index, success, failed):
+    payload = bytearray(_result_payload(success=success, failed=failed))
+    payload[index] = 0xFF
+    assert parse_servo_rebase_zero_result_packet(payload) is None
+
+
+def test_result_routes_timestamp_and_preserves_independent_result_snapshot():
     comm = LowerComputerComm("")
     wire_payload = _result_payload() + struct.pack(">I", 1000)
     business, timestamp = split_p4_timestamp(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, wire_payload)
@@ -73,8 +97,9 @@ def test_result_routes_timestamp_and_preserves_independent_snapshot_offsets():
     assert updated.multiturn_restore_result_token == 0
     snapshot = HandModel()
     snapshot.copy_state_from(updated)
-    updated.servo_rebase_zero_logical_offsets[0] = 99
-    assert snapshot.servo_rebase_zero_logical_offsets[0] == -64
+    updated.servo_rebase_zero_success_mask = 1
+    assert snapshot.servo_rebase_zero_success_mask == 3
+    assert not hasattr(updated, "servo_rebase_zero_logical_offsets")
 
 
 def test_queued_ack_leaves_result_and_coordinate_trust_unchanged():
@@ -104,9 +129,15 @@ def _controller(monkeypatch):
     state = controller.current_state
     state.system_state = SYSTEM_STATE_IDLE
     state.has_system_status_data = True
+    state.system_status_last_rx_ts = core_logic.time.time()
+    state.has_servo_route_status = True
+    state.servo_route_controllable_bitmap = 3
     state.has_servo_rebase_zero_result = True
     state.servo_rebase_zero_result_token = 7
     state.servo_online_bitmap = 3
+    state.has_product_fingerprint = True
+    state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": "0000123456789ABC"}
+    controller._servo_rebase_zero_device_id = state.product_fingerprint["device_id"]
     monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0.02)
     return controller
 
@@ -116,7 +147,6 @@ def _publish_final_result(controller, success=3, failed=0):
     state.servo_rebase_zero_result_token = 8
     state.servo_rebase_zero_success_mask = success
     state.servo_rebase_zero_failed_mask = failed
-    state.servo_rebase_zero_logical_offsets[:2] = [-64, -4095]
     state.servo_rebase_zero_result_last_rx_ts = core_logic.time.time()
     state.servo_rebase_zero_result_p4_time_ms = 1000
 
@@ -135,7 +165,7 @@ def test_api_waits_for_final_result_without_maintenance_reset(monkeypatch):
     assert result.result_token == 8
     assert result.success_motor_mask == 3
     assert result.failed_motor_mask == 0
-    assert result.logical_offsets[:3] == (-64, -4095, None)
+    assert not hasattr(result, "logical_offsets")
     controller.comm.send_command.assert_called_once_with(("servo_rebase_zero", 3))
     controller._invalidate_servo_rebase_zero_anchors.assert_called_once_with(3)
     assert controller._multiturn_anchor_capture_blocked_mask == 3
@@ -155,7 +185,209 @@ def test_api_accepts_final_result_even_when_ack_was_lost(monkeypatch):
     ]
 
 
-def test_api_partial_failure_exposes_offsets_only_for_successful_motors(monkeypatch):
+def test_direct_zero_uses_f1_ack_and_the_shared_hardware_result(monkeypatch):
+    controller = _controller(monkeypatch)
+
+    def ack(cmd, _timeout, received_after):
+        assert cmd == CMD_MOTOR_ABS_ZERO
+        _publish_final_result(controller)
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+
+    controller.comm.wait_for_ack.side_effect = ack
+    assert controller.zero_direct_motor_abs(3).ok
+    controller.comm.send_command.assert_called_once_with(("motor_abs_zero", 3))
+    controller._invalidate_servo_rebase_zero_anchors.assert_called_once_with(3)
+
+
+def test_direct_zero_cancelled_before_submission_preserves_feedback_and_anchors(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller.current_state.servo_angles[0] = 8000
+    assert not controller.zero_direct_motor_abs(1, cancelled=lambda: True).ok
+    assert controller.current_state.servo_angles[0] == 8000
+    assert controller._servo_rebase_zero_unresolved_mask == 0
+    controller.comm.send_command.assert_not_called()
+    controller._invalidate_servo_rebase_zero_anchors.assert_not_called()
+
+
+def test_direct_zero_cancel_gate_restores_capture_state_without_sending(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._multiturn_anchor_capture_blocked_mask = 2
+    controller._multiturn_anchor_capture_pending_mask = 1
+    assert not controller.zero_direct_motor_abs(1, send_gate=lambda _: False).ok
+    assert controller._servo_rebase_zero_unresolved_mask == 0
+    assert controller._multiturn_anchor_capture_blocked_mask == 2
+    assert controller._multiturn_anchor_capture_pending_mask == 1
+    controller.comm.send_command.assert_not_called()
+
+
+def test_direct_zero_timeout_also_blocks_calibration_rebase_retry(monkeypatch):
+    controller = _controller(monkeypatch)
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
+    controller.comm.wait_for_ack.return_value = (
+        CMD_MOTOR_ABS_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, 1.0,
+    )
+    assert not controller.zero_direct_motor_abs(3).ok
+    assert not controller.rebase_servo_abs_zero(3).ok
+    assert controller.comm.send_command.call_args_list.count(call(("motor_abs_zero", 3))) == 1
+    assert call(("servo_rebase_zero", 3)) not in controller.comm.send_command.call_args_list
+
+
+def test_direct_zero_anchor_saved_requires_runtime_validity_without_pending_capture(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._multiturn_store_payload = {"valid_motor_mask": "0x00000003"}
+    assert controller.servo_abs_zero_anchor_saved(3)
+    for attr in ("_servo_rebase_zero_unresolved_mask", "_servo_rebase_zero_capture_mask",
+                 "_multiturn_anchor_capture_blocked_mask"):
+        setattr(controller, attr, 1)
+        assert not controller.servo_abs_zero_anchor_saved(3)
+        assert controller.servo_abs_zero_anchor_saved(2)
+        setattr(controller, attr, 0)
+    assert not controller.servo_abs_zero_anchor_saved(4)
+
+
+def _fresh_zero_feedback(controller):
+    state = controller.current_state
+    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.has_servo_route_status = True
+    state.servo_route_controllable_bitmap = 3
+    state.servo_raw_online[:2] = [True, True]
+    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+    if not state.has_product_fingerprint:
+        state.has_product_fingerprint = True
+        state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": "0000123456789ABC"}
+    return state
+
+
+def test_direct_zero_late_result_after_timeout_advances_only_saved_success(monkeypatch):
+    controller = _controller(monkeypatch)
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
+    controller.comm.wait_for_ack.return_value = (
+        CMD_MOTOR_ABS_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, 1.0,
+    )
+    assert not controller.zero_direct_motor_abs(3).ok
+    assert not any(controller.get_servo_abs_zero_generations())
+    _publish_final_result(controller, success=1, failed=2)
+    state = _fresh_zero_feedback(controller)
+    controller._service_servo_rebase_zero_capture(state)
+    generations, feedback_ms, devices, connections, current_connection = controller.get_servo_abs_zero_generation_state()
+    assert generations[:2] == (1, 0)
+    assert feedback_ms[:2] == (1001, 0)
+    assert devices[0] == "0000123456789ABC"
+    assert connections[0] == current_connection
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller.get_servo_abs_zero_generations() == generations
+
+
+def test_direct_zero_cancel_after_submission_still_advances_when_late_anchor_is_saved(monkeypatch):
+    controller = _controller(monkeypatch)
+    cancelled = [False]
+
+    def ack(cmd, _timeout, received_after):
+        cancelled[0] = True
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+
+    controller.comm.wait_for_ack.side_effect = ack
+    assert not controller.zero_direct_motor_abs(3, cancelled=lambda: cancelled[0]).ok
+    assert controller._servo_rebase_zero_unresolved_mask == 3
+    assert not any(controller.get_servo_abs_zero_generations())
+    _publish_final_result(controller)
+    controller._service_servo_rebase_zero_capture(_fresh_zero_feedback(controller))
+    assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
+
+
+def test_direct_zero_generation_waits_for_save_and_does_not_repeat_on_more_feedback(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._servo_rebase_zero_capture_mask = 3
+    controller._servo_rebase_zero_capture_after_ms = 1000
+    controller._block_multiturn_anchor_capture(3)
+    controller._persist_multiturn_state.side_effect = [False, True]
+    state = _fresh_zero_feedback(controller)
+    controller._service_servo_rebase_zero_capture(state)
+    assert not any(controller.get_servo_abs_zero_generations())
+    assert controller._servo_rebase_zero_capture_mask == 3
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
+    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1002
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
+    assert controller._persist_multiturn_state.call_count == 2
+
+
+def test_initial_or_reconnected_historical_result_does_not_advance_zero_generation(monkeypatch):
+    controller = _controller(monkeypatch)
+    for reconnect in (False, True):
+        if reconnect:
+            controller._reset_local_runtime_state("SYNCING")
+        _publish_final_result(controller)
+        state = _fresh_zero_feedback(controller)
+        state.servo_online_bitmap = 3
+        controller._service_servo_rebase_zero_capture(state)
+        assert not any(controller.get_servo_abs_zero_generations())
+    controller._persist_multiturn_state.assert_not_called()
+
+
+def test_saved_zero_generation_remains_monotonic_across_local_runtime_reset(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._servo_rebase_zero_capture_mask = 3
+    controller._servo_rebase_zero_capture_after_ms = 1000
+    controller._service_servo_rebase_zero_capture(_fresh_zero_feedback(controller))
+    generations = controller.get_servo_abs_zero_generations()
+    controller._reset_local_runtime_state("SYNCING")
+    assert isinstance(generations, tuple)
+    assert controller.get_servo_abs_zero_generations() == generations
+
+
+def test_direct_zero_different_device_result_cannot_complete_or_invalidate_original_request(monkeypatch):
+    controller = _controller(monkeypatch)
+    original_device = controller.current_state.product_fingerprint["device_id"]
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
+
+    def other_device_ack(cmd, _timeout, received_after):
+        controller.current_state.product_fingerprint["device_id"] = "0000FEDCBA987654"
+        _publish_final_result(controller)
+        _fresh_zero_feedback(controller)
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+
+    controller.comm.wait_for_ack.side_effect = other_device_ack
+    assert not controller.zero_direct_motor_abs(3).ok
+    state = controller.current_state
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._servo_rebase_zero_unresolved_mask == 3
+    assert controller._servo_rebase_zero_device_id == original_device
+    assert not any(controller.get_servo_abs_zero_generations())
+    controller._invalidate_servo_rebase_zero_anchors.assert_not_called()
+    controller._persist_multiturn_state.assert_not_called()
+    state.product_fingerprint["device_id"] = original_device
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._servo_rebase_zero_unresolved_mask == 0
+    assert controller.get_servo_abs_zero_generations()[:2] == (1, 1)
+
+
+def test_direct_zero_requires_a_verified_device_identity_before_submission(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller.current_state.has_product_fingerprint = False
+    result = controller.zero_direct_motor_abs(3)
+    assert not result.ok and 'identity' in result.message
+    controller.comm.send_command.assert_not_called()
+    assert controller._servo_rebase_zero_unresolved_mask == 0
+
+
+@pytest.mark.parametrize('token,success,failed', [(0, 3, 0), (8, 1, 0), (8, 7, 0)])
+def test_reboot_history_or_incomplete_result_keeps_local_zero_request_unresolved(monkeypatch, token, success, failed):
+    controller = _controller(monkeypatch)
+    controller._servo_rebase_zero_unresolved_mask = 3
+    controller._servo_rebase_zero_baseline_token = 7
+    controller._servo_rebase_zero_sent_at = 0
+    _publish_final_result(controller, success=success, failed=failed)
+    state = _fresh_zero_feedback(controller)
+    state.servo_rebase_zero_result_token = token
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._servo_rebase_zero_unresolved_mask == 3
+    controller._invalidate_servo_rebase_zero_anchors.assert_not_called()
+    controller._persist_multiturn_state.assert_not_called()
+
+
+def test_api_partial_failure_exposes_success_and_failure_masks(monkeypatch):
     controller = _controller(monkeypatch)
 
     def ack(cmd, _timeout, received_after):
@@ -167,7 +399,7 @@ def test_api_partial_failure_exposes_offsets_only_for_successful_motors(monkeypa
     assert not result.ok
     assert result.success_motor_mask == 1
     assert result.failed_motor_mask == 2
-    assert result.logical_offsets[:2] == (-64, None)
+    assert not hasattr(result, "logical_offsets")
 
 
 def test_timeout_queries_existing_transaction_and_blocks_blind_reexecution(monkeypatch):
@@ -360,6 +592,9 @@ def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
     state = controller.current_state
     state.has_servo_angle_data = state.has_servo_raw_data = True
     state.servo_online_bitmap = 3
+    state.has_product_fingerprint = True
+    state.product_fingerprint = {"protocol_version": HOST_PROTOCOL_VERSION, "device_id": identity["device_id"]}
+    controller._servo_rebase_zero_device_id = identity["device_id"]
     state.servo_raw_online[:2] = [True, True]
     state.servo_raw_positions[:2] = [64, 4095]
     state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 101

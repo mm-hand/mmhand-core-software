@@ -81,8 +81,8 @@ def test_nearest_logical_abs_supports_both_wrap_directions() -> None:
     assert nearest_logical_abs(3 * 4096 + 100, 100, 700) == 3 * 4096 + 700
 
 
-def test_nearest_logical_abs_preserves_non_integer_turn_offset() -> None:
-    """logical offset 不为整圈时，只能使用成对的 SavedRaw 计算增量。"""
+def test_nearest_logical_abs_uses_paired_saved_raw_for_existing_anchors() -> None:
+    """已有锚点的 ABS 和 raw 必须配对，不能只按 ABS 推断掉电前相位。"""
     assert nearest_logical_abs(5000, 1000, 1100) == 5100
 
 

@@ -48,6 +48,7 @@ ROSexample/**/log/
 desktop/resources/config/*.before-device-isolation.bak
 desktop/resources/config/device_state/**/*.before-device-isolation.bak
 reference/
+.venv/
 # Historical calibration and one-off local validation outputs
 desktop/resources/config/*.before_*.json
 desktop/resources/config/*.bak

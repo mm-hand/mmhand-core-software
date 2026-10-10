@@ -21,7 +21,7 @@ bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
                                   uint8_t count,
                                   uint32_t jointMask);
 // 暂存最多 27 个逻辑多圈 ABS 直控目标。
-// 此处不做统一数值钳位；发送前由舵机层结合每台电机 logicalOffset 做最终硬限制。
+// 此处不做数值钳位；发送前由舵机层按实际 ABS 的硬件范围执行最终检查。
 bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
                             const int32_t* targets,
                             uint8_t count,

@@ -1,7 +1,7 @@
 /**
  * @file ActuatorTypes.h
  * @brief 定义业务层提交给舵机执行层的命令数据结构。
- * @details position 始终表示 P4 logical ABS；驱动层负责转换为 hardware ABS。
+ * @details position 始终表示与舵机实际坐标一致的 ABS；驱动层负责硬件范围检查。
  */
 #ifndef MMHAND_ACTUATOR_TYPES_H
 #define MMHAND_ACTUATOR_TYPES_H
@@ -32,7 +32,7 @@ inline constexpr uint8_t HOST_CONTROL_HOLD_FAILED = 3;
 
 struct ServoTargetCommand_t {
     uint8_t motorChannel; ///< 逻辑 Mxx；执行层在发送前解析当前 BUS 路由。
-    int32_t position;  ///< P4 logical ABS counts，不是舵机 hardware ABS。
+    int32_t position;  ///< 与舵机实际坐标一致的 ABS counts。
     uint16_t speed;    ///< 飞特位置命令速度参数，0 表示固件默认策略。
     uint8_t acc;       ///< 飞特位置命令加速度参数。
 };

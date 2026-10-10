@@ -57,6 +57,7 @@ from .protocol import (
     CMD_RESTORE_MULTITURN,
     CMD_SERVO_RESET_ZERO,
     CMD_SERVO_REBASE_ZERO,
+    CMD_MOTOR_ABS_ZERO,
     ENCODER_COUNT,
     MOTOR_COUNT,
     PROTO_ACK_STATUS_OK,
@@ -71,6 +72,7 @@ from .protocol import (
     SYSTEM_STATE_READY,
     SYSTEM_STATE_PAUSED,
     SYSTEM_STATE_RUN_DIRECT,
+    SERVO_TARGET_OWNER_CONTROL,
 
     SYSTEM_STATE_ROPE_INIT_RUNNING,
     SYSTEM_STATE_UNCONTROLLABLE,
@@ -98,6 +100,9 @@ SERVO_RESET_ZERO_ACK_TIMEOUT_S = 1.5
 SERVO_RESET_ZERO_RESULT_TIMEOUT_S = 4.0
 SERVO_REBASE_ZERO_ACK_TIMEOUT_S = 1.5
 SERVO_REBASE_ZERO_RESULT_TIMEOUT_S = 8.0
+SERVO_COORDINATE_MAX_ATTEMPTS = 3
+SERVO_COORDINATE_RESULT_SYNC_ATTEMPTS = 3
+SERVO_COORDINATE_RESULT_SYNC_WAIT_S = 1.0
 HOST_MULTITURN_MOVING_SAVE_PERIOD_S = 0.05
 HOST_MULTITURN_IDLE_SAVE_PERIOD_S = 0.50
 HOST_MULTITURN_RESTORE_RETRY_S = 1.0
@@ -131,14 +136,13 @@ class ManualPrepareResult(NamedTuple):
 
 
 class ServoRebaseZeroResult(NamedTuple):
-    """硬件设零的最终结果；失败或未选电机的 offset 为 None。"""
+    """硬件 ABS 设零的最终结果，成功与失败由电机位图区分。"""
 
     ok: bool
     message: str
     result_token: int
     success_motor_mask: int
     failed_motor_mask: int
-    logical_offsets: Tuple[Optional[int], ...]
 
 
 class HandController:
@@ -180,6 +184,19 @@ class HandController:
         self._multiturn_pending_restore_token = 0
         self._multiturn_pending_restore_at = 0.0
         self._multiturn_last_restore_attempt_at = 0.0
+        self._multiturn_restore_context = None
+        self._multiturn_restore_attempts = [0] * MOTOR_COUNT
+        self._multiturn_restore_confirmed_mask = 0
+        self._multiturn_restore_exhausted_mask = 0
+        self._multiturn_restore_cancelled = False
+        self._multiturn_pending_restore_expected_token = 0
+        self._multiturn_pending_restore_sent_at = 0.0
+        self._multiturn_pending_restore_p4_time_ms = None
+        self._multiturn_pending_restore_context = None
+        self._multiturn_pending_restore_query_count = 0
+        self._multiturn_pending_restore_query_at = 0.0
+        self._multiturn_pending_restore_query_exhausted = False
+        self._multiturn_pending_restore_ack_sequence = 0
         # Reset Zero 后 P4 会短暂把 logical ABS 标成可用，但在新的 Auto/LUT
         # 结果落盘前，该坐标不能成为下一次重启的恢复锚点。
         self._multiturn_anchor_capture_pending_mask = 0
@@ -189,12 +206,29 @@ class HandController:
         # 写盘和坐标基准变更共用事务锁，避免后台把旧坐标写回已失效锚点。
         self._multiturn_io_lock = threading.RLock()
         self._servo_rebase_zero_call_lock = threading.Lock()
+        self._coordinate_command_lock = threading.RLock()
+        self._coordinate_cancel_generation = 0
+        self._servo_turn_zero_unresolved_mask = 0
+        self._servo_turn_zero_baseline_token = 0
+        self._servo_turn_zero_sent_at = 0.0
+        self._servo_turn_zero_device_id = ""
+        self._servo_turn_zero_connection = 0
+        self._servo_turn_zero_comm = None
+        self._servo_turn_zero_reason = "calibration_turn_zero"
         self._servo_rebase_zero_unresolved_mask = 0
         self._servo_rebase_zero_baseline_token = 0
         self._servo_rebase_zero_sent_at = 0.0
         self._servo_rebase_zero_capture_mask = 0
         self._servo_rebase_zero_capture_after_ms = 0
         self._servo_rebase_zero_rebased_mask = 0
+        self._servo_rebase_zero_device_id = ""
+        self._servo_rebase_zero_request_connection = 0
+        self._servo_abs_zero_connection_generation = 0
+        # 本地归零事务的新反馈已落盘后才递增；不使用设备历史结果作为代次。
+        self._servo_abs_zero_generations = [0] * MOTOR_COUNT
+        self._servo_abs_zero_generation_feedback_ms = [0] * MOTOR_COUNT
+        self._servo_abs_zero_generation_device_ids = [""] * MOTOR_COUNT
+        self._servo_abs_zero_generation_connections = [0] * MOTOR_COUNT
         self._calibration_digest_cache = ""
         self._calibration_digest_mtime_ns = -1
         self._calibration_digest_checked_at = 0.0
@@ -382,6 +416,9 @@ class HandController:
 
     def pause(self):
         """Pause firmware output without clearing the cached target."""
+        with self._coordinate_command_lock:
+            self._coordinate_cancel_generation += 1
+            self._multiturn_restore_cancelled = True
         with self.state_lock:
             host_running = self._host_calibration_overlay.get('calib_status') in (
                 'PENDING', 'RUNNING',
@@ -390,8 +427,9 @@ class HandController:
             self._host_calibration_overlay = {}
             if host_running:
                 self.current_state.calib_status = 'IDLE'
-        if self.comm:
-            self.comm.send_command("pause")
+        with self._coordinate_command_lock:
+            if self.comm:
+                self.comm.send_command("pause")
         self._paused = True
         self._started = False
 
@@ -478,7 +516,21 @@ class HandController:
         self._multiturn_pending_restore_token = 0
         self._multiturn_pending_restore_at = 0.0
         self._multiturn_last_restore_attempt_at = 0.0
+        self._multiturn_restore_context = None
+        self._multiturn_restore_attempts = [0] * MOTOR_COUNT
+        self._multiturn_restore_confirmed_mask = 0
+        self._multiturn_restore_exhausted_mask = 0
+        self._multiturn_restore_cancelled = False
+        self._multiturn_pending_restore_expected_token = 0
+        self._multiturn_pending_restore_sent_at = 0.0
+        self._multiturn_pending_restore_p4_time_ms = None
+        self._multiturn_pending_restore_context = None
+        self._multiturn_pending_restore_query_count = 0
+        self._multiturn_pending_restore_query_at = 0.0
+        self._multiturn_pending_restore_query_exhausted = False
+        self._multiturn_pending_restore_ack_sequence = 0
         with self._multiturn_io_lock:
+            self._servo_abs_zero_connection_generation += 1
             # 重新连接不能把已发出但未确认/未落盘的归零当成未执行，
             # 否则旧 JSON 锚点可能被恢复到新的硬件圈数基准。
             pending_rebase = (
@@ -487,12 +539,14 @@ class HandController:
             )
             with self._multiturn_anchor_capture_lock:
                 self._multiturn_anchor_capture_pending_mask = 0
-                self._multiturn_anchor_capture_blocked_mask = pending_rebase
+                self._multiturn_anchor_capture_blocked_mask = pending_rebase | self._servo_turn_zero_unresolved_mask
                 self._multiturn_anchor_capture_last_error = ""
             if not pending_rebase:
+                self._servo_rebase_zero_device_id = ""
                 self._servo_rebase_zero_baseline_token = 0
                 self._servo_rebase_zero_sent_at = 0.0
                 self._servo_rebase_zero_capture_after_ms = 0
+                self._servo_rebase_zero_request_connection = self._servo_abs_zero_connection_generation
             self._servo_rebase_zero_rebased_mask &= pending_rebase
         self._calibration_digest_cache = ""
         self._calibration_digest_mtime_ns = -1
@@ -1030,60 +1084,166 @@ class HandController:
             f"calibrated anchor saved runtime+snapshot mask=0x{confirmed_mask:08X}",
         )
 
-    def _service_multiturn_restore(self, state: HandModel) -> None:
+    def _service_multiturn_restore(self, state: HandModel, ack_events=()) -> None:
         with self._multiturn_io_lock:
-            self._service_multiturn_restore_locked(state)
+            self._service_multiturn_restore_locked(state, ack_events)
 
-    def _service_multiturn_restore_locked(self, state: HandModel) -> None:
-        """按最近邻圈恢复单台舵机，不再用固定 raw 距离拒绝正常跨圈。"""
+    def _service_multiturn_restore_locked(self, state: HandModel, ack_events=()) -> None:
+        """非阻塞恢复；仅明确失败的通道可重写，未知结果只查询原事务。"""
         if not self.comm:
             return
-        result_token = int(
-            getattr(state, "multiturn_restore_result_token", 0) or 0
-        )
+        device_id = self.servo_abs_zero_device_id(state)
+        if not device_id:
+            return
+        context = (device_id, self._servo_abs_zero_connection_generation, id(self.comm))
+        if self._multiturn_restore_context != context:
+            self._multiturn_restore_context = context
+            self._multiturn_restore_attempts = [0] * MOTOR_COUNT
+            self._multiturn_restore_confirmed_mask = 0
+            self._multiturn_restore_exhausted_mask = 0
+            self._multiturn_pending_restore_mask = 0
+            self._multiturn_pending_restore_context = None
+            self._multiturn_pending_restore_query_count = 0
+            self._multiturn_pending_restore_query_exhausted = False
+            self._multiturn_last_restore_attempt_at = 0.0
+
+        valid_mask = (1 << MOTOR_COUNT) - 1
+        online = int(getattr(state, "servo_online_bitmap", 0) or 0) & valid_mask
+        unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0) & valid_mask
+        for motor_idx in range(MOTOR_COUNT):
+            if not online & (1 << motor_idx):
+                self._multiturn_restore_attempts[motor_idx] = 0
+        self._multiturn_restore_confirmed_mask &= online
+        self._multiturn_restore_exhausted_mask &= online & unknown
+        now = time.monotonic()
+        result_token = int(getattr(state, "multiturn_restore_result_token", 0) or 0)
         if self._multiturn_pending_restore_mask:
-            if result_token != self._multiturn_pending_restore_token:
-                restored = int(
-                    getattr(state, "multiturn_restore_restored_mask", 0) or 0
-                ) & self._multiturn_pending_restore_mask
-                rejected = int(
-                    getattr(state, "multiturn_restore_rejected_mask", 0) or 0
-                ) & self._multiturn_pending_restore_mask
+            pending_mask = self._multiturn_pending_restore_mask
+            restored = int(getattr(state, "multiturn_restore_restored_mask", 0) or 0)
+            rejected = int(getattr(state, "multiturn_restore_rejected_mask", 0) or 0)
+            result_p4_ms = int(getattr(state, "multiturn_restore_result_p4_time_ms", 0) or 0)
+            baseline_p4_ms = self._multiturn_pending_restore_p4_time_ms
+            matches_pending = (
+                bool(getattr(state, "has_multiturn_restore_result", False))
+                and self._multiturn_pending_restore_context == context
+                and result_token == self._multiturn_pending_restore_expected_token
+                and float(getattr(state, "multiturn_restore_result_last_rx_ts", 0) or 0)
+                > self._multiturn_pending_restore_sent_at
+                and not (restored & rejected)
+                and (restored | rejected) == pending_mask
+                and (baseline_p4_ms is None or
+                     ((result_p4_ms - baseline_p4_ms) & 0xFFFFFFFF) < 0x80000000)
+            )
+            negative_status = None
+            if not matches_pending:
+                # ACK has no transaction token: require a newer event in this
+                # same device/connection, plus host and P4 send-time bounds.
+                for event in (*getattr(state, "proto_ack_history", ()), *ack_events):
+                    if not isinstance(event, dict):
+                        continue
+                    if (int(event.get("command", -1)) == CMD_RESTORE_MULTITURN
+                            and int(event.get("sequence", 0)) > self._multiturn_pending_restore_ack_sequence
+                            and float(event.get("received_at", 0)) >= self._multiturn_pending_restore_sent_at
+                            and (baseline_p4_ms is None or
+                                 ((int(event.get("p4_time_ms", 0)) - baseline_p4_ms) & 0xFFFFFFFF) < 0x80000000)):
+                        status = int(event.get("status", -1))
+                        if status >= 0 and status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED):
+                            negative_status = status
+            if matches_pending or negative_status is not None:
+                if negative_status is not None:
+                    restored, rejected = 0, pending_mask
+                    log_session(
+                        "MULTITURN", f"host restore not accepted status={negative_status} "
+                        f"mask=0x{pending_mask:08X}",
+                    )
+                self._multiturn_restore_confirmed_mask |= restored
+                for motor_idx in range(MOTOR_COUNT):
+                    bit = 1 << motor_idx
+                    if (rejected & unknown & bit
+                            and self._multiturn_restore_attempts[motor_idx] >= 3):
+                        self._multiturn_restore_exhausted_mask |= bit
                 log_session(
                     "MULTITURN",
                     f"host restore result restored=0x{restored:08X} rejected=0x{rejected:08X}",
                 )
                 self._multiturn_pending_restore_mask = 0
-            elif (
-                time.monotonic() - self._multiturn_pending_restore_at
-                < MULTITURN_RESTORE_RESULT_TIMEOUT_S
-            ):
-                return
+                self._multiturn_pending_restore_query_count = 0
+                self._multiturn_pending_restore_query_exhausted = False
+                if self._multiturn_restore_exhausted_mask:
+                    state.host_multiturn_status = (
+                        "multi-turn restore failed after 3 requests: "
+                        + self._format_motor_mask(self._multiturn_restore_exhausted_mask)
+                    )
+                    log_session("MULTITURN", state.host_multiturn_status)
             else:
-                log_session("MULTITURN", "host restore result timeout")
-                self._multiturn_pending_restore_mask = 0
+                if now - self._multiturn_pending_restore_at >= MULTITURN_RESTORE_RESULT_TIMEOUT_S:
+                    if self._multiturn_pending_restore_query_count >= 3:
+                        if now - self._multiturn_pending_restore_query_at >= HOST_MULTITURN_RESTORE_RETRY_S:
+                            if not self._multiturn_pending_restore_query_exhausted:
+                                self._multiturn_pending_restore_query_exhausted = True
+                                state.host_multiturn_status = (
+                                    "multi-turn restore result unknown after 3 queries: "
+                                    + self._format_motor_mask(pending_mask)
+                                )
+                                log_session("MULTITURN", state.host_multiturn_status)
+                    elif (not self._multiturn_restore_cancelled
+                          and now - self._multiturn_pending_restore_query_at >= HOST_MULTITURN_RESTORE_RETRY_S):
+                        self._multiturn_pending_restore_query_at = now
+                        with self._coordinate_command_lock:
+                            if (not self._multiturn_restore_cancelled
+                                    and self.comm.is_connected()
+                                    and self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE))):
+                                self._multiturn_pending_restore_query_count += 1
+                                log_session(
+                                    "MULTITURN",
+                                    "host restore result query "
+                                    f"attempt={self._multiturn_pending_restore_query_count}/3 "
+                                    f"mask=0x{pending_mask:08X}",
+                                )
+                # A missing ACK or result cannot prove the write did not run.
+                # Retain the transaction even after queries are exhausted.
+                return
 
-        if (
-            time.monotonic() - self._multiturn_last_restore_attempt_at
-            < HOST_MULTITURN_RESTORE_RETRY_S
-        ):
+        if self._multiturn_restore_cancelled:
+            return
+        if now - self._multiturn_last_restore_attempt_at < HOST_MULTITURN_RESTORE_RETRY_S:
+            return
+        if (self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask
+                or getattr(self, "_servo_turn_zero_unresolved_mask", 0)):
+            return
+        with self._multiturn_anchor_capture_lock:
+            blocked_mask = self._multiturn_anchor_capture_blocked_mask
+        if not unknown & online & ~blocked_mask:
+            return
+        if not bool(getattr(state, "has_multiturn_restore_result", False)):
+            self._multiturn_last_restore_attempt_at = now
+            with self._coordinate_command_lock:
+                if not self._multiturn_restore_cancelled and self.comm.is_connected():
+                    self.comm.send_command(("state_sync", STATE_SYNC_MULTITURN_STATE))
+            return
+        if (not bool(getattr(state, "has_system_status_data", False))
+                or not 0 <= time.time() - float(state.system_status_last_rx_ts) <= LOWER_STATUS_STALE_AFTER_S
+                or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
+                                              SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                or state.control_enabled or state.servo_target_owner
+                or not bool(getattr(state, "has_p4_time", False))
+                or not bool(getattr(state, "has_servo_route_status", False))
+                or int(getattr(state, "servo_route_scan_state", 0) or 0) == 1
+                or not self._restore_feedback_ready(state)):
             return
         saved_mask, saved_abs, saved_raw, identity_ready = (
             self._multiturn_recovery_anchors(state)
         )
         if not identity_ready or saved_mask == 0:
             return
-        unknown = int(getattr(state, "multi_turn_unknown_bitmap", 0) or 0)
-        online = int(getattr(state, "servo_online_bitmap", 0) or 0)
-        if bool(getattr(state, "has_servo_route_status", False)):
-            online &= int(
-                getattr(state, "servo_route_controllable_bitmap", 0) or 0
-            )
+        online &= (int(getattr(state, "servo_route_controllable_bitmap", 0) or 0)
+                   & ~int(getattr(state, "servo_route_conflict_bitmap", 0) or 0))
         with self._multiturn_anchor_capture_lock:
             blocked_mask = self._multiturn_anchor_capture_blocked_mask
         candidate = (
             unknown & online & saved_mask & ~blocked_mask
-            & ((1 << MOTOR_COUNT) - 1)
+            & ~self._multiturn_restore_confirmed_mask
+            & ~self._multiturn_restore_exhausted_mask & valid_mask
         )
         current_raw = list(getattr(state, "servo_raw_positions", []) or [])
         raw_online = list(getattr(state, "servo_raw_online", []) or [])
@@ -1093,9 +1253,11 @@ class HandController:
             bit = 1 << motor_idx
             if (
                 candidate & bit
+                and self._multiturn_restore_attempts[motor_idx] < 3
                 and motor_idx < len(current_raw)
                 and motor_idx < len(raw_online)
                 and bool(raw_online[motor_idx])
+                and 0 <= int(current_raw[motor_idx]) < 4096
                 and motor_idx < len(saved_raw)
                 and motor_idx < len(saved_abs)
             ):
@@ -1107,14 +1269,38 @@ class HandController:
                     current_raw[motor_idx],
                 )
                 restore_mask |= bit
-        self._multiturn_last_restore_attempt_at = time.monotonic()
+        self._multiturn_last_restore_attempt_at = now
         if restore_mask == 0:
             return
-        self.comm.send_command(("restore_multiturn", restore_mask, restore_abs))
-        self._multiturn_pending_restore_mask = restore_mask
-        self._multiturn_pending_restore_token = result_token
-        self._multiturn_pending_restore_at = time.monotonic()
-        log_session("MULTITURN", f"host restore requested mask=0x{restore_mask:08X}")
+        with self._coordinate_command_lock:
+            if (self._multiturn_restore_cancelled or not self.comm.is_connected()
+                    or not 0 <= time.time() - float(state.system_status_last_rx_ts) <= LOWER_STATUS_STALE_AFTER_S
+                    or not self._restore_feedback_ready(state)
+                    or context != (device_id, self._servo_abs_zero_connection_generation, id(self.comm))):
+                return
+            sent_at = time.time()
+            if not self.comm.send_command(("restore_multiturn", restore_mask, restore_abs)):
+                log_session("MULTITURN", f"host restore was not queued mask=0x{restore_mask:08X}")
+                return
+            for motor_idx in range(MOTOR_COUNT):
+                if restore_mask & (1 << motor_idx):
+                    self._multiturn_restore_attempts[motor_idx] += 1
+            self._multiturn_pending_restore_mask = restore_mask
+            self._multiturn_pending_restore_token = result_token
+            self._multiturn_pending_restore_expected_token = (result_token + 1) & 0xFFFFFFFF
+            self._multiturn_pending_restore_at = now
+            self._multiturn_pending_restore_sent_at = sent_at
+            self._multiturn_pending_restore_p4_time_ms = (
+                int(state.p4_time_ms) if state.has_p4_time else None
+            )
+            self._multiturn_pending_restore_context = context
+            self._multiturn_pending_restore_query_count = 0
+            self._multiturn_pending_restore_query_at = 0.0
+            self._multiturn_pending_restore_query_exhausted = False
+            self._multiturn_pending_restore_ack_sequence = int(getattr(state, "proto_ack_sequence", 0) or 0)
+        attempts = {motor_idx: self._multiturn_restore_attempts[motor_idx]
+                    for motor_idx in range(MOTOR_COUNT) if restore_mask & (1 << motor_idx)}
+        log_session("MULTITURN", f"host restore requested mask=0x{restore_mask:08X} attempts={attempts}")
 
     def wait_for_multiturn_recovery(
         self,
@@ -1164,6 +1350,26 @@ class HandController:
             unknown_mask = int(
                 getattr(state, "multi_turn_unknown_bitmap", 0) or 0
             ) & target_mask
+            with self._multiturn_io_lock:
+                context = (self.servo_abs_zero_device_id(state),
+                           self._servo_abs_zero_connection_generation, id(self.comm))
+                same_context = self._multiturn_restore_context == context
+                exhausted_mask = (self._multiturn_restore_exhausted_mask & unknown_mask
+                                  if same_context else 0)
+                unresolved_mask = (
+                    self._multiturn_pending_restore_mask & unknown_mask
+                    if same_context and self._multiturn_pending_restore_query_exhausted else 0
+                )
+                cancelled = self._multiturn_restore_cancelled
+            if exhausted_mask:
+                return (False, "multi-turn restore failed after 3 requests: "
+                        + self._format_motor_mask(exhausted_mask))
+            if unresolved_mask:
+                return (False, "multi-turn restore result remains unknown after 3 queries: "
+                        + self._format_motor_mask(unresolved_mask))
+            if cancelled and unknown_mask:
+                return (False, "multi-turn restore cancelled by STOP or PAUSE: "
+                        + self._format_motor_mask(unknown_mask))
             saved_mask, _saved_abs, _saved_raw, identity_ready = (
                 self._multiturn_recovery_anchors(state)
             )
@@ -1220,10 +1426,11 @@ class HandController:
                 ack_events = self.comm.drain_ack_events()
                 safety_events = self.comm.drain_safety_events()
                 self._service_startup_state_sync(new_model)
+                self._service_servo_turn_zero_result(new_model)
                 self._service_servo_rebase_zero_capture(new_model)
                 self._persist_multiturn_state(new_model)
                 self._service_multiturn_anchor_capture(new_model)
-                self._service_multiturn_restore(new_model)
+                self._service_multiturn_restore(new_model, ack_events=ack_events)
                 with self.state_lock:
                     self.current_state.copy_state_from(new_model)
                     if ack_events:
@@ -1668,12 +1875,37 @@ class HandController:
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
         if not self.comm:
             return False
+        motor_mask = int(active_motor_mask) & 0xFFFFFFFF
+        joint_mask = int(active_joint_mask) & 0xFFFFFFFF
+        require_can = bool(require_can_feedback)
         sent_at = time.time()
+        with self.state_lock:
+            state = self.current_state
+            # RUN_DIRECT owns the current scope. Reusing its confirmed scope
+            # avoids an illegal D7 rewrite when sending the next motor target.
+            # Changes and stale/incomplete status still require the P4 ACK.
+            if (
+                not require_can
+                and motor_mask != 0
+                and motor_mask & ~((1 << MOTOR_COUNT) - 1) == 0
+                and joint_mask & ~((1 << ENCODER_COUNT) - 1) == 0
+                and state.has_system_status_data
+                and state.has_active_scope_status
+                and 0 <= sent_at - state.system_status_last_rx_ts <= 0.6
+                and state.system_state == SYSTEM_STATE_RUN_DIRECT
+                and state.control_enabled
+                and state.servo_target_owner == SERVO_TARGET_OWNER_CONTROL
+                and state.control_mode == ControlMode.DIRECT_MOTOR.value
+                and state.active_motor_mask == motor_mask
+                and state.active_joint_mask == joint_mask
+                and not state.require_can_feedback
+            ):
+                return True
         self.comm.send_command((
             "active_scope",
-            int(active_motor_mask) & 0xFFFFFFFF,
-            int(active_joint_mask) & 0xFFFFFFFF,
-            bool(require_can_feedback),
+            motor_mask,
+            joint_mask,
+            require_can,
         ))
         ack = self.comm.wait_for_ack(CMD_ACTIVE_SCOPE, ACTIVE_SCOPE_ACK_TIMEOUT_S, received_after=sent_at)
         return bool(ack is not None and int(ack[2]) == 0)
@@ -1681,26 +1913,155 @@ class HandController:
     def _invalidate_servo_rebase_zero_anchors(self, motor_mask: int) -> None:
         """替换坐标前后的旧 runtime / Auto 快照都不能用于恢复。"""
         with self._multiturn_io_lock:
-            self._invalidate_multiturn_anchor_mask(motor_mask, "servo_abs_rebase_zero")
+            state = self._coordinate_state()
+            if (self._servo_rebase_zero_device_id
+                    and (self.servo_abs_zero_device_id(state) != self._servo_rebase_zero_device_id
+                         or self._servo_abs_zero_connection_generation != self._servo_rebase_zero_request_connection)):
+                return
+            self._invalidate_coordinate_anchors(motor_mask, "servo_abs_rebase_zero", state)
+
+    def _invalidate_coordinate_anchors(self, motor_mask, reason, state):
+        """从固定设备快照选择同一 namespace 的运行锚点及 Auto 后备锚点。"""
+        with self._multiturn_io_lock:
+            if self._multiturn_identity(state) is None:
+                raise CalibrationSnapshotError("device identity unavailable during coordinate anchor invalidation")
+            snapshot_path = self._multiturn_store.path.parent / CALIB_LOAD_SNAPSHOT_PATH.name
+            self._invalidate_multiturn_anchor_mask(motor_mask, reason)
             invalidate_calibration_snapshot_scope(
-                CALIB_LOAD_SNAPSHOT_PATH,
-                motor_mask=motor_mask,
-                joint_mask=joint_mask_for_motor_mask(motor_mask),
-                reason="servo_abs_rebase_zero",
+                snapshot_path, motor_mask=motor_mask,
+                joint_mask=joint_mask_for_motor_mask(motor_mask), reason=reason,
             )
             self._calibration_snapshot_anchor_valid_mask &= ~motor_mask
             self._calibration_digest_checked_at = 0.0
             self._calibration_digest_mtime_ns = -1
 
+    @staticmethod
+    def servo_abs_zero_device_id(state: HandModel) -> str:
+        """沿用持久化身份的设备指纹门槛，仅校验，不切换文件或读取磁盘。"""
+        reported = state.product_fingerprint if state.has_product_fingerprint else {}
+        device_id = str(reported.get("device_id", ""))
+        if (int(reported.get("protocol_version", 0)) != HOST_PROTOCOL_VERSION
+                or len(device_id) != 16 or device_id == "0000000000000000"
+                or any(char not in "0123456789ABCDEF" for char in device_id)):
+            return ""
+        return device_id
+
+    @staticmethod
+    def _servo_abs_zero_result_matches(state, baseline_token, sent_at, mask):
+        expected = ((int(baseline_token) + 1) & 0xffffffff) or 1
+        completed = state.servo_rebase_zero_success_mask | state.servo_rebase_zero_failed_mask
+        return (state.has_servo_rebase_zero_result
+                and state.servo_rebase_zero_result_token == expected
+                and state.servo_rebase_zero_result_last_rx_ts >= sent_at
+                and completed == mask)
+
+    def _coordinate_state(self):
+        with self.state_lock:
+            state = HandModel()
+            state.copy_state_from(self.current_state)
+        return state
+
+    @staticmethod
+    def _coordinate_safe_state(state, mask):
+        return (state.has_system_status_data
+                and 0 <= time.time() - state.system_status_last_rx_ts <= LOWER_STATUS_STALE_AFTER_S
+                and not state.control_enabled and state.servo_target_owner == 0
+                and state.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
+                                           SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED)
+                and state.has_servo_route_status and state.servo_route_scan_state != 1
+                and not mask & ~state.servo_online_bitmap
+                and not mask & ~state.servo_route_controllable_bitmap
+                and not mask & state.servo_route_conflict_bitmap)
+
+    @staticmethod
+    def _restore_feedback_ready(state):
+        """当前 raw 只可与同快照、及时到达的 ABS 一起重建硬件坐标。"""
+        delta = (int(state.system_status_p4_time_ms) - int(state.servo_feedback_p4_time_ms)) & 0xffffffff
+        if delta >= 0x80000000:
+            delta -= 0x100000000
+        return (state.has_servo_angle_data and state.has_servo_raw_data
+                and state.servo_raw_p4_time_ms == state.servo_feedback_p4_time_ms
+                and 0 <= time.time() - state.servo_abs_last_rx_ts <= LOWER_STATUS_STALE_AFTER_S
+                and abs(delta) <= LOWER_STATUS_STALE_AFTER_S * 1000)
+
+    @staticmethod
+    def _coordinate_ack_status(ack, command_id, sent_at):
+        """仅发送之后同命令的 ACK 可用于受理判断；逐电机成功仍依赖最终结果。"""
+        if (ack is None or len(ack) < 4 or int(ack[0]) != command_id
+                or float(ack[3]) < sent_at):
+            return None
+        return int(ack[2])
+
+    def _wait_coordinate_result(self, matches, cancelled, timeout_s, *, query_first=False):
+        """丢失结果只查询现有事务；查询次数不计作新的硬件写请求。"""
+        def query():
+            with self._coordinate_command_lock:
+                if cancelled():
+                    return False
+                self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
+                return True
+
+        queries = 0
+        if query_first and query():
+            queries = 1
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            state = self._coordinate_state()
+            if matches(state):
+                return state
+            if cancelled():
+                return None
+            if time.monotonic() >= deadline:
+                if queries >= SERVO_COORDINATE_RESULT_SYNC_ATTEMPTS:
+                    return None
+                if not query():
+                    return None
+                queries += 1
+                deadline = time.monotonic() + min(
+                    max(0.0, timeout_s), SERVO_COORDINATE_RESULT_SYNC_WAIT_S,
+                )
+                continue
+            time.sleep(0.02)
+
+    @staticmethod
+    def _servo_turn_zero_result_matches(state, baseline_token, sent_at, mask):
+        expected = (int(baseline_token) + 1) & 0xffffffff
+        success, failed = state.servo_reset_zero_success_mask, state.servo_reset_zero_failed_mask
+        return (state.has_servo_reset_zero_status
+                and state.servo_reset_zero_request_token == expected
+                and state.servo_reset_zero_result_token == expected
+                and state.servo_reset_zero_status in (2, 3)
+                and not success & failed and (success | failed) == mask
+                and state.system_status_last_rx_ts >= sent_at)
+
+    def _service_servo_turn_zero_result(self, state):
+        """迟到 EE 结果仍失效旧锚点，未知结果期间禁止再次改写圈数。"""
+        with self._multiturn_io_lock:
+            mask = self._servo_turn_zero_unresolved_mask
+            if (not mask or self.comm is not self._servo_turn_zero_comm
+                    or self._servo_abs_zero_connection_generation != self._servo_turn_zero_connection
+                    or self.servo_abs_zero_device_id(state) != self._servo_turn_zero_device_id
+                    or not self._servo_turn_zero_result_matches(
+                        state, self._servo_turn_zero_baseline_token, self._servo_turn_zero_sent_at, mask)):
+                return
+            self._invalidate_coordinate_anchors(mask, self._servo_turn_zero_reason, state)
+            self._servo_turn_zero_unresolved_mask = 0
+
     def _service_servo_rebase_zero_capture(self, state: HandModel) -> None:
         """最终结果先失效旧坐标，再等待结果之后的新同帧 ABS/raw 落盘。"""
         with self._multiturn_io_lock:
+            device_id = self.servo_abs_zero_device_id(state)
+            if not device_id or device_id != self._servo_rebase_zero_device_id:
+                return
+            if self._servo_rebase_zero_request_connection != self._servo_abs_zero_connection_generation:
+                return
             unresolved = self._servo_rebase_zero_unresolved_mask
             if (
                 unresolved
-                and state.has_servo_rebase_zero_result
-                and state.servo_rebase_zero_result_token != self._servo_rebase_zero_baseline_token
-                and state.servo_rebase_zero_result_last_rx_ts >= self._servo_rebase_zero_sent_at
+                and self._servo_abs_zero_result_matches(
+                    state, self._servo_rebase_zero_baseline_token,
+                    self._servo_rebase_zero_sent_at, unresolved,
+                )
             ):
                 self._invalidate_servo_rebase_zero_anchors(unresolved)
                 self._servo_rebase_zero_capture_mask = (
@@ -1729,8 +2090,8 @@ class HandController:
                 if not state.servo_raw_online[motor]:
                     eligible &= ~(1 << motor)
             if eligible:
-                # 此命令用于 Auto 开始前，旧 Auto active scope 已失效；只写
-                # runtime 锚点。新 Auto/LUT 完成后再由原有 capture 写双份快照。
+                # 设置新坐标后，旧 Auto/LUT scope 已失效；只写 runtime 锚点。
+                # 新 Auto/LUT 完成后再由原有 capture 写双份快照。
                 with self._multiturn_anchor_capture_lock:
                     self._multiturn_anchor_capture_blocked_mask &= ~eligible
                 try:
@@ -1740,281 +2101,356 @@ class HandController:
                         self._multiturn_anchor_capture_blocked_mask |= eligible
                     raise
                 if saved:
+                    for motor in range(MOTOR_COUNT):
+                        if eligible & (1 << motor):
+                            self._servo_abs_zero_generations[motor] += 1
+                            self._servo_abs_zero_generation_feedback_ms[motor] = state.servo_feedback_p4_time_ms
+                            self._servo_abs_zero_generation_device_ids[motor] = device_id
+                            self._servo_abs_zero_generation_connections[motor] = self._servo_abs_zero_connection_generation
                     self._servo_rebase_zero_capture_mask &= ~eligible
                 else:
                     with self._multiturn_anchor_capture_lock:
                         self._multiturn_anchor_capture_blocked_mask |= eligible
 
-    def rebase_servo_abs_zero(self, motor_mask: int) -> ServoRebaseZeroResult:
+    def rebase_servo_abs_zero(
+        self, motor_mask: int, *, cancelled=lambda: False, send_gate=None,
+    ) -> ServoRebaseZeroResult:
         """静止时将所选电机当前位置设为 ABS 0；调用者先释放运动 owner。
 
-        P4 保存 offset = -Reset 后的新 raw。这里不发维护 RESET、不自动重试
-        硬件归零；ACK 丢失仍等待最终结果，超时只查询现有事务结果。
+        P4 用 0x0B 校正舵机实际 ABS 并读回确认。明确失败的电机最多请求三次；
+        已成功电机不重复写入，未知结果仅查询原事务，不发维护 RESET。
         """
-        empty_offsets: Tuple[Optional[int], ...] = (None,) * MOTOR_COUNT
+        return self._set_servo_abs_zero(
+            motor_mask, CMD_SERVO_REBASE_ZERO, "servo_rebase_zero",
+            cancelled=cancelled, send_gate=send_gate,
+        )
 
-        def rejected(message: str, failed_mask: int = 0) -> ServoRebaseZeroResult:
-            return ServoRebaseZeroResult(False, message, 0, 0, failed_mask, empty_offsets)
+    def zero_direct_motor_abs(
+        self, motor_mask: int, *, cancelled=lambda: False, send_gate=None
+    ) -> ServoRebaseZeroResult:
+        """Direct 专用置零；复用校准置零的结果、可信反馈及锚点事务。"""
+        return self._set_servo_abs_zero(
+            motor_mask, CMD_MOTOR_ABS_ZERO, "motor_abs_zero",
+            cancelled=cancelled, send_gate=send_gate,
+        )
 
+    def servo_abs_zero_anchor_saved(self, motor_mask: int) -> bool:
+        """所选成功电机的新实际坐标已由反馈写入运行 JSON。"""
+        mask = int(motor_mask)
+        with self._multiturn_io_lock, self._multiturn_anchor_capture_lock:
+            payload = self._multiturn_store_payload or {}
+            valid = int(str(payload.get("valid_motor_mask", "0")), 0)
+            pending = (self._servo_rebase_zero_unresolved_mask
+                       | self._servo_rebase_zero_capture_mask
+                       | self._multiturn_anchor_capture_blocked_mask)
+            return bool(mask and valid & mask == mask and not pending & mask)
+
+    def get_servo_abs_zero_generation_state(self):
+        """原子返回代次、反馈帧及设备/连接来源；调用者不持应用锁。"""
+        with self._multiturn_io_lock:
+            return (tuple(self._servo_abs_zero_generations),
+                    tuple(self._servo_abs_zero_generation_feedback_ms),
+                    tuple(self._servo_abs_zero_generation_device_ids),
+                    tuple(self._servo_abs_zero_generation_connections),
+                    self._servo_abs_zero_connection_generation)
+
+    def get_servo_abs_zero_generations(self):
+        """只读、单调的电机坐标变更代次，迟到或取消后落盘同样可见。"""
+        return self.get_servo_abs_zero_generation_state()[0]
+
+    def _set_servo_abs_zero(
+        self, motor_mask: int, command_id: int, command_name: str,
+        *, cancelled=lambda: False, send_gate=None,
+    ) -> ServoRebaseZeroResult:
+        """F0/F1 共用串行事务，最多三轮，仅重试已确认失败的电机。"""
         mask = int(motor_mask)
         if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
             raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
+        success = 0
+        result_token = 0
+
+        def rejected(message):
+            return ServoRebaseZeroResult(False, message, result_token, success, mask & ~success)
+
         if not self.comm:
-            return rejected("serial not connected", mask)
+            return rejected("serial not connected")
+        if cancelled():
+            return rejected("servo ABS zero cancelled before submission")
         if not self._servo_rebase_zero_call_lock.acquire(blocking=False):
-            return rejected("another servo ABS rebase request is waiting", mask)
+            return rejected("another servo ABS rebase request is waiting")
         try:
-            with self.state_lock:
-                state = HandModel()
-                state.copy_state_from(self.current_state)
+            state = self._coordinate_state()
+            device_id = self.servo_abs_zero_device_id(state)
+            if not device_id:
+                return rejected("valid P4 device identity unavailable for servo ABS zero")
             if not state.has_servo_rebase_zero_result:
                 self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-                return rejected("waiting for P4 servo ABS rebase capability/result", mask)
-            if (
-                not state.has_system_status_data
-                or state.control_enabled
-                or state.servo_target_owner != 0
-                or state.system_state not in (
-                    SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
-                    SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED,
-                )
-            ):
-                return rejected("stop motion and release the P4 target owner before rebasing", mask)
-            if mask & ~state.servo_online_bitmap:
-                return rejected("selected servo ABS rebase motors are offline", mask)
-            with self._multiturn_io_lock:
-                if self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask:
-                    self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-                    return rejected("previous servo ABS rebase is awaiting its result/new feedback", mask)
-                if self._multiturn_pending_restore_mask:
-                    return rejected("a desktop multi-turn restore transaction is pending", mask)
-                with self._multiturn_anchor_capture_lock:
-                    previous_blocked = self._multiturn_anchor_capture_blocked_mask
-                    previous_capture = self._multiturn_anchor_capture_pending_mask
-                self._block_multiturn_anchor_capture(mask)
-                sent_at = time.time()
-                baseline_token = state.servo_rebase_zero_result_token
-                self._servo_rebase_zero_unresolved_mask = mask
-                self._servo_rebase_zero_baseline_token = baseline_token
-                self._servo_rebase_zero_sent_at = sent_at
-                sent = self.comm.send_command(("servo_rebase_zero", mask))
+                return rejected("waiting for P4 servo ABS rebase capability/result")
+            comm = self.comm
+            connection = self._servo_abs_zero_connection_generation
+            cancel_generation = self._coordinate_cancel_generation
 
-            def cancel_unaccepted_request() -> None:
+            def same_session():
+                return (self.comm is comm
+                        and self._servo_abs_zero_connection_generation == connection
+                        and self.servo_abs_zero_device_id(self._coordinate_state()) == device_id)
+
+            def changed():
+                return (cancelled() or self._coordinate_cancel_generation != cancel_generation
+                        or not same_session())
+
+            for attempt in range(1, SERVO_COORDINATE_MAX_ATTEMPTS + 1):
+                pending = mask & ~success
+                state = self._coordinate_state()
+                if changed():
+                    return rejected("servo ABS zero cancelled or device connection changed")
+                if not self._coordinate_safe_state(state, pending):
+                    return rejected("servo ABS zero requires fresh stopped status and online, unambiguous selected motors")
                 with self._multiturn_io_lock:
-                    self._servo_rebase_zero_unresolved_mask = 0
+                    if (self._servo_rebase_zero_unresolved_mask or self._servo_rebase_zero_capture_mask
+                            or self._servo_turn_zero_unresolved_mask):
+                        self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
+                        return rejected("previous servo ABS rebase is awaiting its result/new feedback")
+                    if self._multiturn_pending_restore_mask:
+                        return rejected("a desktop multi-turn restore transaction is pending")
                     with self._multiturn_anchor_capture_lock:
-                        self._multiturn_anchor_capture_blocked_mask = (
-                            self._multiturn_anchor_capture_blocked_mask & ~mask
-                        ) | (previous_blocked & mask)
-                        self._multiturn_anchor_capture_pending_mask |= previous_capture & mask
+                        previous_blocked = self._multiturn_anchor_capture_blocked_mask
+                        previous_capture = self._multiturn_anchor_capture_pending_mask
+                    self._block_multiturn_anchor_capture(pending)
+                    sent_at = time.time()
+                    baseline_token = state.servo_rebase_zero_result_token
+                    self._servo_rebase_zero_unresolved_mask = pending
+                    self._servo_rebase_zero_baseline_token = baseline_token
+                    self._servo_rebase_zero_sent_at = sent_at
+                    self._servo_rebase_zero_device_id = device_id
+                    self._servo_rebase_zero_request_connection = connection
 
-            if not sent:
-                cancel_unaccepted_request()
-                return rejected("servo ABS rebase command queue rejected", mask)
-            ack = self.comm.wait_for_ack(
-                CMD_SERVO_REBASE_ZERO,
-                SERVO_REBASE_ZERO_ACK_TIMEOUT_S,
-                received_after=sent_at,
-            )
-            if ack is not None and int(ack[2]) not in (
-                PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED,
-            ):
-                cancel_unaccepted_request()
-                return rejected(f"servo ABS rebase rejected (status={int(ack[2])})", mask)
-            if ack is None:
-                self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-            deadline = time.monotonic() + SERVO_REBASE_ZERO_RESULT_TIMEOUT_S
-            while time.monotonic() < deadline:
-                with self.state_lock:
-                    state = HandModel()
-                    state.copy_state_from(self.current_state)
-                if (
-                    state.has_servo_rebase_zero_result
-                    and state.servo_rebase_zero_result_token != baseline_token
-                    and state.servo_rebase_zero_result_last_rx_ts >= sent_at
-                ):
-                    self._service_servo_rebase_zero_capture(state)
-                    success = state.servo_rebase_zero_success_mask & mask
-                    failed = (state.servo_rebase_zero_failed_mask & mask) | (mask & ~success)
-                    offsets = tuple(
-                        state.servo_rebase_zero_logical_offsets[i]
-                        if success & (1 << i) else None
-                        for i in range(MOTOR_COUNT)
-                    )
+                def send():
+                    # 外部应用/运动 gate 在此锁之前取得，STOP 无需等待 ACK/文件。
+                    with self._coordinate_command_lock:
+                        if changed() or not self._coordinate_safe_state(self._coordinate_state(), pending):
+                            return False
+                        return comm.send_command((command_name, pending))
+
+                sent = send_gate(send) if send_gate is not None else send()
+                def restore_unaccepted():
+                    with self._multiturn_io_lock, self._multiturn_anchor_capture_lock:
+                        self._servo_rebase_zero_unresolved_mask = 0
+                        self._servo_rebase_zero_device_id = device_id if success else ""
+                        self._multiturn_anchor_capture_blocked_mask = (
+                            self._multiturn_anchor_capture_blocked_mask & ~pending
+                        ) | (previous_blocked & pending)
+                        self._multiturn_anchor_capture_pending_mask |= previous_capture & pending
+
+                if not sent:
+                    restore_unaccepted()
+                    return rejected("servo ABS zero cancelled or command queue rejected")
+                log_session("MULTITURN", f"{command_name} attempt={attempt}/3 mask=0x{pending:08X}")
+                ack = comm.wait_for_ack(command_id, SERVO_REBASE_ZERO_ACK_TIMEOUT_S, received_after=sent_at)
+                matches = lambda s: (same_session()
+                    and self._servo_abs_zero_result_matches(s, baseline_token, sent_at, pending))
+                status = self._coordinate_ack_status(ack, command_id, sent_at)
+                if (same_session() and not matches(self._coordinate_state())
+                        and status is not None and status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
+                    restore_unaccepted()
+                    if changed():
+                        return rejected("servo ABS zero cancelled; hardware write was not accepted")
+                    if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
+                        return rejected(f"servo ABS rebase rejected after 3 attempts (status={status}); hardware write not accepted")
+                    continue
+                state = self._wait_coordinate_result(
+                    matches, changed, SERVO_REBASE_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
+                )
+                if state is None:
+                    if same_session():
+                        self._invalidate_servo_rebase_zero_anchors(pending)
+                    return rejected("servo ABS rebase result timed out or cancelled; original transaction remains unresolved")
+                success |= state.servo_rebase_zero_success_mask & pending
+                result_token = state.servo_rebase_zero_result_token
+                self._service_servo_rebase_zero_capture(state)
+                remaining = mask & ~success
+                if changed():
+                    return rejected("servo ABS zero cancelled after submission; completed motor coordinates retained")
+                if not remaining:
                     return ServoRebaseZeroResult(
-                        failed == 0,
-                        "servo ABS rebased; new feedback anchor capture pending"
-                        if failed == 0 else "some selected motors failed servo ABS rebase",
-                        state.servo_rebase_zero_result_token,
-                        success, failed, offsets,
+                        True, "servo ABS rebased; new feedback anchor capture pending",
+                        result_token, success, 0,
                     )
-                time.sleep(0.02)
-            # 命令可能已经执行，保守失效旧坐标；迟到结果由后台服务继续处理。
-            self._invalidate_servo_rebase_zero_anchors(mask)
-            self.request_state_sync(STATE_SYNC_MULTITURN_STATE)
-            return rejected("servo ABS rebase result timed out; requested result sync without retrying reset", mask)
+                if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
+                    return rejected(f"servo ABS rebase failed after 3 attempts: {self._format_motor_mask(remaining)}")
+                # 首轮成功坐标必须先保存，再打开下一轮，不能覆盖全局 capture 事务。
+                if state.servo_rebase_zero_success_mask & pending:
+                    deadline = time.monotonic() + MULTITURN_ANCHOR_CAPTURE_TIMEOUT_S
+                    while True:
+                        if changed():
+                            return rejected("servo ABS zero cancelled while saving completed motor coordinates")
+                        self._service_servo_rebase_zero_capture(self._coordinate_state())
+                        if not self._servo_rebase_zero_capture_mask:
+                            break
+                        if time.monotonic() >= deadline:
+                            return rejected("servo ABS zero partly completed; new trusted feedback/JSON save unconfirmed")
+                        time.sleep(0.02)
+            return rejected("servo ABS rebase failed")
         except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
-            return rejected(f"servo ABS rebase anchor invalidation failed: {exc}", mask)
+            return rejected(f"servo ABS rebase anchor invalidation failed: {exc}")
         finally:
             self._servo_rebase_zero_call_lock.release()
 
     def prepare_calibration_turn_zero(
-        self,
-        motor_mask: int,
-        *,
+        self, motor_mask: int, *,
         invalidation_reason: str = "calibration_turn_zero",
+        cancelled=lambda: False, motion_gate=lambda action: action(),
     ) -> Tuple[bool, str, int, int]:
-        """标定前归零所选舵机硬件圈数，并原子失效其桌面多圈锚点。"""
-        if not self.comm:
-            return False, "serial not connected", 0, 0
+        """入口仅 RESET 一次；最多三次归零请求，只重试明确失败电机。"""
+        mask = int(motor_mask)
+        if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
+            return False, "calibration motor mask is empty or invalid", 0, 0
+        success = 0
 
-        requested_mask = int(motor_mask) & ((1 << MOTOR_COUNT) - 1)
-        if requested_mask == 0:
-            return False, "calibration motor mask is empty", 0, 0
+        def failure(message):
+            return False, message, success, mask & ~success
 
-        with self.state_lock:
-            state = self.current_state
-            if not bool(getattr(state, "has_servo_reset_zero_status", False)):
-                return (
-                    False,
-                    "P4 firmware does not report calibration turn-reset status",
-                    0,
-                    0,
-                )
-            online_mask = int(getattr(state, "servo_online_bitmap", 0) or 0)
-            baseline_result_token = int(
-                getattr(state, "servo_reset_zero_result_token", 0) or 0
-            )
-            reset_status = int(
-                getattr(state, "servo_reset_zero_status", 0) or 0
-            )
-
-        offline_mask = requested_mask & ~online_mask
-        if offline_mask:
-            return (
-                False,
-                f"selected calibration motors are offline: 0x{offline_mask:08X}",
-                0,
-                offline_mask,
-            )
-        if reset_status == 1:
-            return False, "another calibration turn-reset is running", 0, requested_mask
-
-        # RESET 是维护复位而不是 E-STOP：它释放 owner 和旧目标，又不会留下
-        # emergency-stop 锁存，确保紧接着的自动标定仍能取得控制权。
-        reset_sent_at = time.time()
-        self.reset()
-        reset_ack = self.comm.wait_for_ack(
-            CMD_RESET,
-            CALIBRATION_TURN_RESET_ACK_TIMEOUT_S,
-            received_after=reset_sent_at,
-        )
-        if reset_ack is None or int(reset_ack[2]) not in (
-            PROTO_ACK_STATUS_OK,
-            PROTO_ACK_STATUS_QUEUED,
-        ):
-            return False, "maintenance RESET timeout/reject", 0, requested_mask
-        time.sleep(CALIBRATION_TURN_RESET_SETTLE_S)
-        # 在下发硬件 Reset Zero 前先屏蔽后台锚点保存，避免 P4 暂时清掉
-        # Turn Unknown 后、桌面失效旧锚点前产生竞争窗口。
-        self._block_multiturn_anchor_capture(requested_mask)
-        sent_at = time.time()
-        self.comm.send_command(("servo_reset_zero", requested_mask))
-        ack = self.comm.wait_for_ack(
-            CMD_SERVO_RESET_ZERO,
-            SERVO_RESET_ZERO_ACK_TIMEOUT_S,
-            received_after=sent_at,
-        )
-        if ack is None or int(ack[2]) not in (0, 2):
-            status = "timeout" if ack is None else str(int(ack[2]))
-            try:
-                self._invalidate_multiturn_anchor_mask(
-                    requested_mask, invalidation_reason
-                )
-            except (OSError, DeviceStateStoreError) as exc:
-                log_session("MULTITURN", f"calibration anchor invalidation failed: {exc}")
-            return (
-                False,
-                f"calibration turn-reset rejected (status={status})",
-                0,
-                requested_mask,
-            )
-
-        # ACK 仅表示事务已受理。必须等 result token 前进后再读取成功掩码，
-        # 避免 UI 把“硬件已清零、Flash 尚未替换”误认为完整成功。
-        deadline = time.time() + SERVO_RESET_ZERO_RESULT_TIMEOUT_S
-        while time.time() < deadline:
-            with self.state_lock:
-                state = self.current_state
-                result_token = int(
-                    getattr(state, "servo_reset_zero_result_token", 0) or 0
-                )
-                success_mask = int(
-                    getattr(state, "servo_reset_zero_success_mask", 0) or 0
-                ) & ((1 << MOTOR_COUNT) - 1)
-                failed_mask = int(
-                    getattr(state, "servo_reset_zero_failed_mask", 0) or 0
-                ) & ((1 << MOTOR_COUNT) - 1)
-                status = int(
-                    getattr(state, "servo_reset_zero_status", 0) or 0
-                )
-            if result_token != baseline_result_token and status in (2, 3):
-                completed = success_mask & requested_mask
-                missing = requested_mask & ~completed
-                # 只要某台舵机硬件归零成功，旧 JSON 圈数就绝不能再次恢复。
-                # 即使同一关节另一台舵机失败，也保持该条目失效并要求重标。
-                try:
-                    self._invalidate_multiturn_anchor_mask(
-                        requested_mask, invalidation_reason
-                    )
-                except (OSError, DeviceStateStoreError) as exc:
-                    log_session(
-                        "MULTITURN",
-                        f"calibration anchor invalidation failed: {exc}",
-                    )
-                    return (
-                        False,
-                        f"hardware reset completed but JSON invalidation failed: {exc}",
-                        completed,
-                        requested_mask & ~completed,
-                    )
-                if status == 2 and failed_mask == 0 and missing == 0:
-                    return (
-                        True,
-                        f"reset {completed.bit_count()} selected motor turn counter(s)",
-                        completed,
-                        0,
-                    )
-                failed = failed_mask | missing
-                return (
-                    False,
-                    "some selected motors failed calibration turn-reset",
-                    completed,
-                    failed,
-                )
-            time.sleep(0.02)
-
+        if not self.comm or cancelled():
+            return failure("serial not connected or calibration turn-reset cancelled")
+        if not self._servo_rebase_zero_call_lock.acquire(blocking=False):
+            return failure("another servo coordinate transaction is waiting")
         try:
-            self._invalidate_multiturn_anchor_mask(
-                requested_mask, invalidation_reason
-            )
-        except (OSError, DeviceStateStoreError) as exc:
-            log_session("MULTITURN", f"calibration anchor invalidation failed: {exc}")
-        return (
-            False,
-            "calibration turn-reset ACK received, but result timed out",
-            0,
-            requested_mask,
-        )
+            state = self._coordinate_state()
+            device_id = self.servo_abs_zero_device_id(state)
+            if not device_id:
+                return failure("valid P4 device identity unavailable for calibration turn-reset")
+            comm = self.comm
+            connection = self._servo_abs_zero_connection_generation
+            cancel_generation = self._coordinate_cancel_generation
 
-    def manual_prepare_all_motors(self, *, cancelled=lambda: False, motion_gate=lambda action: action()) -> ManualPrepareResult:
-        """冻结当前在线且路由可控的电机集合，归零并放绳 1500 counts。
+            def same_session():
+                return (self.comm is comm
+                        and self._servo_abs_zero_connection_generation == connection
+                        and self.servo_abs_zero_device_id(self._coordinate_state()) == device_id)
+
+            def changed():
+                return (cancelled() or self._coordinate_cancel_generation != cancel_generation
+                        or not same_session())
+
+            self._service_servo_turn_zero_result(state)
+            if (self._servo_turn_zero_unresolved_mask or self._servo_rebase_zero_unresolved_mask
+                    or self._servo_rebase_zero_capture_mask or self._multiturn_pending_restore_mask):
+                return failure("previous servo coordinate transaction is awaiting its result/new feedback")
+            if not state.has_servo_reset_zero_status:
+                return failure("P4 firmware does not report calibration turn-reset status")
+            if not self._coordinate_safe_state(state, mask):
+                return failure("calibration turn-reset requires fresh stopped status and online selected motors")
+            if state.servo_reset_zero_status == 1:
+                return failure("another calibration turn-reset is running")
+
+            reset_sent_at = time.time()
+
+            def reset_once():
+                with self._coordinate_command_lock:
+                    if changed():
+                        return False
+                    return self.reset()
+
+            if not motion_gate(reset_once):
+                return failure("calibration turn-reset cancelled before maintenance RESET")
+            reset_ack = comm.wait_for_ack(
+                CMD_RESET, CALIBRATION_TURN_RESET_ACK_TIMEOUT_S, received_after=reset_sent_at,
+            )
+            if (changed() or reset_ack is None or int(reset_ack[0]) != CMD_RESET
+                    or float(reset_ack[3]) < reset_sent_at
+                    or int(reset_ack[2]) not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
+                return failure("maintenance RESET timeout/reject or cancelled")
+            deadline = time.monotonic() + CALIBRATION_TURN_RESET_SETTLE_S
+            while time.monotonic() < deadline:
+                if changed():
+                    return failure("calibration turn-reset cancelled after maintenance RESET")
+                time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+
+            for attempt in range(1, SERVO_COORDINATE_MAX_ATTEMPTS + 1):
+                pending = mask & ~success
+                state = self._coordinate_state()
+                if changed() or not self._coordinate_safe_state(state, pending):
+                    return failure("calibration turn-reset cancelled or stopped status/selected routes changed")
+                sent_at = time.time()
+                baseline_token = state.servo_reset_zero_result_token
+
+                def send():
+                    with self._coordinate_command_lock:
+                        if changed() or not self._coordinate_safe_state(self._coordinate_state(), pending):
+                            return False
+                        return comm.send_command(("servo_reset_zero", pending))
+
+                with self._multiturn_io_lock:
+                    with self._multiturn_anchor_capture_lock:
+                        previous_blocked = self._multiturn_anchor_capture_blocked_mask
+                        previous_capture = self._multiturn_anchor_capture_pending_mask
+                    self._block_multiturn_anchor_capture(pending)
+                    self._servo_turn_zero_unresolved_mask = pending
+                    self._servo_turn_zero_baseline_token = baseline_token
+                    self._servo_turn_zero_sent_at = sent_at
+                    self._servo_turn_zero_device_id = device_id
+                    self._servo_turn_zero_connection = connection
+                    self._servo_turn_zero_comm = comm
+                    self._servo_turn_zero_reason = invalidation_reason
+
+                def restore_unaccepted():
+                    with self._multiturn_io_lock, self._multiturn_anchor_capture_lock:
+                        self._servo_turn_zero_unresolved_mask = 0
+                        self._multiturn_anchor_capture_blocked_mask = (
+                            self._multiturn_anchor_capture_blocked_mask & ~pending
+                        ) | (previous_blocked & pending)
+                        self._multiturn_anchor_capture_pending_mask |= previous_capture & pending
+
+                if not motion_gate(send):
+                    restore_unaccepted()
+                    return failure("calibration turn-reset cancelled or command queue rejected")
+                log_session("MULTITURN", f"servo_reset_zero attempt={attempt}/3 mask=0x{pending:08X}")
+                ack = comm.wait_for_ack(
+                    CMD_SERVO_RESET_ZERO, SERVO_RESET_ZERO_ACK_TIMEOUT_S, received_after=sent_at,
+                )
+                matches = lambda s: (same_session()
+                    and self._servo_turn_zero_result_matches(s, baseline_token, sent_at, pending))
+                status = self._coordinate_ack_status(ack, CMD_SERVO_RESET_ZERO, sent_at)
+                if (same_session() and not matches(self._coordinate_state())
+                        and status is not None and status not in (PROTO_ACK_STATUS_OK, PROTO_ACK_STATUS_QUEUED)):
+                    restore_unaccepted()
+                    if changed():
+                        return failure("calibration turn-reset cancelled; hardware write was not accepted")
+                    if attempt == SERVO_COORDINATE_MAX_ATTEMPTS:
+                        return failure(f"calibration turn-reset rejected after 3 attempts (status={status}); hardware write not accepted")
+                    continue
+                result = self._wait_coordinate_result(
+                    matches, changed, SERVO_RESET_ZERO_RESULT_TIMEOUT_S, query_first=status is None,
+                )
+                if result is None:
+                    if same_session():
+                        self._invalidate_coordinate_anchors(
+                            pending, invalidation_reason, self._coordinate_state(),
+                        )
+                    return failure("calibration turn-reset result timed out or cancelled; original transaction unresolved")
+                success |= result.servo_reset_zero_success_mask & pending
+                self._service_servo_turn_zero_result(result)
+                if changed():
+                    return failure("calibration turn-reset cancelled; completed motor coordinates retained")
+                if success == mask:
+                    return True, f"reset {success.bit_count()} selected motor turn counter(s)", success, 0
+            return failure(f"calibration turn-reset failed after 3 attempts: {self._format_motor_mask(mask & ~success)}")
+        except (OSError, DeviceStateStoreError, CalibrationSnapshotError) as exc:
+            return failure(f"calibration turn-reset anchor invalidation failed: {exc}")
+        finally:
+            self._servo_rebase_zero_call_lock.release()
+
+    def manual_prepare_all_motors(self, *, motor_mask=None, cancelled=lambda: False, motion_gate=lambda action: action()) -> ManualPrepareResult:
+        """冻结指定的电机集合，归零并放绳 1500 counts。
 
         该维护事务允许从 Turn Unknown 状态开始，但不会放宽普通直控门禁：
         只有全部硬件 Reset Zero 成功、P4 已清除 Unknown 且反馈重新对齐后，
         才会临时申请该集合直控并发送放绳目标。任何部分失败都停止后续运动。
         """
-        requested_mask = (1 << MOTOR_COUNT) - 1
+        all_motors = (1 << MOTOR_COUNT) - 1
+        if motor_mask is not None and (type(motor_mask) is not int or motor_mask <= 0 or motor_mask & ~all_motors):
+            return ManualPrepareResult(False, 'Invalid selected tendon motor scope', 0, 0, 0, 0)
+        requested_mask = all_motors if motor_mask is None else motor_mask
         empty = ManualPrepareResult(False, "", 0, requested_mask, 0, 0)
         if cancelled():
             return empty._replace(message='Release Rope cancelled')
@@ -2048,6 +2484,9 @@ class HandController:
             return empty._replace(
                 message=f"Manual Prepare requires a stopped state; current={system_state}"
             )
+        if motor_mask is not None and requested_mask & ~(online_mask & route_mask):
+            missing = requested_mask & ~(online_mask & route_mask)
+            return empty._replace(message=f'Selected tendon motors are offline or unroutable: 0x{missing:08X}')
         requested_mask &= online_mask & route_mask
         selected = [i for i in range(MOTOR_COUNT) if requested_mask & (1 << i)]
         if not selected or not has_routes or not has_abs:
@@ -2058,6 +2497,7 @@ class HandController:
             self.prepare_calibration_turn_zero(
                 requested_mask,
                 invalidation_reason="manual_prepare",
+                cancelled=cancelled, motion_gate=motion_gate,
             )
         )
         invalidated_joint_mask = joint_mask_for_motor_mask(reset_mask)
@@ -2484,10 +2924,13 @@ class HandController:
 
     def stop(self):
         """停止：暂停时也可发送，便于紧急停"""
-        self._cancel_host_calibration()
-        self._host_calibration_overlay = {}
-        if self.comm:
-            self.comm.send_command("stop")
+        with self._coordinate_command_lock:
+            self._coordinate_cancel_generation += 1
+            self._multiturn_restore_cancelled = True
+            self._cancel_host_calibration()
+            self._host_calibration_overlay = {}
+            if self.comm:
+                self.comm.send_command("stop")
         with self.state_lock:
             if getattr(self.current_state, "calib_status", None) in ("PENDING", "RUNNING"):
                 self.current_state.calib_status = "IDLE"
@@ -2498,9 +2941,12 @@ class HandController:
         """发送重置指令；暂停时不发送"""
         self._cancel_host_calibration()
         self._host_calibration_overlay = {}
-        if self.comm:
-            self.comm.send_command("reset")
+        with self._coordinate_command_lock:
+            sent = bool(self.comm and self.comm.send_command("reset"))
+            if sent:
+                self._multiturn_restore_cancelled = False
         self._started = False
+        return sent
 
 
     def is_started(self) -> bool:

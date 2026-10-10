@@ -1,4 +1,4 @@
-"""Local target drafts and explicit Send actions; backend authorization remains intact.
+"""Local target drafts; slider release and Send use backend authorization.
 
 职责：展示快照并提交后端操作。
 线程：NiceGUI 页面事件循环。
@@ -8,7 +8,7 @@
 禁止依赖：禁止直接操作协议、串口和控制器。
 """
 from nicegui import ui
-from .common import FINGERS, finger_cards, selection, target_editor, label, show
+from .common import FINGERS, finger_cards, selection, target_editor, label, show, quality
 
 def build(hand, act):
     drafts, refreshers, syncing = {}, [], [False]
@@ -31,13 +31,17 @@ def build(hand, act):
                     with ui.column().classes('joint-row w-full gap-1'):
                         with ui.row().classes('items-center'):
                             refreshers.append(selection(hand, 'selected_joints', [j], f'J{j:02d}'))
+                            control = quality()
                             feedback = label()
-                        drafts[j], number, slider = target_editor(max(row['min'], min(row['max'], row['target'])), row['min'], row['max'])
+                        drafts[j], number, slider = target_editor(
+                            max(row['min'], min(row['max'], row['target'])), row['min'], row['max'],
+                            on_commit=lambda value, j=j: act(lambda: hand.request_targets({j: value})))
                         with ui.row().classes('items-center'):
                             limits = label()
                             ui.button('Send', on_click=lambda j=j: act(lambda: hand.request_targets({j: drafts[j]['value']}))).props('dense outline')
-                    def refresh(snapshot, j=j, feedback=feedback, limits=limits):
+                    def refresh(snapshot, j=j, feedback=feedback, limits=limits, control=control):
                         row = snapshot['joints'][j]
+                        control([row['feedback_control_status']], 'P4-confirmed feedback control state for this joint.')
                         control_abs = ' / '.join(show(snapshot['motors'][m]['abs']) for m in row['motors'])
                         feedback.set_text(f"Enc: {row['encoder']}   Current: {show(row['angle'], '°')}   ROS2 Target: {show(row['ros_target'], '°')}\nRaw: {show(row['raw'])}   Control ABS: {control_abs}")
                         limits.set_text(f"Min: {show(row['min'], '°')}   Max: {show(row['max'], '°')}")

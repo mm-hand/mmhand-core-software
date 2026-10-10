@@ -54,7 +54,7 @@ uint32_t collectTurnOverflowMask()
             continue;
         }
 
-        // 这里只检查舵机本次上电会话的 hardware ABS；logicalOffset 不参与判断。
+        // 业务反馈与舵机使用相同 ABS，越界时立即关闭力矩。
         const int32_t hardwareAbs =
             driver->getHardwareAbsolutePosition(id);
         if (hardwareAbs < kServoResetZeroTriggerMin ||

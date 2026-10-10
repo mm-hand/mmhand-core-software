@@ -85,6 +85,28 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
         if (rejectedMask) *rejectedMask = motorMask;
         return false;
     }
+    // 旧 JSON 的 savedRaw 可能不在当前 ABS 坐标系。置数已生效但应答丢失时，
+    // 主机按旧 raw 重算的下一次 ABS 会漂移；有限续接必须保持首次写入目标。
+    struct PendingHardwareSync {
+        FeetechServoDriver* driver = nullptr;
+        int32_t absolutePosition = 0;
+        uint32_t trustedTimestampMs = 0;
+        uint32_t onlineSessionGeneration = 0;
+        uint8_t servoId = 0;
+        uint8_t failedRequests = 0;
+        bool active = false;
+        bool blocked = false;
+    };
+    static PendingHardwareSync pending[SERVO_TOTAL_NUM];
+    static SystemRuntimeContext* pendingOwner = nullptr;
+    constexpr uint8_t kMaxFailedSyncRequests = 3;
+    if (pendingOwner != sharedData) {
+        pendingOwner = sharedData;
+        for (auto& item : pending) item = PendingHardwareSync{};
+    }
+    // 保留既有调用接口；主机坐标同步始终以 0x0B 改写实际 ABS，
+    // 不再依据本次 P4 会话是否清过圈数而仅修改 RAM 坐标。
+    (void)resetZeroMask;
     const uint32_t requestMask = motorMask & validMotorChannelMask();
     for (uint8_t channel = 0; channel < SERVO_TOTAL_NUM; ++channel) {
         const uint32_t bit = 1UL << channel;
@@ -92,28 +114,81 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
         ServoRoute route;
         FeetechServoDriver* driver =
             resolveMotorDriver(channel, &route, true);
-        uint8_t attempts = 0;
-        int16_t resetRaw = 0;
-        const bool resetHardware = (resetZeroMask & bit) != 0;
-        const bool restoredOk = driver &&
-            (resetHardware
-                 ? driver->resetTurnCounterAndRestoreLogical(
-                       route.servoId,
-                       motorAbs[channel],
-                       &resetRaw,
-                       &attempts)
-                 : (driver->isMultiTurnConfigured(route.servoId) &&
-                    driver->restoreAbsolutePosition(route.servoId,
-                                                    motorAbs[channel])));
-        if (!restoredOk) {
+        PendingHardwareSync& retry = pending[channel];
+        if (retry.active) {
+            if (!driver || driver != retry.driver || route.servoId != retry.servoId) {
+                retry.blocked = true;
+            } else {
+                const ServoFeedbackInternal& fb = driver->getFeedback(route.servoId);
+                if (driver->isAbsoluteReliable(route.servoId) ||
+                    fb.offlineLastTrustedTimestampMs != retry.trustedTimestampMs) {
+                    // 同一舵机已经建立新的可信坐标（例如显式 F0），旧事务结束。
+                    retry = PendingHardwareSync{};
+                } else if (!driver->isOnline(route.servoId) ||
+                           fb.onlineSessionGeneration != retry.onlineSessionGeneration ||
+                           driver->hasOnlineTransitionPending(route.servoId)) {
+                    retry.blocked = true;
+                }
+            }
+        }
+        if (motorAbs[channel] < kServoHardwareCommandMin ||
+            motorAbs[channel] > kServoHardwareCommandMax) {
             rejected |= bit;
             FW_LOG_WARN_PRINTF(
-                "[SERVO SESSION REBASE] M%02u reset=%u attempts=%u result=failed\r\n",
+                "[SERVO SESSION REBASE] M%02u requested_abs=%ld result=failed reason=abs-range\r\n",
+                (unsigned)channel, (long)motorAbs[channel]);
+            continue;
+        }
+        if (retry.active && (retry.blocked ||
+                             retry.failedRequests >= kMaxFailedSyncRequests)) {
+            // 无法确认还是同一次坐标改写时保持 Unknown，禁止使用漂移后的请求值。
+            rejected |= bit;
+            FW_LOG_WARN_PRINTF(
+                "[SERVO SESSION REBASE] M%02u requested_abs=%ld pending_abs=%ld result=failed reason=unresolved-sync\r\n",
+                (unsigned)channel, (long)motorAbs[channel],
+                (long)retry.absolutePosition);
+            continue;
+        }
+        const int32_t targetAbs = retry.active
+            ? retry.absolutePosition : motorAbs[channel];
+        uint8_t attempts = 0;
+        int16_t calibratedRaw = 0;
+        bool correctionAttempted = false;
+        const uint32_t sessionGeneration = driver
+            ? driver->getFeedback(route.servoId).onlineSessionGeneration : 0;
+        const uint32_t trustedTimestamp = driver
+            ? driver->getFeedback(route.servoId).offlineLastTrustedTimestampMs : 0;
+        const bool restoredOk = driver &&
+            driver->calibrateHardwareAbsolutePosition(
+                route.servoId, targetAbs, &calibratedRaw, &attempts,
+                &correctionAttempted);
+        if (!restoredOk) {
+            if (correctionAttempted) {
+                if (!retry.active) {
+                    retry.driver = driver;
+                    retry.servoId = route.servoId;
+                    retry.absolutePosition = targetAbs;
+                    retry.trustedTimestampMs = trustedTimestamp;
+                    retry.onlineSessionGeneration = sessionGeneration;
+                    retry.active = true;
+                }
+                if (!driver->isOnline(route.servoId) ||
+                    driver->getFeedback(route.servoId).onlineSessionGeneration !=
+                        sessionGeneration) {
+                    retry.blocked = true;
+                }
+                ++retry.failedRequests;
+            }
+            rejected |= bit;
+            FW_LOG_WARN_PRINTF(
+                "[SERVO SESSION REBASE] M%02u instruction=0x0B requested_abs=%ld target_abs=%ld attempts=%u result=failed\r\n",
                 (unsigned)channel,
-                resetHardware ? 1U : 0U,
+                (long)motorAbs[channel],
+                (long)targetAbs,
                 (unsigned)attempts);
             continue;
         }
+        retry = PendingHardwareSync{};
         if (clearRecoveryTransaction) {
             driver->finishRecoveryAttempt(
                 route.servoId, true,
@@ -121,17 +196,16 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
         }
         restored |= bit;
         FW_LOG_INFO_PRINTF(
-            "[SERVO SESSION REBASE] M%02u bus=%u id=%u reset=%u attempts=%u "
-            "raw=%d hardware=%ld logical=%ld offset=%ld result=success\r\n",
+            "[SERVO SESSION REBASE] M%02u bus=%u id=%u instruction=0x0B requested_abs=%ld target_abs=%ld attempts=%u "
+            "raw=%d abs=%ld result=success\r\n",
             (unsigned)channel,
             (unsigned)route.busIndex,
             (unsigned)route.servoId,
-            resetHardware ? 1U : 0U,
+            (long)motorAbs[channel],
+            (long)targetAbs,
             (unsigned)attempts,
             (int)driver->getRawPosition(route.servoId),
-            (long)driver->getHardwareAbsolutePosition(route.servoId),
-            (long)driver->getAbsolutePosition(route.servoId),
-            (long)driver->getLogicalOffset(route.servoId));
+            (long)driver->getAbsolutePosition(route.servoId));
     }
     if (restored != 0) {
         sharedAtomicFetchAnd(&sharedData->multi_turn_unknown_bitmap,
@@ -140,7 +214,7 @@ bool restoreServoMultiTurnFromHost(SystemRuntimeContext* sharedData,
     if (restoredMask) *restoredMask = restored;
     if (rejectedMask) *rejectedMask = rejected;
     FW_LOG_INFO_PRINTF(
-        "[SERVO RESTORE] request=0x%08lX restored=0x%08lX rejected=0x%08lX unknown=0x%08lX mode=nearest-circle\r\n",
+        "[SERVO RESTORE] request=0x%08lX restored=0x%08lX rejected=0x%08lX unknown=0x%08lX mode=hardware-abs\r\n",
         (unsigned long)requestMask,
         (unsigned long)restored,
         (unsigned long)rejected,

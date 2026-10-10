@@ -433,8 +433,7 @@ bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-// 上报每台舵机独立的动态逻辑行程。单台舵机掉电重建 offset 后，只有
-// 对应 Mxx 的 min/max 会变化，其他26路保持原值。
+// 上报实际 ABS 的硬件行程；每台舵机的范围有效性仍随在线及可信状态变化。
 bool sendServoLogicalRangePacket(SystemRuntimeContext* sharedData)
 {
     if (!sharedData) {
@@ -813,11 +812,9 @@ bool sendDirectTargetResultPacket(uint32_t token,
 
 bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
                                      uint32_t successMask,
-                                     uint32_t failedMask,
-                                     const int32_t offsets[SERVO_TOTAL_NUM])
+                                     uint32_t failedMask)
 {
-    if (!offsets) return false;
-    // FE + length + type + token/masks + 27 offset + timestamp + FF。
+    // FE + length + type + token/masks + 原帧保留区 + timestamp + FF。
     uint8_t buffer[4U + 12U + 4U * SERVO_TOTAL_NUM + kP4TimestampBytes];
     static_assert(sizeof(buffer) - 2U <= UINT8_MAX,
                   "Rebase result must fit the one-byte frame length");
@@ -828,9 +825,9 @@ bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
     appendU32BigEndian(buffer, &idx, resultToken);
     appendU32BigEndian(buffer, &idx, successMask);
     appendU32BigEndian(buffer, &idx, failedMask);
-    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
-        appendI32BigEndian(buffer, &idx, offsets[motor]);
-    }
+    constexpr size_t kReservedBytes = 4U * SERVO_TOTAL_NUM;
+    memset(buffer + idx, 0, kReservedBytes);
+    idx += kReservedBytes;
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = static_cast<uint8_t>(idx - 2U);

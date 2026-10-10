@@ -9,7 +9,7 @@
 """
 import json
 from nicegui import ui
-from .common import label, table, set_rows
+from .common import label, table, set_rows, quality_name
 
 def build(hand, act):
     with ui.row().classes('page-toolbar'):
@@ -32,7 +32,8 @@ def build(hand, act):
     def refresh(snapshot):
         diag = snapshot['diagnostics']
         headline.set_text(f"Motors: {sum(m['online'] is True for m in snapshot['motors'])}/27   Encoders: {sum(j['encoder'] == 'ONLINE' for j in snapshot['joints'])}/21   Owner: {diag['owner']}   Status age: {diag['status_age_ms']}ms")
-        set_rows(issues, snapshot['issues']); set_rows(operations, snapshot['operations'])
+        set_rows(issues, [dict(issue, problem=quality_name(issue['problem'])) for issue in snapshot['issues']])
+        set_rows(operations, snapshot['operations'])
         for title, value in [('Task Runtime', diag['tasks']), ('Routes', diag['routes']), ('Fingerprint', diag['fingerprint']), ('Raw Snapshot', diag)]:
             text = json.dumps(value, indent=2, default=str)
             if codes[title].content != text:

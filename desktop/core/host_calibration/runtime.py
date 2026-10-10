@@ -446,7 +446,15 @@ class HostCalibrationIO:
         return False
 
     def _rebase_and_wait(self, mask, window):
-        result = self.controller.rebase_servo_abs_zero(mask)
+        def submit(callback):
+            # controller 的命令锁与 STOP 串行；等待最终结果不持该锁。
+            if self.is_cancelled() or not self.owns_control():
+                return False
+            return callback()
+
+        result = self.controller.rebase_servo_abs_zero(
+            mask, cancelled=self.is_cancelled, send_gate=submit,
+        )
         self._clear_result_scope(mask)
         if not result.ok:
             self.feedback_recovery_error = result.message
@@ -458,7 +466,7 @@ class HostCalibrationIO:
         requested_at = time.time()
         self.controller.request_state_sync()
         accepted_anchor_ms = None
-        # 新 offset 的 ABS/raw 和 logical range 都必须来自这次结果之后。
+        # 新坐标的 ABS/raw 和硬件行程都必须来自这次结果之后。
         def rebased_feedback():
             nonlocal accepted_anchor_ms
             state = self._state()
@@ -586,15 +594,12 @@ class HostCalibrationIO:
         selected = self.selected_joint_mask | sum(
             1 << joint for joint in {MOTOR_TO_JOINT_INDEX[m]
                 for m in range(MOTOR_COUNT) if self.selected_motor_mask & (1 << m)})
-        targets = [j for j in range(16) if selected & (1 << j)]
-        if not targets:
+        if not any(selected & (1 << joint) for joint in WORKSPACE_DUAL_JOINTS):
             return True
         state = self._state()
         for joint in WORKSPACE_DUAL_JOINTS:
             if selected & (1 << joint):
                 continue
-            if all(j // 4 * 4 == joint for j in targets):
-                continue  # 不让位目标手指自己的侧摆。
             pair = sum(1 << motor for motor in joint_motors(joint))
             if state.servo_route_conflict_bitmap & pair:
                 self.feedback_recovery_error = f'J{joint:02d} helper motor route conflict; check IDs and bus connections'

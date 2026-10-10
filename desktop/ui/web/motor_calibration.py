@@ -30,7 +30,9 @@ def build(hand, act, load_calibration):
                     def refresh(snapshot, j=j, badge=badge, motors=motors, info=info):
                         row, result = snapshot['joints'][j], snapshot['joints'][j]['result']
                         offset, shortfall = result.get('autoMinOffsetCounts'), result.get('autoMaxShortfallCounts')
-                        hint = 'Transaction failed. See System Log and Operation History for the actual reason.' if 'FAILED' in row['motor_quality'] else f"Return offset: {show(offset)} (warning ≥350); travel shortfall: {show(shortfall)} (warning ≥300) counts. Possible causes: weak spring return, tendon friction, preload or mechanical resistance; forces are not measured."
+                        causes = ('tendon friction, preload or mechanical resistance' if len(row['motors']) == 2
+                                  else 'weak spring return, tendon friction, preload or mechanical resistance')
+                        hint = 'Transaction failed. See System Log and Operation History for the actual reason.' if 'FAILED' in row['motor_quality'] else f"Return offset: {show(offset)} (warning ≥350); travel shortfall: {show(shortfall)} (warning ≥300) counts. Possible causes: {causes}; forces are not measured."
                         badge(row['motor_quality'], hint)
                         set_rows(motors, [dict(m, motor=f"M{m['motor']:02d}") for m in snapshot['motors'] if m['joint'] == j])
                         limits = ' / '.join(f"M{m['motor']:02d}: {show(m['limits'])}" for m in snapshot['motors'] if m['joint'] == j)

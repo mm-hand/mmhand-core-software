@@ -22,15 +22,19 @@ from uuid import uuid4
 
 from desktop.paths import RUN_DATA_DIR
 from .angle_mapping import get_spec
-from .calibration_diagnostics import format_calibration_diagnostic, format_calibration_warning
+from .calibration_diagnostics import (
+    format_calibration_diagnostic, format_calibration_warning, format_calibration_batch_summary,
+)
 from .data_recording.recorder import DataSessionRecorder
 from .host_calibration.config import default_encoder_direction, joint_motors, shorten_sign
 from .session_log import log_session, session_log_since
 from .console_snapshot import enrich_snapshot, motor_quality
 from .protocol import (
-    ControlMode, ENCODER_COUNT, MOTOR_COUNT, SYSTEM_STATE_UNCONTROLLABLE,
+    ControlMode, ENCODER_COUNT, MOTOR_COUNT, DUAL_TENDON_JOINT_INDICES, SYSTEM_STATE_UNCONTROLLABLE,
     SYSTEM_STATE_IDLE, SYSTEM_STATE_READY, SYSTEM_STATE_RUN_DIRECT,
     SYSTEM_STATE_RUN_FEEDBACK, SYSTEM_STATE_ROPE_INIT_RUNNING,
+    SYSTEM_STATE_RECOVERY_REQUIRED,
+    STATE_SYNC_ALL,
 )
 
 
@@ -64,6 +68,7 @@ class ApplicationActions:
         self._application_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mmhand-operation')
         self._application_epoch = 0
         self._application_busy = None
+        self._application_connect = None
         self._application_operations = deque(maxlen=64)
         self._manual_drafts = {}
         self._manual_saved_pairs = {}
@@ -85,6 +90,7 @@ class ApplicationActions:
         self._estop_requested_at = 0.0
         self._direct_sequence = 0
         self._selected_motors = (0,)
+        self._displayed_motor_abs_zero_generations = [0] * MOTOR_COUNT
         self._save_data = True
         self._record_full_tactile = False
         self._recording_started_at = 0.0
@@ -196,6 +202,26 @@ class ApplicationActions:
                     'targets': list(state.target_angles),
                 })
 
+    def _application_observe_identity(self, device_id):
+        with self._application_lock:
+            connection = self._application_connect
+            initial_identity = (connection is not None
+                                and connection['operation_id'] == self._application_busy
+                                and connection['epoch'] == self._application_epoch
+                                and not connection['device_id'])
+            if initial_identity and device_id:
+                # The first identity belongs to this Connect, even on a reconnect.
+                connection['device_id'] = device_id
+            if device_id == self._last_reported_device_id:
+                return False
+            self._last_reported_device_id = device_id
+            if not initial_identity:
+                self._application_epoch += 1
+            self._manual_drafts.clear()
+            self._manual_saved_pairs.clear()
+            self._import_previews.clear()
+            return True
+
     def _finish_application_operation(self, operation_id, ok, message, *, phase=None):
         with self._application_lock:
             for item in self._application_operations:
@@ -208,8 +234,11 @@ class ApplicationActions:
             self._recorder.event('operation_result', source='APP', detail=f'{operation_id}: {message}')
             if self._application_busy == operation_id:
                 self._application_busy = None
+            if (self._application_connect is not None
+                    and self._application_connect['operation_id'] == operation_id):
+                self._application_connect = None
 
-    def submit_operation(self, name, action, *, requires_device=True, cleanup=False, scope='Global'):
+    def submit_operation(self, name, action, *, requires_device=True, cleanup=False, scope='Global', p4_connection=False):
         with self._application_lock:
             if self._application_closed:
                 return OperationResult(False, None, 'Application is shutting down')
@@ -220,6 +249,8 @@ class ApplicationActions:
             operation_id = uuid4().hex[:12]
             epoch = self._application_epoch
             self._application_busy = operation_id
+            if p4_connection:
+                self._application_connect = {'operation_id': operation_id, 'epoch': epoch, 'device_id': ''}
             self._application_operations.append({'operation_id': operation_id, 'name': name,
                                                  'time': time.strftime('%H:%M:%S'), 'scope': scope,
                                                  'status': 'PENDING', 'message': 'Accepted', 'phase': 'queued'})
@@ -234,8 +265,16 @@ class ApplicationActions:
                             if item['operation_id'] == operation_id:
                                 item.update(status='RUNNING', phase='running')
                     ok, message = action(epoch)
-                    if epoch != self._application_epoch:
-                        ok, message = False, 'Operation cancelled. A device write may have completed; check the readback.'
+                    with self._application_lock:
+                        cancelled = epoch != self._application_epoch
+                        if cancelled:
+                            ok, message = False, 'Operation cancelled. A device write may have completed; check the readback.'
+                        if not (cancelled and p4_connection):
+                            self._finish_application_operation(operation_id, ok, message)
+                            return
+                    # Join controller callbacks outside the application lock;
+                    # cancellations during saved-state loading also close P4.
+                    self.disconnect(stop_lower=True)
                     self._finish_application_operation(operation_id, ok, message)
                 except Exception as exc:
                     self._finish_application_operation(operation_id, False, f'{name} failed: {exc}')
@@ -275,8 +314,6 @@ class ApplicationActions:
             if epoch != self._application_epoch:
                 if tactile:
                     self.disconnect_tactile_serial()
-                else:
-                    self.disconnect(stop_lower=True)
                 return False, 'Connection cancelled'
             if not tactile:
                 saved_pairs = {}
@@ -295,7 +332,8 @@ class ApplicationActions:
                     self._manual_saved_pairs = saved_pairs
             return bool(ok), 'S3 connected' if ok and tactile else 'P4 connected; waiting for valid status' if ok else 'Connection failed. Check the device and port availability.'
 
-        return self.submit_operation('Connect S3' if tactile else 'Connect P4', connect, requires_device=False)
+        return self.submit_operation('Connect S3' if tactile else 'Connect P4', connect,
+                                     requires_device=False, p4_connection=not tactile)
 
     def request_disconnect(self, *, tactile=False):
         self.stop_motion()
@@ -335,6 +373,12 @@ class ApplicationActions:
         joints = self._selected_joints
 
         def enable(epoch):
+            state = self.get_state_snapshot()
+            if (state.control_enabled or state.servo_target_owner
+                    or state.system_state not in (SYSTEM_STATE_UNCONTROLLABLE,
+                                                  SYSTEM_STATE_IDLE, SYSTEM_STATE_READY,
+                                                  SYSTEM_STATE_RECOVERY_REQUIRED)):
+                return False, 'Stop active motion before preparing joint control'
             mask = sum(1 << j for j in joints)
             motors = sum(1 << m for j in joints for m in joint_motors(j))
             if not mask or not self.set_active_scope(motors, mask, True):
@@ -342,10 +386,25 @@ class ApplicationActions:
             with self._application_lock:
                 if epoch != self._application_epoch:
                     return False, 'Enable cancelled'
+                self.invalidate_direct_commands()
+                self.set_control_mode(ControlMode.JOINT_ANGLE)
                 started = time.time()
                 self.start()
-            ok = self._wait_application(lambda s: s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
-                                        and s.control_enabled and s.system_status_last_rx_ts > started, epoch, 5)
+            # START prepares a stopped P4. Motion ownership is granted only
+            # when the paired joint target and RUN_FEEDBACK are submitted.
+            ok = self._wait_application(
+                lambda s: self.is_comm_connected() and s.protocol_compatible
+                and s.has_system_status_data
+                and s.system_state in (SYSTEM_STATE_IDLE, SYSTEM_STATE_READY)
+                and not s.control_enabled and not s.servo_target_owner
+                and s.control_mode == ControlMode.JOINT_ANGLE.value
+                and s.has_active_scope_status
+                and s.active_motor_mask == motors and s.active_joint_mask == mask
+                and s.require_can_feedback
+                and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
+                and s.system_status_last_rx_ts > started,
+                epoch, 5,
+            )
             return ok, 'P4 preparation confirmed. Check device state and calibration before proceeding.' if ok else 'Enable was not confirmed. Check the P4 rejection reason.'
 
         return self.submit_operation('Enable', enable)
@@ -561,16 +620,47 @@ class ApplicationActions:
                     if event.joint_mask & (1 << j):
                         self._motor_transactions[j] = 'SAVED' if event.ok else 'FAILED'
                         result = state.joint_calib_results[j] or {}
-                        labels = motor_quality(bool(state.auto_calibration_valid_bitmap & (1 << j)), result) if event.ok else ['FAILED']
-                        log_session('CALIB', f"J{j:02d} completed: {' / '.join(labels)}; return offset={result.get('autoMinOffsetCounts', 'unknown')} (≥350); travel shortfall={result.get('autoMaxShortfallCounts', 'unknown')} (≥300) counts. Possible causes: spring return, tendon friction or preload; force is not measured.")
+                        labels = motor_quality(bool(state.auto_calibration_valid_bitmap & (1 << j)), result, joint=j) if event.ok else ['FAILED']
+                        causes = ('tendon friction, preload or mechanical resistance' if j in DUAL_TENDON_JOINT_INDICES
+                                  else 'weak spring return, tendon friction, preload or mechanical resistance')
+                        log_session('CALIB', f"J{j:02d} completed: {' / '.join(labels)}; return offset={result.get('autoMinOffsetCounts', 'unknown')} (≥350); travel shortfall={result.get('autoMaxShortfallCounts', 'unknown')} (≥300) counts. Possible causes: {causes}; force is not measured.")
             if event.phase == 'calibration_complete' and not event.ok:
                 failed = event.details.get('failed_joint_mask', 0) or (event.joint_mask & ~event.details.get('completed_joint_mask', 0))
                 for j in range(ENCODER_COUNT):
                     if failed & (1 << j):
                         self._motor_transactions[j] = 'FAILED'
             if event.phase == 'calibration_complete':
+                records = [record for record in (event.details.get('records') or [])
+                           if isinstance(record, dict)]
+                terminal = event.details.get('terminal_status', event.phase)
+                summary = format_calibration_batch_summary(records)
+                failed_mask = int(event.details.get('failed_joint_mask', 0) or 0)
+                for record in records:
+                    if record.get('status') == 'FAILED':
+                        failed_mask |= int(record.get('joint_mask', 0) or 0)
+                failed = (not event.ok or bool(failed_mask)
+                          or terminal in ('FAILED', 'HOST_FAILED', 'HOST_ERROR'))
+                warned = (terminal == 'WARN' or summary['active']
+                          or any(record.get('status') == 'WARN' for record in records))
+                if failed or warned:
+                    if failed and not failed_mask and not event.ok:
+                        failed_mask = event.joint_mask & ~int(event.details.get('completed_joint_mask', 0) or 0)
+                    messages = [event.message]
+                    joints = [f'J{j:02d}' for j in range(ENCODER_COUNT) if failed_mask & (1 << j)]
+                    if joints:
+                        messages.append('Failed joints: ' + ', '.join(joints))
+                    if summary['active']:
+                        messages.append(summary['message'])
+                    elif warned:
+                        messages.append('Calibration ended with warnings. Check Motor Calibration and Diagnostics for details.')
+                    alert = dict(title='Motor Calibration Failed' if failed else 'Motor Calibration Completed with Warnings',
+                                 message='\n\n'.join(message for message in messages if message),
+                                 severity='negative' if failed else 'warning')
+                    for item in self._application_operations:
+                        if item['operation_id'] == operation_id:
+                            item['calibration_alert'] = alert
                 self._finish_application_operation(operation_id, event.ok, event.message,
-                                                   phase=event.details.get('terminal_status', event.phase))
+                                                   phase=terminal)
                 self._calibration_operation_id = None
             else:
                 for item in self._application_operations:
@@ -611,6 +701,116 @@ class ApplicationActions:
             return ok, message
         return self.submit_operation('Enable Direct Control', enable)
 
+    def request_direct_zero(self, motors=None):
+        """以点击时的电机范围归零；只有真实反馈和 JSON 保存后刷新草稿。"""
+        try:
+            with self._application_lock:
+                chosen = tuple(sorted(set(self._selected_motors if motors is None else motors)))
+            if not chosen or any(type(m) is not int or m not in range(MOTOR_COUNT) for m in chosen):
+                raise ValueError('Select valid motors to set ABS zero')
+        except (TypeError, ValueError) as exc:
+            return OperationResult(False, None, str(exc))
+        mask = sum(1 << m for m in chosen)
+
+        def zero(epoch):
+            def transaction(manual_cancelled):
+                cancelled = lambda: manual_cancelled() or epoch != self._application_epoch
+
+                def submit(callback):
+                    # 只锁入队过程；ACK、反馈和文件等待不阻塞 STOP。
+                    with self._application_lock:
+                        if cancelled():
+                            return False
+                        return self._submit_manual_motion(callback)
+
+                state = self.get_state_snapshot()
+                operation_device_id = self._controller.servo_abs_zero_device_id(state)
+                if (cancelled() or not self._fresh_application_state()
+                        or not operation_device_id
+                        or not state.has_servo_route_status
+                        or state.servo_route_scan_state == 1
+                        or mask & ~state.servo_online_bitmap
+                        or mask & ~state.servo_route_controllable_bitmap
+                        or mask & state.servo_route_conflict_bitmap):
+                    return False, 'ABS zero requires fresh status and online, unambiguous selected motors'
+
+                def stop_outputs():
+                    self._controller.invalidate_direct_commands()
+                    self._controller.stop()
+                    return True
+
+                stopped_at = time.time()
+                if not submit(stop_outputs):
+                    return False, 'ABS zero cancelled before stopping'
+                stopped = self._wait_application(
+                    lambda s: self.is_comm_connected() and not cancelled()
+                    and 0 <= time.time() - s.system_status_last_rx_ts <= 0.6
+                    and s.system_status_last_rx_ts >= stopped_at
+                    and not s.control_enabled and not s.servo_target_owner
+                    and s.system_state in (SYSTEM_STATE_UNCONTROLLABLE, SYSTEM_STATE_IDLE,
+                                           SYSTEM_STATE_READY, SYSTEM_STATE_RECOVERY_REQUIRED),
+                    epoch,
+                )
+                if not stopped or cancelled():
+                    return False, 'P4 stop/owner release was not confirmed; ABS zero was not sent'
+                if self._controller.servo_abs_zero_device_id(self.get_state_snapshot()) != operation_device_id:
+                    return False, 'P4 device identity changed; ABS zero was not sent'
+
+                result = self._controller.zero_direct_motor_abs(
+                    mask, cancelled=cancelled, send_gate=submit
+                )
+                if result.result_token or self._controller._servo_rebase_zero_unresolved_mask:
+                    from .motor_mapping import MOTOR_TO_JOINT_INDEX
+                    with self._application_lock:
+                        for m in chosen:
+                            self._motor_transactions[MOTOR_TO_JOINT_INDEX[m]] = 'PENDING'
+                success = result.success_motor_mask & mask
+                if not success:
+                    return False, result.message
+                self.request_state_sync(STATE_SYNC_ALL)
+                confirmed = 0
+
+                def saved_feedback(state):
+                    nonlocal confirmed
+                    delta = (state.servo_feedback_p4_time_ms
+                             - state.servo_rebase_zero_result_p4_time_ms) & 0xffffffff
+                    if (cancelled() or not self._fresh_application_state()
+                            or self._controller.servo_abs_zero_device_id(state) != operation_device_id
+                            or not state.has_servo_angle_data or not state.has_servo_raw_data
+                            or state.servo_rebase_zero_result_token != result.result_token
+                            or state.servo_feedback_p4_time_ms != state.servo_raw_p4_time_ms
+                            or not 0 < delta < 0x80000000
+                            or not 0 <= time.time() - state.servo_abs_last_rx_ts <= 0.6
+                            or not state.has_servo_route_status):
+                        return False
+                    for motor in chosen:
+                        bit = 1 << motor
+                        if (not success & bit or confirmed & bit
+                                or not state.servo_online_bitmap & bit
+                                or not state.servo_route_controllable_bitmap & bit
+                                or state.multi_turn_unknown_bitmap & bit
+                                or not state.servo_raw_online[motor]
+                                or not self._controller.servo_abs_zero_anchor_saved(bit)):
+                            continue
+                        if cancelled():
+                            return False
+                        confirmed |= bit
+                    return confirmed == success
+
+                saved = self._wait_application(saved_feedback, epoch, 3.0)
+                if not saved:
+                    return False, 'ABS zero may have completed; new trusted feedback/JSON save is unconfirmed. No automatic retry.'
+                if not result.ok:
+                    return False, f'ABS zero partly completed (saved mask=0x{confirmed:08X}); {result.message}'
+                return True, 'Selected motor ABS zero confirmed in P4, servo feedback and saved desktop coordinates'
+
+            return self._run_manual_transaction(
+                transaction, (False, 'Another device transaction is active')
+            )
+
+        return self.submit_operation('Set Motor ABS Zero', zero,
+                                     scope=' / '.join(f'M{m:02d}' for m in chosen))
+
     def request_pause(self):
         with self._application_lock:
             self._application_epoch += 1
@@ -630,17 +830,22 @@ class ApplicationActions:
         return self.submit_operation('Tighten Half Turn' if tighten else 'Release Half Turn', step)
 
     def request_release_rope(self):
+        joints = self._selected_joints
+        motor_mask = sum(1 << m for j in joints for m in joint_motors(j))
+        if not motor_mask:
+            return OperationResult(False, None, 'Select joints before releasing their tendons')
         def release(epoch):
             state = self.get_state_snapshot()
             if state.control_enabled or state.servo_target_owner or epoch != self._application_epoch:
-                return False, 'Stop motion before releasing rope'
-            result = self.manual_prepare_all_motors()
+                return False, 'Stop motion before releasing selected tendons'
+            result = self.manual_prepare_all_motors(motor_mask=motor_mask)
             with self._application_lock:
                 for j in range(ENCODER_COUNT):
                     if result.invalidated_joint_mask & (1 << j):
                         self._motor_transactions[j] = 'PENDING'
             return bool(result.ok), result.message
-        return self.submit_operation('Release Rope', release)
+        return self.submit_operation('Release Selected Tendons', release,
+                                     scope=' / '.join(f'J{j:02d}' for j in joints))
 
     def clear_calibration_preview(self):
         with self._application_lock:
@@ -706,12 +911,21 @@ class ApplicationActions:
         if state.servo_route_conflict_bitmap & mask or state.servo_route_controllable_bitmap & mask != mask:
             return False, 'Selected motor route is unavailable or conflicting'
         for m, target in targets.items():
-            if (not state.servo_logical_range_valid_bitmap & (1 << m)
-                    or not state.servo_online_bitmap & (1 << m)
-                    or state.multi_turn_unknown_bitmap & (1 << m)
-                    or not state.servo_logical_range_min[m] <= target <= state.servo_logical_range_max[m]
-                    or state.servo_load[m] & 0x3ff >= 800):
-                return False, f'M{m:02d} position is unknown, offline, overloaded or outside limits. Check Diagnostics.'
+            bit = 1 << m
+            if not state.servo_logical_range_valid_bitmap & bit:
+                return False, f'M{m:02d} logical ABS range is unavailable. Request state sync or reconnect.'
+            if not state.servo_online_bitmap & bit:
+                return False, f'M{m:02d} is offline. Check Diagnostics.'
+            if state.multi_turn_unknown_bitmap & bit:
+                return False, f'M{m:02d} multi-turn ABS is unknown. Use the controlled recovery or calibration procedure.'
+            lo, hi = state.servo_logical_range_min[m], state.servo_logical_range_max[m]
+            if not lo <= target <= hi:
+                return False, f'M{m:02d} target {target} is outside logical ABS limits [{lo}, {hi}].'
+            # P4 telemetry already encodes load as a signed value. Masking a
+            # negative value would turn a light reverse load into an overload.
+            load = abs(int(state.servo_load[m]))
+            if load >= 800:
+                return False, f'M{m:02d} load magnitude {load} is at or above the direct-control limit 800. Check Diagnostics.'
             if state.motor_abs_limit_valid_bitmap & (1 << m) and not state.motor_abs_limit_min[m] <= target <= state.motor_abs_limit_max[m]:
                 return False, f'M{m:02d} target exceeds calibrated limits'
         from .motor_mapping import MOTOR_TO_JOINT_INDEX
@@ -824,7 +1038,14 @@ class ApplicationActions:
         self._recording_thread.start()
 
     def application_snapshot(self, *, include_curves=True):
+        # io 锁只能在应用锁外取得；代次可能先于 current_state 新帧发布。
+        (zero_generations, zero_feedback_ms, zero_device_ids,
+         zero_connections, connection_generation) = self._controller.get_servo_abs_zero_generation_state()
         state = self.get_state_snapshot()
+        connection_unchanged = (self._controller.get_servo_abs_zero_generation_state()[-1]
+                                == connection_generation)
+        device_id = self._controller.servo_abs_zero_device_id(state)
+        p4_received_at = state.host_rx_time
         self.consume_tactile_state_into(state)
         now = time.time()
         fresh = (self.is_comm_connected() and state.has_system_status_data and
@@ -863,6 +1084,22 @@ class ApplicationActions:
         if warning.get('ready'):
             problems.append(warning.get('body', warning.get('message', 'Assembly warning detected. Check calibration details.')))
         with self._application_lock:
+            for motor in range(MOTOR_COUNT):
+                bit = 1 << motor
+                delta = (state.servo_feedback_p4_time_ms - zero_feedback_ms[motor]) & 0xffffffff
+                if (zero_generations[motor] > self._displayed_motor_abs_zero_generations[motor]
+                        and connection_unchanged
+                        and device_id and zero_device_ids[motor] == device_id
+                        and zero_connections[motor] == connection_generation
+                        and fresh and state.has_servo_angle_data and state.has_servo_raw_data
+                        and state.servo_feedback_p4_time_ms == state.servo_raw_p4_time_ms
+                        and delta < 0x80000000
+                        and 0 <= now - state.servo_abs_last_rx_ts <= 0.6
+                        and state.servo_online_bitmap & bit
+                        and state.servo_route_controllable_bitmap & bit
+                        and not state.multi_turn_unknown_bitmap & bit
+                        and state.servo_raw_online[motor]):
+                    self._displayed_motor_abs_zero_generations[motor] = zero_generations[motor]
             busy = bool(self._application_busy or host_active)
             ros_reason = self._ros_reason if not self._ros_available else ('P4 is not ready' if not fresh or not self.is_started() else
                          'Device protection fault is active' if state.system_fault_bitmap else
@@ -888,7 +1125,8 @@ class ApplicationActions:
                 'message': self._last_operation_message, 'busy': busy, 'selected_joints': list(self._selected_joints),
                 'devices': [asdict(d) for d in self._devices], 'discovery_error': self._discovery_error,
                 'operations': deepcopy(list(self._application_operations)), 'joints': joints,
-                'motors': [{'motor': m, 'abs': state.servo_angles[m] if fresh and state.has_servo_angle_data and state.servo_online[m] and 0 <= now - state.servo_abs_last_rx_ts <= 0.6 else None,
+                'motors': [{'motor': m, 'abs_zero_generation': self._displayed_motor_abs_zero_generations[m],
+                            'abs': state.servo_angles[m] if fresh and state.has_servo_angle_data and state.servo_online[m] and 0 <= now - state.servo_abs_last_rx_ts <= 0.6 else None,
                             'online': state.servo_online[m] if fresh else None,
                             'current': state.servo_current[m] if fresh and state.servo_telem_online[m] and 0 <= now - state.servo_telem_last_rx_ts <= 0.6 else None,
                             'load': state.servo_load[m] if fresh and state.servo_telem_online[m] and 0 <= now - state.servo_telem_last_rx_ts <= 0.6 else None,
@@ -901,6 +1139,7 @@ class ApplicationActions:
                 'calibration': {'status': state.calib_status, 'results': deepcopy(state.joint_calib_results),
                                 'warning': warning, 'diagnostic': format_calibration_diagnostic(state)},
                 'diagnostics': {'state': state.system_state, 'owner': state.servo_target_owner, 'faults': state.system_fault_bitmap,
+                                'receive_age_ms': int((now - p4_received_at) * 1000) if p4_received_at and now >= p4_received_at else None,
                                 'status_age_ms': int((now - state.system_status_last_rx_ts) * 1000) if state.system_status_last_rx_ts else None,
                                 'tasks': deepcopy(state.task_runtime), 'safety_events': deepcopy(state.safety_event_history),
                                 'fingerprint': deepcopy(state.product_fingerprint)},

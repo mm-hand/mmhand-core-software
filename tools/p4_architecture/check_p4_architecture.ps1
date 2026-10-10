@@ -317,7 +317,9 @@ if (-not (Select-String -LiteralPath $servoServicePath `
     Add-Failure "Servo execution path bypasses ActuatorSafetyPolicy::evaluateCommand."
 }
 if (-not (Select-String -LiteralPath $driverHeaderPath `
-        -SimpleMatch "logicalToHardwareTarget" -Quiet)) {
+        -SimpleMatch "validateAbsoluteTarget" -Quiet) -or
+    -not (Select-String -LiteralPath $driverHeaderPath `
+        -SimpleMatch "servoHardwareCommandFromAbs" -Quiet)) {
     Add-Failure "Feetech driver lost final hardware range guard."
 }
 

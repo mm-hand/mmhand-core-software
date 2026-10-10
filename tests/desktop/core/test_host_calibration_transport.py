@@ -86,7 +86,9 @@ def test_protocol_has_one_direct_entry_and_no_host_calibration_motion_protocol()
     commands = {item["name"]: item for item in schema["commands"]}
     assert commands["CMD_MOTOR_POS_ABS"]["payload_bytes"] == 119
     assert commands["CMD_MOTOR_DIRECT_RELEASE"]["payload_bytes"] == 4
-    assert all(item["value"] != 0xF1 for item in schema["commands"])
+    assert commands["CMD_MOTOR_ABS_ZERO"]["value"] == 0xF1
+    assert commands["CMD_MOTOR_ABS_ZERO"]["payload_bytes"] == 4
+    assert commands["CMD_MOTOR_ABS_ZERO"]["requires_handshake"] is True
     assert not any("HOST_CALIBRATION" in item["name"] for item in schema["commands"] + schema["packets"])
     assert not hasattr(protocol, "build_host_calibration_targets_cmd")
     assert not hasattr(protocol, "build_host_calibration_release_cmd")
@@ -115,9 +117,10 @@ def test_retired_session_drops_motion_but_keeps_rebase_and_result_queries():
     comm.tx_queue.put_nowait(target)
     comm.tx_queue.put_nowait(('motor_direct_release', 12))
     comm.tx_queue.put_nowait(('servo_rebase_zero', 1))
+    comm.tx_queue.put_nowait(('motor_abs_zero', 1 << 9))
     comm.tx_queue.put_nowait(('state_sync', 64))
     assert comm.invalidate_pending_direct_commands() == 2
-    assert list(comm.tx_queue.queue) == [('servo_rebase_zero', 1), ('state_sync', 64)]
+    assert list(comm.tx_queue.queue) == [('servo_rebase_zero', 1), ('motor_abs_zero', 1 << 9), ('state_sync', 64)]
 
 
 def test_result_requires_whole_batch_applied_or_rejected():

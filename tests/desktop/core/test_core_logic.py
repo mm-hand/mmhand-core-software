@@ -15,6 +15,7 @@ from desktop.core.core_logic import HandController
 from desktop.core.data_models import HandModel
 from desktop.core.device_state_store import MultiTurnRuntimeStore
 from desktop.core.protocol import (
+    CMD_ACTIVE_SCOPE,
     CMD_CALIBRATE,
     CMD_CALIB_LOAD_JOINT,
     CMD_CALIB_LOAD_LIMITS,
@@ -31,6 +32,7 @@ from desktop.core.protocol import (
     PROTO_ACK_STATUS_OK,
     SYSTEM_STATE_IDLE,
     SYSTEM_STATE_RUN_FEEDBACK,
+    SYSTEM_STATE_RUN_DIRECT,
 )
 
 
@@ -544,6 +546,14 @@ def test_host_multiturn_restore_uses_nearest_circle_for_each_motor(tmp_path):
     )
 
     state = controller.current_state
+    state.has_system_status_data = state.has_p4_time = True
+    state.system_state = SYSTEM_STATE_IDLE
+    state.system_status_last_rx_ts = core_logic.time.time()
+    state.has_product_fingerprint = True
+    state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+    state.has_multiturn_restore_result = True
+    state.has_servo_angle_data = True
+    state.servo_abs_last_rx_ts = core_logic.time.time()
     state.multi_turn_unknown_bitmap = (1 << 0) | (1 << 1)
     state.servo_online_bitmap = (1 << 0) | (1 << 1)
     state.has_servo_route_status = True
@@ -578,6 +588,7 @@ class TestPrepareCalibrationTurnZero:
         "product_fingerprint": {"schema_version": 2},
             "calibration_snapshot_sha256": "abc",
         }
+        controller._multiturn_identity = lambda _state: identity
         controller._multiturn_store_payload = controller._multiturn_store.save(
             identity=identity,
             valid_motor_mask=(1 << 2) | (1 << 3),
@@ -586,22 +597,31 @@ class TestPrepareCalibrationTurnZero:
             p4_time_ms=10,
         )
         state = controller.current_state
+        state.has_product_fingerprint = True
+        state.product_fingerprint = {"device_id": "0000123456789ABC", "protocol_version": 2}
+        state.has_system_status_data = state.has_servo_route_status = True
+        state.system_state = SYSTEM_STATE_IDLE
+        state.system_status_last_rx_ts = core_logic.time.time()
+        state.servo_route_controllable_bitmap = (1 << 2) | (1 << 3)
         state.has_servo_reset_zero_status = True
         state.servo_online_bitmap = (1 << 2) | (1 << 3)
         state.servo_reset_zero_status = 0
         state.servo_reset_zero_result_token = 5
+        state.servo_reset_zero_request_token = 5
         monkeypatch.setattr(core_logic.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(core_logic, "CALIBRATION_TURN_RESET_SETTLE_S", 0)
 
         def wait_for_ack(cmd, _timeout, received_after=None):
-            del received_after
             if cmd == CMD_RESET:
-                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, 0.5)
+                return (cmd, 0, PROTO_ACK_STATUS_QUEUED, received_after)
             if cmd == CMD_SERVO_RESET_ZERO:
                 state.servo_reset_zero_result_token = 6
+                state.servo_reset_zero_request_token = 6
+                state.system_status_last_rx_ts = core_logic.time.time()
                 state.servo_reset_zero_status = 2
                 state.servo_reset_zero_success_mask = 1 << 2
                 state.servo_reset_zero_failed_mask = 0
-                return (cmd, 1, PROTO_ACK_STATUS_OK, 1.0)
+                return (cmd, 1, PROTO_ACK_STATUS_OK, received_after)
             return None
 
         controller.comm.wait_for_ack.side_effect = wait_for_ack
@@ -637,9 +657,9 @@ class TestPrepareCalibrationTurnZero:
 
         assert result.ok is False
         assert "reset rejected" in result.message
-        controller.prepare_calibration_turn_zero.assert_called_once_with(
-            all_motors & ~(1 << 24), invalidation_reason="manual_prepare"
-        )
+        controller.prepare_calibration_turn_zero.assert_called_once()
+        assert controller.prepare_calibration_turn_zero.call_args.args == (all_motors & ~(1 << 24),)
+        assert controller.prepare_calibration_turn_zero.call_args.kwargs["invalidation_reason"] == "manual_prepare"
 
 
 
@@ -828,3 +848,93 @@ def test_device_change_clears_manual_drafts_and_calibration_transaction():
     assert backend._manual_drafts == {}
     assert backend._calibration_workflow._operation == ""
     assert not backend.ros2_output_armed()
+
+
+class TestActiveDirectScopeReuse:
+    """Repeated Direct targets reuse only the live P4-confirmed scope."""
+
+    @staticmethod
+    def _controller(monkeypatch):
+        controller = HandController()
+        controller.comm = MagicMock()
+        controller.comm.wait_for_ack.return_value = (
+            CMD_ACTIVE_SCOPE, SYSTEM_STATE_RUN_DIRECT, 1, 100.1
+        )
+        state = controller.current_state
+        state.has_system_status_data = True
+        state.has_active_scope_status = True
+        state.system_status_last_rx_ts = 99.8
+        state.system_state = SYSTEM_STATE_RUN_DIRECT
+        state.control_enabled = True
+        state.servo_target_owner = 1
+        state.control_mode = ControlMode.DIRECT_MOTOR.value
+        state.active_motor_mask = 1 << 11
+        state.active_joint_mask = 1 << 8
+        state.require_can_feedback = False
+        monkeypatch.setattr(core_logic.time, "time", lambda: 100.0)
+        return controller
+
+    def test_same_running_direct_scope_does_not_send_d7(self, monkeypatch):
+        controller = self._controller(monkeypatch)
+
+        assert controller.set_active_scope(1 << 11, 1 << 8, False)
+
+        controller.comm.send_command.assert_not_called()
+        controller.comm.wait_for_ack.assert_not_called()
+
+    @pytest.mark.parametrize("changes,requested", [
+        ({}, (1 << 10, 1 << 8, False)),
+        ({}, (1 << 11, 1 << 9, False)),
+        ({"require_can_feedback": True}, (1 << 11, 1 << 8, True)),
+        ({"require_can_feedback": True}, (1 << 11, 1 << 8, False)),
+        ({"system_state": SYSTEM_STATE_RUN_FEEDBACK}, (1 << 11, 1 << 8, False)),
+        ({"servo_target_owner": 0}, (1 << 11, 1 << 8, False)),
+        ({"servo_target_owner": 2}, (1 << 11, 1 << 8, False)),
+        ({"control_mode": ControlMode.JOINT_ANGLE.value}, (1 << 11, 1 << 8, False)),
+        ({"control_enabled": False}, (1 << 11, 1 << 8, False)),
+        ({"has_system_status_data": False}, (1 << 11, 1 << 8, False)),
+        ({"has_active_scope_status": False}, (1 << 11, 1 << 8, False)),
+        ({"system_status_last_rx_ts": 99.0}, (1 << 11, 1 << 8, False)),
+        ({"system_status_last_rx_ts": 101.0}, (1 << 11, 1 << 8, False)),
+        ({"active_motor_mask": 0}, (0, 1 << 8, False)),
+        ({"active_motor_mask": 1 << MOTOR_COUNT}, (1 << MOTOR_COUNT, 1 << 8, False)),
+        ({"active_joint_mask": 1 << ENCODER_COUNT}, (1 << 11, 1 << ENCODER_COUNT, False)),
+    ])
+    def test_unconfirmed_or_changed_scope_uses_p4_gate(
+        self, monkeypatch, changes, requested
+    ):
+        controller = self._controller(monkeypatch)
+        for field, value in changes.items():
+            setattr(controller.current_state, field, value)
+
+        assert not controller.set_active_scope(*requested)
+
+        controller.comm.send_command.assert_called_once_with(
+            ("active_scope", *requested)
+        )
+        controller.comm.wait_for_ack.assert_called_once_with(
+            CMD_ACTIVE_SCOPE,
+            core_logic.ACTIVE_SCOPE_ACK_TIMEOUT_S,
+            received_after=100.0,
+        )
+
+    @pytest.mark.parametrize("ack,expected", [
+        ((CMD_ACTIVE_SCOPE, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_OK, 100.1), True),
+        ((CMD_ACTIVE_SCOPE, SYSTEM_STATE_IDLE, 1, 100.1), False),
+        (None, False),
+    ])
+    def test_matching_idle_scope_still_waits_for_ack(
+        self, monkeypatch, ack, expected
+    ):
+        controller = self._controller(monkeypatch)
+        controller.current_state.system_state = SYSTEM_STATE_IDLE
+        controller.current_state.control_enabled = False
+        controller.current_state.servo_target_owner = 0
+        controller.comm.wait_for_ack.return_value = ack
+
+        assert controller.set_active_scope(1 << 11, 1 << 8, False) is expected
+
+        controller.comm.send_command.assert_called_once_with(
+            ("active_scope", 1 << 11, 1 << 8, False)
+        )
+        controller.comm.wait_for_ack.assert_called_once()

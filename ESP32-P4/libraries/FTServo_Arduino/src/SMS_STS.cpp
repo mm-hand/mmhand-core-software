@@ -136,6 +136,19 @@ int SMS_STS::CalibrationOfs(u8 ID)
 	return writeByte(ID, SMS_STS_TORQUE_ENABLE, 128);
 }
 
+int SMS_STS::CalibratePosition(u8 ID, s16 Position)
+{
+	if(Position == -32768){
+		u8Status = 0;
+		u8Error = ERR_BUFF_LEN;
+		return 0;
+	}
+	// Follow ReadPos/WritePosEx's position convention, not two's complement.
+	const u16 encoded = Position < 0
+		? (u16)((u16)(-Position) | (1U << 15)) : (u16)Position;
+	return Recal(ID, encoded);
+}
+
 int SMS_STS::FeedBack(int ID)
 {
 	int nLen = Read(ID, SMS_STS_PRESENT_POSITION_L, Mem, sizeof(Mem));
