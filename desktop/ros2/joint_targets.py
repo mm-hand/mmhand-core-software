@@ -109,6 +109,7 @@ class Ros2JointTargetBridge:
         )
         self._thread: Optional[threading.Thread] = None
         self._node = None
+        self._executor = None
         self._rclpy = None
         self._shutdown_rclpy = False
         self._started = False
@@ -118,6 +119,7 @@ class Ros2JointTargetBridge:
             return
         try:
             import rclpy
+            from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from std_msgs.msg import Float32MultiArray
         except Exception as exc:  # pragma: no cover - environment dependent
@@ -146,6 +148,10 @@ class Ros2JointTargetBridge:
 
         self._rclpy = rclpy
         self._node = _JointTargetNode()
+        # rclpy.spin() 复用进程级全局 executor，两个桥同时 spin 会触发
+        # "Executor is already spinning"；每个桥持有独立 executor。
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
         self._thread = threading.Thread(target=self._spin, name="mmhand-ros2-joint-targets", daemon=True)
         self._started = True
         self._thread.start()
@@ -156,6 +162,12 @@ class Ros2JointTargetBridge:
             return
         rclpy = self._rclpy
         node = self._node
+        executor = self._executor
+        if executor is not None:
+            try:
+                executor.shutdown(timeout_sec=1.0)
+            except Exception:
+                pass
         if node is not None:
             try:
                 node.destroy_node()
@@ -171,13 +183,14 @@ class Ros2JointTargetBridge:
             self._thread.join(timeout=2.0)
         self._thread = None
         self._node = None
+        self._executor = None
         self._rclpy = None
         self._started = False
         self._shutdown_rclpy = False
 
     def _spin(self) -> None:
         try:
-            self._rclpy.spin(self._node)
+            self._executor.spin()
         except Exception as exc:
             self._warn(f"ROS2 joint target subscriber stopped: {exc}")
 

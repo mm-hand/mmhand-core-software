@@ -1,7 +1,9 @@
 # MM-Hand NiceGUI UI
 
 Launch with `python -m desktop --no-ros2`, then open `http://127.0.0.1:8080`.
-Omit `--no-ros2` when the ROS2 environment is available.
+If port 8080 is occupied, the app automatically serves on the next free port
+and prints the chosen port. Omit `--no-ros2` when the ROS2 environment is
+available.
 
 `browser_view.py` builds the fixed connection bar, status bar, eight tabs, import
 dialog and System Log. `web/` has one ordinary build/refresh module per page,

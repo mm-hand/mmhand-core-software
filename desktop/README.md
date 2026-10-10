@@ -7,7 +7,8 @@ python -m pip install -r desktop/requirements.txt
 python -m desktop --no-ros2
 ```
 
-浏览器地址 `http://127.0.0.1:8080`，只监听本机。启用 ROS2 时先加载可导入
+浏览器地址 `http://127.0.0.1:8080`（端口被占用时自动顺延到下一个可用端口并在
+终端打印实际端口），只监听本机。启用 ROS2 时先加载可导入
 rclpy/std_msgs 的环境，再运行 `python -m desktop`。只有 Web GUI 可以管理连接、
 ENABLE、授权与停止。没有 CLI、独立 ROS2 控制入口或自动运动启动参数。
 
