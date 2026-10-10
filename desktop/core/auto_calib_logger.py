@@ -15,7 +15,6 @@ from typing import Optional
 from desktop.paths import LOG_DIR
 
 AUTO_CALIB_LOG_DIR = os.path.join(str(LOG_DIR), "auto_calib")
-AUTO_CALIB_LOG_KEEP_FILES = 20
 
 
 class AutoCalibLogger:
@@ -34,7 +33,6 @@ class AutoCalibLogger:
             self._close_no_lock()
             self._port = str(port or self._port or "").strip()
             os.makedirs(AUTO_CALIB_LOG_DIR, exist_ok=True)
-            self._prune_old_logs()
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             suffix = self._safe_port_suffix(self._port)
             name = f"auto_calib_{stamp}{suffix}.log"
@@ -56,7 +54,6 @@ class AutoCalibLogger:
         with self._lock:
             path = self._path
             self._close_no_lock()
-            self._prune_old_logs()
             return path or None
 
     def _write_no_lock(self, source: str, message: str) -> None:
@@ -87,19 +84,3 @@ class AutoCalibLogger:
     def _safe_port_suffix(port: str) -> str:
         text = "".join(ch if ch.isalnum() else "_" for ch in str(port or "").strip())
         return f"_{text}" if text else ""
-
-    @staticmethod
-    def _prune_old_logs() -> None:
-        if not os.path.isdir(AUTO_CALIB_LOG_DIR):
-            return
-        paths = [
-            os.path.join(AUTO_CALIB_LOG_DIR, name)
-            for name in os.listdir(AUTO_CALIB_LOG_DIR)
-            if name.startswith("auto_calib_") and name.lower().endswith(".log")
-        ]
-        paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-        for path in paths[AUTO_CALIB_LOG_KEEP_FILES:]:
-            try:
-                os.remove(path)
-            except OSError:
-                pass

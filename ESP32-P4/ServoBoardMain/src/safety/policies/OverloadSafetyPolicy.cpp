@@ -21,7 +21,7 @@ uint32_t overloadActiveMotorMask(SystemRuntimeContext* runtime,
     }
     const uint32_t validMask = validMotorChannelMask();
     if (command.controlMode == CONTROL_MODE_DIRECT_MOTOR) {
-        return sharedAtomicLoad(&runtime->active_motor_mask) & validMask;
+        return command.directMotorMask & validMask;
     }
 
     uint32_t motorMask = 0;

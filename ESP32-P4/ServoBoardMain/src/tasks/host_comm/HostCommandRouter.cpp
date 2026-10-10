@@ -14,6 +14,7 @@
 #include "../../platform/rtos/SharedSafetyState.h"
 #include "../../platform/log/FirmwareLog.h"
 #include "../../runtime/ports/SystemEventPort.h"
+#include "../../runtime/ports/DirectTargetResult.h"
 
 // RUN_DIRECT 被状态机接受前，直控目标只存在 pending 邮箱中。
 // 若事件入队失败，仅撤销同 generation 的目标，避免误删随后到达的新命令。
@@ -32,6 +33,8 @@ static void cancelStagedDirectCommand(SystemRuntimeContext* sharedData,
 
     if (sharedData->pending_direct_valid != 0 &&
         sharedData->pending_direct_generation == generation) {
+        rejectOutstandingDirectTarget(sharedData);
+        sharedData->pending_direct_token = 0;
         sharedData->pending_direct_valid = 0;
         sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->pending_direct_motor_mask = 0;
@@ -73,6 +76,8 @@ bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
         for (uint8_t i = 0; i < count; i++) {
             sharedData->targetAngles[i] = angles[i];
         }
+        rejectOutstandingDirectTarget(sharedData);
+        sharedData->direct_release_generation = 0;
         sharedData->control_mode = CONTROL_MODE_JOINT;
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->feedback_command_joint_mask = appliedMask;
@@ -104,41 +109,63 @@ bool upperApplyTargetAngles(SystemRuntimeContext* sharedData,
     return upperApplyTargetAnglesMasked(sharedData, angles, count, activeMask);
 }
 
-// 暂存整组舵机逻辑 ABS，generation 保证状态机只提升最新一帧直控命令。
+// 所有直控使用同一暂存、准入和执行路径；token 只关联可选的总线回执。
 bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
                             const int32_t* targets,
-                            uint8_t count)
+                            uint8_t count,
+                            uint32_t token,
+                            uint32_t requestedMotorMask,
+                            uint16_t speed,
+                            uint8_t acc)
 {
-    if (!sharedData || !targets) {
-        return false;
-    }
-    if (count > SERVO_TOTAL_NUM) {
-        count = SERVO_TOTAL_NUM;
-    }
+    if (!sharedData || !targets || count == 0 || count > SERVO_TOTAL_NUM) return false;
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+    const uint32_t activeMask =
+        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+    const uint32_t mask = requestedMotorMask & validMotorChannelMask();
+    const bool rejected = requestedMotorMask != mask || mask == 0 ||
+        (mask & ~activeMask) != 0 ||
+        sharedData->direct_release_generation != 0 ||
+        (token != 0 && token == sharedData->direct_target_request_token) ||
+        sharedData->servo_rebase_zero_request_token !=
+            sharedData->servo_rebase_zero_result_token ||
+        sharedData->restore_multi_turn_request_token !=
+            sharedData->restore_multi_turn_result_token ||
+        sharedData->servo_reset_zero_request_token !=
+            sharedData->servo_reset_zero_result_token;
+    if (rejected) {
+        if (lock) xSemaphoreGive(lock);
         return false;
     }
-    memcpy(sharedData->pendingMotorTargetRaw,
-           sharedData->motorTargetRaw,
+
+    rejectOutstandingDirectTarget(sharedData);
+    memcpy(sharedData->pendingMotorTargetRaw, sharedData->motorTargetRaw,
            sizeof(sharedData->pendingMotorTargetRaw));
-    for (uint8_t i = 0; i < count; i++) {
-        sharedData->pendingMotorTargetRaw[i] = targets[i];
+    for (uint8_t i = 0; i < count; ++i) {
+        if ((mask & (1UL << i)) != 0) sharedData->pendingMotorTargetRaw[i] = targets[i];
     }
-    const uint32_t generation = sharedData->pending_direct_generation + 1U;
+    uint32_t generation = sharedData->pending_direct_generation + 1U;
+    if (generation == 0) generation = 1;
     sharedData->pending_direct_generation = generation;
     sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
-    sharedData->pending_direct_motor_mask =
-        sharedAtomicLoad(&sharedData->active_motor_mask) & validMotorChannelMask();
+    sharedData->pending_direct_motor_mask = mask;
     sharedData->pending_direct_joint_mask =
         sharedAtomicLoad(&sharedData->active_joint_mask) &
         ((1UL << ENCODER_TOTAL_NUM) - 1UL);
     sharedData->pending_direct_require_can = 0;
+    sharedData->pending_direct_token = token;
+    sharedData->pending_direct_speed = speed;
+    sharedData->pending_direct_acc = acc;
+    {
+        SharedSafetyGuard guard;
+        sharedData->direct_target_request_generation = generation;
+        sharedData->direct_target_request_token = token;
+        sharedData->direct_target_request_mask = mask;
+    }
     sharedData->pending_direct_valid = 1;
     sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
-    if (lock) {
-        xSemaphoreGive(lock);
-    }
+    if (lock) xSemaphoreGive(lock);
     if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
         cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
         return false;
@@ -150,45 +177,58 @@ bool upperApplySingleMotorTarget(SystemRuntimeContext* sharedData,
                                  uint8_t motorIndex,
                                  int32_t target)
 {
-    if (!sharedData || motorIndex >= SERVO_TOTAL_NUM) {
-        return false;
-    }
-    const uint32_t motorMask = (1UL << motorIndex) & validMotorChannelMask();
-    if (motorMask == 0) {
-        return false;
-    }
+    if (!sharedData || motorIndex >= SERVO_TOTAL_NUM) return false;
+    int32_t targets[SERVO_TOTAL_NUM] = {};
+    targets[motorIndex] = target;
+    return upperApplyMotorTargets(sharedData, targets, SERVO_TOTAL_NUM, 0,
+        1UL << motorIndex, SERVO_TARGET_SPEED_DEFAULT, SERVO_TARGET_ACC_DEFAULT);
+}
+
+bool upperReleaseMotorDirect(SystemRuntimeContext* sharedData, uint32_t token)
+{
+    if (!sharedData) return false;
     SemaphoreHandle_t lock = sharedData->commandStateMutex;
-    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return false;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+    const uint32_t generation = sharedData->applied_direct_generation;
+    const bool tokenMatches = token == 0 ||
+        (token == sharedData->applied_direct_token &&
+         sharedData->direct_target_result_generation == generation &&
+         sharedData->direct_target_result_token == token &&
+         sharedData->direct_target_status == DIRECT_TARGET_APPLY_APPLIED);
+    const uint8_t currentState = sharedAtomicLoad(&sharedData->system_state);
+    const bool alreadyCompleted = generation != 0 && tokenMatches &&
+        (currentState == SYSTEM_STATE_IDLE || currentState == SYSTEM_STATE_READY ||
+         currentState == SYSTEM_STATE_RECOVERY_REQUIRED) &&
+        sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_NONE &&
+        sharedAtomicLoad(&sharedData->control_enabled) == 0 &&
+        sharedAtomicLoad(&sharedData->emergency_stop_latched) == 0 &&
+        sharedData->pending_direct_valid == 0 &&
+        sharedData->applied_direct_motor_mask != 0 &&
+        sharedData->direct_target_result_generation == generation &&
+        sharedData->direct_target_status == DIRECT_TARGET_APPLY_APPLIED;
+    if (alreadyCompleted) {
+        if (lock) xSemaphoreGive(lock);
+        return true;
     }
-    if (sharedData->pending_direct_valid != 0) {
-        // 保留尚未提升的最新整组直控修改，避免单电机编辑覆盖同帧其他通道。
-    } else {
-        memcpy(sharedData->pendingMotorTargetRaw,
-               sharedData->motorTargetRaw,
-               sizeof(sharedData->pendingMotorTargetRaw));
+    const bool accepted = generation != 0 && tokenMatches &&
+        sharedAtomicLoad(&sharedData->system_state) == SYSTEM_STATE_RUN_DIRECT &&
+        sharedAtomicLoad(&sharedData->servo_target_owner) == SERVO_TARGET_OWNER_CONTROL &&
+        sharedData->motor_direct_command_source == MOTOR_DIRECT_SOURCE_ABSOLUTE &&
+        sharedData->pending_direct_valid == 0 &&
+        sharedData->direct_release_generation == 0;
+    if (accepted) sharedData->direct_release_generation = generation;
+    if (lock) xSemaphoreGive(lock);
+    if (!accepted) return false;
+    if (postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT_DONE, generation)) {
+        return true;
     }
-    sharedData->pendingMotorTargetRaw[motorIndex] = target;
-    const uint32_t generation = sharedData->pending_direct_generation + 1U;
-    sharedData->pending_direct_generation = generation;
-    sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
-    sharedData->pending_direct_motor_mask = motorMask;
-    sharedData->pending_direct_joint_mask = 0;
-    sharedData->pending_direct_require_can = 0;
-    sharedData->pending_direct_valid = 1;
-    sharedData->direct_reject_reason = DIRECT_REJECT_NONE;
-    if (lock) {
-        xSemaphoreGive(lock);
+    if (!lock || xSemaphoreTake(lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (sharedData->direct_release_generation == generation) {
+            sharedData->direct_release_generation = 0;
+        }
+        if (lock) xSemaphoreGive(lock);
     }
-    FW_LOG_INFO_PRINTF("[UPPER] SINGLE_MOTOR_TARGET M%02u target=%ld mask=0x%08lX\r\n",
-                  (unsigned)motorIndex,
-                  (long)target,
-                  (unsigned long)motorMask);
-    if (!postSystemEventForToken(sharedData, SYSTEM_EVENT_RUN_DIRECT, generation)) {
-        cancelStagedDirectCommand(sharedData, generation, DIRECT_REJECT_EVENT_QUEUE);
-        return false;
-    }
-    return true;
+    return false;
 }
 
 // Active scope 仅能在无 owner、控制关闭的静止态修改，并在持锁后复核一次状态。
@@ -245,6 +285,8 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
     const bool cancelledPendingDirect = sharedData->pending_direct_valid != 0;
     const uint32_t cancelledGeneration = sharedData->pending_direct_generation;
     if (cancelledPendingDirect) {
+        rejectOutstandingDirectTarget(sharedData);
+        sharedData->pending_direct_token = 0;
         sharedData->pending_direct_valid = 0;
         sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->pending_direct_motor_mask = 0;
@@ -259,6 +301,9 @@ bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
         sharedAtomicStore(&sharedData->require_can_feedback,
                           (uint8_t)(requireCanFeedback ? 1 : 0));
     }
+    rejectOutstandingDirectTarget(sharedData);
+    sharedData->direct_release_generation = 0;
+    sharedData->applied_direct_motor_mask = 0;
     sharedData->control_mode = requireCanFeedback ? CONTROL_MODE_JOINT : CONTROL_MODE_DIRECT_MOTOR;
     if (requireCanFeedback) {
         sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;

@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "../../data/ServoTypes.h"
+
 namespace p4::host {
 
 // append* 把主机标量按大端序追加到 buffer，并同步推进 index。
@@ -40,6 +42,11 @@ bool parseInt32ArrayBigEndian(const uint8_t* payload,
 
 // 返回 command 对应固定 payload 长度；未知命令返回 SIZE_MAX。
 size_t getCommandPayloadLength(uint8_t command);
+
+/** 将同一位置快照编码为既有 RAW、ABS 两帧；容量不足返回 0，不写半帧。 */
+size_t encodeServoPositionPackets(uint8_t* buffer,
+                                  size_t capacity,
+                                  const ServoAngleData_t& position);
 
 } // namespace p4::host
 

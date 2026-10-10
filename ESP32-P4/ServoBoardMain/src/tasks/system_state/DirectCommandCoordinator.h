@@ -33,7 +33,9 @@ uint32_t pendingDirectMotorMask(SystemRuntimeContext* sharedData,
 void rejectPendingDirectCommand(SystemRuntimeContext* sharedData,
                                 uint32_t generation,
                                 uint8_t rejectReason);
-/** 门禁通过后原子应用 pending 目标、active scope 和控制模式。 */
+/** 当前代际且无更新 pending 命令时，原子释放普通直控输出权。 */
+bool retireDirectCommand(SystemRuntimeContext* sharedData, uint32_t generation);
+/** 门禁通过后原子应用 pending 目标、实际输出范围和控制模式。 */
 bool promotePendingDirectCommand(SystemRuntimeContext* sharedData,
                                  uint32_t generation);
 

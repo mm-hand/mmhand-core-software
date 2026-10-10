@@ -70,9 +70,8 @@ uint32_t requiredMotorMask(SystemRuntimeContext* runtime)
         return 0;
     }
     uint32_t mask = sharedAtomicLoad(&runtime->active_motor_mask);
-    if (sharedAtomicLoad(&runtime->system_state) ==
-        SYSTEM_STATE_CALIBRATION_RUNNING) {
-        mask |= sharedAtomicLoad(&runtime->calibration_aux_motor_mask);
+    if (sharedAtomicLoad(&runtime->system_state) == SYSTEM_STATE_RUN_DIRECT) {
+        mask = sharedAtomicLoad(&runtime->applied_direct_motor_mask);
     }
     return mask & validMotorChannelMask();
 }

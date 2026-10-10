@@ -10,7 +10,6 @@
 #include "../../safety/policies/SystemReadinessPolicy.h"
 #include "../../modules/actuator/ActuatorCommandGateway.h"
 #include "../../config/SafetyConfig.h"
-#include "../../data/CalibrationTypes.h"
 #include "../../data/SystemTypes.h"
 #include "../../platform/rtos/AtomicValue.h"
 #include "../../platform/rtos/SharedSafetyState.h"
@@ -87,12 +86,6 @@ static bool beginHostControlHold(SystemRuntimeContext* sharedData,
     }
 
     sharedAtomicStore(&sharedData->control_enabled, (uint8_t)0);
-    if (interruptedState == SYSTEM_STATE_CALIBRATION_RUNNING) {
-        // 先关闭标定运动标志，使舵机通信任务停止标定专用轮询；真正的 owner/state
-        // 保留到 Hold 被执行层确认，避免 Hold 在模式切换窗口中被拒绝。
-        sharedAtomicStore(&sharedData->calibration_motion_started,
-                          (uint8_t)0);
-    }
     p4::actuator::clearPending(sharedData);
 
     const uint32_t token =
@@ -122,8 +115,7 @@ static bool beginHostControlHold(SystemRuntimeContext* sharedData,
         return false;
     }
 
-    // 自动标定可能临时使用 active scope 之外的双腱辅助电机，Hold 必须覆盖
-    // 当前运动态实际可能驱动的完整集合，而不能只看 active_motor_mask。
+    // 直控 Hold 使用当前已生效批次的电机范围。
     const uint32_t activeMotorMask =
         p4::state::requiredMotorMask(sharedData);
     const uint32_t onlineMask =
@@ -184,45 +176,15 @@ static bool beginHostControlHold(SystemRuntimeContext* sharedData,
 /** 标记内部运动任务因上位机失联而取消；任务会在 owner/state 被撤销后自行退出。 */
 static void cancelInternalMotionForHostLeaseLoss(
     SystemRuntimeContext* sharedData,
-    uint8_t interruptedState,
-    const HostLeaseSupervisorPort& port)
+    uint8_t interruptedState)
 {
     if (!sharedData) {
         return;
-    }
-    if (interruptedState == SYSTEM_STATE_CALIBRATION_RUNNING) {
-        sharedAtomicStore(&sharedData->calibration_motion_started,
-                          (uint8_t)0);
-        CalibrationDiagData_t diag;
-        memset(&diag, 0, sizeof(diag));
-        diag.valid = 1;
-        diag.reason = CALIB_DIAG_REASON_CONTROL_LOST;
-        diag.phase = CALIB_DIAG_PHASE_SEQUENCE;
-        diag.joint = 0xFF;
-        diag.motor = 0xFF;
-        diag.valueA = (int32_t)(monotonicMillis() -
-            sharedAtomicLoad(&sharedData->host_rx_heartbeat_ms));
-        diag.valueB = (int32_t)kHostControlLeaseTimeoutMs;
-        diag.bitmap = p4::state::requiredMotorMask(sharedData);
-        diag.timestamp = monotonicMillis();
-        {
-            SharedSafetyGuard guard;
-            diag.sequence = sharedData->calibration_diag.sequence + 1;
-            sharedData->calibration_diag = diag;
-        }
-        port.setCalibrationStatus(CALIB_STATUS_FAILED);
     }
     if (interruptedState == SYSTEM_STATE_ROPE_INIT_RUNNING) {
         sharedData->rope_init_status = ROPE_INIT_STATUS_FAILED;
         sharedData->rope_init_reason = ROPE_INIT_REASON_CANCELLED;
         sharedData->rope_init_timestamp = monotonicMillis();
-        if (sharedAtomicLoad(
-                &sharedData->calibration_rope_init_pending) != 0) {
-            // 标定结果已经提交，仅 READY 收尾被租约中断；保留结果并报告 WARN。
-            port.setCalibrationStatus(CALIB_STATUS_WARN);
-            sharedAtomicStore(&sharedData->calibration_rope_init_pending,
-                              (uint8_t)0);
-        }
         sharedAtomicStore(&sharedData->feedback_recovery_pending,
                           (uint8_t)0);
         sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
@@ -232,14 +194,13 @@ static void cancelInternalMotionForHostLeaseLoss(
 
 /**
  * 监视所有运动状态的上位机租约并完成 Hold 确认闭环。
- * CONTROL 与 CALIBRATION owner 均使用当前 ABS Hold；ROS2 不设置独立消息超时，
+ * 控制与 Rope Init 均使用当前 ABS Hold；ROS2 不设置独立消息超时，
  * 仍由桌面端公共串口心跳续租。
  */
 void updateHostControlLease(SystemRuntimeContext* sharedData,
                             const HostLeaseSupervisorPort& port)
 {
     if (!sharedData || !port.resolveIdleOrReady || !port.transitionTo ||
-        !port.setCalibrationStatus ||
         sharedAtomicLoad(&sharedData->emergency_stop_latched) != 0) {
         return;
     }
@@ -264,8 +225,7 @@ void updateHostControlLease(SystemRuntimeContext* sharedData,
             sharedAtomicLoad(&sharedData->system_state);
         // Hold 已经落入总线，先使内部任务进入取消收尾，再释放 owner。
         cancelInternalMotionForHostLeaseLoss(sharedData,
-                                             interruptedState,
-                                             port);
+                                             interruptedState);
         p4::actuator::clearPending(sharedData);
         sharedAtomicStore(&sharedData->servo_target_owner,
                           (uint8_t)SERVO_TARGET_OWNER_NONE);

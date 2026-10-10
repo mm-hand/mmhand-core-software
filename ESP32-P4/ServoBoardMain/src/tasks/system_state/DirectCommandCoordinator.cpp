@@ -13,6 +13,7 @@
 #include "../../platform/time/Clock.h"
 #include "../../safety/SafetyEventReporter.h"
 #include "../../safety/SafetyRuleRegistry.h"
+#include "../../runtime/ports/DirectTargetResult.h"
 
 namespace mmhand::system {
 
@@ -27,6 +28,11 @@ void resetCommandState(SystemRuntimeContext* sharedData)
         return;
     }
 
+    rejectOutstandingDirectTarget(sharedData);
+    sharedData->pending_direct_token = 0;
+    sharedData->direct_release_generation = 0;
+    sharedData->applied_direct_token = 0;
+    sharedData->applied_direct_motor_mask = 0;
     // RESET 同时失效全部命令 token，随后到达的旧 DONE 事件会被识别为过期。
     for (uint8_t i = 0; i < ENCODER_TOTAL_NUM; i++) {
         sharedData->targetAngles[i] = 0.0f;
@@ -57,7 +63,6 @@ void resetCommandState(SystemRuntimeContext* sharedData)
     sharedAtomicStore(&sharedData->feedback_recovery_pending, (uint8_t)0);
     sharedAtomicStore(&sharedData->feedback_recovery_request_sequence,
                       (uint32_t)0);
-    sharedAtomicStore(&sharedData->calibration_rope_init_pending, (uint8_t)0);
 
     if (lock) {
         xSemaphoreGive(lock);
@@ -74,6 +79,8 @@ bool setCommandModeJoint(SystemRuntimeContext* sharedData)
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return false;
     }
+    rejectOutstandingDirectTarget(sharedData);
+    sharedData->direct_release_generation = 0;
     // 清除直控来源，避免 MotionControlTask 返回负反馈后仍按旧直控 generation 判定。
     sharedData->control_mode = CONTROL_MODE_JOINT;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
@@ -110,6 +117,9 @@ void clearPendingDirectCommand(SystemRuntimeContext* sharedData,
     if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) {
         return;
     }
+    rejectOutstandingDirectTarget(sharedData);
+    sharedData->pending_direct_token = 0;
+    sharedData->direct_release_generation = 0;
     sharedData->pending_direct_valid = 0;
     sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData->pending_direct_motor_mask = 0;
@@ -178,6 +188,8 @@ void rejectPendingDirectCommand(SystemRuntimeContext* sharedData,
     bool rejectedCurrentGeneration = false;
     if (sharedData->pending_direct_valid != 0 &&
         sharedData->pending_direct_generation == generation) {
+        rejectOutstandingDirectTarget(sharedData);
+        sharedData->pending_direct_token = 0;
         sharedData->pending_direct_valid = 0;
         sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
         sharedData->pending_direct_motor_mask = 0;
@@ -201,6 +213,29 @@ void rejectPendingDirectCommand(SystemRuntimeContext* sharedData,
                                               (int32_t)rejectReason);
         }
     }
+}
+
+bool retireDirectCommand(SystemRuntimeContext* sharedData, uint32_t generation)
+{
+    if (!sharedData) return false;
+    SemaphoreHandle_t lock = sharedData->commandStateMutex;
+    if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+    const bool accepted = generation != 0 &&
+        sharedData->applied_direct_generation == generation &&
+        sharedData->pending_direct_valid == 0 &&
+        sharedData->motor_direct_command_source == MOTOR_DIRECT_SOURCE_ABSOLUTE;
+    if (accepted) {
+        rejectOutstandingDirectTarget(sharedData);
+        SharedSafetyGuard guard;
+        sharedAtomicStore(&sharedData->control_enabled, (uint8_t)0);
+        sharedAtomicStore(&sharedData->servo_target_owner, (uint8_t)SERVO_TARGET_OWNER_NONE);
+        sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_NONE;
+    }
+    if (sharedData->direct_release_generation == generation) {
+        sharedData->direct_release_generation = 0;
+    }
+    if (lock) xSemaphoreGive(lock);
+    return accepted;
 }
 
 bool promotePendingDirectCommand(SystemRuntimeContext* sharedData,
@@ -231,18 +266,19 @@ bool promotePendingDirectCommand(SystemRuntimeContext* sharedData,
     sharedData->motor_direct_command_generation = generation;
     sharedData->motor_direct_command_source = MOTOR_DIRECT_SOURCE_ABSOLUTE;
     sharedData->applied_direct_generation = generation;
+    sharedData->applied_direct_token = sharedData->pending_direct_token;
+    sharedData->applied_direct_speed = sharedData->pending_direct_speed;
+    sharedData->applied_direct_acc = sharedData->pending_direct_acc;
     {
-        // 目标与 active scope 在同一命令锁内生效，MotionControlTask 下一帧看到完整版本。
+        // active scope 是最大授权范围；本批输出范围随目标在同一锁内提交。
         SharedSafetyGuard guard;
-        sharedAtomicStore(&sharedData->active_motor_mask,
+        sharedAtomicStore(&sharedData->applied_direct_motor_mask,
                           sharedData->pending_direct_motor_mask & validMotorChannelMask());
-        sharedAtomicStore(&sharedData->active_joint_mask,
-                          sharedData->pending_direct_joint_mask &
-                          ((1UL << ENCODER_TOTAL_NUM) - 1UL));
         sharedAtomicStore(&sharedData->require_can_feedback,
                           (uint8_t)(sharedData->pending_direct_require_can ? 1U : 0U));
     }
     sharedData->pending_direct_valid = 0;
+    sharedData->pending_direct_token = 0;
     sharedData->pending_direct_source = MOTOR_DIRECT_SOURCE_NONE;
     sharedData->pending_direct_motor_mask = 0;
     sharedData->pending_direct_joint_mask = 0;

@@ -13,6 +13,7 @@
 #include <Arduino.h>
 
 #include "../../platform/rtos/FreeRtosKernel.h"
+#include "../../platform/rtos/PeriodicDeadline.h"
 
 enum TaskRuntimeId : uint8_t {
     TASK_RUNTIME_HOST_COMM = 0,
@@ -20,7 +21,7 @@ enum TaskRuntimeId : uint8_t {
     TASK_RUNTIME_S3_CAN_RX = 2,
     TASK_RUNTIME_SERVO_BUS = 3,
     TASK_RUNTIME_MOTION_CONTROL = 4,
-    TASK_RUNTIME_AUTO_CALIB = 5,
+    TASK_RUNTIME_RESERVED_5 = 5, ///< 旧自动标定槽已退役，保留后续任务的线协议编号。
     TASK_RUNTIME_MONITOR = 6,
     TASK_RUNTIME_COUNT = 7,
 };
@@ -87,5 +88,21 @@ void taskRuntimeMarkSystemStatusSent(void);
 void taskRuntimeMarkStopReceived(void);
 void taskRuntimeMarkStopRequested(void);
 void taskRuntimeMarkStopTorqueOffComplete(void);
+
+/** Complete scheduling metrics and skip missed deadlines without replaying old cycles. */
+inline void taskRuntimeFinishCycle(uint8_t taskId, bool periodicDue,
+                                   TickType_t loopBegin, TickType_t periodTicks,
+                                   p4::platform::rtos::PeriodicDeadline& deadline)
+{
+    taskRuntimeMarkLoopEnd(taskId);
+    if (!periodicDue) return;
+    const TickType_t loopEnd = xTaskGetTickCount();
+    const bool overrun = (loopEnd - loopBegin) >= periodTicks || deadline.due(loopEnd);
+    taskRuntimeMarkPeriodResult(taskId, overrun);
+    if (overrun) {
+        if (deadline.due(loopEnd)) deadline.advancePast(loopEnd);
+        vTaskDelay(1);
+    }
+}
 
 #endif // P4_RUNTIME_METRICS_TASK_RUNTIME_METRICS_H

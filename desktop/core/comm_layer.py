@@ -31,6 +31,7 @@ from .communication import (
     SerialTransport,
     StateReducer,
 )
+from .communication.feedback_history import TimestampedFeedbackHistory
 from .data_models import (
     FingerTactile,
     HandModel,
@@ -55,6 +56,8 @@ from .protocol import (
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE,
     PACKET_TYPE_MOTOR_ABS_LIMIT,
     PACKET_TYPE_MULTITURN_RESTORE_RESULT,
+    PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
+    PACKET_TYPE_DIRECT_TARGET_RESULT,
     PACKET_TYPE_PRODUCT_FINGERPRINT,
     PACKET_TYPE_SERVO_ROUTE_STATUS,
     PACKET_TYPE_SAFETY_EVENT,
@@ -83,6 +86,8 @@ from .protocol import (
     build_clear_calibration_cmd,
     build_clear_calibration_scope_cmd,
     build_servo_reset_zero_cmd,
+    build_servo_rebase_zero_cmd,
+    build_motor_direct_release_cmd,
     build_host_heartbeat_cmd,
     build_motor_pos_abs_cmd,
     build_motor_pos_abs_one_cmd,
@@ -94,6 +99,7 @@ from .protocol import (
     build_task_diag_subscribe_cmd,
     build_control_trace_subscribe_cmd,
     build_rope_init_cmd,
+    build_pause_cmd,
 
     build_restore_multiturn_cmd,
     build_run_feedback_cmd,
@@ -189,6 +195,8 @@ P4_PACKET_KINDS = {
     PACKET_TYPE_SERVO_ROUTE_STATUS: "servo_route_status",
     PACKET_TYPE_SAFETY_EVENT: "safety_event",
     PACKET_TYPE_MULTITURN_RESTORE_RESULT: "multiturn_restore_result",
+    PACKET_TYPE_SERVO_REBASE_ZERO_RESULT: "servo_rebase_zero_result",
+    PACKET_TYPE_DIRECT_TARGET_RESULT: "direct_target_result",
     PACKET_TYPE_MOTOR_ABS_LIMIT: "motor_abs_limit",
     PACKET_TYPE_SERVO_LOGICAL_RANGE: "servo_logical_range",
     PACKET_TYPE_MANUAL_ENCODER_REFERENCE: "manual_reference",
@@ -1057,7 +1065,13 @@ class LowerComputerComm:
             tx_thread.join(timeout=1.0)
         self._rx_thread = None
         self._tx_thread = None
+        self.feedback_history.reset()
         log_session("COMM", "serial disconnected")
+
+    @property
+    def feedback_history(self) -> TimestampedFeedbackHistory:
+        """逐包 P4 时间戳反馈历史；独立于可被覆盖的 UI 状态邮箱。"""
+        return self._state_reducer.feedback_history
 
     def is_connected(self) -> bool:
         return bool(self.running and self._transport.is_open)
@@ -1078,6 +1092,14 @@ class LowerComputerComm:
         model.has_encoder_health_status = False
         model.has_servo_angle_data = False
         model.has_servo_raw_data = False
+        model.has_encoder_raw_data = False
+        model.encoder_raw_p4_time_ms = 0
+        model.servo_telem_p4_time_ms = 0
+        model.servo_telem_last_rx_ts = 0.0
+        model.has_direct_target_result = False
+        model.direct_target_result_rx_ts = 0.0
+        model.servo_logical_range_last_rx_ts = 0.0
+        model.servo_logical_range_p4_time_ms = 0
         model.has_fault_status_data = False
         model.servo_online_bitmap = 0
         model.has_servo_route_status = False
@@ -1101,6 +1123,7 @@ class LowerComputerComm:
             motor.state = MotorState.ERROR
         model.tactile_online = False
         model.tactile_module_online = [False] * len(model.tactile_module_online)
+        self.feedback_history.reset()
         self._state_reducer.last_model = model
         return model
 
@@ -1452,6 +1475,8 @@ class LowerComputerComm:
             "calib_load_joint",
         ):
             self._auto_calib_logger.log("TX", repr(cmd))
+        if cmd == "pause":
+            return build_pause_cmd()
         if cmd == "stop":
             self._enqueue_stop_immediately()
             return True
@@ -1502,7 +1527,10 @@ class LowerComputerComm:
         with self.tx_queue.mutex:
             pending = self.tx_queue.queue
             kept = [item for item in pending if item != "start" and not (
-                isinstance(item, tuple) and item[0] in ("motor_pos_abs", "motor_pos_abs_one")
+                isinstance(item, tuple) and item[0] in (
+                    "motor_pos_abs", "motor_pos_abs_one",
+                    "motor_direct_release",
+                )
             )]
             removed = len(pending) - len(kept)
             pending.clear()
@@ -1682,6 +1710,16 @@ class LowerComputerComm:
             and cmd[0] == "servo_reset_zero"
         ):
             return build_servo_reset_zero_cmd(cmd[1])
+        if (
+            isinstance(cmd, tuple) and len(cmd) == 2
+            and cmd[0] == "servo_rebase_zero"
+        ):
+            return build_servo_rebase_zero_cmd(cmd[1])
+        if isinstance(cmd, tuple) and len(cmd) == 6 and cmd[0] == "motor_pos_abs":
+            return build_motor_pos_abs_cmd(
+                cmd[3], token=cmd[1], motor_mask=cmd[2], speed=cmd[4], acc=cmd[5])
+        if isinstance(cmd, tuple) and len(cmd) == 2 and cmd[0] == "motor_direct_release":
+            return build_motor_direct_release_cmd(cmd[1])
         if isinstance(cmd, tuple) and len(cmd) == 3 and cmd[0] == "manual_encoder_reference":
             return build_manual_encoder_reference_cmd(cmd[1], cmd[2])
         if cmd == "clear_manual_encoder_reference":

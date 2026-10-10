@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import copy
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 from tools import generate_robot_model
 
@@ -83,3 +85,41 @@ def test_manifest_rejects_duplicate_motor_binding(tmp_path: Path) -> None:
         assert "duplicate" in str(exc)
     else:
         raise AssertionError("duplicate motor binding was accepted")
+
+
+def test_firmware_only_outputs_preserve_desktop_and_check_current_crc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path)
+    args.firmware_only = True
+    outputs = generate_robot_model.build_outputs(args)
+    assert set(outputs) == {args.p4_limits_output, args.p4_fingerprint_output}
+    args.mapping_output.write_text("desktop mapping retained", encoding="utf-8")
+    args.fingerprint_output.write_text("desktop fingerprint retained", encoding="utf-8")
+    argv = [
+        "generate_robot_model.py", "--firmware-only",
+        "--mapping-output", str(args.mapping_output),
+        "--fingerprint-output", str(args.fingerprint_output),
+        "--p4-limits-output", str(args.p4_limits_output),
+        "--p4-fingerprint-output", str(args.p4_fingerprint_output),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert generate_robot_model.main() == 0
+    assert args.mapping_output.read_text(encoding="utf-8") == "desktop mapping retained"
+    assert args.fingerprint_output.read_text(encoding="utf-8") == "desktop fingerprint retained"
+    monkeypatch.setattr(sys, "argv", argv + ["--check"])
+    assert generate_robot_model.main() == 0
+    args.p4_fingerprint_output.write_text("stale source CRC", encoding="utf-8")
+    assert generate_robot_model.main() == 1
+    # Default checks continue to reject unsynchronized Desktop outputs.
+    args.p4_fingerprint_output.write_text(outputs[args.p4_fingerprint_output], encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [item for item in argv if item != "--firmware-only"] + ["--check"])
+    assert generate_robot_model.main() == 1
+
+
+def test_firmware_only_rejects_redirecting_p4_output_into_desktop(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    args.firmware_only = True
+    args.p4_fingerprint_output = generate_robot_model.DEFAULT_FINGERPRINT
+    with pytest.raises(generate_robot_model.ModelGenerationError, match="cannot be inside desktop"):
+        generate_robot_model.build_outputs(args)

@@ -1,0 +1,387 @@
+"""设零协议、异步最终结果和新坐标锚点验证；不连接真实硬件。"""
+
+import struct
+from unittest.mock import MagicMock, call
+
+import pytest
+
+import desktop.core.core_logic as core_logic
+from desktop.core.comm_layer import LowerComputerComm
+from desktop.core.core_logic import HandController
+from desktop.core.calibration_snapshot import atomic_write_snapshot, read_snapshot
+from desktop.core.data_models import HandModel
+from desktop.core.device_state_store import MultiTurnRuntimeStore
+from desktop.core.protocol import (
+    CMD_SERVO_REBASE_ZERO,
+    MOTOR_COUNT,
+    PACKET_TYPE_PROTO_ACK,
+    PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
+    PROTO_ACK_STATUS_QUEUED,
+    STATE_SYNC_MULTITURN_STATE,
+    SYSTEM_STATE_IDLE,
+    SYSTEM_STATE_RUN_DIRECT,
+    build_servo_rebase_zero_cmd,
+    parse_servo_rebase_zero_result_packet,
+    split_p4_timestamp,
+)
+
+
+def _result_payload(token=8, success=3, failed=0, offsets=None):
+    offsets = list(offsets or [-64, -4095] + [0] * (MOTOR_COUNT - 2))
+    return struct.pack(f">III{MOTOR_COUNT}i", token, success, failed, *offsets)
+
+
+def test_command_encodes_selected_channels_with_fixed_big_endian_mask():
+    mask = (1 << 0) | (1 << 26)
+    assert build_servo_rebase_zero_cmd(mask) == (
+        bytes((0xFE, 6, CMD_SERVO_REBASE_ZERO)) + struct.pack(">I", mask) + b"\xFF"
+    )
+    comm = LowerComputerComm("")
+    assert comm._encode_command(("servo_rebase_zero", mask)) == build_servo_rebase_zero_cmd(mask)
+
+
+@pytest.mark.parametrize("mask", [0, -1, 1 << 27, (1 << 31) | 1, 1 << 32])
+def test_command_rejects_empty_negative_or_outside_hardware_mask(mask):
+    with pytest.raises(ValueError, match="non-zero valid motor mask"):
+        build_servo_rebase_zero_cmd(mask)
+
+
+def test_result_decodes_signed_offsets_and_exact_length():
+    offsets = [-4095, 0, -2147483648, 2147483647] + [0] * (MOTOR_COUNT - 4)
+    payload = _result_payload(success=0x0F, offsets=offsets)
+    assert len(payload) == 120
+    assert parse_servo_rebase_zero_result_packet(payload) == (8, 0x0F, 0, offsets)
+    assert parse_servo_rebase_zero_result_packet(payload[:-1]) is None
+    assert parse_servo_rebase_zero_result_packet(payload + b"\x00") is None
+    assert parse_servo_rebase_zero_result_packet(_result_payload(success=1, failed=1)) is None
+    assert parse_servo_rebase_zero_result_packet(_result_payload(success=1 << 27)) is None
+
+
+def test_result_routes_timestamp_and_preserves_independent_snapshot_offsets():
+    comm = LowerComputerComm("")
+    wire_payload = _result_payload() + struct.pack(">I", 1000)
+    business, timestamp = split_p4_timestamp(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, wire_payload)
+    assert business == _result_payload()
+    assert timestamp == 1000
+    updated = comm._process_packets([(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, wire_payload)])
+    assert updated is not None
+    assert updated.servo_rebase_zero_result_token == 8
+    assert updated.servo_rebase_zero_success_mask == 3
+    assert updated.servo_rebase_zero_failed_mask == 0
+    assert updated.servo_rebase_zero_result_p4_time_ms == 1000
+    assert updated.has_servo_rebase_zero_result
+    assert updated.multiturn_restore_result_token == 0
+    snapshot = HandModel()
+    snapshot.copy_state_from(updated)
+    updated.servo_rebase_zero_logical_offsets[0] = 99
+    assert snapshot.servo_rebase_zero_logical_offsets[0] == -64
+
+
+def test_queued_ack_leaves_result_and_coordinate_trust_unchanged():
+    comm = LowerComputerComm("")
+    previous = HandModel()
+    previous.multi_turn_unknown_bitmap = 3
+    previous.servo_rebase_zero_result_token = 7
+    comm._state_reducer.last_model = previous
+    updated = comm._process_packets([(
+        PACKET_TYPE_PROTO_ACK,
+        bytes((CMD_SERVO_REBASE_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED))
+        + struct.pack(">I", 1000),
+    )])
+    assert updated is not None
+    assert updated.proto_ack_cmd == CMD_SERVO_REBASE_ZERO
+    assert updated.servo_rebase_zero_result_token == 7
+    assert updated.servo_rebase_zero_success_mask == 0
+    assert updated.multi_turn_unknown_bitmap == 3
+
+
+def _controller(monkeypatch):
+    controller = HandController()
+    controller.comm = MagicMock()
+    controller.comm.send_command.return_value = True
+    controller._invalidate_servo_rebase_zero_anchors = MagicMock()
+    controller._persist_multiturn_state = MagicMock(return_value=True)
+    state = controller.current_state
+    state.system_state = SYSTEM_STATE_IDLE
+    state.has_system_status_data = True
+    state.has_servo_rebase_zero_result = True
+    state.servo_rebase_zero_result_token = 7
+    state.servo_online_bitmap = 3
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0.02)
+    return controller
+
+
+def _publish_final_result(controller, success=3, failed=0):
+    state = controller.current_state
+    state.servo_rebase_zero_result_token = 8
+    state.servo_rebase_zero_success_mask = success
+    state.servo_rebase_zero_failed_mask = failed
+    state.servo_rebase_zero_logical_offsets[:2] = [-64, -4095]
+    state.servo_rebase_zero_result_last_rx_ts = core_logic.time.time()
+    state.servo_rebase_zero_result_p4_time_ms = 1000
+
+
+def test_api_waits_for_final_result_without_maintenance_reset(monkeypatch):
+    controller = _controller(monkeypatch)
+
+    def ack(cmd, _timeout, received_after):
+        assert received_after > 0
+        _publish_final_result(controller)
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, core_logic.time.time()
+
+    controller.comm.wait_for_ack.side_effect = ack
+    result = controller.rebase_servo_abs_zero(3)
+    assert result.ok
+    assert result.result_token == 8
+    assert result.success_motor_mask == 3
+    assert result.failed_motor_mask == 0
+    assert result.logical_offsets[:3] == (-64, -4095, None)
+    controller.comm.send_command.assert_called_once_with(("servo_rebase_zero", 3))
+    controller._invalidate_servo_rebase_zero_anchors.assert_called_once_with(3)
+    assert controller._multiturn_anchor_capture_blocked_mask == 3
+
+
+def test_api_accepts_final_result_even_when_ack_was_lost(monkeypatch):
+    controller = _controller(monkeypatch)
+
+    def ack(*_args, **_kwargs):
+        _publish_final_result(controller)
+        return None
+
+    controller.comm.wait_for_ack.side_effect = ack
+    assert controller.rebase_servo_abs_zero(3).ok
+    assert controller.comm.send_command.call_args_list == [
+        call(("servo_rebase_zero", 3)), call(("state_sync", STATE_SYNC_MULTITURN_STATE)),
+    ]
+
+
+def test_api_partial_failure_exposes_offsets_only_for_successful_motors(monkeypatch):
+    controller = _controller(monkeypatch)
+
+    def ack(cmd, _timeout, received_after):
+        _publish_final_result(controller, success=1, failed=2)
+        return cmd, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, received_after
+
+    controller.comm.wait_for_ack.side_effect = ack
+    result = controller.rebase_servo_abs_zero(3)
+    assert not result.ok
+    assert result.success_motor_mask == 1
+    assert result.failed_motor_mask == 2
+    assert result.logical_offsets[:2] == (-64, None)
+
+
+def test_timeout_queries_existing_transaction_and_blocks_blind_reexecution(monkeypatch):
+    controller = _controller(monkeypatch)
+    monkeypatch.setattr(core_logic, "SERVO_REBASE_ZERO_RESULT_TIMEOUT_S", 0)
+    controller.comm.wait_for_ack.return_value = (
+        CMD_SERVO_REBASE_ZERO, SYSTEM_STATE_IDLE, PROTO_ACK_STATUS_QUEUED, 1.0,
+    )
+    result = controller.rebase_servo_abs_zero(3)
+    assert not result.ok
+    assert controller._servo_rebase_zero_unresolved_mask == 3
+    assert not controller.rebase_servo_abs_zero(3).ok
+    sent = controller.comm.send_command.call_args_list
+    assert sent.count(call(("servo_rebase_zero", 3))) == 1
+    assert call(("state_sync", STATE_SYNC_MULTITURN_STATE)) in sent
+    assert call("reset") not in sent
+
+
+@pytest.mark.parametrize("state,enabled,owner", [
+    (SYSTEM_STATE_RUN_DIRECT, True, 1), (SYSTEM_STATE_IDLE, False, 1),
+])
+def test_api_requires_stopped_state_without_target_owner(monkeypatch, state, enabled, owner):
+    controller = _controller(monkeypatch)
+    controller.current_state.system_state = state
+    controller.current_state.control_enabled = enabled
+    controller.current_state.servo_target_owner = owner
+    assert not controller.rebase_servo_abs_zero(3).ok
+    controller.comm.send_command.assert_not_called()
+
+
+def test_new_anchor_uses_fresh_matching_abs_and_raw_after_final_result(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._servo_rebase_zero_unresolved_mask = 3
+    controller._servo_rebase_zero_baseline_token = 7
+    controller._servo_rebase_zero_sent_at = 0
+    controller._block_multiturn_anchor_capture(3)
+    _publish_final_result(controller)
+    state = controller.current_state
+    state.has_servo_angle_data = True
+    state.has_servo_raw_data = True
+    state.servo_raw_online[:2] = [True, True]
+    state.servo_feedback_p4_time_ms = 999
+    state.servo_raw_p4_time_ms = 999
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._multiturn_anchor_capture_blocked_mask == 3
+    controller._persist_multiturn_state.assert_not_called()
+    state.servo_feedback_p4_time_ms = 1001
+    state.servo_raw_p4_time_ms = 1002
+    controller._service_servo_rebase_zero_capture(state)
+    controller._persist_multiturn_state.assert_not_called()
+    state.servo_raw_p4_time_ms = 1001
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._multiturn_anchor_capture_blocked_mask == 0
+    assert controller._multiturn_anchor_capture_pending_mask == 0
+    controller._persist_multiturn_state.assert_called_once_with(state, force=True)
+
+
+def test_blocked_rebase_scope_cannot_restore_old_json_anchor(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._multiturn_recovery_anchors = lambda _state: (
+        3, [8192] * MOTOR_COUNT, [0] * MOTOR_COUNT, True,
+    )
+    state = controller.current_state
+    state.multi_turn_unknown_bitmap = 3
+    state.servo_raw_online[:2] = [True, True]
+    controller._block_multiturn_anchor_capture(3)
+    controller._service_multiturn_restore(state)
+    controller.comm.send_command.assert_not_called()
+
+
+def test_new_anchor_save_failure_keeps_scope_blocked_and_retries(monkeypatch):
+    controller = _controller(monkeypatch)
+    controller._persist_multiturn_state = (
+        HandController._persist_multiturn_state.__get__(controller)
+    )
+    controller._multiturn_identity = lambda _state: {"device": "same-hand"}
+    controller._load_multiturn_store = MagicMock(return_value=None)
+    controller._multiturn_store = MagicMock()
+    controller._multiturn_store.save.side_effect = OSError("disk full")
+    controller._servo_rebase_zero_capture_mask = 3
+    controller._servo_rebase_zero_capture_after_ms = 1000
+    controller._servo_rebase_zero_rebased_mask = 3
+    controller._block_multiturn_anchor_capture(3)
+    state = controller.current_state
+    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.servo_raw_online[:2] = [True, True]
+    state.servo_raw_positions[:2] = [64, 4095]
+    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 1001
+
+    controller._service_servo_rebase_zero_capture(state)
+    assert state.host_multiturn_status == "save failed: disk full"
+    assert controller._servo_rebase_zero_capture_mask == 3
+    assert controller._multiturn_anchor_capture_blocked_mask == 3
+
+    controller._multiturn_store.save.side_effect = None
+    controller._multiturn_store.save.return_value = {"raw": list(state.servo_raw_positions)}
+    controller._service_servo_rebase_zero_capture(state)
+    assert controller._servo_rebase_zero_capture_mask == 0
+    assert controller._multiturn_anchor_capture_blocked_mask == 0
+    assert controller._multiturn_store.save.call_count == 2
+    assert controller._multiturn_store.save.call_args.kwargs["logical_abs"][:2] == [0, 0]
+    assert controller._multiturn_store.save.call_args.kwargs["raw"][:2] == [64, 4095]
+
+
+@pytest.mark.parametrize("waiting_for_result", [True, False])
+def test_reconnect_preserves_pending_rebase_and_blocks_old_anchor_restore(
+    monkeypatch, waiting_for_result,
+):
+    controller = _controller(monkeypatch)
+    controller._servo_rebase_zero_unresolved_mask = 3 if waiting_for_result else 0
+    controller._servo_rebase_zero_capture_mask = 0 if waiting_for_result else 3
+    controller._servo_rebase_zero_baseline_token = 7
+    controller._servo_rebase_zero_sent_at = 123.0
+    controller._servo_rebase_zero_capture_after_ms = 1000
+    controller._servo_rebase_zero_rebased_mask = 0 if waiting_for_result else 3
+    controller._block_multiturn_anchor_capture(3)
+
+    controller._reset_local_runtime_state("SYNCING")
+    assert controller._servo_rebase_zero_unresolved_mask == (3 if waiting_for_result else 0)
+    assert controller._servo_rebase_zero_capture_mask == (0 if waiting_for_result else 3)
+    assert controller._servo_rebase_zero_baseline_token == 7
+    assert controller._servo_rebase_zero_sent_at == 123.0
+    assert controller._servo_rebase_zero_capture_after_ms == 1000
+    assert controller._multiturn_anchor_capture_blocked_mask == 3
+
+    controller._multiturn_recovery_anchors = lambda _state: (
+        3, [8192] * MOTOR_COUNT, [0] * MOTOR_COUNT, True,
+    )
+    state = controller.current_state
+    state.servo_online_bitmap = state.multi_turn_unknown_bitmap = 3
+    state.servo_raw_online[:2] = [True, True]
+    controller._service_multiturn_restore(state)
+    controller.comm.send_command.assert_not_called()
+
+
+def test_rebase_invalidates_only_old_scope_and_captures_runtime_before_new_auto(
+    tmp_path, monkeypatch,
+):
+    controller = HandController()
+    controller._multiturn_store = MultiTurnRuntimeStore(tmp_path / "runtime.json")
+    identity = {
+        "device_id": "0000123456789ABC",
+        "urdf_repo_path": "model/hand.urdf",
+        "product_fingerprint": {
+            "schema_version": 2,
+            "feedback_mapping_version": 3,
+            "hardware_map_crc": 0x1234,
+        },
+    }
+    controller._multiturn_identity = lambda _state: identity
+    other = 1 << 26
+    old_abs = [5000, 6000] + [0] * (MOTOR_COUNT - 3) + [9000]
+    old_raw = [100, 200] + [0] * (MOTOR_COUNT - 3) + [320]
+    controller._multiturn_store_payload = controller._multiturn_store.save(
+        identity=identity, valid_motor_mask=3 | other,
+        logical_abs=old_abs, raw=old_raw, p4_time_ms=99,
+    )
+    snapshot_path = tmp_path / "calibration.mmcal.json"
+    results = [None] * 21
+    results[0] = {"joint": 0, "success": True}
+    results[20] = {"joint": 20, "success": True}
+    manual_min, manual_max = [123] * 21, [456] * 21
+    atomic_write_snapshot(snapshot_path, {
+        "joint_calib_results": results,
+        "motor_abs_limit_min": [100] * MOTOR_COUNT,
+        "motor_abs_limit_max": [1000] * MOTOR_COUNT,
+        "motor_abs_limit_valid_bitmap": hex(3 | other),
+        "manual_reference_min_raw": manual_min,
+        "manual_reference_max_raw": manual_max,
+        "manual_reference_valid_bitmap": "0x001FFFFF",
+        "active_joint_mask": hex(1 | (1 << 20)),
+        "active_motor_mask": hex(3 | other),
+        "multiturn_anchor_valid_bitmap": hex(3 | other),
+        "multiturn_anchor_logical_abs": old_abs,
+        "multiturn_anchor_raw": old_raw,
+    })
+    monkeypatch.setattr(core_logic, "CALIB_LOAD_SNAPSHOT_PATH", snapshot_path)
+    controller._block_multiturn_anchor_capture(3)
+    controller._invalidate_servo_rebase_zero_anchors(3)
+    runtime = controller._multiturn_store.load(identity=identity)
+    snapshot = read_snapshot(snapshot_path)
+    assert int(runtime["valid_motor_mask"], 0) == other
+    assert snapshot["manual_reference_min_raw"] == manual_min
+    assert snapshot["manual_reference_max_raw"] == manual_max
+    assert snapshot["joint_calib_results"][0] is None
+    assert snapshot["joint_calib_results"][20]["success"]
+    assert int(snapshot["motor_abs_limit_valid_bitmap"], 0) == other
+    assert int(snapshot["multiturn_anchor_valid_bitmap"], 0) == other
+
+    state = controller.current_state
+    state.has_servo_angle_data = state.has_servo_raw_data = True
+    state.servo_online_bitmap = 3
+    state.servo_raw_online[:2] = [True, True]
+    state.servo_raw_positions[:2] = [64, 4095]
+    state.servo_feedback_p4_time_ms = state.servo_raw_p4_time_ms = 101
+    state.p4_time_ms = 101
+    controller._servo_rebase_zero_capture_mask = 3
+    controller._servo_rebase_zero_capture_after_ms = 100
+    controller._servo_rebase_zero_rebased_mask = 3
+    controller._service_servo_rebase_zero_capture(state)
+    runtime = controller._multiturn_store.load(identity=identity)
+    assert int(runtime["valid_motor_mask"], 0) == 3 | other
+    assert runtime["logical_abs"][:2] == [0, 0]
+    assert runtime["raw"][:2] == [64, 4095]
+    assert runtime["logical_abs"][26] == 9000
+    # 新 Auto 尚未生成，不提前把运行原点写成有效 Auto/LUT 快照。
+    assert int(read_snapshot(snapshot_path)["multiturn_anchor_valid_bitmap"], 0) == other
+    assert controller._multiturn_anchor_capture_pending_mask == 0
+    stale = HandModel()
+    stale.copy_state_from(state)
+    stale.servo_angles[:2] = [5000, 6000]
+    stale.servo_raw_positions[:2] = [100, 200]
+    stale.servo_feedback_p4_time_ms = stale.servo_raw_p4_time_ms = 99
+    controller._persist_multiturn_state(stale, force=True)
+    runtime = controller._multiturn_store.load(identity=identity)
+    assert runtime["logical_abs"][:2] == [0, 0]
+    assert runtime["raw"][:2] == [64, 4095]

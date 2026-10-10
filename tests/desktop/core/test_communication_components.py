@@ -13,6 +13,8 @@ from __future__ import annotations
 import struct
 from types import SimpleNamespace
 
+import pytest
+
 from desktop.core.comm_layer import LowerComputerComm
 from desktop.core.communication import (
     AckTracker,
@@ -24,7 +26,24 @@ from desktop.core.communication import (
 )
 from desktop.core.data_models import HandModel
 from desktop.core.hand_backend import HandBackend
-from desktop.core.protocol import PROTOCOL_HEADER, PROTOCOL_TAIL, split_p4_timestamp
+from desktop.core.communication.feedback_history import FeedbackHistoryError
+from desktop.core.protocol import (
+    CMD_RESET,
+    DISCONNECT_SENTINEL,
+    ENCODER_COUNT,
+    MOTOR_COUNT,
+    PACKET_TYPE_ENCODER_RAW,
+    PACKET_TYPE_SERVO_ANGLE,
+    PACKET_TYPE_SERVO_REBASE_ZERO_RESULT,
+    PACKET_TYPE_SERVO_TELEM,
+    PACKET_TYPE_SYSTEM_STATUS,
+    PACKET_TYPE_TASK_DIAG,
+    PROTOCOL_HEADER,
+    PROTOCOL_TAIL,
+    PROTO_ACK_STATUS_OK,
+    TASK_RUNTIME_NAMES,
+    split_p4_timestamp,
+)
 
 
 class _FakeSerial:
@@ -222,3 +241,377 @@ def test_hand_backend_connection_uses_comm_health_api_without_legacy_serial_prop
     )
 
     assert backend.is_comm_connected() is True
+
+
+def _timestamped_packet(packet_type: int, payload: bytes, timestamp_ms: int) -> tuple:
+    return packet_type, payload + struct.pack(">I", timestamp_ms)
+
+
+def _encoder_packet(timestamp_ms: int, first: int, error_index: int = -1) -> tuple:
+    values = [first + index for index in range(ENCODER_COUNT)]
+    if error_index >= 0:
+        values[error_index] = DISCONNECT_SENTINEL
+    return _timestamped_packet(
+        PACKET_TYPE_ENCODER_RAW, struct.pack(f">{ENCODER_COUNT}h", *values), timestamp_ms
+    )
+
+
+def _abs_packet(timestamp_ms: int, first: int) -> tuple:
+    values = [first + index for index in range(MOTOR_COUNT)]
+    return _timestamped_packet(
+        PACKET_TYPE_SERVO_ANGLE, struct.pack(f">{MOTOR_COUNT}i", *values), timestamp_ms
+    )
+
+
+def _connectivity_packet(
+    timestamp_ms: int, *, servo_mask: int = (1 << MOTOR_COUNT) - 1,
+    encoder_mask: int = (1 << ENCODER_COUNT) - 1, unknown_mask: int = 0,
+    encoder_fault_mask: int = 0, can_online: bool = True,
+) -> tuple:
+    payload = bytearray(43)
+    struct.pack_into(">I", payload, 13, unknown_mask)
+    struct.pack_into(">I", payload, 26, servo_mask)
+    struct.pack_into(">I", payload, 30, encoder_mask)
+    payload[34] = int(can_online)
+    struct.pack_into(">I", payload, 39, encoder_fault_mask)
+    return _timestamped_packet(PACKET_TYPE_SYSTEM_STATUS, bytes(payload), timestamp_ms)
+
+
+def test_feedback_history_preserves_every_packet_and_original_device_time_in_one_batch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    result = comm._process_packets([
+        _connectivity_packet(120),
+        _encoder_packet(0, 100),
+        _abs_packet(3, -50),
+        _encoder_packet(10, 130),
+        _abs_packet(13, -40),
+        _encoder_packet(20, 160),
+        _abs_packet(23, -30),
+    ])
+
+    frames = comm.feedback_history.read(cursor)
+    assert [(frame.kind, frame.p4_time_ms) for frame in frames] == [
+        ("encoder_raw", 0), ("servo_abs", 3),
+        ("encoder_raw", 10), ("servo_abs", 13),
+        ("encoder_raw", 20), ("servo_abs", 23),
+    ]
+    assert [frame.values[0] for frame in frames] == [100, -50, 130, -40, 160, -30]
+    assert frames[0].valid_mask == (1 << ENCODER_COUNT) - 1
+    assert frames[1].valid_mask == (1 << MOTOR_COUNT) - 1
+    assert isinstance(frames[0].values, tuple)
+    assert frames[0].received_at > 0.0
+    assert result.encoders[0].raw_sensor == 160
+    assert result.servo_angles[0] == -30
+    assert comm.feedback_history is comm._state_reducer.feedback_history
+
+
+def test_feedback_history_uses_raw_error_online_fault_and_turn_unknown_masks() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(
+            90, servo_mask=0b111, encoder_mask=0b111,
+            unknown_mask=0b010, encoder_fault_mask=0b001,
+        ),
+        _encoder_packet(100, 700, error_index=2),
+        _abs_packet(101, 50),
+    ])
+
+    raw, absolute = comm.feedback_history.read(cursor)
+    assert raw.valid_mask == 0b010
+    assert raw.values[2] == 0
+    assert absolute.valid_mask == 0b101
+
+
+def test_feedback_history_keeps_untrusted_frames_before_online_status() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([_encoder_packet(100, 700, error_index=2), _abs_packet(101, 50)])
+
+    raw, absolute = comm.feedback_history.read(cursor)
+    assert raw.valid_mask == 0
+    assert absolute.valid_mask == 0
+
+
+def test_feedback_history_keeps_can_offline_raw_as_an_invalid_break() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(90, can_online=False), _encoder_packet(100, 700)
+    ])
+
+    frames = comm.feedback_history.read(cursor)
+    assert len(frames) == 1
+    assert frames[0].kind == "encoder_raw"
+    assert frames[0].valid_mask == 0
+
+
+def test_feedback_history_does_not_apply_later_status_to_earlier_frames() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _encoder_packet(100, 700), _abs_packet(101, 50),
+        _connectivity_packet(102), _encoder_packet(110, 710), _abs_packet(111, 60),
+    ])
+
+    frames = comm.feedback_history.read(cursor)
+    assert [frame.valid_mask for frame in frames] == [
+        0, 0, (1 << ENCODER_COUNT) - 1, (1 << MOTOR_COUNT) - 1
+    ]
+
+
+def test_servo_telemetry_cannot_supply_abs_history() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    payload = b"".join(
+        struct.pack(">hhhBB", 1, 2, 3, 12, 29) for _ in range(MOTOR_COUNT)
+    )
+
+    result = comm._process_packets([
+        _timestamped_packet(PACKET_TYPE_SERVO_TELEM, payload, 55)
+    ])
+
+    assert comm.feedback_history.read(cursor) == ()
+    assert result.servo_temperature == [29] * MOTOR_COUNT
+
+
+def test_feedback_history_never_substitutes_host_time_for_missing_p4_timestamp() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    comm._packet_router._timestamp_splitter = lambda _kind, payload: (payload, None)
+
+    raw_packet = _encoder_packet(100, 700)
+    absolute_packet = _abs_packet(101, 50)
+    comm._process_packets([
+        (raw_packet[0], raw_packet[1][:-4]),
+        (absolute_packet[0], absolute_packet[1][:-4]),
+    ])
+
+    assert comm.feedback_history.read(cursor) == ()
+
+
+def test_successful_f0_result_breaks_history_before_new_logical_origin_samples() -> None:
+    comm = LowerComputerComm("")
+    comm._process_packets([_connectivity_packet(1), _encoder_packet(2, 100), _abs_packet(3, 900)])
+    old_cursor = comm.feedback_history.mark()
+    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+
+    comm._process_packets([
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
+        _encoder_packet(11, 110), _abs_packet(12, 0),
+    ])
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(old_cursor)
+    frames = comm.feedback_history.read(comm.feedback_history.mark())
+    assert [(frame.kind, frame.p4_time_ms) for frame in frames] == [
+        ("encoder_raw", 11), ("servo_abs", 12)
+    ]
+    assert frames[-1].values[0] == 0
+
+
+def test_failed_f0_result_keeps_existing_coordinate_history() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    payload = struct.pack(">III", 42, 0, 0b1) + bytes(MOTOR_COUNT * 4)
+
+    comm._process_packets([
+        _connectivity_packet(1), _abs_packet(3, 900),
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
+    ])
+
+    assert len(comm.feedback_history.read(cursor)) == 1
+
+
+def test_state_reset_clears_history_and_invalidates_old_cursor() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    comm._process_packets([_connectivity_packet(1), _abs_packet(3, 900)])
+
+    comm._state_reducer.reset()
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    assert comm.feedback_history.read(comm.feedback_history.mark()) == ()
+    assert comm._state_reducer._feedback_status_clock_ms is None
+
+
+def test_reset_ack_clears_feedback_history() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    comm._process_packets([_connectivity_packet(1), _abs_packet(3, 900)])
+
+    comm._process_packets([_timestamped_packet(
+        0x06, bytes((CMD_RESET, 0, PROTO_ACK_STATUS_OK)), 10
+    )])
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    assert comm.feedback_history.read(comm.feedback_history.mark()) == ()
+
+
+def test_disconnect_clears_feedback_history() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    comm._process_packets([_connectivity_packet(1), _abs_packet(3, 900)])
+
+    comm.disconnect()
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    assert comm.feedback_history.read(comm.feedback_history.mark()) == ()
+
+
+def test_serial_offline_clears_feedback_history() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    comm._process_packets([_connectivity_packet(1), _abs_packet(3, 900)])
+
+    comm._mark_comm_offline("test")
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    assert comm.feedback_history.read(comm.feedback_history.mark()) == ()
+
+
+def test_short_uptime_status_clock_regression_resets_history_within_same_batch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(25), _encoder_packet(26, 700), _abs_packet(27, 900),
+        _connectivity_packet(10), _encoder_packet(11, 710), _abs_packet(12, 0),
+    ])
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    frames = comm.feedback_history.read(comm.feedback_history.mark())
+    assert [(frame.kind, frame.p4_time_ms) for frame in frames] == [
+        ("encoder_raw", 11), ("servo_abs", 12)
+    ]
+    assert comm._state_reducer._feedback_status_clock_ms == 10
+
+
+def test_status_clock_uint32_wrap_preserves_feedback_epoch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(0xFFFFFFF0),
+        _encoder_packet(0xFFFFFFF1, 700), _abs_packet(0xFFFFFFF2, 900),
+        _connectivity_packet(15), _encoder_packet(16, 710), _abs_packet(17, 910),
+    ])
+
+    frames = comm.feedback_history.read(cursor)
+    assert [frame.p4_time_ms for frame in frames] == [0xFFFFFFF1, 0xFFFFFFF2, 16, 17]
+    assert comm._state_reducer._feedback_status_clock_ms == 15
+
+
+def test_out_of_order_raw_and_abs_timestamps_cannot_reset_status_clock_epoch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(100), _encoder_packet(200, 700), _abs_packet(250, 900),
+        _encoder_packet(150, 710), _abs_packet(175, 910), _connectivity_packet(101),
+    ])
+
+    frames = comm.feedback_history.read(cursor)
+    assert [frame.p4_time_ms for frame in frames] == [200, 250, 150, 175]
+    assert comm._state_reducer._feedback_status_clock_ms == 101
+
+
+def test_replayed_historical_diagnostic_cannot_reset_feedback_epoch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+    diagnostics = []
+    for task_id in TASK_RUNTIME_NAMES:
+        diagnostic = bytearray(191)
+        diagnostic[0] = 4
+        diagnostic[1] = task_id
+        struct.pack_into(">I", diagnostic, 29, 7)
+        struct.pack_into(">I", diagnostic, 91, 10)
+        diagnostics.append((PACKET_TYPE_TASK_DIAG, bytes(diagnostic)))
+
+    comm._process_packets([
+        _connectivity_packet(1000), _encoder_packet(1001, 700), _abs_packet(1002, 900),
+        *diagnostics,
+    ])
+    assert comm._state_reducer.last_model.p4_time_ms == 10
+    comm._process_packets([
+        _connectivity_packet(1003), _encoder_packet(1004, 710), _abs_packet(1005, 910),
+    ])
+
+    assert len(comm.feedback_history.read(cursor)) == 4
+    assert comm._state_reducer._feedback_status_clock_ms == 1003
+
+
+def test_malformed_status_packet_cannot_change_feedback_clock_or_epoch() -> None:
+    comm = LowerComputerComm("")
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _connectivity_packet(100), _encoder_packet(101, 700), _abs_packet(102, 900),
+        _timestamped_packet(PACKET_TYPE_SYSTEM_STATUS, b"\x00", 1),
+        _connectivity_packet(103),
+    ])
+
+    assert len(comm.feedback_history.read(cursor)) == 2
+    assert comm._state_reducer._feedback_status_clock_ms == 103
+
+
+def test_repeated_f0_result_echo_keeps_active_history_and_updates_model_timestamp() -> None:
+    comm = LowerComputerComm("")
+    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+    comm._process_packets([
+        _connectivity_packet(1),
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
+        _encoder_packet(11, 700), _abs_packet(12, 0),
+    ])
+    cursor = comm.feedback_history.mark()
+
+    comm._process_packets([
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 20),
+        _encoder_packet(21, 710), _abs_packet(22, 10),
+    ])
+
+    assert len(comm.feedback_history.read(cursor)) == 4
+    assert comm._state_reducer.last_model.servo_rebase_zero_result_p4_time_ms == 20
+
+
+@pytest.mark.parametrize("token,success_mask,failed_mask,first_offset", [
+    (42, 0b1, 0, -110),
+    (42, 0b11, 0, -99),
+    (42, 0b1, 0b10, -99),
+    (43, 0b1, 0, -99),
+])
+def test_changed_f0_result_identity_breaks_history(
+    token: int, success_mask: int, failed_mask: int, first_offset: int,
+) -> None:
+    comm = LowerComputerComm("")
+    payload = struct.pack(">III", 42, 0b1, 0) + struct.pack(f">{MOTOR_COUNT}i", *([-99] * MOTOR_COUNT))
+    comm._process_packets([
+        _connectivity_packet(1),
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, payload, 10),
+        _encoder_packet(11, 700), _abs_packet(12, 0),
+    ])
+    cursor = comm.feedback_history.mark()
+    offsets = [-99] * MOTOR_COUNT
+    offsets[0] = first_offset
+    changed_payload = struct.pack(">III", token, success_mask, failed_mask) + struct.pack(
+        f">{MOTOR_COUNT}i", *offsets
+    )
+
+    comm._process_packets([
+        _timestamped_packet(PACKET_TYPE_SERVO_REBASE_ZERO_RESULT, changed_payload, 20),
+    ])
+
+    with pytest.raises(FeedbackHistoryError):
+        comm.feedback_history.read(cursor)
+    assert comm.feedback_history.read(comm.feedback_history.mark()) == ()

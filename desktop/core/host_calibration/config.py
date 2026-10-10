@@ -1,0 +1,121 @@
+"""config.py - MMHand Desktop 模块契约。
+
+职责：保留原 P4 标定配置，并提供上位机侧摆校准的低速参数。
+线程：纯常量与无状态查询，不拥有线程。
+输入：关节或电机索引。
+输出：安装映射、标定阈值及参数。
+状态所有权：流程实例拥有参数，硬件映射复用 core 唯一映射。
+禁止依赖：禁止依赖 Qt/UI、串口、ROS2 或 Replay。
+"""
+
+from dataclasses import dataclass, replace
+
+from ..motor_mapping import (
+    MOTOR_TO_JOINT_INDEX,
+    JOINT_TO_PRIMARY_MOTOR_INDEX,
+    motor_tendon_shorten_abs_sign,
+)
+from ..protocol import ENCODER_COUNT, MOTOR_COUNT, TENDON_LUT_MAX_SAMPLES
+
+# 保留固件名字，便于与 src/config/CalibrationConfig.h 逐项核对。
+kFeedbackReadyServoTimeoutMs = 500
+kEncoderTrustedSampleMaxAgeMs = 300
+kInitialFeedbackWaitMs = 1200
+kEncoderRecoveryTimeoutMs = 2000
+kEncoderRecoveryStableSamples = 3
+kServoRecoveryTimeoutMs = 5000
+kServoRecoveryStableSamples = 3
+kMinTravelDeg = 10.0
+kMaxTravelDeg = 359.0
+kRejectNearFullWrapSpanCounts = 15360
+kLutStartDeg = -5.0
+kLutZeroDeg = 0.0
+kServoZeroPullCounts = 500
+kDualInitialSlackCounts = 3200
+kMotorAbsWindowCounts = 4096 * 5
+kMotorAbsReleaseMarginCounts = 500
+kMotorAbsTightMarginCounts = 900
+kOverloadLoadThreshold = 800
+kDualPrimaryTightLoadThreshold = 190
+kDualSecondaryPreloadLoadThreshold = 190
+kDualSecondaryFinalLoadThreshold = 250
+kWorkspaceTightLoadThreshold = 190
+kWorkspaceReleaseCounts = 3200
+kWorkspaceTargetToleranceCounts = 60
+kReverseMinFollowDeg = 12.0
+# 上位机串口事务预算；不替代 P4 机械状态机内部的 100 ms 执行确认配置。
+kHostTargetResultTimeoutMs = 1000
+kHostRebaseFeedbackTimeoutMs = 3000
+kTendonFitSampleStepDeg = 5.0
+kSingleTendonMaxReleaseCounts = 4096 * 2
+kAngleStallStableSamples = 2
+kPreReleaseSyncTargetToleranceCounts = 40
+kPreReleaseSyncSettleDeltaCounts = 20
+kPreReleaseSyncStableSamples = 2
+kTendonRawSampleCapacity = TENDON_LUT_MAX_SAMPLES * 3
+kCalibrationEncoderModulo = 16384
+kCalibrationEncoderHalfTurn = 8192
+kFeedbackReadyEnterOutsideToleranceCounts = 24
+kDefaultEncoderDirection = (
+    -1, -1, -1, 1, -1, -1, -1, 1, -1, -1, -1, 1,
+    -1, -1, -1, 1, -1, -1, -1, 1, -1,
+)
+
+# 四指 MCP AA 和拇指 AA；J20 的拇指 CMC 不属于侧摆。
+SIDE_SWAY_JOINT_INDICES = (0, 4, 8, 12, 16)
+
+
+@dataclass(frozen=True)
+class AutoCalibrationParams:
+    """原 defaultAutoCalibrationParams()；字段保留 P4 拼写。"""
+
+    tightenSpeedCountsPerSec: int = 400
+    servoSpeed: int = 400
+    servoAcc: int = 20
+    loopMs: int = 20
+    windowMs: int = 200
+    traceMs: int = 200
+    windowServoDeltaCounts: int = 50
+    zeroReachAbsTolerance: int = 200
+    stallActualDeg: float = 0.75
+    tightLoadHigh: int = 250
+
+
+def default_auto_calibration_params(joint: int | None = None) -> AutoCalibrationParams:
+    params = AutoCalibrationParams()
+    if joint not in SIDE_SWAY_JOINT_INDICES:
+        return params
+    # 降低反馈延迟期间的位移，保留原 50-count 运动门禁以抗噪。
+    # 低速下将窗口扩大到 400 ms（约 80 counts），避免正常运动无法达标。
+    return replace(params, tightenSpeedCountsPerSec=200, servoSpeed=200,
+                   windowMs=400)
+
+
+def joint_motors(joint: int) -> tuple[int, ...]:
+    return tuple(m for m, mapped in enumerate(MOTOR_TO_JOINT_INDEX) if mapped == joint)
+
+
+def primary_motor(joint: int) -> int:
+    return JOINT_TO_PRIMARY_MOTOR_INDEX[joint] if 0 <= joint < ENCODER_COUNT else -1
+
+
+def shorten_sign(motor: int) -> int:
+    return motor_tendon_shorten_abs_sign(motor) if 0 <= motor < MOTOR_COUNT else 0
+
+
+def default_encoder_direction(joint: int) -> int:
+    return kDefaultEncoderDirection[joint]
+
+
+def load_magnitude(raw: int) -> int:
+    """ServoValue.h：负载方向位不参与机械阈值比较。"""
+    return abs(int(raw)) & 0x03FF
+
+
+def motor_apply_tendon_delta(motor: int, raw_abs: int, tendon_delta: int) -> int:
+    # P4 clampCalibrationServoAbs 是恒等函数；最终硬件范围由 IO 检查。
+    return int(raw_abs) + shorten_sign(motor) * int(tendon_delta)
+
+
+def single_tendon_release_counts(motor: int, tight_abs: int, current_abs: int) -> int:
+    return max(0, (int(tight_abs) - int(current_abs)) * shorten_sign(motor))

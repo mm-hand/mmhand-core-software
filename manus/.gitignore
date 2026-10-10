@@ -1,7 +1,0 @@
-Output/
-Temp/
-**/build/
-**/*.exe
-**/*.pdb
-**/*.dll
-**/*.lib

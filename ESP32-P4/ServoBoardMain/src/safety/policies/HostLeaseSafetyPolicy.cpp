@@ -17,8 +17,7 @@ bool requiresHostControlLease(uint8_t systemState, uint8_t targetOwner)
                systemState == SYSTEM_STATE_RUN_FEEDBACK;
     }
     if (targetOwner == SERVO_TARGET_OWNER_CALIBRATION) {
-        return systemState == SYSTEM_STATE_CALIBRATION_RUNNING ||
-               systemState == SYSTEM_STATE_ROPE_INIT_RUNNING;
+        return systemState == SYSTEM_STATE_ROPE_INIT_RUNNING;
     }
     return false;
 }

@@ -135,6 +135,8 @@ def _render_cpp(schema: dict) -> str:
         "kRopeInitPayloadBytes": "CMD_ROPE_INIT",
         "kClearCalibrationScopePayloadBytes": "CMD_CLEAR_CALIBRATION_SCOPE",
         "kServoResetZeroPayloadBytes": "CMD_SERVO_RESET_ZERO",
+        "kServoRebaseZeroPayloadBytes": "CMD_SERVO_REBASE_ZERO",
+        "kMotorDirectReleasePayloadBytes": "CMD_MOTOR_DIRECT_RELEASE",
         "kStateSyncRequestPayloadBytes": "CMD_STATE_SYNC_REQUEST",
         "kTaskDiagSubscribePayloadBytes": "CMD_TASK_DIAG_SUBSCRIBE",
         "kControlTraceSubscribePayloadBytes": "CMD_CONTROL_TRACE_SUBSCRIBE",

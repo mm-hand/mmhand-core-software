@@ -7,7 +7,9 @@
 依赖方向：config/data/generated -> platform/hal -> modules/safety/runtime -> tasks -> app。
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$FirmwareOnly
+)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -156,7 +158,6 @@ $taskPackages = @{
     "servo_bus" = @("ServoBusTask.cpp", "ServoBusService.cpp")
     "motion_control" = @("MotionControlTask.cpp", "MotionControlService.cpp")
     "runtime_monitor" = @("RuntimeMonitorTask.cpp", "RuntimeMonitorService.cpp")
-    "auto_calibration" = @("AutoCalibrationTask.cpp", "AutoCalibrationCoordinator.cpp")
 }
 foreach ($entry in $taskPackages.GetEnumerator()) {
     foreach ($fileName in $entry.Value) {
@@ -204,9 +205,20 @@ foreach ($match in $removedServiceLoops) {
                  $match.Path, $match.LineNumber)
 }
 
-# R6.1：三个历史超大文件必须保持为编排层，禁止状态机实现重新回流。
+# R6.1：通信和状态协调层禁止状态机实现重新回流。
+# 自动标定已由 Desktop 独占；P4 保留数据镜像与通用直控，不得重新恢复旧算法入口。
+$removedCalibrationRoot = Join-Path $taskRoot "auto_calibration"
+if ((Test-Path -LiteralPath $removedCalibrationRoot) -and
+    (Get-ChildItem -LiteralPath $removedCalibrationRoot -Recurse -File).Count -gt 0) {
+    Add-Failure "Removed firmware automatic calibration task returned: tasks/auto_calibration"
+}
+$removedCalibrationSymbols = $sourceFiles | Select-String -Encoding UTF8 -Pattern `
+    '\b(autoCalibrationTask|startAutoCalibrationTaskRuntime|AutoCalibrationTaskRuntime|AutoCalibrationCoordinator|SingleMotorCalibrationMachine|DualMotorCalibrationMachine|CalibrationSessionController|CalibrationSequencePlanner|CalibrationMotionSupport|calibration_motion_started|calibration_aux_motor_mask|calibration_trust_request_mask|calibration_trust_accepted_mask|calibration_target_request_token|calibration_target_result_token|SYSTEM_EVENT_CALIBRATE|SYSTEM_EVENT_CALIBRATION_DONE|SYSTEM_EVENT_CALIBRATION_FAILED)\b'
+foreach ($match in $removedCalibrationSymbols) {
+    Add-Failure ("Removed firmware calibration symbol returned: {0}:{1}" -f `
+                 $match.Path, $match.LineNumber)
+}
 $coordinatorBudgets = @{
-    "tasks\auto_calibration\AutoCalibrationCoordinator.cpp" = 260
     "tasks\host_comm\HostCommService.cpp" = 620
     "tasks\system_state\SystemStateCoordinator.cpp" = 180
 }
@@ -223,9 +235,6 @@ foreach ($entry in $coordinatorBudgets.GetEnumerator()) {
 }
 
 $requiredSplitModules = @(
-    "tasks\auto_calibration\CalibrationMotionSupport.cpp",
-    "tasks\auto_calibration\single_motor\SingleMotorCalibrationMachine.cpp",
-    "tasks\auto_calibration\dual_motor\DualMotorCalibrationMachine.cpp",
     "tasks\host_comm\HostFrameReader.cpp",
     "tasks\host_comm\HostCommandDispatcher.cpp",
     "tasks\host_comm\HostTelemetryPublisher.cpp",
@@ -320,7 +329,8 @@ foreach ($match in $legacyMappingRuntime) {
                  $match.Path, $match.LineNumber)
 }
 
-# R0：产品指纹不仅要“已生成”，还必须逐项证明 Desktop 与 P4 使用同一组 CRC。
+# R0：默认逐项同步 Desktop/P4；固件独立变更只比对稳定模型/硬件契约。
+# FirmwareOnly 下源码/参数 CRC 仍由下方 P4 生成检查验证，不能沿用旧值。
 if (-not (Test-Path -LiteralPath $productFingerprintJsonPath) -or
     -not (Test-Path -LiteralPath $productFingerprintHeaderPath)) {
     Add-Failure "Product fingerprint contract is missing."
@@ -338,6 +348,9 @@ if (-not (Test-Path -LiteralPath $productFingerprintJsonPath) -or
         "structure_commit_crc" = "kProductStructureCommitCrc"
     }
     foreach ($entry in $fingerprintFields.GetEnumerator()) {
+        if ($FirmwareOnly -and $entry.Key -in @("parameter_crc", "firmware_source_crc")) {
+            continue
+        }
         $expected = ([string]$fingerprint.($entry.Key)).ToUpperInvariant()
         $pattern = [regex]::Escape($entry.Value) + '\s*=\s*0x([0-9A-Fa-f]{8})UL'
         $match = [regex]::Match($fingerprintHeader, $pattern)
@@ -402,7 +415,11 @@ try {
         @("tools\generate_upper_protocol.py", "Upper protocol"),
         @("tools\generate_p4_safety_catalog.py", "P4 safety catalog")
     )) {
-        & python $check[0] --check
+        $generatorArgs = @("--check")
+        if ($FirmwareOnly -and $check[0] -ne "tools\generate_upper_protocol.py") {
+            $generatorArgs += "--firmware-only"
+        }
+        & python -B $check[0] @generatorArgs
         if ($LASTEXITCODE -ne 0) {
             Add-Failure "$($check[1]) generated files are stale."
         }
@@ -411,7 +428,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Add-Failure "Robot model generated files are stale."
     }
-    & python "tools\p4_architecture\check_safety_rule_closure.py"
+    & python -B "tools\p4_architecture\check_safety_rule_closure.py"
     if ($LASTEXITCODE -ne 0) {
         Add-Failure "P4 safety rules have not completed registration/execution/event/recovery closure."
     }
@@ -426,4 +443,7 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "P4 architecture check passed." -ForegroundColor Green
+if ($FirmwareOnly) {
+    Write-Host "Firmware-only checks preserved Desktop outputs; current P4 source/parameter CRCs were verified."
+}
 Write-Host "Checked $($sourceFiles.Count) C/C++ source files; firmware was not compiled."

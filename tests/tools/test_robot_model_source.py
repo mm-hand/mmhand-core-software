@@ -8,7 +8,6 @@ import zlib
 
 import pytest
 
-from desktop.core.model_resources import resolve_mesh
 from tools.generate_robot_model import (
     DEFAULT_MANIFEST, DEFAULT_SOURCE, DEFAULT_URDF, ModelGenerationError,
     load_manifest, load_urdf_limits, topology_crc32, publish_outputs,
@@ -51,22 +50,6 @@ def test_invalid_axis_or_tree_is_rejected(tmp_path, replacement):
     urdf.write_text('<robot name="hand"><link name="base"/><link name="tip"/>' + replacement + '</robot>', encoding="utf-8")
     with pytest.raises(ValueError):
         validate_tree(urdf, ["j"])
-
-
-def test_mesh_resolution_supports_relative_and_package_without_xml_rewriting(tmp_path):
-    package = tmp_path / "hand_description"
-    (package / "urdf").mkdir(parents=True)
-    (package / "meshes").mkdir()
-    (package / "package.xml").write_text("<package/>", encoding="utf-8")
-    mesh = package / "meshes" / "palm.stl"
-    mesh.write_bytes(b"mesh")
-    urdf = package / "urdf" / "hand.urdf"
-    assert resolve_mesh(urdf, "../meshes/palm.stl") == mesh
-    assert resolve_mesh(urdf, "package://hand_description/meshes/palm.stl") == mesh
-    with pytest.raises(ValueError, match="missing mesh"):
-        resolve_mesh(urdf, "../meshes/missing.stl")
-    with pytest.raises(ValueError, match="escapes"):
-        resolve_mesh(urdf, "package://hand_description/../other.stl")
 
 
 def test_git_source_rejects_dirty_and_untracked_inputs(tmp_path):

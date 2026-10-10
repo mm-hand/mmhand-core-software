@@ -859,24 +859,6 @@ public:
         return restoreAbsolutePosition(id, anchorLogicalAbs + rawDelta);
     }
 
-    // 自动标定已经重新建立机械端点后，当前 power-session ABS 可作为新的
-    // 可信基准。这里不平移坐标，也不修改 logicalOffset，只闭合驱动内部
-    // absoluteReliable 与共享 Turn Known 状态。
-    bool acceptCurrentSessionAsTrusted(uint8_t id)
-    {
-        if (id > MAX_SERVO_ID || !_feedback[id].online ||
-            !_multiTurnConfigured[id] ||
-            _feedback[id].onlineTransitionPending ||
-            _feedback[id].recoveryFailed) {
-            return false;
-        }
-        ServoFeedbackInternal& fb = _feedback[id];
-        fb.initialized = true;
-        fb.absoluteReliable = true;
-        fb.lastUpdate = millis();
-        return true;
-    }
-
     // ServoBus 消费一次掉线冻结快照。读取后清 pending，确保同一次掉电
     // 仅建立一份会话内热插拔恢复锚点。
     bool consumeOfflineTrustedSnapshot(uint8_t id,

@@ -24,7 +24,13 @@ bool upperApplyTargetAnglesMasked(SystemRuntimeContext* sharedData,
 // 此处不做统一数值钳位；发送前由舵机层结合每台电机 logicalOffset 做最终硬限制。
 bool upperApplyMotorTargets(SystemRuntimeContext* sharedData,
                             const int32_t* targets,
-                            uint8_t count);
+                            uint8_t count,
+                            uint32_t token,
+                            uint32_t requestedMotorMask,
+                            uint16_t speed,
+                            uint8_t acc);
+/** 释放当前普通直控输出权；token=0 按当前 generation，非零须匹配成功回执。 */
+bool upperReleaseMotorDirect(SystemRuntimeContext* sharedData, uint32_t token);
 // 在静止态原子更新 active motor/joint scope；requireCanFeedback 决定是否依赖磁编反馈。
 bool upperApplyActiveScope(SystemRuntimeContext* sharedData,
                            uint32_t activeMotorMask,

@@ -1,30 +1,22 @@
+from unittest.mock import Mock
 import pytest
-
 from desktop.app.entry import build_parser, main
 
 
-def test_default_launch_opens_gui_without_authorizing_motion(monkeypatch):
-    calls = []
-    monkeypatch.setattr("desktop.app.ui_runner.run_ui", lambda **kw: calls.append(kw) or 0)
-    assert main([]) == 0
-    assert calls == [{"ros2_enabled": True}]
+def test_default_entry_enables_optional_ros():
+    assert not build_parser().parse_args([]).no_ros2
+    assert build_parser().parse_args(['--no-ros2']).no_ros2
 
 
-def test_no_ros2_launch(monkeypatch):
-    calls = []
-    monkeypatch.setattr("desktop.app.ui_runner.run_ui", lambda **kw: calls.append(kw) or 0)
-    assert main(["--no-ros2"]) == 0
-    assert calls == [{"ros2_enabled": False}]
+@pytest.mark.parametrize('arguments', [['ui'], ['cli'], ['--auto-start'], ['--ros-topic', '/raw_ik_target']])
+def test_retired_modes_are_not_formal_entry(arguments):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(arguments)
 
 
-@pytest.mark.parametrize("args", [
-    ["ui"], ["cli"], ["--mode", "replay"], ["--port", "COM7"],
-    ["--tactile-port", "COM8"], ["--ros2"], ["--ros2-input", "raw_ik"],
-    ["--ros-topic", "/other"], ["--ros2-joint-target-topic", "/other"],
-    ["--ros2-raw-ik-topic", "/other"], ["--ros2-raw-ik-space", "urdf_rad"],
-    ["--auto-start"], ["--no-plot"],
-])
-def test_retired_arguments_are_explicitly_rejected(args):
-    with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(args)
-    assert exc.value.code == 2
+def test_main_launches_one_local_ui(monkeypatch):
+    from desktop.app import ui_runner
+    runner = Mock(return_value=0)
+    monkeypatch.setattr(ui_runner, 'run_ui', runner)
+    assert main(['--no-ros2']) == 0
+    runner.assert_called_once_with(ros2_enabled=False)

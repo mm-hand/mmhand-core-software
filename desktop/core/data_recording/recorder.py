@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import shutil
 import threading
 import time
 from datetime import datetime
@@ -26,9 +25,6 @@ from .topic_schema import (
     DEFAULT_TOPICS,
     TOPIC_FIELDNAMES,
 )
-
-
-RUN_DATA_SESSION_KEEP_DIRS = 20
 
 
 class DataSessionRecorder:
@@ -65,8 +61,7 @@ class DataSessionRecorder:
     ) -> None:
         self.stop()
         os.makedirs(root_dir, exist_ok=True)
-        self._prune_old_sessions(root_dir)
-        session = session_name or f"数据记录_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        session = session_name or f"数据记录_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         session_dir = os.path.join(root_dir, session)
         os.makedirs(session_dir, exist_ok=True)
         selected_topics = list(topics or DEFAULT_TOPICS)
@@ -249,24 +244,6 @@ class DataSessionRecorder:
         with open(readable_path, "w", encoding="utf-8") as handle:
             json.dump(meta, handle, ensure_ascii=False, indent=2, default=str)
             handle.write("\n")
-
-    @staticmethod
-    def _prune_old_sessions(root_dir: str) -> None:
-        try:
-            entries = [
-                os.path.join(root_dir, name)
-                for name in os.listdir(root_dir)
-                if (name.startswith("session_") or name.startswith("数据记录_"))
-                and os.path.isdir(os.path.join(root_dir, name))
-            ]
-        except OSError:
-            return
-        entries.sort(key=lambda item: os.path.getmtime(item), reverse=True)
-        for path in entries[RUN_DATA_SESSION_KEEP_DIRS - 1:]:
-            try:
-                shutil.rmtree(path)
-            except OSError:
-                pass
 
 
 def _host_time_text(host_time: float) -> str:

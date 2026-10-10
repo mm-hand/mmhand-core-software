@@ -5,7 +5,7 @@ from desktop.core.data_models import HandModel
 from desktop.core.protocol import HOST_PROTOCOL_VERSION
 
 
-def test_anchor_paths_follow_device_and_model_and_preserve_legacy(tmp_path, monkeypatch):
+def test_anchor_paths_follow_device_and_model_without_activating_legacy(tmp_path, monkeypatch):
     anchor = tmp_path / "multiturn_runtime.json"
     bundle = tmp_path / "calibration_bundle.mmcal.json"
     anchor.write_text('{"legacy":true}', encoding="utf-8")
@@ -28,7 +28,8 @@ def test_anchor_paths_follow_device_and_model_and_preserve_legacy(tmp_path, monk
     assert controller._multiturn_store.path != path_a
     assert controller._calibration_snapshot_anchor_valid_mask == 0
     for path in (anchor, bundle):
-        assert path.read_bytes() == path.with_name(path.name + ".before-device-isolation.bak").read_bytes()
+        assert path.read_text(encoding="utf-8") == '{"legacy":true}'
+        assert not path.with_name(path.name + ".before-device-isolation.bak").exists()
 
 
 def test_bad_device_id_or_protocol_cannot_choose_storage(monkeypatch):

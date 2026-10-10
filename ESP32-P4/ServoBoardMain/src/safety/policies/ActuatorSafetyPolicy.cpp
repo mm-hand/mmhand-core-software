@@ -59,8 +59,7 @@ bool ownerMatchesSystemState(uint8_t owner, uint8_t state)
                state == SYSTEM_STATE_RUN_FEEDBACK;
     }
     if (owner == SERVO_TARGET_OWNER_CALIBRATION) {
-        return state == SYSTEM_STATE_CALIBRATION_RUNNING ||
-               state == SYSTEM_STATE_ROPE_INIT_RUNNING;
+        return state == SYSTEM_STATE_ROPE_INIT_RUNNING;
     }
     return false;
 }
@@ -86,8 +85,7 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
                       SERVO_TARGET_BATCH_MAX);
     }
     if (batch.purpose != SERVO_TARGET_PURPOSE_NORMAL &&
-        batch.purpose != SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD &&
-        batch.purpose != SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED) {
+        batch.purpose != SERVO_TARGET_PURPOSE_HOST_LEASE_HOLD) {
         return reject(ServoRejectReason::InvalidCommand,
                       0,
                       0,
@@ -99,15 +97,6 @@ ServoSafetyDecision evaluateBatchStructure(const ServoTargetBatch_t& batch)
           batch.source != SERVO_TARGET_OWNER_CALIBRATION) ||
          batch.transactionToken == 0 ||
          batch.count == 0)) {
-        return reject(ServoRejectReason::InvalidCommand,
-                      0,
-                      0,
-                      0xFF,
-                      0xFF);
-    }
-    if (batch.purpose == SERVO_TARGET_PURPOSE_CALIBRATION_CONFIRMED &&
-        (batch.source != SERVO_TARGET_OWNER_CALIBRATION ||
-         batch.transactionToken == 0 || batch.count == 0)) {
         return reject(ServoRejectReason::InvalidCommand,
                       0,
                       0,
@@ -238,7 +227,7 @@ ServoSafetyDecision evaluateCommand(const ServoTargetBatch_t& batch,
                       motorChannel,
                       commandIndex);
     }
-    // 标定/人工直控可关闭此门禁来重建坐标，负反馈与 Rope Init 必须开启。
+    // 人工直控可关闭此门禁来重建坐标，负反馈与 Rope Init 必须开启。
     if (context.requireMultiTurnKnown &&
         (context.multiTurnUnknownMask & motorBit) != 0) {
         return reject(ServoRejectReason::MultiTurnUnknown,

@@ -152,7 +152,7 @@ bool sendSystemStatusPacket(SystemRuntimeContext* sharedData)
     buffer[idx++] = sharedData->control_enabled;
     buffer[idx++] = sharedData->servo_target_owner;
     buffer[idx++] = sharedData->control_mode;
-    buffer[idx++] = g_calibrationStatus;
+    buffer[idx++] = 0; // 旧自动标定状态字段保留布局，固件不再运行标定任务。
     buffer[idx++] = (uint8_t)((faultBitmap >> 24) & 0xFF);
     buffer[idx++] = (uint8_t)((faultBitmap >> 16) & 0xFF);
     buffer[idx++] = (uint8_t)((faultBitmap >> 8) & 0xFF);
@@ -569,38 +569,6 @@ bool sendJointCalibSnapshotPacket(uint8_t jointIndex)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 上报最近一次结构化自动标定失败及本轮关节结果汇总。 */
-bool sendCalibrationDiagPacket(const CalibrationDiagData_t& diag)
-{
-    uint8_t buffer[48];
-    size_t idx = 0;
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0x00;
-    buffer[idx++] = PACKET_TYPE_CALIB_DIAG;
-    buffer[idx++] = diag.valid ? 1 : 0;
-    buffer[idx++] = diag.reason;
-    buffer[idx++] = diag.phase;
-    buffer[idx++] = diag.joint;
-    buffer[idx++] = diag.motor;
-    appendI32BigEndian(buffer, &idx, diag.valueA);
-    appendI32BigEndian(buffer, &idx, diag.valueB);
-    appendI32BigEndian(buffer, &idx, diag.valueC);
-    buffer[idx++] = (uint8_t)((diag.bitmap >> 24) & 0xFF);
-    buffer[idx++] = (uint8_t)((diag.bitmap >> 16) & 0xFF);
-    buffer[idx++] = (uint8_t)((diag.bitmap >> 8) & 0xFF);
-    buffer[idx++] = (uint8_t)(diag.bitmap & 0xFF);
-    buffer[idx++] = (uint8_t)((diag.timestamp >> 24) & 0xFF);
-    buffer[idx++] = (uint8_t)((diag.timestamp >> 16) & 0xFF);
-    buffer[idx++] = (uint8_t)((diag.timestamp >> 8) & 0xFF);
-    buffer[idx++] = (uint8_t)(diag.timestamp & 0xFF);
-    appendU32BigEndian(buffer, &idx, diag.sequence);
-    appendU32BigEndian(buffer, &idx, diag.completedJointMask);
-    appendU32BigEndian(buffer, &idx, diag.failedJointMask);
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = (uint8_t)(idx - 2);
-    return FW_SERIAL_WRITE(buffer, idx) == idx;
-}
-
 /** 上报 21 路磁编 raw、有效状态和源快照时间。 */
 bool sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw)
 {
@@ -700,38 +668,13 @@ bool sendControlTracePacket(const ControlTraceData_t& trace)
     return FW_SERIAL_WRITE(buffer, idx) == idx;
 }
 
-/** 100 Hz logical ABS 仅携带连续位置；在线状态由 SYSTEM_STATUS 权威上报。 */
-bool sendServoAnglePacket(const ServoAngleData_t& servoAngle)
+/** 同快照 RAW/ABS 同节奏发送；一次串口写避免日志插入两帧之间。 */
+bool sendServoPositionPackets(const ServoAngleData_t& position)
 {
-    uint8_t buffer[128];
-    size_t idx = 0;
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0;
-    buffer[idx++] = PACKET_TYPE_SERVO_ANGLE;
-    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
-        appendI32BigEndian(buffer, &idx, servoAngle.servoAngles[i]);
-    }
-    appendU32BigEndian(buffer, &idx, servoAngle.timestamp);
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = static_cast<uint8_t>(idx - 2U);
-    return FW_SERIAL_WRITE(buffer, idx) == idx;
-}
-
-/** 100 Hz 单圈位置只发送当前 RawNow。 */
-bool sendServoRawPacket(const ServoAngleData_t& servoRaw)
-{
-    uint8_t buffer[72];
-    size_t idx = 0;
-    buffer[idx++] = PROTOCOL_HEADER;
-    buffer[idx++] = 0;
-    buffer[idx++] = PACKET_TYPE_SERVO_RAW;
-    for (uint8_t i = 0; i < SERVO_TOTAL_NUM; ++i) {
-        appendI16BigEndian(buffer, &idx, servoRaw.servoRawPositions[i]);
-    }
-    appendU32BigEndian(buffer, &idx, servoRaw.timestamp);
-    buffer[idx++] = PROTOCOL_TAIL;
-    buffer[1] = static_cast<uint8_t>(idx - 2U);
-    return FW_SERIAL_WRITE(buffer, idx) == idx;
+    uint8_t buffer[3U + SERVO_TOTAL_NUM * 2U + 4U + 1U +
+                   3U + SERVO_TOTAL_NUM * 4U + 4U + 1U];
+    const size_t length = encodeServoPositionPackets(buffer, sizeof(buffer), position);
+    return length != 0U && FW_SERIAL_WRITE(buffer, length) == length;
 }
 
 /** 100 Hz 遥测不重复携带在线数组，在线状态统一来自 SYSTEM_STATUS。 */
@@ -840,6 +783,54 @@ bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
     appendU32BigEndian(buffer, &idx, resultToken);
     appendU32BigEndian(buffer, &idx, restoredMask);
     appendU32BigEndian(buffer, &idx, rejectedMask);
+    appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = static_cast<uint8_t>(idx - 2U);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
+bool sendDirectTargetResultPacket(uint32_t token,
+                                           uint32_t requestedMask,
+                                           uint32_t appliedMask,
+                                           uint32_t rejectedMask,
+                                           uint8_t status)
+{
+    uint8_t buffer[25];
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_DIRECT_TARGET_RESULT;
+    appendU32BigEndian(buffer, &idx, token);
+    appendU32BigEndian(buffer, &idx, requestedMask);
+    appendU32BigEndian(buffer, &idx, appliedMask);
+    appendU32BigEndian(buffer, &idx, rejectedMask);
+    buffer[idx++] = status;
+    appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
+    buffer[idx++] = PROTOCOL_TAIL;
+    buffer[1] = static_cast<uint8_t>(idx - 2U);
+    return FW_SERIAL_WRITE(buffer, idx) == idx;
+}
+
+bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
+                                     uint32_t successMask,
+                                     uint32_t failedMask,
+                                     const int32_t offsets[SERVO_TOTAL_NUM])
+{
+    if (!offsets) return false;
+    // FE + length + type + token/masks + 27 offset + timestamp + FF。
+    uint8_t buffer[4U + 12U + 4U * SERVO_TOTAL_NUM + kP4TimestampBytes];
+    static_assert(sizeof(buffer) - 2U <= UINT8_MAX,
+                  "Rebase result must fit the one-byte frame length");
+    size_t idx = 0;
+    buffer[idx++] = PROTOCOL_HEADER;
+    buffer[idx++] = 0;
+    buffer[idx++] = PACKET_TYPE_SERVO_REBASE_ZERO_RESULT;
+    appendU32BigEndian(buffer, &idx, resultToken);
+    appendU32BigEndian(buffer, &idx, successMask);
+    appendU32BigEndian(buffer, &idx, failedMask);
+    for (uint8_t motor = 0; motor < SERVO_TOTAL_NUM; ++motor) {
+        appendI32BigEndian(buffer, &idx, offsets[motor]);
+    }
     appendU32BigEndian(buffer, &idx, p4::platform::time::monotonicMillis());
     buffer[idx++] = PROTOCOL_TAIL;
     buffer[1] = static_cast<uint8_t>(idx - 2U);

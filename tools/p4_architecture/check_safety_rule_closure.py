@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from generate_p4_safety_catalog import (  # noqa: E402
     FIRMWARE_INDEX_JSON,
     Probe,
     load_rule_definitions,
+    is_retired_rule,
     resolve_rule_binding,
 )
 
@@ -53,6 +55,8 @@ def generated_entry_ok(rule: dict, contract, entry: dict | None) -> bool:
         entry.get("name") == rule["name"]
         and int(entry.get("rule_id", -1)) == int(rule["rule_id"])
         and entry.get("code") == rule["code"]
+        and entry.get("active") is True
+        and entry.get("retired") is False
         and entry.get("policy") == {
             "file": contract.policy.path,
             "symbol": contract.policy.token,
@@ -87,12 +91,54 @@ def audit(repo_root: Path) -> dict[str, object]:
         repo_root / "desktop" / "resources" / "config" / "p4_safety_rules.json"
     ))["rules"]
     desktop_by_id = {int(item["rule_id"]): item for item in desktop_items}
+    runtime_sources = {
+        str(path.relative_to(source_root)): read(path)
+        for path in source_root.rglob("*")
+        if path.suffix in {".c", ".cpp", ".h"}
+        and "generated" not in path.relative_to(source_root).parts
+    }
 
     results: list[dict[str, object]] = []
     mapped_rule_count = 0
     for rule in load_rule_definitions():
         contract = resolve_rule_binding(rule)
         code = str(rule["code"])
+        if is_retired_rule(rule):
+            entry = generated_by_name.get(str(rule["name"]), {})
+            runtime_pattern = re.compile(
+                rf"\bSafetyRuleId\s*::\s*{re.escape(str(rule['name']))}\b"
+            )
+            runtime_references = [
+                path for path, text in runtime_sources.items()
+                if runtime_pattern.search(text)
+            ]
+            has_no_binding = contract is None and not any(
+                name in entry for name in
+                ("policy", "caller", "event", "recovery", "registry_function")
+            )
+            inactive = has_no_binding and not runtime_references
+            results.append({
+                "name": rule["name"],
+                "code": code,
+                "retired": True,
+                "registration": (
+                    str(rule["name"]) in catalog_header
+                    and int(rule["rule_id"]) in desktop_by_id
+                    and desktop_by_id[int(rule["rule_id"])]["code"] == code
+                    and entry.get("name") == rule["name"]
+                    and entry.get("rule_id") == rule["rule_id"]
+                    and entry.get("code") == code
+                    and entry.get("active") is False
+                    and entry.get("retired") is True
+                ),
+                "policy": has_no_binding,
+                "caller": inactive,
+                "mapping": inactive,
+                "event": inactive,
+                "recovery": inactive,
+                "runtime_references": runtime_references,
+            })
+            continue
         if contract is None:
             results.append({
                 "name": rule["name"],
@@ -156,11 +202,13 @@ def audit(repo_root: Path) -> dict[str, object]:
             direct_store_writers.append(str(path.relative_to(source_root)))
 
     keys = ("registration", "policy", "caller", "mapping", "event", "recovery")
+    active_results = [item for item in results if not item.get("retired", False)]
     return {
-        "rule_count": len(results),
-        "closed_count": sum(all(item[key] for key in keys) for item in results),
+        "rule_count": len(active_results),
+        "retired_rule_count": len(results) - len(active_results),
+        "closed_count": sum(all(item[key] for key in keys) for item in active_results),
         "registry_mapped_rule_count": mapped_rule_count,
-        "direct_rule_count": len(results) - mapped_rule_count,
+        "direct_rule_count": len(active_results) - mapped_rule_count,
         "rules": results,
         "stale_scaffold": stale_scaffold,
         "direct_store_writers": direct_store_writers,
@@ -185,6 +233,8 @@ def main() -> int:
         for item in failures:
             missing = [key for key in keys if not item[key]]
             print(f" - {item['code']} {item['name']}: {', '.join(missing)}")
+            for path in item.get("runtime_references", []):
+                print(f"   retired rule still referenced at runtime: {path}")
         for path in report["stale_scaffold"]:
             print(f" - stale safety scaffold: {path}")
         for path in report["direct_store_writers"]:
@@ -194,7 +244,8 @@ def main() -> int:
             "P4 safety rule closure check passed: "
             f"{report['closed_count']}/{report['rule_count']} rules closed; "
             f"Registry maps {report['registry_mapped_rule_count']}, "
-            f"Policy direct IDs {report['direct_rule_count']}."
+            f"Policy direct IDs {report['direct_rule_count']}; "
+            f"{report['retired_rule_count']} retired rules have no runtime bindings."
         )
     return 1 if failures or report["stale_scaffold"] or report["direct_store_writers"] else 0
 

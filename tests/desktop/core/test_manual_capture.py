@@ -1,75 +1,80 @@
-"""Manual endpoint capture: fresh feedback, draft isolation and install outcome."""
-
-import threading
-from types import SimpleNamespace
-
+"""Manual capture uses current asynchronous GUI operations and retains confirmed endpoints."""
+import time
+from unittest.mock import Mock
 import pytest
-
 from desktop.core.hand_backend import HandBackend
-from desktop.core.data_models import HandModel
-
+from desktop.core.protocol import SYSTEM_STATE_READY
 
 @pytest.fixture
 def capture(monkeypatch):
-    state = HandModel()
-    state.has_encoder_raw_data = True
-    state.encoder_raw_last_rx_ts = 100.0
+    hand = HandBackend()
+    monkeypatch.setattr(hand, 'is_comm_connected', lambda: True)
+    state = hand._controller.current_state
+    state.has_system_status_data = state.has_encoder_raw_data = True
+    state.system_status_last_rx_ts = state.encoder_raw_last_rx_ts = time.time()
+    state.system_state = SYSTEM_STATE_READY
+    state.encoder_online_bitmap = 1
     state.has_manual_reference_encoder_directions = True
     state.manual_reference_encoder_directions = [1] * 21
     state.encoders[0].raw_error = False
-    calls = []
-    backend = HandBackend.__new__(HandBackend)
-    backend._manual_capture_lock = threading.RLock()
-    backend._manual_drafts = {}
-    backend.is_comm_connected = lambda: True
-    backend.get_state_snapshot = lambda: state
-    backend._controller = SimpleNamespace(set_manual_encoder_reference=lambda *args: calls.append(args) or True)
-    monkeypatch.setattr('desktop.core.hand_backend.time.time', lambda: 100.1)
-    return backend, state, calls
+    writer = Mock(return_value=True)
+    monkeypatch.setattr(hand, 'set_manual_encoder_reference', writer)
+    yield hand, state, writer
+    hand.close_application()
 
+def run(hand, endpoint):
+    result = hand.request_manual_capture(0, endpoint)
+    assert result.accepted, result.message
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        row = next(r for r in hand._application_operations if r['operation_id'] == result.operation_id)
+        if row['status'] in ('SUCCESS', 'FAILED'):
+            return row['status'] == 'SUCCESS'
+        time.sleep(.005)
+    pytest.fail('capture operation did not finish')
 
-def test_cross_zero_pair_saves_only_after_both_new_endpoints(capture):
-    backend, state, calls = capture
+def test_wrap_pair_and_subsequent_single_endpoint_save(capture):
+    hand, state, writer = capture
     state.encoders[0].raw_sensor = 16000
-    assert not backend.capture_manual_endpoint(0, True).saved
-    assert calls == []
+    assert run(hand, 'min')
+    writer.assert_not_called()
     state.encoders[0].raw_sensor = 200
-    assert backend.capture_manual_endpoint(0, False).saved
-    assert calls == [(0, 16000, 200)]
+    assert run(hand, 'max')
+    writer.assert_called_once_with(0, 16000, 200)
     state.encoders[0].raw_sensor = 400
-    assert not backend.capture_manual_endpoint(0, False).saved
-    assert len(calls) == 1  # An old endpoint cannot complete a new pair.
-
+    assert run(hand, 'max')
+    assert writer.call_args.args == (0, 16000, 400)
+    assert writer.call_count == 2
 
 @pytest.mark.parametrize('second', [100, 99, 8292])
 def test_equal_reverse_or_half_turn_pair_is_not_installed(capture, second):
-    backend, state, calls = capture
+    hand, state, writer = capture
     state.encoders[0].raw_sensor = 100
-    backend.capture_manual_endpoint(0, True)
+    assert run(hand, 'min')
     state.encoders[0].raw_sensor = second
-    assert not backend.capture_manual_endpoint(0, False).saved
-    assert calls == []
+    assert not run(hand, 'max')
+    writer.assert_not_called()
 
+@pytest.mark.parametrize('fault', ['stale', 'raw_error', 'missing_direction', 'bad_direction'])
+def test_invalid_feedback_or_direction_never_enters_draft(capture, fault):
+    hand, state, writer = capture
+    if fault == 'stale': state.encoder_raw_last_rx_ts -= 1
+    elif fault == 'raw_error': state.encoders[0].raw_error = True
+    elif fault == 'missing_direction': state.has_manual_reference_encoder_directions = False
+    else: state.manual_reference_encoder_directions[0] = 0
+    assert not run(hand, 'min')
+    assert not hand._manual_drafts
+    writer.assert_not_called()
 
-def test_stale_or_error_feedback_never_enters_draft(capture):
-    backend, state, calls = capture
-    state.encoder_raw_last_rx_ts = 99
-    assert not backend.capture_manual_endpoint(0, True).accepted
-    state.encoder_raw_last_rx_ts = 100
-    state.encoders[0].raw_error = True
-    assert not backend.capture_manual_endpoint(0, True).accepted
-    assert backend._manual_drafts == {}
-    assert calls == []
-
-
-def test_install_failure_preserves_draft_for_retry(capture):
-    backend, state, _ = capture
-    backend._controller.set_manual_encoder_reference = lambda *args: False
+def test_install_failure_retains_confirmed_pair_for_explicit_set(capture):
+    hand, state, writer = capture
+    writer.return_value = False
     state.encoders[0].raw_sensor = 100
-    backend.capture_manual_endpoint(0, True)
+    assert run(hand, 'min')
     state.encoders[0].raw_sensor = 200
-    result = backend.capture_manual_endpoint(0, False)
-    assert result.accepted and not result.saved
-    assert backend._manual_drafts[0] == {'min': 100, 'max': 200}
-    backend._controller.set_manual_encoder_reference = lambda *args: True
-    assert backend.capture_manual_endpoint(0, False).saved
+    assert not run(hand, 'max')
+    assert hand._manual_drafts[0]['min'] == 100
+    assert hand._manual_drafts[0]['max'] == 200
+    writer.return_value = True
+    assert run(hand, 'max')
+    assert writer.call_count == 2

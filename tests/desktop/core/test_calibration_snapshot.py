@@ -209,7 +209,7 @@ def test_scope_invalidation_preserves_manual_when_all_auto_is_removed(tmp_path):
     assert updated["joint_calib_results"] == [None] * ENCODER_COUNT
     assert parse_mask(updated["motor_abs_limit_valid_bitmap"]) == 0
     assert parse_mask(updated["active_joint_mask"]) == 0
-    assert len(list(tmp_path.glob("*.before_scoped_manual_prepare_*.json"))) == 1
+    assert len(list((tmp_path / "backups").glob("*.before_scoped_manual_prepare_*.json"))) == 1
 
 
 def test_manual_identity_is_written_atomically_and_foreign_file_is_rejected(tmp_path):

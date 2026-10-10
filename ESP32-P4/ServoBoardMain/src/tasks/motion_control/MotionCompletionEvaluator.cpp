@@ -25,7 +25,7 @@ bool directTargetsReached(SystemRuntimeContext* runtime,
     }
 
     const uint32_t requiredMask =
-        sharedAtomicLoad(&runtime->active_motor_mask) & validMotorChannelMask();
+        command.directMotorMask & validMotorChannelMask();
     if (requiredMask == 0) {
         return false;
     }

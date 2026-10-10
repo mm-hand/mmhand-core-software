@@ -161,12 +161,15 @@ def test_servo_reset_zero_command_contains_big_endian_motor_mask():
 def test_manual_reference_snapshot_parses_all_21_pairs():
     mins = [100 + i for i in range(ENCODER_COUNT)]
     maxs = [1000 + i for i in range(ENCODER_COUNT)]
-    payload = bytearray([1])
+    payload = bytearray([3])
     payload.extend(struct.pack(">III", (1 << ENCODER_COUNT) - 1, 0x12345678, 9))
+    payload.append(1)
+    payload.extend(struct.pack(">I", 0))
     payload.append(1)
     for min_raw, max_raw in zip(mins, maxs):
         payload.extend(struct.pack(">HH", min_raw, max_raw))
 
+    payload.extend(bytes([1] * ENCODER_COUNT))
     parsed = parse_manual_encoder_reference_packet(bytes(payload))
 
     assert parsed is not None
@@ -176,8 +179,8 @@ def test_manual_reference_snapshot_parses_all_21_pairs():
     assert parsed["committed"] is True
     assert parsed["min_raw"] == mins
     assert parsed["max_raw"] == maxs
-    assert parsed["has_encoder_directions"] is False
-    assert parsed["encoder_directions"] == [0] * ENCODER_COUNT
+    assert parsed["has_encoder_directions"] is True
+    assert parsed["encoder_directions"] == [1] * ENCODER_COUNT
 
 
 def test_manual_reference_v3_parses_p4_encoder_directions():

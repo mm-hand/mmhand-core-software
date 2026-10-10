@@ -1,0 +1,10 @@
+{
+  "empty": {
+    "old_ms": 0.0456,
+    "new_ms": 0.2142
+  },
+  "full_tactile_and_lut": {
+    "old_ms": 0.0449,
+    "new_ms": 0.4514
+  }
+}

@@ -7,7 +7,6 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from desktop.core.model_resources import mesh_paths
 
 
 def _git(directory: Path, *args: str) -> str:
@@ -28,7 +27,7 @@ def inspect_source(urdf: Path) -> tuple[dict, Path, dict[str, Path]]:
     if _git(repository, "status", "--porcelain", "--untracked-files=all"):
         raise ValueError(f"structure repository has uncommitted changes: {repository}")
     commit = _git(repository, "rev-parse", "HEAD")
-    resources = mesh_paths(urdf)
+    resources = {}
     files = {urdf, *resources.values()}
     package_files = list(urdf.parent.parent.glob("package.xml"))
     files.update(package_files)

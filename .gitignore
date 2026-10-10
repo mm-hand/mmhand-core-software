@@ -1,22 +1,21 @@
-*.zip
-*.mp4
-
-.DS_Store
+# Python caches
 __pycache__/
 *.py[cod]
-*.pyo
 .pytest_cache/
-desktop/teleop/Posture/.vscode/
+*.egg-info/
 
-# Local run artifacts
+# Commit the project VS Code configuration, ignore other local files.
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Generated project data
+.debug/
 run_data/
-desktop/logs/
-desktop/multiturn_cache.json
-desktop/resources/config/calib_load_snapshot.json
 desktop/resources/config/calibration_bundle.mmcal.json
 desktop/resources/config/calibration_bundle.mmcal.json.bak
-desktop/resources/config/calibration_bundle.mmcal.legacy_v5_*.json
-desktop/resources/config/calibration_bundle.mmcal.before_*.json
 desktop/resources/config/device_state/
 *.mmcal.json
 ESP32-P4ID/
@@ -40,8 +39,6 @@ tmp/
 .debug/
 desktop/resources/config/calib_load_snapshot.before_new_device_*.json
 desktop/resources/hku_hand_v2_urdf_builtin/
-docs/images/磁编码器舵机拟合_*/
-tools/analyze_encoder_servo_linearity.py
 
 # ROSexample/colcon generated artifacts
 ROSexample/**/build/
@@ -50,3 +47,8 @@ ROSexample/**/log/
 *.egg-info/
 desktop/resources/config/*.before-device-isolation.bak
 desktop/resources/config/device_state/**/*.before-device-isolation.bak
+reference/
+# Historical calibration and one-off local validation outputs
+desktop/resources/config/*.before_*.json
+desktop/resources/config/*.bak
+simplify-*.log

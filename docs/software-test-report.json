@@ -1,0 +1,88 @@
+{
+  "branch": "codex/mmhand-simplified-refactor",
+  "directory": "C:\\Users\\73547\\mmhand",
+  "software": {
+    "passed": 736,
+    "failed": 0,
+    "skipped": 0,
+    "environment": "Clean Python 3.13 venv; pytest 8.4.2; NiceGUI 3.16.0; native MSVC C++ tests included"
+  },
+  "generation_architecture_safety": {
+    "passed": true,
+    "active_safety_rules": 77,
+    "retired_safety_rules": 26
+  },
+  "real_commit_gate_negative_probes": {
+    "checkout_commit": "60479bd",
+    "gate_script_identical_to_final": true,
+    "head_unchanged": true,
+    "probes": [
+      {
+        "probe": "partial-staging",
+        "rejected": true,
+        "expected": "Stage the complete"
+      },
+      {
+        "probe": "stale-generated",
+        "rejected": true,
+        "expected": "stale"
+      },
+      {
+        "probe": "missing-compiler",
+        "rejected": true,
+        "expected": "compiler is required"
+      },
+      {
+        "probe": "failing-test",
+        "rejected": true,
+        "expected": "intentional gate verification"
+      }
+    ]
+  },
+  "web_smoke": {
+    "http_status": 200,
+    "tabs": [
+      "Joint Calibration",
+      "Motor Calibration",
+      "Feedback Control",
+      "Direct Control",
+      "Replay",
+      "Plots & Recordings",
+      "Tactile",
+      "Diagnostics"
+    ],
+    "show": false,
+    "normal_shutdown": true,
+    "hardware_connected": false
+  },
+  "firmware": {
+    "P4": {
+      "fqbn": "esp32:esp32:esp32p4",
+      "exit_code": 0,
+      "sketch_bytes": 444784,
+      "global_bytes": 92652
+    },
+    "S3": {
+      "fqbn": "esp32:esp32:esp32s3",
+      "exit_code": 0,
+      "sketch_bytes": 351708,
+      "global_bytes": 24584,
+      "source_identical_to_final": true
+    }
+  },
+  "history_data": {
+    "archive": "C:/Users/73547/mmhand_data/archive/simplify_20261010_113722",
+    "source_files": 39,
+    "worktree_files": 200,
+    "sha256_reverified": true,
+    "automatically_activated": false
+  },
+  "hardware_validation": "No device connection, flashing, or motion test; follow docs/simplification.md checklist.",
+  "protocol_merge": {
+    "hello": "0xF3",
+    "rebase_zero": "0xF0",
+    "direct_release": "0xF2",
+    "pause": "0xD9",
+    "matched_p4_firmware_required": true
+  }
+}

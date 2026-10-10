@@ -9,8 +9,6 @@
 
 bool controlSnapshotHasActiveScope(const ControlServiceInputSnapshot& input);
 bool servoSnapshotIsConsistent(const ServoServiceInputSnapshot& input);
-bool calibrationSnapshotHasSelection(
-    const CalibrationServiceInputSnapshot& input);
 bool stateSnapshotIsConsistent(const StateServiceInputSnapshot& input);
 
 #endif // P4_MODULES_RUNTIME_SERVICE_CYCLE_POLICY_H

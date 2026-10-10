@@ -487,29 +487,6 @@ class TestRequestRunFeedback:
         controller.comm.send_command.assert_called_once_with("run_feedback")
 
 
-class TestRequestFirmwareCalibration:
-    def test_requires_queued_ack(self):
-        controller = HandController()
-        controller.comm = MagicMock()
-        controller.comm.send_command.return_value = True
-        controller.comm.wait_for_ack.return_value = (
-            CMD_CALIBRATE,
-            0,
-            PROTO_ACK_STATUS_QUEUED,
-            1.0,
-        )
-
-        assert controller.request_firmware_calibration() is True
-        controller.comm.send_command.assert_called_once_with("calibrate")
-        controller.comm.wait_for_ack.assert_called_once()
-
-    def test_reject_ack_is_reported(self):
-        controller = HandController()
-        controller.comm = MagicMock()
-        controller.comm.send_command.return_value = True
-        controller.comm.wait_for_ack.return_value = (CMD_CALIBRATE, 0, 4, 1.0)
-
-        assert controller.request_firmware_calibration() is False
 
 
 class TestAsyncPersistenceAck:

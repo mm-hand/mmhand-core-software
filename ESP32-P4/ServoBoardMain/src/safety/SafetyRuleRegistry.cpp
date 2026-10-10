@@ -93,45 +93,12 @@ SafetyRuleId ruleForRopeInitReason(uint8_t reason)
     }
 }
 
-SafetyRuleId ruleForCalibrationDiagReason(uint8_t reason)
-{
-    switch (reason) {
-        case CALIB_DIAG_REASON_NONE: return SafetyRuleId::None;
-        case CALIB_DIAG_REASON_ACTIVE_SCOPE_EMPTY: return SafetyRuleId::CalibrationActiveScopeEmpty;
-        case CALIB_DIAG_REASON_ENCODER_ERROR: return SafetyRuleId::CalibrationEncoderError;
-        case CALIB_DIAG_REASON_SERVO_OFFLINE: return SafetyRuleId::CalibrationServoOffline;
-        case CALIB_DIAG_REASON_OVERLOAD: return SafetyRuleId::CalibrationOverload;
-        case CALIB_DIAG_REASON_ZERO_CROSS_INVALID: return SafetyRuleId::CalibrationZeroCrossInvalid;
-        case CALIB_DIAG_REASON_WRAP_TOO_LARGE: return SafetyRuleId::CalibrationWrapTooLarge;
-        case CALIB_DIAG_REASON_ABS_LIMIT_INVALID: return SafetyRuleId::CalibrationAbsLimitInvalid;
-        case CALIB_DIAG_REASON_TARGET_PUBLISH_FAILED: return SafetyRuleId::CalibrationTargetPublishFailed;
-        case CALIB_DIAG_REASON_FEEDBACK_LOST: return SafetyRuleId::CalibrationFeedbackLost;
-        case CALIB_DIAG_REASON_TASK_START_FAILED: return SafetyRuleId::CalibrationTaskStartFailed;
-        case CALIB_DIAG_REASON_CONTROL_LOST: return SafetyRuleId::CalibrationControlLost;
-        case CALIB_DIAG_REASON_HOLD_TARGET_FAILED: return SafetyRuleId::CalibrationHoldTargetFailed;
-        case CALIB_DIAG_REASON_JOINT_LIST_INVALID: return SafetyRuleId::CalibrationJointListInvalid;
-        case CALIB_DIAG_REASON_DUPLICATE_JOINT: return SafetyRuleId::CalibrationDuplicateJoint;
-        case CALIB_DIAG_REASON_WORKSPACE_PREP_FAILED: return SafetyRuleId::CalibrationWorkspacePrepFailed;
-        case CALIB_DIAG_REASON_JOINT_STEP_FAILED: return SafetyRuleId::CalibrationJointStepFailed;
-        case CALIB_DIAG_REASON_SERVO_RECOVERY_TIMEOUT: return SafetyRuleId::CalibrationServoRecoveryTimeout;
-        case CALIB_DIAG_REASON_RELEASE_OVER_TWO_TURNS: return SafetyRuleId::CalibrationReleaseOverTwoTurns;
-        case CALIB_DIAG_REASON_MOTOR_MAPPING_INVALID: return SafetyRuleId::CalibrationMotorMappingInvalid;
-        case CALIB_DIAG_REASON_RESULT_SPAN_INVALID: return SafetyRuleId::CalibrationResultSpanInvalid;
-        case CALIB_DIAG_REASON_RESULT_BUILD_FAILED: return SafetyRuleId::CalibrationResultBuildFailed;
-        case CALIB_DIAG_REASON_RESULT_COMMIT_FAILED: return SafetyRuleId::CalibrationResultCommitFailed;
-        case CALIB_DIAG_REASON_MULTITURN_TRUST_FAILED: return SafetyRuleId::CalibrationMultiTurnTrustFailed;
-        case CALIB_DIAG_REASON_DUAL_EXCHANGE_STALLED: return SafetyRuleId::CalibrationDualExchangeStalled;
-        default: return SafetyRuleId::None;
-    }
-}
-
 SafetyRuleId ruleForSystemFaultBit(uint32_t faultBit)
 {
     switch (faultBit) {
         case SYSTEM_FAULT_CAN_OFFLINE: return SafetyRuleId::FaultCanOffline;
         case SYSTEM_FAULT_OVERLOAD: return SafetyRuleId::FaultOverload;
         case SYSTEM_FAULT_SERVO_OFFLINE: return SafetyRuleId::FaultServoOffline;
-        case SYSTEM_FAULT_CALIBRATION: return SafetyRuleId::FaultCalibration;
         case SYSTEM_FAULT_MULTITURN_UNKNOWN: return SafetyRuleId::FaultMultiTurnUnknown;
         default: return SafetyRuleId::None;
     }

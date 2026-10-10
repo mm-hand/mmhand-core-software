@@ -19,7 +19,6 @@ from typing import Iterable
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.robot_model_source import inspect_source, validate_tree
-from desktop.core.model_resources import mesh_paths
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -383,13 +382,20 @@ def build_outputs(args: argparse.Namespace) -> dict[Path, str]:
     source = _read_json(DEFAULT_SOURCE)
     source_commit = source["source_commit"]
     fingerprint = build_fingerprint(manifest, limits, args.urdf, source_commit)
-    return {
+    outputs = {
         args.mapping_output: render_mapping(manifest, limits, source_commit, source["source_urdf_path"]),
         args.p4_limits_output: render_p4_limits(manifest, limits),
         args.fingerprint_output: render_fingerprint_json(fingerprint),
         args.p4_fingerprint_output: render_p4_fingerprint(fingerprint),
         getattr(args, "p4_bindings_output", DEFAULT_P4_BINDINGS): render_p4_bindings(manifest),
     }
+    if getattr(args, "firmware_only", False):
+        outputs = {path: text for path, text in outputs.items()
+                   if path in (args.p4_limits_output, args.p4_fingerprint_output)}
+        if any(path.resolve().is_relative_to((ROOT / "desktop").resolve()) for path in outputs):
+            raise ModelGenerationError("--firmware-only output cannot be inside desktop")
+    return outputs
+
 
 
 def default_args() -> argparse.Namespace:
@@ -409,7 +415,6 @@ def check_outputs() -> list[Path]:
             path = DEFAULT_URDF
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             stale.append(path)
-    mesh_paths(DEFAULT_URDF)
     stale.extend(path for path, content in build_outputs(default_args()).items()
                  if not path.is_file() or path.read_text(encoding="utf-8") != content)
     return stale
@@ -417,9 +422,30 @@ def check_outputs() -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("urdf", type=Path, help="原始结构 Git 仓库中的 URDF 文件")
-    source_path = parser.parse_args().urdf
+    parser.add_argument("urdf", nargs="?", type=Path, help="Original committed structure URDF to import")
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--refresh", action="store_true", help="Regenerate from the committed local URDF")
+    parser.add_argument("--firmware-only", action="store_true")
+    for name, default in (("manifest", DEFAULT_MANIFEST), ("mapping-output", DEFAULT_MAPPING),
+                          ("fingerprint-output", DEFAULT_FINGERPRINT), ("p4-limits-output", DEFAULT_P4_LIMITS),
+                          ("p4-fingerprint-output", DEFAULT_P4_FINGERPRINT)):
+        parser.add_argument("--" + name, type=Path, default=default)
+    options = parser.parse_args()
+    source_path = options.urdf
     try:
+        if source_path is None:
+            options.urdf = DEFAULT_URDF
+            outputs = build_outputs(options)
+            if options.check:
+                stale = [path for path, content in outputs.items()
+                         if not path.is_file() or path.read_text(encoding="utf-8") != content]
+                if not options.firmware_only:
+                    stale.extend(check_outputs())
+                for path in sorted(set(stale)):
+                    print(f"generated robot-model file is stale: {path}", file=sys.stderr)
+                return int(bool(stale))
+            publish_outputs({path: text.encode("utf-8") for path, text in outputs.items()})
+            return 0
         manifest = load_manifest(DEFAULT_MANIFEST)
         limits = load_urdf_limits(source_path, manifest)
         source, repository, resources = inspect_source(source_path)

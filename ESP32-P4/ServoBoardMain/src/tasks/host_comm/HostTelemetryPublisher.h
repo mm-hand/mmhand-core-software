@@ -28,12 +28,10 @@ bool sendFaultStatusPacket(SystemRuntimeContext* sharedData,
 bool sendMotorAbsLimitPacket(SystemRuntimeContext* sharedData);
 bool sendServoLogicalRangePacket(SystemRuntimeContext* sharedData);
 bool sendJointCalibSnapshotPacket(uint8_t jointIndex);
-bool sendCalibrationDiagPacket(const CalibrationDiagData_t& diag);
 bool sendEncoderRawPacket(const RemoteSensorData_t& sensorRaw);
 bool sendMappedAnglePacket(const MappedAngleData_t& mappedAngle);
 bool sendControlTracePacket(const ControlTraceData_t& trace);
-bool sendServoAnglePacket(const ServoAngleData_t& servoAngle);
-bool sendServoRawPacket(const ServoAngleData_t& servoRaw);
+bool sendServoPositionPackets(const ServoAngleData_t& position);
 bool sendServoTelemetryPacket(const ServoTelemetryData_t& telemetry);
 bool sendTactileSummaryPacket(const RemoteTactileData_t& tactile);
 bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
@@ -41,6 +39,17 @@ bool sendTactileFullPackets(const RemoteTactileData_t& tactile);
 bool sendMultiTurnRestoreResultPacket(uint32_t resultToken,
                                       uint32_t restoredMask,
                                       uint32_t rejectedMask);
+/** logical ABS 设零的最终结果；offset 仅在 successMask 对应电机有效。 */
+bool sendServoRebaseZeroResultPacket(uint32_t resultToken,
+                                     uint32_t successMask,
+                                     uint32_t failedMask,
+                                     const int32_t offsets[SERVO_TOTAL_NUM]);
+/** 普通直控总线写入结果；0 token 表示未请求回执关联。 */
+bool sendDirectTargetResultPacket(uint32_t token,
+                                           uint32_t requestedMask,
+                                           uint32_t appliedMask,
+                                           uint32_t rejectedMask,
+                                           uint8_t status);
 bool sendServoRouteStatusPacket(SystemRuntimeContext* sharedData);
 /** 发送一条已去重的安全规则事件；时间戳使用事件实际触发时刻。 */
 bool sendSafetyEventPacket(const SafetyEventRecord& event,

@@ -52,6 +52,7 @@ SYSTEM_STATE_RUN_FEEDBACK = 2
 SYSTEM_STATE_CALIBRATION_RUNNING = 4
 SYSTEM_STATE_READY = 5
 SYSTEM_STATE_RUN_DIRECT = 6
+SYSTEM_STATE_PAUSED = 7
 SYSTEM_STATE_ROPE_INIT_RUNNING = 8
 SYSTEM_STATE_RECOVERY_REQUIRED = 9
 
@@ -949,6 +950,43 @@ def parse_multiturn_restore_result_packet(payload: bytes) -> Optional[Tuple[int,
     return struct.unpack(">III", payload)
 
 
+def parse_servo_rebase_zero_result_packet(
+    payload: bytes,
+) -> Optional[Tuple[int, int, int, List[int]]]:
+    """解析当前位置设零事务；offset 仅对 success mask 中的电机有效。"""
+    if len(payload) != 12 + MOTOR_COUNT * 4:
+        return None
+    token, success_mask, failed_mask = struct.unpack_from(">III", payload)
+    valid_mask = (1 << MOTOR_COUNT) - 1
+    if (success_mask | failed_mask) & ~valid_mask or success_mask & failed_mask:
+        return None
+    offsets = list(struct.unpack_from(f">{MOTOR_COUNT}i", payload, 12))
+    return token, success_mask, failed_mask, offsets
+
+
+def parse_direct_target_result_packet(
+    payload: bytes,
+) -> Optional[Tuple[int, int, int, int, int]]:
+    """解析通用直控同步写结果；APPLIED 与物理到位是两个独立条件。"""
+    if len(payload) != 17:
+        return None
+    token, requested, applied, rejected, status = struct.unpack(">IIIIB", payload)
+    valid_mask = (1 << MOTOR_COUNT) - 1
+    if (requested | applied | rejected) & ~valid_mask:
+        return None
+    if applied & rejected or (applied | rejected) != requested:
+        return None
+    if requested == 0:
+        return (token, requested, applied, rejected, status) if not (token or status) else None
+    if status not in (2, 3):
+        return None
+    if status == 2 and (applied != requested or rejected):
+        return None
+    if status == 3 and not rejected:
+        return None
+    return token, requested, applied, rejected, status
+
+
 def parse_fault_status_packet(payload: bytes) -> Optional[Tuple[int, List[Optional[int]]]]:
     if len(payload) < 4:
         return None
@@ -1102,6 +1140,10 @@ def build_run_feedback_cmd() -> bytes:
     return _build_command_frame(CMD_RUN_FEEDBACK, b"")
 
 
+
+
+def build_pause_cmd() -> bytes:
+    return _build_command_frame(CMD_PAUSE, b"")
 
 
 def build_restore_multiturn_cmd(active_motor_mask: int, motor_abs: List[int]) -> bytes:
@@ -1259,6 +1301,22 @@ def build_servo_reset_zero_cmd(motor_mask: int) -> bytes:
     )
 
 
+def build_servo_rebase_zero_cmd(motor_mask: int) -> bytes:
+    """所选 Mxx 当前位置 logical ABS 设为零，并由 P4 保存逻辑 offset。"""
+    mask = int(motor_mask)
+    if mask <= 0 or mask & ~((1 << MOTOR_COUNT) - 1):
+        raise ValueError("servo ABS rebase requires a non-zero valid motor mask")
+    return _build_command_frame(CMD_SERVO_REBASE_ZERO, struct.pack(">I", mask))
+
+
+def build_motor_direct_release_cmd(token: int = 0) -> bytes:
+    """结束普通直控并保持扭矩；零匹配当前代际，非零匹配执行事务。"""
+    token = int(token)
+    if not 0 <= token <= 0xFFFFFFFF:
+        raise ValueError("direct release token must be uint32")
+    return _build_command_frame(CMD_MOTOR_DIRECT_RELEASE, struct.pack(">I", token))
+
+
 def build_manual_encoder_reference_cmd(
     manual_min_raw: Sequence[int],
     manual_max_raw: Sequence[int],
@@ -1385,13 +1443,25 @@ MOTOR_ABS_CMD_MIN = -(2**31)
 MOTOR_ABS_CMD_MAX = 2**31 - 1
 
 
-def build_motor_pos_abs_cmd(motor_abs: List[int]) -> bytes:
+def build_motor_pos_abs_cmd(
+    motor_abs: Sequence[int], *, token: int = 0, motor_mask: int = 0,
+    speed: int = 400, acc: int = 254,
+) -> bytes:
+    """统一直控帧；mask=0 使用当前 scope，token=0 不跟踪执行回执。"""
     if len(motor_abs) != MOTOR_COUNT:
         raise ValueError(f"need exactly {MOTOR_COUNT} motor absolute values")
-    payload = bytearray()
-    for value in motor_abs:
-        payload.extend(struct.pack(">i", int(value)))
-    return _build_command_frame(CMD_MOTOR_POS_ABS, bytes(payload))
+    token, motor_mask, speed, acc = map(int, (token, motor_mask, speed, acc))
+    if not 0 <= token <= 0xFFFFFFFF:
+        raise ValueError("direct token must be uint32")
+    if motor_mask < 0 or motor_mask & ~((1 << MOTOR_COUNT) - 1):
+        raise ValueError("direct motor mask must fit the 27 motor channels")
+    values = [int(value) for value in motor_abs]
+    if any(value < MOTOR_ABS_CMD_MIN or value > MOTOR_ABS_CMD_MAX for value in values):
+        raise ValueError("direct targets must be int32")
+    if not 0 <= speed <= 0xFFFF or not 0 <= acc <= 0xFF:
+        raise ValueError("direct speed/acc must be uint16/uint8")
+    payload = struct.pack(f">II{MOTOR_COUNT}iHB", token, motor_mask, *values, speed, acc)
+    return _build_command_frame(CMD_MOTOR_POS_ABS, payload)
 
 
 def build_motor_pos_abs_one_cmd(motor_index: int, motor_abs: int) -> bytes:

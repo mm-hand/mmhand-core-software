@@ -82,12 +82,13 @@ def test_desktop_frame_builder_rejects_unknown_command() -> None:
         protocol._build_command_frame(0xFE, b"")
 
 
-def test_retired_pause_number_cannot_be_reassigned(tmp_path: Path) -> None:
+def test_current_pause_and_retired_numbers_cannot_be_reassigned(tmp_path: Path) -> None:
     schema = json.loads(generator.DEFAULT_SCHEMA.read_text(encoding="utf-8"))
-    assert 217 in schema["retired_command_values"]
-    assert not hasattr(protocol, "CMD_PAUSE")
+    assert protocol.CMD_PAUSE == 217
+    assert any(cmd["name"] == "CMD_PAUSE" and cmd["value"] == 217 for cmd in schema["commands"])
     assert schema["p4_runtime"]["heartbeats_ms"]["kSystemStatusHeartbeatMs"] == 200
-    schema["commands"][0]["value"] = 217
+    schema["retired_command_values"] = [250]
+    schema["commands"][0]["value"] = 250
     path = tmp_path / "reused.json"
     path.write_text(json.dumps(schema), encoding="utf-8")
     with pytest.raises(ValueError, match="retired command"):

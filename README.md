@@ -1,36 +1,37 @@
-注：本版pid参数适用于我的灵巧手，若参数不符需要自行调整
+# MM-Hand
 
-本文简要记录当前 cl 分支相对上一版提交的主要改进点，便于回看、测试和后续继续开发。
+MM-Hand 上位机使用 Python NiceGUI，硬件状态机、协议与保护策略保留在现有控制后端和固件。
 
-主要改进
-自动标定顺序调整：全手标定改为从大拇指到小拇指，单个手指内部仍保持关节编号从小到大的顺序。
+## 启动
 
-S3 启动等待时间优化：上电等待从 20 秒缩短到 10 秒，减少烧录和调试等待。
+在仓库根目录运行：
 
-触觉映射调整：触觉逻辑组映射与当前装配和上位机显示链路重新对齐。
+```powershell
+python -m pip install -r requirements-test.txt
+python -m desktop --no-ros2
+```
 
-上位机触觉窗口增强：加入 S3 触觉串口选择、连接、断开和状态提示，不再必须通过命令行指定触觉串口。
+正式控制入口只有 `python -m desktop [--no-ros2]`。省略 `--no-ros2` 时接收
+`/mmhand/joint_targets`，运动仍需 Web GUI 授权。启动不会自动连接或 ENABLE。
 
-触觉显示优化：补充手掌/手指轮廓辅助绘制，使触觉点阵更容易看出手型结构。
+八页依次为 Joint Calibration、Motor Calibration、Feedback Control、Direct Control、
+Replay、Plots & Recordings、Tactile、Diagnostics。所有硬件操作经过 HandBackend。
 
-触觉串口链路增强：上位机独立触觉串口解析、状态合并和 UI 更新链路更完整。
+数据默认写入用户目录下的 `mmhand_data`，可用 `MMHAND_DATA_DIR` 覆盖。
+历史资料保存在 archive，不自动加载为活动标定。
 
-通信文档更新：补充通信帧、校验和调试说明，方便后续排查 CAN、串口和上位机协议问题。
-未提交内容
+## 维护
 
-以下内容属于本机状态或运行数据，本次不作为代码更新提交：
+先安装 Git 钩子，再提交：
 
-run_data/
-desktop/logs/
-desktop/multiturn_cache.json
-.vscode/ 本机 IDE 配置
-desktop/resources/config/calib_load_snapshot.json 实机标定快照
-嵌套旧副本 mmhand-main/
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/install_git_hooks.ps1
+python tools/precommit_checks.py
+```
 
-测试提示
+每次 commit 必须通过生成物、架构、安全闭环及全量 Python/生产 C++ 主机测试。
+Windows 需安装 MSVC Build Tools 或 GCC/Clang；必测项缺依赖或跳过会阻止提交。
+固件源码或宏修改后，还须完整编译对应固件。
 
-烧录 S3 后建议确认磁编和触觉数据均能稳定上报。
-
-打开上位机后，在触觉窗口选择 S3 串口并连接，确认触觉点阵不再间歇性显示 No tactile data。
-
-全手自动标定时，确认执行顺序为大拇指到小拇指。
+[启动与目录职责](desktop/README.md) · [简化交付与实机清单](docs/simplification.md) ·
+[逐文件行数](docs/code-inventory/README.md) · [删除清单](docs/deleted-files.txt)

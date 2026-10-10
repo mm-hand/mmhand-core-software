@@ -8,13 +8,9 @@
 #include "../config/BoardConfig.h"
 #include "../platform/log/FirmwareLog.h"
 #include "SystemAssembly.h"
-#include "../data/CalibrationTypes.h"
 #include "../hal/serial/HostSerialPort.h"
 
 #include <Arduino.h>
-
-// 持续标定状态属于系统运行状态；瞬时 ACK 由通讯模块独占管理。
-volatile uint8_t g_calibrationStatus = CALIB_STATUS_IDLE;
 
 void appBootstrapSetup()
 {

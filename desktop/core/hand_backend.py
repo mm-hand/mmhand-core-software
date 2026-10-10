@@ -15,10 +15,11 @@ import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from .angle_mapping import get_spec, urdf_manual_scaled_mapping_metadata
+from .application_actions import ApplicationActions
 from .calibration_workflow import (
     CalibrationWorkflowEvent,
-    CalibrationWorkflowService,
 )
+from .calibration_workflow import CalibrationWorkflowService
 from .comm_layer import TactileSerialComm, list_ports as _list_ports
 from .core_logic import HandController, ManualPrepareResult
 from .data_models import HandModel, clone_hand_model, resolve_joint_workspace_range
@@ -92,15 +93,7 @@ class JointCommandResult:
     targets: List[float] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class ManualCaptureResult:
-    accepted: bool
-    saved: bool
-    raw: Optional[int]
-    message: str
-
-
-class HandBackend:
+class HandBackend(ApplicationActions):
     """UI-free orchestration layer above HandController.
 
     The low-level controller still owns protocol-level behavior.  This class
@@ -113,8 +106,6 @@ class HandBackend:
         controller: Optional[HandController] = None,
     ) -> None:
         self._controller = controller or HandController()
-        self._manual_capture_lock = threading.RLock()
-        self._manual_drafts: dict[int, dict[str, int]] = {}
         self._last_reported_device_id = ""
         self._port_scan_ts = float("-inf")
         self._port_scan_cache: tuple = ()
@@ -129,6 +120,8 @@ class HandBackend:
         # ROS2 回调运行在独立线程。授权检查、角度入队与 E-STOP 必须共用
         # 同一把锁，保证 STOP 入队后不会再插入新的 joint_target_run。
         self._ros2_output_lock = threading.RLock()
+        self._manual_transaction_active = False
+        self._manual_cancel = threading.Event()
         self._ros2_output_armed = False
         self._ros2_armed_scope: Optional[Tuple[int, int, bool]] = None
         self._ros2_last_drop_reason = ""
@@ -147,6 +140,7 @@ class HandBackend:
             self._workspace_mapping_version, self._workspace_urdf_crc = 0, 0
         self._joint_target_callback_lock = threading.Lock()
         self._ensure_controller_callback_registered()
+        self._init_application_actions()
 
     @property
     def comm(self):
@@ -185,15 +179,21 @@ class HandBackend:
         if device_id != self._last_reported_device_id:
             self._last_reported_device_id = device_id
             self._calibration_workflow.cancel()
-            with self._manual_capture_lock:
-                self._manual_drafts.clear()
+            self._manual_cancel.set()
+            if hasattr(self, '_application_lock'):
+                with self._application_lock:
+                    self._application_epoch += 1
+                    self._manual_drafts.clear()
+                    self._manual_saved_pairs.clear()
+                    self._import_previews.clear()
             self.set_ros2_output_armed(False, reason="device_identity_changed")
             self.cancel_replay_motion("device identity changed")
         if not snapshot.protocol_compatible:
             with self._ros2_output_lock:
                 self._set_ros2_output_armed_locked(False, reason="protocol_contract_lost")
             self.cancel_replay_motion("protocol contract lost")
-        self._calibration_workflow.observe_state(snapshot)
+        if hasattr(self, '_application_lock'):
+            self._application_observe(snapshot)
         with self._callback_lock:
             callbacks = list(self._state_callbacks)
         for callback in callbacks:
@@ -222,6 +222,8 @@ class HandBackend:
             self._joint_target_callbacks = [cb for cb in self._joint_target_callbacks if cb != callback]
 
     def _notify_joint_target_callbacks(self, payload: dict) -> None:
+        if 'ros' in str(payload.get('source', '')).lower():
+            self._console_ros_targets = dict(enumerate(payload.get('input_targets', [])))
         with self._joint_target_callback_lock:
             callbacks = list(self._joint_target_callbacks)
         for callback in callbacks:
@@ -246,8 +248,11 @@ class HandBackend:
         return self._controller.current_state
 
     def connect(self, port: str) -> bool:
-        with self._manual_capture_lock:
+        self._manual_cancel.set()
+        with self._application_lock:
             self._manual_drafts.clear()
+            self._manual_saved_pairs.clear()
+            self._import_previews.clear()
         self._calibration_workflow.cancel()
         self.cancel_replay_motion("connect")
         self.set_ros2_output_armed(False, reason="connect")
@@ -263,8 +268,11 @@ class HandBackend:
         """关闭上位机链路；默认交由 P4 租约 Hold，显式急停才下发 STOP。"""
         self.cancel_replay_motion("shutdown")
         self._calibration_workflow.cancel()
-        with self._manual_capture_lock:
+        self._manual_cancel.set()
+        with self._application_lock:
             self._manual_drafts.clear()
+            self._manual_saved_pairs.clear()
+            self._import_previews.clear()
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="shutdown")
             self._requested_active_joint_mask = None
@@ -320,14 +328,6 @@ class HandBackend:
         comm = self.tactile_comm
         if comm is None:
             return False, state
-        if not self.is_tactile_serial_connected():
-            now = time.time()
-            if self.tactile_port and now >= self._next_tactile_reconnect_ts:
-                self._next_tactile_reconnect_ts = now + 1.0
-                try:
-                    comm.connect()
-                except Exception:
-                    pass
         latest = comm.get_latest_model()
         if latest is not None:
             self._tactile_state = latest
@@ -450,16 +450,17 @@ class HandBackend:
         motion_token: Optional[int] = None,
     ) -> JointCommandResult:
         """串行化Replay令牌检查与实际入队，杜绝STOP之后补入一帧旧目标。"""
-        with self._replay_motion_lock:
-            return self._send_joint_targets_locked(
-                angles,
-                source=source,
-                live=live,
-                input_space=input_space,
-                raw_targets=raw_targets,
-                command_joint_mask=command_joint_mask,
-                motion_token=motion_token,
-            )
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                return self._send_joint_targets_locked(
+                    angles,
+                    source=source,
+                    live=live,
+                    input_space=input_space,
+                    raw_targets=raw_targets,
+                    command_joint_mask=command_joint_mask,
+                    motion_token=motion_token,
+                )
 
     def _send_joint_targets_locked(
         self,
@@ -477,6 +478,15 @@ class HandBackend:
         state = self.get_current_state()
         input_targets = list(angles)
         raw_input_targets = list(raw_targets) if raw_targets is not None else list(input_targets)
+        if self._manual_transaction_active or self._calibration_workflow.is_import_active():
+            return JointCommandResult(sent=False, blocked=list(range(ENCODER_COUNT)), clamped=[],
+                                      message='Device maintenance or calibration import is active', targets=input_targets)
+        if self._calibration_workflow.is_host_calibration_active():
+            return JointCommandResult(
+                sent=False,
+                message="Joint command rejected: host calibration is active",
+                targets=list(input_targets),
+            )
         is_replay = str(source or "").startswith("Replay:")
         if is_replay:
             if motion_token is None or not self.replay_motion_token_valid(motion_token):
@@ -599,6 +609,11 @@ class HandBackend:
                 log_session("ROS2_GATE", f"DISARM reason={reason or 'requested'}")
             return True, "ROS2 joint output disabled"
 
+        if self._calibration_workflow.is_host_calibration_active():
+            return False, "ROS2 enable blocked: host calibration is active"
+        if self._manual_transaction_active or self._calibration_workflow.is_import_active():
+            return False, 'ROS2 enable blocked: device transaction is active'
+
         if not self.is_comm_connected():
             return False, "ROS2 enable blocked: P4 serial is not connected"
 
@@ -641,14 +656,17 @@ class HandBackend:
         """响应独立 ROS2 INPUT 开关，并复用线程安全的 ROS2 输出授权门。"""
         # UI 灰显不是安全门。CLI 或其他调用方也必须先启动普通控制器，
         # 防止提前预授权后某次普通 START 意外放行持续到来的遥操帧。
-        if enabled and not self.is_started():
-            return False, "ordinary controller is not enabled; press ENABLE first"
-        if enabled:
-            self.cancel_replay_motion("ROS2 input enabled")
-        ok, message = self.set_ros2_output_armed(
-            bool(enabled),
-            reason="ROS2_OUTPUT_ENABLE" if enabled else "ROS2_OUTPUT_DISABLE",
-        )
+        with self._ros2_output_lock:
+            if enabled and self._calibration_workflow.is_host_calibration_active():
+                return False, "ROS2 enable blocked: host calibration is active"
+            if enabled and not self.is_started():
+                return False, "ordinary controller is not enabled; press ENABLE first"
+            if enabled:
+                self.cancel_replay_motion("ROS2 input enabled")
+            ok, message = self._set_ros2_output_armed_locked(
+                bool(enabled),
+                reason="ROS2_OUTPUT_ENABLE" if enabled else "ROS2_OUTPUT_DISABLE",
+            )
         if enabled and ok:
             return True, "ROS2 input enabled; waiting for the next ROS2 frame"
         if not enabled and ok:
@@ -683,8 +701,18 @@ class HandBackend:
         """
         values = list(angles)
         raw_values = list(raw_targets) if raw_targets is not None else list(values)
+        try:
+            valid = (len(values) == ENCODER_COUNT and all(
+                math.isfinite(float(value)) and get_spec(joint).urdf_range_deg[0] <= float(value) <= get_spec(joint).urdf_range_deg[1]
+                for joint, value in enumerate(values)))
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            return JointCommandResult(sent=False, message='ROS2 frame rejected: requires 21 finite URDF degree values within joint limits', targets=values)
         with self._ros2_output_lock:
-            if not self._ros2_output_armed:
+            if self._calibration_workflow.is_host_calibration_active():
+                reason = "host_calibration_active"
+            elif not self._ros2_output_armed:
                 reason = "not_armed"
             elif not self.is_comm_connected():
                 reason = "serial_offline"
@@ -719,18 +747,24 @@ class HandBackend:
                 targets=values,
             )
 
-    def begin_replay_motion(self) -> Tuple[bool, int, str]:
+    def begin_replay_motion(self, *, expected_application_epoch=None) -> Tuple[bool, int, str]:
         """取得 Replay 独占令牌，并明确撤销 ROS2 输出授权。"""
         if not self.is_comm_connected():
             return False, 0, "Replay rejected: P4 serial port is not connected"
-        if not self.is_started():
-            return False, 0, "Replay rejected: press ENABLE first"
         with self._ros2_output_lock:
+            if self._manual_transaction_active or self._calibration_workflow.is_import_active():
+                return False, 0, 'Replay rejected: a device transaction is active'
+            if expected_application_epoch is not None and expected_application_epoch != self._application_epoch:
+                return False, 0, 'Replay rejected: startup cancelled'
+            if self._calibration_workflow.is_host_calibration_active():
+                return False, 0, "Replay rejected: host calibration is active"
+            if not self.is_started():
+                return False, 0, "Replay rejected: press ENABLE first"
             self._set_ros2_output_armed_locked(False, reason="replay_start")
-        with self._replay_motion_lock:
-            self._replay_motion_generation += 1
-            self._replay_motion_active = True
-            token = self._replay_motion_generation
+            with self._replay_motion_lock:
+                self._replay_motion_generation += 1
+                self._replay_motion_active = True
+                token = self._replay_motion_generation
         log_session("REPLAY_OWNER", f"CLAIM token={token}")
         return True, token, "Replay motion ownership granted"
 
@@ -785,25 +819,71 @@ class HandBackend:
 
     # Controller command proxies.  These keep UI/ROS on the backend surface while
     # HandController remains the hardware-control primitive layer.
+    def _run_user_output(self, callback, blocked_result=None):
+        """原子核验并提交用户输出；host worker 和取消收口阶段独占控制。"""
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                if (self._calibration_workflow.is_host_calibration_active()
+                        or self._manual_transaction_active or self._calibration_workflow.is_import_active()):
+                    return blocked_result
+                return callback()
+
+    def _run_manual_transaction(self, callback, blocked_result=False):
+        """Keep STOP locks free during device ACK/readback and disk waits."""
+        with self._ros2_output_lock, self._replay_motion_lock:
+            if (self._calibration_workflow.is_host_calibration_active()
+                    or self._calibration_workflow.is_import_active() or self._manual_transaction_active):
+                return blocked_result
+            self.cancel_replay_motion('manual transaction')
+            self._set_ros2_output_armed_locked(False, reason='manual transaction')
+            self._manual_cancel.clear()
+            self._manual_transaction_active = True
+        try:
+            return callback(self._manual_cancel.is_set)
+        finally:
+            with self._ros2_output_lock:
+                self._manual_transaction_active = False
+
+    def _submit_manual_motion(self, callback):
+        with self._ros2_output_lock:
+            return False if self._manual_cancel.is_set() else callback()
+
     def hold_current_motor_positions(self, delay_s: float = 0.15) -> bool:
-        return self._controller.hold_current_motor_positions(delay_s=delay_s)
+        return self._run_user_output(
+            lambda: self._controller.hold_current_motor_positions(delay_s=delay_s),
+            False,
+        )
 
     def invalidate_direct_commands(self) -> None:
-        self._controller.invalidate_direct_commands()
+        self._run_user_output(lambda: self._controller.invalidate_direct_commands())
 
     def enable_direct_hold(self, motor_mask: int):
-        return self._controller.enable_direct_hold(motor_mask)
+        return self._run_user_output(
+            lambda: self._controller.enable_direct_hold(motor_mask),
+            (False, "host calibration is active", []),
+        )
 
     def set_control_mode(self, mode: ControlMode) -> None:
-        self._controller.set_control_mode(mode)
+        self._run_user_output(lambda: self._controller.set_control_mode(mode))
 
     def get_control_mode(self) -> ControlMode:
         return self._controller.get_control_mode()
 
     def invalidate_joint_commands(self) -> int:
-        return self._controller.invalidate_joint_commands()
+        return self._run_user_output(lambda: self._controller.invalidate_joint_commands(), 0)
 
+    def pause(self) -> None:
+        self._manual_cancel.set()
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                self.cancel_replay_motion("pause")
+                self._set_ros2_output_armed_locked(False, reason="pause")
+                if self._calibration_workflow.is_host_calibration_active():
+                    self._calibration_workflow.cancel()
+                self._controller.pause()
 
+    def resume(self) -> None:
+        self._run_user_output(lambda: self._controller.resume())
 
     def set_target_angles(self, angles: List[float]) -> JointCommandResult:
         return self.send_joint_targets(angles, source="Backend set_target_angles", live=False)
@@ -812,13 +892,13 @@ class HandBackend:
         return self.send_joint_targets(angles, source="Backend set_target_angles_live", live=True)
 
     def set_motor_positions_absolute(self, motor_abs: List[int]) -> None:
-        self._controller.set_motor_positions_absolute(motor_abs)
+        self._run_user_output(lambda: self._controller.set_motor_positions_absolute(motor_abs))
 
     def set_single_motor_position_absolute(self, motor_index: int, motor_abs: int) -> None:
-        self._controller.set_single_motor_position_absolute(motor_index, motor_abs)
+        self._run_user_output(
+            lambda: self._controller.set_single_motor_position_absolute(motor_index, motor_abs)
+        )
 
-    def request_firmware_calibration(self) -> bool:
-        return self._controller.request_firmware_calibration()
 
     def register_calibration_workflow_callback(
         self, callback: Callable[[CalibrationWorkflowEvent], None]
@@ -831,7 +911,9 @@ class HandBackend:
         self._calibration_workflow.unregister_callback(callback)
 
     def cancel_calibration_workflow(self) -> None:
-        self._calibration_workflow.cancel()
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                self._calibration_workflow.cancel()
 
     def begin_calibration_workflow(
         self,
@@ -840,86 +922,70 @@ class HandBackend:
         motor_mask: int,
         reset_motor_mask: int,
     ) -> bool:
-        return self._calibration_workflow.begin_calibration(
-            joint_mask=joint_mask,
-            motor_mask=motor_mask,
-            reset_motor_mask=reset_motor_mask,
-            baseline_state=self.get_state_snapshot(),
-        )
+        # ROS2 发送持有 ROS2 -> Replay 两把锁；用相同顺序封住撤权到
+        # 标定事务建立之间的空档，旧帧和新 Replay claim 均不能穿插。
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                if self._manual_transaction_active or self._calibration_workflow.is_import_active():
+                    return False
+                self.cancel_replay_motion("host_calibration")
+                self._set_ros2_output_armed_locked(False, reason="host_calibration")
+                return self._calibration_workflow.begin_calibration(
+                    joint_mask=joint_mask,
+                    motor_mask=motor_mask,
+                    reset_motor_mask=reset_motor_mask,
+                    baseline_state=self.get_state_snapshot(),
+                )
 
-    def begin_startup_calibration_restore(self, active_joint_mask: int) -> bool:
-        return self._calibration_workflow.begin_startup_restore(active_joint_mask)
 
     def inspect_calibration_snapshot(self, path) -> dict:
         return self._calibration_workflow.inspect_snapshot(path)
 
     def begin_calibration_import(self, snapshot: dict, source: str = "") -> bool:
-        return self._calibration_workflow.begin_import(snapshot, source)
+        with self._ros2_output_lock:
+            with self._replay_motion_lock:
+                if self._manual_transaction_active:
+                    return False
+                return self._calibration_workflow.begin_import(snapshot, source)
 
     def request_run_feedback(self) -> bool:
-        return self._controller.request_run_feedback()
+        return self._run_user_output(lambda: self._controller.request_run_feedback(), False)
 
     def set_active_scope(self, active_motor_mask: int, active_joint_mask: int, require_can_feedback: bool) -> bool:
-        self.cancel_replay_motion("active_scope_change")
-        with self._ros2_output_lock:
-            self._set_ros2_output_armed_locked(False, reason="active_scope_change")
+        def write(cancelled):
+            if cancelled():
+                return False
             ok = self._controller.set_active_scope(active_motor_mask, active_joint_mask, require_can_feedback)
-            if ok:
-                valid_joint_mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
-                self._requested_active_joint_mask = valid_joint_mask
-                self._requested_active_scope = (
-                    int(active_motor_mask),
-                    valid_joint_mask,
-                    bool(require_can_feedback),
-                )
-            return ok
+            with self._ros2_output_lock:
+                if ok and not cancelled():
+                    valid_joint_mask = int(active_joint_mask) & ((1 << ENCODER_COUNT) - 1)
+                    self._requested_active_joint_mask = valid_joint_mask
+                    self._requested_active_scope = (
+                        int(active_motor_mask),
+                        valid_joint_mask,
+                        bool(require_can_feedback),
+                    )
+                    return True
+                return False
+        return self._run_manual_transaction(write)
 
     def set_manual_encoder_references(self, manual_min_raw, manual_max_raw) -> bool:
-        return self._controller.set_manual_encoder_references(
-            list(manual_min_raw), list(manual_max_raw)
+        return self._run_manual_transaction(
+            lambda cancelled: False if cancelled() else self._controller.set_manual_encoder_references(
+                list(manual_min_raw), list(manual_max_raw)
+            ),
+            False,
         )
 
     def set_manual_encoder_reference(
         self, joint: int, manual_min_raw: int, manual_max_raw: int
     ) -> bool:
-        return self._controller.set_manual_encoder_reference(
-            joint, manual_min_raw, manual_max_raw
+        return self._run_manual_transaction(
+            lambda cancelled: self._controller.set_manual_encoder_reference(
+                joint, manual_min_raw, manual_max_raw, cancelled=cancelled
+            ),
+            False,
         )
-
-    def capture_manual_endpoint(self, joint: int, is_min: bool) -> ManualCaptureResult:
-        """捕获核心快照中的新鲜 raw；完整本轮端点对才安装并保存。"""
-        joint = int(joint)
-        with self._manual_capture_lock:
-            if not 0 <= joint < ENCODER_COUNT or not self.is_comm_connected():
-                return ManualCaptureResult(False, False, None, "Manual capture rejected: device disconnected or joint invalid")
-            state = self.get_state_snapshot()
-            age = time.time() - float(state.encoder_raw_last_rx_ts or 0)
-            encoder = state.encoders[joint]
-            if (not state.has_encoder_raw_data or not 0 <= age <= 0.3
-                    or encoder.raw_error or not 0 <= int(encoder.raw_sensor) < 16384
-                    or (state.has_encoder_health_status and not state.encoder_online_bitmap & (1 << joint))):
-                return ManualCaptureResult(False, False, None, f"J{joint:02d}：磁编采样无效或过期。检查 S3 后重试。")
-            if not state.has_manual_reference_encoder_directions:
-                return ManualCaptureResult(False, False, None, f"J{joint:02d}：尚无 P4 安装方向。等待设备状态后重试。")
-            direction = int(state.manual_reference_encoder_directions[joint])
-            if direction not in (-1, 1):
-                return ManualCaptureResult(False, False, None, f"J{joint:02d}：安装方向无效。检查 P4 配置。")
-            raw = int(encoder.raw_sensor)
-            draft = self._manual_drafts.setdefault(joint, {})
-            draft["min" if is_min else "max"] = raw
-            if len(draft) < 2:
-                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：端点草稿已捕获，请 Set 另一端；尚未保存。")
-            span = directed_encoder_delta(draft["min"], draft["max"], direction)
-            if not 0 < span < 8192:
-                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：端点行程 {span} counts 无效。检查方向并重新 Set；尚未保存。")
-            try:
-                saved = bool(self._controller.set_manual_encoder_reference(joint, draft["min"], draft["max"]))
-            except Exception as exc:
-                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：保存或安装失败：{exc}。草稿保留，可重新 Set 重试。")
-            if not saved:
-                return ManualCaptureResult(True, False, raw, f"J{joint:02d}：未保存或未确认安装。草稿保留，检查连接后重新 Set 重试。")
-            self._manual_drafts.pop(joint, None)
-            return ManualCaptureResult(True, True, raw, f"J{joint:02d} Manual 已保存并安装，需重新自动标定。")
 
     @staticmethod
     def joint_motor_lut_ranges(result, joint: int):
@@ -930,26 +996,22 @@ class HandBackend:
         return self._controller.query_manual_encoder_references()
 
     def clear_manual_encoder_references(self) -> bool:
-        with self._manual_capture_lock:
-            ok = self._controller.clear_manual_encoder_references()
-            if ok:
-                self._manual_drafts.clear()
-            return ok
+        return self._run_manual_transaction(lambda cancelled: False if cancelled() else self._controller.clear_manual_encoder_references(), False)
 
     def rope_init(self, active_joint_mask: int) -> bool:
-        return self._controller.rope_init(active_joint_mask)
+        return self._run_user_output(lambda: self._controller.rope_init(active_joint_mask), False)
 
     def manual_prepare_all_motors(self) -> ManualPrepareResult:
         """停止外部连续输入后执行全手 turn0 与 1500-count 预松事务。"""
-        self.cancel_replay_motion("manual_prepare")
-        with self._ros2_output_lock:
-            self._set_ros2_output_armed_locked(False, reason="manual_prepare")
-            return self._controller.manual_prepare_all_motors()
+        return self._run_manual_transaction(
+            lambda cancelled: self._controller.manual_prepare_all_motors(cancelled=cancelled, motion_gate=self._submit_manual_motion),
+            ManualPrepareResult(False, 'host calibration is active or device transaction is finishing', 0, 0, 0, 0))
 
     def start(self) -> None:
-        self._controller.start()
+        self._run_user_output(lambda: self._controller.start())
 
     def stop(self) -> None:
+        self._manual_cancel.set()
         self.cancel_replay_motion("E_STOP")
         with self._ros2_output_lock:
             self._set_ros2_output_armed_locked(False, reason="E_STOP")
@@ -962,4 +1024,12 @@ class HandBackend:
             self._controller.reset()
 
     def is_started(self) -> bool:
-        return self._controller.is_started()
+        with self._ros2_output_lock:
+            if self._calibration_workflow.is_host_calibration_active():
+                return False
+            return self._controller.is_started()
+
+    def is_expected_calibration_turn_unknown(self, state: HandModel) -> bool:
+        """故障界面只让位给实际静止归零事务，不屏蔽设备真值。"""
+        io = getattr(self._controller, '_host_calibration_io', None)
+        return bool(io and io.is_expected_calibration_turn_unknown(state))

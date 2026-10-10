@@ -24,6 +24,7 @@ DEFAULT_JOINT_TARGET_TOPIC = "/mmhand/joint_targets"
 @dataclass(frozen=True)
 class Ros2JointTargetConfig:
     topic: str = DEFAULT_JOINT_TARGET_TOPIC
+    auto_start: bool = False
     input_space: str = URDF_DEG
 
 
@@ -34,26 +35,34 @@ class JointTargetCommandHandler:
         self,
         backend: HandBackend,
         *,
+        topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+        auto_start: bool = False,
+        input_space: str = URDF_DEG,
         warning_sink: Optional[Callable[[str], None]] = None,
         warn_interval_s: float = 1.0,
     ) -> None:
         self.backend = backend
-        self.topic = DEFAULT_JOINT_TARGET_TOPIC
+        if auto_start:
+            raise ValueError('ROS2 requires /mmhand/joint_targets and 21 URDF degrees; automatic startup is prohibited')
+        self.topic = topic
+        self.auto_start = bool(auto_start)
+        self.input_space = str(input_space)
         self.warning_sink = warning_sink or print
         self.warn_interval_s = float(warn_interval_s)
         self._last_warn_ts = 0.0
+        self._auto_started = False
 
     def handle_message(self, msg: object) -> bool:
         return self.handle_values(getattr(msg, "data", []))
 
     def handle_values(self, values: Iterable[float]) -> bool:
         try:
-            adaptation = adapt_joint_targets(values, source_space=URDF_DEG)
+            adaptation = adapt_joint_targets(values, source_space=self.input_space)
         except (TypeError, ValueError) as exc:
             self._warn(f"ignored ROS2 joint target: {exc}")
             return False
 
-        # ROS2 输入统一经过 backend 的授权门。这里不能直接调用
+        # 两个 ROS2 输入 topic 统一经过 backend 的授权门。这里不能直接调用
         # send_joint_targets，否则 E-STOP 后的下一帧会再次发送 RUN_FEEDBACK。
         result = self.backend.send_ros2_joint_targets(
             adaptation.urdf_targets_deg,
@@ -83,11 +92,19 @@ class Ros2JointTargetBridge:
     def __init__(
         self,
         backend: HandBackend,
+        *,
+        topic: str = DEFAULT_JOINT_TARGET_TOPIC,
+        auto_start: bool = False,
     ) -> None:
+        if topic != DEFAULT_JOINT_TARGET_TOPIC or auto_start:
+            raise ValueError('ROS2 bridge requires /mmhand/joint_targets; automatic startup is prohibited')
         self.backend = backend
-        self.config = Ros2JointTargetConfig()
+        self.config = Ros2JointTargetConfig(topic=topic, auto_start=auto_start, input_space=URDF_DEG)
         self.handler = JointTargetCommandHandler(
             backend,
+            topic=self.config.topic,
+            auto_start=self.config.auto_start,
+            input_space=self.config.input_space,
             warning_sink=self._warn,
         )
         self._thread: Optional[threading.Thread] = None
@@ -108,7 +125,6 @@ class Ros2JointTargetBridge:
                 "ROS2 support requires rclpy and std_msgs in the active Python environment"
             ) from exc
 
-        self._rclpy = rclpy
         if not rclpy.ok():
             rclpy.init(args=None)
             self._shutdown_rclpy = True
@@ -136,6 +152,8 @@ class Ros2JointTargetBridge:
 
     def stop(self) -> None:
         self.backend.set_ros2_output_armed(False, reason="ros2_bridge_stop")
+        if not self._started:
+            return
         rclpy = self._rclpy
         node = self._node
         if node is not None:

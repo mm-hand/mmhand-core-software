@@ -1,5 +1,5 @@
 #!/bin/sh
-# P4 提交前快速门禁：只检查生成物与分层契约，不执行固件编译。
+# Read-only full software gate; never generate, modify, or stage files.
 repo_root="$(git rev-parse --show-toplevel)" || exit 1
-
-python "$repo_root/tools/check.py" --fast
+cd "$repo_root" || exit 1
+exec python tools/precommit_checks.py --staged

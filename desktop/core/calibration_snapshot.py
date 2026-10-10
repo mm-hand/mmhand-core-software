@@ -393,7 +393,8 @@ def atomic_write_snapshot(path: Path | str, payload: dict, *, backup: bool = Tru
     target.parent.mkdir(parents=True, exist_ok=True)
     sealed = seal_snapshot(payload)
     temp_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-    backup_path = target.with_suffix(target.suffix + ".bak")
+    backup_path = target.parent / "backups" / (target.name + ".bak")
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
             json.dump(sealed, handle, indent=2, ensure_ascii=False)
@@ -648,9 +649,8 @@ def _invalidate_calibration_snapshot_scope_locked(
     joint_mask = int(joint_mask) & _JOINT_MASK
     reason_tag = str(reason).strip().lower() or "coordinate_reset"
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    archive = target.with_name(
-        f"{target.stem}.before_scoped_{reason_tag}_{stamp}{target.suffix}"
-    )
+    archive = target.parent / "backups" / f"{target.stem}.before_scoped_{reason_tag}_{stamp}{target.suffix}"
+    archive.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(target, archive)
     payload = read_snapshot(target)

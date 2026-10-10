@@ -1,4 +1,5 @@
 import math
+import pytest
 from types import SimpleNamespace
 
 from desktop.core.protocol import ENCODER_COUNT
@@ -66,6 +67,14 @@ def test_ros2_handler_never_starts_or_enables_device() -> None:
 
     assert backend.starts == 0
     assert len(backend.sent) == 2
+
+
+def test_ros2_handler_refuses_auto_start() -> None:
+    backend = FakeBackend()
+    with pytest.raises(ValueError, match='automatic startup is prohibited'):
+        JointTargetCommandHandler(backend, auto_start=True)
+    assert backend.starts == 0
+    assert backend.sent == []
 
 
 def test_ros2_handler_reports_backend_workspace_rejection() -> None:

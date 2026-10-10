@@ -12,7 +12,6 @@ namespace p4::system {
 bool canAcceptStart(uint8_t state);
 bool canAcceptRunDirect(uint8_t state);
 bool canAcceptRunFeedback(uint8_t state);
-bool canAcceptCalibration(uint8_t state);
 
 } // namespace p4::system
 

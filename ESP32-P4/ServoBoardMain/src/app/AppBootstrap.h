@@ -7,9 +7,6 @@
 
 #include <stdint.h>
 
-// 持续标定状态随 SYSTEM_STATUS 周期上报；短时 ACK 已由
-extern volatile uint8_t g_calibrationStatus;
-
 // Arduino setup() 的系统入口：创建共享资源并启动全部任务。
 void appBootstrapSetup();
 

@@ -80,8 +80,8 @@
     {
       "id": "p4SerialPort",
       "type": "promptString",
-      "description": "ESP32-P4 Arduino upload port, for example COM7",
-      "default": "COM7"
+      "description": "ESP32-P4 Arduino upload port, for example COM4",
+      "default": "COM4"
     }
   ]
 }

@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MMHand · 状态转换与准入条件</title>
+<style>
+:root{--ink:#172b42;--muted:#64748b;--paper:#f4f6f8;--line:#dce3ea;--blue:#2563eb;--amber:#b9670b;--teal:#087c72;--red:#b42346;--white:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}button,input,select{font:inherit}button,a{touch-action:manipulation}button{cursor:pointer}a{color:#235dad;text-underline-offset:3px}code,.mono{font-family:Consolas,"SFMono-Regular",monospace;font-size:.88em;overflow-wrap:anywhere}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:3px solid #7eacf6;outline-offset:3px}
+.shell{max-width:1510px;margin:auto;padding:30px 36px 70px}.eyebrow{font:12px/1.5 Consolas,monospace;letter-spacing:2px;color:var(--muted)}h1{font-size:clamp(27px,3vw,40px);line-height:1.3;margin:9px 0 12px;font-weight:750;letter-spacing:-1px}h2{font-size:22px;margin:0 0 8px}h3{font-size:17px;margin:0 0 8px}p{margin:8px 0}.intro{max-width:930px;color:var(--muted)}.topline{display:flex;justify-content:space-between;gap:25px;align-items:flex-start}.meta{min-width:190px;text-align:right;font-size:12px;color:var(--muted);padding-top:8px}.summary{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:25px 0}.summary-card{padding:20px 24px;border:1px solid var(--line);border-left:5px solid var(--blue);background:white;border-radius:12px}.summary-card.cal{border-left-color:var(--amber)}.summary-card small{color:var(--muted)}.summary-card strong{display:block;font-size:18px;margin:4px 0 8px}.tags{display:flex;gap:6px;flex-wrap:wrap}.tag{background:#edf2f7;border-radius:5px;padding:3px 8px;font-size:12px}.tag.blue{background:#eaf1ff;color:#2055ae}.tag.amber{background:#fff0da;color:#985508}.tag.red{background:#fff0f3;color:var(--red)}
+nav.tabs{display:flex;gap:8px;border-bottom:1px solid var(--line);margin-bottom:20px;position:sticky;top:0;background:var(--paper);z-index:5;padding:10px 0;flex-wrap:wrap}.tab{border:0;background:transparent;color:var(--muted);padding:9px 17px;border-radius:7px;font-weight:650}.tab[aria-selected=true]{background:var(--ink);color:white}.panel[hidden]{display:none!important}.panel-title{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:15px}.caption{color:var(--muted);font-size:13px}.button{border:1px solid #cad5e0;background:white;padding:7px 12px;border-radius:6px;color:var(--ink);white-space:nowrap}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1fr) 325px;gap:18px;align-items:start}.box{background:white;border:1px solid var(--line);border-radius:12px}.diagram-scroll{overflow:auto;padding:12px}.diagram-scroll svg{display:block;width:100%;min-width:750px;height:auto}.diagram-scroll svg text{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif}.state-node{cursor:pointer;transition:opacity .15s}.state-node:hover rect,.state-node.selected rect{stroke-width:3.5}.state-node.selected rect{filter:drop-shadow(0 3px 5px #19384d22)}.state-name{font-size:16px;font-weight:700}.state-code{font-family:Consolas,monospace!important;font-size:13px}.state-desc{font-size:12px;fill:#53677e}.edge-label{font-size:12px;fill:#53677e;paint-order:stroke;stroke:white;stroke-width:5px;stroke-linejoin:round}.legend{display:flex;flex-wrap:wrap;gap:14px;margin:11px 5px;font-size:12px;color:var(--muted)}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}.detail{padding:20px;position:sticky;top:75px}.detail h3{font-size:21px}.detail .enum{font:12px/1.6 Consolas,monospace;color:var(--muted);overflow-wrap:anywhere}.detail ul{padding-left:18px;font-size:13px}.detail .related{padding-top:12px;border-top:1px solid var(--line);margin-top:15px}.detail button{margin-top:10px}.global-bar{display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:16px 20px;margin-top:15px;font-size:13px}.global-bar strong{color:var(--red)}.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-top:18px}.note{padding:18px 20px}.note h3{font-size:15px}.note p{font-size:13px;color:var(--muted)}.section-gap{margin-top:24px}
+.flow-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr);gap:20px;align-items:start}.flow{padding:24px 28px}.flow-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:18px;margin-bottom:16px}.badge{border-radius:100px;padding:3px 10px;font-size:12px;background:#eaf1ff;color:#2055ae}.badge.amber{background:#fff0da;color:#985508}.flow-step{position:relative;background:#f8fafc;border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:8px;padding:14px 17px;margin-bottom:29px}.flow-step:after{content:"↓ 通过";position:absolute;bottom:-27px;left:50%;transform:translateX(-50%);color:#71849a;font-size:12px;white-space:nowrap}.flow-step:last-child{margin-bottom:0}.flow-step:last-child:after{display:none}.flow-step.cal{border-left-color:var(--amber)}.flow-step.good{background:#eef7f4;border-left-color:var(--teal)}.flow-step strong{display:block}.flow-step p{font-size:13px;margin:5px 0 0;color:#51677c}.fail{display:block;margin-top:6px;font-size:12px;color:var(--red)}.flow-step small{font-size:11px;color:#728296}.aside-card{padding:20px 22px;margin-bottom:17px}.aside-card ul{padding-left:20px;font-size:13px}.aside-card .mono{font-size:12px}.stage-box{padding:17px;border:2px dashed #dcb079;border-radius:10px;background:#fffaf2;margin-top:25px}.stage-box .flow-step{background:white}.stage-box>.caption{margin-bottom:15px}.compare{overflow-x:auto}.compare table{min-width:750px}.warning{border-left:4px solid #bb8350;background:#fff8ef;padding:13px 17px;border-radius:5px;font-size:13px;margin:15px 0}
+table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}th{background:#eef2f6;color:#4b6074;font-weight:650;padding:11px 13px;border-bottom:1px solid var(--line)}td{padding:12px 13px;border-bottom:1px solid #e6edf3;vertical-align:top}tr:last-child td{border-bottom:0}.state-list{display:flex;gap:4px;flex-wrap:wrap}.state-chip{background:#edf2f7;border-radius:4px;font:11px/1.5 Consolas,monospace;padding:3px 6px;white-space:nowrap}.state-chip.direct{background:#eaf1ff;color:#2055ae}.state-chip.cal{background:#fff0da;color:#985508}.state-chip.feedback{background:#e5f6f2;color:#06675e}.source{font-size:11px;display:block;margin-top:6px;overflow-wrap:anywhere}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.toolbar input{flex:1;min-width:200px}.toolbar input,.toolbar select{border:1px solid #cdd7e1;border-radius:6px;padding:8px 10px;background:white;color:var(--ink)}.table-wrap{overflow:auto}.table-wrap table{min-width:950px}.count{font-size:12px;color:var(--muted)}.empty{text-align:center;padding:30px;color:var(--muted)}.cycle{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;counter-reset:cycle;margin:17px 0}.cycle-step{background:white;border:1px solid var(--line);padding:16px;border-radius:8px;font-size:13px;counter-increment:cycle}.cycle-step:before{content:counter(cycle,decimal-leading-zero);display:block;font:24px Consolas,monospace;color:#8090a3;margin-bottom:8px}.sources-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.sources-grid a{display:block;padding:15px 18px;background:white;border:1px solid var(--line);border-radius:8px;font-size:13px}.sources-grid small{display:block;color:var(--muted)}footer{border-top:1px solid var(--line);margin-top:35px;padding-top:18px;font-size:12px;color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.trust-chain{display:grid;grid-template-columns:1.2fr 30px 2fr 30px 1.3fr 30px 1.3fr;gap:9px;align-items:center;padding:22px}.trust-node{padding:18px;border:1px solid var(--line);border-radius:9px;background:#f8fafc;min-height:130px;font-size:13px}.trust-node strong{display:block;font-size:16px;margin-bottom:7px}.trust-node.good{border-color:#90c9bd;background:#eef8f4}.trust-node.unknown{border-color:#e6b7c3;background:#fff3f5}.trust-node p{margin:5px 0}.trust-arrow{text-align:center;font-size:24px;color:#71849a}.trust-return{grid-column:1/-1;border-top:1px dashed #c58c9b;padding-top:12px;color:var(--red);font-size:13px}.trust-form{display:grid;grid-template-columns:1.3fr repeat(3,1fr);gap:12px;margin:16px 0}.trust-form label{font-size:12px;color:var(--muted)}.trust-form input,.trust-form select{display:block;width:100%;margin-top:5px;border:1px solid #cdd7e1;border-radius:6px;padding:9px;background:white;color:var(--ink)}.trust-form input{font-family:Consolas,monospace}.gate-result{border-radius:8px;padding:16px 19px;border:1px solid #90c9bd;background:#eef8f4;font-size:13px;margin:13px 0}.gate-result.fail-result{border-color:#e4b3bf;background:#fff3f5}.gate-result strong{display:block;font-size:16px}.trust-actions{display:flex;gap:8px;flex-wrap:wrap}.trust-details{padding:17px 20px;margin-top:16px}.trust-details summary{cursor:pointer;font-weight:650}.trust-details p{font-size:13px}
+@media(max-width:1100px){.overview-grid{grid-template-columns:1fr}.detail{position:static}.flow-grid{grid-template-columns:1fr}.notes{grid-template-columns:1fr}.cycle{grid-template-columns:repeat(3,1fr)}.trust-form{grid-template-columns:1fr 1fr}}
+@media(max-width:680px){.shell{padding:20px 15px 40px}.summary{grid-template-columns:1fr}.meta{display:none}.summary-card{padding:16px}.tab{padding:8px 10px;font-size:13px}.global-bar{grid-template-columns:1fr}.flow{padding:18px}.sources-grid{grid-template-columns:1fr}.cycle{grid-template-columns:1fr 1fr}.panel-title{flex-wrap:wrap}.trust-chain{grid-template-columns:1fr;padding:16px}.trust-arrow{transform:rotate(90deg);line-height:1}.trust-node{min-height:0}.trust-form{grid-template-columns:1fr}}
+@media print{nav.tabs,.button,.toolbar,.detail button{display:none!important}.panel[hidden]{display:block!important}.panel{break-before:page}.overview-grid,.flow-grid{display:block}.detail{position:static;margin-top:12px}.shell{max-width:none;padding:0}.diagram-scroll svg{min-width:0}.box,.note,.flow-step{break-inside:avoid}.summary{grid-template-columns:1fr 1fr}body{background:white}table{font-size:10px}.table-wrap{overflow:visible}.table-wrap table{min-width:0}.cycle{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header class="topline">
+<div><div class="eyebrow">MMHAND / ESP32-P4 / SYSTEM STATE</div><h1>状态怎么切换，运动何时被允许</h1><p class="intro">基于 SystemStateTask 的当前实现。蓝色标出普通舵机直控入口，包含上位机自动校准的运动；橙色保留原 MCU 自动校准入口。分别呈现请求、状态准入和机械运动前置。</p></div>
+<div class="meta">源码核对：2026-10-08<br>基线：3f52e5d<br>9 个真实状态 · 离线 HTML</div>
+</header>
+<div class="summary">
+<div class="summary-card"><small>进入 RUN_DIRECT（6）</small><strong>提交 ABS 目标，先通过目标电机的硬件准入</strong><div class="tags"><span class="tag blue">pending 代次匹配</span><span class="tag blue">在线 / ≤500 ms</span><span class="tag blue">多圈可信</span><span class="tag blue">路由 / 无阻断故障</span></div><p class="caption">来源：IDLE / READY / RECOVERY_REQUIRED / RUN_DIRECT。Manual、Auto、磁编反馈及已标定工作限位不属于普通直控入口的必需项。</p></div>
+<div class="summary-card cal"><small>原 MCU 入口：CALIBRATION_RUNNING（4）</small><strong>先授予校准状态，在状态内恢复反馈并预检</strong><div class="tags"><span class="tag amber">急停未锁存</span><span class="tag amber">租约新鲜 / 无 Hold pending</span><span class="tag amber">Manual 已提交并覆盖选择</span></div><p class="caption">来源：UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED。进入后 motion_started=0；预检后开始原机械校准。当前上位机流程使用蓝色 RUN_DIRECT，不请求此状态。</p></div>
+</div>
+<nav class="tabs" role="tablist" aria-label="状态分析视图">
+<button class="tab" id="tab-overview" role="tab" aria-selected="true" aria-controls="panel-overview" data-panel="overview">状态总览</button>
+<button class="tab" id="tab-direct" role="tab" aria-selected="false" aria-controls="panel-direct" data-panel="direct" tabindex="-1">直控入口</button>
+<button class="tab" id="tab-calibration" role="tab" aria-selected="false" aria-controls="panel-calibration" data-panel="calibration" tabindex="-1">校准入口</button>
+<button class="tab" id="tab-trust" role="tab" aria-selected="false" aria-controls="panel-trust" data-panel="trust" tabindex="-1">多圈 ABS 可信</button>
+<button class="tab" id="tab-transitions" role="tab" aria-selected="false" aria-controls="panel-transitions" data-panel="transitions" tabindex="-1">全部转换与守卫</button>
+<button class="tab" id="tab-runtime" role="tab" aria-selected="false" aria-controls="panel-runtime" data-panel="runtime" tabindex="-1">调度与源码</button>
+</nav>
+<section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+<div class="panel-title"><div><h2>九个状态与主要转换</h2><p class="caption">点击状态查看入口、出口和源码。集合边聚合相同来源；所有事件及特殊分支见“全部转换与守卫”。虚线框是判断函数或集合，不是新增状态。</p></div><button class="button" id="export-svg">下载总览 SVG</button></div>
+<div class="overview-grid">
+<div>
+<div class="box diagram-scroll">
+<svg id="state-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 920" role="img" aria-labelledby="svg-title svg-desc">
+<title id="svg-title">MMHand 顶层状态转换总览</title><desc id="svg-desc">初始化到不可控。START或显式重评进入公共判断；判断返回不可控、空闲、就绪、需要恢复。直控从三个静止状态进入；反馈从READY进入，需要恢复时先RopeInit。校准允许不可控进入，校准完成后先RopeInit。普通控制可暂停并通过START恢复。STOP、RESET和阻断故障收敛到不可控。</desc>
+<defs>
+<marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#8a9bae"/></marker>
+<marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#2563eb"/></marker>
+<marker id="arrow-amber" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#b9670b"/></marker>
+<marker id="arrow-teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#087c72"/></marker>
+</defs>
+<rect x="40" y="290" width="1080" height="150" rx="16" fill="#f8fafc" stroke="#ced8e3" stroke-dasharray="6 5"/>
+<text x="60" y="316" fill="#657a8e" font-size="13">静止集合：下列三个状态可周期重评；前提 owner=NONE、control_enabled=0</text>
+<rect x="40" y="535" width="1080" height="165" rx="16" fill="#fafcfd" stroke="#e0e7ee"/>
+<text x="60" y="558" fill="#657a8e" font-size="12">运行集合：执行中持续监督租约及各状态的阻断故障</text>
+<g fill="none" stroke-width="2">
+<path d="M65 77V116" stroke="#8a9bae" marker-end="url(#arrow-gray)"/>
+<path d="M360 162H420" stroke="#8a9bae" marker-end="url(#arrow-gray)"/>
+<path d="M500 225V263H210V337" stroke="#8a9bae" marker-end="url(#arrow-gray)"/>
+<path d="M580 225V337" stroke="#8a9bae" marker-end="url(#arrow-gray)"/>
+<path d="M660 225V263H930V337" stroke="#8a9bae" marker-end="url(#arrow-gray)"/>
+<path d="M430 214H393V245H320V216" stroke="#8a9bae" stroke-dasharray="5 4" marker-end="url(#arrow-gray)"/>
+<path d="M210 440V573" stroke="#2563eb" marker-end="url(#arrow-blue)"/>
+<path d="M580 418V573" stroke="#087c72" marker-end="url(#arrow-teal)"/>
+<path d="M930 440V573" stroke="#b9670b" marker-end="url(#arrow-amber)"/>
+<path d="M1097 337V262H1040V216" stroke="#b9670b" marker-end="url(#arrow-amber)"/>
+<path d="M230 116V46H970V116" stroke="#b9670b" marker-end="url(#arrow-amber)"/>
+<path d="M970 216V240H1140V625H1080" stroke="#b9670b" marker-end="url(#arrow-amber)"/>
+<path d="M780 625H720" stroke="#087c72" marker-end="url(#arrow-teal)"/>
+<path d="M210 676V758H470V800" stroke="#2563eb" marker-end="url(#arrow-blue)"/>
+<path d="M530 676V800" stroke="#087c72" marker-end="url(#arrow-teal)"/>
+<path d="M420 849H375V646H360" stroke="#2563eb" stroke-dasharray="5 4" marker-end="url(#arrow-blue)"/>
+<path d="M667 800V676" stroke="#087c72" stroke-dasharray="5 4" marker-end="url(#arrow-teal)"/>
+<path d="M40 625H18V278H450V225" stroke="#8a9bae" stroke-dasharray="5 4" marker-end="url(#arrow-gray)"/>
+</g>
+<text x="58" y="67" fill="#657a8e" font-size="12">初始化（虚拟起点）</text>
+<text x="372" y="145" class="edge-label">START</text><text x="369" y="181" class="edge-label">或显式重评</text>
+<text x="65" y="244" class="edge-label">底层可控，反馈未 READY</text><text x="65" y="265" class="edge-label">且无可恢复低边界 → IDLE</text><text x="590" y="284" class="edge-label">完整反馈门禁通过</text>
+<text x="789" y="249" class="edge-label">且存在可恢复低边界</text>
+<text x="292" y="260" class="edge-label">急停锁存 / 底层不可控</text>
+<text x="113" y="479" class="edge-label" fill="#2563eb">RUN_DIRECT [直控门]</text><text x="111" y="500" class="edge-label">三个静止状态均可进入</text>
+<text x="588" y="479" class="edge-label">RUN_FEEDBACK [反馈门]</text>
+<text x="794" y="479" class="edge-label">手动 ROPE_INIT（静止集合）</text><text x="793" y="503" class="edge-label">或 RECOVERY 的反馈恢复</text>
+<text x="841" y="285" class="edge-label">CALIBRATE [校准门]</text>
+<text x="430" y="38" class="edge-label">CALIBRATE：也允许 UNCONTROLLABLE 来源</text>
+<text x="989" y="466" class="edge-label">CALIBRATION_DONE</text><text x="998" y="490" class="edge-label">收尾准入通过</text>
+<text x="721" y="715" class="edge-label">← 自动恢复成功且可续跑反馈</text>
+<text x="230" y="741" class="edge-label">PAUSE</text><text x="540" y="742" class="edge-label">PAUSE</text>
+<text x="260" y="859" class="edge-label">START + 直控恢复门</text><text x="681" y="760" class="edge-label">START + 反馈恢复门</text>
+<text x="57" y="912" fill="#657a8e" font-size="12">完成、反馈超时、Rope 失败、Hold 确认后的退出 → 释放 owner → 公共判断函数；具体分支见转换表。</text>
+<g id="nodes"></g>
+</svg>
+<div class="legend"><span><i class="dot" style="background:#2563eb"></i>普通直控</span><span><i class="dot" style="background:#b9670b"></i>校准 / Rope Init</span><span><i class="dot" style="background:#087c72"></i>关节反馈</span><span><i class="dot" style="background:#8a9bae"></i>重评 / 完成出口</span></div>
+</div>
+<div class="box global-bar"><div><strong>全局收敛：STOP / RESET → UNCONTROLLABLE</strong><br>STOP 独立 token 优先处理；急停锁存只有 RESET 清除。运行阻断故障也撤授权、断扭矩并进入 UNCONTROLLABLE。</div><div><strong>失联：先 Hold，确认后再释放运行状态</strong><br>心跳过期先保持当前 ABS；确认成功后公共重评，失败或超时请求 E-STOP。Hold pending 不是新的顶层状态。</div></div>
+</div>
+<aside class="box detail" id="state-detail" aria-live="polite"></aside>
+</div>
+<div class="notes">
+<div class="box note"><h3>START 通常只做准备</h3><p>UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED 接受 START 后清队列并重评；其他运行状态拒绝 START。普通直控由 ABS 目标产生 RUN_DIRECT；PAUSED 的 START 才恢复原运行。</p></div>
+<div class="box note"><h3>校准 DONE 先进入 Rope Init</h3><p>搜索完成后保留结果，尝试自动收尾。校准 SUCCESS/WARN 延后发布；收尾之后仍用公共判定选择状态，并不保证一定 READY。</p></div>
+<div class="box note"><h3>UNCONTROLLABLE 不自动升 READY</h3><p>周期重评只覆盖三个静止状态。离开 UNCONTROLLABLE 通常需要 START 或显式 REEVALUATE_READY；反馈恢复本身不会自动触发这条转换。</p></div>
+</div>
+</section>
+<section class="panel" id="panel-direct" role="tabpanel" aria-labelledby="tab-direct" hidden>
+<div class="panel-title"><div><h2>进入直控：新目标与暂停恢复是两条入口</h2><p class="caption">主流程按 RUN_DIRECT 分支的执行顺序绘制。任一新目标准入失败，顶层状态保持原值；过期 generation 不得影响更新的命令。</p></div></div>
+<div class="flow-grid">
+<div class="box flow">
+<div class="flow-title"><span class="badge">入口 A</span>发送新的舵机 ABS 目标</div>
+<div class="flow-step"><strong>① Host 解析普通 ABS 指令，暂存 pending 目标</strong><p>D3 CMD_MOTOR_POS_ABS 统一携带客户端 token、本批电机 mask、27 路 ABS、speed 和 acc，共 119 bytes；mask=0 使用当前 active scope。明确的本批 mask 必须在 active 授权范围内；单电机 DE 走同一路径。递增状态机 generation，投 RUN_DIRECT(generation)。</p><small>HostCommandRouter.cpp / DirectCommandCoordinator.cpp</small><span class="fail">格式、授权、命令锁或事件入队失败 → 不进入运行</span></div>
+<div class="flow-step"><strong>② pending 有效，事件 generation 与当前 pending 一致</strong><p>pending_direct_valid != 0；pending_direct_generation == event.token。</p><small>SystemEventDispatcher.cpp:547 · DirectCommandCoordinator.cpp:124</small><span class="fail">旧事件 → 忽略；不会释放或拒绝新 generation</span></div>
+<div class="flow-step"><strong>③ 急停未锁存；Host 租约新鲜；Hold 非 PENDING</strong><p>heartbeat 非 0 且年龄 ≤1000 ms。结构合法的 Host 命令帧也会刷新心跳。</p><small>SystemEventDispatcher.cpp:554 / 561 · HostLeaseSupervisor.cpp:47</small><span class="fail">失败 → 当前 pending 拒绝（STATE / STALE）</span></div>
+<div class="flow-step"><strong>④ 当前状态允许直控</strong><p>IDLE / READY / RECOVERY_REQUIRED / RUN_DIRECT。</p><small>StateAdmissionPolicy.cpp:20 · SystemEventDispatcher.cpp:569</small><span class="fail">UNCONTROLLABLE、PAUSED、反馈、校准、Rope Init → 拒绝</span></div>
+<div class="flow-step"><strong>⑤ 本次 pending motor mask 多圈已知</strong><p>multi_turn_unknown_bitmap 与本次目标 scope 无交集。可信如何建立、如何失效以及位图演示见 <button class="button" data-show-panel="trust">多圈 ABS 可信</button>。</p><small>SystemEventDispatcher.cpp:582–593</small><span class="fail">unknown → DIRECT_REJECT_MULTITURN</span></div>
+<div class="flow-step"><strong>⑥ directMotorMaskReady：完整硬件准入</strong><p>有效 mask 非空；位置快照 ≤500 ms；scope 内舵机全在线；无多圈 unknown、无 turn overflow；scanState=0 或 2，路由可控位图覆盖 scope；current | latched fault 排除三种 scope fault 后为 0。</p><p>排除的 scope fault：CAN_OFFLINE / SERVO_OFFLINE / MULTITURN_UNKNOWN；舵机在线和多圈仍由本函数逐项检查。</p><small>SystemReadinessPolicy.cpp:105–142</small><span class="fail">失败 → DIRECT_REJECT_HARDWARE</span></div>
+<div class="flow-step"><strong>⑦ promote pending 成功：目标与本批输出范围同时生效</strong><p>命令锁内提升目标、generation、本批 motor mask、客户端 token、speed 和 acc；active scope 保留最大授权范围，control_mode=DIRECT。清可随 scope 恢复的三种旧故障位。</p><small>DirectCommandCoordinator.cpp / SystemEventDispatcher.cpp</small><span class="fail">代次改变 / 命令锁失败 → DIRECT_REJECT_STALE</span></div>
+<div class="flow-step good"><strong>⑧ RUN_DIRECT（6）：owner=CONTROL，control_enabled=1</strong><p>MotionControl 使用 logical ABS 目标，经 ActuatorGateway 和 ServoBus 执行。位置目标绕过 P4 关节 PID；驱动仍做授权、路由和可达范围等安全裁决。</p><small>SystemEventDispatcher.cpp:628–630</small></div>
+</div>
+<div>
+<div class="box aside-card"><div class="flow-title"><span class="badge">入口 B</span>PAUSED → START 恢复</div><ol>
+<li>paused_resume_state == RUN_DIRECT。</li><li>controllableEntryReady() 检查当前正式 active motor scope，满足同一硬件准入。</li><li>清队列，owner=CONTROL、enabled=1、DIRECT mode，恢复原正式目标。</li></ol><p class="caption">失败 → idleOrReadyState() 重判。该分支不提升新 pending，也没有显式调用新目标入口的租约/急停拒绝函数；正常 Host START 会续租，周期随后仍执行租约及故障监督。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp">SystemEventDispatcher.cpp:449–493</a></p></div>
+<div class="box aside-card"><h3>直控入口实际不要求</h3><div class="tags"><span class="tag">Manual</span><span class="tag">Auto / LUT</span><span class="tag">CAN / 磁编</span><span class="tag">已标定 ABS 工作限位</span></div><p class="caption">这是入口函数的实际检查范围。舵机最终执行可达范围仍必须满足；“没有 Auto”与“多圈 unknown”是不同问题。</p></div>
+<div class="box aside-card"><h3>执行结果、完成与暂停出口</h3><ul><li>通用 0x1A APPLIED 表示执行层完成本批同步写调用，未证明逐台接收或机械到位；反馈继续验证运动。</li><li>该代次完成同步写调用后，才累计机械到位样本并产生自动 DONE。</li><li>协议支持执行层给出的部分 applied/rejected 位图，整体 REJECTED；上位机不推进校准。当前 SDK 调用不能检测所有物理丢帧。</li><li>RUN_DIRECT_DONE 必须匹配 applied_direct_generation，随后释放 owner/enabled 并公共重评。</li><li>通用 F2 可主动结束当前普通直控；token=0 匹配当前代次，非 0 匹配已成功执行事务；保留扭矩和故障。</li><li>PAUSE 断扭矩 → PAUSED；STOP / 阻断故障 → UNCONTROLLABLE。</li></ul><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp">SystemEventDispatcher.cpp</a> · <a href="通信协议与数据校验.md">通用直控协议与执行确认边界</a></p></div>
+<div class="warning">从 UNCONTROLLABLE 不能直接接受 RUN_DIRECT。若舵机底层已经可控，先 START / 显式重评得到静止状态，再发 ABS 目标。</div>
+</div>
+</div>
+</section>
+<section class="panel" id="panel-calibration" role="tabpanel" aria-labelledby="tab-calibration" hidden>
+<div class="panel-title"><div><h2>原 MCU 校准状态：先准入，再预检和运动</h2><p class="caption">下面橙色流程保留原 CALIBRATE 入口：SystemState 准入后，校准 task 在 CALIBRATION_RUNNING 内预检；预检与机械阶段共享状态编号 4。当前上位机校准走下方蓝色普通直控链。</p></div></div>
+<div class="box aside-card"><h3>当前上位机校准：P4 始终按普通直控处理</h3><div class="flow-step"><strong>① 静止 owner=NONE → F0 归零当前关节和必要辅助对</strong><p>先维护 RESET，再复查辅助对；完整在线且未知时整对归零，部分在线失败。F0 成功后最多等 3 s 的新 ABS/raw 同戳对和 logical range；持续 UNKNOWN 不允许进入普通直控。</p></div><div class="flow-step"><strong>② 普通 D3 → RUN_DIRECT（6）/ CONTROL owner</strong><p>上位机用磁编、负载和位置反馈运行原机械状态机，speed=400 / acc=20；P4 使用同一普通直控硬件准入，绕过 PID，不加宿主标定专用 Manual/CAN/负载门禁。QUEUED 不等于执行；上位机等通用结果最多 1 s，不重发运动。</p></div><div class="flow-step"><strong>③ 通用 F2 释放 → 一次 Manual E8 → LUT DF → 限位 E0</strong><p>Manual 异步提交必须最终成功后才发依赖其 CRC 的 LUT；LUT 全部由上位机构建，空 LUT 留作宿主诊断，不上传或伪造成功。UI 仅排除当前静止 F0 范围内的短暂 UNKNOWN 中间帧，真实故障仍保护。</p></div><div class="flow-step good"><strong>④ 普通 Rope Init → 上位机双腱 LUT(0°) 直控收尾</strong><p>选中且完成的双腱按 J 编号升序，speed=400 / acc=254、按 50 ms 步长一对一批，最后通用释放。P4 不新增宿主收尾状态或校准提交证明。</p></div><p class="caption"><a href="上位机自动校准实现与对照.md">上位机实现、逐关节交接与实录根因</a> · <button class="button" data-show-panel="direct">查看统一 RUN_DIRECT 前置</button></p></div>
+<div class="flow-grid">
+<div class="box flow">
+<div class="flow-title"><span class="badge amber">状态入口</span>CALIBRATE → CALIBRATION_RUNNING</div>
+<div class="flow-step cal"><strong>① CALIBRATE 命令 → 系统事件</strong><p>Host 先检查 Manual，再入事件队列并回 QUEUED ACK。ACK 不代表状态准入或任务已经启动。</p><small>HostCommandDispatcher.cpp:211–224</small></div>
+<div class="flow-step cal"><strong>② 急停未锁存；Host 租约新鲜；Hold 非 PENDING</strong><p>heartbeat 非 0，年龄 ≤1000 ms。急停锁存必须由 RESET 解除。</p><small>SystemEventDispatcher.cpp:854–864</small><span class="fail">失败 → 保持原状态，校准 status=FAILED</span></div>
+<div class="flow-step cal"><strong>③ active joints 的 Manual 已提交且完整有效</strong><p>active joint mask 非空；manual_reference_committed；valid bitmap 覆盖全部选择；Manual 条目实际有效。</p><small>SystemReadinessPolicy.cpp:150–163 · SystemEventDispatcher.cpp:865</small><span class="fail">失败 → 保持原状态，校准 status=FAILED</span></div>
+<div class="flow-step cal"><strong>④ 来源状态允许校准</strong><p>UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED。</p><small>StateAdmissionPolicy.cpp:34 · SystemEventDispatcher.cpp:870</small><span class="fail">其他状态 → 拒绝，保持原状态</span></div>
+<div class="flow-step cal good"><strong>⑤ 进入 CALIBRATION_RUNNING（4），创建校准 task</strong><p>owner=CALIBRATION；control_enabled=0；mode=JOINT；status=RUNNING；motion_started=0；清校准故障标记和旧目标/恢复事务。</p><small>SystemEventDispatcher.cpp:880–900</small><span class="fail">task 创建失败 → FAILED、断扭矩、UNCONTROLLABLE</span></div>
+<div class="stage-box">
+<div class="flow-title"><span class="badge amber">运动前预检</span>仍在 CALIBRATION_RUNNING（4）</div>
+<p class="caption">此时不发机械搜索目标。顶层监督暂时豁免 CAN_OFFLINE、SERVO_OFFLINE、MULTITURN_UNKNOWN，让通信任务完成恢复。</p>
+<div class="flow-step cal"><strong>⑥ 选择范围有效，所选执行器的 Servo 恢复预检</strong><p>joint/motor 选择均非空。Servo 在线、多圈模式已配置、无 recovery pending/failed；位置快照 ≤500 ms，连续 3 个不同 timestamp；最多等待 5000 ms。</p><small>CalibrationSessionController.cpp:79–108 · CalibrationMotionSupport.cpp:364</small></div>
+<div class="flow-step cal"><strong>⑦ 所选磁编 / CAN 恢复预检</strong><p>链路和关节在线、无故障、帧有效且年龄 ≤300 ms；连续 3 个不同 timestamp；最多等待 2000 ms。</p><small>CalibrationSessionController.cpp:109–111 · CalibrationMotionSupport.cpp:256</small></div>
+<div class="flow-step cal"><strong>⑧ 工作空间辅助范围 + 所选/辅助 Servo 再预检</strong><p>需要四指侧摆让位时动态选择辅助电机；写 aux mask，按 selected | auxiliary 再等待 Servo 恢复。</p><small>CalibrationSessionController.cpp:113–128</small></div>
+<div class="flow-step good"><strong>⑨ 全部通过，motion_started=1 → 机械校准</strong><p>校准自发 logical ABS 批次，等待执行 ACK，并依据反馈搜索机械端点；绕过 P4 关节 PID。运动期 CAN/Servo 离线恢复为阻断故障；unknown 仍允许由校准路径处理。</p><small>CalibrationSessionController.cpp:129–138 · SystemFaultPolicy.cpp:91–100</small></div>
+</div>
+<p class="fail">任一预检或机械序列失败 → CALIBRATION_FAILED → UNCONTROLLABLE（Hold pending / 失权迟到事件另行处理）。</p>
+</div>
+<div>
+<div class="box aside-card"><h3>状态入口没有这些前置项</h3><div class="tags"><span class="tag amber">现有 Auto / LUT</span><span class="tag amber">Servo 已在线</span><span class="tag amber">CAN 已在线</span><span class="tag amber">多圈已经 known</span></div><p class="caption">状态入口允许 unknown；在线/恢复在状态内部检查。单腱目标 unknown 只记录 WARN。双腱动态辅助预检允许目标 unknown，但 J00/J04/J08/J12 的后续目标工作空间预检仍要求 known；参与让位的辅助对也必须 known，半对在线或 unknown 均失败，整对离线的非目标辅助对可跳过。</p><button class="button" data-show-panel="trust">查看校准可信登记与辅助范围条件</button></div>
+<div class="box aside-card"><h3>搜索完成后的状态链</h3>
+<div class="flow-step cal"><strong>CALIBRATION_DONE</strong><p>原状态正确、无 Hold pending，Manual/Auto 契约和多圈可信，且 Rope controller 启动成功。</p></div>
+<div class="flow-step cal"><strong>ROPE_INIT_RUNNING（8）</strong><p>CALIBRATION owner、enabled=0、临时 DIRECT mode；状态 task 推进收尾，校准 status 此时仍 RUNNING。</p></div>
+<div class="flow-step good"><strong>Rope 成功 → 公共重评</strong><p>校准 status=SUCCESS 或 WARN；最终可为 READY / IDLE / RECOVERY_REQUIRED / UNCONTROLLABLE，依实时门禁决定。</p></div>
+<p class="caption">自动 Rope 无法启动或失败：保留 Auto/LUT、报告 WARN、断扭矩后公共重评。校准收尾不会自动启动 RUN_FEEDBACK。</p>
+</div>
+<div class="box aside-card"><h3>取消、故障及重试</h3><ul><li>PAUSE 在校准和 Rope Init 期间被拒绝。</li><li>STOP 校准搜索 → UNCONTROLLABLE，校准 status=IDLE；校准收尾被 STOP 中断 → WARN。</li><li>校准搜索算法失败或阻断故障 → UNCONTROLLABLE、FAILED；校准收尾 Rope Init 阻断故障 → UNCONTROLLABLE、WARN。</li><li>失联 Hold 确认后取消；搜索 FAILED / CONTROL_LOST，收尾 WARN。</li></ul><p class="caption">新 CALIBRATE 入口会清 calibration_fault_latched；代码没有把“校准失败后先 RESET”设为独立硬门禁。其他锁存故障仍可能在进入后由监督阻断。</p></div>
+</div>
+</div>
+<div class="box compare section-gap"><table>
+<caption class="sr-only">普通直控和自动校准入口条件对照</caption>
+<thead><tr><th>条件</th><th>新目标直控 RUN_DIRECT</th><th>校准状态入口 CALIBRATE</th><th>校准运动前</th></tr></thead>
+<tbody>
+<tr><td>允许来源</td><td>IDLE / READY / RECOVERY_REQUIRED / RUN_DIRECT</td><td>UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED</td><td>已处于 CALIBRATION_RUNNING</td></tr>
+<tr><td>急停 / 租约</td><td>急停清、租约新鲜、无 Hold pending</td><td>同左</td><td>持续所有权及安全监督</td></tr>
+<tr><td>Manual / 现有 Auto</td><td>均非入口必需</td><td>Manual 必需；现有 Auto 非必需</td><td>Manual 参与映射，生成新的 Auto/LUT</td></tr>
+<tr><td>Servo 在线 / 新鲜</td><td>进入前，pending scope ≤500 ms</td><td>入口不检查</td><td>恢复预检 ≤500 ms，连续 3 新帧</td></tr>
+<tr><td>磁编 / CAN</td><td>入口不要求</td><td>入口不检查在线</td><td>≤300 ms，连续 3 新帧</td></tr>
+<tr><td>多圈 known</td><td>进入前必须；还不能 overflow</td><td>入口不要求</td><td>按具体机械/工作空间路径检查，校准成功后由驱动登记可信</td></tr>
+<tr><td>owner / control_enabled</td><td>CONTROL / 1</td><td>CALIBRATION / 0</td><td>CALIBRATION / 0，motion_started=1 后发机械目标</td></tr>
+<tr><td>P4 关节 PID</td><td>位置直控输出绕过 PID</td><td>进入后普通 Control 输出关闭</td><td>校准 logical ABS 批次绕过 PID；仍经执行层安全校验</td></tr>
+</tbody></table></div>
+</section>
+<section class="panel" id="panel-trust" role="tabpanel" aria-labelledby="tab-trust" hidden>
+<div class="panel-title"><div><h2>多圈 ABS：先建立可信基准，再检查运动所需范围</h2><p class="caption">下面整理原版可信流程。迁移准备另新增 <a href="标定前逻辑ABS归零协议.md">0xF0 标定前 logical ABS 设零 / offset 协议</a>：对应关节搜索前使用，最终结果为 0x19；原机械校准算法仍保留。</p></div></div>
+<div class="notes">
+<div class="box note"><h3>① 多圈配置与可信是独立标志</h3><p><code>isMultiTurnConfigured()</code> 表示多圈模式配置完成；<code>isAbsoluteReliable()</code> 读取驱动的 <code>absoluteReliable</code>。在线、多圈配置成功、读到一个 ABS 数值，都不足以建立此前的逻辑圈数基准。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.h">FeetechServoDriver.h:561–563 / 666–669 / 1067–1092</a></p></div>
+<div class="box note"><h3>② 状态准入检查两个位图</h3><p><code>requiredMask != 0</code><br><code>(unknown &amp; requiredMask) == 0</code><br><code>(overflow &amp; requiredMask) == 0</code></p><p>unknown 对应 <code>multi_turn_unknown_bitmap</code>；overflow 对应 <code>servo_turn_overflow_bitmap</code>。位 1 分别表示该电机尚未可信、圈数溢出。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp">SystemReadinessPolicy.cpp:105–142 / 166–171</a></p></div>
+<div class="box note"><h3>③ 可信通过后继续完整准入</h3><p>直控还需 scope 在线、位置快照 ≤500 ms、路由可控、无其他阻断故障，并通过状态/急停/租约门禁。反馈和 Rope Init 还需 Manual、Auto/模型契约、磁编与工作限位等条件。</p><p>写入 Manual（0xE6/0xE8）、LUT（0xDF）或限位（0xE0）不会设置多圈可信；加载完成后仍需独立恢复 ABS 基准。</p></div>
+</div>
+<div class="box section-gap">
+<div class="trust-chain" role="img" aria-label="上电未知，经JSON恢复、RAM热插拔恢复、校准可信登记或Reset Zero建立驱动可信，随后清未知位；运动入口再查未知位及溢出，掉线或失效返回未知。">
+<div class="trust-node unknown"><strong>UNKNOWN</strong><p>P4 上电：全部有效电机 unknown=1。</p><p>新电源会话、失效或掉线后需要恢复逻辑基准。</p></div>
+<div class="trust-arrow" aria-hidden="true">→</div>
+<div class="trust-node"><strong>四条建立路径</strong><p>桌面 JSON：RESTORE_MULTITURN</p><p>P4 持续供电：RAM 热插拔锚点恢复</p><p>机械校准完成：trust token 登记</p><p>SERVO_RESET_ZERO：建立新 turn0</p></div>
+<div class="trust-arrow" aria-hidden="true">→</div>
+<div class="trust-node good"><strong>驱动认可基准</strong><p><code>absoluteReliable=true</code></p><p>恢复路径验证硬件与 logical offset；校准路径认可已重建的当前会话。</p></div>
+<div class="trust-arrow" aria-hidden="true">→</div>
+<div class="trust-node good"><strong>共享 KNOWN</strong><p>服务清成功电机的 unknown 位；反馈发布也会将在线且 reliable 的电机同步为 known。</p><p>准备进入运动时，按本次 requiredMask 再查 unknown 和 overflow。</p></div>
+<div class="trust-return">↶ 驱动会话失效 / 离线 → <code>absoluteReliable=false</code>，反馈发布置 unknown。恢复失败不会建立新信任；RESET 前失败可能保留旧基准，RESET 已执行后可能撤销。overflow 独立阻断。</div>
+</div>
+</div>
+<div class="box compare section-gap"><table><caption class="sr-only">各状态入口对多圈可信的要求</caption><thead><tr><th>检查位置</th><th>检查范围</th><th>多圈准入条件与结果</th></tr></thead><tbody>
+<tr><td>新 ABS 直控入口</td><td>本次 <code>pendingDirectMotorMask(event.token)</code>；单电机命令只看该电机</td><td>unknown 与 pending scope 无交集；随后完整 <code>directMotorMaskReady()</code> 还排除 overflow。unknown → <code>DIRECT_REJECT_MULTITURN</code>；overflow 等硬件项失败 → <code>DIRECT_REJECT_HARDWARE</code>。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/system_state/SystemEventDispatcher.cpp">SystemEventDispatcher.cpp:582–605</a></span></td></tr>
+<tr><td>START 准备 / 暂停恢复直控</td><td>当前正式 <code>requiredMotorMask()</code></td><td><code>controllableEntryReady()</code> 调用同一完整硬件准入，unknown/overflow 任一命中均不通过；不能通过 START 绕过可信检查。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp">SystemReadinessPolicy.cpp:145–148</a></span></td></tr>
+<tr><td>READY / RUN_FEEDBACK / Rope Init</td><td><code>requiredMotorMask()</code>，通常为 <code>active_motor_mask &amp; validMask</code></td><td><code>activeMotorsMultiTurnKnown()</code>：scope 非空，unknown 与 overflow 均不命中。Rope 包括手动启动、反馈自动恢复、校准收尾。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp">SystemReadinessPolicy.cpp:166–205</a></span></td></tr>
+<tr><td>进入 CALIBRATION_RUNNING</td><td>状态入口检查 active Manual；通用恢复预检看 selected | auxiliary Servo</td><td>不以 known 为前置。恢复预检要求在线、多圈模式 configured、无 pending/failed、≤500 ms 的连续 3 个新快照；该预检不清 unknown。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationMotionSupport.cpp">CalibrationMotionSupport.cpp:363–427</a></span></td></tr>
+<tr><td>校准机械目标 / 动态辅助范围</td><td>单腱目标；双腱目标对与实际参与让位的辅助对</td><td>单腱目标 unknown 仅 WARN 并使用当前相对 ABS 重建。双腱动态辅助预检允许目标对 unknown，需 configured 且无 pending/failed；非目标辅助对必须 known 且两台在线，整对离线可跳过。目标是否最终可运动还要看下一行。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/single_motor/SingleMotorCalibrationMachine.cpp">SingleMotorCalibrationMachine.cpp:309–316</a> · <a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/dual_motor/DualMotorCalibrationMachine.cpp">DualMotorCalibrationMachine.cpp:531–662</a></span></td></tr>
+<tr><td>J00 / J04 / J08 / J12 实际工作空间目标预检</td><td>目标双腱两台电机；后续辅助姿态建立/复用</td><td><strong>目标对必须 known，unknown 直接失败。</strong><code>prepareWorkspaceForDualCalibration()</code> 调用 <code>waitWorkspaceFeedbackKnown()</code>；辅助姿态也要求 known。其他双腱关节跳过这项工作空间预检。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/dual_motor/DualMotorCalibrationMachine.cpp">DualMotorCalibrationMachine.cpp:35 / 901–919 / 1001 / 1169 / 1345–1373 / 2373–2376</a></span></td></tr>
+<tr><td>ServoBus 最终发送层</td><td>批次中每台电机</td><td><code>requireMultiTurnKnown</code> 仅在 RUN_FEEDBACK / ROPE_INIT_RUNNING 为 true。CALIBRATION_RUNNING / RUN_DIRECT 在这一层放宽，但普通直控仍已被上面的入口和周期故障监督检查；这不提供 unknown 普通直控入口。所有模式仍检查 overflow、有效 logical range、换算后的 hardware 目标范围 [-30719,30719]。<span class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.cpp">ServoBusService.cpp:192–196</a> · <a href="../ESP32-P4/ServoBoardMain/src/safety/policies/ActuatorSafetyPolicy.cpp">ActuatorSafetyPolicy.cpp:241–276</a></span></td></tr>
+</tbody></table></div>
+<div class="warning"><strong>原实现的两层准入不一致：</strong>双腱动态范围预检允许目标 unknown，实际 J00/J04/J08/J12 工作空间目标预检又拒绝 unknown。因此不能把“CALIBRATE 状态入口允许 unknown”理解为这些关节一定能从 unknown 完成首次校准。</div>
+<div class="box aside-card section-gap">
+<h3>位图准入演示</h3><p class="caption">只演示多圈这一项，不连接硬件，也不代替完整运动准入。当前有效范围为 M00..M26；scope 外的 unknown 不阻断本次检查。校准状态入口不使用这个 known 谓词。</p>
+<div class="trust-form">
+<label for="trust-context">检查范围的来源<select id="trust-context"><option value="direct">新直控：pending motor mask</option><option value="active">READY / 反馈 / Rope：requiredMotorMask</option></select></label>
+<label for="trust-required">requiredMask（十六进制）<input id="trust-required" value="0x00000003" spellcheck="false" autocomplete="off"></label>
+<label for="trust-unknown">unknown bitmap（十六进制）<input id="trust-unknown" value="0x00000020" spellcheck="false" autocomplete="off"></label>
+<label for="trust-overflow">overflow bitmap（十六进制）<input id="trust-overflow" value="0x00000000" spellcheck="false" autocomplete="off"></label>
+</div>
+<div class="gate-result" id="trust-result" aria-live="polite">启用 JavaScript 后显示多圈准入结果。</div>
+<div class="trust-actions"><button class="button" data-trust-example="outside">scope 外 unknown</button><button class="button" data-trust-example="unknown">选中电机 unknown</button><button class="button" data-trust-example="overflow">选中电机 overflow</button><button class="button" data-trust-example="empty">空 scope</button></div>
+<p class="source"><a href="../ESP32-P4/ServoBoardMain/src/safety/policies/SystemReadinessPolicy.cpp">requiredMotorMask():67–77，CALIBRATION_RUNNING 时还包含 calibration_aux_motor_mask</a> · <a href="../ESP32-P4/ServoBoardMain/src/config/topology/HardwareMap.cpp">有效通道：HardwareMap.cpp:81–96</a></p>
+</div>
+<div class="flow-grid section-gap">
+<div class="box flow">
+<div class="flow-title"><span class="badge">现有 0xDA</span>桌面 JSON → RESTORE_MULTITURN → KNOWN</div>
+<div class="flow-step"><strong>⓪ Python 先验证保存锚点，并用当前 raw 展开最近圈</strong><p>device-state JSON 必须通过 SHA-256 完整性；兼容性比较 schema_version、feedback_mapping_version、hardware_map_crc。候选电机取 unknown ∩ online ∩ savedMask，并检查当前 raw 在线；已收到路由状态时还检查路由可控。P4 执行端始终检查可控路由。</p><p><code>restoredABS = savedABS + ((currentRaw - savedRaw + 2048) % 4096 - 2048)</code>。保存与当前 raw 的差归一到 [-2048,2047]；原路径没有固定 raw 距离阈值或锚点有效期，也不校验设备唯一序列号。下发的 0xDA 仅带 mask 与 27 路 logical ABS，不携带 raw/identity。</p><small>device_state_store.py:41–54 / 80–98 / 120–146 · core_logic.py:877–951</small></div>
+<div class="flow-step"><strong>① Host 接收前置：只能恢复所请求的未知电机</strong><p>requestMask 非空，且是 Unknown、Online、Configured 的子集；不能命中 <code>recoveryPending &amp; ~recoveryFailed</code>。自动恢复仍忙时拒绝；明确 failed 时允许桌面接管；正常 known 电机不允许重新定义 turn0。</p><small>HostCommandDispatcher.cpp:375–450</small></div>
+<div class="flow-step"><strong>② 保存请求与 request token；接收 ACK 不代表恢复成功</strong><p>Host 在命令 mutex 内保存 mask 和 27 路展开后的 logical ABS，递增 token。回 ACK OK 只说明请求已受理，ServoBus 后续逐台执行。</p><small>HostCommandDispatcher.cpp:431–451</small></div>
+<div class="flow-step"><strong>③ ServoBus 执行时重新检查静止安全状态</strong><p>control_enabled=0，owner=NONE，状态为 UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED。取当前在线且可控路由；允许部分电机成功，失败留在 rejected mask。</p><small>ServoBusService.cpp:389–411 / 448–503</small></div>
+<div class="flow-step"><strong>④ 首次会话恢复：硬件 turn0 与 logical offset 一起验证</strong><p>单播关力矩、RESET、配置多圈模式、读一帧 RESET 后的新反馈，再绑定 logical ABS；校验 hardware ABS==reset raw、logical ABS==请求值、lastUpdate 非 0。同会话已 sessionRebased 的电机可免重复硬件 RESET。</p><small>FeetechServoDriver.h:687–782 · ServoBusService.cpp:491–503</small></div>
+<div class="flow-step good"><strong>⑤ 驱动 reliable、清成功电机 unknown，等待最终结果</strong><p>核对 0x17 MULTITURN_RESTORE_RESULT 的 token、restored/rejected masks，并确认状态读回。可信只覆盖成功电机；UNCONTROLLABLE 不会仅因未知位清除就自动变 READY，仍按状态图 START / 显式重评及完整门禁处理。</p><small>ServoBusRouting.cpp:135–150 · ServoBusService.cpp:404–411</small></div>
+</div>
+<div>
+<div class="box aside-card"><h3>机械校准结束：可信登记握手</h3><ol><li><code>commitJointServoMultiTurnTrust()</code> 请求该关节全部执行器，递增 trust token。</li><li>ServoBus 解析可控路由，驱动要求 online、configured、无 onlineTransitionPending、无 recoveryFailed。</li><li><code>acceptCurrentSessionAsTrusted()</code> 置 reliable；清 accepted 电机 unknown；回 result token + accepted mask。</li><li>校准 task 最多等 1000 ms，须同 token 且 accepted 覆盖全部 request，才把可信登记视为成功。</li></ol><p class="caption">此路径认可机械校准建立的当前会话基准，不修改 logicalOffset；它本身不额外检查 Manual/LUT CRC、overflow 或反馈年龄。overflow、反馈健康仍由其他层约束。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationMotionSupport.cpp">CalibrationMotionSupport.cpp:491–553</a> · <a href="../ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.cpp">ServoBusService.cpp:511–555</a> · <a href="../ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.h">FeetechServoDriver.h:865–877</a></p></div>
+<div class="box aside-card"><h3>其他建立路径</h3><p><strong>RAM 热插拔恢复：</strong>P4 仍供电时冻结掉线前可信 raw/ABS 锚点；重新连续 3 帧在线、关力矩成功、配置完成且有锚点，按 raw 最近圈变化 RESET 并恢复 offset。配置完成但无锚点时可成为恢复 ready，仍保留 unknown；该恢复没有锚点年龄或设备序列号校验。</p><p><strong>SERVO_RESET_ZERO：</strong>请求非空、全部请求电机在线，无另一运行中的 Reset Zero；执行需 control_enabled=0、owner=NONE，状态为 UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED。逐台关力矩/RESET/配置/新反馈成功后建立新 turn0，清成功电机 unknown/overflow，并失效相关 Auto/LUT/限位；需要重新恢复或校准这些数据。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/tasks/host_comm/HostCommandDispatcher.cpp">HostCommandDispatcher.cpp:868–914</a> · <a href="../ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoBusService.cpp">ServoBusService.cpp:674–741 / 795–877</a></p></div>
+</div>
+</div>
+<details class="box trust-details"><summary>可信何时失效，以及哪些数据不能替代它</summary><p>P4 上电把全部有效电机标为 unknown。连续同步读失败 3 次、在线反馈年龄 ≥80 ms（维护宽限/未轮询通道除外），或 UART restartTransport，会触发驱动会话失效：冻结原可信锚点，清 online、initialized、reliable、configured、logicalOffset 与 turnCount。重新 online 不会直接恢复旧圈数；反馈发布随后把无路由或已离线失效电机置 unknown。</p><p>驱动 reliable 与共享 unknown 的更新并非原子同步：服务在成功路径清 unknown；反馈发布也会在电机 online 且驱动 reliable 时自动清 unknown，无驱动或已离线失效时置 unknown。这一同步不会凭空建立驱动的可信基准。</p><p>硬件圈数越界设置独立 overflow，关力矩并 STOP，不直接撤销 reliable 或置 unknown。Reset Zero 的 RESET 已响应后若配置/新反馈失败，驱动基准也可能已被撤销，不能把失败视为完全未改变状态。</p><p>Manual、Auto/LUT、工作限位、舵机 raw、logical ABS 与可信位是不同数据。校准的 <code>readLatestMotorServoAbs()</code> 只检查通道、队列与 online，不检查 unknown 或帧年龄。发布快照 timestamp 会更新，但数值可能来自缓存（例如前两次读失败仍在线）；不能把“读到数值”或“新快照”当成每台电机都新测量、已可信。</p><p class="source"><a href="../ESP32-P4/ServoBoardMain/src/app/SystemAssembly.cpp">SystemAssembly.cpp:122</a> · <a href="../ESP32-P4/ServoBoardMain/src/hal/servo/FeetechServoDriver.h">FeetechServoDriver.h:173–206 / 580–599 / 962–1029</a> · <a href="../ESP32-P4/ServoBoardMain/src/tasks/servo_bus/ServoFeedbackPublisher.cpp">ServoFeedbackPublisher.cpp:46–65 / 166–243</a> · <a href="../ESP32-P4/ServoBoardMain/src/tasks/auto_calibration/CalibrationFeedbackReader.cpp">CalibrationFeedbackReader.cpp:72–86</a></p></details>
+</section>
+<section class="panel" id="panel-transitions" role="tabpanel" aria-labelledby="tab-transitions" hidden>
+<div class="panel-title"><div><h2>完整转换表：事件、守卫、动作与拒绝分支</h2><p class="caption">D 表示 idleOrReadyState()，是判断函数，返回 UNCONTROLLABLE / IDLE / READY / RECOVERY_REQUIRED。编号对应图的聚合边及额外分支。</p></div><span class="count" id="transition-count" aria-live="polite"></span></div>
+<div class="toolbar">
+<label class="sr-only" for="search">搜索转换</label><input id="search" type="search" placeholder="搜索事件、字段、条件或源码…">
+<label class="sr-only" for="category">转换类别</label><select id="category"><option value="all">全部类别</option><option value="direct">直控</option><option value="calibration">校准</option><option value="feedback">反馈 / Rope Init</option><option value="idle">准备 / 重评 / 暂停</option><option value="safety">停止 / 故障 / 租约</option></select>
+<label class="sr-only" for="state-filter">相关状态</label><select id="state-filter"><option value="all">全部相关状态</option></select>
+<button class="button" id="reset-filter">清除筛选</button>
+</div>
+<div class="box table-wrap"><table><thead><tr><th>编号 / 触发</th><th>来源 → 目标</th><th>守卫与条件</th><th>动作、拒绝及定位</th></tr></thead><tbody id="transition-body"></tbody></table></div>
+</section>
+<section class="panel" id="panel-runtime" role="tabpanel" aria-labelledby="tab-runtime" hidden>
+<h2>状态任务每个周期的处理顺序</h2><p class="caption">SystemStateTask 目标周期 10 ms，并可由通知提前唤醒；状态、owner 或 enabled 改变后立即唤醒 MotionControl。</p>
+<div class="cycle">
+<div class="cycle-step"><strong>独立 E-STOP token</strong><p>优先收敛 STOP，普通事件队列满也不会丢急停。</p></div>
+<div class="cycle-step"><strong>排空普通事件队列</strong><p>串行处理所有当前事件，并执行状态准入。</p></div>
+<div class="cycle-step"><strong>推进 Rope Init</strong><p>同线程非阻塞 controller；内部 50 ms 节拍。</p></div>
+<div class="cycle-step"><strong>租约 / Hold</strong><p>心跳过期、保持请求、执行 ACK、失败升级急停。</p></div>
+<div class="cycle-step"><strong>故障汇总 / 收敛</strong><p>当前状态决定阻断 faults；占用运动资源时撤权。</p></div>
+<div class="cycle-step"><strong>静止状态重评</strong><p>仅 IDLE / READY / RECOVERY_REQUIRED；不含 U 或 PAUSED。</p></div>
+</div>
+<div class="box compare section-gap"><table><thead><tr><th>运行状态</th><th>系统监督不阻断的故障</th><th>其余故障的去向</th></tr></thead><tbody>
+<tr><td>RUN_DIRECT</td><td>CAN_OFFLINE</td><td>UNCONTROLLABLE，锁存、撤权、断扭矩</td></tr>
+<tr><td>RUN_FEEDBACK / ROPE_INIT_RUNNING</td><td>无</td><td>同上</td></tr>
+<tr><td>CALIBRATION_RUNNING，motion_started=0</td><td>CAN_OFFLINE / SERVO_OFFLINE / MULTITURN_UNKNOWN</td><td>同上；内部预检仍必须通过</td></tr>
+<tr><td>CALIBRATION_RUNNING，motion_started=1</td><td>MULTITURN_UNKNOWN</td><td>同上；CAN/Servo 离线开始阻断</td></tr>
+<tr><td>PAUSED / 静止状态</td><td>blockingFaultsForState 返回 0</td><td>进入运行时重新准入；静止状态由公共重评决定</td></tr>
+</tbody></table></div>
+<div class="box aside-card section-gap"><h3>公共判断 D 的实际顺序</h3><ol><li>急停锁存，或 controllableEntryReady() 不通过 → UNCONTROLLABLE。</li><li>底层可控且完整反馈门禁满足 → READY。</li><li>底层可控、反馈未 READY 且 recoverableBelowMask 非 0 → RECOVERY_REQUIRED。</li><li>其余底层可控情况 → IDLE。</li></ol><p class="caption">READY 的完整门禁包含 Manual、requiresCan、Auto/映射版本与 URDF/Manual CRC、多圈/overflow、ABS 工作限位、CAN/磁编/映射快照的新鲜与有效、无系统故障和工作空间下边界迟滞。进入需连续 3 个新样本 outsideCounts ≥−24；退出需连续 3 个新样本 &lt;−48。超上边界不会直接撤 READY。本函数没有显式检查 LUT valid/count。</p></div>
+<h2 class="section-gap">源码事实源</h2><p class="caption">行号基于当前工作树及基线 3f52e5d；后续修改以函数名为准。链接相对本 HTML，可与仓库一同移动。</p>
+<div class="sources-grid" id="sources"></div>
+<div class="warning">实现细节：task 创建失败的校准分支切回 UNCONTROLLABLE，但没有显式清 owner；因此不能把 UNCONTROLLABLE 定义成“任何路径下 owner 都必为 NONE”。普通 STOP、RESET、Fault Hold、CALIBRATION_FAILED 会撤 owner。</div>
+</section>
+<footer>本图来自静态源码核对，未连接硬件。状态编号保持原内部 ABI；没有新增 BOOT、FAULT、HOLD 或 CALIB_SUCCESS 顶层状态。<a href="自动校准迁移上位机_流程与接口梳理.md">自动校准迁移与外部交接清单</a> · <a href="README.md">文档索引</a></footer>
+<noscript><p>本文件的入口条件和说明可直接阅读；状态节点与转换表需要启用浏览器 JavaScript。</p></noscript>
+</main>
+<script>
+'use strict';
+const ROOT = '../ESP32-P4/ServoBoardMain/src/';
+const sourceFiles = {
+task:['tasks/system_state/SystemStateTask.cpp','SystemStateTask.cpp','任务入口、10 ms 周期、变化后唤醒'],
+coordinator:['tasks/system_state/SystemStateCoordinator.cpp','SystemStateCoordinator.cpp','初始化与每轮处理顺序'],
+events:['tasks/system_state/SystemEventDispatcher.cpp','SystemEventDispatcher.cpp','事件分支、状态转换、公共判断 D'],
+admission:['safety/policies/StateAdmissionPolicy.cpp','StateAdmissionPolicy.cpp','START / DIRECT / FEEDBACK / CALIBRATE 来源表'],
+readiness:['safety/policies/SystemReadinessPolicy.cpp','SystemReadinessPolicy.cpp','直控硬件准入、Manual、READY 迟滞'],
+direct:['tasks/system_state/DirectCommandCoordinator.cpp','DirectCommandCoordinator.cpp','pending generation 与正式提升'],
+router:['tasks/host_comm/HostCommandRouter.cpp','HostCommandRouter.cpp','ABS 指令暂存、scope 与事件入队'],
+host:['tasks/host_comm/HostCommandDispatcher.cpp','HostCommandDispatcher.cpp','Host 命令、心跳续租、协议 ACK'],
+lease:['tasks/system_state/HostLeaseSupervisor.cpp','HostLeaseSupervisor.cpp','租约准入、当前位置 Hold 与取消'],
+leasePolicy:['safety/policies/HostLeaseSafetyPolicy.cpp','HostLeaseSafetyPolicy.cpp','1000 ms 心跳新鲜度'],
+fault:['safety/policies/SystemFaultPolicy.cpp','SystemFaultPolicy.cpp','故障汇总及分状态屏蔽'],
+session:['tasks/auto_calibration/CalibrationSessionController.cpp','CalibrationSessionController.cpp','无运动预检、motion_started、序列事件'],
+motion:['tasks/auto_calibration/CalibrationMotionSupport.cpp','CalibrationMotionSupport.cpp','恢复预检、校准批次 ACK、多圈可信'],
+rope:['tasks/system_state/RopeInitController.cpp','RopeInitController.cpp','非阻塞 Rope Init'],
+ropePolicy:['safety/policies/RopeInitSafetyPolicy.cpp','RopeInitSafetyPolicy.cpp','Manual / Auto 契约与收尾保护'],
+types:['data/SystemTypes.h','SystemTypes.h','9 个状态与事件 ABI'],
+safety:['config/SafetyConfig.h','SafetyConfig.h','500 / 1000 ms 等准入阈值'],
+gateway:['modules/actuator/ActuatorCommandGateway.cpp','ActuatorCommandGateway.cpp','owner 仲裁、目标单槽、Hold 条件']
+};
+const states = [
+{id:'U',code:0,name:'不可控',enum:'UNCONTROLLABLE',kind:'idle',x:60,y:116,w:300,h:100,desc:'等待准备 / 复位 / 校准入口',facts:['初始化、STOP、RESET、运行阻断故障和校准失败可到达此状态。','周期重评不处理本状态；START 或显式 REEVALUATE_READY 才调用公共判断。','急停锁存未清时公共判断仍返回本状态；CALIBRATE 入口也拒绝急停。','普通直控不能从此状态直接进入；校准可以。'],source:'events:368 / 496 / 527 / 850'},
+{id:'I',code:1,name:'空闲可控',enum:'IDLE',kind:'idle',x:60,y:338,w:300,h:80,desc:'底层电机可控，反馈条件尚未齐',facts:['底层可控，但完整反馈门禁未通过且无可恢复低边界关节。','缺 Manual / Auto / CAN / mapped 时可能停在此处。','可提交新 ABS 直控；可请求校准或满足前置的 Rope Init。','无 owner、enabled=0 时每轮公共重评。'],source:'events:368 / 387'},
+{id:'F',code:2,name:'关节反馈运行',enum:'RUN_FEEDBACK',kind:'feedback',x:420,y:574,w:300,h:102,desc:'CONTROL owner · enabled=1',facts:['普通入口只从 READY；RECOVERY_REQUIRED 可能先 Rope Init 再恢复。','RUN_FEEDBACK 重复请求幂等接受，不清目标队列。','DONE / TIMEOUT 必须属于当前命令 token（或内部 token=0），再退出到公共重评。','可 PAUSE；系统故障和租约持续监督。'],source:'events:633 / 807 / 822'},
+{id:'C',code:4,name:'自动校准运行',enum:'CALIBRATION_RUNNING',kind:'calibration',x:820,y:116,w:300,h:100,desc:'先无运动预检，再机械搜索',facts:['入口来源 U / IDLE / READY / RECOVERY_REQUIRED。','入口需要急停清、租约新鲜、无 Hold pending、active Manual 完整；不要求已有 Auto。','owner=CALIBRATION、enabled=0；预检通过才置 motion_started=1。','机械目标绕过 P4 关节 PID；搜索 DONE 尝试自动 Rope Init。'],source:'events:850 / 1096 / 1172'},
+{id:'R',code:5,name:'反馈就绪',enum:'READY',kind:'feedback',x:420,y:338,w:300,h:80,desc:'反馈门禁和下边界迟滞通过',facts:['这是反馈准入就绪，不代表系统正在运动。','Manual / Auto 契约、CAN/磁编、映射、多圈、工作限位和系统健康均满足。','READY 下边界用 −24 / −48 counts、连续 3 新样本迟滞；不以上边界越界撤销。','可提交直控、反馈、校准或手动 Rope Init。'],source:'readiness:182 / 303'},
+{id:'D',code:6,name:'舵机直控运行',enum:'RUN_DIRECT',kind:'direct',x:60,y:574,w:300,h:102,desc:'logical ABS 位置目标 · CONTROL',facts:['新 ABS 目标经 pending generation 和硬件准入进入；上位机校准也使用该普通入口。','普通入口不要求 Manual / Auto / 磁编 / 已标定工作限位；机械预检和 LUT 构建留在上位机。','本批电机在线、反馈≤500 ms、多圈可信、无 overflow、路由可控且无其他阻断故障；active scope 保留最大授权。','完成同步写调用后才累计到位样本；通用 F2 可结束匹配代次；运行监督忽略 CAN_OFFLINE。'],source:'events:545 / 790'},
+{id:'P',code:7,name:'暂停',enum:'PAUSED',kind:'idle',x:420,y:800,w:300,h:90,desc:'仅普通直控 / 反馈可暂停',facts:['PAUSE 记录 paused_resume_state，释放 owner、关闭控制并请求断扭矩。','START 重新核验对应运行门禁，通过才恢复原运行和目标；失败公共重评。','周期重评和运行故障收敛不自动处理暂停状态。','校准与 Rope Init 没有进入本状态的 PAUSE 路径。'],source:'events:449 / 835'},
+{id:'H',code:8,name:'绳长 / 工作空间恢复',enum:'ROPE_INIT_RUNNING',kind:'calibration',x:780,y:574,w:300,h:102,desc:'Rope Init · CALIBRATION owner',facts:['有三类来源：手动 ROPE_INIT、校准搜索 DONE、反馈的自动恢复。','owner=CALIBRATION、enabled=0、临时 DIRECT mode；SystemStateTask 同线程推进。','校准收尾成功发布 SUCCESS/WARN 后公共重评；不会自动启动反馈。','仅 feedback_recovery_pending 路径在条件满足时返回 RUN_FEEDBACK。'],source:'events:335 / 924 / 977'},
+{id:'B',code:9,name:'需要工作空间恢复',enum:'RECOVERY_REQUIRED',kind:'idle',x:780,y:338,w:300,h:80,desc:'底层可控，有可恢复的低边界关节',facts:['公共判断中底层可控、反馈未READY且 recoverableBelowMask 非零。','RUN_FEEDBACK 目标朝区间内且预检通过时先进入 Rope Init。','若反馈门禁已恢复，可先短暂转 READY 再进入反馈。','可提交直控、校准或手动 Rope Init。'],source:'events:368 / 690'}
+];
+const transitions = [
+{id:'T01',event:'初始化',from:['BOOT'],to:['U'],kind:'idle',guard:'initSystemStateCoordinator() 成功。BOOT 仅为图示起点。',action:'初始状态 UNCONTROLLABLE；清协调上下文。',source:'coordinator:33–42'},
+{id:'T02',event:'SYSTEM_EVENT_START',from:['U','I','R','B'],to:['DECIDE'],kind:'idle',guard:'canAcceptStart() 允许；非 PAUSED。',action:'清目标队列、owner=NONE、enabled=0，执行 D。START 不直接启动运动。',source:'events:449–493'},
+{id:'T03',event:'SYSTEM_EVENT_START',from:['P'],to:['D'],kind:'direct',guard:'paused_resume_state=RUN_DIRECT；controllableEntryReady(active motor scope) 通过。',action:'恢复正式旧目标、DIRECT mode、CONTROL owner / enabled=1。没有新 pending 提升；该分支无显式新命令租约/急停检查，后续周期仍监督。',source:'events:461–487'},
+{id:'T04',event:'SYSTEM_EVENT_START',from:['P'],to:['F'],kind:'feedback',guard:'paused_resume_state=RUN_FEEDBACK；当前反馈工作空间 READY。',action:'JOINT mode、CONTROL owner / enabled=1，恢复反馈运行。',source:'events:461–487'},
+{id:'T05',event:'SYSTEM_EVENT_START',from:['P'],to:['DECIDE'],kind:'idle',guard:'原运行态非法，或相应恢复门禁失败。',action:'owner=NONE、enabled=0，执行 D。',source:'events:462–486'},
+{id:'T06',event:'SYSTEM_EVENT_RUN_DIRECT',from:['I','R','B','D'],to:['D'],kind:'direct',guard:'pending valid + generation 匹配；急停清；Host 新鲜、无 Hold pending；本批电机多圈可信；directMotorMaskReady；promote 成功。',action:'提升目标/本批输出mask/token/speed/acc，保留active授权scope；DIRECT mode；清三种可随 scope 恢复的故障位；CONTROL owner / enabled=1。拒绝保持原状态，旧事件忽略。',source:'events:545–630'},
+{id:'T07',event:'SYSTEM_EVENT_RUN_DIRECT_DONE',from:['D'],to:['DECIDE'],kind:'direct',guard:'event.token == applied_direct_generation。',action:'释放 owner / enabled，执行 D；旧完成事件忽略。',source:'events:790–805'},
+{id:'T08',event:'SYSTEM_EVENT_RUN_FEEDBACK',from:['R'],to:['F'],kind:'feedback',guard:'急停清、Host 新鲜、无 Hold pending、Manual 完整；工作空间 READY、多圈可信、ABS 限位有效；JOINT 模式命令锁成功。',action:'清目标、CONTROL owner / enabled=1；异步反馈准入 ACCEPTED。',source:'events:633–787'},
+{id:'T09',event:'SYSTEM_EVENT_RUN_FEEDBACK',from:['F'],to:['F'],kind:'feedback',guard:'通用急停/租约/Manual 门禁通过，当前已在反馈运行。',action:'幂等接受，不清输出队列；控制任务消费新的 joint token。',source:'events:681–688'},
+{id:'T10',event:'SYSTEM_EVENT_RUN_FEEDBACK',from:['B'],to:['R','F'],kind:'feedback',guard:'重新检查时工作空间已 READY；之后再过普通反馈准入。',action:'先 READY，再 RUN_FEEDBACK；第二次门禁失败时可停在 READY 并拒绝请求。',source:'events:690–695 / 740–787'},
+{id:'T11',event:'SYSTEM_EVENT_RUN_FEEDBACK',from:['B'],to:['H'],kind:'feedback',guard:'仍有 recoverableBelowMask；所有 active targets 有限且 >= currentMin；Rope preflight、多圈 known、controller start 成功。',action:'feedback_recovery_pending=1，保存 request sequence，CALIBRATION owner；反馈 ACCEPTED 表示恢复已启动。',source:'events:690–738'},
+{id:'T12',event:'SYSTEM_EVENT_RUN_FEEDBACK',from:['H'],to:['H'],kind:'feedback',guard:'仅 feedback_recovery_pending=1 的 Rope Init；通用入口门禁通过。',action:'目标仍朝区间内则更新恢复 request 并接受；否则清恢复 pending、拒绝反馈请求，但 Rope Init 机械过程继续。',source:'events:658–677'},
+{id:'T13',event:'SYSTEM_EVENT_RUN_FEEDBACK_DONE / SYSTEM_EVENT_RUN_FEEDBACK_TIMEOUT',from:['F'],to:['DECIDE'],kind:'feedback',guard:'event.token=0，或等于当前 joint_command_token。',action:'释放 owner/enabled，保留最后接受位置，再执行 D；超时不直接锁存故障，也不固定返回 U。',source:'events:403–420 / 807–833'},
+{id:'T14',event:'SYSTEM_EVENT_PAUSE',from:['D','F'],to:['P'],kind:'idle',guard:'仅 RUN_DIRECT / RUN_FEEDBACK。',action:'保存原运行态，释放 owner/enabled，请求断扭矩；其他状态拒绝 PAUSE。',source:'events:835–847'},
+{id:'T15',event:'SYSTEM_EVENT_CALIBRATE',from:['U','I','R','B'],to:['C'],kind:'calibration',guard:'急停清；Host 新鲜且无 Hold pending；active Manual 完整/已提交；来源状态允许。',action:'CALIBRATION owner、enabled=0、JOINT mode、status RUNNING、motion_started=0；清 calibration fault 并创建 task。Servo/CAN/unknown 在线恢复在状态内检查。',source:'events:850–900'},
+{id:'T16',event:'校准 task 创建失败（CALIBRATE 分支）',from:['C'],to:['U'],kind:'calibration',guard:'startAutoCalibrationTaskRuntime() 返回 false。',action:'诊断 TASK_START_FAILED、calibration fault=1、FAILED、断扭矩；此分支没有显式 owner=NONE。',source:'events:900–919'},
+{id:'T17',event:'SYSTEM_EVENT_CALIBRATION_DONE',from:['C'],to:['H'],kind:'calibration',guard:'Hold 非 pending、当前状态匹配；Rope active-scope preflight、多圈可信、controller start 成功。',action:'标记 calibration_rope_init_pending；自动收尾，status 仍 RUNNING；CALIBRATION owner、enabled=0、临时 DIRECT mode。',source:'events:1096–1126'},
+{id:'T18',event:'SYSTEM_EVENT_CALIBRATION_DONE（收尾无法启动）',from:['C'],to:['DECIDE'],kind:'calibration',guard:'原状态正确、Hold 非 pending，但 Rope preflight/可信/start 失败。',action:'保留 Auto/LUT，WARN；释放 owner、JOINT mode、断扭矩，再 D。start 失败前可能短暂进入 H。',source:'events:1129–1149'},
+{id:'T19',event:'SYSTEM_EVENT_CALIBRATION_FAILED',from:['C'],to:['U'],kind:'calibration',guard:'Hold 非 pending、当前仍在 CALIBRATION_RUNNING。',action:'释放 owner/enabled，motion_started=0，calibration fault=1，FAILED、断扭矩。Hold pending 或失权后的迟到事件忽略。',source:'events:1172–1196'},
+{id:'T20',event:'SYSTEM_EVENT_ROPE_INIT',from:['I','R','B'],to:['H'],kind:'feedback',guard:'急停清、Host 新鲜、无 Hold pending；active Manual/Auto/CRC preflight、多圈 known。',action:'手动 Rope：feedbackRecovery=false，CALIBRATION owner、enabled=0、DIRECT mode。底层 controller 启动后按节拍检查反馈。',source:'events:924–975'},
+{id:'T21',event:'SYSTEM_EVENT_ROPE_INIT_DONE（反馈自动恢复）',from:['H'],to:['F'],kind:'feedback',guard:'Hold 非 pending、状态匹配；resumeFeedback=1、JOINT 切换成功、最新目标朝区间内、完整工作空间 READY。',action:'mark workspace ready，清恢复 pending，恢复 CONTROL owner/enabled=1，反馈准入 ACCEPTED。',source:'events:977–1035'},
+{id:'T22',event:'SYSTEM_EVENT_ROPE_INIT_DONE（其他收尾）',from:['H'],to:['DECIDE'],kind:'feedback',guard:'手动/校准收尾，或反馈恢复条件未满足；Hold 非 pending、原态匹配。',action:'Rope SUCCESS；释放 owner、JOINT mode、清 pending；校准收尾按 warning bitmap 设置 SUCCESS/WARN，再 D；恢复不能继续则反馈 REJECTED。',source:'events:998–1046'},
+{id:'T23',event:'SYSTEM_EVENT_ROPE_INIT_FAILED',from:['H'],to:['DECIDE'],kind:'feedback',guard:'Hold 非 pending、当前仍在 Rope Init。',action:'释放 owner、JOINT mode、断扭矩；反馈恢复 REJECTED；校准收尾保留结果并 WARN；执行 D。',source:'events:1050–1093'},
+{id:'T24',event:'SYSTEM_EVENT_REEVALUATE_READY',from:['U','I','R','B'],to:['DECIDE'],kind:'idle',guard:'owner=NONE、enabled=0；scope / Manual / Auto load-clear / Reset Zero 等触发。',action:'显式执行 D。急停锁存时 D 始终返回 U。',source:'events:1153–1169'},
+{id:'T25',event:'周期 READY 重评',from:['I','R','B'],to:['DECIDE'],kind:'idle',guard:'不占用运动资源，owner=NONE、enabled=0。',action:'每周期执行 D；明确不含 U / PAUSED。',source:'coordinator:94–106 / events:387–400'},
+{id:'T26',event:'SYSTEM_EVENT_STOP / E-STOP',from:['ANY'],to:['U'],kind:'safety',guard:'独立 emergency stop token 优先处理；所有状态都可停止。',action:'锁执行门禁，清普通事件/目标/pending/恢复，撤 owner/enabled；校准搜索 status=IDLE，校准收尾 WARN。',source:'events:85–108 / 496–524'},
+{id:'T27',event:'SYSTEM_EVENT_RESET',from:['ANY'],to:['U'],kind:'safety',guard:'用户 RESET / Clear Fault。',action:'清命令、可复位故障和 E-STOP latch，断扭矩、status IDLE；保留 Manual/Auto/多圈数据，不自动 START。',source:'events:527–542'},
+{id:'T28',event:'周期阻断故障 / enterFaultHold',from:['D','F','C','H'],to:['U'],kind:'safety',guard:'占用运动资源且 blockingFaultsForState != 0。直控忽略 CAN；校准按 motion_started 分阶段豁免。',action:'锁存 fault、撤 owner、断扭矩；校准搜索 FAILED，校准收尾 WARN。空闲/PAUSED 的 blockingFaults 为 0。',source:'coordinator:94–105 / events:187–239 / fault:79–104'},
+{id:'T29',event:'Host 租约过期 → Hold 开始',from:['D','F','C','H'],to:['SAME'],kind:'safety',guard:'运动需租约，heartbeat=0 或年龄>1000 ms；能生成当前位置 Hold。',action:'停止普通 producer、清邮箱，发当前 ABS Hold；保留顶层 state/owner 等待 ACK，校准 motion_started=0。Hold 不是新顶层状态。',source:'lease:73–181 / 307–315'},
+{id:'T30',event:'Host Hold 执行确认',from:['D','F','C','H'],to:['DECIDE'],kind:'safety',guard:'hold status=APPLIED，resultToken=requestToken。',action:'取消内部会话，释放 owner/enabled，再 D；搜索 FAILED / CONTROL_LOST，校准收尾 WARN；心跳恢复不会自动续跑旧目标。',source:'lease:184–231 / 261–279'},
+{id:'T31',event:'Host Hold 失败 / 超时',from:['D','F','C','H'],to:['U'],kind:'safety',guard:'Hold 无法发起、FAILED 或确认等待>500 ms。',action:'requestEmergencyStop() 锁门禁并通知；状态服务处理独立 STOP token 后到 U。',source:'lease:281–315'},
+{id:'T32',event:'不满足准入 / 旧 DONE / 迟到事件',from:['ANY'],to:['SAME'],kind:'idle',guard:'错误源状态、旧 token、旧 pending generation；或校准/Rope DONE/FAILED 时 Hold pending。',action:'拒绝或忽略，不发生相应状态迁移；不要把协议 QUEUED/反馈恢复 ACCEPTED 当成目标运行状态。',source:'events:440–1200'}
+];
+function esc(value){return String(value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function sourceLink(value){return value.split(' / ').map(function(part){const split=part.split(':');const key=split[0];const file=sourceFiles[key];return file?'<a href="'+ROOT+file[0]+'">'+esc(file[1]+(split[1]?':'+split[1]:''))+'</a>':esc(part);}).join(' · ');}
+function chips(ids){return '<div class="state-list">'+ids.map(function(id){const s=states.find(function(x){return x.id===id;});if(s){return '<span class="state-chip '+esc(s.kind)+'">'+esc(s.enum)+' ('+s.code+')</span>';}return '<span class="state-chip">'+esc({BOOT:'初始化（虚拟）',DECIDE:'D：公共判断',ANY:'任意状态',SAME:'原状态'}[id]||id)+'</span>';}).join('')+'</div>';}
+function drawNodes(){
+ const group=document.getElementById('nodes');const ns='http://www.w3.org/2000/svg';
+ const color={idle:['#f2f5f9','#92a5b8'],direct:['#eaf1ff','#2563eb'],calibration:['#fff3df','#b9670b'],feedback:['#eaf7f4','#087c72']};
+ states.forEach(function(s){const g=document.createElementNS(ns,'g');g.setAttribute('class','state-node');g.setAttribute('data-state',s.id);g.setAttribute('role','button');g.setAttribute('tabindex','0');g.setAttribute('aria-label',s.name+'，'+s.enum+'，状态 '+s.code+'。查看详情');g.innerHTML='<rect x="'+s.x+'" y="'+s.y+'" width="'+s.w+'" height="'+s.h+'" rx="12" fill="'+color[s.kind][0]+'" stroke="'+color[s.kind][1]+'" stroke-width="1.7"/><text x="'+(s.x+17)+'" y="'+(s.y+27)+'" class="state-name" fill="#172b42">'+esc(s.name)+'<tspan fill="#73869b" font-size="12"> / '+s.code+'</tspan></text><text x="'+(s.x+17)+'" y="'+(s.y+49)+'" class="state-code" fill="'+color[s.kind][1]+'">'+s.enum+'</text><text x="'+(s.x+17)+'" y="'+(s.y+70)+'" class="state-desc">'+esc(s.desc)+'</text>';g.addEventListener('click',function(){selectState(s.id);});g.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();selectState(s.id);}});group.appendChild(g);});
+ const d=document.createElementNS(ns,'g');d.innerHTML='<rect x="420" y="116" width="320" height="109" rx="14" fill="#fff" stroke="#8a9bae" stroke-width="1.8" stroke-dasharray="6 4"/><text x="438" y="144" class="state-name" fill="#304b64">公共判断 D（不是状态）</text><text x="438" y="169" class="state-code" fill="#657a8e">idleOrReadyState()</text><text x="438" y="195" class="state-desc">急停 → 底层可控 → 反馈门禁 / 低边界</text>';group.appendChild(d);
+}
+function selectState(id){
+ const s=states.find(function(x){return x.id===id;});if(!s)return;
+ document.querySelectorAll('.state-node').forEach(function(n){n.classList.toggle('selected',n.getAttribute('data-state')===id);});
+ const outgoing=transitions.filter(function(t){return t.from.indexOf(id)>=0;});
+ const incoming=transitions.filter(function(t){return t.to.indexOf(id)>=0;});
+ document.getElementById('state-detail').innerHTML='<span class="tag '+(s.kind==='direct'?'blue':s.kind==='calibration'?'amber':'')+'">真实状态 '+s.code+'</span><h3>'+esc(s.name)+'</h3><div class="enum">'+s.enum+'</div><ul>'+s.facts.map(function(f){return '<li>'+esc(f)+'</li>';}).join('')+'</ul><div class="related"><strong>相关转换</strong><p class="caption">'+incoming.map(function(t){return t.id;}).join(' / ')+' 进入<br>'+outgoing.map(function(t){return t.id;}).join(' / ')+' 从本状态发起</p><p class="caption">另适用 D 的判定分支，以及全局 STOP / RESET。</p><button class="button" id="related-button">查看该状态的完整转换</button><p class="source">'+sourceLink(s.source)+'</p></div>';
+ document.getElementById('related-button').addEventListener('click',function(){resetFilters();document.getElementById('state-filter').value=id;renderTransitions();showPanel('transitions');});
+}
+function showPanel(name){
+ document.querySelectorAll('.tab').forEach(function(t){const active=t.dataset.panel===name;t.setAttribute('aria-selected',String(active));t.tabIndex=active?0:-1;});
+ document.querySelectorAll('.panel').forEach(function(p){p.hidden=p.id!=='panel-'+name;});
+}
+function resetFilters(){document.getElementById('search').value='';document.getElementById('category').value='all';document.getElementById('state-filter').value='all';}
+function renderTransitions(){
+ const search=document.getElementById('search').value.trim().toLowerCase();const kind=document.getElementById('category').value;const id=document.getElementById('state-filter').value;
+ const found=transitions.filter(function(t){const sourceMatch=t.from.indexOf(id)>=0||t.from.indexOf('ANY')>=0;const targetMatch=t.to.indexOf(id)>=0||(t.to.indexOf('DECIDE')>=0&&['U','I','R','B'].indexOf(id)>=0);const names=t.from.concat(t.to).map(function(sid){const s=states.find(function(x){return x.id===sid;});return s?s.name+' '+s.enum:sid;}).join(' ');return(kind==='all'||t.kind===kind)&&(id==='all'||sourceMatch||targetMatch)&&(!search||(t.id+' '+t.event+' '+names+' '+t.guard+' '+t.action+' '+t.source+' '+sourceLink(t.source)).toLowerCase().indexOf(search)>=0);});
+ document.getElementById('transition-count').textContent=found.length+' / '+transitions.length+' 条分支';
+ document.getElementById('transition-body').innerHTML=found.length?found.map(function(t){return '<tr><td><span class="tag">'+t.id+'</span><p class="mono">'+esc(t.event)+'</p></td><td>'+chips(t.from)+'<p aria-hidden="true">↓</p>'+chips(t.to)+'</td><td>'+esc(t.guard)+'</td><td>'+esc(t.action)+'<span class="source">'+sourceLink(t.source)+'</span></td></tr>';}).join(''):'<tr><td colspan="4" class="empty">没有匹配的转换。调整条件或清除筛选。</td></tr>';
+}
+const VALID_TRUST_MOTOR_MASK = 0x07FFFFFF;
+function evaluateTrustMask(required,unknown,overflow){
+ const scope=required & VALID_TRUST_MOTOR_MASK;
+ const unknownHit=unknown & scope;const overflowHit=overflow & scope;
+ return {scope:scope,unknownHit:unknownHit,overflowHit:overflowHit,passed:scope!==0&&unknownHit===0&&overflowHit===0};
+}
+function trustHex(value){return '0x'+(value>>>0).toString(16).toUpperCase().padStart(8,'0');}
+function trustMotors(mask){
+ const motors=[];for(let i=0;i<27;i++){if(mask & (1<<i)){motors.push('M'+String(i).padStart(2,'0'));}}
+ return motors.length?motors.join(' / '):'无';
+}
+function parseTrustHex(value){
+ const input=value.trim();if(!/^(?:0x)?[0-9a-f]{1,8}$/i.test(input)){throw new Error('请填写 1–8 位十六进制数，可带 0x 前缀。');}
+ return parseInt(input.replace(/^0x/i,''),16);
+}
+function renderTrustGate(){
+ const result=document.getElementById('trust-result');
+ try{
+  const required=parseTrustHex(document.getElementById('trust-required').value);
+  const unknown=parseTrustHex(document.getElementById('trust-unknown').value);
+  const overflow=parseTrustHex(document.getElementById('trust-overflow').value);
+  const gate=evaluateTrustMask(required,unknown,overflow);
+  const context=document.getElementById('trust-context').value==='direct'?'本次 pending scope':'当前 requiredMotorMask';
+  const reasons=[];if(gate.scope===0){reasons.push('有效 scope 为空');}
+  if(gate.unknownHit){reasons.push('尚未可信：'+trustMotors(gate.unknownHit));}
+  if(gate.overflowHit){reasons.push('圈数溢出：'+trustMotors(gate.overflowHit));}
+  result.classList.toggle('fail-result',!gate.passed);
+  result.innerHTML='<strong>'+esc(gate.passed?'多圈这一项通过':'多圈这一项不通过')+'</strong><p>'+esc(context)+' = <code>'+trustHex(gate.scope)+'</code>（'+esc(trustMotors(gate.scope))+'）</p><p>unknown ∩ scope = <code>'+trustHex(gate.unknownHit)+'</code>；overflow ∩ scope = <code>'+trustHex(gate.overflowHit)+'</code></p><p>'+esc(reasons.length?reasons.join('；'):'所选电机均已 known 且没有 overflow；还需继续检查完整运动准入。')+'</p><p class="caption">scope 外 unknown：'+esc(trustMotors((unknown & VALID_TRUST_MOTOR_MASK) & ~gate.scope))+'。所有输入按 M00..M26 有效位掩码过滤。</p>';
+ }catch(error){result.classList.add('fail-result');result.innerHTML='<strong>输入格式无效</strong><p>'+esc(error.message)+'</p>';}
+}
+states.forEach(function(s){const option=document.createElement('option');option.value=s.id;option.textContent=s.name+' / '+s.enum;document.getElementById('state-filter').appendChild(option);});
+document.querySelectorAll('.tab').forEach(function(t){t.addEventListener('click',function(){showPanel(t.dataset.panel);});t.addEventListener('keydown',function(e){if(['ArrowLeft','ArrowRight','Home','End'].indexOf(e.key)<0)return;e.preventDefault();const tabs=Array.from(document.querySelectorAll('.tab'));const current=tabs.indexOf(t);const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(current+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;showPanel(tabs[next].dataset.panel);tabs[next].focus();});});
+['search','category','state-filter'].forEach(function(id){document.getElementById(id).addEventListener(id==='search'?'input':'change',renderTransitions);});
+document.getElementById('reset-filter').addEventListener('click',function(){resetFilters();renderTransitions();});
+document.querySelectorAll('[data-show-panel]').forEach(function(button){button.addEventListener('click',function(){showPanel(button.dataset.showPanel);document.getElementById('tab-'+button.dataset.showPanel).focus();});});
+['trust-required','trust-unknown','trust-overflow'].forEach(function(id){document.getElementById(id).addEventListener('input',renderTrustGate);});
+document.getElementById('trust-context').addEventListener('change',renderTrustGate);
+document.querySelectorAll('[data-trust-example]').forEach(function(button){button.addEventListener('click',function(){
+ const samples={outside:[3,32,0],unknown:[3,1,0],overflow:[3,0,2],empty:[0,0,0]};const values=samples[button.dataset.trustExample];
+ ['trust-required','trust-unknown','trust-overflow'].forEach(function(id,index){document.getElementById(id).value=trustHex(values[index]);});renderTrustGate();
+});});
+document.getElementById('sources').innerHTML=Object.keys(sourceFiles).map(function(key){const f=sourceFiles[key];return '<a href="'+ROOT+f[0]+'">'+esc(f[1])+'<small>'+esc(f[2])+'</small></a>';}).join('');
+document.getElementById('export-svg').addEventListener('click',function(){const original=document.getElementById('state-svg');const clone=original.cloneNode(true);const style=document.createElementNS('http://www.w3.org/2000/svg','style');style.textContent='.state-name{font-size:16px;font-weight:700}.state-code{font:13px Consolas,monospace}.state-desc{font-size:12px;fill:#53677e}.edge-label{font-size:12px;fill:#53677e;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}text{font-family:Microsoft YaHei,PingFang SC,system-ui,sans-serif}';clone.insertBefore(style,clone.firstChild);clone.setAttribute('width','1160');clone.setAttribute('height','920');const blob=new Blob([new XMLSerializer().serializeToString(clone)],{type:'image/svg+xml;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MMHand_状态转换总览.svg';document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},1000);});
+drawNodes();selectState('C');renderTransitions();renderTrustGate();
+</script>
+</body>
+</html>
