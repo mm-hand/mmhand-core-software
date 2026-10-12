@@ -21,4 +21,3 @@ NiceGUI event loop. STOP uses the existing backend cancellation path.
 
 Replaced Qt pages, compatibility helpers and Qt-only tests are removed. Core
 control, communications, calibration, ROS2 and replay stay independent of UI.
-See [delivery report](../../docs/web-gui/README.md).

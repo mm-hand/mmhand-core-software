@@ -215,3 +215,13 @@ When the source relevant to a graph changes, preparation gives that graph a new
 changing the relevant graph content can reuse the JSON: publishing refreshes
 the line-numbered links from the current committed revision. The generator
 never commits or pushes the outputs.
+
+After a successful publish, copy the freshly rendered bilingual guides to the
+repository root so they are visible at the repo entry point:
+
+- `docs/ai/AI_README.zh.md` → repo root `AI_README.zh.md`
+- `docs/ai/AI_README.en.md` → repo root `AI_README.en.md`
+
+Copy the rendered files verbatim; do not hand-edit either the originals or the
+copies. Repeat this copy after every future publish, and keep the root copies
+in the same commit as the regenerated guide.
